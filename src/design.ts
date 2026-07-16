@@ -38,6 +38,10 @@ import {
 } from "./ir.js";
 import { ProfileDefinition, SketchBuilder } from "./sketch.js";
 import { TopologySelection } from "./topology.js";
+import {
+  SHELL_DIRECTIONS,
+  type ShellDirection,
+} from "./protocol/shell.js";
 
 const DESIGN_OWNER = Symbol("InvariantCAD.DesignOwner");
 
@@ -489,6 +493,42 @@ export class DesignBuilder {
       input: input.toIR(),
       edges: options.edges.toIR(),
       distance: options.distance.ir,
+    });
+    return new SolidRef(this, key);
+  }
+
+  shell(
+    id: string,
+    input: SolidRef,
+    options: {
+      readonly openings: TopologySelection<"face">;
+      /** Positive wall-thickness magnitude. */
+      readonly thickness: LengthExpression;
+      readonly direction?: ShellDirection;
+      readonly tolerance?: LengthExpression;
+    },
+  ): SolidRef {
+    this.assertOwned(input);
+    if (!(options.openings instanceof TopologySelection)) {
+      throw new TypeError("Shell openings must be an explicit topology selection");
+    }
+    if (options.openings.topology !== "face") {
+      throw new TypeError("A shell requires a face topology selection");
+    }
+    for (const reference of options.openings.references) {
+      this.assertOwned(reference);
+    }
+    const direction = options.direction ?? "inward";
+    if (!SHELL_DIRECTIONS.includes(direction)) {
+      throw new TypeError("Shell direction must be 'inward' or 'outward'");
+    }
+    const key = this.addNode(id, {
+      kind: "shell",
+      input: input.toIR(),
+      openings: options.openings.toIR(),
+      thickness: options.thickness.ir,
+      direction,
+      tolerance: (options.tolerance ?? mm(1e-6)).ir,
     });
     return new SolidRef(this, key);
   }

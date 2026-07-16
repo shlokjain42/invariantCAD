@@ -1,5 +1,6 @@
 import type { Mat4, Vec3 } from "./core/math.js";
 import type { ResolvedProfile } from "./protocol/profile.js";
+import type { ResolvedShellOptions } from "./protocol/shell.js";
 import type {
   KernelTopologyCapabilities,
   KernelTopologyKey,
@@ -14,7 +15,8 @@ export type KernelFeature =
   | "boolean"
   | "transform"
   | "fillet"
-  | "chamfer";
+  | "chamfer"
+  | "shell";
 export type KernelCapabilityKind =
   | "primitive"
   | "feature"
@@ -173,6 +175,16 @@ export interface GeometryKernel {
     /** Each key seeds a maximal tangent-connected contour. */
     edges: readonly KernelTopologyKey[],
     options: { readonly distance: number },
+    context?: KernelFeatureContext,
+  ): KernelShape;
+  shell?(
+    shape: KernelShape,
+    /**
+     * Exact input faces removed as openings; these keys do not propagate.
+     * Protocol v1 requires round/arc joins at offset-face transitions.
+     */
+    openings: readonly KernelTopologyKey[],
+    options: ResolvedShellOptions,
     context?: KernelFeatureContext,
   ): KernelShape;
   topology?(shape: KernelShape): KernelTopologySnapshot;

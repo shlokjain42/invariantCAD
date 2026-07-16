@@ -65,7 +65,10 @@ import {
   resolveTopologySelection,
   topologySelectionRequirements,
 } from "./topology-resolution.js";
-import type { KernelTopologyKey } from "./protocol/topology.js";
+import type {
+  KernelTopologyKey,
+  TopologyKind,
+} from "./protocol/topology.js";
 
 export type ParameterOverride = number | Expression<Dimension>;
 export type ShapeExportFormat = MeshExportFormat | KernelExchangeFormat;
@@ -732,14 +735,16 @@ export class Evaluator {
       }
       return value;
     };
-    const resolveSelectedEdges = (
+    const resolveSelectedTopology = <K extends TopologyKind>(
       id: NodeId,
-      selection: TopologySelectionIR<"edge">,
+      field: string,
+      selection: TopologySelectionIR<K>,
       resolveInput: () => KernelShape,
     ): {
       readonly input: KernelShape;
-      readonly edges: readonly KernelTopologyKey[];
+      readonly keys: readonly KernelTopologyKey[];
     } => {
+      const path = `/nodes/${id}/${field}`;
       if (!kernelSupportsTopology(this.kernel)) {
         throw new EvaluationFailure(
           diagnostic(
@@ -748,12 +753,12 @@ export class Evaluator {
             {
               severity: "error",
               node: id,
-              path: `/nodes/${id}/edges`,
+              path,
               hints: ["Choose a geometry kernel with persistent topology support"],
               details: {
                 kernel: this.kernel.id,
                 kind: "topology",
-                capability: "edge-selection",
+                capability: `${selection.topology}-selection`,
               },
             },
           ),
@@ -789,7 +794,7 @@ export class Evaluator {
             {
               severity: "error",
               node: id,
-              path: `/nodes/${id}/edges`,
+              path,
               details: {
                 kernel: this.kernel.id,
                 kind: "topology",
@@ -806,13 +811,13 @@ export class Evaluator {
         {
           evaluate: expression,
           node: id,
-          path: `/nodes/${id}/edges`,
+          path,
         },
       );
       if (!selected.ok) {
         throw new EvaluationFailure(selected.diagnostics[0]!);
       }
-      return { input, edges: selected.value };
+      return { input, keys: selected.value };
     };
     const evaluateNode = (id: NodeId): NodeValue => {
       ensureLive();
@@ -994,15 +999,16 @@ export class Evaluator {
             break;
           case "fillet": {
             requireKernelCapability("feature", "fillet", id);
-            const selected = resolveSelectedEdges(
+            const selected = resolveSelectedTopology(
               id,
+              "edges",
               node.edges,
               () => solidRef(node.input),
             );
             result = ownShape(
               this.kernel.fillet!(
                 selected.input,
-                selected.edges,
+                selected.keys,
                 { radius: positive(expression(node.radius), id, "radius") },
                 featureContext(id),
               ),
@@ -1012,21 +1018,69 @@ export class Evaluator {
           }
           case "chamfer": {
             requireKernelCapability("feature", "chamfer", id);
-            const selected = resolveSelectedEdges(
+            const selected = resolveSelectedTopology(
               id,
+              "edges",
               node.edges,
               () => solidRef(node.input),
             );
             result = ownShape(
               this.kernel.chamfer!(
                 selected.input,
-                selected.edges,
+                selected.keys,
                 {
                   distance: positive(
                     expression(node.distance),
                     id,
                     "distance",
                   ),
+                },
+                featureContext(id),
+              ),
+              id,
+            );
+            break;
+          }
+          case "shell": {
+            requireKernelCapability("feature", "shell", id);
+            const thickness = positive(
+              expression(node.thickness),
+              id,
+              "thickness",
+            );
+            const tolerance = positive(
+              expression(node.tolerance),
+              id,
+              "tolerance",
+            );
+            if (!(tolerance < thickness)) {
+              throw new EvaluationFailure(
+                diagnostic(
+                  "FEATURE_INVALID",
+                  "Shell tolerance must be less than its thickness",
+                  {
+                    severity: "error",
+                    node: id,
+                    path: `/nodes/${id}/tolerance`,
+                    details: { tolerance, thickness },
+                  },
+                ),
+              );
+            }
+            const selected = resolveSelectedTopology(
+              id,
+              "openings",
+              node.openings,
+              () => solidRef(node.input),
+            );
+            result = ownShape(
+              this.kernel.shell!(
+                selected.input,
+                selected.keys,
+                {
+                  thickness,
+                  direction: node.direction,
+                  tolerance,
                 },
                 featureContext(id),
               ),

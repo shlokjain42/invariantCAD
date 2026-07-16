@@ -4,7 +4,7 @@ Comprehensive, type-safe CAD-as-code for TypeScript.
 
 InvariantCAD represents a design as immutable, versioned JSON and evaluates it through replaceable geometry and sketch-solver backends. The public API never exposes WASM pointers or kernel-specific objects.
 
-> **Project status:** `0.1.0` is the released-foundation target. Current main adds an exact OpenCascade B-Rep backend, analytic sketch-profile transfer, STEP/BREP exchange, closed semantic topology roles, sketch-boundary provenance, and exact selector-driven fillets and equal-distance chamfers. Complete topology history through topology-changing features and other advanced mechanical features remain under active development; see the [support matrix](#support-matrix) and [roadmap](docs/roadmap.md).
+> **Project status:** `0.1.0` is the released-foundation target. Current main adds an exact OpenCascade B-Rep backend, analytic sketch-profile transfer, STEP/BREP exchange, closed semantic topology roles, sketch-boundary provenance, exact selector-driven fillets and equal-distance chamfers, and exact face-selected inward/outward shells. Complete topology history through topology-changing features and other advanced mechanical features remain under active development; see the [support matrix](#support-matrix) and [roadmap](docs/roadmap.md).
 
 ## Install
 
@@ -100,7 +100,7 @@ evaluator.dispose();
 
 The backend is explicitly selected; a design document never contains OCCT handles or backend-specific objects.
 
-### Semantic topology, fillets, and chamfers
+### Semantic topology, fillets, chamfers, and shells
 
 Topology selections describe intent as set queries. They never persist a face index, edge index, OCCT handle, or transient hash. This source-aware selector keeps identifying the same extrusion rim after a 90-degree rotation and across width/height parameter crossovers:
 
@@ -151,11 +151,30 @@ const beveled = cad.chamfer("beveled", moved, {
   distance: mm(2),
 });
 cad.output("beveled", beveled);
+
+const openEnd = topology.faces
+  .createdBy(extrusion, { role: "extrude.face.end-cap" })
+  .and(topology.faces.modifiedBy(moved))
+  .select();
+
+const hollow = cad.shell("hollow", moved, {
+  openings: openEnd,
+  thickness: mm(2),
+  direction: "inward",
+  tolerance: mm(1e-6),
+});
+cad.output("hollow", hollow);
 ```
 
 The current chamfer mode applies one constant, equal setback distance on both incident faces. That produces a 45-degree bevel where the faces are orthogonal. Distance-angle, asymmetric, and variable chamfers are not supported yet.
 
 For both fillets and chamfers, `edges` selects contour seeds rather than hard stopping boundaries. Each seed expands to the maximal connected contour of tangent edges that continues between tangent face chains on both sides. A closed tangent contour expands around the complete loop, and multiple seeds on the same contour apply the operation only once. Selector cardinality constrains the seed set, not the number of input edges ultimately modified. Expansion stops at sharp, disconnected, degenerate, non-manifold, boundary, or ambiguous junctions. Continuity at a modeling-tolerance boundary can remain kernel-dependent; this mode cannot yet express “stop at this otherwise tangent vertex.”
+
+Shell openings deliberately use different semantics: `openings` is the exact set of input faces removed. Selected faces are not tangent-contour seeds, and the operation never propagates removal to an adjacent tangent or coplanar face. Selector cardinality therefore describes the actual opening-face set passed to the kernel.
+
+Shell `thickness` is always a positive wall-thickness magnitude. `direction: "inward"` keeps the unselected input boundary as the exterior skin and offsets the second wall into the solid; `direction: "outward"` keeps it as the interior skin and builds the second wall outside it. Document v1 fixes offset-face transitions to round/arc joins; intersection/miter joins are not supported yet. The builder defaults direction to `"inward"` and reconstruction tolerance to `mm(1e-6)`, then materializes both values in the immutable document so serialization and semantic hashes include them. Thickness and tolerance must be positive, and tolerance must be less than thickness.
+
+The current shell mode accepts exactly one solid with no loose faces, edges, or vertices, at least one selected opening face, and at least one retained face. It produces one valid positive-volume solid or a structured kernel diagnostic; it does not apply independently to disconnected bodies. Closed hollowing without an opening and variable-thickness shells are not supported yet.
 
 The serialized role vocabulary is closed and exported through `TOPOLOGY_ROLES` and `TOPOLOGY_ROLE_RULES`:
 
@@ -168,7 +187,7 @@ The serialized role vocabulary is closed and exported through `TOPOLOGY_ROLES` a
 
 `start` and `end` follow construction parameterization, not current world orientation. A topology-preserving transform retains the original role/source lineage and adds `modified` lineage for the transform. Cylinder seams, cone apex artifacts, sphere seams/poles, and other kernel artifacts are deliberately unnamed so a document cannot accidentally depend on their enumeration.
 
-Selectors also support curve/surface kind, edge direction, face normal, radius, adjacency, `and`/`or`/`not`, and explicit cardinality. Zero matches produce `TOPOLOGY_SELECTION_MISSING`; excess matches produce `TOPOLOGY_SELECTION_AMBIGUOUS`. The exact backend currently provides complete broad feature provenance for primitives, extrusions, revolutions, and topology-preserving transforms, plus the semantic roles and sketch sources above. It marks boolean, fillet, and chamfer history partial, so provenance queries on those results fail with `TOPOLOGY_HISTORY_UNAVAILABLE` rather than choosing an unstable edge. Manifold reports an explicit capability error for selector-driven fillets and chamfers.
+Selectors also support curve/surface kind, edge direction, face normal, radius, adjacency, `and`/`or`/`not`, and explicit cardinality. Zero matches produce `TOPOLOGY_SELECTION_MISSING`; excess matches produce `TOPOLOGY_SELECTION_AMBIGUOUS`. The exact backend currently provides complete broad feature provenance for primitives, extrusions, revolutions, and topology-preserving transforms, plus the semantic roles and sketch sources above. It marks boolean, fillet, chamfer, and shell history partial, so provenance queries on those results fail with `TOPOLOGY_HISTORY_UNAVAILABLE` rather than choosing unstable topology. Geometry-only selectors can still inspect those results. Manifold reports an explicit capability error for selector-driven fillets, chamfers, and shells.
 
 ## What works today
 
@@ -186,6 +205,7 @@ Selectors also support curve/surface kind, edge direction, face normal, radius, 
 - Semantic face/edge set selectors with closed roles, sketch sources, and explicit cardinality
 - Exact constant-radius edge fillets through the OCCT backend
 - Exact constant equal-distance edge chamfers through the OCCT backend
+- Exact constant-thickness inward/outward shells with semantic face openings through the OCCT backend
 - Translation, Euler rotation, nonuniform scale, and mirror
 - Parts with part number, material, description, and metadata
 - Fixed-placement and nested assemblies with shared part definitions
@@ -200,7 +220,7 @@ The solver API is replaceable. The built-in solver is intentionally a v0.1 refer
 
 - Reliable manifold-mesh CSG through `manifold-3d` WebAssembly
 - Exact B-Rep primitives, analytic profile extrusion/revolution, CSG, and transforms through OpenCascade WebAssembly
-- Exact topology enumeration, geometry/adjacency descriptors, and selected-edge fillets/chamfers through OpenCascade WebAssembly
+- Exact topology enumeration, geometry/adjacency descriptors, selected-edge fillets/chamfers, and face-selected shells through OpenCascade WebAssembly
 - Native STEP, text BREP, and binary BREP import/export in the exact-kernel protocol
 - Volume, surface area, axis-aligned bounds, genus, and kernel tolerance
 - Typed-array mesh extraction
@@ -225,7 +245,8 @@ The solver API is replaceable. The built-in solver is intentionally a v0.1 refer
 | IGES import/export | No | Exact backend |
 | Fillet | OCCT backend with semantic edge selectors | Yes |
 | Chamfer | OCCT equal-distance mode with semantic edge selectors | Yes |
-| Shell and draft | No | Exact backend |
+| Shell | OCCT inward/outward constant-thickness mode with semantic face openings | Yes |
+| Draft | No | Exact backend |
 | Persistent face/edge selectors | Primitive/extrusion roles and sources; origin/geometry/adjacency queries | Yes |
 | Drawings, GD&T, PMI | No | Yes |
 | Sheet metal | No | Yes |

@@ -8,6 +8,7 @@ import {
 } from "./ir.js";
 import type { ExpressionIR } from "./expressions.js";
 import { TOPOLOGY_ROLES } from "./protocol/topology.js";
+import { SHELL_DIRECTIONS } from "./protocol/shell.js";
 
 const DimensionSchema = z.enum(["scalar", "length", "angle"]);
 
@@ -326,6 +327,16 @@ const NodeSchema = z.discriminatedUnion("kind", [
       input: RefSchema,
       edges: TopologySelectionSchema,
       distance: ExpressionSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("shell"),
+      input: RefSchema,
+      openings: TopologySelectionSchema,
+      thickness: ExpressionSchema,
+      direction: z.enum(SHELL_DIRECTIONS),
+      tolerance: ExpressionSchema,
     })
     .strict(),
   z.object({

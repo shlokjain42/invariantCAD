@@ -96,6 +96,7 @@ export {
   type SketchLoopIR,
   type SketchNodeIR,
   type SketchProfileIR,
+  type ShellNodeIR,
   type SphereNodeIR,
   type TransformNodeIR,
   type TransformOperationIR,
@@ -164,6 +165,12 @@ export {
   type ResolvedProfile,
   type TessellatedProfile,
 } from "./protocol/profile.js";
+export {
+  SHELL_DIRECTIONS,
+  SHELL_JOIN_SEMANTICS,
+  type ResolvedShellOptions,
+  type ShellDirection,
+} from "./protocol/shell.js";
 export {
   topology,
   type TopologyOriginOptions,

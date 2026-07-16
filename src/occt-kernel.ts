@@ -35,6 +35,7 @@ import type {
   ResolvedProfile,
 } from "./protocol/profile.js";
 import { curveStart } from "./protocol/profile.js";
+import type { ResolvedShellOptions } from "./protocol/shell.js";
 
 const OCCT_SHAPE = Symbol("InvariantCAD.OcctShape");
 const TOPOLOGY_HASH_UPPER_BOUND = 2_147_483_647;
@@ -229,6 +230,7 @@ class OcctKernel implements GeometryKernel {
       "transform",
       "fillet",
       "chamfer",
+      "shell",
     ],
     nativeImports: ["step", "brep", "brep-binary"],
     nativeExports: ["step", "brep", "brep-binary"],
@@ -304,6 +306,27 @@ class OcctKernel implements GeometryKernel {
   private releaseHandles(handles: readonly ShapeHandle[]): void {
     for (let index = handles.length - 1; index >= 0; index -= 1) {
       this.raw.release(handles[index]!);
+    }
+  }
+
+  private normalizeImportedSolidOrientation(handle: ShapeHandle): ShapeHandle {
+    let reverse = false;
+    try {
+      reverse =
+        this.raw.getShapeType(handle) === "solid" &&
+        this.raw.getVolume(handle) < 0;
+    } catch (error) {
+      this.raw.release(handle);
+      throw error;
+    }
+    if (!reverse) return handle;
+    try {
+      const reversed = this.raw.reverseShape(handle);
+      this.raw.release(handle);
+      return reversed;
+    } catch (error) {
+      this.raw.release(handle);
+      throw error;
     }
   }
 
@@ -860,6 +883,9 @@ class OcctKernel implements GeometryKernel {
     context?: KernelFeatureContext,
   ): KernelShape {
     checkContext(context);
+    if (tools.length === 0) {
+      throw new RangeError("Boolean operations require at least one tool shape");
+    }
     const targetShape = this.shape(target);
     const toolShapes = tools.map((tool) => this.shape(tool));
     const targetHandle = targetShape[OCCT_SHAPE];
@@ -868,13 +894,6 @@ class OcctKernel implements GeometryKernel {
       ...targetShape.lineage,
       ...toolShapes.flatMap((tool) => tool.lineage),
     ]);
-    if (operation === "union") {
-      return this.own(
-        this.raw.fuseAll([targetHandle, ...toolHandles]),
-        context,
-        { inherited, relation: "modified", history: "partial" },
-      );
-    }
     if (operation === "subtract") {
       return this.own(this.raw.cutAll(targetHandle, toolHandles), context, {
         inherited,
@@ -887,7 +906,10 @@ class OcctKernel implements GeometryKernel {
     try {
       for (const tool of toolHandles) {
         checkContext(context);
-        const next = this.raw.common(current, tool);
+        const next =
+          operation === "union"
+            ? this.raw.fuse(current, tool)
+            : this.raw.common(current, tool);
         if (ownsCurrent) this.raw.release(current);
         current = next;
         ownsCurrent = true;
@@ -1060,42 +1082,35 @@ class OcctKernel implements GeometryKernel {
     context?: KernelFeatureContext,
   ): KernelShape {
     checkContext(context);
+    let imported: ShapeHandle;
     switch (format) {
       case "step":
-        return this.own(
-          this.raw.importStep(
-            data instanceof Uint8Array
-              ? arrayBufferCopy(data)
-              : data,
-          ),
-          context,
-          { history: "partial" },
+        imported = this.raw.importStep(
+          data instanceof Uint8Array ? arrayBufferCopy(data) : data,
         );
+        break;
       case "brep":
-        return this.own(
-          this.raw.fromBREP(
-            typeof data === "string"
-              ? data
-              : new TextDecoder().decode(
-                  data instanceof Uint8Array ? data : new Uint8Array(data),
-                ),
-          ),
-          context,
-          { history: "partial" },
+        imported = this.raw.fromBREP(
+          typeof data === "string"
+            ? data
+            : new TextDecoder().decode(
+                data instanceof Uint8Array ? data : new Uint8Array(data),
+              ),
         );
+        break;
       case "brep-binary":
-        return this.own(
-          this.raw.fromBREPBinary(
-            typeof data === "string"
-              ? new TextEncoder().encode(data)
-              : data instanceof Uint8Array
-                ? data
-                : new Uint8Array(data),
-          ),
-          context,
-          { history: "partial" },
+        imported = this.raw.fromBREPBinary(
+          typeof data === "string"
+            ? new TextEncoder().encode(data)
+            : data instanceof Uint8Array
+              ? data
+              : new Uint8Array(data),
         );
+        break;
     }
+    return this.own(this.normalizeImportedSolidOrientation(imported), context, {
+      history: "partial",
+    });
   }
 
   exportShape(
@@ -1510,6 +1525,157 @@ class OcctKernel implements GeometryKernel {
       relation: "modified",
       history: "partial",
     });
+  }
+
+  shell(
+    shape: KernelShape,
+    openings: readonly KernelTopologyKey[],
+    options: ResolvedShellOptions,
+    context?: KernelFeatureContext,
+  ): KernelShape {
+    checkContext(context);
+    if (!Number.isFinite(options.thickness) || !(options.thickness > 0)) {
+      throw new RangeError("Shell thickness must be finite and positive");
+    }
+    if (openings.length === 0) {
+      throw new RangeError("Shell requires at least one opening face");
+    }
+    if (options.direction !== "inward" && options.direction !== "outward") {
+      throw new TypeError("Shell direction must be 'inward' or 'outward'");
+    }
+    if (!Number.isFinite(options.tolerance) || !(options.tolerance > 0)) {
+      throw new RangeError("Shell tolerance must be finite and positive");
+    }
+    if (!(options.tolerance < options.thickness)) {
+      throw new RangeError("Shell tolerance must be less than its thickness");
+    }
+    const input = this.shape(shape);
+    const inputSolids = this.raw.getSubShapes(input[OCCT_SHAPE], "solid");
+    if (inputSolids.length !== 1) {
+      this.releaseHandles(inputSolids);
+      throw new TypeError("Shell input must contain exactly one solid");
+    }
+    const inputSolid = inputSolids[0]!;
+    try {
+      if (
+        !this.raw.isValid(input[OCCT_SHAPE]) ||
+        !this.raw.isValid(inputSolid)
+      ) {
+        throw new TypeError("Shell input must be a valid solid");
+      }
+      for (const topology of ["face", "edge", "vertex"] as const) {
+        if (
+          this.raw.subShapeCount(input[OCCT_SHAPE], topology) !==
+          this.raw.subShapeCount(inputSolid, topology)
+        ) {
+          throw new TypeError(
+            "Shell input must not contain loose topology outside its solid",
+          );
+        }
+      }
+      const signedInputVolume = this.raw.getVolume(inputSolid);
+      const inputVolume = Math.abs(signedInputVolume);
+      if (
+        !Number.isFinite(inputVolume) ||
+        !(inputVolume > Math.max(options.tolerance ** 3, Number.EPSILON))
+      ) {
+        throw new TypeError("Shell input must have positive finite volume");
+      }
+      const snapshot = this.topology(input);
+      const uniqueOpenings = [...new Set(openings)];
+      const handles = uniqueOpenings.map((key) => {
+        const retained = input.topologyHandles.get(key);
+        if (retained?.topology !== "face") {
+          throw new TypeError(
+            `Topology key '${key}' is not a face of the input shape`,
+          );
+        }
+        return retained.handle;
+      });
+      if (handles.length >= snapshot.faces.length) {
+        throw new RangeError("Shell requires at least one retained face");
+      }
+      const signedThickness =
+        options.direction === "inward"
+          ? options.thickness
+          : -options.thickness;
+      let normalizedInput: ShapeHandle | undefined;
+      let result: ShapeHandle;
+      try {
+        if (signedInputVolume < 0) {
+          normalizedInput = this.raw.reverseShape(inputSolid);
+        }
+        result = this.raw.shell(
+          normalizedInput ?? inputSolid,
+          handles,
+          signedThickness,
+          options.tolerance,
+        );
+      } finally {
+        if (normalizedInput !== undefined) this.raw.release(normalizedInput);
+      }
+      try {
+        const removalTolerance = Math.max(
+          options.tolerance ** 3,
+          inputVolume * 1e-12,
+        );
+        if (!this.raw.isValid(result)) {
+          throw new RangeError("Shell produced an invalid solid");
+        }
+        let resultVolume = this.raw.getVolume(result);
+        if (resultVolume < -removalTolerance) {
+          const reversed = this.raw.reverseShape(result);
+          this.raw.release(result);
+          result = reversed;
+          if (!this.raw.isValid(result)) {
+            throw new RangeError("Shell produced an invalid solid");
+          }
+          resultVolume = this.raw.getVolume(result);
+        }
+        const resultSolids = this.raw.getSubShapes(result, "solid");
+        try {
+          if (resultSolids.length !== 1) {
+            throw new RangeError("Shell did not produce exactly one solid");
+          }
+          for (const topology of ["face", "edge", "vertex"] as const) {
+            if (
+              this.raw.subShapeCount(result, topology) !==
+              this.raw.subShapeCount(resultSolids[0]!, topology)
+            ) {
+              throw new RangeError(
+                "Shell produced loose topology outside its result solid",
+              );
+            }
+          }
+        } finally {
+          this.releaseHandles(resultSolids);
+        }
+        if (
+          !Number.isFinite(resultVolume) ||
+          !(resultVolume > removalTolerance)
+        ) {
+          throw new RangeError("Shell did not produce a positive-volume solid");
+        }
+        if (
+          options.direction === "inward" &&
+          !(resultVolume < inputVolume - removalTolerance)
+        ) {
+          throw new RangeError(
+            "Shell thickness did not produce a hollowed solid",
+          );
+        }
+        return this.own(result, context, {
+          inherited: input.lineage,
+          relation: "modified",
+          history: "partial",
+        });
+      } catch (error) {
+        this.raw.release(result);
+        throw error;
+      }
+    } finally {
+      this.releaseHandles(inputSolids);
+    }
   }
 
   mesh(shape: KernelShape, options: MeshOptions = {}): MeshData {

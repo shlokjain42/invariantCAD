@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  SHELL_DIRECTIONS,
+  SHELL_JOIN_SEMANTICS,
   createEvaluator,
   createManifoldKernel,
   design,
@@ -9,6 +11,7 @@ import {
   scalarVec3,
   stringifyDocument,
   topology,
+  validateDocument,
   vec3,
   mm,
   nodeDependencies,
@@ -214,6 +217,122 @@ describe("semantic topology selections", () => {
     );
   });
 
+  it("builds, validates, and canonically serializes a face-selected shell", async () => {
+    expect(Object.isFrozen(SHELL_DIRECTIONS)).toBe(true);
+    expect(SHELL_DIRECTIONS).toEqual(["inward", "outward"]);
+    expect(SHELL_JOIN_SEMANTICS).toBe("round");
+
+    const cad = design("hollow-box");
+    const box = cad.box("box", {
+      size: vec3(mm(10), mm(20), mm(30)),
+    });
+    const openings = topology.faces
+      .createdBy(box, { role: "box.face.z-max" })
+      .and(topology.faces.normal(scalarVec3(0, 0, 1)))
+      .select();
+    const hollow = cad.shell("hollow", box, {
+      openings,
+      thickness: mm(2),
+    });
+    cad.output("hollow", hollow);
+    const document = cad.build();
+    expect(await hashDocument(document)).toBe(
+      "6177e48e1f48bf48f81978e34edd770681404eada48e07c66680e97a6ad9e2f7",
+    );
+
+    expect(document.nodes[hollow.node]).toEqual({
+      kind: "shell",
+      input: { node: "box", kind: "solid" },
+      openings: expect.objectContaining({
+        topology: "face",
+        cardinality: { min: 1, max: 1 },
+      }),
+      thickness: { op: "literal", dimension: "length", value: 2 },
+      direction: "inward",
+      tolerance: {
+        op: "literal",
+        dimension: "length",
+        value: 1e-6,
+      },
+    });
+    expect(nodeDependencies(document.nodes[hollow.node]!)).toEqual([
+      { node: "box", kind: "solid" },
+    ]);
+    expect(outputKindForNode(document.nodes[hollow.node]!)).toBe("solid");
+
+    const reordered = JSON.parse(stringifyDocument(document)) as any;
+    reordered.nodes.hollow.openings.query.queries.reverse();
+    const parsed = parseDocumentValue(reordered);
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      expect(await hashDocument(parsed.value)).toBe(await hashDocument(document));
+    }
+
+    const unknownField = JSON.parse(stringifyDocument(document)) as any;
+    unknownField.nodes.hollow.join = "intersection";
+    expect(parseDocumentValue(unknownField).diagnostics).toContainEqual(
+      expect.objectContaining({ code: "IR_INVALID" }),
+    );
+
+    const missingThickness = JSON.parse(stringifyDocument(document)) as any;
+    delete missingThickness.nodes.hollow.thickness;
+    expect(parseDocumentValue(missingThickness).diagnostics).toContainEqual(
+      expect.objectContaining({ code: "IR_INVALID" }),
+    );
+
+    const missingTolerance = JSON.parse(stringifyDocument(document)) as any;
+    delete missingTolerance.nodes.hollow.tolerance;
+    expect(parseDocumentValue(missingTolerance).diagnostics).toContainEqual(
+      expect.objectContaining({ code: "IR_INVALID" }),
+    );
+
+    const scalarThickness = JSON.parse(stringifyDocument(document)) as any;
+    scalarThickness.nodes.hollow.thickness.dimension = "scalar";
+    const wrongDimension = parseDocumentValue(scalarThickness);
+    expect(wrongDimension.ok).toBe(false);
+    expect(wrongDimension.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "EXPRESSION_DIMENSION_MISMATCH",
+        path: "/nodes/hollow/thickness",
+      }),
+    );
+
+    const invalidDirection = JSON.parse(stringifyDocument(document)) as any;
+    invalidDirection.nodes.hollow.direction = "sideways";
+    expect(parseDocumentValue(invalidDirection).diagnostics).toContainEqual(
+      expect.objectContaining({ code: "IR_INVALID" }),
+    );
+    expect(validateDocument(invalidDirection).diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "IR_INVALID",
+        node: "hollow",
+        path: "/nodes/hollow/direction",
+      }),
+    );
+
+    const scalarTolerance = JSON.parse(stringifyDocument(document)) as any;
+    scalarTolerance.nodes.hollow.tolerance.dimension = "scalar";
+    const wrongTolerance = parseDocumentValue(scalarTolerance);
+    expect(wrongTolerance.ok).toBe(false);
+    expect(wrongTolerance.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "EXPRESSION_DIMENSION_MISMATCH",
+        path: "/nodes/hollow/tolerance",
+      }),
+    );
+
+    const edgeSelection = JSON.parse(stringifyDocument(document)) as any;
+    edgeSelection.nodes.hollow.openings.topology = "edge";
+    const wrongTopology = parseDocumentValue(edgeSelection);
+    expect(wrongTopology.ok).toBe(false);
+    expect(wrongTopology.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "TOPOLOGY_SELECTOR_INVALID",
+        path: "/nodes/hollow/openings/topology",
+      }),
+    );
+  });
+
   it("rejects cross-design and non-ancestor provenance references", () => {
     const cad = design("first");
     const box = cad.box("box", { size: vec3(mm(10), mm(10), mm(10)) });
@@ -252,6 +371,35 @@ describe("semantic topology selections", () => {
         distance: mm(1),
       }),
     ).toThrow("explicit topology selection");
+
+    expect(() =>
+      cad.shell("foreign-shell", box, {
+        openings: topology.faces.createdBy(foreign).exactly(6),
+        thickness: mm(1),
+      }),
+    ).toThrow("cross design boundaries");
+
+    expect(() =>
+      cad.shell("edges", box, {
+        openings: topology.edges.all().select() as any,
+        thickness: mm(1),
+      }),
+    ).toThrow("face topology selection");
+
+    expect(() =>
+      cad.shell("fake-shell", box, {
+        openings: { topology: "face" } as any,
+        thickness: mm(1),
+      }),
+    ).toThrow("explicit topology selection");
+
+    expect(() =>
+      cad.shell("invalid-shell-direction", box, {
+        openings: topology.faces.all().select(),
+        thickness: mm(1),
+        direction: "sideways" as any,
+      }),
+    ).toThrow("'inward' or 'outward'");
 
     const rounded = cad.fillet("rounded", box, {
       edges: topology.edges.createdBy(box).exactly(12),
@@ -509,6 +657,37 @@ describe("semantic topology selections", () => {
     }
   });
 
+  it("fails before selection when the active kernel cannot shell", async () => {
+    const evaluator = await createEvaluator();
+    try {
+      const cad = design("unsupported-shell");
+      const box = cad.box("box", {
+        size: vec3(mm(10), mm(10), mm(10)),
+      });
+      cad.output(
+        "hollow",
+        cad.shell("hollow", box, {
+          openings: topology.faces
+            .createdBy(box, { role: "box.face.z-max" })
+            .select(),
+          thickness: mm(1),
+        }),
+      );
+      const result = await evaluator.evaluate(cad.build());
+      expect(result.ok).toBe(false);
+      expect(result.diagnostics).toContainEqual(
+        expect.objectContaining({
+          code: "KERNEL_CAPABILITY_MISSING",
+          node: "hollow",
+          path: "/nodes/hollow",
+          details: expect.objectContaining({ capability: "shell" }),
+        }),
+      );
+    } finally {
+      evaluator.dispose();
+    }
+  });
+
   it("reports malformed chamfer capability declarations and missing topology", async () => {
     const document = (() => {
       const cad = design("chamfer-preflight");
@@ -591,6 +770,96 @@ describe("semantic topology selections", () => {
           details: expect.objectContaining({
             kind: "topology",
             capability: "edge-selection",
+          }),
+        }),
+      );
+    } finally {
+      noTopologyEvaluator.dispose();
+    }
+  });
+
+  it("reports malformed shell capability declarations and missing face topology", async () => {
+    const document = (() => {
+      const cad = design("shell-preflight");
+      const box = cad.box("box", {
+        size: vec3(mm(10), mm(10), mm(10)),
+      });
+      cad.output(
+        "hollow",
+        cad.shell("hollow", box, {
+          openings: topology.faces.all().atLeast(1),
+          thickness: mm(1),
+        }),
+      );
+      return cad.build();
+    })();
+
+    const malformedDelegate = await createManifoldKernel();
+    const malformed = new Proxy(malformedDelegate, {
+      get(target, property) {
+        if (property === "id") return "malformed-shell";
+        if (property === "capabilities") {
+          return {
+            ...target.capabilities,
+            features: [...target.capabilities.features, "shell"],
+          };
+        }
+        const value: unknown = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as GeometryKernel;
+    const malformedEvaluator = await createEvaluator({ kernel: malformed });
+    try {
+      const result = await malformedEvaluator.evaluate(document);
+      expect(result.ok).toBe(false);
+      expect(result.diagnostics).toContainEqual(
+        expect.objectContaining({
+          code: "KERNEL_ERROR",
+          node: "hollow",
+          details: expect.objectContaining({
+            capability: "shell",
+            protocolViolation: true,
+          }),
+        }),
+      );
+    } finally {
+      malformedEvaluator.dispose();
+    }
+
+    const noTopologyDelegate = await createManifoldKernel();
+    let invoked = false;
+    const noTopology = new Proxy(noTopologyDelegate, {
+      get(target, property) {
+        if (property === "id") return "shell-without-topology";
+        if (property === "capabilities") {
+          return {
+            ...target.capabilities,
+            features: [...target.capabilities.features, "shell"],
+          };
+        }
+        if (property === "shell") {
+          return () => {
+            invoked = true;
+            throw new Error("Shell must not be invoked without topology");
+          };
+        }
+        const value: unknown = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as GeometryKernel;
+    const noTopologyEvaluator = await createEvaluator({ kernel: noTopology });
+    try {
+      const result = await noTopologyEvaluator.evaluate(document);
+      expect(result.ok).toBe(false);
+      expect(invoked).toBe(false);
+      expect(result.diagnostics).toContainEqual(
+        expect.objectContaining({
+          code: "KERNEL_CAPABILITY_MISSING",
+          node: "hollow",
+          path: "/nodes/hollow/openings",
+          details: expect.objectContaining({
+            kind: "topology",
+            capability: "face-selection",
           }),
         }),
       );

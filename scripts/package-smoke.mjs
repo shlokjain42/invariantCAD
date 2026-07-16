@@ -54,7 +54,7 @@ try {
     join(consumer, "smoke.mjs"),
     [
       'import { writeFile } from "node:fs/promises";',
-      'import { TOPOLOGY_ROLE_RULES, angleVec3, createEvaluator, deg, design, kernelSupports, mm, plane, scalarVec3, stringifyDocument, tf, topology, vec3 } from "invariantcad";',
+      'import { SHELL_DIRECTIONS, SHELL_JOIN_SEMANTICS, TOPOLOGY_ROLE_RULES, angleVec3, createEvaluator, deg, design, kernelSupports, mm, plane, scalarVec3, stringifyDocument, tf, topology, vec3 } from "invariantcad";',
       'import { createOcctKernel } from "invariantcad/kernels/occt";',
       "",
       'const cad = design("package-smoke");',
@@ -83,6 +83,8 @@ try {
       '  const boxRoles = [...snapshot.faces, ...snapshot.edges].flatMap((item) => item.lineage.flatMap((lineage) => lineage.role === undefined ? [] : [lineage.role]));',
       '  if (snapshot.history !== "complete" || new Set(boxRoles).size !== 18) throw new Error("Semantic box roles were not packaged");',
       '  if (TOPOLOGY_ROLE_RULES["box.face.x-min"].topology !== "face") throw new Error("Topology role registry was not packaged");',
+      '  if (SHELL_DIRECTIONS.join(",") !== "inward,outward") throw new Error("Shell direction registry was not packaged");',
+      '  if (SHELL_JOIN_SEMANTICS !== "round") throw new Error("Shell join semantics were not packaged");',
       "  const vertical = snapshot.edges.filter((edge) => Math.abs(edge.curve.direction?.[2] ?? 0) > 0.999);",
       '  if (vertical.length !== 4) throw new Error("Unexpected vertical edge count");',
       "  const rounded = exactKernel.fillet(exactBox, vertical.map((edge) => edge.key), { radius: 0.2 });",
@@ -122,6 +124,27 @@ try {
       "} finally {",
       "  provenanceEvaluator.dispose();",
       "}",
+      'const shellCad = design("package-shell");',
+      'const shellBox = shellCad.box("box", { size: vec3(mm(10), mm(20), mm(30)) });',
+      'const shellOpening = topology.faces.createdBy(shellBox, { role: "box.face.z-max" }).select();',
+      'shellCad.output("hollow", shellCad.shell("hollow", shellBox, { openings: shellOpening, thickness: mm(2), direction: "inward", tolerance: mm(1e-6) }));',
+      "const shellDocument = shellCad.build();",
+      "const shellJson = stringifyDocument(shellDocument);",
+      'if (!shellJson.includes("shell") || !shellJson.includes("box.face.z-max") || !shellJson.includes("inward")) throw new Error("Shell was not serialized");',
+      'await writeFile("model-shell.invariantcad.json", shellJson);',
+      "const shellEvaluator = await createEvaluator({ kernel: await createOcctKernel() });",
+      "try {",
+      "  const result = await shellEvaluator.evaluate(shellDocument);",
+      "  if (!result.ok) throw new Error(JSON.stringify(result.diagnostics));",
+      "  try {",
+      '    const volume = result.value.output("hollow").measure().volume;',
+      '    if (Math.abs(volume - 3312) > 1e-8) throw new Error("Unexpected semantic shell volume " + volume);',
+      "  } finally {",
+      "    result.value.dispose();",
+      "  }",
+      "} finally {",
+      "  shellEvaluator.dispose();",
+      "}",
       'const filletCad = design("package-fillet");',
       'const filletBox = filletCad.box("box", { size: vec3(mm(10), mm(20), mm(30)) });',
       'const filletEdges = topology.edges.createdBy(filletBox).and(topology.edges.direction(scalarVec3(0, 0, 1))).exactly(4);',
@@ -134,25 +157,40 @@ try {
   await writeFile(
     join(consumer, "type-smoke.ts"),
     [
-      'import { EDGE_TOPOLOGY_ROLES, FACE_TOPOLOGY_ROLES, TOPOLOGY_ROLE_RULES, TOPOLOGY_ROLES, angleVec3, deg, design, mm, plane, scalarVec3, tf, topology, vec3, type ChamferNodeIR, type DesignDocument, type EdgeTopologyRole, type FaceTopologyRole, type ProfileRef, type SolidRef, type TopologyOriginOptions, type TopologyRole, type TopologySelection } from "invariantcad";',
+      'import { EDGE_TOPOLOGY_ROLES, FACE_TOPOLOGY_ROLES, SHELL_DIRECTIONS, TOPOLOGY_ROLE_RULES, TOPOLOGY_ROLES, angleVec3, deg, design, mm, plane, scalarVec3, tf, topology, vec3, type ChamferNodeIR, type DesignDocument, type EdgeTopologyRole, type FaceTopologyRole, type ProfileRef, type ShellDirection, type ShellNodeIR, type SolidRef, type TopologyOriginOptions, type TopologyRole, type TopologySelection } from "invariantcad";',
       'import { createOcctKernel, type OcctKernelOptions } from "invariantcad/kernels/occt";',
       "",
       'const cad = design("type-smoke");',
       'const solid: SolidRef = cad.box("solid", { size: vec3(mm(1), mm(2), mm(3)) });',
       'const edges = topology.edges.createdBy(solid).and(topology.edges.direction(scalarVec3(0, 0, 1))).exactly(4);',
+      'const faces = topology.faces.createdBy(solid, { role: "box.face.z-max" }).select();',
       'const rounded: SolidRef = cad.fillet("rounded", solid, { edges, radius: mm(0.1) });',
       'const beveled: SolidRef = cad.chamfer("beveled", solid, { edges, distance: mm(0.1) });',
+      'const hollow: SolidRef = cad.shell("hollow", solid, { openings: faces, thickness: mm(0.1), direction: "inward", tolerance: mm(1e-6) });',
       "// @ts-expect-error Chamfers require edge selections.",
       'cad.chamfer("invalid-faces", solid, { edges: topology.faces.all().select(), distance: mm(0.1) });',
       "// @ts-expect-error Chamfer distance must be a length expression.",
       'cad.chamfer("invalid-distance", solid, { edges, distance: deg(45) });',
+      "// @ts-expect-error Shells require face selections for openings.",
+      'cad.shell("invalid-shell-edges", solid, { openings: edges, thickness: mm(0.1) });',
+      "// @ts-expect-error Shell thickness must be a length expression.",
+      'cad.shell("invalid-shell-thickness", solid, { openings: faces, thickness: deg(45) });',
+      "// @ts-expect-error Shell direction is a closed string union.",
+      'cad.shell("invalid-shell-direction", solid, { openings: faces, thickness: mm(0.1), direction: "inside" });',
       'cad.output("solid", rounded);',
       'cad.output("beveled", beveled);',
+      'cad.output("hollow", hollow);',
       "const document: DesignDocument = cad.build();",
       'const maybeChamfer = document.nodes[beveled.node];',
       'if (maybeChamfer?.kind !== "chamfer") throw new Error("Missing chamfer IR");',
       'const chamferNode: ChamferNodeIR = maybeChamfer;',
       'if (chamferNode.distance.dimension !== "length") throw new Error("Invalid chamfer distance type");',
+      'const maybeShell = document.nodes[hollow.node];',
+      'if (maybeShell?.kind !== "shell") throw new Error("Missing shell IR");',
+      'const shellNode: ShellNodeIR = maybeShell;',
+      'const shellDirection: ShellDirection = shellNode.direction;',
+      'const shellDirections: readonly ShellDirection[] = SHELL_DIRECTIONS;',
+      'if (!shellDirections.includes(shellDirection) || shellNode.thickness.dimension !== "length" || shellNode.tolerance.dimension !== "length") throw new Error("Invalid shell IR types");',
       "const options: OcctKernelOptions = {};",
       "void createOcctKernel(options);",
       "void document;",
@@ -229,6 +267,7 @@ try {
   run(bin, ["--help"], consumer);
   run(bin, ["validate", "model.invariantcad.json"], consumer);
   run(bin, ["validate", "model-chamfer.invariantcad.json"], consumer);
+  run(bin, ["validate", "model-shell.invariantcad.json"], consumer);
   run(
     bin,
     ["export", "model.invariantcad.json", "--to", "model.step"],
@@ -251,6 +290,21 @@ try {
   );
   if ((await stat(join(consumer, "beveled.step"))).size < 100) {
     throw new Error("Installed CLI produced an empty chamfer STEP file");
+  }
+  run(
+    bin,
+    [
+      "export",
+      "model-shell.invariantcad.json",
+      "--output",
+      "hollow",
+      "--to",
+      "hollow.step",
+    ],
+    consumer,
+  );
+  if ((await stat(join(consumer, "hollow.step"))).size < 100) {
+    throw new Error("Installed CLI produced an empty shell STEP file");
   }
   process.stdout.write("Packed package smoke test passed.\n");
 } finally {

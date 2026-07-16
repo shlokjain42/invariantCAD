@@ -2,6 +2,7 @@ import type { EntityId, NodeId, ParameterId } from "./core/ids.js";
 import type { JsonValue } from "./core/json.js";
 import type { Dimension, ExpressionIR } from "./expressions.js";
 import type { TopologyKind, TopologyRole } from "./protocol/topology.js";
+import type { ShellDirection } from "./protocol/shell.js";
 
 export const DOCUMENT_SCHEMA =
   "https://invariantcad.dev/schema/document/v1" as const;
@@ -293,6 +294,17 @@ export interface ChamferNodeIR {
   readonly distance: ExpressionIR;
 }
 
+export interface ShellNodeIR {
+  readonly kind: "shell";
+  readonly input: RefIR<"solid">;
+  /** Exact input faces removed as openings; unlike edge contours, no propagation occurs. */
+  readonly openings: TopologySelectionIR<"face">;
+  /** Positive wall-thickness magnitude. */
+  readonly thickness: ExpressionIR;
+  readonly direction: ShellDirection;
+  readonly tolerance: ExpressionIR;
+}
+
 export interface PartNodeIR {
   readonly kind: "part";
   readonly solid: RefIR<"solid">;
@@ -325,6 +337,7 @@ export type NodeIR =
   | TransformNodeIR
   | FilletNodeIR
   | ChamferNodeIR
+  | ShellNodeIR
   | PartNodeIR
   | AssemblyNodeIR;
 
@@ -360,6 +373,7 @@ export function nodeDependencies(node: NodeIR): readonly RefIR[] {
       return [node.input];
     case "fillet":
     case "chamfer":
+    case "shell":
       return [node.input];
     case "part":
       return [node.solid];

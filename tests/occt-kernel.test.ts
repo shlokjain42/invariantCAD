@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { OcctKernel as RawOcctKernel } from "occt-wasm";
 import {
   angleVec3,
   createEvaluator,
@@ -89,6 +90,112 @@ describe("OCCT exact-kernel integration", () => {
       }
       kernel.disposeShape(original);
       expect(() => kernel.disposeShape(original)).not.toThrow();
+    } finally {
+      kernel.dispose();
+    }
+  });
+
+  it("normalizes reversed imported solids before face-selected shelling", async () => {
+    const raw = await RawOcctKernel.init();
+    let reversedBrep: string;
+    try {
+      const box = raw.makeBox(10, 20, 30);
+      const reversed = raw.reverseShape(box);
+      expect(raw.isValid(reversed)).toBe(true);
+      expect(raw.getVolume(reversed)).toBeCloseTo(-6_000, 8);
+      reversedBrep = raw.toBREP(reversed);
+      raw.release(reversed);
+      raw.release(box);
+    } finally {
+      raw[Symbol.dispose]();
+    }
+
+    const kernel = await createOcctKernel();
+    try {
+      const imported = kernel.importShape!(reversedBrep, "brep");
+      expect(kernel.measure(imported).volume).toBeCloseTo(6_000, 8);
+      const top = kernel
+        .topology!(imported)
+        .faces.reduce((highest, face) =>
+          face.center[2] > highest.center[2] ? face : highest,
+        );
+      const inward = kernel.shell!(imported, [top.key], {
+        thickness: 2,
+        direction: "inward",
+        tolerance: 1e-6,
+      });
+      expect(kernel.measure(inward).volume).toBeCloseTo(3_312, 8);
+      expect(kernel.measure(inward).boundingBox).toEqual({
+        min: [0, 0, 0],
+        max: [10, 20, 30],
+      });
+      const outward = kernel.shell!(imported, [top.key], {
+        thickness: 1,
+        direction: "outward",
+        tolerance: 1e-6,
+      });
+      expect(kernel.measure(outward).volume).toBeCloseTo(2_143.466064545511, 8);
+
+      kernel.disposeShape(outward);
+      kernel.disposeShape(inward);
+      kernel.disposeShape(imported);
+    } finally {
+      kernel.dispose();
+    }
+  });
+
+  it("rejects shell inputs with loose topology outside their sole solid", async () => {
+    const raw = await RawOcctKernel.init();
+    let mixedBrep: string;
+    try {
+      const box = raw.makeBox(10, 20, 30);
+      const reversedBox = raw.reverseShape(box);
+      const other = raw.makeBox(1, 1, 1);
+      const otherFaces = raw.getSubShapes(other, "face");
+      const looseTop = otherFaces.find((face) => {
+        const bounds = raw.getBoundingBox(face, false);
+        return (
+          Math.abs(bounds.zmin - 1) < 1e-10 &&
+          Math.abs(bounds.zmax - 1) < 1e-10
+        );
+      });
+      expect(looseTop).toBeDefined();
+      if (looseTop === undefined) throw new Error("Missing loose top face");
+      const mixed = raw.makeCompound([reversedBox, looseTop]);
+      mixedBrep = raw.toBREP(mixed);
+      raw.release(mixed);
+      otherFaces.forEach((face) => raw.release(face));
+      raw.release(other);
+      raw.release(reversedBox);
+      raw.release(box);
+    } finally {
+      raw[Symbol.dispose]();
+    }
+
+    const kernel = await createOcctKernel();
+    try {
+      const imported = kernel.importShape!(mixedBrep, "brep");
+      const snapshot = kernel.topology!(imported);
+      const looseTop = snapshot.faces.find(
+        (face) =>
+          Math.abs(face.area - 1) < 1e-8 &&
+          Math.abs(face.center[2] - 1) < 1e-8,
+      );
+      expect(looseTop?.surface).toEqual({
+        kind: "plane",
+        normal: [0, 0, 1],
+      });
+      const top = snapshot.faces.reduce((highest, face) =>
+        face.center[2] > highest.center[2] ? face : highest,
+      );
+      expect(() =>
+        kernel.shell!(imported, [top.key], {
+          thickness: 1,
+          direction: "inward",
+          tolerance: 1e-6,
+        }),
+      ).toThrow("loose topology outside its solid");
+      kernel.disposeShape(imported);
     } finally {
       kernel.dispose();
     }
@@ -352,11 +459,162 @@ describe("OCCT exact-kernel integration", () => {
       expect(() =>
         firstKernel.chamfer!(firstBox, [foreignEdge.key], { distance: 1 }),
       ).toThrow("is not an edge of the input shape");
+      const foreignFaces = secondKernel.topology!(secondBox).faces;
+      const foreignFace = foreignFaces[0]!;
+      expect(() =>
+        firstKernel.shell!(firstBox, [foreignFace.key], {
+          thickness: 1,
+          direction: "inward",
+          tolerance: 1e-6,
+        }),
+      ).toThrow("is not a face of the input shape");
+      expect(() =>
+        firstKernel.shell!(
+          firstBox,
+          foreignFaces.map((face) => face.key),
+          {
+            thickness: 1,
+            direction: "inward",
+            tolerance: 1e-6,
+          },
+        ),
+      ).toThrow("is not a face of the input shape");
       firstKernel.disposeShape(firstBox);
       secondKernel.disposeShape(secondBox);
     } finally {
       firstKernel.dispose();
       secondKernel.dispose();
+    }
+  });
+
+  it("hollows exact solids through selected opening faces", async () => {
+    const kernel = await createOcctKernel();
+    try {
+      const shellOptions = (
+        thickness: number,
+        direction: "inward" | "outward" = "inward",
+        tolerance = 1e-6,
+      ) => ({ thickness, direction, tolerance });
+      expect(kernelSupports(kernel.capabilities, "feature", "shell")).toBe(true);
+      const box = kernel.box!([10, 20, 30], false, { feature: "box" });
+      const snapshot = kernel.topology!(box);
+      const faceWithRole = (role: string) =>
+        snapshot.faces.find((face) =>
+          face.lineage.some((lineage) => lineage.role === role),
+        );
+      const top = faceWithRole("box.face.z-max");
+      const bottom = faceWithRole("box.face.z-min");
+      expect(top).toBeDefined();
+      expect(bottom).toBeDefined();
+      if (top === undefined || bottom === undefined) return;
+
+      const hollow = kernel.shell!(
+        box,
+        [top.key],
+        shellOptions(2),
+        { feature: "hollow" },
+      );
+      expect(kernel.measure(box).volume).toBeCloseTo(6_000, 8);
+      expect(kernel.measure(hollow).volume).toBeCloseTo(3_312, 8);
+      expect(kernel.measure(hollow).boundingBox).toEqual(
+        kernel.measure(box).boundingBox,
+      );
+      const hollowTopology = kernel.topology!(hollow);
+      expect(hollowTopology.history).toBe("partial");
+      expect(hollowTopology.faces).toHaveLength(11);
+      expect(hollowTopology.edges).toHaveLength(24);
+
+      const tunnel = kernel.shell!(
+        box,
+        [top.key, bottom.key],
+        shellOptions(2),
+      );
+      expect(kernel.measure(tunnel).volume).toBeCloseTo(3_120, 8);
+      const duplicate = kernel.shell!(
+        box,
+        [top.key, top.key],
+        shellOptions(2),
+      );
+      expect(kernel.measure(duplicate).volume).toBeCloseTo(3_312, 8);
+
+      const outward = kernel.shell!(box, [top.key], shellOptions(1, "outward"));
+      expect(kernel.measure(outward).volume).toBeCloseTo(2_143.466064545511, 8);
+      expect(kernel.measure(outward).boundingBox).toEqual({
+        min: [-1, -1, -1],
+        max: [11, 21, 30],
+      });
+      expect(kernel.topology!(outward).faces).toHaveLength(23);
+
+      const allButTop = snapshot.faces
+        .filter((face) => face.key !== top.key)
+        .map((face) => face.key);
+      const inwardSlab = kernel.shell!(box, allButTop, shellOptions(1));
+      expect(kernel.measure(inwardSlab).volume).toBeCloseTo(200, 8);
+      expect(kernel.measure(inwardSlab).boundingBox).toEqual({
+        min: [0, 0, 29],
+        max: [10, 20, 30],
+      });
+      const outwardSlab = kernel.shell!(
+        box,
+        allButTop,
+        shellOptions(1, "outward"),
+      );
+      expect(kernel.measure(outwardSlab).volume).toBeCloseTo(200, 8);
+      expect(kernel.measure(outwardSlab).boundingBox).toEqual({
+        min: [0, 0, 30],
+        max: [10, 20, 31],
+      });
+
+      expect(() => kernel.shell!(box, [], shellOptions(1))).toThrow(
+        "at least one opening face",
+      );
+      for (const thickness of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+        expect(() => kernel.shell!(box, [top.key], shellOptions(thickness))).toThrow(
+          "finite and positive",
+        );
+      }
+      expect(() =>
+        kernel.shell!(box, [snapshot.edges[0]!.key], shellOptions(1)),
+      ).toThrow("is not a face");
+      expect(() =>
+        kernel.shell!(box, [top.key], shellOptions(1, "inward", 0)),
+      ).toThrow("tolerance must be finite and positive");
+      expect(() =>
+        kernel.shell!(box, [top.key], shellOptions(1, "inward", 1)),
+      ).toThrow("less than its thickness");
+      expect(() =>
+        kernel.shell!(
+          box,
+          snapshot.faces.map((face) => face.key),
+          shellOptions(1),
+        ),
+      ).toThrow("at least one retained face");
+      expect(() => kernel.shell!(box, [top.key], shellOptions(5.1))).toThrow(
+        "did not produce a hollowed solid",
+      );
+      expect(() => kernel.shell!(box, [top.key], shellOptions(5))).toThrow(
+        "invalid solid",
+      );
+
+      const translated = kernel.transform!(box, [
+        { kind: "translate", value: [20, 0, 0] },
+      ]);
+      const disconnected = kernel.boolean!("union", box, [translated]);
+      expect(() =>
+        kernel.shell!(disconnected, [top.key], shellOptions(1)),
+      ).toThrow("exactly one solid");
+
+      kernel.disposeShape(disconnected);
+      kernel.disposeShape(translated);
+      kernel.disposeShape(outwardSlab);
+      kernel.disposeShape(inwardSlab);
+      kernel.disposeShape(outward);
+      kernel.disposeShape(duplicate);
+      kernel.disposeShape(tunnel);
+      kernel.disposeShape(hollow);
+      kernel.disposeShape(box);
+    } finally {
+      kernel.dispose();
     }
   });
 
@@ -556,6 +814,203 @@ describe("OCCT exact-kernel integration", () => {
           node: "single",
           path: "/nodes/single/distance",
           details: { value: 0 },
+        }),
+      );
+    } finally {
+      evaluator.dispose();
+    }
+  });
+
+  it("keeps source-aware transformed shell openings stable across parameters", async () => {
+    const kernel = await createOcctKernel();
+    const evaluator = await createEvaluator({ kernel });
+    try {
+      const cad = design("source-stable-shell");
+      const width = cad.parameter.length("width", mm(40));
+      const height = cad.parameter.length("height", mm(20));
+      const depth = cad.parameter.length("depth", mm(10));
+      const thickness = cad.parameter.length("thickness", mm(2));
+      const tolerance = cad.parameter.length("tolerance", mm(1e-6));
+      const profile = cad.sketch("profile", plane.xy(), (sketch) =>
+        sketch.profile(sketch.rectangle("outline", { width, height })),
+      );
+      const extrusion = cad.extrude("extrusion", profile, { distance: depth });
+      const moved = cad.transform("moved", extrusion, [
+        tf.rotate(angleVec3(deg(0), deg(0), deg(90))),
+        tf.translate(vec3(mm(100), mm(5), mm(7))),
+      ]);
+      const rightSide = topology.faces
+        .createdBy(extrusion, {
+          role: "extrude.face.side",
+          source: { sketch: profile, entity: "outline.e1" },
+        })
+        .and(topology.faces.modifiedBy(moved))
+        .select();
+      cad.output(
+        "hollow",
+        cad.shell("hollow", moved, {
+          openings: rightSide,
+          thickness,
+          tolerance,
+        }),
+      );
+      const document = cad.build();
+      const cases = [
+        { width: 40, height: 20, depth: 10, thickness: 2 },
+        { width: 20, height: 40, depth: 10, thickness: 2 },
+        { width: 30, height: 30, depth: 12, thickness: 3 },
+      ];
+      for (const dimensions of cases) {
+        const result = await evaluator.evaluate(document, {
+          parameters: dimensions,
+        });
+        expect(result.ok).toBe(true);
+        if (!result.ok) continue;
+        try {
+          const base =
+            dimensions.width * dimensions.height * dimensions.depth;
+          const cavity =
+            (dimensions.width - dimensions.thickness) *
+            (dimensions.height - 2 * dimensions.thickness) *
+            (dimensions.depth - 2 * dimensions.thickness);
+          expect(result.value.output("hollow").measure().volume).toBeCloseTo(
+            base - cavity,
+            8,
+          );
+          expect(
+            result.diagnostics.some((item) => item.code.startsWith("TOPOLOGY_")),
+          ).toBe(false);
+        } finally {
+          result.value.dispose();
+        }
+      }
+
+      const zeroThickness = await evaluator.evaluate(document, {
+        parameters: { thickness: 0 },
+      });
+      expect(zeroThickness.ok).toBe(false);
+      expect(zeroThickness.diagnostics).toContainEqual(
+        expect.objectContaining({
+          code: "FEATURE_INVALID",
+          node: "hollow",
+          path: "/nodes/hollow/thickness",
+          details: { value: 0 },
+        }),
+      );
+
+      const excessiveTolerance = await evaluator.evaluate(document, {
+        parameters: { tolerance: 2, thickness: 2 },
+      });
+      expect(excessiveTolerance.ok).toBe(false);
+      expect(excessiveTolerance.diagnostics).toContainEqual(
+        expect.objectContaining({
+          code: "FEATURE_INVALID",
+          node: "hollow",
+          path: "/nodes/hollow/tolerance",
+          details: { tolerance: 2, thickness: 2 },
+        }),
+      );
+    } finally {
+      evaluator.dispose();
+    }
+  });
+
+  it("shells a connected boolean union as one solid", async () => {
+    const kernel = await createOcctKernel();
+    const evaluator = await createEvaluator({ kernel });
+    try {
+      const cad = design("connected-union-shell");
+      const first = cad.box("first", {
+        size: vec3(mm(10), mm(20), mm(30)),
+      });
+      const secondBase = cad.box("second-base", {
+        size: vec3(mm(10), mm(20), mm(30)),
+      });
+      const second = cad.transform("second", secondBase, [
+        tf.translate(vec3(mm(5), mm(0), mm(0))),
+      ]);
+      const connected = cad.union("connected", first, [second]);
+      const openings = topology.faces
+        .normal(scalarVec3(0, 0, 1))
+        .atLeast(1);
+      cad.output(
+        "hollow",
+        cad.shell("hollow", connected, {
+          openings,
+          thickness: mm(1),
+        }),
+      );
+
+      const result = await evaluator.evaluate(cad.build());
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      try {
+        const measurement = result.value.output("hollow").measure();
+        expect(measurement.volume).toBeCloseTo(2_214, 8);
+        expect(measurement.boundingBox).toEqual({
+          min: [0, 0, 0],
+          max: [15, 20, 30],
+        });
+      } finally {
+        result.value.dispose();
+      }
+    } finally {
+      evaluator.dispose();
+    }
+  });
+
+  it("reports shell collapse and downstream provenance gaps structurally", async () => {
+    const kernel = await createOcctKernel();
+    const evaluator = await createEvaluator({ kernel });
+    try {
+      const collapseCad = design("collapsed-shell");
+      const collapseBox = collapseCad.box("box", {
+        size: vec3(mm(10), mm(20), mm(30)),
+      });
+      collapseCad.output(
+        "hollow",
+        collapseCad.shell("hollow", collapseBox, {
+          openings: topology.faces
+            .createdBy(collapseBox, { role: "box.face.z-max" })
+            .select(),
+          thickness: mm(5.1),
+        }),
+      );
+      const collapsed = await evaluator.evaluate(collapseCad.build());
+      expect(collapsed.ok).toBe(false);
+      expect(collapsed.diagnostics).toContainEqual(
+        expect.objectContaining({
+          code: "KERNEL_ERROR",
+          node: "hollow",
+          path: "/nodes/hollow",
+        }),
+      );
+
+      const historyCad = design("shell-history-boundary");
+      const historyBox = historyCad.box("box", {
+        size: vec3(mm(10), mm(20), mm(30)),
+      });
+      const first = historyCad.shell("first", historyBox, {
+        openings: topology.faces
+          .createdBy(historyBox, { role: "box.face.z-max" })
+          .select(),
+        thickness: mm(1),
+      });
+      historyCad.output(
+        "second",
+        historyCad.shell("second", first, {
+          openings: topology.faces.modifiedBy(first).atLeast(1),
+          thickness: mm(0.5),
+        }),
+      );
+      const history = await evaluator.evaluate(historyCad.build());
+      expect(history.ok).toBe(false);
+      expect(history.diagnostics).toContainEqual(
+        expect.objectContaining({
+          code: "TOPOLOGY_HISTORY_UNAVAILABLE",
+          node: "second",
+          path: expect.stringMatching(/^\/nodes\/second\/openings\/query/),
+          details: expect.objectContaining({ history: "partial" }),
         }),
       );
     } finally {

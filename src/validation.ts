@@ -25,6 +25,7 @@ import {
   type TopologyKind,
   type TopologyRole,
 } from "./protocol/topology.js";
+import { SHELL_DIRECTIONS } from "./protocol/shell.js";
 
 function validateExpression(
   expression: ExpressionIR,
@@ -834,6 +835,33 @@ function validateNode(
         diagnostics,
       );
       expression(node.distance, "length", "distance");
+      break;
+    case "shell":
+      validateRef(node.input, "solid", document, `${path}/input`, diagnostics);
+      validateTopologySelection(
+        node.openings,
+        "face",
+        node.input.node,
+        document,
+        `${path}/openings`,
+        diagnostics,
+      );
+      expression(node.thickness, "length", "thickness");
+      if (!SHELL_DIRECTIONS.includes(node.direction)) {
+        diagnostics.push(
+          diagnostic(
+            "IR_INVALID",
+            "Shell direction must be 'inward' or 'outward'",
+            {
+              severity: "error",
+              node: id,
+              path: `${path}/direction`,
+              details: { direction: node.direction },
+            },
+          ),
+        );
+      }
+      expression(node.tolerance, "length", "tolerance");
       break;
     case "part":
       validateRef(node.solid, "solid", document, `${path}/solid`, diagnostics);

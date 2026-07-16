@@ -28,6 +28,11 @@ function canonicalizeDocumentTopology(
               ...node,
               edges: canonicalizeTopologySelectionIR(node.edges),
             }
+          : node.kind === "shell"
+            ? {
+                ...node,
+                openings: canonicalizeTopologySelectionIR(node.openings),
+              }
           : node,
       ]),
     ) as DesignDocument["nodes"],

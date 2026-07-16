@@ -41,6 +41,24 @@ function expectMeasurement(
   );
 }
 
+function expectBoundingBox(
+  actual: ShapeMeasurements["boundingBox"],
+  expected: ShapeMeasurements["boundingBox"],
+  relativeTolerance: number,
+): void {
+  for (const bound of ["min", "max"] as const) {
+    actual[bound].forEach((coordinate, index) => {
+      const expectedCoordinate = expected[bound][index]!;
+      expect(Math.abs(coordinate - expectedCoordinate)).toBeLessThanOrEqual(
+        Math.max(
+          Number.EPSILON,
+          Math.max(1, Math.abs(expectedCoordinate)) * relativeTolerance,
+        ),
+      );
+    });
+  }
+}
+
 export function geometryKernelConformance(
   options: KernelConformanceOptions,
 ): void {
@@ -111,6 +129,10 @@ export function geometryKernelConformance(
         expect(kernel.capabilities.topology.geometry).toBeTypeOf("boolean");
         expect(kernel.capabilities.topology.adjacency).toBeTypeOf("boolean");
       }
+      if (kernelSupports(kernel.capabilities, "feature", "shell")) {
+        expect(kernel.capabilities.topology).toBeDefined();
+        expect(kernel.capabilities.topology?.kinds).toContain("face");
+      }
     });
 
     it("constructs every declared primitive", () => {
@@ -136,6 +158,92 @@ export function geometryKernelConformance(
           Math.max(relativeTolerance, 5e-4),
         );
       }
+    });
+
+    it("honors the face-selected inward/outward shell contract when declared", () => {
+      if (!kernelSupports(kernel.capabilities, "feature", "shell")) return;
+      if (!kernelSupports(kernel.capabilities, "primitive", "box")) return;
+      const box = kernel.box!([2, 3, 4], false, { feature: "box" });
+      const snapshot = kernel.topology!(box);
+      const top = snapshot.faces.reduce((highest, face) =>
+        face.center[2] > highest.center[2] ? face : highest,
+      );
+
+      const inward = kernel.shell!(
+        box,
+        [top.key],
+        { thickness: 0.2, direction: "inward", tolerance: 1e-6 },
+        { feature: "inward" },
+      );
+      const inwardMeasurement = expectLiveShape(inward);
+      expectMeasurement(inwardMeasurement, "volume", 8.192, relativeTolerance);
+      expectBoundingBox(
+        inwardMeasurement.boundingBox,
+        { min: [0, 0, 0], max: [2, 3, 4] },
+        relativeTolerance,
+      );
+
+      const outward = kernel.shell!(box, [top.key], {
+        thickness: 0.2,
+        direction: "outward",
+        tolerance: 1e-6,
+      });
+      const outwardMeasurement = expectLiveShape(outward);
+      expectMeasurement(
+        outwardMeasurement,
+        "volume",
+        10.033569268660488,
+        Math.max(relativeTolerance, 1e-8),
+      );
+      expectBoundingBox(
+        outwardMeasurement.boundingBox,
+        { min: [-0.2, -0.2, -0.2], max: [2.2, 3.2, 4] },
+        relativeTolerance,
+      );
+
+      expect(() =>
+        kernel.shell!(box, [], {
+          thickness: 0.2,
+          direction: "inward",
+          tolerance: 1e-6,
+        }),
+      ).toThrow();
+      expect(() =>
+        kernel.shell!(box, [top.key], {
+          thickness: 0.2,
+          direction: "inward",
+          tolerance: 0.2,
+        }),
+      ).toThrow();
+
+      kernel.disposeShape(outward);
+      kernel.disposeShape(inward);
+      kernel.disposeShape(box);
+    });
+
+    it("shells curved cylindrical walls when both capabilities are declared", () => {
+      if (!kernelSupports(kernel.capabilities, "feature", "shell")) return;
+      if (!kernelSupports(kernel.capabilities, "primitive", "cylinder")) return;
+      const cylinder = kernel.cylinder!(4, 2, 2, false, 128, {
+        feature: "cylinder",
+      });
+      const snapshot = kernel.topology!(cylinder);
+      const top = snapshot.faces.reduce((highest, face) =>
+        face.center[2] > highest.center[2] ? face : highest,
+      );
+      const hollow = kernel.shell!(cylinder, [top.key], {
+        thickness: 0.2,
+        direction: "inward",
+        tolerance: 1e-6,
+      });
+      expectMeasurement(
+        expectLiveShape(hollow),
+        "volume",
+        Math.PI * (2 ** 2 * 4 - (2 - 0.2) ** 2 * (4 - 0.2)),
+        Math.max(relativeTolerance, 2e-4),
+      );
+      kernel.disposeShape(hollow);
+      kernel.disposeShape(cylinder);
     });
 
     it("extrudes and revolves exact profile semantics when declared", () => {

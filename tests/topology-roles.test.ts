@@ -18,7 +18,7 @@ import {
 import { createOcctKernel } from "../src/occt-kernel.js";
 
 function roleDocument(
-  feature: "fillet" | "chamfer" = "fillet",
+  feature: "fillet" | "chamfer" | "shell" = "fillet",
 ): ReturnType<ReturnType<typeof design>["build"]> {
   const cad = design("topology-role-validation");
   const profile = cad.sketch("profile", plane.xy(), (sketch) =>
@@ -38,14 +38,25 @@ function roleDocument(
       source: { sketch: profile, entity: "outline.e0" },
     })
     .select();
+  const side = topology.faces
+    .createdBy(extrusion, {
+      role: "extrude.face.side",
+      source: { sketch: profile, entity: "outline.e0" },
+    })
+    .select();
   cad.output(
     "rounded",
     feature === "fillet"
       ? cad.fillet("rounded", extrusion, { edges: endRim, radius: mm(1) })
-      : cad.chamfer("rounded", extrusion, {
-          edges: endRim,
-          distance: mm(1),
-        }),
+      : feature === "chamfer"
+        ? cad.chamfer("rounded", extrusion, {
+            edges: endRim,
+            distance: mm(1),
+          })
+        : cad.shell("rounded", extrusion, {
+            openings: side,
+            thickness: mm(1),
+          }),
   );
   return cad.build();
 }
@@ -254,6 +265,16 @@ describe("closed topology role validation", () => {
       missing: "sketch-sources",
       feature: "chamfer" as const,
     },
+    {
+      capability: "semanticRoles" as const,
+      missing: "semantic-roles",
+      feature: "shell" as const,
+    },
+    {
+      capability: "sketchSources" as const,
+      missing: "sketch-sources",
+      feature: "shell" as const,
+    },
   ])(
     "$feature reports missing $missing before invoking topology or the feature",
     async ({ capability, missing, feature }) => {
@@ -307,7 +328,7 @@ describe("closed topology role validation", () => {
           expect.objectContaining({
             code: "KERNEL_CAPABILITY_MISSING",
             node: "rounded",
-            path: "/nodes/rounded/edges",
+            path: `/nodes/rounded/${feature === "shell" ? "openings" : "edges"}`,
             details: {
               kernel: `without-${missing}`,
               kind: "topology",
