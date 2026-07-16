@@ -53,7 +53,12 @@ const Vec3ExpressionSchema = z.tuple([
 
 const RefSchema = z.object({
   node: z.string(),
-  kind: z.enum(["profile", "solid", "part", "assembly"]),
+  kind: z.enum(["profile", "path", "solid", "part", "assembly"]),
+});
+
+const DesignOutputRefSchema = z.object({
+  node: z.string(),
+  kind: z.enum(["solid", "part", "assembly"]),
 });
 
 const PlaneSchema = z.object({
@@ -288,6 +293,14 @@ const NodeSchema = z.discriminatedUnion("kind", [
     profile: z.object({ outer: LoopSchema, holes: z.array(LoopSchema) }),
     tolerance: z.number().positive(),
   }),
+  z
+    .object({
+      kind: z.literal("polylinePath"),
+      points: z.array(Vec3ExpressionSchema).min(2),
+      closed: z.literal(false),
+      tolerance: z.number().positive(),
+    })
+    .strict(),
   z.object({
     kind: z.literal("extrude"),
     profile: RefSchema,
@@ -308,6 +321,15 @@ const NodeSchema = z.discriminatedUnion("kind", [
       kind: z.literal("loft"),
       profiles: z.array(RefSchema).min(2),
       ruled: z.literal(true),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("sweep"),
+      profile: RefSchema,
+      path: RefSchema,
+      transition: z.literal("right-corner"),
+      frame: z.literal("corrected-frenet"),
     })
     .strict(),
   z.object({
@@ -409,6 +431,6 @@ export const DesignDocumentSchema: z.ZodType<DesignDocument> = z.object({
     }),
   ),
   nodes: z.record(z.string(), NodeSchema),
-  outputs: z.record(z.string(), RefSchema),
+  outputs: z.record(z.string(), DesignOutputRefSchema),
   metadata: z.record(z.string(), z.json()).optional(),
 }) as unknown as z.ZodType<DesignDocument>;

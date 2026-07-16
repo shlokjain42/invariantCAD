@@ -4,6 +4,8 @@ import type { ResolvedDraftOptions } from "./protocol/draft.js";
 import type { ResolvedShellOptions } from "./protocol/shell.js";
 import type { ResolvedOffsetOptions } from "./protocol/offset.js";
 import type { ResolvedLoftOptions } from "./protocol/loft.js";
+import type { ResolvedPath } from "./protocol/path.js";
+import type { ResolvedSweepOptions } from "./protocol/sweep.js";
 import type {
   KernelTopologyCapabilities,
   KernelTopologyKey,
@@ -16,6 +18,7 @@ export type KernelFeature =
   | "extrude"
   | "revolve"
   | "loft"
+  | "sweep"
   | "boolean"
   | "transform"
   | "fillet"
@@ -187,6 +190,12 @@ export interface GeometryKernel {
   loft?(
     profiles: readonly ResolvedProfile[],
     options: ResolvedLoftOptions,
+    context?: KernelFeatureContext,
+  ): KernelShape;
+  sweep?(
+    profile: ResolvedProfile,
+    path: ResolvedPath,
+    options: ResolvedSweepOptions,
     context?: KernelFeatureContext,
   ): KernelShape;
   boolean?(

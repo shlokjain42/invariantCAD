@@ -118,6 +118,7 @@ Evaluated shapes are owned by exactly one evaluation result. Disposing that resu
   - YZ: `U=+Y`, `V=+Z`, `N=+X`
 - Revolve uses the sketch's local V/Y axis.
 - Loft section stations follow the sketch-plane normal and must be strictly monotonic; document-v1 lofts are ruled solids with ordered curve-index correspondence.
+- Polyline sweep paths are open, explicitly segmented 3D values. Document-v1 solid sweeps seat a hole-free profile at the path start, require its plane normal to be parallel to the first segment in either direction, and use corrected-Frenet transport with right-corner intersection transitions.
 - Transform operations are applied in list order.
 
 ## Backend conformance
@@ -127,6 +128,7 @@ Every geometry kernel should run the same corpus for:
 - primitives and transforms;
 - nested profile holes;
 - extrude, partial/full revolve, and bounded ruled solid lofts;
+- explicit open polyline paths and bounded right-corner solid sweeps;
 - overlapping and empty booleans;
 - bounds, volume, surface area, and topological class;
 - parameter extremes and degenerate geometry;
@@ -138,6 +140,7 @@ Every geometry kernel should run the same corpus for:
 - exact whole-solid offsets, fixed round joins, direction/volume monotonicity, strict body cardinality, and collapse rejection;
 - atomic semantic-face draft, signed-angle bounds, independent pull/neutral-plane vectors, exact indexed evolution, and transactional ownership;
 - ruled loft profile compatibility, monotonic section order, strict output topology cardinality, and transactional ownership;
+- sweep path simplicity/clearance, frame and transition semantics, strict one-body validation, and transactional ownership;
 - Node and browser initialization.
 
 Results are compared by tolerances and topological expectations, never by triangle ordering or exported-file bytes.

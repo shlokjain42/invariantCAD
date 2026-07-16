@@ -6,6 +6,7 @@ import {
   type ShapeMeasurements,
 } from "../src/index.js";
 import type { ResolvedLoop, ResolvedProfile } from "../src/index.js";
+import type { ResolvedPolylinePath } from "../src/index.js";
 import { EXACT_INDEXED_TOPOLOGY_EVOLUTION_PROTOCOL_VERSION } from "../src/kernel.js";
 
 export interface KernelConformanceOptions {
@@ -470,6 +471,32 @@ export function geometryKernelConformance(
         Math.max(relativeTolerance, 1e-7),
       );
       kernel.disposeShape(loft);
+    });
+
+    it("sweeps a closed profile along an open right-corner path when declared", () => {
+      if (!kernelSupports(kernel.capabilities, "feature", "sweep")) return;
+      const profile: ResolvedProfile = {
+        plane: { plane: "YZ", origin: [0, 0, 0] },
+        outer: rectangleLoop(-1, -1, 1, 1),
+        holes: [],
+      };
+      const path: ResolvedPolylinePath = {
+        kind: "polyline",
+        points: [
+          [0, 0, 0],
+          [5, 0, 0],
+          [5, 5, 0],
+        ],
+        closed: false,
+      };
+      const sweep = kernel.sweep!(
+        profile,
+        path,
+        { frame: "corrected-frenet", transition: "right-corner" },
+        { tolerance: 1e-7 },
+      );
+      expectMeasurement(expectLiveShape(sweep), "volume", 40, relativeTolerance);
+      kernel.disposeShape(sweep);
     });
 
     it("applies transforms and booleans without consuming inputs", () => {

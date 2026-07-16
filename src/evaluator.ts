@@ -53,6 +53,11 @@ import {
   kernelSupportsTopology,
 } from "./kernel.js";
 import { validateRuledSolidLoftProfiles } from "./protocol/loft.js";
+import {
+  validateResolvedPolylinePath,
+  type ResolvedPolylinePath,
+} from "./protocol/path.js";
+import { validateResolvedSweep } from "./protocol/sweep.js";
 import { createManifoldKernel, type ManifoldKernelOptions } from "./manifold-kernel.js";
 import {
   createReferenceSketchSolver,
@@ -98,6 +103,12 @@ interface ProfileValue {
   readonly profile: ResolvedProfile;
 }
 
+interface PathValue {
+  readonly kind: "path";
+  readonly path: ResolvedPolylinePath;
+  readonly tolerance: number;
+}
+
 interface SolidValue {
   readonly kind: "solid";
   readonly shape: KernelShape;
@@ -121,7 +132,7 @@ interface AssemblyValue {
   readonly occurrences: readonly AssemblyOccurrence[];
 }
 
-type NodeValue = ProfileValue | SolidValue | PartValue | AssemblyValue;
+type NodeValue = ProfileValue | PathValue | SolidValue | PartValue | AssemblyValue;
 
 class EvaluationFailure extends Error {
   readonly diagnostic: Diagnostic;
@@ -1145,6 +1156,35 @@ export class Evaluator {
             result = { kind: "profile", profile: solved.profile };
             break;
           }
+          case "polylinePath": {
+            const path: ResolvedPolylinePath = {
+              kind: "polyline",
+              points: node.points.map(
+                (point) => point.map(expression) as unknown as Vec3,
+              ),
+              closed: node.closed,
+            };
+            const issue = validateResolvedPolylinePath(path, node.tolerance);
+            if (issue !== undefined) {
+              const { message, pointIndex, ...details } = issue;
+              throw new EvaluationFailure(
+                diagnostic("FEATURE_INVALID", message, {
+                  severity: "error",
+                  node: id,
+                  path:
+                    pointIndex === undefined
+                      ? `/nodes/${id}/points`
+                      : `/nodes/${id}/points/${pointIndex}`,
+                  details: {
+                    ...details,
+                    ...(pointIndex === undefined ? {} : { pointIndex }),
+                  },
+                }),
+              );
+            }
+            result = { kind: "path", path, tolerance: node.tolerance };
+            break;
+          }
           case "extrude": {
             requireKernelCapability("feature", "extrude", id);
             const profile = evaluateNode(node.profile.node);
@@ -1219,6 +1259,48 @@ export class Evaluator {
               this.kernel.loft!(
                 profiles,
                 { ruled: node.ruled },
+                { ...featureContext(id), tolerance },
+              ),
+              id,
+            );
+            break;
+          }
+          case "sweep": {
+            requireKernelCapability("feature", "sweep", id);
+            const profileValue = evaluateNode(node.profile.node);
+            if (profileValue.kind !== "profile") {
+              throw new Error("Sweep profile mismatch");
+            }
+            const pathValue = evaluateNode(node.path.node);
+            if (pathValue.kind !== "path") {
+              throw new Error("Sweep path mismatch");
+            }
+            const profileNode = document.nodes[node.profile.node];
+            const tolerance = Math.max(
+              profileNode?.kind === "sketch" ? profileNode.tolerance : 1e-7,
+              pathValue.tolerance,
+            );
+            const issue = validateResolvedSweep(
+              profileValue.profile,
+              pathValue.path,
+              tolerance,
+            );
+            if (issue !== undefined) {
+              const { message, input, ...details } = issue;
+              throw new EvaluationFailure(
+                diagnostic("FEATURE_INVALID", message, {
+                  severity: "error",
+                  node: id,
+                  path: `/nodes/${id}/${input}`,
+                  details: { ...details, input },
+                }),
+              );
+            }
+            result = ownShape(
+              this.kernel.sweep!(
+                profileValue.profile,
+                pathValue.path,
+                { transition: node.transition, frame: node.frame },
                 { ...featureContext(id), tolerance },
               ),
               id,
@@ -1560,7 +1642,7 @@ export class Evaluator {
           );
         } else {
           throw new EvaluationFailure(
-            diagnostic("OUTPUT_MISSING", "Profiles cannot be final design outputs", {
+            diagnostic("OUTPUT_MISSING", "Profiles and paths cannot be final design outputs", {
               severity: "error",
               path: `/outputs/${name}`,
             }),

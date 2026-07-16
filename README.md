@@ -4,7 +4,7 @@ Comprehensive, type-safe CAD-as-code for TypeScript.
 
 InvariantCAD represents a design as immutable, versioned JSON and evaluates it through replaceable geometry and sketch-solver backends. The public API never exposes WASM pointers or kernel-specific objects.
 
-> **Project status:** `0.1.0` is the released-foundation target. Current main adds an exact OpenCascade B-Rep backend, analytic sketch-profile transfer, STEP/BREP exchange, bounded ruled solid lofts, closed semantic topology roles, sketch-boundary provenance, exact selector-driven fillets and equal-distance chamfers, exact face-selected inward/outward shells, exact whole-solid inward/outward offsets, and atomic semantic-face draft with exact indexed topology evolution when the matched InvariantCAD-owned OCCT facade is loaded. Complete topology history across the other topology-changing features and additional advanced mechanical features remain under active development; see the [support matrix](#support-matrix) and [roadmap](docs/roadmap.md).
+> **Project status:** `0.1.0` is the released-foundation target. Current main adds an exact OpenCascade B-Rep backend, analytic sketch-profile transfer, STEP/BREP exchange, bounded ruled solid lofts, explicit 3D polyline paths and bounded exact solid sweeps, closed semantic topology roles, sketch-boundary provenance, exact selector-driven fillets and equal-distance chamfers, exact face-selected inward/outward shells, exact whole-solid inward/outward offsets, and atomic semantic-face draft with exact indexed topology evolution when the matched InvariantCAD-owned OCCT facade is loaded. Complete topology history across the other topology-changing features and additional advanced mechanical features remain under active development; see the [support matrix](#support-matrix) and [roadmap](docs/roadmap.md).
 
 ## Install
 
@@ -104,6 +104,26 @@ evaluator.dispose();
 ```
 
 The backend is explicitly selected; a design document never contains OCCT handles or backend-specific objects. The default `createOcctKernel()` loads stock `occt-wasm` and supports the exact features listed below except draft. Draft is advertised only when `moduleFactory` loads the matched InvariantCAD-owned facade build; `wasm` is an optional explicit binary override for environments where that factory cannot locate its sibling binary. The repository can turn that local build into a verified, package-neutral bundle, but applications must still supply its runtime explicitly. See [Browser initialization](#browser-initialization).
+
+### Exact polyline sweeps
+
+Paths are first-class parameterized nodes rather than closed sketch profiles:
+
+```ts
+const section = cad.sketch("section", plane.yz(), (sketch) =>
+  sketch.profile(
+    sketch.rectangle("outline", { width: mm(2), height: mm(2) }),
+  ),
+);
+const spine = cad.polylinePath("spine", [
+  vec3(mm(0), mm(0), mm(0)),
+  vec3(mm(5), mm(0), mm(0)),
+  vec3(mm(5), mm(5), mm(0)),
+]);
+const swept = cad.sweep("swept", section, spine);
+```
+
+Document-v1 sweeps require an open, simple path with no repeated or redundant collinear vertices; a closed, hole-free profile seated at its start; a first segment parallel to the profile-plane normal in either direction; corrected-Frenet transport; right-corner intersections; and conservative clearance between non-adjacent path legs. Unsupported curved, guided, variable-section, or closed-path modes fail explicitly rather than changing semantics.
 
 ### Semantic topology, fillets, chamfers, shells, offsets, and draft
 
@@ -227,7 +247,7 @@ The serialized role vocabulary is closed and exported through `TOPOLOGY_ROLES` a
 
 `start` and `end` follow construction parameterization, not current world orientation. A topology-preserving transform retains the original role/source lineage and adds `modified` lineage for the transform. Cylinder seams, cone apex artifacts, sphere seams/poles, and other kernel artifacts are deliberately unnamed so a document cannot accidentally depend on their enumeration.
 
-Selectors also support curve/surface kind, edge direction, face normal, radius, adjacency, `and`/`or`/`not`, and explicit cardinality. Zero matches produce `TOPOLOGY_SELECTION_MISSING`; excess matches produce `TOPOLOGY_SELECTION_AMBIGUOUS`. The exact backend currently provides complete broad feature provenance for primitives, extrusions, revolutions, lofts, and topology-preserving transforms, plus the semantic roles and sketch sources above. Loft topology has broad `createdBy(loft)` lineage but deliberately has no cap/side roles or sketch-source mapping. Boolean, fillet, chamfer, shell, and offset history is partial, so provenance queries on those results fail with `TOPOLOGY_HISTORY_UNAVAILABLE` rather than choosing unstable topology. Geometry-only selectors can still inspect those results. Draft is the narrower exception: a matched owned facade provides exact indexed evolution specifically for draft. Manifold and stock/default OCCT report an explicit capability error for draft.
+Selectors also support curve/surface kind, edge direction, face normal, radius, adjacency, `and`/`or`/`not`, and explicit cardinality. Zero matches produce `TOPOLOGY_SELECTION_MISSING`; excess matches produce `TOPOLOGY_SELECTION_AMBIGUOUS`. The exact backend currently provides complete broad feature provenance for primitives, extrusions, revolutions, lofts, sweeps, and topology-preserving transforms, plus the semantic roles and sketch sources above. Loft and sweep topology have broad `createdBy(feature)` lineage but deliberately have no cap/side roles or sketch-source mapping. Boolean, fillet, chamfer, shell, and offset history is partial, so provenance queries on those results fail with `TOPOLOGY_HISTORY_UNAVAILABLE` rather than choosing unstable topology. Geometry-only selectors can still inspect those results. Draft is the narrower exception: a matched owned facade provides exact indexed evolution specifically for draft. Manifold and stock/default OCCT report an explicit capability error for draft.
 
 ## What works today
 
@@ -241,6 +261,7 @@ Selectors also support curve/surface kind, edge direction, face normal, radius, 
 - Explicit outer loops and hole loops
 - Extrude, symmetric extrude, and revolve on both kernels
 - Ordered, ruled, hole-free solid lofts through parallel principal-plane profiles on the exact OCCT backend
+- Explicit open 3D polyline paths and hole-free right-corner solid sweeps on the exact OCCT backend
 - Twist and top-scale extrusion through the Manifold mesh backend
 - Union, subtraction, and intersection
 - Semantic face/edge set selectors with closed roles, sketch sources, and explicit cardinality
@@ -292,13 +313,14 @@ The solver API is replaceable. The built-in solver is intentionally a v0.1 refer
 | Whole-solid offset | OCCT inward/outward mode with fixed round joins | Yes |
 | Draft | Explicitly supplied matched owned OCCT facade with semantic face selectors | Yes |
 | Loft | OCCT ordered ruled-solid mode with matched hole-free sections | Smooth, guided, and open modes |
+| Sweep | OCCT open-polyline solid mode with corrected-Frenet transport and right-corner transitions | Curved, smooth, guided, and variable-section modes |
 | Persistent face/edge selectors | Primitive/extrusion roles and sources; origin/geometry/adjacency queries | Yes |
 | Drawings, GD&T, PMI | No | Yes |
 | Sheet metal | No | Yes |
 | CAM and CAE adapters | No | Yes |
 | STL and OBJ export | Yes | Yes |
 
-Capabilities are negotiated by backends. InvariantCAD will not silently pretend a mesh operation is exact B-Rep or silently downgrade exact geometry. The current loft contract is deliberately bounded to ruled solids through at least two distinct, ordered, hole-free profiles on parallel planes, with matching directed curve signatures. Draft requires both the ordinary `draft` feature and `exactIndexedTopologyEvolution` v1 scoped to draft; a stock/default OCCT module advertises neither.
+Capabilities are negotiated by backends. InvariantCAD will not silently pretend a mesh operation is exact B-Rep or silently downgrade exact geometry. The current loft contract is deliberately bounded to ruled solids through at least two distinct, ordered, hole-free profiles on parallel planes, with matching directed curve signatures. The current sweep contract is similarly bounded to simple open polyline paths, conservative nonlocal profile clearance, and fixed corrected-Frenet/right-corner semantics. Draft requires both the ordinary `draft` feature and `exactIndexedTopologyEvolution` v1 scoped to draft; a stock/default OCCT module advertises neither.
 
 ## Assemblies
 

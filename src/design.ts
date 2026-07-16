@@ -28,6 +28,7 @@ import {
   type AssemblyInstanceIR,
   type AssemblyNodeIR,
   type DesignDocument,
+  type DesignOutputKind,
   type NodeIR,
   type OutputKind,
   type ParameterIR,
@@ -69,6 +70,12 @@ export class ModelRef<K extends OutputKind> {
 export class ProfileRef extends ModelRef<"profile"> {
   constructor(owner: DesignBuilder, node: NodeId) {
     super(owner, "profile", node);
+  }
+}
+
+export class PathRef extends ModelRef<"path"> {
+  constructor(owner: DesignBuilder, node: NodeId) {
+    super(owner, "path", node);
   }
 }
 
@@ -196,7 +203,7 @@ export class DesignBuilder {
   readonly metadata: Readonly<Record<string, JsonValue>> | undefined;
   private readonly parameterRecords: Record<ParameterId, ParameterIR> = {};
   private readonly nodeRecords: Record<NodeId, NodeIR> = {};
-  private readonly outputRecords: Record<string, RefIR> = {};
+  private readonly outputRecords: Record<string, RefIR<DesignOutputKind>> = {};
 
   constructor(name: string, options: DesignOptions = {}) {
     if (name.trim().length === 0) throw new TypeError("A design requires a name");
@@ -337,6 +344,27 @@ export class DesignBuilder {
     return new ProfileRef(this, key);
   }
 
+  polylinePath(
+    id: string,
+    points: readonly Vec3Expression[],
+    options: { readonly tolerance?: number } = {},
+  ): PathRef {
+    if (points.length < 2) {
+      throw new TypeError("A polyline path requires at least two ordered points");
+    }
+    const tolerance = options.tolerance ?? 1e-7;
+    if (!Number.isFinite(tolerance) || !(tolerance > 0)) {
+      throw new RangeError("Polyline path tolerance must be finite and positive");
+    }
+    const key = this.addNode(id, {
+      kind: "polylinePath",
+      points: points.map((point) => [point[0].ir, point[1].ir, point[2].ir]),
+      closed: false,
+      tolerance,
+    });
+    return new PathRef(this, key);
+  }
+
   extrude(
     id: string,
     profile: ProfileRef,
@@ -404,6 +432,36 @@ export class DesignBuilder {
       kind: "loft",
       profiles: profiles.map((profile) => profile.toIR()),
       ruled: true,
+    });
+    return new SolidRef(this, key);
+  }
+
+  sweep(
+    id: string,
+    profile: ProfileRef,
+    path: PathRef,
+    options: {
+      readonly transition?: "right-corner";
+      readonly frame?: "corrected-frenet";
+    } = {},
+  ): SolidRef {
+    this.assertOwned(profile);
+    this.assertOwned(path);
+    if (
+      options.transition !== undefined &&
+      options.transition !== "right-corner"
+    ) {
+      throw new TypeError("Document v1 sweeps require right-corner transitions");
+    }
+    if (options.frame !== undefined && options.frame !== "corrected-frenet") {
+      throw new TypeError("Document v1 sweeps require a corrected-Frenet frame");
+    }
+    const key = this.addNode(id, {
+      kind: "sweep",
+      profile: profile.toIR(),
+      path: path.toIR(),
+      transition: "right-corner",
+      frame: "corrected-frenet",
     });
     return new SolidRef(this, key);
   }

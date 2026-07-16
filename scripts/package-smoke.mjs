@@ -93,7 +93,7 @@ try {
     join(consumer, "smoke.mjs"),
     [
       'import { writeFile } from "node:fs/promises";',
-      'import { OFFSET_DIRECTIONS, OFFSET_JOIN_SEMANTICS, SHELL_DIRECTIONS, SHELL_JOIN_SEMANTICS, TOPOLOGY_ROLE_RULES, angleVec3, createEvaluator, deg, design, kernelSupports, mm, plane, scalarVec3, stringifyDocument, tf, topology, vec3 } from "invariantcad";',
+      'import { OFFSET_DIRECTIONS, OFFSET_JOIN_SEMANTICS, SHELL_DIRECTIONS, SHELL_JOIN_SEMANTICS, SWEEP_FRAMES, SWEEP_TRANSITIONS, TOPOLOGY_ROLE_RULES, angleVec3, createEvaluator, deg, design, kernelSupports, mm, plane, scalarVec3, stringifyDocument, tf, topology, vec3 } from "invariantcad";',
       'import { createOcctKernel } from "invariantcad/kernels/occt";',
       "",
       'const cad = design("package-smoke");',
@@ -129,6 +129,10 @@ try {
       '  if (!kernelSupports(exactKernel.capabilities, "feature", "loft")) throw new Error("Exact loft capability was not packaged");',
       '  const directLoft = exactKernel.loft([{ plane: { plane: "XY", origin: [0, 0, 0] }, outer: { curves: [{ kind: "line", start: [0, 0], end: [2, 0] }, { kind: "line", start: [2, 0], end: [2, 3] }, { kind: "line", start: [2, 3], end: [0, 3] }, { kind: "line", start: [0, 3], end: [0, 0] }] }, holes: [] }, { plane: { plane: "XY", origin: [0, 0, 5] }, outer: { curves: [{ kind: "line", start: [0, 0], end: [4, 0] }, { kind: "line", start: [4, 0], end: [4, 6] }, { kind: "line", start: [4, 6], end: [0, 6] }, { kind: "line", start: [0, 6], end: [0, 0] }] }, holes: [] }], { ruled: true }, { tolerance: 1e-7 });',
       '  if (Math.abs(exactKernel.measure(directLoft).volume - 70) > 1e-8) throw new Error("Unexpected exact loft volume");',
+      '  if (!kernelSupports(exactKernel.capabilities, "feature", "sweep")) throw new Error("Exact sweep capability was not packaged");',
+      '  if (SWEEP_FRAMES.join(",") !== "corrected-frenet" || SWEEP_TRANSITIONS.join(",") !== "right-corner") throw new Error("Sweep semantic registries were not packaged");',
+      '  const directSweep = exactKernel.sweep({ plane: { plane: "YZ", origin: [0, 0, 0] }, outer: { curves: [{ kind: "line", start: [-1, -1], end: [1, -1] }, { kind: "line", start: [1, -1], end: [1, 1] }, { kind: "line", start: [1, 1], end: [-1, 1] }, { kind: "line", start: [-1, 1], end: [-1, -1] }] }, holes: [] }, { kind: "polyline", points: [[0, 0, 0], [5, 0, 0], [5, 5, 0]], closed: false }, { frame: "corrected-frenet", transition: "right-corner" }, { tolerance: 1e-7 });',
+      '  if (Math.abs(exactKernel.measure(directSweep).volume - 40) > 1e-8) throw new Error("Unexpected exact sweep volume");',
       "  const vertical = snapshot.edges.filter((edge) => Math.abs(edge.curve.direction?.[2] ?? 0) > 0.999);",
       '  if (vertical.length !== 4) throw new Error("Unexpected vertical edge count");',
       "  const rounded = exactKernel.fillet(exactBox, vertical.map((edge) => edge.key), { radius: 0.2 });",
@@ -143,6 +147,7 @@ try {
       '  if (exactKernel.topology(expanded).history !== "partial") throw new Error("Offset history boundary was not preserved");',
       "  exactKernel.disposeShape(expanded);",
       "  exactKernel.disposeShape(directLoft);",
+      "  exactKernel.disposeShape(directSweep);",
       "  exactKernel.disposeShape(beveled);",
       "  exactKernel.disposeShape(rounded);",
       "  exactKernel.disposeShape(exactBox);",
@@ -236,6 +241,27 @@ try {
       '} finally {',
       '  loftEvaluator.dispose();',
       '}',
+      'const sweepCad = design("package-sweep");',
+      'const sweepProfile = sweepCad.sketch("profile", plane.yz(), (sketch) => sketch.profile(sketch.rectangle("section", { width: mm(2), height: mm(2) })));',
+      'const sweepPath = sweepCad.polylinePath("path", [vec3(mm(0), mm(0), mm(0)), vec3(mm(5), mm(0), mm(0)), vec3(mm(5), mm(5), mm(0))]);',
+      'sweepCad.output("sweep", sweepCad.sweep("sweep", sweepProfile, sweepPath));',
+      'const sweepDocument = sweepCad.build();',
+      'const sweepJson = stringifyDocument(sweepDocument);',
+      'if (!sweepJson.includes("polylinePath") || !sweepJson.includes("corrected-frenet") || !sweepJson.includes("right-corner")) throw new Error("Sweep was not serialized");',
+      'await writeFile("model-sweep.invariantcad.json", sweepJson);',
+      'const sweepEvaluator = await createEvaluator({ kernel: await createOcctKernel() });',
+      'try {',
+      '  const result = await sweepEvaluator.evaluate(sweepDocument);',
+      '  if (!result.ok) throw new Error(JSON.stringify(result.diagnostics));',
+      '  try {',
+      '    const volume = result.value.output("sweep").measure().volume;',
+      '    if (Math.abs(volume - 40) > 1e-8) throw new Error("Unexpected semantic sweep volume " + volume);',
+      '  } finally {',
+      '    result.value.dispose();',
+      '  }',
+      '} finally {',
+      '  sweepEvaluator.dispose();',
+      '}',
       'const filletCad = design("package-fillet");',
       'const filletBox = filletCad.box("box", { size: vec3(mm(10), mm(20), mm(30)) });',
       'const filletEdges = topology.edges.createdBy(filletBox).and(topology.edges.direction(scalarVec3(0, 0, 1))).exactly(4);',
@@ -328,7 +354,7 @@ try {
   await writeFile(
     join(consumer, "type-smoke.ts"),
     [
-      'import { EDGE_TOPOLOGY_ROLES, FACE_TOPOLOGY_ROLES, OFFSET_DIRECTIONS, SHELL_DIRECTIONS, TOPOLOGY_ROLE_RULES, TOPOLOGY_ROLES, angleVec3, deg, design, mm, plane, scalarVec3, tf, topology, vec3, type ChamferNodeIR, type DesignDocument, type DraftNodeIR, type EdgeTopologyRole, type FaceTopologyRole, type LoftNodeIR, type OffsetDirection, type OffsetNodeIR, type ProfileRef, type ShellDirection, type ShellNodeIR, type SolidRef, type TopologyOriginOptions, type TopologyRole, type TopologySelection } from "invariantcad";',
+      'import { EDGE_TOPOLOGY_ROLES, FACE_TOPOLOGY_ROLES, OFFSET_DIRECTIONS, SHELL_DIRECTIONS, TOPOLOGY_ROLE_RULES, TOPOLOGY_ROLES, angleVec3, deg, design, mm, plane, scalarVec3, tf, topology, vec3, type ChamferNodeIR, type DesignDocument, type DraftNodeIR, type EdgeTopologyRole, type FaceTopologyRole, type LoftNodeIR, type OffsetDirection, type OffsetNodeIR, type PathRef, type PolylinePathNodeIR, type ProfileRef, type ShellDirection, type ShellNodeIR, type SolidRef, type SweepNodeIR, type TopologyOriginOptions, type TopologyRole, type TopologySelection } from "invariantcad";',
       'import { createOcctKernel, type OcctKernelOptions, type OcctModuleFactory, type OcctModuleOptions } from "invariantcad/kernels/occt";',
       "",
       'const cad = design("type-smoke");',
@@ -343,8 +369,12 @@ try {
       'const loftBottom: ProfileRef = cad.sketch("loft-bottom", plane.xy(), (sketch) => sketch.profile(sketch.rectangle("bottom", { width: mm(1), height: mm(2) })));',
       'const loftTop: ProfileRef = cad.sketch("loft-top", plane.xy(vec3(mm(0), mm(0), mm(3))), (sketch) => sketch.profile(sketch.rectangle("top", { width: mm(2), height: mm(4) })));',
       'const lofted: SolidRef = cad.loft("lofted", [loftBottom, loftTop], { ruled: true });',
+      'const sweepPath: PathRef = cad.polylinePath("sweep-path", [vec3(mm(0), mm(0), mm(0)), vec3(mm(0), mm(0), mm(3)), vec3(mm(3), mm(0), mm(3))]);',
+      'const swept: SolidRef = cad.sweep("swept", loftBottom, sweepPath, { frame: "corrected-frenet", transition: "right-corner" });',
       '// @ts-expect-error Document v1 lofts must be ruled.',
       'cad.loft("smooth", [loftBottom, loftTop], { ruled: false });',
+      '// @ts-expect-error Document v1 sweeps use corrected-Frenet transport only.',
+      'cad.sweep("fixed-sweep", loftBottom, sweepPath, { frame: "fixed" });',
       "// @ts-expect-error Chamfers require edge selections.",
       'cad.chamfer("invalid-faces", solid, { edges: topology.faces.all().select(), distance: mm(0.1) });',
       "// @ts-expect-error Chamfer distance must be a length expression.",
@@ -370,6 +400,7 @@ try {
       'cad.output("expanded", expanded);',
       'cad.output("drafted", drafted);',
       'cad.output("lofted", lofted);',
+      'cad.output("swept", swept);',
       "const document: DesignDocument = cad.build();",
       'const maybeChamfer = document.nodes[beveled.node];',
       'if (maybeChamfer?.kind !== "chamfer") throw new Error("Missing chamfer IR");',
@@ -395,6 +426,14 @@ try {
       'if (maybeLoft?.kind !== "loft") throw new Error("Missing loft IR");',
       'const loftNode: LoftNodeIR = maybeLoft;',
       'if (loftNode.ruled !== true || loftNode.profiles.length !== 2) throw new Error("Invalid loft IR types");',
+      'const maybePath = document.nodes[sweepPath.node];',
+      'if (maybePath?.kind !== "polylinePath") throw new Error("Missing path IR");',
+      'const pathNode: PolylinePathNodeIR = maybePath;',
+      'if (pathNode.closed !== false || pathNode.points.length !== 3) throw new Error("Invalid path IR types");',
+      'const maybeSweep = document.nodes[swept.node];',
+      'if (maybeSweep?.kind !== "sweep") throw new Error("Missing sweep IR");',
+      'const sweepNode: SweepNodeIR = maybeSweep;',
+      'if (sweepNode.frame !== "corrected-frenet" || sweepNode.transition !== "right-corner") throw new Error("Invalid sweep IR types");',
       'const moduleFactory: OcctModuleFactory = async (_moduleOptions?: OcctModuleOptions) => ({});',
       "const options: OcctKernelOptions = { moduleFactory };",
       "void createOcctKernel(options);",
@@ -491,6 +530,7 @@ try {
   run(bin, ["validate", "model-shell.invariantcad.json"], consumer);
   run(bin, ["validate", "model-offset.invariantcad.json"], consumer);
   run(bin, ["validate", "model-loft.invariantcad.json"], consumer);
+  run(bin, ["validate", "model-sweep.invariantcad.json"], consumer);
   run(
     bin,
     ["export", "model.invariantcad.json", "--to", "model.step"],
@@ -558,6 +598,21 @@ try {
   );
   if ((await stat(join(consumer, "loft.step"))).size < 100) {
     throw new Error("Installed CLI produced an empty loft STEP file");
+  }
+  run(
+    bin,
+    [
+      "export",
+      "model-sweep.invariantcad.json",
+      "--output",
+      "sweep",
+      "--to",
+      "sweep.step",
+    ],
+    consumer,
+  );
+  if ((await stat(join(consumer, "sweep.step"))).size < 100) {
+    throw new Error("Installed CLI produced an empty sweep STEP file");
   }
   process.stdout.write("Packed package smoke test passed.\n");
 } finally {

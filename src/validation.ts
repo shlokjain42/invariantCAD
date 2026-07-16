@@ -789,6 +789,44 @@ function validateNode(
     case "sketch":
       validateSketch(node, document, path, diagnostics);
       break;
+    case "polylinePath":
+      if (node.points.length < 2) {
+        diagnostics.push(
+          diagnostic(
+            "FEATURE_INVALID",
+            "A polyline path requires at least two ordered points",
+            { severity: "error", node: id, path: `${path}/points` },
+          ),
+        );
+      }
+      if (node.closed !== false) {
+        diagnostics.push(
+          diagnostic(
+            "FEATURE_INVALID",
+            "Document v1 polyline paths must be open",
+            { severity: "error", node: id, path: `${path}/closed` },
+          ),
+        );
+      }
+      node.points.forEach((point, pointIndex) =>
+        point.forEach((value, coordinateIndex) =>
+          expression(
+            value,
+            "length",
+            `points/${pointIndex}/${coordinateIndex}`,
+          ),
+        ),
+      );
+      if (!Number.isFinite(node.tolerance) || !(node.tolerance > 0)) {
+        diagnostics.push(
+          diagnostic(
+            "FEATURE_INVALID",
+            "Polyline path tolerance must be finite and positive",
+            { severity: "error", node: id, path: `${path}/tolerance` },
+          ),
+        );
+      }
+      break;
     case "extrude":
       validateRef(node.profile, "profile", document, `${path}/profile`, diagnostics);
       expression(node.distance, "length", "distance");
@@ -850,6 +888,28 @@ function validateNode(
       }
       break;
     }
+    case "sweep":
+      validateRef(node.profile, "profile", document, `${path}/profile`, diagnostics);
+      validateRef(node.path, "path", document, `${path}/path`, diagnostics);
+      if (node.transition !== "right-corner") {
+        diagnostics.push(
+          diagnostic(
+            "FEATURE_INVALID",
+            "Document v1 sweeps require right-corner transitions",
+            { severity: "error", node: id, path: `${path}/transition` },
+          ),
+        );
+      }
+      if (node.frame !== "corrected-frenet") {
+        diagnostics.push(
+          diagnostic(
+            "FEATURE_INVALID",
+            "Document v1 sweeps require a corrected-Frenet frame",
+            { severity: "error", node: id, path: `${path}/frame` },
+          ),
+        );
+      }
+      break;
     case "boolean":
       validateRef(node.target, "solid", document, `${path}/target`, diagnostics);
       node.tools.forEach((tool, index) =>
@@ -1031,7 +1091,13 @@ export function validateDocument(
     validateNode(id, node, document, diagnostics);
   }
   for (const [name, output] of Object.entries(document.outputs)) {
-    validateRef(output, output.kind, document, `/outputs/${name}`, diagnostics);
+    validateRef(
+      output,
+      ["solid", "part", "assembly"],
+      document,
+      `/outputs/${name}`,
+      diagnostics,
+    );
   }
   detectGraphCycles(document, diagnostics);
   if (hasErrors(diagnostics)) return { ok: false, diagnostics };

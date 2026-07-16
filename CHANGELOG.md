@@ -4,6 +4,7 @@
 
 - Added a kernel-neutral ordered ruled-solid loft node and TypeScript builder API.
 - Added strict profile compatibility, station ordering, exact OCCT result-topology validation, capability negotiation, and conformance coverage for the bounded loft contract.
+- Added first-class parameterized open 3D polyline paths and a bounded exact solid-sweep contract with corrected-Frenet transport, right-corner transitions, conservative self-overlap rejection, transactional OCCT ownership, and package-level coverage.
 
 - Preserve analytic sketch lines, arcs, circles, and their source entity IDs in resolved profiles
 - Add an exact OpenCascade B-Rep backend with STEP and text/binary BREP exchange

@@ -4,12 +4,14 @@ import type { Dimension, ExpressionIR } from "./expressions.js";
 import type { TopologyKind, TopologyRole } from "./protocol/topology.js";
 import type { ShellDirection } from "./protocol/shell.js";
 import type { OffsetDirection } from "./protocol/offset.js";
+import type { SweepFrame, SweepTransition } from "./protocol/sweep.js";
 
 export const DOCUMENT_SCHEMA =
   "https://invariantcad.dev/schema/document/v1" as const;
 export const DOCUMENT_VERSION = 1 as const;
 
-export type OutputKind = "profile" | "solid" | "part" | "assembly";
+export type OutputKind = "profile" | "path" | "solid" | "part" | "assembly";
+export type DesignOutputKind = Exclude<OutputKind, "profile" | "path">;
 
 export interface RefIR<K extends OutputKind = OutputKind> {
   readonly node: NodeId;
@@ -179,6 +181,13 @@ export interface SketchNodeIR {
   readonly tolerance: number;
 }
 
+export interface PolylinePathNodeIR {
+  readonly kind: "polylinePath";
+  readonly points: readonly Vec3ExpressionIR[];
+  readonly closed: false;
+  readonly tolerance: number;
+}
+
 export interface ExtrudeNodeIR {
   readonly kind: "extrude";
   readonly profile: RefIR<"profile">;
@@ -202,6 +211,14 @@ export interface LoftNodeIR {
   readonly profiles: readonly RefIR<"profile">[];
   /** Document v1 supports ruled interpolation only. */
   readonly ruled: true;
+}
+
+export interface SweepNodeIR {
+  readonly kind: "sweep";
+  readonly profile: RefIR<"profile">;
+  readonly path: RefIR<"path">;
+  readonly transition: SweepTransition;
+  readonly frame: SweepFrame;
 }
 
 export interface BooleanNodeIR {
@@ -367,9 +384,11 @@ export type NodeIR =
   | CylinderNodeIR
   | SphereNodeIR
   | SketchNodeIR
+  | PolylinePathNodeIR
   | ExtrudeNodeIR
   | RevolveNodeIR
   | LoftNodeIR
+  | SweepNodeIR
   | BooleanNodeIR
   | TransformNodeIR
   | FilletNodeIR
@@ -390,7 +409,7 @@ export interface DesignDocument {
   };
   readonly parameters: Readonly<Record<ParameterId, ParameterIR>>;
   readonly nodes: Readonly<Record<NodeId, NodeIR>>;
-  readonly outputs: Readonly<Record<string, RefIR>>;
+  readonly outputs: Readonly<Record<string, RefIR<DesignOutputKind>>>;
   readonly metadata?: Readonly<Record<string, JsonValue>>;
 }
 
@@ -402,12 +421,15 @@ export function nodeDependencies(node: NodeIR): readonly RefIR[] {
     case "cylinder":
     case "sphere":
     case "sketch":
+    case "polylinePath":
       return [];
     case "extrude":
     case "revolve":
       return [node.profile];
     case "loft":
       return node.profiles;
+    case "sweep":
+      return [node.profile, node.path];
     case "boolean":
       return [node.target, ...node.tools];
     case "transform":
@@ -429,6 +451,8 @@ export function outputKindForNode(node: NodeIR): OutputKind {
   switch (node.kind) {
     case "sketch":
       return "profile";
+    case "polylinePath":
+      return "path";
     case "part":
       return "part";
     case "assembly":

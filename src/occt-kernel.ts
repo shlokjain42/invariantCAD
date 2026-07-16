@@ -1,3 +1,4 @@
+import { TransitionMode } from "occt-wasm";
 import type {
   OcctKernel as RawOcctKernel,
   ShapeHandle,
@@ -39,6 +40,11 @@ import {
   validateRuledSolidLoftProfiles,
   type ResolvedLoftOptions,
 } from "./protocol/loft.js";
+import type { ResolvedPath } from "./protocol/path.js";
+import {
+  validateResolvedSweep,
+  type ResolvedSweepOptions,
+} from "./protocol/sweep.js";
 import type { ResolvedOffsetOptions } from "./protocol/offset.js";
 import type { ResolvedShellOptions } from "./protocol/shell.js";
 import {
@@ -317,6 +323,7 @@ class OcctKernel implements GeometryKernel {
       "extrude",
       "revolve",
       "loft",
+      "sweep",
       "boolean",
       "transform",
       "fillet",
@@ -532,6 +539,7 @@ class OcctKernel implements GeometryKernel {
     profile: ResolvedProfile,
   ): {
     readonly face: ShapeHandle;
+    readonly outerWire: ShapeHandle;
     readonly allocated: readonly ShapeHandle[];
     readonly curves: readonly ProfileCurveHandle[];
   } {
@@ -553,7 +561,7 @@ class OcctKernel implements GeometryKernel {
         face = this.raw.addHolesInFace(face, holes);
         allocated.push(face);
       }
-      return { face, allocated, curves };
+      return { face, outerWire, allocated, curves };
     } catch (error) {
       this.releaseHandles(allocated);
       throw error;
@@ -1145,6 +1153,162 @@ class OcctKernel implements GeometryKernel {
       throw error;
     } finally {
       this.releaseHandles(allocated);
+    }
+  }
+
+  sweep(
+    profile: ResolvedProfile,
+    path: ResolvedPath,
+    options: ResolvedSweepOptions,
+    context?: KernelFeatureContext,
+  ): KernelShape {
+    checkContext(context);
+    if (
+      typeof options !== "object" ||
+      options === null ||
+      options.transition !== "right-corner" ||
+      options.frame !== "corrected-frenet"
+    ) {
+      throw new TypeError(
+        "Document v1 sweeps require corrected-Frenet transport and right-corner transitions",
+      );
+    }
+    if (path.kind !== "polyline") {
+      throw new TypeError("Document v1 sweeps require a polyline path");
+    }
+    const tolerance = context?.tolerance ?? this.modelingTolerance;
+    const issue = validateResolvedSweep(profile, path, tolerance);
+    if (issue !== undefined) throw new RangeError(issue.message);
+
+    const built = this.profileFace(profile);
+    const pathAllocated: ShapeHandle[] = [];
+    let result: ShapeHandle | undefined;
+    try {
+      const curveCount = profile.outer.curves.length;
+      if (
+        this.raw.isNull(built.outerWire) ||
+        this.raw.getShapeType(built.outerWire) !== "wire" ||
+        !this.raw.isValid(built.outerWire) ||
+        this.raw.subShapeCount(built.outerWire, "edge") !== curveCount ||
+        this.raw.subShapeCount(built.outerWire, "vertex") !== curveCount ||
+        this.raw.isNull(built.face) ||
+        this.raw.getShapeType(built.face) !== "face" ||
+        !this.raw.isValid(built.face) ||
+        this.raw.subShapeCount(built.face, "edge") !== curveCount ||
+        this.raw.subShapeCount(built.face, "vertex") !== curveCount
+      ) {
+        throw new RangeError(
+          "Sweep profile does not form a valid simple planar face",
+        );
+      }
+      const profileArea = this.raw.getSurfaceArea(built.face);
+      if (!Number.isFinite(profileArea) || !(profileArea > tolerance ** 2)) {
+        throw new RangeError(
+          "Sweep profile does not form a valid simple planar face",
+        );
+      }
+
+      const pathEdges: ShapeHandle[] = [];
+      for (let index = 0; index < path.points.length - 1; index += 1) {
+        checkContext(context);
+        const start = path.points[index]!;
+        const end = path.points[index + 1]!;
+        const edge = this.raw.makeLineEdge(occtVector(start), occtVector(end));
+        pathAllocated.push(edge);
+        pathEdges.push(edge);
+        if (
+          this.raw.isNull(edge) ||
+          this.raw.getShapeType(edge) !== "edge" ||
+          !this.raw.isValid(edge) ||
+          this.raw.subShapeCount(edge, "vertex") !== 2
+        ) {
+          throw new RangeError(
+            `Sweep path segment ${index} does not form a valid edge`,
+          );
+        }
+      }
+      const spine = this.raw.makeWire(pathEdges);
+      pathAllocated.push(spine);
+      const segmentCount = pathEdges.length;
+      if (
+        this.raw.isNull(spine) ||
+        this.raw.getShapeType(spine) !== "wire" ||
+        !this.raw.isValid(spine) ||
+        this.raw.subShapeCount(spine, "edge") !== segmentCount ||
+        this.raw.subShapeCount(spine, "vertex") !== segmentCount + 1
+      ) {
+        throw new RangeError(
+          "Sweep path does not form one valid unmodified open wire",
+        );
+      }
+
+      checkContext(context);
+      result = this.raw.sweep(
+        built.outerWire,
+        spine,
+        TransitionMode.RightCorner,
+      );
+      checkContext(context);
+      const minimumVolume = Math.max(tolerance ** 3, Number.EPSILON);
+      const expectedFaces = segmentCount * curveCount + 2;
+
+      const validateResult = (): number => {
+        if (
+          result === undefined ||
+          this.raw.isNull(result) ||
+          this.raw.getShapeType(result) !== "solid" ||
+          !this.raw.isValid(result)
+        ) {
+          throw new RangeError("Sweep did not produce one valid solid");
+        }
+        if (
+          this.raw.subShapeCount(result, "solid") !== 1 ||
+          this.raw.subShapeCount(result, "shell") !== 1
+        ) {
+          throw new RangeError("Sweep did not produce exactly one solid and shell");
+        }
+        if (this.raw.subShapeCount(result, "face") !== expectedFaces) {
+          throw new RangeError(
+            "Sweep changed the profile-segment face correspondence",
+          );
+        }
+        const solids = this.raw.getSubShapes(result, "solid");
+        try {
+          if (
+            solids.length !== 1 ||
+            !this.isPureSingleSolidShape(result, solids[0]!)
+          ) {
+            throw new RangeError(
+              "Sweep produced loose topology outside its result solid",
+            );
+          }
+        } finally {
+          this.releaseHandles(solids);
+        }
+        const volume = this.raw.getVolume(result);
+        if (!Number.isFinite(volume) || !(Math.abs(volume) > minimumVolume)) {
+          throw new RangeError("Sweep did not produce a positive-volume solid");
+        }
+        return volume;
+      };
+
+      let volume = validateResult();
+      if (volume < 0) {
+        const reversed = this.raw.reverseShape(result);
+        this.raw.release(result);
+        result = reversed;
+        volume = validateResult();
+      }
+      if (!(volume > minimumVolume)) {
+        throw new RangeError("Sweep did not produce a positive-volume solid");
+      }
+      return this.own(result, context);
+    } catch (error) {
+      if (result !== undefined) this.raw.release(result);
+      throw error;
+    } finally {
+      this.releaseHandles(pathAllocated);
+      this.releaseHandles(built.allocated);
     }
   }
 

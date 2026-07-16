@@ -18,6 +18,7 @@ InvariantCAD's goal is one coherent TypeScript CAD system, not one monolithic ge
 - Curve-preserving resolved profiles with sketch-entity provenance
 - Exact primitives, extrude, revolve, booleans, and transforms
 - Bounded ruled solid lofts through ordered, compatible, hole-free profiles
+- Bounded exact solid sweeps along explicit open 3D polyline paths with corrected-Frenet transport and right-corner transitions
 - Exact lines, circles, conics, NURBS curves, and NURBS surfaces
 - STEP and OCCT BREP import/export, followed by IGES
 - Shape healing and validity diagnostics
@@ -49,7 +50,7 @@ InvariantCAD's goal is one coherent TypeScript CAD system, not one monolithic ge
 - Asymmetric, distance-angle, and variable chamfer modes through semantic selectors
 - Variable fillet through semantic selectors
 - Closed, variable-thickness, and intersection/miter-join shell modes
-- Sweep, smooth/guided/open or holed loft modes, pipe, and two-dimensional wire/profile offset
+- Smooth/curved/guided sweep modes, smooth/guided/open or holed loft modes, pipe, and two-dimensional wire/profile offset
 - Feature-specific validity and healing diagnostics
 - Parameter-torture corpus for persistent selections
 

@@ -14,6 +14,7 @@ export {
   DesignBuilder,
   ModelRef,
   ProfileRef,
+  PathRef,
   SolidRef,
   PartRef,
   AssemblyRef,
@@ -80,6 +81,7 @@ export {
   type CircleEntityIR,
   type CylinderNodeIR,
   type DesignDocument,
+  type DesignOutputKind,
   type DraftNeutralPlaneIR,
   type DraftNodeIR,
   type EdgeUseIR,
@@ -94,6 +96,7 @@ export {
   type RefIR,
   type RevolveNodeIR,
   type LoftNodeIR,
+  type PolylinePathNodeIR,
   type SketchConstraintIR,
   type SketchEntityIR,
   type SketchLoopIR,
@@ -102,6 +105,7 @@ export {
   type ShellNodeIR,
   type OffsetNodeIR,
   type SphereNodeIR,
+  type SweepNodeIR,
   type TransformNodeIR,
   type TransformOperationIR,
   type TopologyCardinalityIR,
@@ -177,6 +181,25 @@ export {
   type LoftProfileValidationIssue,
   type ResolvedLoftOptions,
 } from "./protocol/loft.js";
+export {
+  POLYLINE_PATH_MIN_CORNER_SINE,
+  resolvedPolylineSegmentDistance,
+  validateResolvedPolylinePath,
+  type PathValidationIssue,
+  type PathValidationReason,
+  type ResolvedPath,
+  type ResolvedPolylinePath,
+} from "./protocol/path.js";
+export {
+  SWEEP_FRAMES,
+  SWEEP_TRANSITIONS,
+  validateResolvedSweep,
+  type ResolvedSweepOptions,
+  type SweepFrame,
+  type SweepTransition,
+  type SweepValidationIssue,
+  type SweepValidationReason,
+} from "./protocol/sweep.js";
 export {
   OFFSET_DIRECTIONS,
   OFFSET_JOIN_SEMANTICS,
