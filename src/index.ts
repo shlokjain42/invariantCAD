@@ -81,6 +81,7 @@ export {
   type DesignDocument,
   type EdgeUseIR,
   type ExtrudeNodeIR,
+  type FilletNodeIR,
   type NodeIR,
   type OutputKind,
   type ParameterIR,
@@ -97,6 +98,11 @@ export {
   type SphereNodeIR,
   type TransformNodeIR,
   type TransformOperationIR,
+  type TopologyCardinalityIR,
+  type TopologyOriginRelation,
+  type TopologyQueryIR,
+  type TopologySelectionIR,
+  type TopologySourceIR,
 } from "./ir.js";
 export {
   EvaluatedAssembly,
@@ -121,6 +127,7 @@ export {
   mergeMeshes,
   GEOMETRY_KERNEL_PROTOCOL_VERSION,
   kernelSupports,
+  kernelSupportsTopology,
   transformMesh,
   type BoundingBox,
   type GeometryKernel,
@@ -137,6 +144,7 @@ export {
   type MeshOptions,
   type ResolvedTransformOperation,
   type ShapeMeasurements,
+  type TopologyGeometryKernel,
 } from "./kernel.js";
 export {
   curveEnd,
@@ -156,6 +164,29 @@ export {
   type TessellatedProfile,
 } from "./protocol/profile.js";
 export {
+  topology,
+  TopologyQuery,
+  TopologySelection,
+  type TopologyOriginOptions,
+} from "./topology.js";
+export {
+  resolveTopologySelection,
+  type TopologyResolutionContext,
+} from "./topology-resolution.js";
+export type {
+  KernelCurveDescriptor,
+  KernelEdgeDescriptor,
+  KernelFaceDescriptor,
+  KernelSurfaceDescriptor,
+  KernelTopologyBounds,
+  KernelTopologyCapabilities,
+  KernelTopologyKey,
+  KernelTopologyLineage,
+  KernelTopologySnapshot,
+  KernelTopologySource,
+  TopologyKind,
+} from "./protocol/topology.js";
+export {
   ReferenceSketchSolver,
   createReferenceSketchSolver,
   type SketchSolveContext,
@@ -173,7 +204,12 @@ export {
   stringifyDocument,
   type StringifyOptions,
 } from "./serialization.js";
-export { DesignDocumentSchema, ExpressionSchema } from "./schema.js";
+export {
+  DesignDocumentSchema,
+  ExpressionSchema,
+  TopologyQuerySchema,
+  TopologySelectionSchema,
+} from "./schema.js";
 export { validateDocument } from "./validation.js";
 export {
   exportAsciiStl,

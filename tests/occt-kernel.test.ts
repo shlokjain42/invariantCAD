@@ -6,7 +6,10 @@ import {
   kernelSupports,
   mm,
   plane,
+  scalarVec3,
+  topology,
   vec2,
+  vec3,
 } from "../src/index.js";
 import { createOcctKernel } from "../src/occt-kernel.js";
 import { geometryKernelConformance } from "./kernel-conformance.js";
@@ -102,6 +105,97 @@ describe("OCCT exact-kernel integration", () => {
       expect(result.diagnostics).toContainEqual(
         expect.objectContaining({ code: "KERNEL_ERROR", node: "solid" }),
       );
+    } finally {
+      evaluator.dispose();
+    }
+  });
+
+  it("enumerates reciprocal topology and applies an exact selected-edge fillet", async () => {
+    const kernel = await createOcctKernel();
+    try {
+      const box = kernel.box!([10, 20, 30], false, { feature: "box" });
+      const snapshot = kernel.topology!(box);
+      expect(snapshot.history).toBe("complete");
+      expect(snapshot.faces).toHaveLength(6);
+      expect(snapshot.edges).toHaveLength(12);
+      expect(new Set([...snapshot.faces, ...snapshot.edges].map((item) => item.key)).size).toBe(18);
+      for (const face of snapshot.faces) {
+        expect(face.edges.length).toBeGreaterThanOrEqual(4);
+        for (const edge of face.edges) {
+          expect(snapshot.edges.find((candidate) => candidate.key === edge)?.faces).toContain(
+            face.key,
+          );
+        }
+      }
+      const vertical = snapshot.edges.filter((edge) => {
+        const direction = edge.curve.direction;
+        return direction !== undefined && Math.abs(direction[2]) > 0.999;
+      });
+      expect(vertical).toHaveLength(4);
+      const rounded = kernel.fillet!(
+        box,
+        vertical.map((edge) => edge.key),
+        { radius: 2 },
+        { feature: "rounded" },
+      );
+      expect(kernel.measure(box).volume).toBeCloseTo(6_000, 8);
+      expect(kernel.measure(rounded).volume).toBeCloseTo(
+        6_000 - 4 * 30 * 2 ** 2 * (1 - Math.PI / 4),
+        8,
+      );
+      kernel.disposeShape(rounded);
+      kernel.disposeShape(box);
+    } finally {
+      kernel.dispose();
+    }
+  });
+
+  it("keeps a semantic fillet selection stable across parameter changes", async () => {
+    const kernel = await createOcctKernel();
+    const evaluator = await createEvaluator({ kernel });
+    try {
+      const cad = design("parametric-fillet");
+      const height = cad.parameter.length("height", mm(30));
+      const box = cad.box("box", {
+        size: vec3(mm(10), mm(20), height),
+      });
+      const verticalEdges = topology.edges
+        .createdBy(box)
+        .and(topology.edges.direction(scalarVec3(0, 0, 1)))
+        .exactly(4);
+      cad.output(
+        "rounded",
+        cad.fillet("rounded", box, {
+          edges: verticalEdges,
+          radius: mm(2),
+        }),
+      );
+      const document = cad.build();
+      const first = await evaluator.evaluate(document);
+      const second = await evaluator.evaluate(document, {
+        parameters: { height: 40 },
+      });
+      expect(first.ok).toBe(true);
+      expect(second.ok).toBe(true);
+      if (!first.ok || !second.ok) return;
+      try {
+        expect(first.value.output("rounded").measure().volume).toBeCloseTo(
+          6_000 - 4 * 30 * 2 ** 2 * (1 - Math.PI / 4),
+          8,
+        );
+        expect(second.value.output("rounded").measure().volume).toBeCloseTo(
+          8_000 - 4 * 40 * 2 ** 2 * (1 - Math.PI / 4),
+          8,
+        );
+        expect(
+          new TextDecoder().decode(
+            first.value.output("rounded").export("step") as Uint8Array,
+          ),
+        ).toContain("ISO-10303-21");
+      } finally {
+        first.value.dispose();
+        second.value.dispose();
+      }
     } finally {
       evaluator.dispose();
     }

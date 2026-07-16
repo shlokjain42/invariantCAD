@@ -1,9 +1,19 @@
 import type { Mat4, Vec3 } from "./core/math.js";
 import type { ResolvedProfile } from "./protocol/profile.js";
+import type {
+  KernelTopologyCapabilities,
+  KernelTopologyKey,
+  KernelTopologySnapshot,
+} from "./protocol/topology.js";
 
 export type KernelRepresentation = "mesh" | "brep" | "sdf";
 export type KernelPrimitive = "box" | "cylinder" | "sphere";
-export type KernelFeature = "extrude" | "revolve" | "boolean" | "transform";
+export type KernelFeature =
+  | "extrude"
+  | "revolve"
+  | "boolean"
+  | "transform"
+  | "fillet";
 export type KernelCapabilityKind =
   | "primitive"
   | "feature"
@@ -21,6 +31,7 @@ export interface KernelCapabilities {
   readonly features: readonly KernelFeature[];
   readonly nativeImports: readonly KernelExchangeFormat[];
   readonly nativeExports: readonly KernelExchangeFormat[];
+  readonly topology?: KernelTopologyCapabilities;
 }
 
 export function kernelSupports(
@@ -149,6 +160,13 @@ export interface GeometryKernel {
     operations: readonly ResolvedTransformOperation[],
     context?: KernelFeatureContext,
   ): KernelShape;
+  fillet?(
+    shape: KernelShape,
+    edges: readonly KernelTopologyKey[],
+    options: { readonly radius: number },
+    context?: KernelFeatureContext,
+  ): KernelShape;
+  topology?(shape: KernelShape): KernelTopologySnapshot;
   importShape?(
     data: string | ArrayBuffer | Uint8Array,
     format: KernelExchangeFormat,
@@ -164,6 +182,19 @@ export interface GeometryKernel {
   status(shape: KernelShape): KernelShapeStatus;
   disposeShape(shape: KernelShape): void;
   dispose(): void;
+}
+
+export interface TopologyGeometryKernel extends GeometryKernel {
+  readonly capabilities: KernelCapabilities & {
+    readonly topology: KernelTopologyCapabilities;
+  };
+  topology(shape: KernelShape): KernelTopologySnapshot;
+}
+
+export function kernelSupportsTopology(
+  kernel: GeometryKernel,
+): kernel is TopologyGeometryKernel {
+  return kernel.capabilities.topology !== undefined && kernel.topology !== undefined;
 }
 
 export function transformMesh(mesh: MeshData, matrix: Mat4): MeshData {

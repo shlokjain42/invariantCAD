@@ -48,6 +48,7 @@ import {
   type ResolvedTransformOperation,
   type ShapeMeasurements,
   kernelSupports,
+  kernelSupportsTopology,
 } from "./kernel.js";
 import { createManifoldKernel, type ManifoldKernelOptions } from "./manifold-kernel.js";
 import {
@@ -59,6 +60,10 @@ import {
   type ResolvedProfile,
 } from "./protocol/profile.js";
 import { validateDocument } from "./validation.js";
+import {
+  resolveTopologySelection,
+  topologySelectionRequirements,
+} from "./topology-resolution.js";
 
 export type ParameterOverride = number | Expression<Dimension>;
 export type ShapeExportFormat = MeshExportFormat | KernelExchangeFormat;
@@ -903,6 +908,94 @@ export class Evaluator {
               id,
             );
             break;
+          case "fillet": {
+            requireKernelCapability("feature", "fillet", id);
+            if (!kernelSupportsTopology(this.kernel)) {
+              throw new EvaluationFailure(
+                diagnostic(
+                  "KERNEL_CAPABILITY_MISSING",
+                  `Kernel '${this.kernel.id}' cannot resolve topology selections`,
+                  {
+                    severity: "error",
+                    node: id,
+                    path: `/nodes/${id}/edges`,
+                    hints: ["Choose a geometry kernel with persistent topology support"],
+                    details: {
+                      kernel: this.kernel.id,
+                      kind: "topology",
+                      capability: "edge-selection",
+                    },
+                  },
+                ),
+              );
+            }
+            const topologyCapabilities = this.kernel.capabilities.topology;
+            const requirements = topologySelectionRequirements(node.edges);
+            const missingTopologyCapabilities = [
+              ...requirements.kinds
+                .filter((kind) => !topologyCapabilities.kinds.includes(kind))
+                .map((kind) => `${kind}-topology`),
+              ...(requirements.provenance &&
+              topologyCapabilities.provenance === "none"
+                ? ["feature-provenance"]
+                : []),
+              ...(requirements.semanticRoles &&
+              !topologyCapabilities.semanticRoles
+                ? ["semantic-roles"]
+                : []),
+              ...(requirements.sketchSources &&
+              !topologyCapabilities.sketchSources
+                ? ["sketch-sources"]
+                : []),
+              ...(requirements.geometry && !topologyCapabilities.geometry
+                ? ["topology-geometry"]
+                : []),
+              ...(requirements.adjacency && !topologyCapabilities.adjacency
+                ? ["topology-adjacency"]
+                : []),
+            ];
+            if (missingTopologyCapabilities.length > 0) {
+              throw new EvaluationFailure(
+                diagnostic(
+                  "KERNEL_CAPABILITY_MISSING",
+                  `Kernel '${this.kernel.id}' cannot satisfy this topology selector`,
+                  {
+                    severity: "error",
+                    node: id,
+                    path: `/nodes/${id}/edges`,
+                    details: {
+                      kernel: this.kernel.id,
+                      kind: "topology",
+                      missing: missingTopologyCapabilities,
+                    },
+                  },
+                ),
+              );
+            }
+            const input = solidRef(node.input);
+            const selected = resolveTopologySelection(
+              node.edges,
+              this.kernel.topology(input),
+              {
+                evaluate: expression,
+                node: id,
+                path: `/nodes/${id}/edges`,
+              },
+            );
+            if (!selected.ok) {
+              throw new EvaluationFailure(selected.diagnostics[0]!);
+            }
+            result = ownShape(
+              this.kernel.fillet!(
+                input,
+                selected.value,
+                { radius: positive(expression(node.radius), id, "radius") },
+                featureContext(id),
+              ),
+              id,
+            );
+            break;
+          }
           case "part":
             result = {
               kind: "part",

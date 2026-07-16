@@ -4,7 +4,7 @@ Comprehensive, type-safe CAD-as-code for TypeScript.
 
 InvariantCAD represents a design as immutable, versioned JSON and evaluates it through replaceable geometry and sketch-solver backends. The public API never exposes WASM pointers or kernel-specific objects.
 
-> **Project status:** `0.1.0` is the released-foundation target. Current main adds an exact OpenCascade B-Rep backend, analytic sketch-profile transfer, and STEP/BREP exchange. Advanced mechanical features and persistent topology are still under active development; see the [support matrix](#support-matrix) and [roadmap](docs/roadmap.md).
+> **Project status:** `0.1.0` is the released-foundation target. Current main adds an exact OpenCascade B-Rep backend, analytic sketch-profile transfer, STEP/BREP exchange, semantic topology selectors, and exact selector-driven fillets. Complete topology history through booleans and other advanced mechanical features remain under active development; see the [support matrix](#support-matrix) and [roadmap](docs/roadmap.md).
 
 ## Install
 
@@ -100,6 +100,39 @@ evaluator.dispose();
 
 The backend is explicitly selected; a design document never contains OCCT handles or backend-specific objects.
 
+### Semantic topology and exact fillets
+
+Topology selections describe intent as set queries. They never persist a face index, edge index, OCCT handle, or transient hash:
+
+```ts
+import {
+  design,
+  mm,
+  scalarVec3,
+  topology,
+  vec3,
+} from "invariantcad";
+
+const cad = design("rounded-block");
+const height = cad.parameter.length("height", mm(30));
+const block = cad.box("block", {
+  size: vec3(mm(10), mm(20), height),
+});
+
+const verticalEdges = topology.edges
+  .createdBy(block)
+  .and(topology.edges.direction(scalarVec3(0, 0, 1)))
+  .exactly(4);
+
+const rounded = cad.fillet("rounded", block, {
+  edges: verticalEdges,
+  radius: mm(2),
+});
+cad.output("rounded", rounded);
+```
+
+Selectors support feature origin, curve/surface kind, edge direction, face normal, radius, adjacency, `and`/`or`/`not`, and explicit cardinality. Zero matches produce `TOPOLOGY_SELECTION_MISSING`; excess matches produce `TOPOLOGY_SELECTION_AMBIGUOUS`. The exact backend currently provides complete broad feature provenance for primitives, extrusions, revolutions, and topology-preserving transforms. It marks boolean and fillet history partial, so provenance queries on those results fail with `TOPOLOGY_HISTORY_UNAVAILABLE` rather than choosing an unstable edge. Manifold reports an explicit capability error for selector-driven fillets.
+
 ## What works today
 
 ### Modeling
@@ -113,6 +146,8 @@ The backend is explicitly selected; a design document never contains OCCT handle
 - Extrude, symmetric extrude, and revolve on both kernels
 - Twist and top-scale extrusion through the Manifold mesh backend
 - Union, subtraction, and intersection
+- Semantic face/edge set selectors with explicit cardinality
+- Exact constant-radius edge fillets through the OCCT backend
 - Translation, Euler rotation, nonuniform scale, and mirror
 - Parts with part number, material, description, and metadata
 - Fixed-placement and nested assemblies with shared part definitions
@@ -127,6 +162,7 @@ The solver API is replaceable. The built-in solver is intentionally a v0.1 refer
 
 - Reliable manifold-mesh CSG through `manifold-3d` WebAssembly
 - Exact B-Rep primitives, analytic profile extrusion/revolution, CSG, and transforms through OpenCascade WebAssembly
+- Exact topology enumeration, geometry/adjacency descriptors, and selected-edge fillets through OpenCascade WebAssembly
 - Native STEP, text BREP, and binary BREP import/export in the exact-kernel protocol
 - Volume, surface area, axis-aligned bounds, genus, and kernel tolerance
 - Typed-array mesh extraction
@@ -149,8 +185,9 @@ The solver API is replaceable. The built-in solver is intentionally a v0.1 refer
 | Exact B-Rep primitives and core features | OCCT backend | Yes |
 | STEP and BREP import/export | OCCT backend | Yes |
 | IGES import/export | No | Exact backend |
-| Fillet, chamfer, shell, draft | No | Exact backend |
-| Persistent face/edge selectors | Schema work | Yes |
+| Fillet | OCCT backend with semantic edge selectors | Yes |
+| Chamfer, shell, draft | No | Exact backend |
+| Persistent face/edge selectors | Initial origin/geometry/adjacency slice | Yes |
 | Drawings, GD&T, PMI | No | Yes |
 | Sheet metal | No | Yes |
 | CAM and CAE adapters | No | Yes |
@@ -207,7 +244,7 @@ if (!result.ok) {
 }
 ```
 
-Stable codes include `REFERENCE_MISSING`, `GRAPH_CYCLE`, `PARAMETER_OUT_OF_RANGE`, `SKETCH_OVER_CONSTRAINED`, `EMPTY_RESULT`, `KERNEL_CAPABILITY_MISSING`, and `EVALUATION_ABORTED`.
+Stable codes include `REFERENCE_MISSING`, `GRAPH_CYCLE`, `PARAMETER_OUT_OF_RANGE`, `SKETCH_OVER_CONSTRAINED`, `EMPTY_RESULT`, `KERNEL_CAPABILITY_MISSING`, `TOPOLOGY_SELECTION_MISSING`, `TOPOLOGY_SELECTION_AMBIGUOUS`, `TOPOLOGY_HISTORY_UNAVAILABLE`, and `EVALUATION_ABORTED`.
 
 ## CLI
 

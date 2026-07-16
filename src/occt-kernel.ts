@@ -17,6 +17,15 @@ import type {
   ShapeMeasurements,
 } from "./kernel.js";
 import type {
+  KernelCurveDescriptor,
+  KernelEdgeDescriptor,
+  KernelFaceDescriptor,
+  KernelSurfaceDescriptor,
+  KernelTopologyKey,
+  KernelTopologyLineage,
+  KernelTopologySnapshot,
+} from "./protocol/topology.js";
+import type {
   NumericPlane,
   ResolvedArcCurve,
   ResolvedCurve,
@@ -25,14 +34,35 @@ import type {
 } from "./protocol/profile.js";
 
 const OCCT_SHAPE = Symbol("InvariantCAD.OcctShape");
+const TOPOLOGY_HASH_UPPER_BOUND = 2_147_483_647;
+
+type TopologyHistory = KernelTopologySnapshot["history"];
+
+interface RetainedTopologyHandle {
+  readonly topology: "face" | "edge";
+  readonly handle: ShapeHandle;
+}
 
 class OcctShape implements KernelShape {
   readonly kernel = "occt";
   readonly [OCCT_SHAPE]: ShapeHandle;
+  readonly serial: number;
+  readonly lineage: readonly KernelTopologyLineage[];
+  readonly history: TopologyHistory;
+  readonly topologyHandles = new Map<KernelTopologyKey, RetainedTopologyHandle>();
+  topologySnapshot: KernelTopologySnapshot | undefined;
   disposed = false;
 
-  constructor(handle: ShapeHandle) {
+  constructor(
+    handle: ShapeHandle,
+    serial: number,
+    lineage: readonly KernelTopologyLineage[],
+    history: TopologyHistory,
+  ) {
     this[OCCT_SHAPE] = handle;
+    this.serial = serial;
+    this.lineage = lineage;
+    this.history = history;
   }
 }
 
@@ -55,6 +85,37 @@ function planeBasis(plane: NumericPlane): PlaneBasis {
 
 function occtVector(value: Vec3): OcctVec3 {
   return { x: value[0], y: value[1], z: value[2] };
+}
+
+function vectorFromOcct(value: OcctVec3): Vec3 {
+  return [value.x, value.y, value.z];
+}
+
+function topologyKey(
+  serial: number,
+  topology: "face" | "edge",
+  index: number,
+): KernelTopologyKey {
+  return `${serial}:${topology}:${index}` as KernelTopologyKey;
+}
+
+function uniqueLineage(
+  values: readonly KernelTopologyLineage[],
+): readonly KernelTopologyLineage[] {
+  const unique = new Map<string, KernelTopologyLineage>();
+  for (const value of values) {
+    const source = value.source;
+    const key = [
+      value.feature,
+      value.relation,
+      value.role ?? "",
+      source?.kind ?? "",
+      source?.sketch ?? "",
+      source?.entity ?? "",
+    ].join("\u0000");
+    unique.set(key, value);
+  }
+  return Object.freeze([...unique.values()]);
 }
 
 function arrayBufferCopy(value: Uint8Array): ArrayBuffer {
@@ -109,14 +170,23 @@ class OcctKernel implements GeometryKernel {
     representation: "brep",
     exact: true,
     primitives: ["box", "cylinder", "sphere"],
-    features: ["extrude", "revolve", "boolean", "transform"],
+    features: ["extrude", "revolve", "boolean", "transform", "fillet"],
     nativeImports: ["step", "brep", "brep-binary"],
     nativeExports: ["step", "brep", "brep-binary"],
+    topology: {
+      kinds: ["face", "edge"],
+      provenance: "feature",
+      semanticRoles: false,
+      sketchSources: false,
+      geometry: true,
+      adjacency: true,
+    },
   };
   private readonly raw: RawOcctKernel;
   private readonly tessellation: MeshOptions;
   private readonly modelingTolerance: number;
   private readonly liveShapes = new Set<OcctShape>();
+  private nextShapeSerial = 1;
   private disposed = false;
 
   constructor(raw: RawOcctKernel, options: OcctKernelOptions = {}) {
@@ -137,9 +207,34 @@ class OcctKernel implements GeometryKernel {
     return shape;
   }
 
-  private own(handle: ShapeHandle): KernelShape {
+  private own(
+    handle: ShapeHandle,
+    context?: KernelFeatureContext,
+    options: {
+      readonly inherited?: readonly KernelTopologyLineage[];
+      readonly relation?: "created" | "modified";
+      readonly history?: TopologyHistory;
+    } = {},
+  ): KernelShape {
     this.assertKernelLive();
-    const shape = new OcctShape(handle);
+    const lineage = uniqueLineage([
+      ...(options.inherited ?? []),
+      ...(context?.feature === undefined
+        ? []
+        : [
+            {
+              feature: context.feature,
+              relation: options.relation ?? "created",
+            } as const,
+          ]),
+    ]);
+    const shape = new OcctShape(
+      handle,
+      this.nextShapeSerial,
+      lineage,
+      options.history ?? "complete",
+    );
+    this.nextShapeSerial += 1;
     this.liveShapes.add(shape);
     return shape;
   }
@@ -233,10 +328,11 @@ class OcctKernel implements GeometryKernel {
   ): KernelShape {
     checkContext(context);
     const box = this.raw.makeBox(size[0], size[1], size[2]);
-    if (!center) return this.own(box);
+    if (!center) return this.own(box, context);
     try {
       return this.own(
         this.raw.translate(box, -size[0] / 2, -size[1] / 2, -size[2] / 2),
+        context,
       );
     } finally {
       this.raw.release(box);
@@ -256,9 +352,12 @@ class OcctKernel implements GeometryKernel {
       Math.abs(radiusBottom - radiusTop) <= this.modelingTolerance
         ? this.raw.makeCylinder(radiusBottom, height)
         : this.raw.makeCone(radiusBottom, radiusTop, height);
-    if (!center) return this.own(cylinder);
+    if (!center) return this.own(cylinder, context);
     try {
-      return this.own(this.raw.translate(cylinder, 0, 0, -height / 2));
+      return this.own(
+        this.raw.translate(cylinder, 0, 0, -height / 2),
+        context,
+      );
     } finally {
       this.raw.release(cylinder);
     }
@@ -270,7 +369,7 @@ class OcctKernel implements GeometryKernel {
     context?: KernelFeatureContext,
   ): KernelShape {
     checkContext(context);
-    return this.own(this.raw.makeSphere(radius));
+    return this.own(this.raw.makeSphere(radius), context);
   }
 
   extrude(
@@ -315,7 +414,7 @@ class OcctKernel implements GeometryKernel {
         this.raw.release(result);
         result = centered;
       }
-      return this.own(result);
+      return this.own(result, context);
     } catch (error) {
       if (result !== undefined) this.raw.release(result);
       throw error;
@@ -346,6 +445,7 @@ class OcctKernel implements GeometryKernel {
           },
           options.angle,
         ),
+        context,
       );
     } finally {
       this.releaseHandles(built.allocated);
@@ -359,13 +459,27 @@ class OcctKernel implements GeometryKernel {
     context?: KernelFeatureContext,
   ): KernelShape {
     checkContext(context);
-    const targetHandle = this.shape(target)[OCCT_SHAPE];
-    const toolHandles = tools.map((tool) => this.shape(tool)[OCCT_SHAPE]);
+    const targetShape = this.shape(target);
+    const toolShapes = tools.map((tool) => this.shape(tool));
+    const targetHandle = targetShape[OCCT_SHAPE];
+    const toolHandles = toolShapes.map((tool) => tool[OCCT_SHAPE]);
+    const inherited = uniqueLineage([
+      ...targetShape.lineage,
+      ...toolShapes.flatMap((tool) => tool.lineage),
+    ]);
     if (operation === "union") {
-      return this.own(this.raw.fuseAll([targetHandle, ...toolHandles]));
+      return this.own(
+        this.raw.fuseAll([targetHandle, ...toolHandles]),
+        context,
+        { inherited, relation: "modified", history: "partial" },
+      );
     }
     if (operation === "subtract") {
-      return this.own(this.raw.cutAll(targetHandle, toolHandles));
+      return this.own(this.raw.cutAll(targetHandle, toolHandles), context, {
+        inherited,
+        relation: "modified",
+        history: "partial",
+      });
     }
     let current = targetHandle;
     let ownsCurrent = false;
@@ -377,7 +491,11 @@ class OcctKernel implements GeometryKernel {
         current = next;
         ownsCurrent = true;
       }
-      return this.own(current);
+      return this.own(current, context, {
+        inherited,
+        relation: "modified",
+        history: "partial",
+      });
     } catch (error) {
       if (ownsCurrent) this.raw.release(current);
       throw error;
@@ -390,7 +508,8 @@ class OcctKernel implements GeometryKernel {
     context?: KernelFeatureContext,
   ): KernelShape {
     checkContext(context);
-    let current = this.shape(shape)[OCCT_SHAPE];
+    const inputShape = this.shape(shape);
+    let current = inputShape[OCCT_SHAPE];
     let ownsCurrent = false;
     const replace = (next: ShapeHandle): void => {
       if (ownsCurrent) this.raw.release(current);
@@ -469,7 +588,11 @@ class OcctKernel implements GeometryKernel {
         current = this.raw.copy(current);
         ownsCurrent = true;
       }
-      return this.own(current);
+      return this.own(current, context, {
+        inherited: inputShape.lineage,
+        relation: "modified",
+        history: inputShape.history,
+      });
     } catch (error) {
       if (ownsCurrent) this.raw.release(current);
       throw error;
@@ -490,6 +613,8 @@ class OcctKernel implements GeometryKernel {
               ? arrayBufferCopy(data)
               : data,
           ),
+          context,
+          { history: "partial" },
         );
       case "brep":
         return this.own(
@@ -500,6 +625,8 @@ class OcctKernel implements GeometryKernel {
                   data instanceof Uint8Array ? data : new Uint8Array(data),
                 ),
           ),
+          context,
+          { history: "partial" },
         );
       case "brep-binary":
         return this.own(
@@ -510,6 +637,8 @@ class OcctKernel implements GeometryKernel {
                 ? data
                 : new Uint8Array(data),
           ),
+          context,
+          { history: "partial" },
         );
     }
   }
@@ -529,6 +658,231 @@ class OcctKernel implements GeometryKernel {
       case "brep-binary":
         return this.raw.toBREPBinary(handle).slice();
     }
+  }
+
+  private topologyBounds(handle: ShapeHandle): {
+    readonly min: Vec3;
+    readonly max: Vec3;
+  } {
+    const bounds = this.raw.getBoundingBox(handle, false);
+    return {
+      min: [bounds.xmin, bounds.ymin, bounds.zmin],
+      max: [bounds.xmax, bounds.ymax, bounds.zmax],
+    };
+  }
+
+  private surfaceDescriptor(face: ShapeHandle): KernelSurfaceDescriptor {
+    const kind = this.raw.surfaceType(face);
+    let normal: Vec3 | undefined;
+    let radius: number | undefined;
+    if (kind === "plane") {
+      const center = this.raw.getSurfaceCenterOfMass(face);
+      const uv = this.raw.uvFromPoint(face, center);
+      normal = vectorFromOcct(this.raw.surfaceNormal(face, uv.u, uv.v));
+    } else if (kind === "cylinder") {
+      radius = this.raw.getFaceCylinderData(face)?.radius;
+    }
+    return {
+      kind,
+      ...(normal === undefined ? {} : { normal }),
+      ...(radius === undefined ? {} : { radius }),
+    };
+  }
+
+  private curveDescriptor(edge: ShapeHandle): KernelCurveDescriptor {
+    const kind = this.raw.curveType(edge);
+    let direction: Vec3 | undefined;
+    let radius: number | undefined;
+    if (kind === "line") {
+      const parameters = this.raw.curveParameters(edge);
+      direction = vectorFromOcct(
+        this.raw.curveTangent(edge, (parameters.first + parameters.last) / 2),
+      );
+    } else if (kind === "circle") {
+      if (this.raw.curveIsClosed(edge)) {
+        radius = this.raw.curveLength(edge) / (Math.PI * 2);
+      } else {
+        const parameters = this.raw.curveParameters(edge);
+        const first = vectorFromOcct(
+          this.raw.curvePointAtParam(edge, parameters.first),
+        );
+        const middle = vectorFromOcct(
+          this.raw.curvePointAtParam(
+            edge,
+            (parameters.first + parameters.last) / 2,
+          ),
+        );
+        const last = vectorFromOcct(
+          this.raw.curvePointAtParam(edge, parameters.last),
+        );
+        const side = (a: Vec3, b: Vec3): number =>
+          Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+        const ab: Vec3 = [
+          middle[0] - first[0],
+          middle[1] - first[1],
+          middle[2] - first[2],
+        ];
+        const ac: Vec3 = [
+          last[0] - first[0],
+          last[1] - first[1],
+          last[2] - first[2],
+        ];
+        const cross: Vec3 = [
+          ab[1] * ac[2] - ab[2] * ac[1],
+          ab[2] * ac[0] - ab[0] * ac[2],
+          ab[0] * ac[1] - ab[1] * ac[0],
+        ];
+        const denominator = 2 * Math.hypot(...cross);
+        if (denominator > Number.EPSILON) {
+          radius =
+            (side(first, middle) * side(middle, last) * side(last, first)) /
+            denominator;
+        }
+      }
+    }
+    return {
+      kind,
+      ...(direction === undefined ? {} : { direction }),
+      ...(radius === undefined ? {} : { radius }),
+    };
+  }
+
+  topology(shape: KernelShape): KernelTopologySnapshot {
+    const owned = this.shape(shape);
+    if (owned.topologySnapshot !== undefined) return owned.topologySnapshot;
+
+    const faceHandles: ShapeHandle[] = [];
+    const edgeHandles: ShapeHandle[] = [];
+    try {
+      faceHandles.push(...this.raw.getSubShapes(owned[OCCT_SHAPE], "face"));
+      edgeHandles.push(...this.raw.getSubShapes(owned[OCCT_SHAPE], "edge"));
+
+      const faceKeys = faceHandles.map((_, index) =>
+        topologyKey(owned.serial, "face", index),
+      );
+      const edgeKeys = edgeHandles.map((_, index) =>
+        topologyKey(owned.serial, "edge", index),
+      );
+      const faceEdges = faceHandles.map(() => new Set<KernelTopologyKey>());
+      const edgeFaces = edgeHandles.map(() => new Set<KernelTopologyKey>());
+      const edgeHashBuckets = new Map<number, number[]>();
+      edgeHandles.forEach((edge, index) => {
+        const hash = this.raw.hashCode(edge, TOPOLOGY_HASH_UPPER_BOUND);
+        const bucket = edgeHashBuckets.get(hash);
+        if (bucket === undefined) edgeHashBuckets.set(hash, [index]);
+        else bucket.push(index);
+      });
+
+      faceHandles.forEach((face, faceIndex) => {
+        const nestedEdges = this.raw.getSubShapes(face, "edge");
+        try {
+          for (const nestedEdge of nestedEdges) {
+            const hash = this.raw.hashCode(
+              nestedEdge,
+              TOPOLOGY_HASH_UPPER_BOUND,
+            );
+            const candidates = edgeHashBuckets.get(hash) ?? [];
+            const edgeIndex = candidates.find((candidate) =>
+              this.raw.isSame(nestedEdge, edgeHandles[candidate]!),
+            );
+            if (edgeIndex === undefined) {
+              throw new Error("OCCT returned a face edge absent from the parent shape");
+            }
+            faceEdges[faceIndex]!.add(edgeKeys[edgeIndex]!);
+            edgeFaces[edgeIndex]!.add(faceKeys[faceIndex]!);
+          }
+        } finally {
+          this.releaseHandles(nestedEdges);
+        }
+      });
+
+      const faces: readonly KernelFaceDescriptor[] = faceHandles.map(
+        (face, index) => ({
+          topology: "face",
+          key: faceKeys[index]!,
+          center: vectorFromOcct(this.raw.getSurfaceCenterOfMass(face)),
+          bounds: this.topologyBounds(face),
+          lineage: owned.lineage,
+          area: this.raw.getSurfaceArea(face),
+          surface: this.surfaceDescriptor(face),
+          edges: Object.freeze([...faceEdges[index]!].sort()),
+        }),
+      );
+      const edges: readonly KernelEdgeDescriptor[] = edgeHandles.map(
+        (edge, index) => ({
+          topology: "edge",
+          key: edgeKeys[index]!,
+          center: vectorFromOcct(this.raw.getLinearCenterOfMass(edge)),
+          bounds: this.topologyBounds(edge),
+          lineage: owned.lineage,
+          length: this.raw.curveLength(edge),
+          curve: this.curveDescriptor(edge),
+          faces: Object.freeze([...edgeFaces[index]!].sort()),
+        }),
+      );
+      faceHandles.forEach((handle, index) => {
+        owned.topologyHandles.set(faceKeys[index]!, {
+          topology: "face",
+          handle,
+        });
+      });
+      edgeHandles.forEach((handle, index) => {
+        owned.topologyHandles.set(edgeKeys[index]!, {
+          topology: "edge",
+          handle,
+        });
+      });
+      const snapshot: KernelTopologySnapshot = Object.freeze({
+        history: owned.history,
+        faces: Object.freeze(faces),
+        edges: Object.freeze(edges),
+      });
+      owned.topologySnapshot = snapshot;
+      return snapshot;
+    } catch (error) {
+      owned.topologyHandles.clear();
+      owned.topologySnapshot = undefined;
+      this.releaseHandles(edgeHandles);
+      this.releaseHandles(faceHandles);
+      throw error;
+    }
+  }
+
+  fillet(
+    shape: KernelShape,
+    edges: readonly KernelTopologyKey[],
+    options: { readonly radius: number },
+    context?: KernelFeatureContext,
+  ): KernelShape {
+    checkContext(context);
+    if (!(options.radius > 0)) throw new RangeError("Fillet radius must be positive");
+    if (edges.length === 0) throw new RangeError("Fillet requires at least one edge");
+    const input = this.shape(shape);
+    this.topology(input);
+    const handles = edges.map((key) => {
+      const retained = input.topologyHandles.get(key);
+      if (retained?.topology !== "edge") {
+        throw new TypeError(`Topology key '${key}' is not an edge of the input shape`);
+      }
+      return retained.handle;
+    });
+    const faceHashes = this.raw.subShapeHashes(
+      input[OCCT_SHAPE],
+      "face",
+      TOPOLOGY_HASH_UPPER_BOUND,
+    );
+    const evolution = this.raw.filletWithHistory(
+      input[OCCT_SHAPE],
+      handles,
+      options.radius,
+      faceHashes,
+      TOPOLOGY_HASH_UPPER_BOUND,
+    );
+    return this.own(evolution.result, context, {
+      inherited: input.lineage,
+      relation: "modified",
+      history: "partial",
+    });
   }
 
   mesh(shape: KernelShape, options: MeshOptions = {}): MeshData {
@@ -601,6 +955,11 @@ class OcctKernel implements GeometryKernel {
     }
     if (shape.disposed) return;
     this.assertKernelLive();
+    for (const retained of shape.topologyHandles.values()) {
+      this.raw.release(retained.handle);
+    }
+    shape.topologyHandles.clear();
+    shape.topologySnapshot = undefined;
     this.raw.release(shape[OCCT_SHAPE]);
     shape.disposed = true;
     this.liveShapes.delete(shape);

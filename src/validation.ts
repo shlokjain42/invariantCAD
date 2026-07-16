@@ -16,8 +16,11 @@ import {
   type RefIR,
   type SketchLoopIR,
   type SketchNodeIR,
+  type TopologyQueryIR,
+  type TopologySelectionIR,
   type TransformOperationIR,
 } from "./ir.js";
+import type { TopologyKind } from "./protocol/topology.js";
 
 function validateExpression(
   expression: ExpressionIR,
@@ -442,6 +445,222 @@ function validateSketch(
   );
 }
 
+function nodeIsAncestor(
+  document: DesignDocument,
+  descendant: NodeId,
+  possibleAncestor: NodeId,
+): boolean {
+  const visited = new Set<NodeId>();
+  const visit = (id: NodeId): boolean => {
+    if (id === possibleAncestor) return true;
+    if (visited.has(id)) return false;
+    visited.add(id);
+    const node = document.nodes[id];
+    return node !== undefined && nodeDependencies(node).some((dependency) => visit(dependency.node));
+  };
+  return visit(descendant);
+}
+
+function validateTopologySelection(
+  selection: TopologySelectionIR,
+  expected: TopologyKind,
+  input: NodeId,
+  document: DesignDocument,
+  path: string,
+  diagnostics: Diagnostic[],
+): void {
+  if (selection.topology !== expected) {
+    diagnostics.push(
+      diagnostic(
+        "TOPOLOGY_SELECTOR_INVALID",
+        `Expected a ${expected} topology selection, received ${selection.topology}`,
+        { severity: "error", path: `${path}/topology` },
+      ),
+    );
+  }
+  const { min, max } = selection.cardinality;
+  if (
+    !Number.isInteger(min) ||
+    min < 1 ||
+    (max !== undefined && (!Number.isInteger(max) || max < min))
+  ) {
+    diagnostics.push(
+      diagnostic("TOPOLOGY_SELECTOR_INVALID", "Invalid topology selection cardinality", {
+        severity: "error",
+        path: `${path}/cardinality`,
+        details: { min, max },
+      }),
+    );
+  }
+
+  const validateQuery = (
+    query: TopologyQueryIR,
+    topology: TopologyKind,
+    queryPath: string,
+  ): void => {
+    const incompatible = (required: TopologyKind, label: string): void => {
+      if (topology !== required) {
+        diagnostics.push(
+          diagnostic(
+            "TOPOLOGY_SELECTOR_INVALID",
+            `${label} queries require ${required} topology`,
+            { severity: "error", path: queryPath },
+          ),
+        );
+      }
+    };
+    switch (query.op) {
+      case "all":
+        break;
+      case "origin": {
+        const feature = document.nodes[query.feature];
+        if (feature === undefined) {
+          diagnostics.push(
+            diagnostic(
+              "REFERENCE_MISSING",
+              `Topology origin references missing feature '${query.feature}'`,
+              { severity: "error", path: `${queryPath}/feature` },
+            ),
+          );
+        } else if (outputKindForNode(feature) !== "solid") {
+          diagnostics.push(
+            diagnostic(
+              "REFERENCE_KIND_MISMATCH",
+              `Topology origin '${query.feature}' does not produce a solid`,
+              { severity: "error", path: `${queryPath}/feature` },
+            ),
+          );
+        } else if (!nodeIsAncestor(document, input, query.feature)) {
+          diagnostics.push(
+            diagnostic(
+              "TOPOLOGY_SELECTOR_INVALID",
+              `Topology origin '${query.feature}' is not the input feature or one of its ancestors`,
+              { severity: "error", path: `${queryPath}/feature` },
+            ),
+          );
+        }
+        if (query.role !== undefined && query.role.length === 0) {
+          diagnostics.push(
+            diagnostic("TOPOLOGY_SELECTOR_INVALID", "Topology roles cannot be empty", {
+              severity: "error",
+              path: `${queryPath}/role`,
+            }),
+          );
+        }
+        if (query.source !== undefined) {
+          const sketch = document.nodes[query.source.sketch];
+          if (sketch === undefined) {
+            diagnostics.push(
+              diagnostic(
+                "REFERENCE_MISSING",
+                `Topology source references missing sketch '${query.source.sketch}'`,
+                { severity: "error", path: `${queryPath}/source/sketch` },
+              ),
+            );
+          } else if (sketch.kind !== "sketch") {
+            diagnostics.push(
+              diagnostic(
+                "REFERENCE_KIND_MISMATCH",
+                `Topology source '${query.source.sketch}' is not a sketch`,
+                { severity: "error", path: `${queryPath}/source/sketch` },
+              ),
+            );
+          } else {
+            if (sketch.entities[query.source.entity] === undefined) {
+              diagnostics.push(
+                diagnostic(
+                  "REFERENCE_MISSING",
+                  `Topology source references missing sketch entity '${query.source.entity}'`,
+                  { severity: "error", path: `${queryPath}/source/entity` },
+                ),
+              );
+            }
+            if (!nodeIsAncestor(document, query.feature, query.source.sketch)) {
+              diagnostics.push(
+                diagnostic(
+                  "TOPOLOGY_SELECTOR_INVALID",
+                  `Sketch '${query.source.sketch}' is not an ancestor of topology origin '${query.feature}'`,
+                  { severity: "error", path: `${queryPath}/source/sketch` },
+                ),
+              );
+            }
+          }
+        }
+        break;
+      }
+      case "surface":
+        incompatible("face", "Surface");
+        break;
+      case "curve":
+        incompatible("edge", "Curve");
+        break;
+      case "normal":
+      case "direction":
+        incompatible(query.op === "normal" ? "face" : "edge", query.op === "normal" ? "Normal" : "Direction");
+        query.value.forEach((value, index) =>
+          validateExpression(value, "scalar", document, `${queryPath}/value/${index}`, diagnostics),
+        );
+        validateExpression(
+          query.tolerance,
+          "angle",
+          document,
+          `${queryPath}/tolerance`,
+          diagnostics,
+        );
+        break;
+      case "radius":
+        validateExpression(query.value, "length", document, `${queryPath}/value`, diagnostics);
+        validateExpression(
+          query.tolerance,
+          "length",
+          document,
+          `${queryPath}/tolerance`,
+          diagnostics,
+        );
+        break;
+      case "adjacentTo":
+        if (query.selection.topology === topology) {
+          diagnostics.push(
+            diagnostic(
+              "TOPOLOGY_SELECTOR_INVALID",
+              "Adjacent topology selection must target the opposite topology kind",
+              { severity: "error", path: `${queryPath}/selection/topology` },
+            ),
+          );
+        }
+        validateTopologySelection(
+          query.selection,
+          topology === "edge" ? "face" : "edge",
+          input,
+          document,
+          `${queryPath}/selection`,
+          diagnostics,
+        );
+        break;
+      case "and":
+      case "or":
+        if (query.queries.length === 0) {
+          diagnostics.push(
+            diagnostic(
+              "TOPOLOGY_SELECTOR_INVALID",
+              `Topology '${query.op}' query requires at least one operand`,
+              { severity: "error", path: `${queryPath}/queries` },
+            ),
+          );
+        }
+        query.queries.forEach((child, index) =>
+          validateQuery(child, topology, `${queryPath}/queries/${index}`),
+        );
+        break;
+      case "not":
+        validateQuery(query.query, topology, `${queryPath}/query`);
+        break;
+    }
+  };
+
+  validateQuery(selection.query, selection.topology, `${path}/query`);
+}
+
 function validateNode(
   id: NodeId,
   node: NodeIR,
@@ -492,6 +711,18 @@ function validateNode(
       node.operations.forEach((operation, index) =>
         validateTransform(operation, document, `${path}/operations/${index}`, diagnostics),
       );
+      break;
+    case "fillet":
+      validateRef(node.input, "solid", document, `${path}/input`, diagnostics);
+      validateTopologySelection(
+        node.edges,
+        "edge",
+        node.input.node,
+        document,
+        `${path}/edges`,
+        diagnostics,
+      );
+      expression(node.radius, "length", "radius");
       break;
     case "part":
       validateRef(node.solid, "solid", document, `${path}/solid`, diagnostics);

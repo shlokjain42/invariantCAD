@@ -3,6 +3,8 @@ import {
   DOCUMENT_SCHEMA,
   DOCUMENT_VERSION,
   type DesignDocument,
+  type TopologyQueryIR,
+  type TopologySelectionIR,
 } from "./ir.js";
 import type { ExpressionIR } from "./expressions.js";
 
@@ -162,6 +164,100 @@ const TransformOperationSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("mirror"), normal: Vec3ExpressionSchema }),
 ]);
 
+const TopologyCardinalitySchema = z
+  .object({
+    min: z.number().int().min(1),
+    max: z.number().int().min(1).optional(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.max !== undefined && value.max < value.min) {
+      context.addIssue({
+        code: "custom",
+        message: "Topology selection maximum cannot be less than its minimum",
+        path: ["max"],
+      });
+    }
+  });
+
+const TopologySourceSchema = z
+  .object({
+    kind: z.literal("sketch-entity"),
+    sketch: z.string(),
+    entity: z.string(),
+  })
+  .strict();
+
+export const TopologyQuerySchema: z.ZodType<TopologyQueryIR> = z.lazy(() =>
+  z.discriminatedUnion("op", [
+    z.object({ op: z.literal("all") }).strict(),
+    z
+      .object({
+        op: z.literal("origin"),
+        feature: z.string(),
+        relation: z.enum(["created", "modified"]),
+        role: z.string().min(1).optional(),
+        source: TopologySourceSchema.optional(),
+      })
+      .strict(),
+    z
+      .object({
+        op: z.literal("surface"),
+        kind: z.string().min(1),
+      })
+      .strict(),
+    z
+      .object({
+        op: z.literal("curve"),
+        kind: z.string().min(1),
+      })
+      .strict(),
+    z
+      .object({
+        op: z.enum(["normal", "direction"]),
+        value: Vec3ExpressionSchema,
+        tolerance: ExpressionSchema,
+      })
+      .strict(),
+    z
+      .object({
+        op: z.literal("radius"),
+        value: ExpressionSchema,
+        tolerance: ExpressionSchema,
+      })
+      .strict(),
+    z
+      .object({
+        op: z.literal("adjacentTo"),
+        selection: z.lazy(() => TopologySelectionSchema),
+      })
+      .strict(),
+    z
+      .object({
+        op: z.enum(["and", "or"]),
+        queries: z.array(TopologyQuerySchema).min(1),
+      })
+      .strict(),
+    z
+      .object({
+        op: z.literal("not"),
+        query: TopologyQuerySchema,
+      })
+      .strict(),
+  ]),
+) as z.ZodType<TopologyQueryIR>;
+
+export const TopologySelectionSchema: z.ZodType<TopologySelectionIR> = z.lazy(
+  () =>
+    z
+      .object({
+        topology: z.enum(["face", "edge"]),
+        query: TopologyQuerySchema,
+        cardinality: TopologyCardinalitySchema,
+      })
+      .strict(),
+) as z.ZodType<TopologySelectionIR>;
+
 const NodeSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("box"),
@@ -215,6 +311,14 @@ const NodeSchema = z.discriminatedUnion("kind", [
     input: RefSchema,
     operations: z.array(TransformOperationSchema).min(1),
   }),
+  z
+    .object({
+      kind: z.literal("fillet"),
+      input: RefSchema,
+      edges: TopologySelectionSchema,
+      radius: ExpressionSchema,
+    })
+    .strict(),
   z.object({
     kind: z.literal("part"),
     solid: RefSchema,

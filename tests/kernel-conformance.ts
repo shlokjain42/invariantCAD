@@ -81,6 +81,11 @@ export function geometryKernelConformance(
       expect(new Set(kernel.capabilities.features).size).toBe(
         kernel.capabilities.features.length,
       );
+      for (const feature of kernel.capabilities.features) {
+        expect(
+          (kernel as unknown as Record<string, unknown>)[feature],
+        ).toBeTypeOf("function");
+      }
       expect(new Set(kernel.capabilities.nativeImports).size).toBe(
         kernel.capabilities.nativeImports.length,
       );
@@ -92,6 +97,19 @@ export function geometryKernelConformance(
       }
       if (kernel.capabilities.nativeExports.length > 0) {
         expect(kernel.exportShape).toBeTypeOf("function");
+      }
+      if (kernel.capabilities.topology !== undefined) {
+        expect(kernel.topology).toBeTypeOf("function");
+        expect(new Set(kernel.capabilities.topology.kinds).size).toBe(
+          kernel.capabilities.topology.kinds.length,
+        );
+        expect(["none", "feature", "history"]).toContain(
+          kernel.capabilities.topology.provenance,
+        );
+        expect(kernel.capabilities.topology.semanticRoles).toBeTypeOf("boolean");
+        expect(kernel.capabilities.topology.sketchSources).toBeTypeOf("boolean");
+        expect(kernel.capabilities.topology.geometry).toBeTypeOf("boolean");
+        expect(kernel.capabilities.topology.adjacency).toBeTypeOf("boolean");
       }
     });
 

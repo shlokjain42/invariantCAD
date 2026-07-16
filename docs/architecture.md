@@ -8,7 +8,7 @@ InvariantCAD separates design intent from computation. A document must remain us
 2. **Units are explicit.** Internal lengths are millimetres, angles are radians, and scalar expressions are dimensionless. TypeScript rejects incompatible expression composition and semantic validation repeats the check for untrusted JSON.
 3. **Modeling is a DAG.** Nodes reference earlier or later nodes by stable ID, not array position. Validation detects missing references, kind mismatches, and cycles before a kernel is invoked.
 4. **Kernel conversions are explicit.** The Manifold backend is a robust triangle-mesh kernel. It is not advertised as exact B-Rep. A future exact backend must declare its representation and conversion losses.
-5. **Topology is not an array index.** Public APIs must never make `faces[3]` or `edges[7]` a durable design reference. Feature provenance, geometry signatures, adjacency, and ambiguity diagnostics will form persistent selectors.
+5. **Topology is not an array index.** Public APIs never make `faces[3]` or `edges[7]` a durable design reference. Serialized selectors combine feature provenance, geometry, adjacency, set algebra, and explicit cardinality. Evaluation-scoped kernel keys are opaque and disposable.
 6. **Failures are structured.** Normal modeling failures produce stable diagnostics with node IDs and JSON Pointer paths. Programmer misuse of the builder can throw immediately.
 7. **WASM lifetime is explicit.** Evaluated results own kernel shapes and expose `dispose()`. Kernel objects never escape through the public mesh or measurement APIs.
 
@@ -34,6 +34,8 @@ Explicit names are required for public features and sketch entities. This makes 
 
 Canonical serialization sorts object keys and rejects values JSON cannot preserve. Semantic hashes exclude display metadata by default.
 
+Topology selectors are also plain document data. Commutative `and` and `or` operands are flattened, deduplicated, and canonically sorted for serialization and hashing. A selector resolves to an unordered set and must state its accepted cardinality; evaluation never breaks ambiguity by taking the first kernel result.
+
 ### Solver layer
 
 `SketchSolverBackend` consumes canonical sketch entities and constraints and returns solved coordinates, radii, residuals, degrees of freedom, status, and diagnostics.
@@ -46,7 +48,11 @@ The built-in reference solver uses damped nonlinear least squares with numerical
 
 `GeometryKernel` owns primitives, profile features, booleans, transformations, tessellation, measurements, status, and lifetime management.
 
-The protocol is explicitly versioned. Backends declare primitive, feature, native-import, and native-export capabilities; the evaluator rejects unsupported operations before invoking them. Shape validity is normalized into backend-neutral status data, while meshing accepts explicit linear/angular deflection options. Stable feature IDs and cancellation signals travel through `KernelFeatureContext` without entering kernel shape handles.
+The protocol is explicitly versioned. Backends declare primitive, feature, native-import, native-export, and topology capabilities; the evaluator rejects unsupported operations before invoking them. Shape validity is normalized into backend-neutral status data, while meshing accepts explicit linear/angular deflection options. Stable feature IDs and cancellation signals travel through `KernelFeatureContext` without entering kernel shape handles.
+
+A topology-capable kernel returns an evaluation-scoped snapshot of faces and edges. Each descriptor contains an opaque key, analytic geometry where available, measurements, bounds, adjacency, and proven lineage. Keys exist only to connect one snapshot to the immediately following kernel call. They are never written to a document or used as persistent identity. Snapshot validation rejects duplicate keys, non-finite geometry, dangling adjacency, and non-reciprocal adjacency as kernel protocol failures.
+
+The OCCT adapter currently proves broad feature lineage for primitives, extrusions, revolutions, and topology-preserving transforms. Boolean and fillet evolution is marked partial because the pinned binding does not expose complete edge history. An origin selector against partial history fails explicitly. Geometry-only selectors can still operate because they do not claim lost provenance.
 
 `ManifoldKernel` is the initial implementation. It copies upstream mesh buffers into InvariantCAD's stable `MeshData`, checks kernel status, and destroys every WASM object. The public API sees only typed arrays and measurements.
 
@@ -60,9 +66,10 @@ Evaluation performs these operations in order:
 2. parameter dependency resolution and bounds checking;
 3. lazy feature-DAG traversal from selected outputs;
 4. sketch solving;
-5. kernel feature execution and status checks;
-6. part and nested-assembly occurrence resolution;
-7. construction of disposable evaluated outputs.
+5. topology capability preflight and selector resolution for consuming features;
+6. kernel feature execution and status checks;
+7. part and nested-assembly occurrence resolution;
+8. construction of disposable evaluated outputs.
 
 One feature is evaluated once per run. Cross-run content-addressed caching is planned after topology and kernel-version fingerprints are formalized.
 
@@ -91,6 +98,8 @@ Every geometry kernel should run the same corpus for:
 - bounds, volume, surface area, and topological class;
 - parameter extremes and degenerate geometry;
 - cancellation and resource teardown;
+- topology set semantics, cardinality, adjacency reciprocity, and history loss;
+- selector-driven features without enumeration-order dependence;
 - Node and browser initialization.
 
 Results are compared by tolerances and topological expectations, never by triangle ordering or exported-file bytes.

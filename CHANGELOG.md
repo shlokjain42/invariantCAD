@@ -5,6 +5,9 @@
 - Preserve analytic sketch lines, arcs, circles, and their source entity IDs in resolved profiles
 - Add an exact OpenCascade B-Rep backend with STEP and text/binary BREP exchange
 - Add evaluated-output and CLI STEP/BREP export without exposing native handles
+- Add serialized, order-independent semantic face/edge selectors with explicit cardinality
+- Add validated OCCT topology snapshots with analytic descriptors, adjacency, provenance, and explicit lifetime management
+- Add exact selector-driven fillets and structured missing, ambiguous, and incomplete-history diagnostics
 - Version and normalize the geometry-kernel protocol, native exchange, validity, and meshing options
 - Enforce declared kernel capabilities before backend invocation
 - Add reusable geometry-kernel conformance tests

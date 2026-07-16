@@ -37,6 +37,7 @@ import {
   type TransformOperationIR,
 } from "./ir.js";
 import { ProfileDefinition, SketchBuilder } from "./sketch.js";
+import { TopologySelection } from "./topology.js";
 
 const DESIGN_OWNER = Symbol("InvariantCAD.DesignOwner");
 
@@ -434,6 +435,33 @@ export class DesignBuilder {
 
   mirror(id: string, input: SolidRef, normal: ScalarVec3Expression): SolidRef {
     return this.transform(id, input, [tf.mirror(normal)]);
+  }
+
+  fillet(
+    id: string,
+    input: SolidRef,
+    options: {
+      readonly edges: TopologySelection<"edge">;
+      readonly radius: LengthExpression;
+    },
+  ): SolidRef {
+    this.assertOwned(input);
+    if (!(options.edges instanceof TopologySelection)) {
+      throw new TypeError("Fillet edges must be an explicit topology selection");
+    }
+    if (options.edges.topology !== "edge") {
+      throw new TypeError("A fillet requires an edge topology selection");
+    }
+    for (const reference of options.edges.references) {
+      this.assertOwned(reference);
+    }
+    const key = this.addNode(id, {
+      kind: "fillet",
+      input: input.toIR(),
+      edges: options.edges.toIR(),
+      radius: options.radius.ir,
+    });
+    return new SolidRef(this, key);
   }
 
   part(

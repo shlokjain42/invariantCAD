@@ -1,6 +1,7 @@
 import type { EntityId, NodeId, ParameterId } from "./core/ids.js";
 import type { JsonValue } from "./core/json.js";
 import type { Dimension, ExpressionIR } from "./expressions.js";
+import type { TopologyKind } from "./protocol/topology.js";
 
 export const DOCUMENT_SCHEMA =
   "https://invariantcad.dev/schema/document/v1" as const;
@@ -224,6 +225,65 @@ export interface TransformNodeIR {
   readonly operations: readonly TransformOperationIR[];
 }
 
+export type TopologyOriginRelation = "created" | "modified";
+
+export interface TopologySourceIR {
+  readonly kind: "sketch-entity";
+  readonly sketch: NodeId;
+  readonly entity: EntityId;
+}
+
+export interface TopologyCardinalityIR {
+  readonly min: number;
+  readonly max?: number;
+}
+
+export type TopologyQueryIR =
+  | { readonly op: "all" }
+  | {
+      readonly op: "origin";
+      readonly feature: NodeId;
+      readonly relation: TopologyOriginRelation;
+      readonly role?: string;
+      readonly source?: TopologySourceIR;
+    }
+  | { readonly op: "surface"; readonly kind: string }
+  | { readonly op: "curve"; readonly kind: string }
+  | {
+      readonly op: "normal" | "direction";
+      readonly value: Vec3ExpressionIR;
+      readonly tolerance: ExpressionIR;
+    }
+  | {
+      readonly op: "radius";
+      readonly value: ExpressionIR;
+      readonly tolerance: ExpressionIR;
+    }
+  | {
+      readonly op: "adjacentTo";
+      readonly selection: TopologySelectionIR;
+    }
+  | {
+      readonly op: "and" | "or";
+      readonly queries: readonly TopologyQueryIR[];
+    }
+  | { readonly op: "not"; readonly query: TopologyQueryIR };
+
+export interface TopologySelectionIR<
+  K extends TopologyKind = TopologyKind,
+> {
+  readonly topology: K;
+  readonly query: TopologyQueryIR;
+  readonly cardinality: TopologyCardinalityIR;
+}
+
+export interface FilletNodeIR {
+  readonly kind: "fillet";
+  readonly input: RefIR<"solid">;
+  readonly edges: TopologySelectionIR<"edge">;
+  readonly radius: ExpressionIR;
+}
+
 export interface PartNodeIR {
   readonly kind: "part";
   readonly solid: RefIR<"solid">;
@@ -254,6 +314,7 @@ export type NodeIR =
   | RevolveNodeIR
   | BooleanNodeIR
   | TransformNodeIR
+  | FilletNodeIR
   | PartNodeIR
   | AssemblyNodeIR;
 
@@ -286,6 +347,8 @@ export function nodeDependencies(node: NodeIR): readonly RefIR[] {
     case "boolean":
       return [node.target, ...node.tools];
     case "transform":
+      return [node.input];
+    case "fillet":
       return [node.input];
     case "part":
       return [node.solid];

@@ -21,11 +21,14 @@ InvariantCAD's goal is one coherent TypeScript CAD system, not one monolithic ge
 - STEP and OCCT BREP import/export, followed by IGES
 - Shape healing and validity diagnostics
 - Explicit exact-to-mesh conversion with tolerances
+- Evaluation-scoped face/edge topology snapshots and capability negotiation
+- Semantic origin/geometry/adjacency selectors with explicit cardinality
+- First exact constant-radius fillet driven by semantic edge selection
 
 ## 0.3 — persistent design intent
 
-- Feature provenance for generated and modified topology
-- Semantic face/edge selectors
+- Complete per-subshape provenance for generated and modified topology
+- Stable semantic roles and sketch-entity source mapping
 - Geometry and adjacency signatures
 - Ambiguity and missing-selection diagnostics
 - Incremental feature hashes and cross-run cache
@@ -33,7 +36,7 @@ InvariantCAD's goal is one coherent TypeScript CAD system, not one monolithic ge
 
 ## 0.4 — advanced mechanical features
 
-- Fillet, chamfer, shell, and draft through semantic selectors
+- Chamfer, shell, draft, and variable fillet through semantic selectors
 - Sweep, loft, pipe, and offset
 - Feature-specific validity and healing diagnostics
 - Parameter-torture corpus for persistent selections

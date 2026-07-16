@@ -8,17 +8,40 @@ import {
 } from "./core/result.js";
 import type { DesignDocument } from "./ir.js";
 import { DesignDocumentSchema } from "./schema.js";
+import { canonicalizeTopologySelectionIR } from "./topology.js";
 import { validateDocument } from "./validation.js";
 
 export interface StringifyOptions {
   readonly pretty?: boolean;
 }
 
+function canonicalizeDocumentTopology(
+  document: DesignDocument,
+): DesignDocument {
+  return {
+    ...document,
+    nodes: Object.fromEntries(
+      Object.entries(document.nodes).map(([id, node]) => [
+        id,
+        node.kind === "fillet"
+          ? {
+              ...node,
+              edges: canonicalizeTopologySelectionIR(node.edges),
+            }
+          : node,
+      ]),
+    ) as DesignDocument["nodes"],
+  };
+}
+
 export function stringifyDocument(
   document: DesignDocument,
   options: StringifyOptions = {},
 ): string {
-  return canonicalStringify(document, options.pretty ? 2 : undefined);
+  return canonicalStringify(
+    canonicalizeDocumentTopology(document),
+    options.pretty ? 2 : undefined,
+  );
 }
 
 export function parseDocument(text: string): CadResult<DesignDocument> {
@@ -56,10 +79,11 @@ export async function hashDocument(
   document: DesignDocument,
   options: { readonly includeMetadata?: boolean } = {},
 ): Promise<string> {
+  const canonicalDocument = canonicalizeDocumentTopology(document);
   const source = options.includeMetadata
-    ? document
+    ? canonicalDocument
     : (() => {
-        const { metadata: _metadata, ...semanticDocument } = document;
+        const { metadata: _metadata, ...semanticDocument } = canonicalDocument;
         return semanticDocument;
       })();
   const bytes = new TextEncoder().encode(canonicalStringify(source));
