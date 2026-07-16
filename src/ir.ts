@@ -3,6 +3,7 @@ import type { JsonValue } from "./core/json.js";
 import type { Dimension, ExpressionIR } from "./expressions.js";
 import type { TopologyKind, TopologyRole } from "./protocol/topology.js";
 import type { ShellDirection } from "./protocol/shell.js";
+import type { OffsetDirection } from "./protocol/offset.js";
 
 export const DOCUMENT_SCHEMA =
   "https://invariantcad.dev/schema/document/v1" as const;
@@ -305,6 +306,15 @@ export interface ShellNodeIR {
   readonly tolerance: ExpressionIR;
 }
 
+export interface OffsetNodeIR {
+  readonly kind: "offset";
+  readonly input: RefIR<"solid">;
+  /** Positive normal-offset magnitude. */
+  readonly distance: ExpressionIR;
+  readonly direction: OffsetDirection;
+  readonly tolerance: ExpressionIR;
+}
+
 export interface PartNodeIR {
   readonly kind: "part";
   readonly solid: RefIR<"solid">;
@@ -338,6 +348,7 @@ export type NodeIR =
   | FilletNodeIR
   | ChamferNodeIR
   | ShellNodeIR
+  | OffsetNodeIR
   | PartNodeIR
   | AssemblyNodeIR;
 
@@ -374,6 +385,7 @@ export function nodeDependencies(node: NodeIR): readonly RefIR[] {
     case "fillet":
     case "chamfer":
     case "shell":
+    case "offset":
       return [node.input];
     case "part":
       return [node.solid];

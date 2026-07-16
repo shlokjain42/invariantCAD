@@ -54,7 +54,7 @@ try {
     join(consumer, "smoke.mjs"),
     [
       'import { writeFile } from "node:fs/promises";',
-      'import { SHELL_DIRECTIONS, SHELL_JOIN_SEMANTICS, TOPOLOGY_ROLE_RULES, angleVec3, createEvaluator, deg, design, kernelSupports, mm, plane, scalarVec3, stringifyDocument, tf, topology, vec3 } from "invariantcad";',
+      'import { OFFSET_DIRECTIONS, OFFSET_JOIN_SEMANTICS, SHELL_DIRECTIONS, SHELL_JOIN_SEMANTICS, TOPOLOGY_ROLE_RULES, angleVec3, createEvaluator, deg, design, kernelSupports, mm, plane, scalarVec3, stringifyDocument, tf, topology, vec3 } from "invariantcad";',
       'import { createOcctKernel } from "invariantcad/kernels/occt";',
       "",
       'const cad = design("package-smoke");',
@@ -85,6 +85,8 @@ try {
       '  if (TOPOLOGY_ROLE_RULES["box.face.x-min"].topology !== "face") throw new Error("Topology role registry was not packaged");',
       '  if (SHELL_DIRECTIONS.join(",") !== "inward,outward") throw new Error("Shell direction registry was not packaged");',
       '  if (SHELL_JOIN_SEMANTICS !== "round") throw new Error("Shell join semantics were not packaged");',
+      '  if (OFFSET_DIRECTIONS.join(",") !== "inward,outward") throw new Error("Offset direction registry was not packaged");',
+      '  if (OFFSET_JOIN_SEMANTICS !== "round") throw new Error("Offset join semantics were not packaged");',
       "  const vertical = snapshot.edges.filter((edge) => Math.abs(edge.curve.direction?.[2] ?? 0) > 0.999);",
       '  if (vertical.length !== 4) throw new Error("Unexpected vertical edge count");',
       "  const rounded = exactKernel.fillet(exactBox, vertical.map((edge) => edge.key), { radius: 0.2 });",
@@ -93,6 +95,11 @@ try {
       "  const beveled = exactKernel.chamfer(exactBox, [vertical[0].key], { distance: 0.2 });",
       '  if (Math.abs(exactKernel.measure(beveled).volume - 23.92) > 1e-8) throw new Error("Unexpected exact chamfer volume");',
       '  if (exactKernel.topology(beveled).history !== "partial") throw new Error("Chamfer history boundary was not preserved");',
+      '  if (!kernelSupports(exactKernel.capabilities, "feature", "offset")) throw new Error("Exact offset capability was not packaged");',
+      '  const expanded = exactKernel.offset(exactBox, { distance: 0.2, direction: "outward", tolerance: 1e-6 });',
+      '  if (Math.abs(exactKernel.measure(expanded).volume - 35.564483717128844) > 1e-8) throw new Error("Unexpected exact offset volume");',
+      '  if (exactKernel.topology(expanded).history !== "partial") throw new Error("Offset history boundary was not preserved");',
+      "  exactKernel.disposeShape(expanded);",
       "  exactKernel.disposeShape(beveled);",
       "  exactKernel.disposeShape(rounded);",
       "  exactKernel.disposeShape(exactBox);",
@@ -145,6 +152,26 @@ try {
       "} finally {",
       "  shellEvaluator.dispose();",
       "}",
+      'const offsetCad = design("package-offset");',
+      'const offsetBox = offsetCad.box("box", { size: vec3(mm(10), mm(20), mm(30)) });',
+      'offsetCad.output("expanded", offsetCad.offset("expanded", offsetBox, { distance: mm(1), direction: "outward", tolerance: mm(1e-6) }));',
+      "const offsetDocument = offsetCad.build();",
+      "const offsetJson = stringifyDocument(offsetDocument);",
+      'if (!offsetJson.includes("offset") || !offsetJson.includes("outward") || !offsetJson.includes("tolerance")) throw new Error("Offset was not serialized");',
+      'await writeFile("model-offset.invariantcad.json", offsetJson);',
+      "const offsetEvaluator = await createEvaluator({ kernel: await createOcctKernel() });",
+      "try {",
+      "  const result = await offsetEvaluator.evaluate(offsetDocument);",
+      "  if (!result.ok) throw new Error(JSON.stringify(result.diagnostics));",
+      "  try {",
+      '    const volume = result.value.output("expanded").measure().volume;',
+      '    if (Math.abs(volume - 8392.684349493147) > 1e-8) throw new Error("Unexpected semantic offset volume " + volume);',
+      "  } finally {",
+      "    result.value.dispose();",
+      "  }",
+      "} finally {",
+      "  offsetEvaluator.dispose();",
+      "}",
       'const filletCad = design("package-fillet");',
       'const filletBox = filletCad.box("box", { size: vec3(mm(10), mm(20), mm(30)) });',
       'const filletEdges = topology.edges.createdBy(filletBox).and(topology.edges.direction(scalarVec3(0, 0, 1))).exactly(4);',
@@ -157,7 +184,7 @@ try {
   await writeFile(
     join(consumer, "type-smoke.ts"),
     [
-      'import { EDGE_TOPOLOGY_ROLES, FACE_TOPOLOGY_ROLES, SHELL_DIRECTIONS, TOPOLOGY_ROLE_RULES, TOPOLOGY_ROLES, angleVec3, deg, design, mm, plane, scalarVec3, tf, topology, vec3, type ChamferNodeIR, type DesignDocument, type EdgeTopologyRole, type FaceTopologyRole, type ProfileRef, type ShellDirection, type ShellNodeIR, type SolidRef, type TopologyOriginOptions, type TopologyRole, type TopologySelection } from "invariantcad";',
+      'import { EDGE_TOPOLOGY_ROLES, FACE_TOPOLOGY_ROLES, OFFSET_DIRECTIONS, SHELL_DIRECTIONS, TOPOLOGY_ROLE_RULES, TOPOLOGY_ROLES, angleVec3, deg, design, mm, plane, scalarVec3, tf, topology, vec3, type ChamferNodeIR, type DesignDocument, type EdgeTopologyRole, type FaceTopologyRole, type OffsetDirection, type OffsetNodeIR, type ProfileRef, type ShellDirection, type ShellNodeIR, type SolidRef, type TopologyOriginOptions, type TopologyRole, type TopologySelection } from "invariantcad";',
       'import { createOcctKernel, type OcctKernelOptions } from "invariantcad/kernels/occt";',
       "",
       'const cad = design("type-smoke");',
@@ -167,6 +194,7 @@ try {
       'const rounded: SolidRef = cad.fillet("rounded", solid, { edges, radius: mm(0.1) });',
       'const beveled: SolidRef = cad.chamfer("beveled", solid, { edges, distance: mm(0.1) });',
       'const hollow: SolidRef = cad.shell("hollow", solid, { openings: faces, thickness: mm(0.1), direction: "inward", tolerance: mm(1e-6) });',
+      'const expanded: SolidRef = cad.offset("expanded", solid, { distance: mm(0.1), direction: "outward", tolerance: mm(1e-6) });',
       "// @ts-expect-error Chamfers require edge selections.",
       'cad.chamfer("invalid-faces", solid, { edges: topology.faces.all().select(), distance: mm(0.1) });',
       "// @ts-expect-error Chamfer distance must be a length expression.",
@@ -177,9 +205,19 @@ try {
       'cad.shell("invalid-shell-thickness", solid, { openings: faces, thickness: deg(45) });',
       "// @ts-expect-error Shell direction is a closed string union.",
       'cad.shell("invalid-shell-direction", solid, { openings: faces, thickness: mm(0.1), direction: "inside" });',
+      "// @ts-expect-error Offset distance must be a length expression.",
+      'cad.offset("invalid-offset-distance", solid, { distance: deg(45) });',
+      'cad.offset("invalid-offset-tolerance", solid, {',
+      "  distance: mm(0.1),",
+      "  // @ts-expect-error Offset tolerance must be a length expression.",
+      "  tolerance: deg(1),",
+      "});",
+      "// @ts-expect-error Offset direction is a closed string union.",
+      'cad.offset("invalid-offset-direction", solid, { distance: mm(0.1), direction: "outside" });',
       'cad.output("solid", rounded);',
       'cad.output("beveled", beveled);',
       'cad.output("hollow", hollow);',
+      'cad.output("expanded", expanded);',
       "const document: DesignDocument = cad.build();",
       'const maybeChamfer = document.nodes[beveled.node];',
       'if (maybeChamfer?.kind !== "chamfer") throw new Error("Missing chamfer IR");',
@@ -191,6 +229,12 @@ try {
       'const shellDirection: ShellDirection = shellNode.direction;',
       'const shellDirections: readonly ShellDirection[] = SHELL_DIRECTIONS;',
       'if (!shellDirections.includes(shellDirection) || shellNode.thickness.dimension !== "length" || shellNode.tolerance.dimension !== "length") throw new Error("Invalid shell IR types");',
+      'const maybeOffset = document.nodes[expanded.node];',
+      'if (maybeOffset?.kind !== "offset") throw new Error("Missing offset IR");',
+      'const offsetNode: OffsetNodeIR = maybeOffset;',
+      'const offsetDirection: OffsetDirection = offsetNode.direction;',
+      'const offsetDirections: readonly OffsetDirection[] = OFFSET_DIRECTIONS;',
+      'if (!offsetDirections.includes(offsetDirection) || offsetNode.distance.dimension !== "length" || offsetNode.tolerance.dimension !== "length") throw new Error("Invalid offset IR types");',
       "const options: OcctKernelOptions = {};",
       "void createOcctKernel(options);",
       "void document;",
@@ -268,6 +312,7 @@ try {
   run(bin, ["validate", "model.invariantcad.json"], consumer);
   run(bin, ["validate", "model-chamfer.invariantcad.json"], consumer);
   run(bin, ["validate", "model-shell.invariantcad.json"], consumer);
+  run(bin, ["validate", "model-offset.invariantcad.json"], consumer);
   run(
     bin,
     ["export", "model.invariantcad.json", "--to", "model.step"],
@@ -305,6 +350,21 @@ try {
   );
   if ((await stat(join(consumer, "hollow.step"))).size < 100) {
     throw new Error("Installed CLI produced an empty shell STEP file");
+  }
+  run(
+    bin,
+    [
+      "export",
+      "model-offset.invariantcad.json",
+      "--output",
+      "expanded",
+      "--to",
+      "expanded.step",
+    ],
+    consumer,
+  );
+  if ((await stat(join(consumer, "expanded.step"))).size < 100) {
+    throw new Error("Installed CLI produced an empty offset STEP file");
   }
   process.stdout.write("Packed package smoke test passed.\n");
 } finally {

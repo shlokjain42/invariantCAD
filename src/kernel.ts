@@ -1,6 +1,7 @@
 import type { Mat4, Vec3 } from "./core/math.js";
 import type { ResolvedProfile } from "./protocol/profile.js";
 import type { ResolvedShellOptions } from "./protocol/shell.js";
+import type { ResolvedOffsetOptions } from "./protocol/offset.js";
 import type {
   KernelTopologyCapabilities,
   KernelTopologyKey,
@@ -16,7 +17,8 @@ export type KernelFeature =
   | "transform"
   | "fillet"
   | "chamfer"
-  | "shell";
+  | "shell"
+  | "offset";
 export type KernelCapabilityKind =
   | "primitive"
   | "feature"
@@ -185,6 +187,12 @@ export interface GeometryKernel {
      */
     openings: readonly KernelTopologyKey[],
     options: ResolvedShellOptions,
+    context?: KernelFeatureContext,
+  ): KernelShape;
+  offset?(
+    shape: KernelShape,
+    /** Protocol v1 requires round/arc joins at face transitions. */
+    options: ResolvedOffsetOptions,
     context?: KernelFeatureContext,
   ): KernelShape;
   topology?(shape: KernelShape): KernelTopologySnapshot;

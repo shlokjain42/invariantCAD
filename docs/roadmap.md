@@ -27,10 +27,12 @@ InvariantCAD's goal is one coherent TypeScript CAD system, not one monolithic ge
 - First exact constant-radius fillet driven by semantic edge selection
 - First exact equal-distance chamfer driven by semantic edge selection
 - First exact constant-thickness inward/outward shell driven by semantic face openings
+- First exact whole-solid inward/outward offset with fixed round joins
 
 ## 0.3 — persistent design intent
 
-- Complete per-subshape provenance through booleans, fillets, chamfers, shells, revolutions, and generated/modified topology
+- Complete per-subshape provenance through booleans, fillets, chamfers, shells, offsets, revolutions, and generated/modified topology
+- Close the pinned OCCT evolution-container ownership gap without regressing chained fillet/chamfer behavior
 - Expanded role and source mapping for additional feature families
 - Geometry and adjacency signatures
 - Expanded selection diagnostics and provenance explanations
@@ -40,9 +42,10 @@ InvariantCAD's goal is one coherent TypeScript CAD system, not one monolithic ge
 ## 0.4 — advanced mechanical features
 
 - Asymmetric, distance-angle, and variable chamfer modes through semantic selectors
-- Draft and variable fillet through semantic selectors
+- Atomic multi-face neutral-plane draft, gated on an OCCT facade that accepts arbitrary planes and pull directions and reports per-seed failures before build
+- Variable fillet through semantic selectors
 - Closed, variable-thickness, and intersection/miter-join shell modes
-- Sweep, loft, pipe, and offset
+- Sweep, loft, pipe, and two-dimensional wire/profile offset
 - Feature-specific validity and healing diagnostics
 - Parameter-torture corpus for persistent selections
 

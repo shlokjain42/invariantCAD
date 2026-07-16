@@ -95,7 +95,7 @@ describe("OCCT exact-kernel integration", () => {
     }
   });
 
-  it("normalizes reversed imported solids before face-selected shelling", async () => {
+  it("normalizes reversed imported solids before directional features", async () => {
     const raw = await RawOcctKernel.init();
     let reversedBrep: string;
     try {
@@ -136,6 +136,24 @@ describe("OCCT exact-kernel integration", () => {
       });
       expect(kernel.measure(outward).volume).toBeCloseTo(2_143.466064545511, 8);
 
+      const expanded = kernel.offset!(imported, {
+        distance: 1,
+        direction: "outward",
+        tolerance: 1e-6,
+      });
+      expect(kernel.measure(expanded).volume).toBeCloseTo(
+        8_392.684349493147,
+        8,
+      );
+      const shrunk = kernel.offset!(imported, {
+        distance: 1,
+        direction: "inward",
+        tolerance: 1e-6,
+      });
+      expect(kernel.measure(shrunk).volume).toBeCloseTo(4_032, 8);
+
+      kernel.disposeShape(shrunk);
+      kernel.disposeShape(expanded);
       kernel.disposeShape(outward);
       kernel.disposeShape(inward);
       kernel.disposeShape(imported);
@@ -144,7 +162,7 @@ describe("OCCT exact-kernel integration", () => {
     }
   });
 
-  it("rejects shell inputs with loose topology outside their sole solid", async () => {
+  it("rejects feature inputs with loose topology outside their sole solid", async () => {
     const raw = await RawOcctKernel.init();
     let mixedBrep: string;
     try {
@@ -190,6 +208,52 @@ describe("OCCT exact-kernel integration", () => {
       );
       expect(() =>
         kernel.shell!(imported, [top.key], {
+          thickness: 1,
+          direction: "inward",
+          tolerance: 1e-6,
+        }),
+      ).toThrow("loose topology outside its solid");
+      expect(() =>
+        kernel.offset!(imported, {
+          distance: 1,
+          direction: "outward",
+          tolerance: 1e-6,
+        }),
+      ).toThrow("loose topology outside its solid");
+      kernel.disposeShape(imported);
+    } finally {
+      kernel.dispose();
+    }
+  });
+
+  it("rejects wrappers that duplicate one of their solid's own subshapes", async () => {
+    const raw = await RawOcctKernel.init();
+    let duplicateBrep: string;
+    try {
+      const box = raw.makeBox(10, 20, 30);
+      const faces = raw.getSubShapes(box, "face");
+      const duplicate = raw.makeCompound([box, faces[0]!]);
+      duplicateBrep = raw.toBREP(duplicate);
+      raw.release(duplicate);
+      faces.forEach((face) => raw.release(face));
+      raw.release(box);
+    } finally {
+      raw[Symbol.dispose]();
+    }
+
+    const kernel = await createOcctKernel();
+    try {
+      const imported = kernel.importShape!(duplicateBrep, "brep");
+      const face = kernel.topology!(imported).faces[0]!;
+      expect(() =>
+        kernel.offset!(imported, {
+          distance: 1,
+          direction: "outward",
+          tolerance: 1e-6,
+        }),
+      ).toThrow("loose topology outside its solid");
+      expect(() =>
+        kernel.shell!(imported, [face.key], {
           thickness: 1,
           direction: "inward",
           tolerance: 1e-6,
@@ -479,6 +543,19 @@ describe("OCCT exact-kernel integration", () => {
           },
         ),
       ).toThrow("is not a face of the input shape");
+      expect(() =>
+        firstKernel.offset!(secondBox, {
+          distance: 1,
+          direction: "outward",
+          tolerance: 1e-6,
+        }),
+      ).toThrow("Expected a live OCCT kernel shape");
+      expect(() => firstKernel.measure(secondBox)).toThrow(
+        "Expected a live OCCT kernel shape",
+      );
+      expect(() => firstKernel.disposeShape(secondBox)).toThrow(
+        "owned by this kernel",
+      );
       firstKernel.disposeShape(firstBox);
       secondKernel.disposeShape(secondBox);
     } finally {
@@ -612,6 +689,190 @@ describe("OCCT exact-kernel integration", () => {
       kernel.disposeShape(duplicate);
       kernel.disposeShape(tunnel);
       kernel.disposeShape(hollow);
+      kernel.disposeShape(box);
+    } finally {
+      kernel.dispose();
+    }
+  });
+
+  it("offsets exact solids with fixed round joins and strict collapse checks", async () => {
+    const raw = await RawOcctKernel.init();
+    let compoundBrep: string;
+    try {
+      const box = raw.makeBox(10, 20, 30);
+      const compound = raw.makeCompound([box]);
+      compoundBrep = raw.toBREP(compound);
+      raw.release(compound);
+      raw.release(box);
+    } finally {
+      raw[Symbol.dispose]();
+    }
+
+    const kernel = await createOcctKernel();
+    try {
+      expect(kernelSupports(kernel.capabilities, "feature", "offset")).toBe(
+        true,
+      );
+      const box = kernel.box!([10, 20, 30], false, { feature: "box" });
+      const expanded = kernel.offset!(
+        box,
+        { distance: 1, direction: "outward", tolerance: 1e-6 },
+        { feature: "expanded" },
+      );
+      const expandedMeasurement = kernel.measure(expanded);
+      expect(expandedMeasurement.volume).toBeCloseTo(8_392.684349493147, 8);
+      expect(expandedMeasurement.surfaceArea).toBeCloseTo(
+        2_589.55748905025,
+        8,
+      );
+      expect(expandedMeasurement.boundingBox.min).toEqual([-1, -1, -1]);
+      expect(expandedMeasurement.boundingBox.max[0]).toBeCloseTo(11, 10);
+      expect(expandedMeasurement.boundingBox.max[1]).toBeCloseTo(21, 10);
+      expect(expandedMeasurement.boundingBox.max[2]).toBeCloseTo(31, 10);
+      const expandedTopology = kernel.topology!(expanded);
+      expect(expandedTopology.history).toBe("partial");
+      expect(expandedTopology.faces).toHaveLength(26);
+      expect(expandedTopology.edges).toHaveLength(48);
+      expect(
+        expandedTopology.faces.filter((face) => face.surface.kind === "plane"),
+      ).toHaveLength(6);
+      expect(
+        expandedTopology.faces.filter(
+          (face) => face.surface.kind === "cylinder",
+        ),
+      ).toHaveLength(12);
+      expect(
+        expandedTopology.faces.filter((face) => face.surface.kind === "sphere"),
+      ).toHaveLength(8);
+
+      const shrunk = kernel.offset!(box, {
+        distance: 1,
+        direction: "inward",
+        tolerance: 1e-6,
+      });
+      const shrunkMeasurement = kernel.measure(shrunk);
+      expect(shrunkMeasurement.volume).toBeCloseTo(4_032, 8);
+      expect(shrunkMeasurement.surfaceArea).toBeCloseTo(1_744, 8);
+      expect(shrunkMeasurement.boundingBox).toEqual({
+        min: [1, 1, 1],
+        max: [9, 19, 29],
+      });
+      const shrunkTopology = kernel.topology!(shrunk);
+      expect(shrunkTopology.history).toBe("partial");
+      expect(shrunkTopology.faces).toHaveLength(6);
+      expect(shrunkTopology.edges).toHaveLength(12);
+
+      const wrapped = kernel.importShape!(compoundBrep, "brep");
+      expect(kernel.measure(wrapped).volume).toBeCloseTo(6_000, 8);
+      const wrappedOffset = kernel.offset!(wrapped, {
+        distance: 1,
+        direction: "outward",
+        tolerance: 1e-6,
+      });
+      expect(kernel.status(wrappedOffset).ok).toBe(true);
+      expect(kernel.measure(wrappedOffset).volume).toBeCloseTo(
+        8_392.684349493147,
+        8,
+      );
+
+      for (const distance of [
+        0,
+        -1,
+        Number.NaN,
+        Number.POSITIVE_INFINITY,
+      ]) {
+        expect(() =>
+          kernel.offset!(box, {
+            distance,
+            direction: "outward",
+            tolerance: 1e-6,
+          }),
+        ).toThrow("distance must be finite and positive");
+      }
+      for (const tolerance of [
+        0,
+        -1,
+        Number.NaN,
+        Number.POSITIVE_INFINITY,
+      ]) {
+        expect(() =>
+          kernel.offset!(box, {
+            distance: 1,
+            direction: "outward",
+            tolerance,
+          }),
+        ).toThrow("tolerance must be finite and positive");
+      }
+      expect(() =>
+        kernel.offset!(box, {
+          distance: 1,
+          direction: "sideways" as any,
+          tolerance: 1e-6,
+        }),
+      ).toThrow("'outward' or 'inward'");
+      expect(() =>
+        kernel.offset!(box, {
+          distance: 1,
+          direction: "outward",
+          tolerance: 1,
+        }),
+      ).toThrow("less than its distance");
+      const abort = new AbortController();
+      abort.abort();
+      expect(() =>
+        kernel.offset!(
+          box,
+          { distance: 1, direction: "outward", tolerance: 1e-6 },
+          { signal: abort.signal },
+        ),
+      ).toThrow("aborted");
+      for (const distance of [5, 5.000001, 5.1]) {
+        expect(() =>
+          kernel.offset!(box, {
+            distance,
+            direction: "inward",
+            tolerance: 1e-6,
+          }),
+        ).toThrow();
+      }
+      expect(kernel.status(box).ok).toBe(true);
+
+      const overlapping = kernel.transform!(box, [
+        { kind: "translate", value: [5, 0, 0] },
+      ]);
+      const connected = kernel.boolean!("union", box, [overlapping]);
+      const connectedOffset = kernel.offset!(connected, {
+        distance: 1,
+        direction: "outward",
+        tolerance: 1e-6,
+      });
+      expect(kernel.measure(connectedOffset).volume).toBeCloseTo(
+        11_908.392312763915,
+        8,
+      );
+      expect(kernel.status(connectedOffset).ok).toBe(true);
+
+      const translated = kernel.transform!(box, [
+        { kind: "translate", value: [20, 0, 0] },
+      ]);
+      const disconnected = kernel.boolean!("union", box, [translated]);
+      expect(() =>
+        kernel.offset!(disconnected, {
+          distance: 1,
+          direction: "outward",
+          tolerance: 1e-6,
+        }),
+      ).toThrow("exactly one solid");
+
+      kernel.disposeShape(disconnected);
+      kernel.disposeShape(translated);
+      kernel.disposeShape(connectedOffset);
+      kernel.disposeShape(connected);
+      kernel.disposeShape(overlapping);
+      kernel.disposeShape(wrappedOffset);
+      kernel.disposeShape(wrapped);
+      kernel.disposeShape(shrunk);
+      kernel.disposeShape(expanded);
       kernel.disposeShape(box);
     } finally {
       kernel.dispose();
@@ -908,6 +1169,124 @@ describe("OCCT exact-kernel integration", () => {
           node: "hollow",
           path: "/nodes/hollow/tolerance",
           details: { tolerance: 2, thickness: 2 },
+        }),
+      );
+    } finally {
+      evaluator.dispose();
+    }
+  });
+
+  it("keeps transformed whole-solid offsets stable across parameter changes", async () => {
+    const kernel = await createOcctKernel();
+    const evaluator = await createEvaluator({ kernel });
+    try {
+      const cad = design("parametric-offset");
+      const width = cad.parameter.length("width", mm(40));
+      const height = cad.parameter.length("height", mm(20));
+      const depth = cad.parameter.length("depth", mm(10));
+      const distance = cad.parameter.length("distance", mm(1));
+      const box = cad.box("box", { size: vec3(width, height, depth) });
+      const moved = cad.transform("moved", box, [
+        tf.rotate(angleVec3(deg(0), deg(0), deg(90))),
+        tf.translate(vec3(mm(100), mm(5), mm(7))),
+      ]);
+      cad.output(
+        "expanded",
+        cad.offset("expanded", moved, {
+          distance,
+          direction: "outward",
+        }),
+      );
+      cad.output(
+        "shrunk",
+        cad.offset("shrunk", moved, {
+          distance,
+          direction: "inward",
+        }),
+      );
+      const document = cad.build();
+      const cases = [
+        { width: 40, height: 20, depth: 10, distance: 1 },
+        { width: 20, height: 40, depth: 10, distance: 2 },
+        { width: 30, height: 30, depth: 12, distance: 3 },
+      ];
+      for (const dimensions of cases) {
+        const result = await evaluator.evaluate(document, {
+          parameters: dimensions,
+        });
+        expect(result.ok).toBe(true);
+        if (!result.ok) continue;
+        try {
+          const base =
+            dimensions.width * dimensions.height * dimensions.depth;
+          const expanded = result.value.output("expanded");
+          const expandedMeasurement = expanded.measure();
+          expect(expandedMeasurement.volume).toBeGreaterThan(base);
+          const expectedBounds = {
+            min: [
+              100 - dimensions.height - dimensions.distance,
+              5 - dimensions.distance,
+              7 - dimensions.distance,
+            ],
+            max: [
+              100 + dimensions.distance,
+              5 + dimensions.width + dimensions.distance,
+              7 + dimensions.depth + dimensions.distance,
+            ],
+          } as const;
+          for (const bound of ["min", "max"] as const) {
+            expandedMeasurement.boundingBox[bound].forEach(
+              (coordinate, index) => {
+                expect(coordinate).toBeCloseTo(
+                  expectedBounds[bound][index]!,
+                  6,
+                );
+              },
+            );
+          }
+          const shrunk = result.value.output("shrunk");
+          expect(shrunk.measure().volume).toBeCloseTo(
+            (dimensions.width - 2 * dimensions.distance) *
+              (dimensions.height - 2 * dimensions.distance) *
+              (dimensions.depth - 2 * dimensions.distance),
+            8,
+          );
+        } finally {
+          result.value.dispose();
+        }
+      }
+    } finally {
+      evaluator.dispose();
+    }
+  });
+
+  it("reports the offset provenance boundary to downstream selectors", async () => {
+    const kernel = await createOcctKernel();
+    const evaluator = await createEvaluator({ kernel });
+    try {
+      const cad = design("offset-history-boundary");
+      const box = cad.box("box", {
+        size: vec3(mm(10), mm(20), mm(30)),
+      });
+      const first = cad.offset("first", box, {
+        distance: mm(1),
+        direction: "outward",
+      });
+      cad.output(
+        "second",
+        cad.shell("second", first, {
+          openings: topology.faces.modifiedBy(first).atLeast(1),
+          thickness: mm(0.5),
+        }),
+      );
+      const result = await evaluator.evaluate(cad.build());
+      expect(result.ok).toBe(false);
+      expect(result.diagnostics).toContainEqual(
+        expect.objectContaining({
+          code: "TOPOLOGY_HISTORY_UNAVAILABLE",
+          node: "second",
+          path: expect.stringMatching(/^\/nodes\/second\/openings\/query/),
+          details: expect.objectContaining({ history: "partial" }),
         }),
       );
     } finally {

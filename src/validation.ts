@@ -26,6 +26,7 @@ import {
   type TopologyRole,
 } from "./protocol/topology.js";
 import { SHELL_DIRECTIONS } from "./protocol/shell.js";
+import { OFFSET_DIRECTIONS } from "./protocol/offset.js";
 
 function validateExpression(
   expression: ExpressionIR,
@@ -852,6 +853,25 @@ function validateNode(
           diagnostic(
             "IR_INVALID",
             "Shell direction must be 'inward' or 'outward'",
+            {
+              severity: "error",
+              node: id,
+              path: `${path}/direction`,
+              details: { direction: node.direction },
+            },
+          ),
+        );
+      }
+      expression(node.tolerance, "length", "tolerance");
+      break;
+    case "offset":
+      validateRef(node.input, "solid", document, `${path}/input`, diagnostics);
+      expression(node.distance, "length", "distance");
+      if (!OFFSET_DIRECTIONS.includes(node.direction)) {
+        diagnostics.push(
+          diagnostic(
+            "IR_INVALID",
+            "Offset direction must be 'outward' or 'inward'",
             {
               severity: "error",
               node: id,

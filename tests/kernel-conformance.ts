@@ -246,6 +246,126 @@ export function geometryKernelConformance(
       kernel.disposeShape(cylinder);
     });
 
+    it("honors the whole-solid inward/outward offset contract when declared", () => {
+      if (!kernelSupports(kernel.capabilities, "feature", "offset")) return;
+      if (!kernelSupports(kernel.capabilities, "primitive", "box")) return;
+      const box = kernel.box!([2, 3, 4], false, { feature: "box" });
+
+      const outward = kernel.offset!(
+        box,
+        { distance: 0.2, direction: "outward", tolerance: 1e-6 },
+        { feature: "outward" },
+      );
+      const outwardMeasurement = expectLiveShape(outward);
+      expectMeasurement(
+        outwardMeasurement,
+        "volume",
+        35.564483717128844,
+        Math.max(relativeTolerance, 1e-8),
+      );
+      expectBoundingBox(
+        outwardMeasurement.boundingBox,
+        { min: [-0.2, -0.2, -0.2], max: [2.2, 3.2, 4.2] },
+        Math.max(relativeTolerance, 1e-8),
+      );
+
+      const inward = kernel.offset!(box, {
+        distance: 0.2,
+        direction: "inward",
+        tolerance: 1e-6,
+      });
+      const inwardMeasurement = expectLiveShape(inward);
+      expectMeasurement(
+        inwardMeasurement,
+        "volume",
+        14.976,
+        relativeTolerance,
+      );
+      expectBoundingBox(
+        inwardMeasurement.boundingBox,
+        { min: [0.2, 0.2, 0.2], max: [1.8, 2.8, 3.8] },
+        relativeTolerance,
+      );
+
+      expect(() =>
+        kernel.offset!(box, {
+          distance: 0,
+          direction: "outward",
+          tolerance: 1e-6,
+        }),
+      ).toThrow();
+      expect(() =>
+        kernel.offset!(box, {
+          distance: 0.2,
+          direction: "outward",
+          tolerance: 0.2,
+        }),
+      ).toThrow();
+      expect(() =>
+        kernel.offset!(box, {
+          distance: 1,
+          direction: "inward",
+          tolerance: 1e-6,
+        }),
+      ).toThrow();
+
+      if (
+        kernelSupports(kernel.capabilities, "feature", "transform") &&
+        kernelSupports(kernel.capabilities, "feature", "boolean")
+      ) {
+        const translated = kernel.transform!(box, [
+          { kind: "translate", value: [4, 0, 0] },
+        ]);
+        const disconnected = kernel.boolean!("union", box, [translated]);
+        expect(() =>
+          kernel.offset!(disconnected, {
+            distance: 0.2,
+            direction: "outward",
+            tolerance: 1e-6,
+          }),
+        ).toThrow();
+        kernel.disposeShape(disconnected);
+        kernel.disposeShape(translated);
+      }
+
+      kernel.disposeShape(inward);
+      kernel.disposeShape(outward);
+      kernel.disposeShape(box);
+    });
+
+    it("offsets curved cylindrical walls when both capabilities are declared", () => {
+      if (!kernelSupports(kernel.capabilities, "feature", "offset")) return;
+      if (!kernelSupports(kernel.capabilities, "primitive", "cylinder")) return;
+      const cylinder = kernel.cylinder!(4, 2, 2, false, 128, {
+        feature: "cylinder",
+      });
+      const outward = kernel.offset!(cylinder, {
+        distance: 0.2,
+        direction: "outward",
+        tolerance: 1e-6,
+      });
+      expectMeasurement(
+        expectLiveShape(outward),
+        "volume",
+        66.6708606929675,
+        Math.max(relativeTolerance, 2e-4),
+      );
+      const inward = kernel.offset!(cylinder, {
+        distance: 0.2,
+        direction: "inward",
+        tolerance: 1e-6,
+      });
+      expectMeasurement(
+        expectLiveShape(inward),
+        "volume",
+        Math.PI * 1.8 ** 2 * 3.6,
+        Math.max(relativeTolerance, 2e-4),
+      );
+      kernel.disposeShape(inward);
+      kernel.disposeShape(outward);
+      kernel.disposeShape(cylinder);
+    });
+
     it("extrudes and revolves exact profile semantics when declared", () => {
       const rectangle: ResolvedProfile = {
         plane: { plane: "XY", origin: [0, 0, 0] },

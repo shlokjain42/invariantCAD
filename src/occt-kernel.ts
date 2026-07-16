@@ -35,6 +35,7 @@ import type {
   ResolvedProfile,
 } from "./protocol/profile.js";
 import { curveStart } from "./protocol/profile.js";
+import type { ResolvedOffsetOptions } from "./protocol/offset.js";
 import type { ResolvedShellOptions } from "./protocol/shell.js";
 
 const OCCT_SHAPE = Symbol("InvariantCAD.OcctShape");
@@ -231,6 +232,7 @@ class OcctKernel implements GeometryKernel {
       "fillet",
       "chamfer",
       "shell",
+      "offset",
     ],
     nativeImports: ["step", "brep", "brep-binary"],
     nativeExports: ["step", "brep", "brep-binary"],
@@ -246,6 +248,7 @@ class OcctKernel implements GeometryKernel {
   private readonly raw: RawOcctKernel;
   private readonly tessellation: MeshOptions;
   private readonly modelingTolerance: number;
+  private readonly ownedShapes = new WeakSet<OcctShape>();
   private readonly liveShapes = new Set<OcctShape>();
   private readonly topologyNamespace = nextTopologyNamespace++;
   private nextShapeSerial = 1;
@@ -263,7 +266,11 @@ class OcctKernel implements GeometryKernel {
 
   private shape(shape: KernelShape): OcctShape {
     this.assertKernelLive();
-    if (!(shape instanceof OcctShape) || shape.disposed) {
+    if (
+      !(shape instanceof OcctShape) ||
+      !this.liveShapes.has(shape) ||
+      shape.disposed
+    ) {
       throw new TypeError("Expected a live OCCT kernel shape");
     }
     return shape;
@@ -299,6 +306,7 @@ class OcctKernel implements GeometryKernel {
       options.annotation,
     );
     this.nextShapeSerial += 1;
+    this.ownedShapes.add(shape);
     this.liveShapes.add(shape);
     return shape;
   }
@@ -306,6 +314,24 @@ class OcctKernel implements GeometryKernel {
   private releaseHandles(handles: readonly ShapeHandle[]): void {
     for (let index = handles.length - 1; index >= 0; index -= 1) {
       this.raw.release(handles[index]!);
+    }
+  }
+
+  private isPureSingleSolidShape(
+    shape: ShapeHandle,
+    solid: ShapeHandle,
+  ): boolean {
+    const type = this.raw.getShapeType(shape);
+    if (type === "solid") return this.raw.isSame(shape, solid);
+    if (type !== "compound" && type !== "compsolid") return false;
+    const children = this.raw.iterShapes(shape);
+    try {
+      return (
+        children.length === 1 &&
+        this.isPureSingleSolidShape(children[0]!, solid)
+      );
+    } finally {
+      this.releaseHandles(children);
     }
   }
 
@@ -1563,6 +1589,11 @@ class OcctKernel implements GeometryKernel {
       ) {
         throw new TypeError("Shell input must be a valid solid");
       }
+      if (!this.isPureSingleSolidShape(input[OCCT_SHAPE], inputSolid)) {
+        throw new TypeError(
+          "Shell input must not contain loose topology outside its solid",
+        );
+      }
       for (const topology of ["face", "edge", "vertex"] as const) {
         if (
           this.raw.subShapeCount(input[OCCT_SHAPE], topology) !==
@@ -1637,6 +1668,11 @@ class OcctKernel implements GeometryKernel {
           if (resultSolids.length !== 1) {
             throw new RangeError("Shell did not produce exactly one solid");
           }
+          if (!this.isPureSingleSolidShape(result, resultSolids[0]!)) {
+            throw new RangeError(
+              "Shell produced loose topology outside its result solid",
+            );
+          }
           for (const topology of ["face", "edge", "vertex"] as const) {
             if (
               this.raw.subShapeCount(result, topology) !==
@@ -1663,6 +1699,146 @@ class OcctKernel implements GeometryKernel {
           throw new RangeError(
             "Shell thickness did not produce a hollowed solid",
           );
+        }
+        return this.own(result, context, {
+          inherited: input.lineage,
+          relation: "modified",
+          history: "partial",
+        });
+      } catch (error) {
+        this.raw.release(result);
+        throw error;
+      }
+    } finally {
+      this.releaseHandles(inputSolids);
+    }
+  }
+
+  offset(
+    shape: KernelShape,
+    options: ResolvedOffsetOptions,
+    context?: KernelFeatureContext,
+  ): KernelShape {
+    checkContext(context);
+    if (!Number.isFinite(options.distance) || !(options.distance > 0)) {
+      throw new RangeError("Offset distance must be finite and positive");
+    }
+    if (options.direction !== "outward" && options.direction !== "inward") {
+      throw new TypeError("Offset direction must be 'outward' or 'inward'");
+    }
+    if (!Number.isFinite(options.tolerance) || !(options.tolerance > 0)) {
+      throw new RangeError("Offset tolerance must be finite and positive");
+    }
+    if (!(options.tolerance < options.distance)) {
+      throw new RangeError("Offset tolerance must be less than its distance");
+    }
+
+    const input = this.shape(shape);
+    const inputSolids = this.raw.getSubShapes(input[OCCT_SHAPE], "solid");
+    if (inputSolids.length !== 1) {
+      this.releaseHandles(inputSolids);
+      throw new TypeError("Offset input must contain exactly one solid");
+    }
+    const inputSolid = inputSolids[0]!;
+    try {
+      if (
+        !this.raw.isValid(input[OCCT_SHAPE]) ||
+        !this.raw.isValid(inputSolid)
+      ) {
+        throw new TypeError("Offset input must be a valid solid");
+      }
+      if (!this.isPureSingleSolidShape(input[OCCT_SHAPE], inputSolid)) {
+        throw new TypeError(
+          "Offset input must not contain loose topology outside its solid",
+        );
+      }
+      for (const topology of ["face", "edge", "vertex"] as const) {
+        if (
+          this.raw.subShapeCount(input[OCCT_SHAPE], topology) !==
+          this.raw.subShapeCount(inputSolid, topology)
+        ) {
+          throw new TypeError(
+            "Offset input must not contain loose topology outside its solid",
+          );
+        }
+      }
+
+      const signedInputVolume = this.raw.getVolume(inputSolid);
+      const inputVolume = Math.abs(signedInputVolume);
+      const volumeTolerance = Math.max(
+        options.tolerance ** 3,
+        inputVolume * 1e-12,
+        Number.EPSILON,
+      );
+      if (!Number.isFinite(inputVolume) || !(inputVolume > volumeTolerance)) {
+        throw new TypeError("Offset input must have positive finite volume");
+      }
+
+      const signedDistance =
+        options.direction === "outward"
+          ? options.distance
+          : -options.distance;
+      let normalizedInput: ShapeHandle | undefined;
+      let result: ShapeHandle;
+      try {
+        if (signedInputVolume < 0) {
+          normalizedInput = this.raw.reverseShape(inputSolid);
+        }
+        result = this.raw.offset(
+          normalizedInput ?? inputSolid,
+          signedDistance,
+          options.tolerance,
+        );
+      } finally {
+        if (normalizedInput !== undefined) this.raw.release(normalizedInput);
+      }
+
+      try {
+        if (this.raw.isNull(result) || !this.raw.isValid(result)) {
+          throw new RangeError("Offset produced an invalid solid");
+        }
+        const resultVolume = this.raw.getVolume(result);
+
+        const resultSolids = this.raw.getSubShapes(result, "solid");
+        try {
+          if (resultSolids.length !== 1) {
+            throw new RangeError("Offset did not produce exactly one solid");
+          }
+          if (!this.isPureSingleSolidShape(result, resultSolids[0]!)) {
+            throw new RangeError(
+              "Offset produced loose topology outside its result solid",
+            );
+          }
+          for (const topology of ["face", "edge", "vertex"] as const) {
+            if (
+              this.raw.subShapeCount(result, topology) !==
+              this.raw.subShapeCount(resultSolids[0]!, topology)
+            ) {
+              throw new RangeError(
+                "Offset produced loose topology outside its result solid",
+              );
+            }
+          }
+        } finally {
+          this.releaseHandles(resultSolids);
+        }
+        if (
+          !Number.isFinite(resultVolume) ||
+          !(resultVolume > volumeTolerance)
+        ) {
+          throw new RangeError("Offset did not produce a positive-volume solid");
+        }
+        if (
+          options.direction === "outward" &&
+          !(resultVolume > inputVolume + volumeTolerance)
+        ) {
+          throw new RangeError("Outward offset did not increase solid volume");
+        }
+        if (
+          options.direction === "inward" &&
+          !(resultVolume < inputVolume - volumeTolerance)
+        ) {
+          throw new RangeError("Inward offset did not decrease solid volume");
         }
         return this.own(result, context, {
           inherited: input.lineage,
@@ -1743,8 +1919,8 @@ class OcctKernel implements GeometryKernel {
   }
 
   disposeShape(shape: KernelShape): void {
-    if (!(shape instanceof OcctShape)) {
-      throw new TypeError("Expected an OCCT kernel shape");
+    if (!(shape instanceof OcctShape) || !this.ownedShapes.has(shape)) {
+      throw new TypeError("Expected an OCCT kernel shape owned by this kernel");
     }
     if (shape.disposed) return;
     this.assertKernelLive();

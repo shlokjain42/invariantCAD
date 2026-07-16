@@ -1088,6 +1088,46 @@ export class Evaluator {
             );
             break;
           }
+          case "offset": {
+            requireKernelCapability("feature", "offset", id);
+            const distance = positive(
+              expression(node.distance),
+              id,
+              "distance",
+            );
+            const tolerance = positive(
+              expression(node.tolerance),
+              id,
+              "tolerance",
+            );
+            if (!(tolerance < distance)) {
+              throw new EvaluationFailure(
+                diagnostic(
+                  "FEATURE_INVALID",
+                  "Offset tolerance must be less than its distance",
+                  {
+                    severity: "error",
+                    node: id,
+                    path: `/nodes/${id}/tolerance`,
+                    details: { tolerance, distance },
+                  },
+                ),
+              );
+            }
+            result = ownShape(
+              this.kernel.offset!(
+                solidRef(node.input),
+                {
+                  distance,
+                  direction: node.direction,
+                  tolerance,
+                },
+                featureContext(id),
+              ),
+              id,
+            );
+            break;
+          }
           case "part":
             result = {
               kind: "part",

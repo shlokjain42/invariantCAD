@@ -42,6 +42,10 @@ import {
   SHELL_DIRECTIONS,
   type ShellDirection,
 } from "./protocol/shell.js";
+import {
+  OFFSET_DIRECTIONS,
+  type OffsetDirection,
+} from "./protocol/offset.js";
 
 const DESIGN_OWNER = Symbol("InvariantCAD.DesignOwner");
 
@@ -527,6 +531,31 @@ export class DesignBuilder {
       input: input.toIR(),
       openings: options.openings.toIR(),
       thickness: options.thickness.ir,
+      direction,
+      tolerance: (options.tolerance ?? mm(1e-6)).ir,
+    });
+    return new SolidRef(this, key);
+  }
+
+  offset(
+    id: string,
+    input: SolidRef,
+    options: {
+      /** Positive normal-offset magnitude. */
+      readonly distance: LengthExpression;
+      readonly direction?: OffsetDirection;
+      readonly tolerance?: LengthExpression;
+    },
+  ): SolidRef {
+    this.assertOwned(input);
+    const direction = options.direction ?? "outward";
+    if (!OFFSET_DIRECTIONS.includes(direction)) {
+      throw new TypeError("Offset direction must be 'outward' or 'inward'");
+    }
+    const key = this.addNode(id, {
+      kind: "offset",
+      input: input.toIR(),
+      distance: options.distance.ir,
       direction,
       tolerance: (options.tolerance ?? mm(1e-6)).ir,
     });

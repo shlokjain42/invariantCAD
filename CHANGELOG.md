@@ -10,7 +10,9 @@
 - Add exact selector-driven fillets and structured missing, ambiguous, and incomplete-history diagnostics
 - Add exact equal-distance selector-driven chamfers with tangent-contour seed semantics, negotiated kernel capability, and partial-history diagnostics
 - Add exact constant-thickness inward/outward shells with fixed round joins, non-propagating semantic face openings, materialized direction and tolerance, strict solid/opening checks, negotiated kernel capability, and partial-history diagnostics
+- Add exact whole-solid inward/outward offsets with fixed round joins, materialized direction and tolerance, strict one-body validation, collapse checks, negotiated kernel capability, and partial-history diagnostics
 - Make exact boolean unions produce shellable fused solids and normalize reversed one-solid imports before topology-sensitive features
+- Reject shapes passed across OCCT kernel instances before their raw arena IDs can alias unrelated geometry
 - Add a closed, typed primitive/extrusion topology-role registry and sketch-curve source selectors
 - Preserve proven per-subshape role/source lineage through transforms and downgrade ambiguous history
 - Version and normalize the geometry-kernel protocol, native exchange, validity, and meshing options

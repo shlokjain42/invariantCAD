@@ -9,6 +9,7 @@ import {
 import type { ExpressionIR } from "./expressions.js";
 import { TOPOLOGY_ROLES } from "./protocol/topology.js";
 import { SHELL_DIRECTIONS } from "./protocol/shell.js";
+import { OFFSET_DIRECTIONS } from "./protocol/offset.js";
 
 const DimensionSchema = z.enum(["scalar", "length", "angle"]);
 
@@ -336,6 +337,15 @@ const NodeSchema = z.discriminatedUnion("kind", [
       openings: TopologySelectionSchema,
       thickness: ExpressionSchema,
       direction: z.enum(SHELL_DIRECTIONS),
+      tolerance: ExpressionSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("offset"),
+      input: RefSchema,
+      distance: ExpressionSchema,
+      direction: z.enum(OFFSET_DIRECTIONS),
       tolerance: ExpressionSchema,
     })
     .strict(),

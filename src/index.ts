@@ -97,6 +97,7 @@ export {
   type SketchNodeIR,
   type SketchProfileIR,
   type ShellNodeIR,
+  type OffsetNodeIR,
   type SphereNodeIR,
   type TransformNodeIR,
   type TransformOperationIR,
@@ -165,6 +166,12 @@ export {
   type ResolvedProfile,
   type TessellatedProfile,
 } from "./protocol/profile.js";
+export {
+  OFFSET_DIRECTIONS,
+  OFFSET_JOIN_SEMANTICS,
+  type OffsetDirection,
+  type ResolvedOffsetOptions,
+} from "./protocol/offset.js";
 export {
   SHELL_DIRECTIONS,
   SHELL_JOIN_SEMANTICS,
