@@ -126,6 +126,9 @@ try {
       '  if (SHELL_JOIN_SEMANTICS !== "round") throw new Error("Shell join semantics were not packaged");',
       '  if (OFFSET_DIRECTIONS.join(",") !== "inward,outward") throw new Error("Offset direction registry was not packaged");',
       '  if (OFFSET_JOIN_SEMANTICS !== "round") throw new Error("Offset join semantics were not packaged");',
+      '  if (!kernelSupports(exactKernel.capabilities, "feature", "loft")) throw new Error("Exact loft capability was not packaged");',
+      '  const directLoft = exactKernel.loft([{ plane: { plane: "XY", origin: [0, 0, 0] }, outer: { curves: [{ kind: "line", start: [0, 0], end: [2, 0] }, { kind: "line", start: [2, 0], end: [2, 3] }, { kind: "line", start: [2, 3], end: [0, 3] }, { kind: "line", start: [0, 3], end: [0, 0] }] }, holes: [] }, { plane: { plane: "XY", origin: [0, 0, 5] }, outer: { curves: [{ kind: "line", start: [0, 0], end: [4, 0] }, { kind: "line", start: [4, 0], end: [4, 6] }, { kind: "line", start: [4, 6], end: [0, 6] }, { kind: "line", start: [0, 6], end: [0, 0] }] }, holes: [] }], { ruled: true }, { tolerance: 1e-7 });',
+      '  if (Math.abs(exactKernel.measure(directLoft).volume - 70) > 1e-8) throw new Error("Unexpected exact loft volume");',
       "  const vertical = snapshot.edges.filter((edge) => Math.abs(edge.curve.direction?.[2] ?? 0) > 0.999);",
       '  if (vertical.length !== 4) throw new Error("Unexpected vertical edge count");',
       "  const rounded = exactKernel.fillet(exactBox, vertical.map((edge) => edge.key), { radius: 0.2 });",
@@ -139,6 +142,7 @@ try {
       '  if (Math.abs(exactKernel.measure(expanded).volume - 35.564483717128844) > 1e-8) throw new Error("Unexpected exact offset volume");',
       '  if (exactKernel.topology(expanded).history !== "partial") throw new Error("Offset history boundary was not preserved");',
       "  exactKernel.disposeShape(expanded);",
+      "  exactKernel.disposeShape(directLoft);",
       "  exactKernel.disposeShape(beveled);",
       "  exactKernel.disposeShape(rounded);",
       "  exactKernel.disposeShape(exactBox);",
@@ -211,6 +215,27 @@ try {
       "} finally {",
       "  offsetEvaluator.dispose();",
       "}",
+      'const loftCad = design("package-loft");',
+      'const loftBottom = loftCad.sketch("bottom", plane.xy(), (sketch) => sketch.profile(sketch.rectangle("outline", { width: mm(2), height: mm(3) })));',
+      'const loftTop = loftCad.sketch("top", plane.xy(vec3(mm(0), mm(0), mm(5))), (sketch) => sketch.profile(sketch.rectangle("outline", { width: mm(4), height: mm(6) })));',
+      'loftCad.output("loft", loftCad.loft("loft", [loftBottom, loftTop]));',
+      'const loftDocument = loftCad.build();',
+      'const loftJson = stringifyDocument(loftDocument);',
+      'if (!loftJson.includes("loft") || !loftJson.includes("ruled")) throw new Error("Loft was not serialized");',
+      'await writeFile("model-loft.invariantcad.json", loftJson);',
+      'const loftEvaluator = await createEvaluator({ kernel: await createOcctKernel() });',
+      'try {',
+      '  const result = await loftEvaluator.evaluate(loftDocument);',
+      '  if (!result.ok) throw new Error(JSON.stringify(result.diagnostics));',
+      '  try {',
+      '    const volume = result.value.output("loft").measure().volume;',
+      '    if (Math.abs(volume - 70) > 1e-8) throw new Error("Unexpected semantic loft volume " + volume);',
+      '  } finally {',
+      '    result.value.dispose();',
+      '  }',
+      '} finally {',
+      '  loftEvaluator.dispose();',
+      '}',
       'const filletCad = design("package-fillet");',
       'const filletBox = filletCad.box("box", { size: vec3(mm(10), mm(20), mm(30)) });',
       'const filletEdges = topology.edges.createdBy(filletBox).and(topology.edges.direction(scalarVec3(0, 0, 1))).exactly(4);',
@@ -303,7 +328,7 @@ try {
   await writeFile(
     join(consumer, "type-smoke.ts"),
     [
-      'import { EDGE_TOPOLOGY_ROLES, FACE_TOPOLOGY_ROLES, OFFSET_DIRECTIONS, SHELL_DIRECTIONS, TOPOLOGY_ROLE_RULES, TOPOLOGY_ROLES, angleVec3, deg, design, mm, plane, scalarVec3, tf, topology, vec3, type ChamferNodeIR, type DesignDocument, type DraftNodeIR, type EdgeTopologyRole, type FaceTopologyRole, type OffsetDirection, type OffsetNodeIR, type ProfileRef, type ShellDirection, type ShellNodeIR, type SolidRef, type TopologyOriginOptions, type TopologyRole, type TopologySelection } from "invariantcad";',
+      'import { EDGE_TOPOLOGY_ROLES, FACE_TOPOLOGY_ROLES, OFFSET_DIRECTIONS, SHELL_DIRECTIONS, TOPOLOGY_ROLE_RULES, TOPOLOGY_ROLES, angleVec3, deg, design, mm, plane, scalarVec3, tf, topology, vec3, type ChamferNodeIR, type DesignDocument, type DraftNodeIR, type EdgeTopologyRole, type FaceTopologyRole, type LoftNodeIR, type OffsetDirection, type OffsetNodeIR, type ProfileRef, type ShellDirection, type ShellNodeIR, type SolidRef, type TopologyOriginOptions, type TopologyRole, type TopologySelection } from "invariantcad";',
       'import { createOcctKernel, type OcctKernelOptions, type OcctModuleFactory, type OcctModuleOptions } from "invariantcad/kernels/occt";',
       "",
       'const cad = design("type-smoke");',
@@ -315,6 +340,11 @@ try {
       'const hollow: SolidRef = cad.shell("hollow", solid, { openings: faces, thickness: mm(0.1), direction: "inward", tolerance: mm(1e-6) });',
       'const expanded: SolidRef = cad.offset("expanded", solid, { distance: mm(0.1), direction: "outward", tolerance: mm(1e-6) });',
       'const drafted: SolidRef = cad.draft("drafted", solid, { faces, angle: deg(1), pullDirection: scalarVec3(0, 0, 1), neutralPlane: { origin: vec3(mm(0), mm(0), mm(0)), normal: scalarVec3(0, 0, 1) } });',
+      'const loftBottom: ProfileRef = cad.sketch("loft-bottom", plane.xy(), (sketch) => sketch.profile(sketch.rectangle("bottom", { width: mm(1), height: mm(2) })));',
+      'const loftTop: ProfileRef = cad.sketch("loft-top", plane.xy(vec3(mm(0), mm(0), mm(3))), (sketch) => sketch.profile(sketch.rectangle("top", { width: mm(2), height: mm(4) })));',
+      'const lofted: SolidRef = cad.loft("lofted", [loftBottom, loftTop], { ruled: true });',
+      '// @ts-expect-error Document v1 lofts must be ruled.',
+      'cad.loft("smooth", [loftBottom, loftTop], { ruled: false });',
       "// @ts-expect-error Chamfers require edge selections.",
       'cad.chamfer("invalid-faces", solid, { edges: topology.faces.all().select(), distance: mm(0.1) });',
       "// @ts-expect-error Chamfer distance must be a length expression.",
@@ -339,6 +369,7 @@ try {
       'cad.output("hollow", hollow);',
       'cad.output("expanded", expanded);',
       'cad.output("drafted", drafted);',
+      'cad.output("lofted", lofted);',
       "const document: DesignDocument = cad.build();",
       'const maybeChamfer = document.nodes[beveled.node];',
       'if (maybeChamfer?.kind !== "chamfer") throw new Error("Missing chamfer IR");',
@@ -360,6 +391,10 @@ try {
       'if (maybeDraft?.kind !== "draft") throw new Error("Missing draft IR");',
       'const draftNode: DraftNodeIR = maybeDraft;',
       'if (draftNode.angle.dimension !== "angle" || draftNode.faces.topology !== "face") throw new Error("Invalid draft IR types");',
+      'const maybeLoft = document.nodes[lofted.node];',
+      'if (maybeLoft?.kind !== "loft") throw new Error("Missing loft IR");',
+      'const loftNode: LoftNodeIR = maybeLoft;',
+      'if (loftNode.ruled !== true || loftNode.profiles.length !== 2) throw new Error("Invalid loft IR types");',
       'const moduleFactory: OcctModuleFactory = async (_moduleOptions?: OcctModuleOptions) => ({});',
       "const options: OcctKernelOptions = { moduleFactory };",
       "void createOcctKernel(options);",
@@ -455,6 +490,7 @@ try {
   run(bin, ["validate", "model-chamfer.invariantcad.json"], consumer);
   run(bin, ["validate", "model-shell.invariantcad.json"], consumer);
   run(bin, ["validate", "model-offset.invariantcad.json"], consumer);
+  run(bin, ["validate", "model-loft.invariantcad.json"], consumer);
   run(
     bin,
     ["export", "model.invariantcad.json", "--to", "model.step"],
@@ -507,6 +543,21 @@ try {
   );
   if ((await stat(join(consumer, "expanded.step"))).size < 100) {
     throw new Error("Installed CLI produced an empty offset STEP file");
+  }
+  run(
+    bin,
+    [
+      "export",
+      "model-loft.invariantcad.json",
+      "--output",
+      "loft",
+      "--to",
+      "loft.step",
+    ],
+    consumer,
+  );
+  if ((await stat(join(consumer, "loft.step"))).size < 100) {
+    throw new Error("Installed CLI produced an empty loft STEP file");
   }
   process.stdout.write("Packed package smoke test passed.\n");
 } finally {

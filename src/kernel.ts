@@ -3,6 +3,7 @@ import type { ResolvedProfile } from "./protocol/profile.js";
 import type { ResolvedDraftOptions } from "./protocol/draft.js";
 import type { ResolvedShellOptions } from "./protocol/shell.js";
 import type { ResolvedOffsetOptions } from "./protocol/offset.js";
+import type { ResolvedLoftOptions } from "./protocol/loft.js";
 import type {
   KernelTopologyCapabilities,
   KernelTopologyKey,
@@ -14,6 +15,7 @@ export type KernelPrimitive = "box" | "cylinder" | "sphere";
 export type KernelFeature =
   | "extrude"
   | "revolve"
+  | "loft"
   | "boolean"
   | "transform"
   | "fillet"
@@ -180,6 +182,11 @@ export interface GeometryKernel {
   revolve?(
     profile: ResolvedProfile,
     options: { readonly angle: number; readonly segments?: number },
+    context?: KernelFeatureContext,
+  ): KernelShape;
+  loft?(
+    profiles: readonly ResolvedProfile[],
+    options: ResolvedLoftOptions,
     context?: KernelFeatureContext,
   ): KernelShape;
   boolean?(

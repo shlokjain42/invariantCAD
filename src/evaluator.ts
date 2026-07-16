@@ -52,6 +52,7 @@ import {
   kernelSupports,
   kernelSupportsTopology,
 } from "./kernel.js";
+import { validateRuledSolidLoftProfiles } from "./protocol/loft.js";
 import { createManifoldKernel, type ManifoldKernelOptions } from "./manifold-kernel.js";
 import {
   createReferenceSketchSolver,
@@ -1179,6 +1180,47 @@ export class Evaluator {
                 angle,
                 ...(node.segments === undefined ? {} : { segments: node.segments }),
               }, featureContext(id)),
+              id,
+            );
+            break;
+          }
+          case "loft": {
+            requireKernelCapability("feature", "loft", id);
+            const profiles = node.profiles.map((reference) => {
+              const value = evaluateNode(reference.node);
+              if (value.kind !== "profile") {
+                throw new Error("Loft profile mismatch");
+              }
+              return value.profile;
+            });
+            const tolerance = node.profiles.reduce(
+              (maximum, reference) => {
+                const profileNode = document.nodes[reference.node];
+                return Math.max(
+                  maximum,
+                  profileNode?.kind === "sketch" ? profileNode.tolerance : 1e-7,
+                );
+              },
+              0,
+            );
+            const issue = validateRuledSolidLoftProfiles(profiles, tolerance);
+            if (issue !== undefined) {
+              const { message, path, ...details } = issue;
+              throw new EvaluationFailure(
+                diagnostic("FEATURE_INVALID", message, {
+                  severity: "error",
+                  node: id,
+                  path: `/nodes/${id}/${path}`,
+                  details,
+                }),
+              );
+            }
+            result = ownShape(
+              this.kernel.loft!(
+                profiles,
+                { ruled: node.ruled },
+                { ...featureContext(id), tolerance },
+              ),
               id,
             );
             break;

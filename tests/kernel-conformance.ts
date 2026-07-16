@@ -447,6 +447,31 @@ export function geometryKernelConformance(
       }
     });
 
+    it("lofts ordered ruled sections when declared", () => {
+      if (!kernelSupports(kernel.capabilities, "feature", "loft")) return;
+      const profiles: readonly ResolvedProfile[] = [
+        {
+          plane: { plane: "XY", origin: [0, 0, 0] },
+          outer: rectangleLoop(0, 0, 2, 3),
+          holes: [],
+        },
+        {
+          plane: { plane: "XY", origin: [0, 0, 5] },
+          outer: rectangleLoop(0, 0, 4, 6),
+          holes: [],
+        },
+      ];
+      const loft = kernel.loft!(profiles, { ruled: true }, { tolerance: 1e-7 });
+      const measurement = expectLiveShape(loft);
+      expectMeasurement(measurement, "volume", 70, relativeTolerance);
+      expectBoundingBox(
+        measurement.boundingBox,
+        { min: [0, 0, 0], max: [4, 6, 5] },
+        Math.max(relativeTolerance, 1e-7),
+      );
+      kernel.disposeShape(loft);
+    });
+
     it("applies transforms and booleans without consuming inputs", () => {
       if (
         !kernelSupports(kernel.capabilities, "primitive", "box") ||

@@ -35,6 +35,10 @@ import type {
   ResolvedProfile,
 } from "./protocol/profile.js";
 import { curveStart } from "./protocol/profile.js";
+import {
+  validateRuledSolidLoftProfiles,
+  type ResolvedLoftOptions,
+} from "./protocol/loft.js";
 import type { ResolvedOffsetOptions } from "./protocol/offset.js";
 import type { ResolvedShellOptions } from "./protocol/shell.js";
 import {
@@ -312,6 +316,7 @@ class OcctKernel implements GeometryKernel {
     features: [
       "extrude",
       "revolve",
+      "loft",
       "boolean",
       "transform",
       "fillet",
@@ -1009,6 +1014,137 @@ class OcctKernel implements GeometryKernel {
       );
     } finally {
       this.releaseHandles(built.allocated);
+    }
+  }
+
+  loft(
+    profiles: readonly ResolvedProfile[],
+    options: ResolvedLoftOptions,
+    context?: KernelFeatureContext,
+  ): KernelShape {
+    checkContext(context);
+    if (typeof options !== "object" || options === null || options.ruled !== true) {
+      throw new TypeError("Document v1 lofts must use ruled interpolation");
+    }
+    const tolerance = context?.tolerance ?? this.modelingTolerance;
+    const issue = validateRuledSolidLoftProfiles(profiles, tolerance);
+    if (issue !== undefined) throw new RangeError(issue.message);
+
+    const allocated: ShapeHandle[] = [];
+    const curves: ProfileCurveHandle[] = [];
+    const wires: ShapeHandle[] = [];
+    let result: ShapeHandle | undefined;
+    try {
+      for (const [index, profile] of profiles.entries()) {
+        checkContext(context);
+        const wire = this.loopWire(profile.outer, profile.plane, allocated, curves);
+        wires.push(wire);
+        const curveCount = profile.outer.curves.length;
+        if (
+          this.raw.isNull(wire) ||
+          this.raw.getShapeType(wire) !== "wire" ||
+          !this.raw.isValid(wire) ||
+          this.raw.subShapeCount(wire, "edge") !== curveCount ||
+          this.raw.subShapeCount(wire, "vertex") !== curveCount
+        ) {
+          throw new RangeError(
+            `Loft profile ${index} does not form a valid unmodified wire`,
+          );
+        }
+        const sectionFace = this.raw.makeFace(wire);
+        allocated.push(sectionFace);
+        if (
+          this.raw.isNull(sectionFace) ||
+          this.raw.getShapeType(sectionFace) !== "face" ||
+          !this.raw.isValid(sectionFace) ||
+          this.raw.subShapeCount(sectionFace, "edge") !== curveCount ||
+          this.raw.subShapeCount(sectionFace, "vertex") !== curveCount
+        ) {
+          throw new RangeError(
+            `Loft profile ${index} does not form a valid simple planar face`,
+          );
+        }
+        const sectionArea = this.raw.getSurfaceArea(sectionFace);
+        if (
+          !Number.isFinite(sectionArea) ||
+          !(sectionArea > tolerance ** 2)
+        ) {
+          throw new RangeError(
+            `Loft profile ${index} does not form a valid simple planar face`,
+          );
+        }
+      }
+
+      checkContext(context);
+      result = this.raw.loft(wires, true, true);
+      checkContext(context);
+
+      const curveCount = profiles[0]!.outer.curves.length;
+      const expectedFaces = (profiles.length - 1) * curveCount + 2;
+      const expectedEdges = (2 * profiles.length - 1) * curveCount;
+      const expectedVertices = profiles.length * curveCount;
+      const minimumVolume = Math.max(tolerance ** 3, Number.EPSILON);
+
+      const validateResult = (): number => {
+        if (
+          result === undefined ||
+          this.raw.isNull(result) ||
+          this.raw.getShapeType(result) !== "solid" ||
+          !this.raw.isValid(result)
+        ) {
+          throw new RangeError("Loft did not produce one valid solid");
+        }
+        if (
+          this.raw.subShapeCount(result, "solid") !== 1 ||
+          this.raw.subShapeCount(result, "shell") !== 1
+        ) {
+          throw new RangeError("Loft did not produce exactly one solid and shell");
+        }
+        if (
+          this.raw.subShapeCount(result, "face") !== expectedFaces ||
+          this.raw.subShapeCount(result, "edge") !== expectedEdges ||
+          this.raw.subShapeCount(result, "vertex") !== expectedVertices
+        ) {
+          throw new RangeError(
+            "Loft changed the ordered section-curve correspondence",
+          );
+        }
+        const solids = this.raw.getSubShapes(result, "solid");
+        try {
+          if (
+            solids.length !== 1 ||
+            !this.isPureSingleSolidShape(result, solids[0]!)
+          ) {
+            throw new RangeError(
+              "Loft produced loose topology outside its result solid",
+            );
+          }
+        } finally {
+          this.releaseHandles(solids);
+        }
+        const volume = this.raw.getVolume(result);
+        if (!Number.isFinite(volume) || !(Math.abs(volume) > minimumVolume)) {
+          throw new RangeError("Loft did not produce a positive-volume solid");
+        }
+        return volume;
+      };
+
+      let volume = validateResult();
+      if (volume < 0) {
+        const reversed = this.raw.reverseShape(result);
+        this.raw.release(result);
+        result = reversed;
+        volume = validateResult();
+      }
+      if (!(volume > minimumVolume)) {
+        throw new RangeError("Loft did not produce a positive-volume solid");
+      }
+      return this.own(result, context);
+    } catch (error) {
+      if (result !== undefined) this.raw.release(result);
+      throw error;
+    } finally {
+      this.releaseHandles(allocated);
     }
   }
 

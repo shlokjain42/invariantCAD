@@ -196,6 +196,14 @@ export interface RevolveNodeIR {
   readonly segments?: number;
 }
 
+export interface LoftNodeIR {
+  readonly kind: "loft";
+  /** Ordered profile sections; document v1 requires at least two. */
+  readonly profiles: readonly RefIR<"profile">[];
+  /** Document v1 supports ruled interpolation only. */
+  readonly ruled: true;
+}
+
 export interface BooleanNodeIR {
   readonly kind: "boolean";
   readonly operation: "union" | "subtract" | "intersect";
@@ -361,6 +369,7 @@ export type NodeIR =
   | SketchNodeIR
   | ExtrudeNodeIR
   | RevolveNodeIR
+  | LoftNodeIR
   | BooleanNodeIR
   | TransformNodeIR
   | FilletNodeIR
@@ -397,6 +406,8 @@ export function nodeDependencies(node: NodeIR): readonly RefIR[] {
     case "extrude":
     case "revolve":
       return [node.profile];
+    case "loft":
+      return node.profiles;
     case "boolean":
       return [node.target, ...node.tools];
     case "transform":

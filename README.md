@@ -4,7 +4,7 @@ Comprehensive, type-safe CAD-as-code for TypeScript.
 
 InvariantCAD represents a design as immutable, versioned JSON and evaluates it through replaceable geometry and sketch-solver backends. The public API never exposes WASM pointers or kernel-specific objects.
 
-> **Project status:** `0.1.0` is the released-foundation target. Current main adds an exact OpenCascade B-Rep backend, analytic sketch-profile transfer, STEP/BREP exchange, closed semantic topology roles, sketch-boundary provenance, exact selector-driven fillets and equal-distance chamfers, exact face-selected inward/outward shells, exact whole-solid inward/outward offsets, and atomic semantic-face draft with exact indexed topology evolution when the matched InvariantCAD-owned OCCT facade is loaded. Complete topology history across the other topology-changing features and additional advanced mechanical features remain under active development; see the [support matrix](#support-matrix) and [roadmap](docs/roadmap.md).
+> **Project status:** `0.1.0` is the released-foundation target. Current main adds an exact OpenCascade B-Rep backend, analytic sketch-profile transfer, STEP/BREP exchange, bounded ruled solid lofts, closed semantic topology roles, sketch-boundary provenance, exact selector-driven fillets and equal-distance chamfers, exact face-selected inward/outward shells, exact whole-solid inward/outward offsets, and atomic semantic-face draft with exact indexed topology evolution when the matched InvariantCAD-owned OCCT facade is loaded. Complete topology history across the other topology-changing features and additional advanced mechanical features remain under active development; see the [support matrix](#support-matrix) and [roadmap](docs/roadmap.md).
 
 ## Install
 
@@ -227,7 +227,7 @@ The serialized role vocabulary is closed and exported through `TOPOLOGY_ROLES` a
 
 `start` and `end` follow construction parameterization, not current world orientation. A topology-preserving transform retains the original role/source lineage and adds `modified` lineage for the transform. Cylinder seams, cone apex artifacts, sphere seams/poles, and other kernel artifacts are deliberately unnamed so a document cannot accidentally depend on their enumeration.
 
-Selectors also support curve/surface kind, edge direction, face normal, radius, adjacency, `and`/`or`/`not`, and explicit cardinality. Zero matches produce `TOPOLOGY_SELECTION_MISSING`; excess matches produce `TOPOLOGY_SELECTION_AMBIGUOUS`. The exact backend currently provides complete broad feature provenance for primitives, extrusions, revolutions, and topology-preserving transforms, plus the semantic roles and sketch sources above. It marks boolean, fillet, chamfer, shell, and offset history partial, so provenance queries on those results fail with `TOPOLOGY_HISTORY_UNAVAILABLE` rather than choosing unstable topology. Geometry-only selectors can still inspect those results. Draft is the narrower exception: a matched owned facade provides exact indexed evolution specifically for draft. Manifold and stock/default OCCT report an explicit capability error for draft.
+Selectors also support curve/surface kind, edge direction, face normal, radius, adjacency, `and`/`or`/`not`, and explicit cardinality. Zero matches produce `TOPOLOGY_SELECTION_MISSING`; excess matches produce `TOPOLOGY_SELECTION_AMBIGUOUS`. The exact backend currently provides complete broad feature provenance for primitives, extrusions, revolutions, lofts, and topology-preserving transforms, plus the semantic roles and sketch sources above. Loft topology has broad `createdBy(loft)` lineage but deliberately has no cap/side roles or sketch-source mapping. Boolean, fillet, chamfer, shell, and offset history is partial, so provenance queries on those results fail with `TOPOLOGY_HISTORY_UNAVAILABLE` rather than choosing unstable topology. Geometry-only selectors can still inspect those results. Draft is the narrower exception: a matched owned facade provides exact indexed evolution specifically for draft. Manifold and stock/default OCCT report an explicit capability error for draft.
 
 ## What works today
 
@@ -240,6 +240,7 @@ Selectors also support curve/surface kind, edge direction, face normal, radius, 
 - Points, lines, circles, arcs, polylines, rectangles, and regular polygons
 - Explicit outer loops and hole loops
 - Extrude, symmetric extrude, and revolve on both kernels
+- Ordered, ruled, hole-free solid lofts through parallel principal-plane profiles on the exact OCCT backend
 - Twist and top-scale extrusion through the Manifold mesh backend
 - Union, subtraction, and intersection
 - Semantic face/edge set selectors with closed roles, sketch sources, and explicit cardinality
@@ -290,13 +291,14 @@ The solver API is replaceable. The built-in solver is intentionally a v0.1 refer
 | Shell | OCCT inward/outward constant-thickness mode with semantic face openings | Yes |
 | Whole-solid offset | OCCT inward/outward mode with fixed round joins | Yes |
 | Draft | Explicitly supplied matched owned OCCT facade with semantic face selectors | Yes |
+| Loft | OCCT ordered ruled-solid mode with matched hole-free sections | Smooth, guided, and open modes |
 | Persistent face/edge selectors | Primitive/extrusion roles and sources; origin/geometry/adjacency queries | Yes |
 | Drawings, GD&T, PMI | No | Yes |
 | Sheet metal | No | Yes |
 | CAM and CAE adapters | No | Yes |
 | STL and OBJ export | Yes | Yes |
 
-Capabilities are negotiated by backends. InvariantCAD will not silently pretend a mesh operation is exact B-Rep or silently downgrade exact geometry. Draft requires both the ordinary `draft` feature and `exactIndexedTopologyEvolution` v1 scoped to draft; a stock/default OCCT module advertises neither.
+Capabilities are negotiated by backends. InvariantCAD will not silently pretend a mesh operation is exact B-Rep or silently downgrade exact geometry. The current loft contract is deliberately bounded to ruled solids through at least two distinct, ordered, hole-free profiles on parallel planes, with matching directed curve signatures. Draft requires both the ordinary `draft` feature and `exactIndexedTopologyEvolution` v1 scoped to draft; a stock/default OCCT module advertises neither.
 
 ## Assemblies
 

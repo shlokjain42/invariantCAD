@@ -801,6 +801,55 @@ function validateNode(
       validateRef(node.profile, "profile", document, `${path}/profile`, diagnostics);
       expression(node.angle, "angle", "angle");
       break;
+    case "loft": {
+      if (node.profiles.length < 2) {
+        diagnostics.push(
+          diagnostic(
+            "FEATURE_INVALID",
+            "Loft requires at least two ordered profiles",
+            { severity: "error", node: id, path: `${path}/profiles` },
+          ),
+        );
+      }
+      const duplicateProfileIndex = node.profiles.findIndex(
+        (profile, index) =>
+          node.profiles.findIndex((candidate) => candidate.node === profile.node) <
+          index,
+      );
+      if (duplicateProfileIndex !== -1) {
+        diagnostics.push(
+          diagnostic(
+            "FEATURE_INVALID",
+            "Loft requires distinct ordered profiles",
+            {
+              severity: "error",
+              node: id,
+              path: `${path}/profiles/${duplicateProfileIndex}`,
+              details: { reason: "duplicate-profile" },
+            },
+          ),
+        );
+      }
+      node.profiles.forEach((profile, index) =>
+        validateRef(
+          profile,
+          "profile",
+          document,
+          `${path}/profiles/${index}`,
+          diagnostics,
+        ),
+      );
+      if (node.ruled !== true) {
+        diagnostics.push(
+          diagnostic(
+            "FEATURE_INVALID",
+            "Document v1 lofts must be ruled",
+            { severity: "error", node: id, path: `${path}/ruled` },
+          ),
+        );
+      }
+      break;
+    }
     case "boolean":
       validateRef(node.target, "solid", document, `${path}/target`, diagnostics);
       node.tools.forEach((tool, index) =>

@@ -303,6 +303,13 @@ const NodeSchema = z.discriminatedUnion("kind", [
     angle: ExpressionSchema,
     segments: z.number().int().min(3).optional(),
   }),
+  z
+    .object({
+      kind: z.literal("loft"),
+      profiles: z.array(RefSchema).min(2),
+      ruled: z.literal(true),
+    })
+    .strict(),
   z.object({
     kind: z.literal("boolean"),
     operation: z.enum(["union", "subtract", "intersect"]),

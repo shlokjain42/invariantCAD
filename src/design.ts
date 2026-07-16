@@ -380,6 +380,34 @@ export class DesignBuilder {
     return new SolidRef(this, key);
   }
 
+  loft(
+    id: string,
+    profiles: readonly ProfileRef[],
+    options: {
+      /** Document v1 supports ruled interpolation only. */
+      readonly ruled?: true;
+    } = {},
+  ): SolidRef {
+    if (profiles.length < 2) {
+      throw new TypeError("Loft requires at least two ordered profiles");
+    }
+    for (const profile of profiles) this.assertOwned(profile);
+    if (
+      new Set(profiles.map((profile) => profile.node)).size !== profiles.length
+    ) {
+      throw new TypeError("Loft requires distinct ordered profiles");
+    }
+    if (options.ruled !== undefined && options.ruled !== true) {
+      throw new TypeError("Document v1 lofts must be ruled");
+    }
+    const key = this.addNode(id, {
+      kind: "loft",
+      profiles: profiles.map((profile) => profile.toIR()),
+      ruled: true,
+    });
+    return new SolidRef(this, key);
+  }
+
   private boolean(
     id: string,
     operation: "union" | "subtract" | "intersect",

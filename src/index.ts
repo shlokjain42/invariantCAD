@@ -93,6 +93,7 @@ export {
   type PrincipalPlane,
   type RefIR,
   type RevolveNodeIR,
+  type LoftNodeIR,
   type SketchConstraintIR,
   type SketchEntityIR,
   type SketchLoopIR,
@@ -170,6 +171,12 @@ export {
   type ResolvedProfile,
   type TessellatedProfile,
 } from "./protocol/profile.js";
+export {
+  LOFT_RULED_SEMANTICS,
+  validateRuledSolidLoftProfiles,
+  type LoftProfileValidationIssue,
+  type ResolvedLoftOptions,
+} from "./protocol/loft.js";
 export {
   OFFSET_DIRECTIONS,
   OFFSET_JOIN_SEMANTICS,

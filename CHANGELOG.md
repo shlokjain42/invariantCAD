@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added a kernel-neutral ordered ruled-solid loft node and TypeScript builder API.
+- Added strict profile compatibility, station ordering, exact OCCT result-topology validation, capability negotiation, and conformance coverage for the bounded loft contract.
+
 - Preserve analytic sketch lines, arcs, circles, and their source entity IDs in resolved profiles
 - Add an exact OpenCascade B-Rep backend with STEP and text/binary BREP exchange
 - Add evaluated-output and CLI STEP/BREP export without exposing native handles
