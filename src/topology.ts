@@ -9,12 +9,16 @@ import type {
   TopologySelectionIR,
   TopologySourceIR,
 } from "./ir.js";
-import type { TopologyKind } from "./protocol/topology.js";
+import type {
+  EdgeTopologyRole,
+  FaceTopologyRole,
+  TopologyKind,
+} from "./protocol/topology.js";
 
 type AnyModelRef = ModelRef<"profile" | "solid" | "part" | "assembly">;
 
-export interface TopologyOriginOptions {
-  readonly role?: string;
+export interface TopologyOriginOptions<K extends TopologyKind = TopologyKind> {
+  readonly role?: K extends "face" ? FaceTopologyRole : EdgeTopologyRole;
   readonly source?: {
     readonly sketch: ProfileRef;
     readonly entity: string;
@@ -241,7 +245,7 @@ class TopologyQueries<K extends TopologyKind> {
   private origin(
     feature: ModelRef<"solid">,
     relation: TopologyOriginRelation,
-    options: TopologyOriginOptions,
+    options: TopologyOriginOptions<K>,
   ): TopologyQuery<K> {
     const source = topologySource(options);
     return new TopologyQuery(
@@ -259,16 +263,15 @@ class TopologyQueries<K extends TopologyKind> {
 
   createdBy(
     feature: ModelRef<"solid">,
-    options: TopologyOriginOptions = {},
+    options: TopologyOriginOptions<K> = {},
   ): TopologyQuery<K> {
     return this.origin(feature, "created", options);
   }
 
   modifiedBy(
     feature: ModelRef<"solid">,
-    options: TopologyOriginOptions = {},
   ): TopologyQuery<K> {
-    return this.origin(feature, "modified", options);
+    return this.origin(feature, "modified", {});
   }
 }
 

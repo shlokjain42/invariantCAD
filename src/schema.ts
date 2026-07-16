@@ -7,6 +7,7 @@ import {
   type TopologySelectionIR,
 } from "./ir.js";
 import type { ExpressionIR } from "./expressions.js";
+import { TOPOLOGY_ROLES } from "./protocol/topology.js";
 
 const DimensionSchema = z.enum(["scalar", "length", "angle"]);
 
@@ -196,7 +197,7 @@ export const TopologyQuerySchema: z.ZodType<TopologyQueryIR> = z.lazy(() =>
         op: z.literal("origin"),
         feature: z.string(),
         relation: z.enum(["created", "modified"]),
-        role: z.string().min(1).optional(),
+        role: z.enum(TOPOLOGY_ROLES).optional(),
         source: TopologySourceSchema.optional(),
       })
       .strict(),

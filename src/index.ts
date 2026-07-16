@@ -165,15 +165,17 @@ export {
 } from "./protocol/profile.js";
 export {
   topology,
-  TopologyQuery,
-  TopologySelection,
   type TopologyOriginOptions,
+  type TopologyQuery,
+  type TopologySelection,
 } from "./topology.js";
 export {
   resolveTopologySelection,
   type TopologyResolutionContext,
 } from "./topology-resolution.js";
 export type {
+  EdgeTopologyRole,
+  FaceTopologyRole,
   KernelCurveDescriptor,
   KernelEdgeDescriptor,
   KernelFaceDescriptor,
@@ -185,6 +187,16 @@ export type {
   KernelTopologySnapshot,
   KernelTopologySource,
   TopologyKind,
+  TopologyRole,
+  TopologyRoleProducer,
+  TopologyRoleRule,
+  TopologyRoleSource,
+} from "./protocol/topology.js";
+export {
+  EDGE_TOPOLOGY_ROLES,
+  FACE_TOPOLOGY_ROLES,
+  TOPOLOGY_ROLE_RULES,
+  TOPOLOGY_ROLES,
 } from "./protocol/topology.js";
 export {
   ReferenceSketchSolver,

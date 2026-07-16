@@ -24,6 +24,8 @@ import type {
   KernelTopologyKey,
   KernelTopologyLineage,
   KernelTopologySnapshot,
+  KernelTopologySource,
+  TopologyRole,
 } from "./protocol/topology.js";
 import type {
   NumericPlane,
@@ -32,6 +34,7 @@ import type {
   ResolvedLoop,
   ResolvedProfile,
 } from "./protocol/profile.js";
+import { curveStart } from "./protocol/profile.js";
 
 const OCCT_SHAPE = Symbol("InvariantCAD.OcctShape");
 const TOPOLOGY_HASH_UPPER_BOUND = 2_147_483_647;
@@ -43,12 +46,36 @@ interface RetainedTopologyHandle {
   readonly handle: ShapeHandle;
 }
 
+type TopologyDescriptor = KernelFaceDescriptor | KernelEdgeDescriptor;
+
+interface TopologyLineageSeed {
+  readonly topology: "face" | "edge";
+  readonly geometryKind: string;
+  readonly center: Vec3;
+  readonly bounds: { readonly min: Vec3; readonly max: Vec3 };
+  readonly measure: number;
+  readonly lineage: readonly KernelTopologyLineage[];
+}
+
+interface TopologyAnnotation {
+  readonly classify?: (
+    descriptor: TopologyDescriptor,
+  ) => readonly KernelTopologyLineage[];
+  readonly seeds?: readonly TopologyLineageSeed[];
+  readonly expectedRoles?: {
+    readonly feature: string;
+    readonly counts: Readonly<Partial<Record<TopologyRole, number>>>;
+  };
+  readonly requireSeedCoverage?: boolean;
+}
+
 class OcctShape implements KernelShape {
   readonly kernel = "occt";
   readonly [OCCT_SHAPE]: ShapeHandle;
   readonly serial: number;
   readonly lineage: readonly KernelTopologyLineage[];
   readonly history: TopologyHistory;
+  readonly annotation: TopologyAnnotation | undefined;
   readonly topologyHandles = new Map<KernelTopologyKey, RetainedTopologyHandle>();
   topologySnapshot: KernelTopologySnapshot | undefined;
   disposed = false;
@@ -58,11 +85,13 @@ class OcctShape implements KernelShape {
     serial: number,
     lineage: readonly KernelTopologyLineage[],
     history: TopologyHistory,
+    annotation?: TopologyAnnotation,
   ) {
     this[OCCT_SHAPE] = handle;
     this.serial = serial;
     this.lineage = lineage;
     this.history = history;
+    this.annotation = annotation;
   }
 }
 
@@ -70,6 +99,11 @@ interface PlaneBasis {
   readonly u: Vec3;
   readonly v: Vec3;
   readonly n: Vec3;
+}
+
+interface ProfileCurveHandle {
+  readonly curve: ResolvedCurve;
+  readonly handle: ShapeHandle;
 }
 
 function planeBasis(plane: NumericPlane): PlaneBasis {
@@ -116,6 +150,22 @@ function uniqueLineage(
     unique.set(key, value);
   }
   return Object.freeze([...unique.values()]);
+}
+
+function semanticLineage(
+  context: KernelFeatureContext | undefined,
+  role: TopologyRole,
+  source?: KernelTopologySource,
+): readonly KernelTopologyLineage[] {
+  if (context?.feature === undefined) return [];
+  return [
+    {
+      feature: context.feature,
+      relation: "created",
+      role,
+      ...(source === undefined ? {} : { source }),
+    },
+  ];
 }
 
 function arrayBufferCopy(value: Uint8Array): ArrayBuffer {
@@ -176,8 +226,8 @@ class OcctKernel implements GeometryKernel {
     topology: {
       kinds: ["face", "edge"],
       provenance: "feature",
-      semanticRoles: false,
-      sketchSources: false,
+      semanticRoles: true,
+      sketchSources: true,
       geometry: true,
       adjacency: true,
     },
@@ -214,6 +264,7 @@ class OcctKernel implements GeometryKernel {
       readonly inherited?: readonly KernelTopologyLineage[];
       readonly relation?: "created" | "modified";
       readonly history?: TopologyHistory;
+      readonly annotation?: TopologyAnnotation;
     } = {},
   ): KernelShape {
     this.assertKernelLive();
@@ -233,6 +284,7 @@ class OcctKernel implements GeometryKernel {
       this.nextShapeSerial,
       lineage,
       options.history ?? "complete",
+      options.annotation,
     );
     this.nextShapeSerial += 1;
     this.liveShapes.add(shape);
@@ -290,10 +342,13 @@ class OcctKernel implements GeometryKernel {
     loop: ResolvedLoop,
     plane: NumericPlane,
     allocated: ShapeHandle[],
+    curveHandles: ProfileCurveHandle[],
   ): ShapeHandle {
-    const edges = loop.curves.map((curve) =>
-      this.curveHandle(curve, plane, allocated),
-    );
+    const edges = loop.curves.map((curve) => {
+      const handle = this.curveHandle(curve, plane, allocated);
+      curveHandles.push({ curve, handle });
+      return handle;
+    });
     const wire = this.raw.makeWire(edges);
     allocated.push(wire);
     return wire;
@@ -301,24 +356,333 @@ class OcctKernel implements GeometryKernel {
 
   private profileFace(
     profile: ResolvedProfile,
-  ): { readonly face: ShapeHandle; readonly allocated: readonly ShapeHandle[] } {
+  ): {
+    readonly face: ShapeHandle;
+    readonly allocated: readonly ShapeHandle[];
+    readonly curves: readonly ProfileCurveHandle[];
+  } {
     const allocated: ShapeHandle[] = [];
+    const curves: ProfileCurveHandle[] = [];
     try {
-      const outerWire = this.loopWire(profile.outer, profile.plane, allocated);
+      const outerWire = this.loopWire(
+        profile.outer,
+        profile.plane,
+        allocated,
+        curves,
+      );
       let face = this.raw.makeFace(outerWire);
       allocated.push(face);
       if (profile.holes.length > 0) {
         const holes = profile.holes.map((loop) =>
-          this.loopWire(loop, profile.plane, allocated),
+          this.loopWire(loop, profile.plane, allocated, curves),
         );
         face = this.raw.addHolesInFace(face, holes);
         allocated.push(face);
       }
-      return { face, allocated };
+      return { face, allocated, curves };
     } catch (error) {
       this.releaseHandles(allocated);
       throw error;
     }
+  }
+
+  private boxTopologyAnnotation(
+    context: KernelFeatureContext | undefined,
+    min: Vec3,
+    max: Vec3,
+  ): TopologyAnnotation {
+    return {
+      ...(context?.feature === undefined
+        ? {}
+        : {
+            expectedRoles: {
+              feature: context.feature,
+              counts: Object.fromEntries(
+                [
+                  "box.face.x-min",
+                  "box.face.x-max",
+                  "box.face.y-min",
+                  "box.face.y-max",
+                  "box.face.z-min",
+                  "box.face.z-max",
+                  "box.edge.x-min-y-min",
+                  "box.edge.x-min-y-max",
+                  "box.edge.x-max-y-min",
+                  "box.edge.x-max-y-max",
+                  "box.edge.x-min-z-min",
+                  "box.edge.x-min-z-max",
+                  "box.edge.x-max-z-min",
+                  "box.edge.x-max-z-max",
+                  "box.edge.y-min-z-min",
+                  "box.edge.y-min-z-max",
+                  "box.edge.y-max-z-min",
+                  "box.edge.y-max-z-max",
+                ].map((role) => [role, 1]),
+              ) as Partial<Record<TopologyRole, number>>,
+            },
+          }),
+      classify: (descriptor) => {
+        if (descriptor.topology === "face") {
+          const normal = descriptor.surface.normal;
+          if (normal === undefined) return [];
+          const absolute = normal.map(Math.abs);
+          const axis = absolute.indexOf(Math.max(...absolute));
+          const sign = normal[axis]! < 0 ? "min" : "max";
+          const role = `box.face.${["x", "y", "z"][axis]}-${sign}` as TopologyRole;
+          return semanticLineage(context, role);
+        }
+        const direction = descriptor.curve.direction;
+        if (direction === undefined) return [];
+        const absolute = direction.map(Math.abs);
+        const parallelAxis = absolute.indexOf(Math.max(...absolute));
+        const axisNames = ["x", "y", "z"] as const;
+        const boundary = (axis: number): string =>
+          `${axisNames[axis]}-${
+            Math.abs(descriptor.center[axis]! - min[axis]!) <=
+            Math.abs(descriptor.center[axis]! - max[axis]!)
+              ? "min"
+              : "max"
+          }`;
+        const boundaryAxes = [0, 1, 2].filter(
+          (axis) => axis !== parallelAxis,
+        );
+        const role = `box.edge.${boundary(boundaryAxes[0]!)}-${boundary(
+          boundaryAxes[1]!,
+        )}` as TopologyRole;
+        return semanticLineage(context, role);
+      },
+    };
+  }
+
+  private cylinderTopologyAnnotation(
+    context: KernelFeatureContext | undefined,
+    zMin: number,
+    zMax: number,
+    hasStart: boolean,
+    hasEnd: boolean,
+  ): TopologyAnnotation {
+    return {
+      ...(context?.feature === undefined
+        ? {}
+        : {
+            expectedRoles: {
+              feature: context.feature,
+              counts: {
+                "cylinder.face.side": 1,
+                ...(hasStart
+                  ? {
+                      "cylinder.face.start-cap": 1,
+                      "cylinder.edge.start-rim": 1,
+                    }
+                  : {}),
+                ...(hasEnd
+                  ? {
+                      "cylinder.face.end-cap": 1,
+                      "cylinder.edge.end-rim": 1,
+                    }
+                  : {}),
+              },
+            },
+          }),
+      classify: (descriptor) => {
+        if (descriptor.topology === "face") {
+          if (descriptor.surface.kind === "plane") {
+            const role =
+              Math.abs(descriptor.center[2] - zMin) <=
+              Math.abs(descriptor.center[2] - zMax)
+              ? "cylinder.face.start-cap"
+              : "cylinder.face.end-cap";
+            return semanticLineage(context, role);
+          }
+          return descriptor.surface.kind === "cylinder" ||
+            descriptor.surface.kind === "cone"
+            ? semanticLineage(context, "cylinder.face.side")
+            : [];
+        }
+        if (descriptor.curve.kind === "circle") {
+          const distanceToBottom = Math.abs(descriptor.center[2] - zMin);
+          const distanceToTop = Math.abs(descriptor.center[2] - zMax);
+          if (descriptor.length <= this.modelingTolerance) return [];
+          return semanticLineage(
+            context,
+            distanceToBottom <= distanceToTop
+              ? "cylinder.edge.start-rim"
+              : "cylinder.edge.end-rim",
+          );
+        }
+        return [];
+      },
+    };
+  }
+
+  private sphereTopologyAnnotation(
+    context?: KernelFeatureContext,
+  ): TopologyAnnotation {
+    return {
+      ...(context?.feature === undefined
+        ? {}
+        : {
+            expectedRoles: {
+              feature: context.feature,
+              counts: { "sphere.face.surface": 1 },
+            },
+          }),
+      classify: (descriptor) =>
+        descriptor.topology === "face" && descriptor.surface.kind === "sphere"
+          ? semanticLineage(context, "sphere.face.surface")
+          : [],
+    };
+  }
+
+  private extrudeTopologyAnnotation(
+    profile: ResolvedProfile,
+    curves: readonly ProfileCurveHandle[],
+    options: { readonly distance: number; readonly symmetric: boolean },
+    context?: KernelFeatureContext,
+  ): TopologyAnnotation {
+    const basis = planeBasis(profile.plane);
+    const vector: Vec3 = basis.n.map(
+      (value) => value * options.distance,
+    ) as unknown as Vec3;
+    const startOffset: Vec3 = basis.n.map((value) =>
+      options.symmetric ? value * -options.distance * 0.5 : 0,
+    ) as unknown as Vec3;
+    const endOffset: Vec3 = startOffset.map(
+      (value, index) => value + vector[index]!,
+    ) as unknown as Vec3;
+    const temporary: ShapeHandle[] = [];
+    const translated = (handle: ShapeHandle, offset: Vec3): ShapeHandle => {
+      const copy =
+        Math.hypot(...offset) <= Number.EPSILON
+          ? this.raw.copy(handle)
+          : this.raw.translate(handle, offset[0], offset[1], offset[2]);
+      temporary.push(copy);
+      return copy;
+    };
+    const sourceOf = (
+      curve: ResolvedCurve,
+    ): KernelTopologySource | undefined =>
+      curve.source === undefined
+        ? undefined
+        : {
+            kind: "sketch-entity",
+            sketch: curve.source.sketch,
+            entity: curve.source.entity,
+          };
+    const seeds: TopologyLineageSeed[] = [];
+    try {
+      for (const item of curves) {
+        const source = sourceOf(item.curve);
+        let side = this.raw.extrude(
+          item.handle,
+          vector[0],
+          vector[1],
+          vector[2],
+        );
+        temporary.push(side);
+        if (Math.hypot(...startOffset) > Number.EPSILON) {
+          const centered = this.raw.translate(
+            side,
+            startOffset[0],
+            startOffset[1],
+            startOffset[2],
+          );
+          temporary.push(centered);
+          side = centered;
+        }
+        seeds.push(
+          this.topologySeedFromHandle(
+            side,
+            "face",
+            semanticLineage(context, "extrude.face.side", source),
+          ),
+        );
+
+        seeds.push(
+          this.topologySeedFromHandle(
+            translated(item.handle, startOffset),
+            "edge",
+            semanticLineage(
+              context,
+              "extrude.edge.start-rim",
+              source,
+            ),
+          ),
+          this.topologySeedFromHandle(
+            translated(item.handle, endOffset),
+            "edge",
+            semanticLineage(
+              context,
+              "extrude.edge.end-rim",
+              source,
+            ),
+          ),
+        );
+
+        if (item.curve.kind !== "circle") {
+          const localStart = pointOnPlane(curveStart(item.curve), profile.plane);
+          const lateralStart: OcctVec3 = {
+            x: localStart.x + startOffset[0],
+            y: localStart.y + startOffset[1],
+            z: localStart.z + startOffset[2],
+          };
+          const lateralEnd: OcctVec3 = {
+            x: lateralStart.x + vector[0],
+            y: lateralStart.y + vector[1],
+            z: lateralStart.z + vector[2],
+          };
+          const lateral = this.raw.makeLineEdge(lateralStart, lateralEnd);
+          temporary.push(lateral);
+          seeds.push(
+            this.topologySeedFromHandle(
+              lateral,
+              "edge",
+              semanticLineage(context, "extrude.edge.lateral"),
+            ),
+          );
+        }
+      }
+    } finally {
+      this.releaseHandles(temporary);
+    }
+
+    return {
+      seeds,
+      ...(context?.feature === undefined
+        ? {}
+        : {
+            expectedRoles: {
+              feature: context.feature,
+              counts: {
+                "extrude.face.start-cap": 1,
+                "extrude.face.end-cap": 1,
+                "extrude.face.side": curves.length,
+                "extrude.edge.start-rim": curves.length,
+                "extrude.edge.end-rim": curves.length,
+                "extrude.edge.lateral": curves.filter(
+                  (item) => item.curve.kind !== "circle",
+                ).length,
+              },
+            },
+          }),
+      classify: (descriptor) => {
+        if (descriptor.topology !== "face") return [];
+        const normal = descriptor.surface.normal;
+        if (normal === undefined) return [];
+        const normalMagnitude = Math.hypot(...normal);
+        if (!(normalMagnitude > Number.EPSILON)) return [];
+        const dot =
+          (normal[0] * vector[0] +
+            normal[1] * vector[1] +
+            normal[2] * vector[2]) /
+          (normalMagnitude * Math.hypot(...vector));
+        if (Math.abs(dot) < 1 - 1e-8) return [];
+        return semanticLineage(
+          context,
+          dot < 0 ? "extrude.face.start-cap" : "extrude.face.end-cap",
+        );
+      },
+    };
   }
 
   box(
@@ -328,11 +692,21 @@ class OcctKernel implements GeometryKernel {
   ): KernelShape {
     checkContext(context);
     const box = this.raw.makeBox(size[0], size[1], size[2]);
-    if (!center) return this.own(box, context);
+    const min: Vec3 = center
+      ? [-size[0] / 2, -size[1] / 2, -size[2] / 2]
+      : [0, 0, 0];
+    const max: Vec3 = [
+      min[0] + size[0],
+      min[1] + size[1],
+      min[2] + size[2],
+    ];
+    const annotation = this.boxTopologyAnnotation(context, min, max);
+    if (!center) return this.own(box, context, { annotation });
     try {
       return this.own(
         this.raw.translate(box, -size[0] / 2, -size[1] / 2, -size[2] / 2),
         context,
+        { annotation },
       );
     } finally {
       this.raw.release(box);
@@ -352,11 +726,19 @@ class OcctKernel implements GeometryKernel {
       Math.abs(radiusBottom - radiusTop) <= this.modelingTolerance
         ? this.raw.makeCylinder(radiusBottom, height)
         : this.raw.makeCone(radiusBottom, radiusTop, height);
-    if (!center) return this.own(cylinder, context);
+    const annotation = this.cylinderTopologyAnnotation(
+      context,
+      center ? -height / 2 : 0,
+      center ? height / 2 : height,
+      radiusBottom > this.modelingTolerance,
+      radiusTop > this.modelingTolerance,
+    );
+    if (!center) return this.own(cylinder, context, { annotation });
     try {
       return this.own(
         this.raw.translate(cylinder, 0, 0, -height / 2),
         context,
+        { annotation },
       );
     } finally {
       this.raw.release(cylinder);
@@ -369,7 +751,9 @@ class OcctKernel implements GeometryKernel {
     context?: KernelFeatureContext,
   ): KernelShape {
     checkContext(context);
-    return this.own(this.raw.makeSphere(radius), context);
+    return this.own(this.raw.makeSphere(radius), context, {
+      annotation: this.sphereTopologyAnnotation(context),
+    });
   }
 
   extrude(
@@ -414,7 +798,14 @@ class OcctKernel implements GeometryKernel {
         this.raw.release(result);
         result = centered;
       }
-      return this.own(result, context);
+      return this.own(result, context, {
+        annotation: this.extrudeTopologyAnnotation(
+          profile,
+          built.curves,
+          options,
+          context,
+        ),
+      });
     } catch (error) {
       if (result !== undefined) this.raw.release(result);
       throw error;
@@ -502,14 +893,12 @@ class OcctKernel implements GeometryKernel {
     }
   }
 
-  transform(
-    shape: KernelShape,
+  private applyTransformOperations(
+    source: ShapeHandle,
     operations: readonly ResolvedTransformOperation[],
     context?: KernelFeatureContext,
-  ): KernelShape {
-    checkContext(context);
-    const inputShape = this.shape(shape);
-    let current = inputShape[OCCT_SHAPE];
+  ): ShapeHandle {
+    let current = source;
     let ownsCurrent = false;
     const replace = (next: ShapeHandle): void => {
       if (ownsCurrent) this.raw.release(current);
@@ -588,13 +977,69 @@ class OcctKernel implements GeometryKernel {
         current = this.raw.copy(current);
         ownsCurrent = true;
       }
+      return current;
+    } catch (error) {
+      if (ownsCurrent) this.raw.release(current);
+      throw error;
+    }
+  }
+
+  transform(
+    shape: KernelShape,
+    operations: readonly ResolvedTransformOperation[],
+    context?: KernelFeatureContext,
+  ): KernelShape {
+    checkContext(context);
+    const inputShape = this.shape(shape);
+    const current = this.applyTransformOperations(
+      inputShape[OCCT_SHAPE],
+      operations,
+      context,
+    );
+    try {
+      const inputSnapshot = this.topology(inputShape);
+      let annotation: TopologyAnnotation | undefined;
+      if (inputSnapshot.history === "complete") {
+        const seeds: TopologyLineageSeed[] = [];
+        const modified: readonly KernelTopologyLineage[] =
+          context?.feature === undefined
+            ? []
+            : [{ feature: context.feature, relation: "modified" }];
+        for (const descriptor of [
+          ...inputSnapshot.faces,
+          ...inputSnapshot.edges,
+        ]) {
+          const retained = inputShape.topologyHandles.get(descriptor.key);
+          if (retained === undefined) {
+            throw new Error("OCCT topology snapshot lost a retained subshape handle");
+          }
+          const transformed = this.applyTransformOperations(
+            retained.handle,
+            operations,
+            context,
+          );
+          try {
+            seeds.push(
+              this.topologySeedFromHandle(
+                transformed,
+                descriptor.topology,
+                uniqueLineage([...descriptor.lineage, ...modified]),
+              ),
+            );
+          } finally {
+            this.raw.release(transformed);
+          }
+        }
+        annotation = { seeds, requireSeedCoverage: true };
+      }
       return this.own(current, context, {
         inherited: inputShape.lineage,
         relation: "modified",
-        history: inputShape.history,
+        history: inputSnapshot.history,
+        ...(annotation === undefined ? {} : { annotation }),
       });
     } catch (error) {
-      if (ownsCurrent) this.raw.release(current);
+      this.raw.release(current);
       throw error;
     }
   }
@@ -669,6 +1114,60 @@ class OcctKernel implements GeometryKernel {
       min: [bounds.xmin, bounds.ymin, bounds.zmin],
       max: [bounds.xmax, bounds.ymax, bounds.zmax],
     };
+  }
+
+  private topologySeedFromHandle(
+    handle: ShapeHandle,
+    topology: "face" | "edge",
+    lineage: readonly KernelTopologyLineage[],
+  ): TopologyLineageSeed {
+    return topology === "face"
+      ? {
+          topology,
+          geometryKind: this.raw.surfaceType(handle),
+          center: vectorFromOcct(this.raw.getSurfaceCenterOfMass(handle)),
+          bounds: this.topologyBounds(handle),
+          measure: this.raw.getSurfaceArea(handle),
+          lineage,
+        }
+      : {
+          topology,
+          geometryKind: this.raw.curveType(handle),
+          center: vectorFromOcct(this.raw.getLinearCenterOfMass(handle)),
+          bounds: this.topologyBounds(handle),
+          measure: this.raw.curveLength(handle),
+          lineage,
+        };
+  }
+
+  private topologySeedMatches(
+    seed: TopologyLineageSeed,
+    descriptor: TopologyDescriptor,
+  ): boolean {
+    if (seed.topology !== descriptor.topology) return false;
+    const geometryKind =
+      descriptor.topology === "face"
+        ? descriptor.surface.kind
+        : descriptor.curve.kind;
+    if (seed.geometryKind !== geometryKind) return false;
+    const close = (first: number, second: number): boolean =>
+      Math.abs(first - second) <=
+      Math.max(
+        this.modelingTolerance * 20,
+        Math.max(1, Math.abs(first), Math.abs(second)) * 1e-8,
+      );
+    const descriptorMeasure =
+      descriptor.topology === "face" ? descriptor.area : descriptor.length;
+    return (
+      close(seed.measure, descriptorMeasure) &&
+      seed.center.every((value, index) => close(value, descriptor.center[index]!)) &&
+      seed.bounds.min.every((value, index) =>
+        close(value, descriptor.bounds.min[index]!),
+      ) &&
+      seed.bounds.max.every((value, index) =>
+        close(value, descriptor.bounds.max[index]!),
+      )
+    );
   }
 
   private surfaceDescriptor(face: ShapeHandle): KernelSurfaceDescriptor {
@@ -796,7 +1295,7 @@ class OcctKernel implements GeometryKernel {
         }
       });
 
-      const faces: readonly KernelFaceDescriptor[] = faceHandles.map(
+      const baseFaces: readonly KernelFaceDescriptor[] = faceHandles.map(
         (face, index) => ({
           topology: "face",
           key: faceKeys[index]!,
@@ -808,7 +1307,7 @@ class OcctKernel implements GeometryKernel {
           edges: Object.freeze([...faceEdges[index]!].sort()),
         }),
       );
-      const edges: readonly KernelEdgeDescriptor[] = edgeHandles.map(
+      const baseEdges: readonly KernelEdgeDescriptor[] = edgeHandles.map(
         (edge, index) => ({
           topology: "edge",
           key: edgeKeys[index]!,
@@ -820,6 +1319,80 @@ class OcctKernel implements GeometryKernel {
           faces: Object.freeze([...edgeFaces[index]!].sort()),
         }),
       );
+      const baseDescriptors: readonly TopologyDescriptor[] = [
+        ...baseFaces,
+        ...baseEdges,
+      ];
+      const seededLineage = new Map<
+        KernelTopologyKey,
+        KernelTopologyLineage[]
+      >();
+      const seedMatches = new Map<KernelTopologyKey, number>();
+      let annotationComplete = true;
+      for (const seed of owned.annotation?.seeds ?? []) {
+        const matches = baseDescriptors.filter((descriptor) =>
+          this.topologySeedMatches(seed, descriptor),
+        );
+        if (matches.length !== 1) {
+          annotationComplete = false;
+          continue;
+        }
+        seedMatches.set(
+          matches[0]!.key,
+          (seedMatches.get(matches[0]!.key) ?? 0) + 1,
+        );
+        const existing = seededLineage.get(matches[0]!.key);
+        if (existing === undefined) {
+          seededLineage.set(matches[0]!.key, [...seed.lineage]);
+        } else {
+          existing.push(...seed.lineage);
+        }
+      }
+      if (
+        owned.annotation?.requireSeedCoverage === true &&
+        baseDescriptors.some(
+          (descriptor) => seedMatches.get(descriptor.key) !== 1,
+        )
+      ) {
+        annotationComplete = false;
+      }
+      const annotate = <T extends TopologyDescriptor>(descriptor: T): T => {
+        const lineage = uniqueLineage([
+          ...descriptor.lineage,
+          ...(owned.annotation?.classify?.(descriptor) ?? []),
+          ...(seededLineage.get(descriptor.key) ?? []),
+        ]);
+        return { ...descriptor, lineage };
+      };
+      const faces = baseFaces.map(annotate);
+      const edges = baseEdges.map(annotate);
+      const expectedRoles = owned.annotation?.expectedRoles;
+      if (expectedRoles !== undefined) {
+        const actual = new Map<TopologyRole, number>();
+        for (const descriptor of [...faces, ...edges]) {
+          for (const lineage of descriptor.lineage) {
+            if (
+              lineage.feature === expectedRoles.feature &&
+              lineage.role !== undefined
+            ) {
+              actual.set(lineage.role, (actual.get(lineage.role) ?? 0) + 1);
+            }
+          }
+        }
+        const expected = Object.entries(expectedRoles.counts) as readonly [
+          TopologyRole,
+          number,
+        ][];
+        if (
+          expected.some(([role, count]) => (actual.get(role) ?? 0) !== count) ||
+          [...actual].some(
+            ([role, count]) => expectedRoles.counts[role] !== count,
+          )
+        ) {
+          annotationComplete = false;
+        }
+      }
+
       faceHandles.forEach((handle, index) => {
         owned.topologyHandles.set(faceKeys[index]!, {
           topology: "face",
@@ -833,7 +1406,10 @@ class OcctKernel implements GeometryKernel {
         });
       });
       const snapshot: KernelTopologySnapshot = Object.freeze({
-        history: owned.history,
+        history:
+          owned.history === "complete" && annotationComplete
+            ? "complete"
+            : "partial",
         faces: Object.freeze(faces),
         edges: Object.freeze(edges),
       });

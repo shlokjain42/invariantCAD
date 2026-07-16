@@ -23,14 +23,15 @@ InvariantCAD's goal is one coherent TypeScript CAD system, not one monolithic ge
 - Explicit exact-to-mesh conversion with tolerances
 - Evaluation-scoped face/edge topology snapshots and capability negotiation
 - Semantic origin/geometry/adjacency selectors with explicit cardinality
+- Closed primitive/extrusion roles and sketch-curve source provenance through transforms
 - First exact constant-radius fillet driven by semantic edge selection
 
 ## 0.3 — persistent design intent
 
-- Complete per-subshape provenance for generated and modified topology
-- Stable semantic roles and sketch-entity source mapping
+- Complete per-subshape provenance through booleans, fillets, revolutions, and generated/modified topology
+- Expanded role and source mapping for additional feature families
 - Geometry and adjacency signatures
-- Ambiguity and missing-selection diagnostics
+- Expanded selection diagnostics and provenance explanations
 - Incremental feature hashes and cross-run cache
 - Change-impact and geometric diff APIs
 

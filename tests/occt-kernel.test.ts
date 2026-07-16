@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  angleVec3,
   createEvaluator,
   deg,
   design,
@@ -8,6 +9,7 @@ import {
   plane,
   scalarVec3,
   topology,
+  tf,
   vec2,
   vec3,
 } from "../src/index.js";
@@ -196,6 +198,124 @@ describe("OCCT exact-kernel integration", () => {
         first.value.dispose();
         second.value.dispose();
       }
+    } finally {
+      evaluator.dispose();
+    }
+  });
+
+  it("preserves extrusion roles and sketch sources through transforms", async () => {
+    const kernel = await createOcctKernel();
+    const evaluator = await createEvaluator({ kernel });
+    try {
+      const cad = design("source-stable-fillet");
+      const width = cad.parameter.length("width", mm(40));
+      const height = cad.parameter.length("height", mm(20));
+      const depth = cad.parameter.length("depth", mm(10));
+      const profile = cad.sketch("profile", plane.xy(), (sketch) =>
+        sketch.profile(
+          sketch.rectangle("outline", { width, height }),
+        ),
+      );
+      const extrusion = cad.extrude("extrusion", profile, {
+        distance: depth,
+      });
+      const moved = cad.transform("moved", extrusion, [
+        tf.rotate(angleVec3(deg(0), deg(0), deg(90))),
+        tf.translate(vec3(mm(100), mm(5), mm(7))),
+      ]);
+      const rightEndRim = topology.edges
+        .createdBy(extrusion, {
+          role: "extrude.edge.end-rim",
+          source: { sketch: profile, entity: "outline.e1" },
+        })
+        .and(topology.edges.modifiedBy(moved))
+        .select();
+      cad.output(
+        "rounded",
+        cad.fillet("rounded", moved, {
+          edges: rightEndRim,
+          radius: mm(2),
+        }),
+      );
+      const document = cad.build();
+      const cases = [
+        { width: 40, height: 20 },
+        { width: 20, height: 40 },
+        { width: 30, height: 30 },
+      ];
+      for (const dimensions of cases) {
+        const result = await evaluator.evaluate(document, {
+          parameters: dimensions,
+        });
+        expect(result.ok).toBe(true);
+        if (!result.ok) continue;
+        try {
+          const expected =
+            dimensions.width * dimensions.height * 10 -
+            dimensions.height * 2 ** 2 * (1 - Math.PI / 4);
+          expect(result.value.output("rounded").measure().volume).toBeCloseTo(
+            expected,
+            8,
+          );
+          expect(
+            result.diagnostics.some((item) => item.code.startsWith("TOPOLOGY_")),
+          ).toBe(false);
+        } finally {
+          result.value.dispose();
+        }
+      }
+    } finally {
+      evaluator.dispose();
+    }
+  });
+
+  it("rejects provenance selectors after topology-changing booleans", async () => {
+    const kernel = await createOcctKernel();
+    const evaluator = await createEvaluator({ kernel });
+    try {
+      const cad = design("boolean-history-boundary");
+      const profile = cad.sketch("profile", plane.xy(), (sketch) =>
+        sketch.profile(
+          sketch.rectangle("outline", { width: mm(20), height: mm(10) }),
+        ),
+      );
+      const extrusion = cad.extrude("extrusion", profile, {
+        distance: mm(5),
+      });
+      const hole = cad.cylinder("hole", {
+        height: mm(10),
+        radius: mm(2),
+        center: true,
+      });
+      const drilled = cad.subtract("drilled", extrusion, [hole]);
+      const originalEndRim = topology.edges
+        .createdBy(extrusion, {
+          role: "extrude.edge.end-rim",
+          source: { sketch: profile, entity: "outline.e1" },
+        })
+        .select();
+      cad.output(
+        "rounded",
+        cad.fillet("rounded", drilled, {
+          edges: originalEndRim,
+          radius: mm(1),
+        }),
+      );
+
+      const result = await evaluator.evaluate(cad.build());
+      expect(result.ok).toBe(false);
+      expect(result.diagnostics).toContainEqual(
+        expect.objectContaining({
+          code: "TOPOLOGY_HISTORY_UNAVAILABLE",
+          node: "rounded",
+          path: expect.stringMatching(/^\/nodes\/rounded\/edges\/query/),
+          details: expect.objectContaining({
+            feature: "extrusion",
+            relation: "created",
+            history: "partial",
+          }),
+        }),
+      );
     } finally {
       evaluator.dispose();
     }

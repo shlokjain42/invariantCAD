@@ -4,7 +4,7 @@ Comprehensive, type-safe CAD-as-code for TypeScript.
 
 InvariantCAD represents a design as immutable, versioned JSON and evaluates it through replaceable geometry and sketch-solver backends. The public API never exposes WASM pointers or kernel-specific objects.
 
-> **Project status:** `0.1.0` is the released-foundation target. Current main adds an exact OpenCascade B-Rep backend, analytic sketch-profile transfer, STEP/BREP exchange, semantic topology selectors, and exact selector-driven fillets. Complete topology history through booleans and other advanced mechanical features remain under active development; see the [support matrix](#support-matrix) and [roadmap](docs/roadmap.md).
+> **Project status:** `0.1.0` is the released-foundation target. Current main adds an exact OpenCascade B-Rep backend, analytic sketch-profile transfer, STEP/BREP exchange, closed semantic topology roles, sketch-boundary provenance, and exact selector-driven fillets. Complete topology history through booleans and other advanced mechanical features remain under active development; see the [support matrix](#support-matrix) and [roadmap](docs/roadmap.md).
 
 ## Install
 
@@ -102,36 +102,63 @@ The backend is explicitly selected; a design document never contains OCCT handle
 
 ### Semantic topology and exact fillets
 
-Topology selections describe intent as set queries. They never persist a face index, edge index, OCCT handle, or transient hash:
+Topology selections describe intent as set queries. They never persist a face index, edge index, OCCT handle, or transient hash. This source-aware selector keeps identifying the same extrusion rim after a 90-degree rotation and across width/height parameter crossovers:
 
 ```ts
 import {
+  angleVec3,
+  deg,
   design,
   mm,
-  scalarVec3,
+  plane,
+  tf,
   topology,
   vec3,
 } from "invariantcad";
 
-const cad = design("rounded-block");
-const height = cad.parameter.length("height", mm(30));
-const block = cad.box("block", {
-  size: vec3(mm(10), mm(20), height),
+const cad = design("source-stable-fillet");
+const width = cad.parameter.length("width", mm(40));
+const height = cad.parameter.length("height", mm(20));
+const profile = cad.sketch("profile", plane.xy(), (sketch) =>
+  sketch.profile(
+    sketch.rectangle("outline", { width, height }),
+  ),
+);
+const extrusion = cad.extrude("extrusion", profile, {
+  distance: mm(10),
 });
+const moved = cad.transform("moved", extrusion, [
+  tf.rotate(angleVec3(deg(0), deg(0), deg(90))),
+  tf.translate(vec3(mm(100), mm(5), mm(7))),
+]);
 
-const verticalEdges = topology.edges
-  .createdBy(block)
-  .and(topology.edges.direction(scalarVec3(0, 0, 1)))
-  .exactly(4);
+const rightEndRim = topology.edges
+  .createdBy(extrusion, {
+    role: "extrude.edge.end-rim",
+    source: { sketch: profile, entity: "outline.e1" },
+  })
+  .and(topology.edges.modifiedBy(moved))
+  .select(); // exactly one edge
 
-const rounded = cad.fillet("rounded", block, {
-  edges: verticalEdges,
+const rounded = cad.fillet("rounded", moved, {
+  edges: rightEndRim,
   radius: mm(2),
 });
 cad.output("rounded", rounded);
 ```
 
-Selectors support feature origin, curve/surface kind, edge direction, face normal, radius, adjacency, `and`/`or`/`not`, and explicit cardinality. Zero matches produce `TOPOLOGY_SELECTION_MISSING`; excess matches produce `TOPOLOGY_SELECTION_AMBIGUOUS`. The exact backend currently provides complete broad feature provenance for primitives, extrusions, revolutions, and topology-preserving transforms. It marks boolean and fillet history partial, so provenance queries on those results fail with `TOPOLOGY_HISTORY_UNAVAILABLE` rather than choosing an unstable edge. Manifold reports an explicit capability error for selector-driven fillets.
+The serialized role vocabulary is closed and exported through `TOPOLOGY_ROLES` and `TOPOLOGY_ROLE_RULES`:
+
+| Producer | Stable face roles | Stable edge roles |
+|---|---|---|
+| Box | signed local faces such as `box.face.x-min` | unique face intersections such as `box.edge.x-min-y-min` |
+| Cylinder or cone | start/end caps and side | start/end rims |
+| Sphere | `sphere.face.surface` | none; seam and pole artifacts stay unnamed |
+| Extrusion | start/end caps and source-aware sides | source-aware start/end rims and unsourced lateral edges |
+
+`start` and `end` follow construction parameterization, not current world orientation. A topology-preserving transform retains the original role/source lineage and adds `modified` lineage for the transform. Cylinder seams, cone apex artifacts, sphere seams/poles, and other kernel artifacts are deliberately unnamed so a document cannot accidentally depend on their enumeration.
+
+Selectors also support curve/surface kind, edge direction, face normal, radius, adjacency, `and`/`or`/`not`, and explicit cardinality. Zero matches produce `TOPOLOGY_SELECTION_MISSING`; excess matches produce `TOPOLOGY_SELECTION_AMBIGUOUS`. The exact backend currently provides complete broad feature provenance for primitives, extrusions, revolutions, and topology-preserving transforms, plus the semantic roles and sketch sources above. It marks boolean and fillet history partial, so provenance queries on those results fail with `TOPOLOGY_HISTORY_UNAVAILABLE` rather than choosing an unstable edge. Manifold reports an explicit capability error for selector-driven fillets.
 
 ## What works today
 
@@ -146,7 +173,7 @@ Selectors support feature origin, curve/surface kind, edge direction, face norma
 - Extrude, symmetric extrude, and revolve on both kernels
 - Twist and top-scale extrusion through the Manifold mesh backend
 - Union, subtraction, and intersection
-- Semantic face/edge set selectors with explicit cardinality
+- Semantic face/edge set selectors with closed roles, sketch sources, and explicit cardinality
 - Exact constant-radius edge fillets through the OCCT backend
 - Translation, Euler rotation, nonuniform scale, and mirror
 - Parts with part number, material, description, and metadata
@@ -187,7 +214,7 @@ The solver API is replaceable. The built-in solver is intentionally a v0.1 refer
 | IGES import/export | No | Exact backend |
 | Fillet | OCCT backend with semantic edge selectors | Yes |
 | Chamfer, shell, draft | No | Exact backend |
-| Persistent face/edge selectors | Initial origin/geometry/adjacency slice | Yes |
+| Persistent face/edge selectors | Primitive/extrusion roles and sources; origin/geometry/adjacency queries | Yes |
 | Drawings, GD&T, PMI | No | Yes |
 | Sheet metal | No | Yes |
 | CAM and CAE adapters | No | Yes |

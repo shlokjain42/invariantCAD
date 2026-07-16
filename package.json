@@ -36,10 +36,10 @@
     "test:watch": "vitest",
     "coverage": "vitest run --coverage",
     "lint:package": "publint && attw --pack . --profile esm-only",
-    "test:package": "node scripts/package-smoke.mjs",
+    "test:package": "pnpm pack --pack-destination .artifacts && node scripts/package-smoke.mjs",
     "example:bracket": "tsx examples/bracket.ts",
     "prepack": "pnpm build",
-    "verify": "pnpm check && pnpm test && pnpm pack --pack-destination .artifacts && pnpm lint:package && pnpm test:package"
+    "verify": "pnpm check && pnpm test && pnpm lint:package && pnpm test:package"
   },
   "engines": {
     "node": ">=20.19"

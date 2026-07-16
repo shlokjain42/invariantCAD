@@ -8,6 +8,8 @@
 - Add serialized, order-independent semantic face/edge selectors with explicit cardinality
 - Add validated OCCT topology snapshots with analytic descriptors, adjacency, provenance, and explicit lifetime management
 - Add exact selector-driven fillets and structured missing, ambiguous, and incomplete-history diagnostics
+- Add a closed, typed primitive/extrusion topology-role registry and sketch-curve source selectors
+- Preserve proven per-subshape role/source lineage through transforms and downgrade ambiguous history
 - Version and normalize the geometry-kernel protocol, native exchange, validity, and meshing options
 - Enforce declared kernel capabilities before backend invocation
 - Add reusable geometry-kernel conformance tests

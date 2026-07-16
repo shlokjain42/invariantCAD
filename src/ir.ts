@@ -1,7 +1,7 @@
 import type { EntityId, NodeId, ParameterId } from "./core/ids.js";
 import type { JsonValue } from "./core/json.js";
 import type { Dimension, ExpressionIR } from "./expressions.js";
-import type { TopologyKind } from "./protocol/topology.js";
+import type { TopologyKind, TopologyRole } from "./protocol/topology.js";
 
 export const DOCUMENT_SCHEMA =
   "https://invariantcad.dev/schema/document/v1" as const;
@@ -244,7 +244,7 @@ export type TopologyQueryIR =
       readonly op: "origin";
       readonly feature: NodeId;
       readonly relation: TopologyOriginRelation;
-      readonly role?: string;
+      readonly role?: TopologyRole;
       readonly source?: TopologySourceIR;
     }
   | { readonly op: "surface"; readonly kind: string }

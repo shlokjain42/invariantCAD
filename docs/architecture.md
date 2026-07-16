@@ -7,7 +7,7 @@ InvariantCAD separates design intent from computation. A document must remain us
 1. **The document is plain data.** `DesignDocument` contains JSON values, stable IDs, expression trees, feature nodes, and references. It never contains callbacks, class instances, maps, BigInts, WASM handles, or native pointers.
 2. **Units are explicit.** Internal lengths are millimetres, angles are radians, and scalar expressions are dimensionless. TypeScript rejects incompatible expression composition and semantic validation repeats the check for untrusted JSON.
 3. **Modeling is a DAG.** Nodes reference earlier or later nodes by stable ID, not array position. Validation detects missing references, kind mismatches, and cycles before a kernel is invoked.
-4. **Kernel conversions are explicit.** The Manifold backend is a robust triangle-mesh kernel. It is not advertised as exact B-Rep. A future exact backend must declare its representation and conversion losses.
+4. **Kernel conversions are explicit.** The Manifold backend is a robust triangle-mesh kernel. It is not advertised as exact B-Rep. Every exact backend must declare its representation and conversion losses.
 5. **Topology is not an array index.** Public APIs never make `faces[3]` or `edges[7]` a durable design reference. Serialized selectors combine feature provenance, geometry, adjacency, set algebra, and explicit cardinality. Evaluation-scoped kernel keys are opaque and disposable.
 6. **Failures are structured.** Normal modeling failures produce stable diagnostics with node IDs and JSON Pointer paths. Programmer misuse of the builder can throw immediately.
 7. **WASM lifetime is explicit.** Evaluated results own kernel shapes and expose `dispose()`. Kernel objects never escape through the public mesh or measurement APIs.
@@ -52,11 +52,13 @@ The protocol is explicitly versioned. Backends declare primitive, feature, nativ
 
 A topology-capable kernel returns an evaluation-scoped snapshot of faces and edges. Each descriptor contains an opaque key, analytic geometry where available, measurements, bounds, adjacency, and proven lineage. Keys exist only to connect one snapshot to the immediately following kernel call. They are never written to a document or used as persistent identity. Snapshot validation rejects duplicate keys, non-finite geometry, dangling adjacency, and non-reciprocal adjacency as kernel protocol failures.
 
-The OCCT adapter currently proves broad feature lineage for primitives, extrusions, revolutions, and topology-preserving transforms. Boolean and fillet evolution is marked partial because the pinned binding does not expose complete edge history. An origin selector against partial history fails explicitly. Geometry-only selectors can still operate because they do not claim lost provenance.
+Semantic roles are a closed, kernel-neutral document vocabulary. A role records construction intent in per-subshape lineage: signed local box faces, unique box face-intersection edges, cylinder/cone caps and rims, the sphere surface, and extrusion caps/sides/rims/lateral edges. Extrusion side faces and start/end rim edges may additionally carry the sketch and curve entity that generated them. Kernel seams, poles, apex degeneracies, and other implementation artifacts remain unnamed.
+
+The OCCT adapter proves broad feature lineage for primitives, extrusions, revolutions, and topology-preserving transforms. It classifies primitive roles from construction-aware geometry and maps extrusion sources with analytic per-curve seeds. A transform applies the identical operation sequence to retained input subshapes, then requires one-to-one geometric coverage before carrying their lineage forward. A missing or ambiguous match downgrades the snapshot to partial history instead of silently retargeting a selection. Boolean and fillet evolution remains partial because the pinned binding does not expose complete edge history. An origin selector against partial history fails explicitly; geometry-only selectors can still operate because they do not claim lost provenance.
 
 `ManifoldKernel` is the initial implementation. It copies upstream mesh buffers into InvariantCAD's stable `MeshData`, checks kernel status, and destroys every WASM object. The public API sees only typed arrays and measurements.
 
-The exact backend uses OpenCascade for analytic profiles, NURBS/B-Rep, healing, exact exchange, mechanical features, and persistent topology. STEP and BREP are native kernel exchange formats; STL and OBJ remain backend-neutral exports of explicitly tessellated meshes. Every backend implements the same conformance corpus, comparing toleranced geometry rather than byte-identical tessellations.
+The exact backend uses OpenCascade for analytic profile evaluation, B-Rep primitives and core features, exact STEP/BREP exchange, and the bounded semantic-topology slice described above. STL and OBJ remain backend-neutral exports of explicitly tessellated meshes. NURBS authoring, public healing controls, and complete persistent history remain roadmap work. Every backend implements the same conformance corpus, comparing toleranced geometry rather than byte-identical tessellations.
 
 ### Evaluation layer
 
@@ -99,6 +101,7 @@ Every geometry kernel should run the same corpus for:
 - parameter extremes and degenerate geometry;
 - cancellation and resource teardown;
 - topology set semantics, cardinality, adjacency reciprocity, and history loss;
+- primitive role inventories, sketch-source mapping, negative/symmetric sweeps, and provenance-preserving transforms;
 - selector-driven features without enumeration-order dependence;
 - Node and browser initialization.
 

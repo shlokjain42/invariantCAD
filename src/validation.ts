@@ -20,7 +20,11 @@ import {
   type TopologySelectionIR,
   type TransformOperationIR,
 } from "./ir.js";
-import type { TopologyKind } from "./protocol/topology.js";
+import {
+  TOPOLOGY_ROLE_RULES,
+  type TopologyKind,
+  type TopologyRole,
+} from "./protocol/topology.js";
 
 function validateExpression(
   expression: ExpressionIR,
@@ -242,6 +246,14 @@ function validateLoop(
       );
     }
   }
+}
+
+function profileUsesEntity(sketch: SketchNodeIR, entity: EntityId): boolean {
+  return [sketch.profile.outer, ...sketch.profile.holes].some((loop) =>
+    loop.kind === "circle"
+      ? loop.entity === entity
+      : loop.edges.some((edge) => edge.entity === entity),
+  );
 }
 
 function validateTransform(
@@ -539,15 +551,69 @@ function validateTopologySelection(
             ),
           );
         }
-        if (query.role !== undefined && query.role.length === 0) {
-          diagnostics.push(
-            diagnostic("TOPOLOGY_SELECTOR_INVALID", "Topology roles cannot be empty", {
-              severity: "error",
-              path: `${queryPath}/role`,
-            }),
-          );
+        if (query.role !== undefined) {
+          const rule = TOPOLOGY_ROLE_RULES[query.role as TopologyRole] as
+            | (typeof TOPOLOGY_ROLE_RULES)[TopologyRole]
+            | undefined;
+          if (rule === undefined) {
+            diagnostics.push(
+              diagnostic(
+                "TOPOLOGY_SELECTOR_INVALID",
+                `Unknown semantic topology role '${String(query.role)}'`,
+                { severity: "error", path: `${queryPath}/role` },
+              ),
+            );
+          } else if (rule.topology !== topology) {
+            diagnostics.push(
+              diagnostic(
+                "TOPOLOGY_SELECTOR_INVALID",
+                `Topology role '${query.role}' selects ${rule.topology}s, not ${topology}s`,
+                { severity: "error", path: `${queryPath}/role` },
+              ),
+            );
+          }
+          if (rule !== undefined && feature !== undefined && feature.kind !== rule.producer) {
+            diagnostics.push(
+              diagnostic(
+                "TOPOLOGY_SELECTOR_INVALID",
+                `Topology role '${query.role}' is not valid for ${feature.kind} feature '${query.feature}'`,
+                { severity: "error", path: `${queryPath}/role` },
+              ),
+            );
+          }
+          if (rule !== undefined && query.relation !== rule.relation) {
+            diagnostics.push(
+              diagnostic(
+                "TOPOLOGY_SELECTOR_INVALID",
+                "Semantic topology roles currently describe created topology only",
+                { severity: "error", path: `${queryPath}/relation` },
+              ),
+            );
+          }
         }
         if (query.source !== undefined) {
+          if (query.relation !== "created" || feature?.kind !== "extrude") {
+            diagnostics.push(
+              diagnostic(
+                "TOPOLOGY_SELECTOR_INVALID",
+                "Sketch-entity topology sources require topology created by an extrusion",
+                { severity: "error", path: `${queryPath}/source` },
+              ),
+            );
+          }
+          if (
+            query.role !== undefined &&
+            TOPOLOGY_ROLE_RULES[query.role as TopologyRole]?.source !==
+              "sketch-curve"
+          ) {
+            diagnostics.push(
+              diagnostic(
+                "TOPOLOGY_SELECTOR_INVALID",
+                `Topology role '${query.role}' cannot originate from one sketch boundary entity`,
+                { severity: "error", path: `${queryPath}/source` },
+              ),
+            );
+          }
           const sketch = document.nodes[query.source.sketch];
           if (sketch === undefined) {
             diagnostics.push(
@@ -566,12 +632,45 @@ function validateTopologySelection(
               ),
             );
           } else {
-            if (sketch.entities[query.source.entity] === undefined) {
+            const sourceEntity = sketch.entities[query.source.entity];
+            if (sourceEntity === undefined) {
               diagnostics.push(
                 diagnostic(
                   "REFERENCE_MISSING",
                   `Topology source references missing sketch entity '${query.source.entity}'`,
                   { severity: "error", path: `${queryPath}/source/entity` },
+                ),
+              );
+            } else if (
+              sourceEntity.kind !== "line" &&
+              sourceEntity.kind !== "arc" &&
+              sourceEntity.kind !== "circle"
+            ) {
+              diagnostics.push(
+                diagnostic(
+                  "REFERENCE_KIND_MISMATCH",
+                  `Topology source entity '${query.source.entity}' is not a profile curve`,
+                  { severity: "error", path: `${queryPath}/source/entity` },
+                ),
+              );
+            } else if (!profileUsesEntity(sketch, query.source.entity)) {
+              diagnostics.push(
+                diagnostic(
+                  "TOPOLOGY_SELECTOR_INVALID",
+                  `Topology source entity '${query.source.entity}' is not used by sketch '${query.source.sketch}' profile boundary`,
+                  { severity: "error", path: `${queryPath}/source/entity` },
+                ),
+              );
+            }
+            if (
+              feature?.kind === "extrude" &&
+              feature.profile.node !== query.source.sketch
+            ) {
+              diagnostics.push(
+                diagnostic(
+                  "TOPOLOGY_SELECTOR_INVALID",
+                  `Sketch '${query.source.sketch}' is not the direct profile of extrusion '${query.feature}'`,
+                  { severity: "error", path: `${queryPath}/source/sketch` },
                 ),
               );
             }

@@ -247,6 +247,60 @@ describe("semantic topology selections", () => {
         details: expect.objectContaining({ protocolViolation: true }),
       }),
     );
+
+    const invalidLineage = resolveTopologySelection(
+      topology.edges.all().atLeast(1).ir,
+      snapshot([
+        {
+          ...verticalEdges[0]!,
+          lineage: [
+            {
+              feature: "box",
+              relation: "created",
+              role: "box.face.x-min",
+            },
+          ],
+        } as KernelEdgeDescriptor,
+      ]),
+      context,
+    );
+    expect(invalidLineage.ok).toBe(false);
+    expect(invalidLineage.diagnostics[0]).toEqual(
+      expect.objectContaining({
+        code: "KERNEL_ERROR",
+        details: expect.objectContaining({ protocolViolation: true }),
+      }),
+    );
+
+    const invalidHistory = resolveTopologySelection(
+      topology.edges.all().atLeast(1).ir,
+      { ...snapshot(), history: "bogus" } as unknown as KernelTopologySnapshot,
+      context,
+    );
+    expect(invalidHistory.ok).toBe(false);
+    expect(invalidHistory.diagnostics[0]).toEqual(
+      expect.objectContaining({
+        code: "KERNEL_ERROR",
+        details: expect.objectContaining({ protocolViolation: true }),
+      }),
+    );
+
+    const misplacedDescriptor = resolveTopologySelection(
+      topology.edges.all().atLeast(1).ir,
+      {
+        history: "complete",
+        faces: [verticalEdges[0]],
+        edges: [],
+      } as unknown as KernelTopologySnapshot,
+      context,
+    );
+    expect(misplacedDescriptor.ok).toBe(false);
+    expect(misplacedDescriptor.diagnostics[0]).toEqual(
+      expect.objectContaining({
+        code: "KERNEL_ERROR",
+        details: expect.objectContaining({ protocolViolation: true }),
+      }),
+    );
   });
 
   it("composes oriented face normals, adjacency, unions, and complements", () => {
