@@ -1,14 +1,16 @@
 declare module "occt-wasm/dist/occt-wasm.js" {
-  interface OcctModuleOptions {
+  export interface OcctModuleOptions {
     readonly wasmBinary?: ArrayBuffer;
     readonly locateFile?: (path: string) => string;
     readonly print?: (message: string) => void;
     readonly printErr?: (message: string) => void;
   }
 
-  const createOcctModule: (
+  export type OcctModuleFactory = (
     options?: OcctModuleOptions,
   ) => Promise<unknown>;
+
+  const createOcctModule: OcctModuleFactory;
 
   export default createOcctModule;
 }

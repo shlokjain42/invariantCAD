@@ -28,12 +28,14 @@ InvariantCAD's goal is one coherent TypeScript CAD system, not one monolithic ge
 - First exact equal-distance chamfer driven by semantic edge selection
 - First exact constant-thickness inward/outward shell driven by semantic face openings
 - First exact whole-solid inward/outward offset with fixed round joins
+- Atomic signed multi-face neutral-plane draft through semantic face selectors, enabled by the matched owned OCCT facade with exact indexed face/edge/vertex evolution
 - Leak-free native evolution ownership for exact fillet and chamfer operations
 - Reproducible, digest-pinned OCCT facade build foundation
+- Versioned distribution of the owned OCCT facade JS/WASM pair with checksums, provenance, SBOM, and complete license material
 
 ## 0.3 — persistent design intent
 
-- Complete per-subshape provenance through booleans, fillets, chamfers, shells, offsets, revolutions, and generated/modified topology
+- Complete per-subshape provenance through booleans, fillets, chamfers, shells, offsets, revolutions, and other generated/modified topology beyond the exact draft slice
 - Expanded role and source mapping for additional feature families
 - Geometry and adjacency signatures
 - Expanded selection diagnostics and provenance explanations
@@ -43,7 +45,6 @@ InvariantCAD's goal is one coherent TypeScript CAD system, not one monolithic ge
 ## 0.4 — advanced mechanical features
 
 - Asymmetric, distance-angle, and variable chamfer modes through semantic selectors
-- Atomic multi-face neutral-plane draft through semantic face selectors; owned native execution, exact indexed face/edge/vertex evolution, and the fail-closed TypeScript lineage reducer now exist, while the public capability remains gated on the ownership-safe adapter and matched facade loader
 - Variable fillet through semantic selectors
 - Closed, variable-thickness, and intersection/miter-join shell modes
 - Sweep, loft, pipe, and two-dimensional wire/profile offset

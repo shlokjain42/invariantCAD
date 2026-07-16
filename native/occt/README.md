@@ -64,15 +64,18 @@ pair directly through the native fixture corpus:
 ```sh
 pnpm build:occt-facade
 pnpm test:occt-facade
+pnpm test:occt-draft-public
 ```
 
-The heavyweight native build and smoke test are intentionally separate from
-normal `pnpm verify`. Generated artifacts stay under the ignored
+The native fixture exercises the raw ABI; the public smoke loads the same
+generated pair through `createOcctKernel` and exercises direct and evaluated
+draft. These heavyweight tests are intentionally separate from normal
+`pnpm verify`. Generated artifacts stay under the ignored
 `.artifacts/occt-facade/` directory and are not committed or packed.
 
-## Internal draft ABI
+## Owned draft ABI and public adapter
 
-The first owned extension is an internal atomic multi-face draft operation. It
+The first owned extension is an atomic multi-face draft operation. It
 stages every unique selected face in one `BRepOffsetAPI_DraftAngle`, checks each
 addition, and calls `Build()` exactly once only after every addition succeeds.
 It accepts an arbitrary neutral-plane origin and normal independently of the
@@ -89,7 +92,8 @@ result into its originating kernel exactly once, after which normal kernel
 `release()` or `releaseAll()` ownership applies.
 
 The facade rejects `abs(angleRad) <= 1e-4`, because the pinned OCCT build can
-otherwise report a successful no-op. Facade version 0.2 also makes a successful
+otherwise report a successful no-op. The public protocol also requires
+`abs(angleRad) < pi/2`. Facade version 0.2 makes a successful
 draft conditional on a complete indexed face/edge/vertex evolution proof. It
 requires one same-kind result successor for every input subshape, rejects
 duplicate claims and unclaimed result subshapes, and exposes no result if that
@@ -116,12 +120,32 @@ OCCT's unoriented `IsSame` identity; preservation compares the canonical input
 and result occurrences with `IsEqual`, so an orientation-only change is
 classified as modified.
 
-This ABI is not yet a document node, `GeometryKernel` method, capability, or
-exported TypeScript feature. A fail-closed TypeScript lineage reducer now
-exists, but public draft remains gated on wiring it through an ownership-safe
-adapter and a loader path that receives the matched generated JavaScript module
-factory together with its WASM binary. A stock 3.7.0 module without the
-recognized facade probe remains usable but must not advertise draft.
+The public document, builder, evaluator, and `GeometryKernel` contracts expose
+signed atomic draft through semantic face selectors. Pull direction and the
+neutral-plane origin and normal remain independent explicit inputs. The OCCT
+adapter maps evaluation-scoped face keys to numeric facade indices, validates
+the complete indexed envelope, cross-checks raw input and result topology
+counts, and adopts the transferred result transactionally.
+
+Draft is enabled only when the supplied InvariantCAD-owned `moduleFactory`
+loads a module whose exact facade probe succeeds. That factory may locate its
+matched sibling WASM itself; callers can provide `wasm` as an explicit binary
+override when their runtime or bundler requires it. The kernel then advertises
+both ordinary `draft` support and feature-scoped
+`exactIndexedTopologyEvolution` v1 for draft. Its global
+topology provenance remains `feature`; other topology-changing operations are
+not promoted to complete history by the draft-specific proof. Default
+`createOcctKernel()` loads stock OCCT and remains usable for its other exact
+features, but it does not advertise or execute draft. Partial, unknown, or
+mismatched facade markers fail closed.
+
+The generated pair remains an ignored source-build artifact and is not included
+in the `invariantcad` npm tarball. Before a release can claim an installable
+draft runtime, the exact JS/WASM pair must be published together as a versioned
+compliance bundle with its SHA-256 manifest, build provenance, SBOM, and all
+required license material. Until then, use the pinned local build above or an
+equivalently trusted matching bundle; the library never fetches native code
+implicitly.
 
 ## License, source, and replacement boundary
 

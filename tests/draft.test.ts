@@ -29,6 +29,7 @@ import {
   type Vec3Expression,
   type ResolvedDraftOptions,
 } from "../src/index.js";
+import { TopologyEvolutionProtocolError } from "../src/internal/topology-evolution.js";
 
 function topologyKey(value: string): KernelTopologyKey {
   return value as KernelTopologyKey;
@@ -66,6 +67,7 @@ function createDraftKernelHarness(
   options: {
     readonly exactEvolution?: unknown;
     readonly implementDraft?: boolean;
+    readonly draftError?: unknown;
   } = {},
 ): DraftKernelHarness {
   const id = "draft-protocol-test";
@@ -109,6 +111,7 @@ function createDraftKernelHarness(
             resolved: ResolvedDraftOptions,
             context?: KernelFeatureContext,
           ): KernelShape {
+            if (options.draftError !== undefined) throw options.draftError;
             invocations.push({
               shape: input,
               faces: [...faces],
@@ -683,6 +686,32 @@ describe("draft evaluator protocol", () => {
       );
       expect(harness.topologyCalls()).toBe(0);
       expect(harness.invocations).toHaveLength(0);
+    } finally {
+      evaluator.dispose();
+    }
+  });
+
+  it("reports malformed exact history returned by a kernel as a protocol violation", async () => {
+    const harness = createDraftKernelHarness({
+      draftError: new TopologyEvolutionProtocolError(
+        "records do not provide complete one-to-one topology coverage",
+      ),
+    });
+    const evaluator = await createEvaluator({ kernel: harness.kernel });
+    try {
+      const result = await evaluator.evaluate(evaluatorDraftDocument());
+      expect(result.ok).toBe(false);
+      expect(result.diagnostics).toContainEqual(
+        expect.objectContaining({
+          code: "KERNEL_ERROR",
+          node: "drafted",
+          path: "/nodes/drafted",
+          details: expect.objectContaining({
+            kernel: "draft-protocol-test",
+            protocolViolation: true,
+          }),
+        }),
+      );
     } finally {
       evaluator.dispose();
     }

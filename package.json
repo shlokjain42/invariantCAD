@@ -40,6 +40,7 @@
     "example:bracket": "tsx examples/bracket.ts",
     "build:occt-facade": "./scripts/build-occt-facade.sh",
     "test:occt-facade": "node scripts/test-occt-facade.mjs",
+    "test:occt-draft-public": "tsx scripts/test-public-occt-draft.ts",
     "prepack": "pnpm build",
     "verify": "pnpm check && pnpm test && pnpm lint:package && pnpm test:package"
   },

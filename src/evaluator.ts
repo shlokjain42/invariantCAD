@@ -74,6 +74,7 @@ import {
   DRAFT_MIN_ANGLE_RADIANS,
   type ResolvedDraftOptions,
 } from "./protocol/draft.js";
+import { TopologyEvolutionProtocolError } from "./internal/topology-evolution.js";
 
 export type ParameterOverride = number | Expression<Dimension>;
 export type ShapeExportFormat = MeshExportFormat | KernelExchangeFormat;
@@ -1466,7 +1467,12 @@ export class Evaluator {
               severity: "error",
               node: id,
               path: `/nodes/${id}`,
-              details: { kernel: this.kernel.id },
+              details: {
+                kernel: this.kernel.id,
+                ...(error instanceof TopologyEvolutionProtocolError
+                  ? { protocolViolation: true }
+                  : {}),
+              },
             },
           ),
         );

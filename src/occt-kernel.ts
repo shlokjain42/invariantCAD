@@ -37,7 +37,23 @@ import type {
 import { curveStart } from "./protocol/profile.js";
 import type { ResolvedOffsetOptions } from "./protocol/offset.js";
 import type { ResolvedShellOptions } from "./protocol/shell.js";
+import {
+  DRAFT_MIN_ANGLE_RADIANS,
+  type ResolvedDraftOptions,
+} from "./protocol/draft.js";
 import { adoptOcctEdgeEvolution } from "./internal/occt-evolution.js";
+import {
+  OcctDraftFacadeProtocolError,
+  adoptOcctDraft,
+  probeOcctDraftFacade,
+  type OcctDraftFacadeModule,
+  type OcctDraftReportSnapshot,
+} from "./internal/occt-draft.js";
+import {
+  TopologyEvolutionProtocolError,
+  reduceIndexedTopologyEvolution,
+  type IndexedTopologyCounts,
+} from "./internal/topology-evolution.js";
 
 const OCCT_SHAPE = Symbol("InvariantCAD.OcctShape");
 const TOPOLOGY_HASH_UPPER_BOUND = 2_147_483_647;
@@ -208,10 +224,76 @@ function checkContext(context?: KernelFeatureContext): void {
   }
 }
 
+function assertDraftVector(
+  value: unknown,
+  label: string,
+  nonzero: boolean,
+): asserts value is Vec3 {
+  if (!Array.isArray(value) || value.length !== 3) {
+    throw new TypeError(`${label} must be a three-component vector`);
+  }
+  for (let index = 0; index < value.length; index += 1) {
+    if (typeof value[index] !== "number" || !Number.isFinite(value[index])) {
+      throw new TypeError(`${label}[${index}] must be finite`);
+    }
+  }
+  if (nonzero && !(Math.hypot(value[0]!, value[1]!, value[2]!) > 0)) {
+    throw new RangeError(`${label} must be nonzero`);
+  }
+}
+
+function validateDraftOptions(options: ResolvedDraftOptions): void {
+  if (typeof options !== "object" || options === null) {
+    throw new TypeError("Draft options must be an object");
+  }
+  if (
+    typeof options.angle !== "number" ||
+    !Number.isFinite(options.angle) ||
+    !(Math.abs(options.angle) > DRAFT_MIN_ANGLE_RADIANS) ||
+    !(Math.abs(options.angle) < Math.PI / 2)
+  ) {
+    throw new RangeError(
+      "Draft angle must satisfy 1e-4 < abs(angle) < pi / 2 radians",
+    );
+  }
+  assertDraftVector(options.pullDirection, "Draft pull direction", true);
+  if (typeof options.neutralPlane !== "object" || options.neutralPlane === null) {
+    throw new TypeError("Draft neutral plane must be an object");
+  }
+  assertDraftVector(
+    options.neutralPlane.origin,
+    "Draft neutral-plane origin",
+    false,
+  );
+  assertDraftVector(
+    options.neutralPlane.normal,
+    "Draft neutral-plane normal",
+    true,
+  );
+}
+
 export type OcctWasmSource = string | URL | ArrayBuffer | Uint8Array;
+
+/** Options accepted by stock or InvariantCAD-owned Emscripten module glue. */
+export interface OcctModuleOptions {
+  readonly wasmBinary?: ArrayBuffer;
+  readonly locateFile?: (path: string) => string;
+  readonly print?: (message: string) => void;
+  readonly printErr?: (message: string) => void;
+}
+
+/** A matched Emscripten JS-glue factory for the supplied OCCT WASM binary. */
+export type OcctModuleFactory = (
+  options?: OcctModuleOptions,
+) => Promise<unknown>;
 
 export interface OcctKernelOptions {
   readonly wasm?: OcctWasmSource;
+  /**
+   * Matched JS glue for a custom OCCT binary. When omitted, stock occt-wasm
+   * glue is used and a custom `wasm` source is passed to that stock factory.
+   */
+  readonly moduleFactory?: OcctModuleFactory;
   readonly tessellation?: MeshOptions;
   readonly modelingTolerance?: number;
   readonly onOutput?: (message: string) => void;
@@ -220,7 +302,9 @@ export interface OcctKernelOptions {
 
 class OcctKernel implements GeometryKernel {
   readonly id = "occt";
-  readonly capabilities: KernelCapabilities = {
+  readonly capabilities: KernelCapabilities;
+  declare readonly draft?: NonNullable<GeometryKernel["draft"]>;
+  private static readonly BASE_CAPABILITIES: KernelCapabilities = {
     protocolVersion: 1,
     representation: "brep",
     exact: true,
@@ -255,10 +339,35 @@ class OcctKernel implements GeometryKernel {
   private nextShapeSerial = 1;
   private disposed = false;
 
-  constructor(raw: RawOcctKernel, options: OcctKernelOptions = {}) {
+  constructor(
+    raw: RawOcctKernel,
+    draftFacade: OcctDraftFacadeModule | undefined,
+    options: OcctKernelOptions = {},
+  ) {
     this.raw = raw;
     this.tessellation = options.tessellation ?? {};
     this.modelingTolerance = options.modelingTolerance ?? 1e-7;
+    this.capabilities =
+      draftFacade === undefined
+        ? OcctKernel.BASE_CAPABILITIES
+        : {
+            ...OcctKernel.BASE_CAPABILITIES,
+            features: [...OcctKernel.BASE_CAPABILITIES.features, "draft"],
+            exactIndexedTopologyEvolution: {
+              protocolVersion: 1,
+              features: ["draft"],
+            },
+          };
+    if (draftFacade !== undefined) {
+      this.draft = (shape, faces, resolved, context) =>
+        this.draftWithExactEvolution(
+          draftFacade,
+          shape,
+          faces,
+          resolved,
+          context,
+        );
+    }
   }
 
   private assertKernelLive(): void {
@@ -286,7 +395,7 @@ class OcctKernel implements GeometryKernel {
       readonly history?: TopologyHistory;
       readonly annotation?: TopologyAnnotation;
     } = {},
-  ): KernelShape {
+  ): OcctShape {
     this.assertKernelLive();
     const lineage = uniqueLineage([
       ...(options.inherited ?? []),
@@ -1476,6 +1585,150 @@ class OcctKernel implements GeometryKernel {
     }
   }
 
+  private rawTopologyCounts(handle: ShapeHandle): IndexedTopologyCounts {
+    return {
+      faces: this.raw.subShapeCount(handle, "face"),
+      edges: this.raw.subShapeCount(handle, "edge"),
+      vertices: this.raw.subShapeCount(handle, "vertex"),
+    };
+  }
+
+  private assertDraftTopologyCounts(
+    declared: IndexedTopologyCounts,
+    actual: IndexedTopologyCounts,
+    label: string,
+  ): void {
+    for (const kind of ["faces", "edges", "vertices"] as const) {
+      if (declared[kind] !== actual[kind]) {
+        throw new TopologyEvolutionProtocolError(
+          `${label}.${kind} declares ${declared[kind]}, but OCCT reports ${actual[kind]}`,
+        );
+      }
+    }
+  }
+
+  /**
+   * Removes a transferred wrapper after post-transfer validation fails.
+   * Its retained subshape handles belong to this wrapper and are released
+   * here; the root stays live so adoptOcctDraft can release it exactly once.
+   */
+  private abandonTransferredShape(shape: OcctShape): void {
+    let cleanupError: unknown;
+    for (const retained of shape.topologyHandles.values()) {
+      try {
+        this.raw.release(retained.handle);
+      } catch (error) {
+        cleanupError ??= error;
+      }
+    }
+    shape.topologyHandles.clear();
+    shape.topologySnapshot = undefined;
+    shape.disposed = true;
+    this.liveShapes.delete(shape);
+    if (cleanupError !== undefined) throw cleanupError;
+  }
+
+  private draftWithExactEvolution(
+    module: OcctDraftFacadeModule,
+    shape: KernelShape,
+    faces: readonly KernelTopologyKey[],
+    options: ResolvedDraftOptions,
+    context?: KernelFeatureContext,
+  ): KernelShape {
+    checkContext(context);
+    validateDraftOptions(options);
+    if (!Array.isArray(faces)) {
+      throw new TypeError("Draft faces must be an array");
+    }
+    if (faces.length === 0) {
+      throw new RangeError("Draft requires at least one face");
+    }
+
+    const input = this.shape(shape);
+    const inputSnapshot = this.topology(input);
+    const faceIndexByKey = new Map(
+      inputSnapshot.faces.map((descriptor, index) => [descriptor.key, index]),
+    );
+    const selectedIndices: number[] = [];
+    const selected = new Set<number>();
+    for (const key of faces) {
+      const index = faceIndexByKey.get(key);
+      const retained = input.topologyHandles.get(key);
+      if (index === undefined || retained?.topology !== "face") {
+        throw new TypeError(
+          `Topology key '${String(key)}' is not a face of the input shape`,
+        );
+      }
+      if (!selected.has(index)) {
+        selected.add(index);
+        selectedIndices.push(index);
+      }
+    }
+    selectedIndices.sort((first, second) => first - second);
+    const faceIds = selectedIndices.map((index) => {
+      const descriptor = inputSnapshot.faces[index]!;
+      const retained = input.topologyHandles.get(descriptor.key);
+      if (retained?.topology !== "face") {
+        throw new Error("OCCT topology snapshot lost a retained face handle");
+      }
+      return retained.handle;
+    });
+
+    const inputHandle = input[OCCT_SHAPE];
+    const rawKernel = this.raw.getRawKernel();
+    try {
+      return adoptOcctDraft({
+        module,
+        kernel: rawKernel,
+        shapeId: inputHandle,
+        faceIds,
+        angleRad: options.angle,
+        pullDirection: options.pullDirection,
+        neutralOrigin: options.neutralPlane.origin,
+        neutralNormal: options.neutralPlane.normal,
+        validate: (report: OcctDraftReportSnapshot) => {
+          this.assertDraftTopologyCounts(
+            report.evolution.inputCounts[0]!,
+            this.rawTopologyCounts(inputHandle),
+            "draft inputCounts[0]",
+          );
+        },
+        adopt: ({ resultId, report }) => {
+          const provisional = this.own(resultId as ShapeHandle, context, {
+            inherited: input.lineage,
+            relation: "modified",
+            history: inputSnapshot.history,
+          });
+          try {
+            const outputSnapshot = this.topology(provisional);
+            this.assertDraftTopologyCounts(
+              report.evolution.resultCounts,
+              this.rawTopologyCounts(provisional[OCCT_SHAPE]),
+              "draft resultCounts",
+            );
+            provisional.topologySnapshot = reduceIndexedTopologyEvolution({
+              evolution: report.evolution,
+              inputs: [inputSnapshot],
+              output: outputSnapshot,
+              ...(context?.feature === undefined
+                ? {}
+                : { feature: context.feature }),
+            });
+            return provisional;
+          } catch (error) {
+            this.abandonTransferredShape(provisional);
+            throw error;
+          }
+        },
+      });
+    } catch (error) {
+      if (error instanceof OcctDraftFacadeProtocolError) {
+        throw new TopologyEvolutionProtocolError(error.message);
+      }
+      throw error;
+    }
+  }
+
   fillet(
     shape: KernelShape,
     edges: readonly KernelTopologyKey[],
@@ -1966,11 +2219,14 @@ class OcctKernel implements GeometryKernel {
 export async function createOcctKernel(
   options: OcctKernelOptions = {},
 ): Promise<GeometryKernel> {
-  const [{ OcctKernel: RawKernel }, { default: createModule }] =
-    await Promise.all([
-      import("occt-wasm"),
-      import("occt-wasm/dist/occt-wasm.js"),
-    ]);
+  const [{ OcctKernel: RawKernel }, createModule] = await Promise.all([
+    import("occt-wasm"),
+    options.moduleFactory === undefined
+      ? import("occt-wasm/dist/occt-wasm.js").then(
+          ({ default: stockFactory }) => stockFactory as OcctModuleFactory,
+        )
+      : Promise.resolve(options.moduleFactory),
+  ]);
   const moduleOptions: {
     wasmBinary?: ArrayBuffer;
     locateFile?: (path: string) => string;
@@ -1991,9 +2247,15 @@ export async function createOcctKernel(
       path.endsWith(".wasm") ? location : path;
   }
   const module = await createModule(moduleOptions);
+  const draftFacade = probeOcctDraftFacade(module);
   const KernelConstructor = RawKernel as unknown as new (
     module: unknown,
   ) => RawOcctKernel;
   const raw = new KernelConstructor(module);
-  return new OcctKernel(raw, options);
+  try {
+    return new OcctKernel(raw, draftFacade, options);
+  } catch (error) {
+    raw[Symbol.dispose]();
+    throw error;
+  }
 }
