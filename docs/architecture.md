@@ -38,6 +38,8 @@ Canonical serialization sorts object keys and rejects values JSON cannot preserv
 
 `SketchSolverBackend` consumes canonical sketch entities and constraints and returns solved coordinates, radii, residuals, degrees of freedom, status, and diagnostics.
 
+Solved profiles preserve analytic lines, arcs, and circles in sketch-local coordinates. Each boundary curve may carry the stable sketch and entity IDs that generated it. Mesh kernels tessellate this representation explicitly; exact kernels consume the analytic curves directly. A solver must never force every downstream kernel to treat a sampled polygon as the authoritative design boundary.
+
 The built-in reference solver uses damped nonlinear least squares with numerical Jacobians. It gives the core a dependency-free, permissively licensed vertical slice. Its capability declaration is deliberately separate so PlaneGCS, EZPZ, or another industrial solver can be integrated without changing documents.
 
 ### Kernel layer
@@ -46,7 +48,7 @@ The built-in reference solver uses damped nonlinear least squares with numerical
 
 `ManifoldKernel` is the initial implementation. It copies upstream mesh buffers into InvariantCAD's stable `MeshData`, checks kernel status, and destroys every WASM object. The public API sees only typed arrays and measurements.
 
-The exact backend should use OpenCascade for NURBS/B-Rep, healing, STEP/IGES, fillets, chamfers, shells, and persistent topology. It must implement the same conformance corpus but compare toleranced geometry rather than byte-identical tessellations.
+The exact backend uses OpenCascade for NURBS/B-Rep, healing, exact exchange, mechanical features, and persistent topology. It must implement the same conformance corpus but compare toleranced geometry rather than byte-identical tessellations.
 
 ### Evaluation layer
 

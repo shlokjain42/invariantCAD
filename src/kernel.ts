@@ -1,5 +1,5 @@
 import type { Mat4, Vec3 } from "./core/math.js";
-import type { NumericProfile } from "./solver.js";
+import type { ResolvedProfile } from "./protocol/profile.js";
 
 export type KernelRepresentation = "mesh" | "brep" | "sdf";
 export type KernelPrimitive = "box" | "cylinder" | "sphere";
@@ -85,7 +85,7 @@ export interface GeometryKernel {
   ): KernelShape;
   sphere(radius: number, segments?: number): KernelShape;
   extrude(
-    profile: NumericProfile,
+    profile: ResolvedProfile,
     options: {
       readonly distance: number;
       readonly symmetric: boolean;
@@ -95,7 +95,7 @@ export interface GeometryKernel {
     },
   ): KernelShape;
   revolve(
-    profile: NumericProfile,
+    profile: ResolvedProfile,
     options: { readonly angle: number; readonly segments?: number },
   ): KernelShape;
   boolean(

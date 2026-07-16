@@ -18,6 +18,14 @@ import type {
   SketchLoopIR,
   SketchNodeIR,
 } from "./ir.js";
+import type {
+  NumericPlane,
+  ProfileCurveSource,
+  ResolvedArcCurve,
+  ResolvedCurve,
+  ResolvedLoop,
+  ResolvedProfile,
+} from "./protocol/profile.js";
 
 export type SketchSolveStatus =
   | "solved"
@@ -37,27 +45,18 @@ export interface SolvedSketch {
   readonly status: SketchSolveStatus;
   readonly points: Readonly<Record<EntityId, Vec2>>;
   readonly radii: Readonly<Record<EntityId, number>>;
-  readonly profile: NumericProfile;
+  readonly profile: ResolvedProfile;
   readonly degreesOfFreedom: number;
   readonly iterations: number;
   readonly residual: number;
   readonly diagnostics: readonly Diagnostic[];
 }
 
-export interface NumericProfile {
-  readonly contours: readonly (readonly Vec2[])[];
-  readonly plane: NumericPlane;
-}
-
-export interface NumericPlane {
-  readonly plane: "XY" | "XZ" | "YZ";
-  readonly origin: readonly [number, number, number];
-}
-
 export interface SketchSolveContext {
   readonly evaluate: (expression: ExpressionIR) => number;
   readonly signal?: AbortSignal;
   readonly maxIterations?: number;
+  readonly feature?: string;
 }
 
 export interface SketchSolverBackend {
@@ -437,13 +436,14 @@ function optimize(
   return { values, iterations, residual, jacobian: finalJacobian };
 }
 
-function arcPoints(
+function resolvedArc(
   entity: ArcEntityIR,
   center: Vec2,
   radius: number,
   evaluate: (expression: ExpressionIR) => number,
   reversed: boolean,
-): Vec2[] {
+  source?: ProfileCurveSource,
+): ResolvedArcCurve {
   let start = evaluate(entity.startAngle);
   let end = evaluate(entity.endAngle);
   let clockwise = entity.clockwise;
@@ -451,66 +451,75 @@ function arcPoints(
     [start, end] = [end, start];
     clockwise = !clockwise;
   }
-  let sweep = end - start;
-  if (clockwise && sweep > 0) sweep -= Math.PI * 2;
-  if (!clockwise && sweep < 0) sweep += Math.PI * 2;
-  const segments = entity.segments ?? Math.max(2, Math.ceil(Math.abs(sweep) / (Math.PI / 24)));
-  return Array.from({ length: segments + 1 }, (_, index): Vec2 => {
-    const angle = start + (sweep * index) / segments;
-    return [center[0] + radius * Math.cos(angle), center[1] + radius * Math.sin(angle)];
-  });
+  return {
+    kind: "arc",
+    center,
+    radius,
+    startAngle: start,
+    endAngle: end,
+    clockwise,
+    ...(entity.segments === undefined ? {} : { segments: entity.segments }),
+    ...(source === undefined ? {} : { source }),
+  };
 }
 
-function circlePoints(center: Vec2, radius: number, segments: number, reversed: boolean): Vec2[] {
-  const points = Array.from({ length: segments }, (_, index): Vec2 => {
-    const angle = (Math.PI * 2 * index) / segments;
-    return [center[0] + radius * Math.cos(angle), center[1] + radius * Math.sin(angle)];
-  });
-  return reversed ? points.reverse() : points;
-}
-
-function loopPoints(
+function resolveLoop(
   loop: SketchLoopIR,
   sketch: SketchNodeIR,
   variables: VariableMap,
   values: readonly number[],
   evaluate: (expression: ExpressionIR) => number,
-): readonly Vec2[] {
+  feature?: string,
+): ResolvedLoop {
+  const source = (entity: EntityId): ProfileCurveSource | undefined =>
+    feature === undefined
+      ? undefined
+      : { kind: "sketch-entity", sketch: feature, entity };
   if (loop.kind === "circle") {
     const entity = sketch.entities[loop.entity] as CircleEntityIR;
-    return circlePoints(
-      pointAt(variables, values, entity.center),
-      radiusAt(variables, values, loop.entity),
-      entity.segments ?? 64,
-      loop.reversed ?? false,
-    );
+    const provenance = source(loop.entity);
+    return {
+      curves: [
+        {
+          kind: "circle",
+          center: pointAt(variables, values, entity.center),
+          radius: radiusAt(variables, values, loop.entity),
+          reversed: loop.reversed ?? false,
+          ...(entity.segments === undefined ? {} : { segments: entity.segments }),
+          ...(provenance === undefined ? {} : { source: provenance }),
+        },
+      ],
+    };
   }
-  const output: Vec2[] = [];
+  const curves: ResolvedCurve[] = [];
   for (const use of loop.edges) {
     const entity = sketch.entities[use.entity]!;
-    let points: readonly Vec2[];
     if (entity.kind === "line") {
       const start = pointAt(variables, values, entity.start);
       const end = pointAt(variables, values, entity.end);
-      points = use.reversed ? [end, start] : [start, end];
+      const provenance = source(use.entity);
+      curves.push({
+        kind: "line",
+        start: use.reversed ? end : start,
+        end: use.reversed ? start : end,
+        ...(provenance === undefined ? {} : { source: provenance }),
+      });
     } else if (entity.kind === "arc") {
-      points = arcPoints(
-        entity,
-        pointAt(variables, values, entity.center),
-        radiusAt(variables, values, use.entity),
-        evaluate,
-        use.reversed ?? false,
+      curves.push(
+        resolvedArc(
+          entity,
+          pointAt(variables, values, entity.center),
+          radiusAt(variables, values, use.entity),
+          evaluate,
+          use.reversed ?? false,
+          source(use.entity),
+        ),
       );
     } else {
       throw new Error(`Profile edge '${use.entity}' is not a line or arc`);
     }
-    if (output.length === 0) output.push(...points);
-    else output.push(...points.slice(1));
   }
-  if (output.length > 1 && distance2(output[0]!, output.at(-1)!) < sketch.tolerance) {
-    output.pop();
-  }
-  return output;
+  return { curves };
 }
 
 export class ReferenceSketchSolver implements SketchSolverBackend {
@@ -569,16 +578,24 @@ export class ReferenceSketchSolver implements SketchSolverBackend {
     for (const id of variables.radiusOffset.keys()) {
       radii[id] = radiusAt(variables, solved.values, id);
     }
-    const contours = [
-      loopPoints(
+    const loops = [
+      resolveLoop(
         sketch.profile.outer,
         sketch,
         variables,
         solved.values,
         context.evaluate,
+        context.feature,
       ),
       ...sketch.profile.holes.map((loop) =>
-        loopPoints(loop, sketch, variables, solved.values, context.evaluate),
+        resolveLoop(
+          loop,
+          sketch,
+          variables,
+          solved.values,
+          context.evaluate,
+          context.feature,
+        ),
       ),
     ];
     return {
@@ -586,7 +603,8 @@ export class ReferenceSketchSolver implements SketchSolverBackend {
       points,
       radii,
       profile: {
-        contours,
+        outer: loops[0]!,
+        holes: loops.slice(1),
         plane: {
           plane: sketch.plane.plane,
           origin: sketch.plane.origin.map(context.evaluate) as [number, number, number],

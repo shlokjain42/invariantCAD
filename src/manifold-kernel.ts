@@ -12,7 +12,11 @@ import type {
   ResolvedTransformOperation,
   ShapeMeasurements,
 } from "./kernel.js";
-import type { NumericPlane, NumericProfile } from "./solver.js";
+import {
+  tessellateProfile,
+  type NumericPlane,
+  type ResolvedProfile,
+} from "./protocol/profile.js";
 
 const MANIFOLD_SHAPE = Symbol("InvariantCAD.ManifoldShape");
 
@@ -147,7 +151,7 @@ export class ManifoldKernel implements GeometryKernel {
   }
 
   extrude(
-    profile: NumericProfile,
+    profile: ResolvedProfile,
     options: {
       readonly distance: number;
       readonly symmetric: boolean;
@@ -156,7 +160,7 @@ export class ManifoldKernel implements GeometryKernel {
       readonly divisions: number;
     },
   ): KernelShape {
-    const contours = profile.contours.map((contour) =>
+    const contours = tessellateProfile(profile).contours.map((contour) =>
       contour.map((point) => [point[0], point[1]] as [number, number]),
     );
     const section = new this.module.CrossSection(contours, "EvenOdd");
@@ -180,10 +184,10 @@ export class ManifoldKernel implements GeometryKernel {
   }
 
   revolve(
-    profile: NumericProfile,
+    profile: ResolvedProfile,
     options: { readonly angle: number; readonly segments?: number },
   ): KernelShape {
-    const contours = profile.contours.map((contour) =>
+    const contours = tessellateProfile(profile).contours.map((contour) =>
       contour.map((point) => [point[0], point[1]] as [number, number]),
     );
     const section = new this.module.CrossSection(contours, "EvenOdd");

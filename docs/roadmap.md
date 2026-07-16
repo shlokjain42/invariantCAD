@@ -15,9 +15,10 @@ InvariantCAD's goal is one coherent TypeScript CAD system, not one monolithic ge
 ## 0.2 — exact mechanical modeling
 
 - OpenCascade WASM/native backend
+- Curve-preserving resolved profiles with sketch-entity provenance
+- Exact primitives, extrude, revolve, booleans, and transforms
 - Exact lines, circles, conics, NURBS curves, and NURBS surfaces
-- STEP, IGES, and OCCT BREP import/export
-- Fillet, chamfer, shell, draft, sweep, loft, pipe, and offset
+- STEP and OCCT BREP import/export, followed by IGES
 - Shape healing and validity diagnostics
 - Explicit exact-to-mesh conversion with tolerances
 
@@ -30,7 +31,14 @@ InvariantCAD's goal is one coherent TypeScript CAD system, not one monolithic ge
 - Incremental feature hashes and cross-run cache
 - Change-impact and geometric diff APIs
 
-## 0.4 — mechanical assemblies
+## 0.4 — advanced mechanical features
+
+- Fillet, chamfer, shell, and draft through semantic selectors
+- Sweep, loft, pipe, and offset
+- Feature-specific validity and healing diagnostics
+- Parameter-torture corpus for persistent selections
+
+## 0.5 — mechanical assemblies
 
 - Assembly mate/joint solver protocol
 - Planar, cylindrical, concentric, distance, angle, gear, rack, and screw relations
@@ -38,7 +46,7 @@ InvariantCAD's goal is one coherent TypeScript CAD system, not one monolithic ge
 - Interference, clearance, and contact queries
 - Bills of material and configurations
 
-## 0.5 — documentation and manufacturing
+## 0.6 — documentation and manufacturing
 
 - Drawing views, sections, details, dimensions, tolerances, and title blocks
 - PMI and GD&T model

@@ -47,9 +47,12 @@ import {
 import { createManifoldKernel, type ManifoldKernelOptions } from "./manifold-kernel.js";
 import {
   createReferenceSketchSolver,
-  type NumericProfile,
   type SketchSolverBackend,
 } from "./solver.js";
+import {
+  resolvedLoopIsClosed,
+  type ResolvedProfile,
+} from "./protocol/profile.js";
 import { validateDocument } from "./validation.js";
 
 export type ParameterOverride = number | Expression<Dimension>;
@@ -69,7 +72,7 @@ export interface CreateEvaluatorOptions {
 
 interface ProfileValue {
   readonly kind: "profile";
-  readonly profile: NumericProfile;
+  readonly profile: ResolvedProfile;
 }
 
 interface SolidValue {
@@ -701,6 +704,7 @@ export class Evaluator {
           case "sketch": {
             const solved = this.sketchSolver.solve(node, {
               evaluate: expression,
+              feature: id,
               ...(options.signal === undefined ? {} : { signal: options.signal }),
             });
             diagnostics.push(
@@ -709,9 +713,13 @@ export class Evaluator {
             if (hasErrors(solved.diagnostics)) {
               throw new EvaluationFailure(solved.diagnostics[0]!);
             }
+            const profileLoops = [
+              solved.profile.outer,
+              ...solved.profile.holes,
+            ];
             if (
-              solved.profile.contours.some(
-                (contour) => contour.length < 3,
+              profileLoops.some(
+                (loop) => !resolvedLoopIsClosed(loop, node.tolerance),
               )
             ) {
               throw new EvaluationFailure(

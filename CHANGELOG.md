@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Preserve analytic sketch lines, arcs, circles, and their source entity IDs in resolved profiles
+- Enforce declared kernel capabilities before backend invocation
+- Add reusable geometry-kernel conformance tests
+- Verify coverage, package metadata, declarations, tarball imports, real geometry, and the installed CLI
+
 ## 0.1.0
 
 - Initial versioned design IR and TypeScript authoring API

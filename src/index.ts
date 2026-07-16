@@ -133,10 +133,25 @@ export {
   type ShapeMeasurements,
 } from "./kernel.js";
 export {
-  ReferenceSketchSolver,
-  createReferenceSketchSolver,
+  curveEnd,
+  curveStart,
+  resolvedLoopIsClosed,
+  tessellateProfile,
+  tessellateResolvedLoop,
   type NumericPlane,
   type NumericProfile,
+  type ProfileCurveSource,
+  type ResolvedArcCurve,
+  type ResolvedCircleCurve,
+  type ResolvedCurve,
+  type ResolvedLineCurve,
+  type ResolvedLoop,
+  type ResolvedProfile,
+  type TessellatedProfile,
+} from "./protocol/profile.js";
+export {
+  ReferenceSketchSolver,
+  createReferenceSketchSolver,
   type SketchSolveContext,
   type SketchSolveStatus,
   type SketchSolverBackend,

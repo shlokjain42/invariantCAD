@@ -5,12 +5,28 @@ import {
   type KernelShape,
   type ShapeMeasurements,
 } from "../src/index.js";
-import type { NumericProfile } from "../src/solver.js";
+import type { ResolvedLoop, ResolvedProfile } from "../src/index.js";
 
 export interface KernelConformanceOptions {
   readonly id: string;
   readonly create: () => Promise<GeometryKernel>;
   readonly relativeTolerance?: number;
+}
+
+function rectangleLoop(
+  xMin: number,
+  yMin: number,
+  xMax: number,
+  yMax: number,
+): ResolvedLoop {
+  return {
+    curves: [
+      { kind: "line", start: [xMin, yMin], end: [xMax, yMin] },
+      { kind: "line", start: [xMax, yMin], end: [xMax, yMax] },
+      { kind: "line", start: [xMax, yMax], end: [xMin, yMax] },
+      { kind: "line", start: [xMin, yMax], end: [xMin, yMin] },
+    ],
+  };
 }
 
 function expectMeasurement(
@@ -93,9 +109,10 @@ export function geometryKernelConformance(
     });
 
     it("extrudes and revolves exact profile semantics when declared", () => {
-      const rectangle: NumericProfile = {
+      const rectangle: ResolvedProfile = {
         plane: { plane: "XY", origin: [0, 0, 0] },
-        contours: [[[0, 0], [2, 0], [2, 3], [0, 3]]],
+        outer: rectangleLoop(0, 0, 2, 3),
+        holes: [],
       };
       if (kernelSupports(kernel.capabilities, "feature", "extrude")) {
         const extrusion = kernel.extrude(rectangle, {
@@ -113,9 +130,10 @@ export function geometryKernelConformance(
         );
       }
       if (kernelSupports(kernel.capabilities, "feature", "revolve")) {
-        const annulus: NumericProfile = {
+        const annulus: ResolvedProfile = {
           plane: { plane: "XY", origin: [0, 0, 0] },
-          contours: [[[2, -2], [3, -2], [3, 2], [2, 2]]],
+          outer: rectangleLoop(2, -2, 3, 2),
+          holes: [],
         };
         const revolution = kernel.revolve(annulus, {
           angle: Math.PI * 2,
