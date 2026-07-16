@@ -118,10 +118,15 @@ export {
 } from "./manifold-kernel.js";
 export {
   mergeMeshes,
+  kernelSupports,
   transformMesh,
   type BoundingBox,
   type GeometryKernel,
+  type KernelCapabilityKind,
   type KernelCapabilities,
+  type KernelFeature,
+  type KernelPrimitive,
+  type KernelRepresentation,
   type KernelShape,
   type MeshData,
   type ResolvedTransformOperation,

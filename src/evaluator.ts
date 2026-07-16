@@ -35,10 +35,14 @@ import {
   transformMesh,
   type BoundingBox,
   type GeometryKernel,
+  type KernelCapabilityKind,
+  type KernelFeature,
+  type KernelPrimitive,
   type KernelShape,
   type MeshData,
   type ResolvedTransformOperation,
   type ShapeMeasurements,
+  kernelSupports,
 } from "./kernel.js";
 import { createManifoldKernel, type ManifoldKernelOptions } from "./manifold-kernel.js";
 import {
@@ -566,6 +570,40 @@ export class Evaluator {
       }
       return { kind: "solid", shape };
     };
+    const requireKernelCapability = (
+      kind: KernelCapabilityKind,
+      capability: KernelPrimitive | KernelFeature | string,
+      id: NodeId,
+    ): void => {
+      const supported =
+        kind === "primitive"
+          ? kernelSupports(
+              this.kernel.capabilities,
+              "primitive",
+              capability as KernelPrimitive,
+            )
+          : kind === "feature"
+            ? kernelSupports(
+                this.kernel.capabilities,
+                "feature",
+                capability as KernelFeature,
+              )
+            : kernelSupports(this.kernel.capabilities, "export", capability);
+      if (supported) return;
+      throw new EvaluationFailure(
+        diagnostic(
+          "KERNEL_CAPABILITY_MISSING",
+          `Kernel '${this.kernel.id}' does not support ${kind} '${capability}'`,
+          {
+            severity: "error",
+            node: id,
+            path: `/nodes/${id}`,
+            hints: ["Choose a compatible geometry kernel for this design"],
+            details: { kernel: this.kernel.id, kind, capability },
+          },
+        ),
+      );
+    };
     const positive = (value: number, id: NodeId, field: string): number => {
       if (!(value > 0)) {
         throw new EvaluationFailure(
@@ -609,6 +647,7 @@ export class Evaluator {
       try {
         switch (node.kind) {
           case "box":
+            requireKernelCapability("primitive", "box", id);
             result = ownShape(
               this.kernel.box(
                 node.size.map((value, index) =>
@@ -620,6 +659,7 @@ export class Evaluator {
             );
             break;
           case "cylinder": {
+            requireKernelCapability("primitive", "cylinder", id);
             const height = positive(expression(node.height), id, "height");
             const radiusBottom = positive(
               expression(node.radiusBottom),
@@ -649,6 +689,7 @@ export class Evaluator {
             break;
           }
           case "sphere":
+            requireKernelCapability("primitive", "sphere", id);
             result = ownShape(
               this.kernel.sphere(
                 positive(expression(node.radius), id, "radius"),
@@ -685,6 +726,7 @@ export class Evaluator {
             break;
           }
           case "extrude": {
+            requireKernelCapability("feature", "extrude", id);
             const profile = evaluateNode(node.profile.node);
             if (profile.kind !== "profile") throw new Error("Extrude profile mismatch");
             result = ownShape(
@@ -700,6 +742,7 @@ export class Evaluator {
             break;
           }
           case "revolve": {
+            requireKernelCapability("feature", "revolve", id);
             const profile = evaluateNode(node.profile.node);
             if (profile.kind !== "profile") throw new Error("Revolve profile mismatch");
             const angle = positive(expression(node.angle), id, "angle");
@@ -722,6 +765,7 @@ export class Evaluator {
             break;
           }
           case "boolean":
+            requireKernelCapability("feature", "boolean", id);
             result = ownShape(
               this.kernel.boolean(
                 node.operation,
@@ -732,6 +776,7 @@ export class Evaluator {
             );
             break;
           case "transform":
+            requireKernelCapability("feature", "transform", id);
             result = ownShape(
               this.kernel.transform(
                 solidRef(node.input),

@@ -1,12 +1,46 @@
 import type { Mat4, Vec3 } from "./core/math.js";
 import type { NumericProfile } from "./solver.js";
 
+export type KernelRepresentation = "mesh" | "brep" | "sdf";
+export type KernelPrimitive = "box" | "cylinder" | "sphere";
+export type KernelFeature = "extrude" | "revolve" | "boolean" | "transform";
+export type KernelCapabilityKind = "primitive" | "feature" | "export";
+
 export interface KernelCapabilities {
-  readonly representation: "mesh" | "brep" | "sdf";
+  readonly representation: KernelRepresentation;
   readonly exact: boolean;
-  readonly primitives: readonly ("box" | "cylinder" | "sphere")[];
-  readonly features: readonly ("extrude" | "revolve" | "boolean" | "transform")[];
+  readonly primitives: readonly KernelPrimitive[];
+  readonly features: readonly KernelFeature[];
   readonly exports: readonly string[];
+}
+
+export function kernelSupports(
+  capabilities: KernelCapabilities,
+  kind: "primitive",
+  capability: KernelPrimitive,
+): boolean;
+export function kernelSupports(
+  capabilities: KernelCapabilities,
+  kind: "feature",
+  capability: KernelFeature,
+): boolean;
+export function kernelSupports(
+  capabilities: KernelCapabilities,
+  kind: "export",
+  capability: string,
+): boolean;
+export function kernelSupports(
+  capabilities: KernelCapabilities,
+  kind: KernelCapabilityKind,
+  capability: string,
+): boolean {
+  const supported =
+    kind === "primitive"
+      ? capabilities.primitives
+      : kind === "feature"
+        ? capabilities.features
+        : capabilities.exports;
+  return (supported as readonly string[]).includes(capability);
 }
 
 export interface KernelShape {
