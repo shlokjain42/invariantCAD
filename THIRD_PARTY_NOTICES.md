@@ -28,8 +28,25 @@ The full relevant texts are distributed in:
 - `licenses/OCCT_LGPL_EXCEPTION.txt`
 - `licenses/occt-wasm-MIT.txt`
 
-The published `occt-wasm` artifact contains a WebAssembly build of OCCT. InvariantCAD does not modify that binary. Rebuild instructions and the wrapper toolchain are available in the tagged wrapper source above; the corresponding OCCT source is available at the pinned fork commit.
+The current npm backend consumes the published `occt-wasm@3.7.0` JavaScript and
+WebAssembly pair unchanged. Rebuild instructions and the wrapper toolchain are
+available in the tagged wrapper source above; the corresponding OCCT source is
+available at the pinned fork commit.
 
-`createOcctKernel({ wasm })` accepts a URL, filesystem path, `ArrayBuffer`, or `Uint8Array`. This keeps the WASM component replaceable with a compatible user-built version rather than hard-wiring the distributed binary into InvariantCAD.
+This source repository can also build an optional, locally modified matched
+JavaScript/WebAssembly pair from the verified upstream source plus the ordered
+patches under `native/occt/patches/`. Outputs under
+`.artifacts/occt-facade/` are ignored, uncommitted, and excluded from the
+current npm tarball. Anyone distributing that modified pair must make the
+upstream wrapper source, every local patch, locked build inputs, corresponding
+OCCT source, and applicable notices available, together with a practical
+relink and replacement path.
+
+For the existing compatible public ABI, `createOcctKernel({ wasm })` accepts a
+URL, filesystem path, `ArrayBuffer`, or `Uint8Array`. This keeps the WASM
+component replaceable with a compatible user-built version rather than
+hard-wiring the distributed binary into InvariantCAD. The internal extension
+smoke test instead loads its matching generated JavaScript glue and WASM pair
+directly.
 
 Anyone redistributing a bundle containing the OCCT WASM binary must preserve these notices and satisfy the applicable LGPL source, modification, reverse-engineering, and replacement requirements.

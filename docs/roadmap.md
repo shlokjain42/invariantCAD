@@ -43,7 +43,7 @@ InvariantCAD's goal is one coherent TypeScript CAD system, not one monolithic ge
 ## 0.4 — advanced mechanical features
 
 - Asymmetric, distance-angle, and variable chamfer modes through semantic selectors
-- Atomic multi-face neutral-plane draft, gated on an OCCT facade that accepts arbitrary planes and pull directions and reports per-seed failures before build
+- Atomic multi-face neutral-plane draft through semantic face selectors; owned native execution exists, but the public node and capability remain gated on exact indexed face/edge/vertex evolution and lineage reduction
 - Variable fillet through semantic selectors
 - Closed, variable-thickness, and intersection/miter-join shell modes
 - Sweep, loft, pipe, and two-dimensional wire/profile offset

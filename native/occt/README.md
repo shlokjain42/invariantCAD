@@ -56,6 +56,44 @@ Patches belong in `native/occt/patches/` and should use Git's `a/` and `b/`
 path prefixes. Prefix filenames with an ordering number (for example,
 `0001-draft-history.patch`) because lexical order is part of the build.
 
+## Native smoke test
+
+Build the patched facade, then load the matched generated JavaScript and WASM
+pair directly through the native fixture corpus:
+
+```sh
+pnpm build:occt-facade
+pnpm test:occt-facade
+```
+
+The heavyweight native build and smoke test are intentionally separate from
+normal `pnpm verify`. Generated artifacts stay under the ignored
+`.artifacts/occt-facade/` directory and are not committed or packed.
+
+## Internal draft ABI
+
+The first owned extension is an internal atomic multi-face draft operation. It
+stages every unique selected face in one `BRepOffsetAPI_DraftAngle`, checks each
+addition, and calls `Build()` exactly once only after every addition succeeds.
+It accepts an arbitrary neutral-plane origin and normal independently of the
+pull direction, and it requires both input and result to be valid,
+positive-volume top-level single solids with unchanged
+solid/shell/face/wire/edge/vertex counts. This count check does not claim full
+incidence-graph isomorphism.
+
+Its raw `uint32_t` arena IDs are adapter-trusted references, not authenticated
+public handles. Only the owning adapter may supply them; they must never enter
+documents or public APIs. A successful report owns its untaken result. Call
+`report.delete()` in a `finally` block; `takeResultId(kernel)` transfers the
+result into its originating kernel exactly once, after which normal kernel
+`release()` or `releaseAll()` ownership applies.
+
+The facade rejects `abs(angleRad) <= 1e-4`, because the pinned OCCT build can
+otherwise report a successful no-op. This ABI is not yet a document node,
+`GeometryKernel` method, capability, or exported TypeScript feature. Public
+draft remains gated on deterministic indexed face/edge/vertex evolution records
+and their TypeScript lineage reducer.
+
 ## License, source, and replacement boundary
 
 `occt-wasm` facade code is upstream open-source code, while Open CASCADE

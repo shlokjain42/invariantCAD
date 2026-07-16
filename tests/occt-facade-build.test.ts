@@ -5,6 +5,11 @@ import { describe, expect, it } from "vitest";
 
 const lockUrl = new URL("../native/occt/upstream.lock.json", import.meta.url);
 const scriptUrl = new URL("../scripts/build-occt-facade.sh", import.meta.url);
+const patchUrl = new URL(
+  "../native/occt/patches/0001-atomic-multi-face-draft.patch",
+  import.meta.url,
+);
+const smokeUrl = new URL("../scripts/test-occt-facade.mjs", import.meta.url);
 
 describe("owned OCCT facade build boundary", () => {
   it("pins every upstream and toolchain input to the audited baseline", async () => {
@@ -58,5 +63,17 @@ describe("owned OCCT facade build boundary", () => {
     expect(source).toContain("--security-opt=no-new-privileges");
     expect(source).toContain("CARGO_NET_OFFLINE=true");
     expect(source).not.toContain(":latest");
+  });
+
+  it("tracks the hardened draft extension and a syntax-valid native smoke test", async () => {
+    const patch = await readFile(patchUrl, "utf8");
+    expect(patch).toContain("invariantcadDraftFacesAtomic");
+    expect(patch).toContain("ANGLE_BELOW_KERNEL_LIMIT");
+    expect(patch).toContain("transferCode");
+
+    const syntax = spawnSync(process.execPath, ["--check", smokeUrl.pathname], {
+      encoding: "utf8",
+    });
+    expect(syntax.status, syntax.stderr).toBe(0);
   });
 });

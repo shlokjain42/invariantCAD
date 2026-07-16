@@ -1,0 +1,699 @@
+diff --git a/facade/include/occt_kernel.h b/facade/include/occt_kernel.h
+index f555b91..b708e71 100644
+--- a/facade/include/occt_kernel.h
++++ b/facade/include/occt_kernel.h
+@@ -2,0 +3 @@
++#include <atomic>
+@@ -3,0 +5 @@
++#include <limits>
+@@ -4,0 +7,2 @@
++#include <memory>
++#include <stdexcept>
+@@ -13,0 +18,86 @@
++class OcctKernel;
++struct InvariantCadDraftTransferState;
++
++/// Returns a process-monotonic token for one OcctKernel instance. This is
++/// inline so upstream's WASI build, which compiles only kernel.cpp from the
++/// handwritten source directory, retains a self-contained OcctKernel ctor.
++inline uint64_t invariantcadNextKernelInstanceToken() {
++    static std::atomic<uint64_t> nextToken{1};
++    uint64_t token = nextToken.load(std::memory_order_relaxed);
++    for (;;) {
++        if (token == std::numeric_limits<uint64_t>::max()) {
++            throw std::overflow_error("InvariantCAD kernel instance token space exhausted");
++        }
++        if (nextToken.compare_exchange_weak(token, token + 1, std::memory_order_relaxed,
++                                            std::memory_order_relaxed)) {
++            return token;
++        }
++    }
++}
++
++/// Owned result of InvariantCAD's atomic multi-face draft facade.
++///
++/// The result shape deliberately remains outside OcctKernel's arena until
++/// takeResultId() is called. Destroying an untaken report therefore releases
++/// the shape without leaking an arena entry.
++struct InvariantCadDraftReport {
++    bool ok = false;
++    std::string stage = "validation";
++    std::string code = "INTERNAL_ERROR";
++    std::string message;
++    int failedSeedIndex = -1;
++    int occtStatus = -1;
++    int requestedSeedCount = 0;
++    int addCount = 0;
++    int skippedSeedCount = 0;
++    int buildCount = 0;
++    std::string problematicShapeType = "none";
++    int problematicShapeIndex = -1;
++
++    InvariantCadDraftReport() = default;
++    InvariantCadDraftReport(const InvariantCadDraftReport&) = default;
++    InvariantCadDraftReport& operator=(const InvariantCadDraftReport&) = default;
++
++    bool getOk() const { return ok; }
++    std::string getStage() const { return stage; }
++    std::string getCode() const { return code; }
++    std::string getMessage() const { return message; }
++    int getFailedSeedIndex() const { return failedSeedIndex; }
++    int getOcctStatus() const { return occtStatus; }
++    int getRequestedSeedCount() const { return requestedSeedCount; }
++    int getAddCount() const { return addCount; }
++    int getSkippedSeedCount() const { return skippedSeedCount; }
++    int getBuildCount() const { return buildCount; }
++    std::string getProblematicShapeType() const { return problematicShapeType; }
++    int getProblematicShapeIndex() const { return problematicShapeIndex; }
++
++    /// Transfers a successful result into kernel's arena exactly once.
++    /// Call transferCode(kernel) first; it is the stable rejection contract.
++    /// The preflight plus take sequence assumes occt-wasm's current synchronous,
++    /// non-pthreaded Embind execution model.
++    uint32_t takeResultId(OcctKernel& kernel);
++    bool hasResult() const;
++    std::string transferCode(const OcctKernel& kernel) const;
++
++  private:
++    std::shared_ptr<InvariantCadDraftTransferState> transfer_;
++
++    friend InvariantCadDraftReport invariantcadDraftFacesAtomic(
++        OcctKernel& kernel, uint32_t shapeId, std::vector<uint32_t> faceIds, double angleRad,
++        double pullX, double pullY, double pullZ, double neutralOriginX, double neutralOriginY,
++        double neutralOriginZ, double neutralNormalX, double neutralNormalY,
++        double neutralNormalZ);
++};
++
++/// Versioned InvariantCAD extension probe, independent of occt-wasm's API.
++std::string invariantcadFacadeVersion();
++
++/// Applies all requested draft faces to one BRepOffsetAPI_DraftAngle maker,
++/// verifies every Add(), and calls Build() once after all additions succeed.
++/// Raw arena IDs are adapter-trusted capability handles. This facade validates
++/// type and membership inside the supplied kernel, but IDs do not authenticate
++/// their originating JavaScript wrapper or another kernel instance.
++InvariantCadDraftReport invariantcadDraftFacesAtomic(
++    OcctKernel& kernel, uint32_t shapeId, std::vector<uint32_t> faceIds, double angleRad,
++    double pullX, double pullY, double pullZ, double neutralOriginX, double neutralOriginY,
++    double neutralOriginZ, double neutralNormalX, double neutralNormalY, double neutralNormalZ);
+@@ -127,0 +218,4 @@ class OcctKernel {
++    OcctKernel(const OcctKernel&) = delete;
++    OcctKernel& operator=(const OcctKernel&) = delete;
++    OcctKernel(OcctKernel&&) = delete;
++    OcctKernel& operator=(OcctKernel&&) = delete;
+@@ -433,0 +528,6 @@ class OcctKernel {
++    friend struct InvariantCadDraftReport;
++    friend InvariantCadDraftReport invariantcadDraftFacesAtomic(
++        OcctKernel& kernel, uint32_t shapeId, std::vector<uint32_t> faceIds, double angleRad,
++        double pullX, double pullY, double pullZ, double neutralOriginX, double neutralOriginY,
++        double neutralOriginZ, double neutralNormalX, double neutralNormalY,
++        double neutralNormalZ);
+@@ -434,0 +535 @@ class OcctKernel {
++    uint32_t invariantcadStoreTransferredShape(const TopoDS_Shape& shape);
+@@ -441,0 +543 @@ class OcctKernel {
++    const uint64_t invariantcadInstanceToken_ = invariantcadNextKernelInstanceToken();
+diff --git a/facade/src/invariantcad_bindings.cpp b/facade/src/invariantcad_bindings.cpp
+new file mode 100644
+index 0000000..2518bd7
+--- /dev/null
++++ b/facade/src/invariantcad_bindings.cpp
+@@ -0,0 +1,33 @@
++// SPDX-License-Identifier: Apache-2.0
++// Copyright 2026 InvariantCAD contributors
++//
++// InvariantCAD-owned extension code. The occt-wasm facade and Open CASCADE
++// dependencies retain their respective upstream licenses.
++
++#include "occt_kernel.h"
++
++#include <emscripten/bind.h>
++
++using namespace emscripten;
++
++EMSCRIPTEN_BINDINGS(invariantcad_facade) {
++    class_<InvariantCadDraftReport>("InvariantCadDraftReport")
++        .property("ok", &InvariantCadDraftReport::getOk)
++        .property("stage", &InvariantCadDraftReport::getStage)
++        .property("code", &InvariantCadDraftReport::getCode)
++        .property("message", &InvariantCadDraftReport::getMessage)
++        .property("failedSeedIndex", &InvariantCadDraftReport::getFailedSeedIndex)
++        .property("occtStatus", &InvariantCadDraftReport::getOcctStatus)
++        .property("requestedSeedCount", &InvariantCadDraftReport::getRequestedSeedCount)
++        .property("addCount", &InvariantCadDraftReport::getAddCount)
++        .property("skippedSeedCount", &InvariantCadDraftReport::getSkippedSeedCount)
++        .property("buildCount", &InvariantCadDraftReport::getBuildCount)
++        .property("problematicShapeType", &InvariantCadDraftReport::getProblematicShapeType)
++        .property("problematicShapeIndex", &InvariantCadDraftReport::getProblematicShapeIndex)
++        .function("hasResult", &InvariantCadDraftReport::hasResult)
++        .function("transferCode", &InvariantCadDraftReport::transferCode)
++        .function("takeResultId", &InvariantCadDraftReport::takeResultId);
++
++    function("invariantcadFacadeVersion", &invariantcadFacadeVersion);
++    function("invariantcadDraftFacesAtomic", &invariantcadDraftFacesAtomic);
++}
+diff --git a/facade/src/invariantcad_facade.cpp b/facade/src/invariantcad_facade.cpp
+new file mode 100644
+index 0000000..18c0a2f
+--- /dev/null
++++ b/facade/src/invariantcad_facade.cpp
+@@ -0,0 +1,540 @@
++// SPDX-License-Identifier: Apache-2.0
++// Copyright 2026 InvariantCAD contributors
++//
++// InvariantCAD-owned extension code. The occt-wasm facade and Open CASCADE
++// dependencies retain their respective upstream licenses.
++
++#include "occt_kernel.h"
++
++#include <BRepCheck_Analyzer.hxx>
++#include <BRepGProp.hxx>
++#include <BRepOffsetAPI_DraftAngle.hxx>
++#include <GProp_GProps.hxx>
++#include <NCollection_IndexedMap.hxx>
++#include <Standard_Failure.hxx>
++#include <TopAbs_ShapeEnum.hxx>
++#include <TopExp.hxx>
++#include <TopTools_ShapeMapHasher.hxx>
++#include <TopoDS.hxx>
++#include <cmath>
++#include <gp.hxx>
++#include <gp_Dir.hxx>
++#include <gp_Pln.hxx>
++#include <gp_Pnt.hxx>
++#include <limits>
++#include <memory>
++#include <stdexcept>
++
++struct InvariantCadDraftTransferState {
++    TopoDS_Shape result;
++    uint64_t kernelInstanceToken = 0;
++    bool transferred = false;
++};
++
++namespace {
++
++constexpr double kHalfPi = 1.57079632679489661923;
++// Pinned OCCT's BRepOffsetAPI_DraftAngle::Add silently returns without adding
++// a face at or below this absolute angle. Reject that range at our boundary.
++constexpr double kKernelMinimumDraftAngle = 1.0e-4;
++
++struct TopologyCounts {
++    int solids = 0;
++    int shells = 0;
++    int faces = 0;
++    int wires = 0;
++    int edges = 0;
++    int vertices = 0;
++
++    bool operator==(const TopologyCounts& other) const {
++        return solids == other.solids && shells == other.shells && faces == other.faces &&
++               wires == other.wires && edges == other.edges && vertices == other.vertices;
++    }
++};
++
++bool finite3(double x, double y, double z) {
++    return std::isfinite(x) && std::isfinite(y) && std::isfinite(z);
++}
++
++bool usableDirection(double x, double y, double z) {
++    if (!finite3(x, y, z)) {
++        return false;
++    }
++    const double squaredMagnitude = x * x + y * y + z * z;
++    const double resolutionSquared = gp::Resolution() * gp::Resolution();
++    return std::isfinite(squaredMagnitude) && squaredMagnitude > resolutionSquared;
++}
++
++int subshapeCount(const TopoDS_Shape& shape, TopAbs_ShapeEnum type) {
++    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> subshapes;
++    TopExp::MapShapes(shape, type, subshapes);
++    return subshapes.Extent();
++}
++
++TopologyCounts topologyCounts(const TopoDS_Shape& shape) {
++    return {
++        subshapeCount(shape, TopAbs_SOLID),
++        subshapeCount(shape, TopAbs_SHELL),
++        subshapeCount(shape, TopAbs_FACE),
++        subshapeCount(shape, TopAbs_WIRE),
++        subshapeCount(shape, TopAbs_EDGE),
++        subshapeCount(shape, TopAbs_VERTEX),
++    };
++}
++
++bool hasPositiveVolume(const TopoDS_Shape& shape) {
++    GProp_GProps properties;
++    BRepGProp::VolumeProperties(shape, properties);
++    const double volume = properties.Mass();
++    return std::isfinite(volume) && volume > 0.0;
++}
++
++const char* shapeTypeName(TopAbs_ShapeEnum type) {
++    switch (type) {
++    case TopAbs_COMPOUND: return "compound";
++    case TopAbs_COMPSOLID: return "compsolid";
++    case TopAbs_SOLID: return "solid";
++    case TopAbs_SHELL: return "shell";
++    case TopAbs_FACE: return "face";
++    case TopAbs_WIRE: return "wire";
++    case TopAbs_EDGE: return "edge";
++    case TopAbs_VERTEX: return "vertex";
++    default: return "shape";
++    }
++}
++
++void attachProblemShape(InvariantCadDraftReport& report, const TopoDS_Shape& inputShape,
++                        const TopoDS_Shape& problematicShape) {
++    if (problematicShape.IsNull()) {
++        return;
++    }
++    report.problematicShapeType = shapeTypeName(problematicShape.ShapeType());
++    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> subshapes;
++    TopExp::MapShapes(inputShape, problematicShape.ShapeType(), subshapes);
++    const int oneBasedIndex = subshapes.FindIndex(problematicShape);
++    report.problematicShapeIndex = oneBasedIndex > 0 ? oneBasedIndex - 1 : -1;
++}
++
++void attachMakerFailure(InvariantCadDraftReport& report, BRepOffsetAPI_DraftAngle& maker,
++                        const TopoDS_Shape& inputShape) noexcept {
++    try {
++        report.occtStatus = static_cast<int>(maker.Status());
++    } catch (...) {
++        report.occtStatus = -1;
++    }
++    try {
++        attachProblemShape(report, inputShape, maker.ProblematicShape());
++    } catch (...) {
++        // Stable stage/code/progress data must survive optional OCCT diagnostics.
++    }
++}
++
++void removeFailedSeed(BRepOffsetAPI_DraftAngle& maker, const TopoDS_Face& face) noexcept {
++    try {
++        maker.Remove(face);
++    } catch (...) {
++        // The one-shot maker is discarded immediately after this failure path.
++    }
++}
++
++} // namespace
++
++uint32_t OcctKernel::invariantcadStoreTransferredShape(const TopoDS_Shape& shape) {
++    if (nextId_ == 0 || arena_.find(nextId_) != arena_.end()) {
++        throw std::overflow_error("InvariantCAD shape arena ID space exhausted");
++    }
++    const uint32_t resultId = nextId_;
++    const auto insertion = arena_.emplace(resultId, shape);
++    if (!insertion.second) {
++        throw std::runtime_error("InvariantCAD could not reserve a result arena ID");
++    }
++    ++nextId_;
++    return resultId;
++}
++
++uint32_t InvariantCadDraftReport::takeResultId(OcctKernel& kernel) {
++    const std::string state = transferCode(kernel);
++    if (state == "NO_RESULT") {
++        throw std::runtime_error("InvariantCAD draft report has no transferable result");
++    }
++    if (state == "ALREADY_TRANSFERRED") {
++        throw std::runtime_error("InvariantCAD draft result was already transferred");
++    }
++    if (state == "WRONG_KERNEL") {
++        throw std::runtime_error("InvariantCAD draft result belongs to another kernel instance");
++    }
++    const uint32_t resultId = kernel.invariantcadStoreTransferredShape(transfer_->result);
++    transfer_->transferred = true;
++    transfer_->result.Nullify();
++    return resultId;
++}
++
++bool InvariantCadDraftReport::hasResult() const {
++    return transfer_ && !transfer_->transferred && !transfer_->result.IsNull();
++}
++
++std::string InvariantCadDraftReport::transferCode(const OcctKernel& kernel) const {
++    if (!transfer_) {
++        return "NO_RESULT";
++    }
++    if (transfer_->transferred || transfer_->result.IsNull()) {
++        return "ALREADY_TRANSFERRED";
++    }
++    if (transfer_->kernelInstanceToken != kernel.invariantcadInstanceToken_) {
++        return "WRONG_KERNEL";
++    }
++    return "READY";
++}
++
++std::string invariantcadFacadeVersion() {
++    return "invariantcad-facade@0.1.0+occt-wasm.3.7.0";
++}
++
++InvariantCadDraftReport invariantcadDraftFacesAtomic(
++    OcctKernel& kernel, uint32_t shapeId, std::vector<uint32_t> faceIds, double angleRad,
++    double pullX, double pullY, double pullZ, double neutralOriginX, double neutralOriginY,
++    double neutralOriginZ, double neutralNormalX, double neutralNormalY,
++    double neutralNormalZ) {
++    const int requestedSeedCount =
++        faceIds.size() > static_cast<size_t>(std::numeric_limits<int>::max())
++            ? std::numeric_limits<int>::max()
++            : static_cast<int>(faceIds.size());
++    int addCount = 0;
++    int skippedSeedCount = 0;
++    int buildCount = 0;
++
++    auto failure = [&](const char* stage, const char* code, const char* message,
++                       int failedSeedIndex = -1) {
++        InvariantCadDraftReport report;
++        report.stage = stage;
++        report.code = code;
++        report.message = message;
++        report.failedSeedIndex = failedSeedIndex;
++        report.requestedSeedCount = requestedSeedCount;
++        report.addCount = addCount;
++        report.skippedSeedCount = skippedSeedCount;
++        report.buildCount = buildCount;
++        return report;
++    };
++
++    if (faceIds.size() > static_cast<size_t>(std::numeric_limits<int>::max())) {
++        return failure("validation", "TOO_MANY_FACE_SEEDS",
++                       "Face seed count exceeds the facade reporting range");
++    }
++    if (faceIds.empty()) {
++        return failure("validation", "EMPTY_FACE_SELECTION", "At least one face is required");
++    }
++    if (!std::isfinite(angleRad) || std::abs(angleRad) >= kHalfPi) {
++        return failure("validation", "INVALID_ANGLE",
++                       "Draft angle must be finite and have magnitude less than pi/2");
++    }
++    if (std::abs(angleRad) <= kKernelMinimumDraftAngle) {
++        return failure("validation", "ANGLE_BELOW_KERNEL_LIMIT",
++                       "Pinned OCCT silently ignores draft angles at or below 1e-4 radians");
++    }
++    if (!usableDirection(pullX, pullY, pullZ)) {
++        return failure("validation", "INVALID_PULL_DIRECTION",
++                       "Pull direction must be finite and exceed gp::Resolution()");
++    }
++    if (!finite3(neutralOriginX, neutralOriginY, neutralOriginZ)) {
++        return failure("validation", "INVALID_NEUTRAL_ORIGIN",
++                       "Neutral-plane origin must be finite");
++    }
++    if (!usableDirection(neutralNormalX, neutralNormalY, neutralNormalZ)) {
++        return failure("validation", "INVALID_NEUTRAL_NORMAL",
++                       "Neutral-plane normal must be finite and exceed gp::Resolution()");
++    }
++
++    // Raw IDs are deliberately trusted adapter handles. Membership/type checks
++    // below constrain them within this kernel, but cannot authenticate which JS
++    // wrapper supplied an integer that happens to exist in this arena.
++    const auto shapeIt = kernel.arena_.find(shapeId);
++    if (shapeIt == kernel.arena_.end()) {
++        return failure("input-validation", "INVALID_SHAPE_ID",
++                       "Input shape ID is not present in the kernel arena");
++    }
++    const TopoDS_Shape& inputShape = shapeIt->second;
++    if (inputShape.IsNull()) {
++        return failure("input-validation", "NULL_INPUT_SHAPE", "Input shape is null");
++    }
++    if (inputShape.ShapeType() != TopAbs_SOLID) {
++        return failure("input-validation", "INPUT_NOT_TOP_LEVEL_SOLID",
++                       "Draft input must be a top-level solid");
++    }
++
++    TopologyCounts inputTopology;
++    try {
++        if (!BRepCheck_Analyzer(inputShape).IsValid()) {
++            return failure("input-validation", "INVALID_INPUT_SOLID",
++                           "Draft input solid is topologically invalid");
++        }
++        if (!hasPositiveVolume(inputShape)) {
++            return failure("input-validation", "INPUT_NOT_POSITIVE_VOLUME",
++                           "Draft input must have finite positive signed volume");
++        }
++        inputTopology = topologyCounts(inputShape);
++        if (inputTopology.solids != 1) {
++            return failure("input-validation", "INPUT_NOT_SINGLE_SOLID",
++                           "Draft input must contain exactly one solid");
++        }
++    } catch (const Standard_Failure&) {
++        return failure("input-validation", "INPUT_VALIDATION_OCCT_EXCEPTION",
++                       "OCCT raised while validating the input solid");
++    } catch (const std::exception&) {
++        return failure("input-validation", "INPUT_VALIDATION_NATIVE_EXCEPTION",
++                       "Native code raised while validating the input solid");
++    }
++
++    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> memberFaces;
++    try {
++        TopExp::MapShapes(inputShape, TopAbs_FACE, memberFaces);
++    } catch (const Standard_Failure&) {
++        return failure("seed-validation", "FACE_MAP_OCCT_EXCEPTION",
++                       "OCCT raised while indexing input faces");
++    } catch (const std::exception&) {
++        return failure("seed-validation", "FACE_MAP_NATIVE_EXCEPTION",
++                       "Native code raised while indexing input faces");
++    }
++
++    std::vector<TopoDS_Face> faces;
++    int currentSeedIndex = -1;
++    try {
++        faces.reserve(faceIds.size());
++        for (size_t index = 0; index < faceIds.size(); ++index) {
++            currentSeedIndex = static_cast<int>(index);
++            const auto faceIt = kernel.arena_.find(faceIds[index]);
++            if (faceIt == kernel.arena_.end()) {
++                return failure("seed-validation", "INVALID_FACE_ID",
++                               "Selected face ID is not present in the kernel arena",
++                               static_cast<int>(index));
++            }
++            const TopoDS_Shape& candidate = faceIt->second;
++            if (candidate.IsNull() || candidate.ShapeType() != TopAbs_FACE) {
++                return failure("seed-validation", "NOT_A_FACE",
++                               "Selected shape is not a non-null face",
++                               static_cast<int>(index));
++            }
++            const int memberIndex = memberFaces.FindIndex(candidate);
++            if (memberIndex <= 0) {
++                return failure("seed-validation", "FACE_NOT_IN_SHAPE",
++                               "Selected face does not belong to the input solid",
++                               static_cast<int>(index));
++            }
++            // Use the input solid's canonical occurrence for dedupe and Add().
++            faces.push_back(TopoDS::Face(memberFaces.FindKey(memberIndex)));
++        }
++    } catch (const Standard_Failure&) {
++        return failure("seed-validation", "SEED_VALIDATION_OCCT_EXCEPTION",
++                       "OCCT raised while canonicalizing draft seeds", currentSeedIndex);
++    } catch (const std::exception&) {
++        return failure("seed-validation", "SEED_VALIDATION_NATIVE_EXCEPTION",
++                       "Native code raised while canonicalizing draft seeds", currentSeedIndex);
++    }
++
++    std::unique_ptr<BRepOffsetAPI_DraftAngle> maker;
++    gp_Dir pullDirection;
++    gp_Pln neutralPlane;
++    try {
++        pullDirection = gp_Dir(pullX, pullY, pullZ);
++        neutralPlane = gp_Pln(gp_Pnt(neutralOriginX, neutralOriginY, neutralOriginZ),
++                              gp_Dir(neutralNormalX, neutralNormalY, neutralNormalZ));
++        maker = std::make_unique<BRepOffsetAPI_DraftAngle>(inputShape);
++    } catch (const Standard_Failure&) {
++        return failure("prepare", "PREPARE_OCCT_EXCEPTION",
++                       "OCCT raised while preparing the draft maker");
++    } catch (const std::exception&) {
++        return failure("prepare", "PREPARE_NATIVE_EXCEPTION",
++                       "Native code raised while preparing the draft maker");
++    }
++
++    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> submittedFaces;
++    for (size_t index = 0; index < faces.size(); ++index) {
++        bool alreadySubmitted = false;
++        try {
++            alreadySubmitted = submittedFaces.Contains(faces[index]);
++            if (!alreadySubmitted) {
++                submittedFaces.Add(faces[index]);
++            }
++        } catch (const Standard_Failure&) {
++            return failure("add", "SEED_DEDUPE_OCCT_EXCEPTION",
++                           "OCCT raised while deduplicating a canonical seed",
++                           static_cast<int>(index));
++        } catch (const std::exception&) {
++            return failure("add", "SEED_DEDUPE_NATIVE_EXCEPTION",
++                           "Native code raised while deduplicating a canonical seed",
++                           static_cast<int>(index));
++        }
++        if (alreadySubmitted) {
++            ++skippedSeedCount;
++            continue;
++        }
++        ++addCount;
++        try {
++            maker->Add(faces[index], pullDirection, angleRad, neutralPlane);
++        } catch (const Standard_Failure&) {
++            auto report = failure("add", "ADD_OCCT_EXCEPTION",
++                                  "OCCT raised while adding a draft seed",
++                                  static_cast<int>(index));
++            attachMakerFailure(report, *maker, inputShape);
++            return report;
++        } catch (const std::exception&) {
++            auto report = failure("add", "ADD_NATIVE_EXCEPTION",
++                                  "Native code raised while adding a draft seed",
++                                  static_cast<int>(index));
++            attachMakerFailure(report, *maker, inputShape);
++            return report;
++        }
++
++        bool addDone = false;
++        try {
++            addDone = maker->AddDone();
++        } catch (const Standard_Failure&) {
++            auto report = failure("add", "ADD_STATUS_OCCT_EXCEPTION",
++                                  "OCCT raised while checking an added draft seed",
++                                  static_cast<int>(index));
++            attachMakerFailure(report, *maker, inputShape);
++            return report;
++        } catch (const std::exception&) {
++            auto report = failure("add", "ADD_STATUS_NATIVE_EXCEPTION",
++                                  "Native code raised while checking an added draft seed",
++                                  static_cast<int>(index));
++            attachMakerFailure(report, *maker, inputShape);
++            return report;
++        }
++        if (!addDone) {
++            auto report = failure("add", "ADD_REJECTED", "OCCT rejected a draft seed",
++                                  static_cast<int>(index));
++            attachMakerFailure(report, *maker, inputShape);
++            removeFailedSeed(*maker, faces[index]);
++            return report;
++        }
++        // Draft_Modification::InternalAdd is idempotent when this canonical
++        // seed was already propagated through an earlier seed's tangent region.
++    }
++
++    buildCount = 1;
++    try {
++        maker->Build();
++    } catch (const Standard_Failure&) {
++        auto report = failure("build", "BUILD_OCCT_EXCEPTION",
++                              "OCCT raised while building the draft");
++        attachMakerFailure(report, *maker, inputShape);
++        return report;
++    } catch (const std::exception&) {
++        auto report = failure("build", "BUILD_NATIVE_EXCEPTION",
++                              "Native code raised while building the draft");
++        attachMakerFailure(report, *maker, inputShape);
++        return report;
++    }
++
++    bool buildDone = false;
++    try {
++        buildDone = maker->IsDone();
++    } catch (const Standard_Failure&) {
++        auto report = failure("build", "BUILD_STATUS_OCCT_EXCEPTION",
++                              "OCCT raised while checking the draft build");
++        attachMakerFailure(report, *maker, inputShape);
++        return report;
++    } catch (const std::exception&) {
++        auto report = failure("build", "BUILD_STATUS_NATIVE_EXCEPTION",
++                              "Native code raised while checking the draft build");
++        attachMakerFailure(report, *maker, inputShape);
++        return report;
++    }
++    if (!buildDone) {
++        auto report = failure("build", "BUILD_FAILED", "OCCT did not complete the draft build");
++        attachMakerFailure(report, *maker, inputShape);
++        return report;
++    }
++
++    TopoDS_Shape result;
++    try {
++        result = maker->Shape();
++    } catch (const Standard_Failure&) {
++        auto report = failure("result-validation", "RESULT_OCCT_EXCEPTION",
++                              "OCCT raised while retrieving the draft result");
++        attachMakerFailure(report, *maker, inputShape);
++        return report;
++    } catch (const std::exception&) {
++        auto report = failure("result-validation", "RESULT_NATIVE_EXCEPTION",
++                              "Native code raised while retrieving the draft result");
++        attachMakerFailure(report, *maker, inputShape);
++        return report;
++    }
++    if (result.IsNull()) {
++        auto report = failure("result-validation", "NULL_RESULT",
++                              "OCCT completed without a result shape");
++        attachMakerFailure(report, *maker, inputShape);
++        return report;
++    }
++    if (result.ShapeType() != TopAbs_SOLID) {
++        auto report = failure("result-validation", "RESULT_NOT_TOP_LEVEL_SOLID",
++                              "Draft result is not a top-level solid");
++        attachMakerFailure(report, *maker, inputShape);
++        return report;
++    }
++
++    try {
++        if (!BRepCheck_Analyzer(result).IsValid()) {
++            auto report = failure("result-validation", "INVALID_RESULT_SOLID",
++                                  "OCCT produced a topologically invalid solid");
++            attachMakerFailure(report, *maker, inputShape);
++            return report;
++        }
++        if (!hasPositiveVolume(result)) {
++            auto report = failure("result-validation", "RESULT_NOT_POSITIVE_VOLUME",
++                                  "Draft result must have finite positive signed volume");
++            attachMakerFailure(report, *maker, inputShape);
++            return report;
++        }
++        const TopologyCounts resultTopology = topologyCounts(result);
++        if (resultTopology.solids != 1) {
++            auto report = failure("result-validation", "RESULT_NOT_SINGLE_SOLID",
++                                  "Draft result must contain exactly one solid");
++            attachMakerFailure(report, *maker, inputShape);
++            return report;
++        }
++        if (!(resultTopology == inputTopology)) {
++            auto report = failure("result-validation", "TOPOLOGY_COUNTS_CHANGED",
++                                  "Draft changed solid/shell/face/wire/edge/vertex counts");
++            attachMakerFailure(report, *maker, inputShape);
++            return report;
++        }
++    } catch (const Standard_Failure&) {
++        auto report = failure("result-validation", "RESULT_VALIDATION_OCCT_EXCEPTION",
++                              "OCCT raised while validating the draft result");
++        attachMakerFailure(report, *maker, inputShape);
++        return report;
++    } catch (const std::exception&) {
++        auto report = failure("result-validation", "RESULT_VALIDATION_NATIVE_EXCEPTION",
++                              "Native code raised while validating the draft result");
++        attachMakerFailure(report, *maker, inputShape);
++        return report;
++    }
++
++    try {
++        auto transfer = std::make_shared<InvariantCadDraftTransferState>();
++        transfer->result = result;
++        transfer->kernelInstanceToken = kernel.invariantcadInstanceToken_;
++
++        InvariantCadDraftReport report;
++        report.ok = true;
++        report.stage = "complete";
++        report.code = "OK";
++        report.message = "Atomic draft completed";
++        report.requestedSeedCount = requestedSeedCount;
++        report.addCount = addCount;
++        report.skippedSeedCount = skippedSeedCount;
++        report.buildCount = buildCount;
++        report.transfer_ = std::move(transfer);
++        try {
++            report.occtStatus = static_cast<int>(maker->Status());
++        } catch (...) {
++            report.occtStatus = -1;
++        }
++        return report;
++    } catch (const std::exception&) {
++        return failure("result-ownership", "RESULT_OWNERSHIP_NATIVE_EXCEPTION",
++                       "Native code could not own the validated draft result");
++    }
++}
