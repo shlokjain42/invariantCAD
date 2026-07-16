@@ -1,0 +1,243 @@
+# InvariantCAD
+
+Comprehensive, type-safe CAD-as-code for TypeScript.
+
+InvariantCAD represents a design as immutable, versioned JSON and evaluates it through replaceable geometry and sketch-solver backends. The public API never exposes WASM pointers or kernel-specific objects.
+
+> **Project status:** `0.1.0` is a working foundation and mesh-CAD vertical slice. It creates, measures, assembles, serializes, validates, and exports real watertight geometry. It is not yet an exact B-Rep replacement for SolidWorks, OpenCascade, or Parasolid; see the [support matrix](#support-matrix) and [roadmap](docs/roadmap.md).
+
+## Install
+
+```bash
+pnpm add invariantcad
+```
+
+Node.js 20 or newer is required. The core API is ESM and also targets modern browsers.
+
+## Quick start
+
+```ts
+import {
+  createEvaluator,
+  design,
+  mm,
+  plane,
+  vec2,
+} from "invariantcad";
+
+const cad = design("mounting-plate");
+
+const width = cad.parameter.length("width", mm(80), { min: mm(1) });
+const height = cad.parameter.length("height", mm(50), { min: mm(1) });
+const thickness = cad.parameter.length("thickness", mm(6), { min: mm(1) });
+const holeRadius = cad.parameter.length("holeRadius", mm(4));
+
+const profile = cad.sketch("plate-profile", plane.xy(), (sketch) => {
+  const outline = sketch.rectangle("outline", { width, height });
+  const hole = sketch.circle("hole", {
+    center: vec2(width.mul(0.25), mm(0)),
+    radius: holeRadius,
+  });
+
+  return sketch.profile(outline, { holes: [hole.loop()] });
+});
+
+const solid = cad.extrude("plate-solid", profile, {
+  distance: thickness,
+  symmetric: true,
+});
+const part = cad.part("plate", solid, { partNumber: "PLATE-001" });
+cad.output("plate", part);
+
+const document = cad.build();
+const evaluator = await createEvaluator();
+const result = await evaluator.evaluate(document, {
+  parameters: { width: 100 }, // base length unit is millimetres
+});
+
+if (!result.ok) {
+  console.error(result.diagnostics);
+} else {
+  try {
+    const plate = result.value.output("plate");
+    console.log(plate.measure());
+
+    const stl = plate.export("stl");
+    // `stl` is a Uint8Array ready for a file, response, or object store.
+  } finally {
+    result.value.dispose();
+  }
+}
+
+evaluator.dispose();
+```
+
+Every feature, entity, constraint, parameter, instance, and output has an explicit stable ID. Those IDs are the basis for reproducible diffs, caching, diagnostics, and future persistent-topology naming.
+
+## What works today
+
+### Modeling
+
+- Dimension-safe length, angle, and scalar expression trees
+- Parameters with defaults, limits, overrides, dependency resolution, and cycle detection
+- Box, cylinder/cone, and sphere primitives
+- Sketches on XY, XZ, and YZ planes
+- Points, lines, circles, arcs, polylines, rectangles, and regular polygons
+- Explicit outer loops and hole loops
+- Extrude, symmetric extrude, twist, taper, and revolve
+- Union, subtraction, and intersection
+- Translation, Euler rotation, nonuniform scale, and mirror
+- Parts with part number, material, description, and metadata
+- Fixed-placement and nested assemblies with shared part definitions
+
+### Sketch constraints
+
+The permissively licensed reference solver currently supports coincidence, horizontal, vertical, fixed, distance, X/Y distance, line length, parallel, perpendicular, equal length, angle, radius, diameter, equal radius, midpoint, and line-circle tangency.
+
+The solver API is replaceable. The built-in solver is intentionally a v0.1 reference implementation; industrial conflict isolation, redundant-constraint reporting, drag solving, and large sparse systems remain roadmap work.
+
+### Evaluation and interchange
+
+- Reliable manifold-mesh CSG through `manifold-3d` WebAssembly
+- Volume, surface area, axis-aligned bounds, genus, and kernel tolerance
+- Typed-array mesh extraction
+- Binary STL, ASCII STL, and OBJ export
+- Canonical JSON serialization and structural/semantic validation
+- SHA-256 semantic document hashes
+- Structured diagnostics instead of opaque geometry exceptions
+- Node and browser runtime support with configurable WASM location
+
+## Support matrix
+
+| Capability | `0.1.0` | Intended stable system |
+|---|---:|---:|
+| Versioned, kernel-neutral design IR | Yes | Yes |
+| Parametric feature graph | Yes | Yes |
+| Watertight mesh solids and CSG | Yes | Yes |
+| Sketch constraints | Reference solver | Pluggable industrial solvers |
+| Parts and fixed-placement assemblies | Yes | Yes |
+| Assembly mates and joints | No | Yes |
+| Exact NURBS/B-Rep geometry | No | OCCT backend |
+| STEP/IGES import and export | No | OCCT backend |
+| Fillet, chamfer, shell, draft | No | Exact backend |
+| Persistent face/edge selectors | Schema work | Yes |
+| Drawings, GD&T, PMI | No | Yes |
+| Sheet metal | No | Yes |
+| CAM and CAE adapters | No | Yes |
+| STL and OBJ export | Yes | Yes |
+
+Capabilities are negotiated by backends. InvariantCAD will not silently pretend a mesh operation is exact B-Rep or silently downgrade exact geometry.
+
+## Assemblies
+
+Modeling transforms create new geometry. Assembly placements create occurrences and preserve the shared part definition:
+
+```ts
+import { tf, vec3, mm } from "invariantcad";
+
+const product = cad.assembly("product", (assembly) => {
+  assembly.instance("left", part);
+  assembly.instance("right", part, {
+    placement: [tf.translate(vec3(mm(100), mm(0), mm(0)))],
+  });
+});
+
+cad.output("product", product);
+```
+
+Nested assemblies are flattened into occurrence paths such as `frame/left-bracket` during evaluation while retaining the original part node.
+
+## Documents and deterministic builds
+
+```ts
+import {
+  hashDocument,
+  parseDocument,
+  stringifyDocument,
+} from "invariantcad";
+
+const json = stringifyDocument(document, { pretty: true });
+const parsed = parseDocument(json);
+const semanticHash = await hashDocument(document);
+```
+
+Canonical serialization sorts record keys, normalizes negative zero, rejects non-finite numbers, and produces identical bytes regardless of feature construction order. Display metadata is excluded from semantic hashes unless requested.
+
+The document schema version is independent of the npm package version.
+
+## Diagnostics
+
+Evaluation returns `CadResult<T>`:
+
+```ts
+if (!result.ok) {
+  for (const issue of result.diagnostics) {
+    console.error(issue.code, issue.path, issue.message);
+  }
+}
+```
+
+Stable codes include `REFERENCE_MISSING`, `GRAPH_CYCLE`, `PARAMETER_OUT_OF_RANGE`, `SKETCH_OVER_CONSTRAINED`, `EMPTY_RESULT`, `KERNEL_CAPABILITY_MISSING`, and `EVALUATION_ABORTED`.
+
+## CLI
+
+The CLI operates on serialized InvariantCAD documents:
+
+```bash
+invariantcad validate design.invariantcad.json
+invariantcad inspect design.invariantcad.json
+invariantcad inspect design.invariantcad.json --parameters dimensions.json
+invariantcad export design.invariantcad.json --output plate --to plate.stl
+invariantcad export design.invariantcad.json --output plate --format obj --to plate.obj
+```
+
+Parameter JSON values use base units: millimetres, radians, and unitless scalars.
+
+## Browser initialization
+
+Most Node.js users need no configuration. Browser bundlers that do not automatically resolve the Manifold WASM asset can supply its URL:
+
+```ts
+import wasmUrl from "manifold-3d/manifold.wasm?url";
+import { createEvaluator } from "invariantcad";
+
+const evaluator = await createEvaluator({ manifold: { wasmUrl } });
+```
+
+The `?url` syntax is bundler-specific; InvariantCAD itself only accepts a normal URL and does not couple its API to Vite.
+
+## Architecture
+
+```text
+TypeScript builders
+        │
+        ▼
+immutable DesignDocument v1 ──► validation / canonical JSON / hashing
+        │
+        ├──► sketch-solver protocol ──► reference solver (v0.1)
+        │
+        └──► geometry-kernel protocol ──► Manifold mesh kernel
+                                      └─► exact OCCT kernel (planned)
+        │
+        ▼
+evaluated parts / assemblies ──► measurement / mesh / STL / OBJ
+```
+
+See [Architecture](docs/architecture.md) for the invariants and backend contracts.
+
+## Development
+
+```bash
+pnpm install
+pnpm check
+pnpm test
+pnpm build
+pnpm example:bracket
+pnpm verify
+```
+
+The bracket example writes its document and STL to `.artifacts/`.
+
+## License
+
+InvariantCAD is Apache-2.0 licensed. The default mesh backend uses the Apache-2.0 licensed Manifold library. Dependency notices and source-license obligations must be preserved in distributions.

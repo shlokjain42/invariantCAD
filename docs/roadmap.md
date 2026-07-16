@@ -1,0 +1,59 @@
+# InvariantCAD roadmap
+
+InvariantCAD's goal is one coherent TypeScript CAD system, not one monolithic geometry algorithm. Specialized kernels and solvers sit behind versioned protocols while the TypeScript API, document model, diagnostics, and design semantics remain stable.
+
+## 0.1 — executable foundation
+
+- Versioned, canonical design IR
+- Dimensioned expressions and bounded parameters
+- Sketch entities, explicit profiles, and reference constraint solver
+- Mesh primitives, extrude, revolve, booleans, and transforms
+- Parts and fixed-placement nested assemblies
+- Measurement, mesh extraction, STL/OBJ export
+- Validation, diagnostics, hashing, CLI, examples, and conformance tests
+
+## 0.2 — exact mechanical modeling
+
+- OpenCascade WASM/native backend
+- Exact lines, circles, conics, NURBS curves, and NURBS surfaces
+- STEP, IGES, and OCCT BREP import/export
+- Fillet, chamfer, shell, draft, sweep, loft, pipe, and offset
+- Shape healing and validity diagnostics
+- Explicit exact-to-mesh conversion with tolerances
+
+## 0.3 — persistent design intent
+
+- Feature provenance for generated and modified topology
+- Semantic face/edge selectors
+- Geometry and adjacency signatures
+- Ambiguity and missing-selection diagnostics
+- Incremental feature hashes and cross-run cache
+- Change-impact and geometric diff APIs
+
+## 0.4 — mechanical assemblies
+
+- Assembly mate/joint solver protocol
+- Planar, cylindrical, concentric, distance, angle, gear, rack, and screw relations
+- Degrees of freedom and motion studies
+- Interference, clearance, and contact queries
+- Bills of material and configurations
+
+## 0.5 — documentation and manufacturing
+
+- Drawing views, sections, details, dimensions, tolerances, and title blocks
+- PMI and GD&T model
+- DXF/SVG/PDF drawing export
+- Sheet-metal bends, flat patterns, and bend tables
+- CAM stock, setups, operations, tool libraries, and postprocessor protocol
+- Additive-manufacturing checks and 3MF export
+
+## 1.0 criteria
+
+- Stable document schema and migration policy
+- Stable public TypeScript API
+- Exact B-Rep and mesh backends passing the conformance corpus
+- Industrial sketch and assembly solver integrations
+- Persistent topology robust across the published torture suite
+- Browser, Node, worker, and server deployments
+- Reproducible packages, SBOM, license notices, and security policy
+- Performance budgets and leak-free long-running evaluation

@@ -1,0 +1,11 @@
+node_modules/
+dist/
+coverage/
+.artifacts/
+*.tgz
+*.stl
+*.obj
+*.glb
+*.step
+.DS_Store
+*.log
