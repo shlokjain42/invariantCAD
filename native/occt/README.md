@@ -117,11 +117,11 @@ and result occurrences with `IsEqual`, so an orientation-only change is
 classified as modified.
 
 This ABI is not yet a document node, `GeometryKernel` method, capability, or
-exported TypeScript feature. Public draft remains gated on the TypeScript
-lineage reducer and a loader path that receives the matched generated
-JavaScript module factory together with its WASM binary. A stock 3.7.0 module
-without the recognized facade probe remains usable but must not advertise
-draft.
+exported TypeScript feature. A fail-closed TypeScript lineage reducer now
+exists, but public draft remains gated on wiring it through an ownership-safe
+adapter and a loader path that receives the matched generated JavaScript module
+factory together with its WASM binary. A stock 3.7.0 module without the
+recognized facade probe remains usable but must not advertise draft.
 
 ## License, source, and replacement boundary
 
