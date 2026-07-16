@@ -17,7 +17,9 @@ import {
 } from "../src/index.js";
 import { createOcctKernel } from "../src/occt-kernel.js";
 
-function roleDocument(): ReturnType<ReturnType<typeof design>["build"]> {
+function roleDocument(
+  feature: "fillet" | "chamfer" = "fillet",
+): ReturnType<ReturnType<typeof design>["build"]> {
   const cad = design("topology-role-validation");
   const profile = cad.sketch("profile", plane.xy(), (sketch) =>
     sketch.profile(
@@ -38,7 +40,12 @@ function roleDocument(): ReturnType<ReturnType<typeof design>["build"]> {
     .select();
   cad.output(
     "rounded",
-    cad.fillet("rounded", extrusion, { edges: endRim, radius: mm(1) }),
+    feature === "fillet"
+      ? cad.fillet("rounded", extrusion, { edges: endRim, radius: mm(1) })
+      : cad.chamfer("rounded", extrusion, {
+          edges: endRim,
+          distance: mm(1),
+        }),
   );
   return cad.build();
 }
@@ -230,16 +237,28 @@ describe("closed topology role validation", () => {
     {
       capability: "semanticRoles" as const,
       missing: "semantic-roles",
+      feature: "fillet" as const,
     },
     {
       capability: "sketchSources" as const,
       missing: "sketch-sources",
+      feature: "fillet" as const,
+    },
+    {
+      capability: "semanticRoles" as const,
+      missing: "semantic-roles",
+      feature: "chamfer" as const,
+    },
+    {
+      capability: "sketchSources" as const,
+      missing: "sketch-sources",
+      feature: "chamfer" as const,
     },
   ])(
-    "reports missing $missing before invoking topology or fillet",
-    async ({ capability, missing }) => {
+    "$feature reports missing $missing before invoking topology or the feature",
+    async ({ capability, missing, feature }) => {
       const delegate = await createOcctKernel();
-      const invoked = { topology: false, fillet: false };
+      const invoked = { topology: false, feature: false };
       const kernel = new Proxy(delegate, {
         get(target, property) {
           if (property === "id") return `without-${missing}`;
@@ -266,12 +285,12 @@ describe("closed topology role validation", () => {
               return target.topology!(...arguments_);
             };
           }
-          if (property === "fillet") {
-            return (
-              ...arguments_: Parameters<NonNullable<GeometryKernel["fillet"]>>
-            ) => {
-              invoked.fillet = true;
-              return target.fillet!(...arguments_);
+          if (property === feature) {
+            return (...arguments_: any[]) => {
+              invoked.feature = true;
+              return (target[feature] as (...values: any[]) => unknown)(
+                ...arguments_,
+              );
             };
           }
           const value: unknown = Reflect.get(target, property, target);
@@ -280,10 +299,10 @@ describe("closed topology role validation", () => {
       }) as GeometryKernel;
       const evaluator = await createEvaluator({ kernel });
       try {
-        const result = await evaluator.evaluate(roleDocument());
+        const result = await evaluator.evaluate(roleDocument(feature));
 
         expect(result.ok).toBe(false);
-        expect(invoked).toEqual({ topology: false, fillet: false });
+        expect(invoked).toEqual({ topology: false, feature: false });
         expect(result.diagnostics).toContainEqual(
           expect.objectContaining({
             code: "KERNEL_CAPABILITY_MISSING",

@@ -13,7 +13,8 @@ export type KernelFeature =
   | "revolve"
   | "boolean"
   | "transform"
-  | "fillet";
+  | "fillet"
+  | "chamfer";
 export type KernelCapabilityKind =
   | "primitive"
   | "feature"
@@ -162,8 +163,16 @@ export interface GeometryKernel {
   ): KernelShape;
   fillet?(
     shape: KernelShape,
+    /** Each key seeds a maximal tangent-connected contour. */
     edges: readonly KernelTopologyKey[],
     options: { readonly radius: number },
+    context?: KernelFeatureContext,
+  ): KernelShape;
+  chamfer?(
+    shape: KernelShape,
+    /** Each key seeds a maximal tangent-connected contour. */
+    edges: readonly KernelTopologyKey[],
+    options: { readonly distance: number },
     context?: KernelFeatureContext,
   ): KernelShape;
   topology?(shape: KernelShape): KernelTopologySnapshot;

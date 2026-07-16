@@ -823,6 +823,18 @@ function validateNode(
       );
       expression(node.radius, "length", "radius");
       break;
+    case "chamfer":
+      validateRef(node.input, "solid", document, `${path}/input`, diagnostics);
+      validateTopologySelection(
+        node.edges,
+        "edge",
+        node.input.node,
+        document,
+        `${path}/edges`,
+        diagnostics,
+      );
+      expression(node.distance, "length", "distance");
+      break;
     case "part":
       validateRef(node.solid, "solid", document, `${path}/solid`, diagnostics);
       break;

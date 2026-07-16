@@ -441,6 +441,7 @@ export class DesignBuilder {
     id: string,
     input: SolidRef,
     options: {
+      /** Seeds for maximal tangent-edge contours. */
       readonly edges: TopologySelection<"edge">;
       readonly radius: LengthExpression;
     },
@@ -460,6 +461,34 @@ export class DesignBuilder {
       input: input.toIR(),
       edges: options.edges.toIR(),
       radius: options.radius.ir,
+    });
+    return new SolidRef(this, key);
+  }
+
+  chamfer(
+    id: string,
+    input: SolidRef,
+    options: {
+      /** Seeds for maximal tangent-edge contours. */
+      readonly edges: TopologySelection<"edge">;
+      readonly distance: LengthExpression;
+    },
+  ): SolidRef {
+    this.assertOwned(input);
+    if (!(options.edges instanceof TopologySelection)) {
+      throw new TypeError("Chamfer edges must be an explicit topology selection");
+    }
+    if (options.edges.topology !== "edge") {
+      throw new TypeError("A chamfer requires an edge topology selection");
+    }
+    for (const reference of options.edges.references) {
+      this.assertOwned(reference);
+    }
+    const key = this.addNode(id, {
+      kind: "chamfer",
+      input: input.toIR(),
+      edges: options.edges.toIR(),
+      distance: options.distance.ir,
     });
     return new SolidRef(this, key);
   }

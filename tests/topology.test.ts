@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createEvaluator,
+  createManifoldKernel,
   design,
   hashDocument,
   parseDocumentValue,
@@ -10,8 +11,11 @@ import {
   topology,
   vec3,
   mm,
+  nodeDependencies,
+  outputKindForNode,
   type KernelEdgeDescriptor,
   type KernelFaceDescriptor,
+  type GeometryKernel,
   type KernelTopologyKey,
   type KernelTopologySnapshot,
 } from "../src/index.js";
@@ -137,6 +141,79 @@ describe("semantic topology selections", () => {
     );
   });
 
+  it("builds, validates, and canonically serializes a selected-edge chamfer", async () => {
+    const cad = design("beveled-box");
+    const box = cad.box("box", {
+      size: vec3(mm(10), mm(20), mm(30)),
+    });
+    const edges = topology.edges
+      .createdBy(box)
+      .and(topology.edges.direction(scalarVec3(0, 0, 1)))
+      .exactly(4);
+    const beveled = cad.chamfer("beveled", box, {
+      edges,
+      distance: mm(2),
+    });
+    cad.output("beveled", beveled);
+    const document = cad.build();
+
+    expect(document.nodes[beveled.node]).toEqual({
+      kind: "chamfer",
+      input: { node: "box", kind: "solid" },
+      edges: expect.objectContaining({
+        topology: "edge",
+        cardinality: { min: 4, max: 4 },
+      }),
+      distance: { op: "literal", dimension: "length", value: 2 },
+    });
+    expect(nodeDependencies(document.nodes[beveled.node]!)).toEqual([
+      { node: "box", kind: "solid" },
+    ]);
+    expect(outputKindForNode(document.nodes[beveled.node]!)).toBe("solid");
+
+    const reordered = JSON.parse(stringifyDocument(document)) as any;
+    reordered.nodes.beveled.edges.query.queries.reverse();
+    const parsed = parseDocumentValue(reordered);
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      expect(await hashDocument(parsed.value)).toBe(await hashDocument(document));
+    }
+
+    const unknownField = JSON.parse(stringifyDocument(document)) as any;
+    unknownField.nodes.beveled.mode = "distance-angle";
+    expect(parseDocumentValue(unknownField)).toEqual(
+      expect.objectContaining({ ok: false }),
+    );
+
+    const missingDistance = JSON.parse(stringifyDocument(document)) as any;
+    delete missingDistance.nodes.beveled.distance;
+    expect(parseDocumentValue(missingDistance).diagnostics).toContainEqual(
+      expect.objectContaining({ code: "IR_INVALID" }),
+    );
+
+    const scalarDistance = JSON.parse(stringifyDocument(document)) as any;
+    scalarDistance.nodes.beveled.distance.dimension = "scalar";
+    const wrongDimension = parseDocumentValue(scalarDistance);
+    expect(wrongDimension.ok).toBe(false);
+    expect(wrongDimension.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "EXPRESSION_DIMENSION_MISMATCH",
+        path: "/nodes/beveled/distance",
+      }),
+    );
+
+    const faceSelection = JSON.parse(stringifyDocument(document)) as any;
+    faceSelection.nodes.beveled.edges.topology = "face";
+    const wrongTopology = parseDocumentValue(faceSelection);
+    expect(wrongTopology.ok).toBe(false);
+    expect(wrongTopology.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "TOPOLOGY_SELECTOR_INVALID",
+        path: "/nodes/beveled/edges/topology",
+      }),
+    );
+  });
+
   it("rejects cross-design and non-ancestor provenance references", () => {
     const cad = design("first");
     const box = cad.box("box", { size: vec3(mm(10), mm(10), mm(10)) });
@@ -154,6 +231,27 @@ describe("semantic topology selections", () => {
         radius: mm(1),
       }),
     ).toThrow("cross design boundaries");
+
+    expect(() =>
+      cad.chamfer("foreign-chamfer", box, {
+        edges: topology.edges.createdBy(foreign).exactly(12),
+        distance: mm(1),
+      }),
+    ).toThrow("cross design boundaries");
+
+    expect(() =>
+      cad.chamfer("faces", box, {
+        edges: topology.faces.all().select() as any,
+        distance: mm(1),
+      }),
+    ).toThrow("edge topology selection");
+
+    expect(() =>
+      cad.chamfer("fake", box, {
+        edges: { topology: "edge" } as any,
+        distance: mm(1),
+      }),
+    ).toThrow("explicit topology selection");
 
     const rounded = cad.fillet("rounded", box, {
       edges: topology.edges.createdBy(box).exactly(12),
@@ -379,6 +477,125 @@ describe("semantic topology selections", () => {
       );
     } finally {
       evaluator.dispose();
+    }
+  });
+
+  it("fails before selection when the active kernel cannot chamfer", async () => {
+    const evaluator = await createEvaluator();
+    try {
+      const cad = design("unsupported-chamfer");
+      const box = cad.box("box", {
+        size: vec3(mm(10), mm(10), mm(10)),
+      });
+      cad.output(
+        "beveled",
+        cad.chamfer("beveled", box, {
+          edges: topology.edges.createdBy(box).exactly(12),
+          distance: mm(1),
+        }),
+      );
+      const result = await evaluator.evaluate(cad.build());
+      expect(result.ok).toBe(false);
+      expect(result.diagnostics).toContainEqual(
+        expect.objectContaining({
+          code: "KERNEL_CAPABILITY_MISSING",
+          node: "beveled",
+          path: "/nodes/beveled",
+          details: expect.objectContaining({ capability: "chamfer" }),
+        }),
+      );
+    } finally {
+      evaluator.dispose();
+    }
+  });
+
+  it("reports malformed chamfer capability declarations and missing topology", async () => {
+    const document = (() => {
+      const cad = design("chamfer-preflight");
+      const box = cad.box("box", {
+        size: vec3(mm(10), mm(10), mm(10)),
+      });
+      cad.output(
+        "beveled",
+        cad.chamfer("beveled", box, {
+          edges: topology.edges.all().atLeast(1),
+          distance: mm(1),
+        }),
+      );
+      return cad.build();
+    })();
+
+    const malformedDelegate = await createManifoldKernel();
+    const malformed = new Proxy(malformedDelegate, {
+      get(target, property) {
+        if (property === "id") return "malformed-chamfer";
+        if (property === "capabilities") {
+          return {
+            ...target.capabilities,
+            features: [...target.capabilities.features, "chamfer"],
+          };
+        }
+        const value: unknown = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as GeometryKernel;
+    const malformedEvaluator = await createEvaluator({ kernel: malformed });
+    try {
+      const result = await malformedEvaluator.evaluate(document);
+      expect(result.ok).toBe(false);
+      expect(result.diagnostics).toContainEqual(
+        expect.objectContaining({
+          code: "KERNEL_ERROR",
+          node: "beveled",
+          details: expect.objectContaining({
+            capability: "chamfer",
+            protocolViolation: true,
+          }),
+        }),
+      );
+    } finally {
+      malformedEvaluator.dispose();
+    }
+
+    const noTopologyDelegate = await createManifoldKernel();
+    let invoked = false;
+    const noTopology = new Proxy(noTopologyDelegate, {
+      get(target, property) {
+        if (property === "id") return "chamfer-without-topology";
+        if (property === "capabilities") {
+          return {
+            ...target.capabilities,
+            features: [...target.capabilities.features, "chamfer"],
+          };
+        }
+        if (property === "chamfer") {
+          return () => {
+            invoked = true;
+            throw new Error("Chamfer must not be invoked without topology");
+          };
+        }
+        const value: unknown = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as GeometryKernel;
+    const noTopologyEvaluator = await createEvaluator({ kernel: noTopology });
+    try {
+      const result = await noTopologyEvaluator.evaluate(document);
+      expect(result.ok).toBe(false);
+      expect(invoked).toBe(false);
+      expect(result.diagnostics).toContainEqual(
+        expect.objectContaining({
+          code: "KERNEL_CAPABILITY_MISSING",
+          node: "beveled",
+          path: "/nodes/beveled/edges",
+          details: expect.objectContaining({
+            kind: "topology",
+            capability: "edge-selection",
+          }),
+        }),
+      );
+    } finally {
+      noTopologyEvaluator.dispose();
     }
   });
 });

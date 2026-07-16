@@ -23,7 +23,7 @@ function canonicalizeDocumentTopology(
     nodes: Object.fromEntries(
       Object.entries(document.nodes).map(([id, node]) => [
         id,
-        node.kind === "fillet"
+        node.kind === "fillet" || node.kind === "chamfer"
           ? {
               ...node,
               edges: canonicalizeTopologySelectionIR(node.edges),

@@ -34,7 +34,11 @@ Explicit names are required for public features and sketch entities. This makes 
 
 Canonical serialization sorts object keys and rejects values JSON cannot preserve. Semantic hashes exclude display metadata by default.
 
+Document schema v1 remains pre-freeze while the unreleased `0.1.0` foundation is assembled. Publishing `0.1.0` freezes that grammar: later strict grammar expansions require a new document version and an explicit migration path. Compatibility tests pin the canonical hash of a pre-chamfer v1 document.
+
 Topology selectors are also plain document data. Commutative `and` and `or` operands are flattened, deduplicated, and canonically sorted for serialization and hashing. A selector resolves to an unordered set and must state its accepted cardinality; evaluation never breaks ambiguity by taking the first kernel result.
+
+Selected edges for fillets and chamfers are tangent-contour seeds, not hard modification boundaries. Every seed expands to the maximal connected contour whose consecutive edges are tangent and whose incident face chains continue tangentially on both sides. Duplicate or overlapping seeds are idempotent, and selector cardinality applies before this expansion. Backends use their effective B-Rep tolerances to classify continuity, so geometry near a tolerance boundary can still differ between kernels; a future explicit stopping-boundary mode must be a distinct serialized contract.
 
 ### Solver layer
 
@@ -46,7 +50,7 @@ The built-in reference solver uses damped nonlinear least squares with numerical
 
 ### Kernel layer
 
-`GeometryKernel` owns primitives, profile features, booleans, transformations, tessellation, measurements, status, and lifetime management.
+`GeometryKernel` owns primitives, profile features, booleans, transformations, selected-edge fillets/chamfers, tessellation, measurements, status, and lifetime management.
 
 The protocol is explicitly versioned. Backends declare primitive, feature, native-import, native-export, and topology capabilities; the evaluator rejects unsupported operations before invoking them. Shape validity is normalized into backend-neutral status data, while meshing accepts explicit linear/angular deflection options. Stable feature IDs and cancellation signals travel through `KernelFeatureContext` without entering kernel shape handles.
 
@@ -54,7 +58,7 @@ A topology-capable kernel returns an evaluation-scoped snapshot of faces and edg
 
 Semantic roles are a closed, kernel-neutral document vocabulary. A role records construction intent in per-subshape lineage: signed local box faces, unique box face-intersection edges, cylinder/cone caps and rims, the sphere surface, and extrusion caps/sides/rims/lateral edges. Extrusion side faces and start/end rim edges may additionally carry the sketch and curve entity that generated them. Kernel seams, poles, apex degeneracies, and other implementation artifacts remain unnamed.
 
-The OCCT adapter proves broad feature lineage for primitives, extrusions, revolutions, and topology-preserving transforms. It classifies primitive roles from construction-aware geometry and maps extrusion sources with analytic per-curve seeds. A transform applies the identical operation sequence to retained input subshapes, then requires one-to-one geometric coverage before carrying their lineage forward. A missing or ambiguous match downgrades the snapshot to partial history instead of silently retargeting a selection. Boolean and fillet evolution remains partial because the pinned binding does not expose complete edge history. An origin selector against partial history fails explicitly; geometry-only selectors can still operate because they do not claim lost provenance.
+The OCCT adapter proves broad feature lineage for primitives, extrusions, revolutions, and topology-preserving transforms. It classifies primitive roles from construction-aware geometry and maps extrusion sources with analytic per-curve seeds. A transform applies the identical operation sequence to retained input subshapes, then requires one-to-one geometric coverage before carrying their lineage forward. A missing or ambiguous match downgrades the snapshot to partial history instead of silently retargeting a selection. Boolean, fillet, and chamfer evolution remains partial because the pinned binding does not expose complete edge history or all generated subshapes. An origin selector against partial history fails explicitly; geometry-only selectors can still operate because they do not claim lost provenance.
 
 `ManifoldKernel` is the initial implementation. It copies upstream mesh buffers into InvariantCAD's stable `MeshData`, checks kernel status, and destroys every WASM object. The public API sees only typed arrays and measurements.
 

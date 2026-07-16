@@ -76,6 +76,7 @@ export {
   type AssemblyNodeIR,
   type BooleanNodeIR,
   type BoxNodeIR,
+  type ChamferNodeIR,
   type CircleEntityIR,
   type CylinderNodeIR,
   type DesignDocument,

@@ -280,8 +280,17 @@ export interface TopologySelectionIR<
 export interface FilletNodeIR {
   readonly kind: "fillet";
   readonly input: RefIR<"solid">;
+  /** Seeds for maximal tangent-edge contours, not hard modification boundaries. */
   readonly edges: TopologySelectionIR<"edge">;
   readonly radius: ExpressionIR;
+}
+
+export interface ChamferNodeIR {
+  readonly kind: "chamfer";
+  readonly input: RefIR<"solid">;
+  /** Seeds for maximal tangent-edge contours, not hard modification boundaries. */
+  readonly edges: TopologySelectionIR<"edge">;
+  readonly distance: ExpressionIR;
 }
 
 export interface PartNodeIR {
@@ -315,6 +324,7 @@ export type NodeIR =
   | BooleanNodeIR
   | TransformNodeIR
   | FilletNodeIR
+  | ChamferNodeIR
   | PartNodeIR
   | AssemblyNodeIR;
 
@@ -349,6 +359,7 @@ export function nodeDependencies(node: NodeIR): readonly RefIR[] {
     case "transform":
       return [node.input];
     case "fillet":
+    case "chamfer":
       return [node.input];
     case "part":
       return [node.solid];

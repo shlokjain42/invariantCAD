@@ -54,7 +54,7 @@ try {
     join(consumer, "smoke.mjs"),
     [
       'import { writeFile } from "node:fs/promises";',
-      'import { TOPOLOGY_ROLE_RULES, angleVec3, createEvaluator, deg, design, mm, plane, scalarVec3, stringifyDocument, tf, topology, vec3 } from "invariantcad";',
+      'import { TOPOLOGY_ROLE_RULES, angleVec3, createEvaluator, deg, design, kernelSupports, mm, plane, scalarVec3, stringifyDocument, tf, topology, vec3 } from "invariantcad";',
       'import { createOcctKernel } from "invariantcad/kernels/occt";',
       "",
       'const cad = design("package-smoke");',
@@ -87,6 +87,11 @@ try {
       '  if (vertical.length !== 4) throw new Error("Unexpected vertical edge count");',
       "  const rounded = exactKernel.fillet(exactBox, vertical.map((edge) => edge.key), { radius: 0.2 });",
       '  if (!(exactKernel.measure(rounded).volume < 24)) throw new Error("Fillet did not remove material");',
+      '  if (!kernelSupports(exactKernel.capabilities, "feature", "chamfer")) throw new Error("Exact chamfer capability was not packaged");',
+      "  const beveled = exactKernel.chamfer(exactBox, [vertical[0].key], { distance: 0.2 });",
+      '  if (Math.abs(exactKernel.measure(beveled).volume - 23.92) > 1e-8) throw new Error("Unexpected exact chamfer volume");',
+      '  if (exactKernel.topology(beveled).history !== "partial") throw new Error("Chamfer history boundary was not preserved");',
+      "  exactKernel.disposeShape(beveled);",
       "  exactKernel.disposeShape(rounded);",
       "  exactKernel.disposeShape(exactBox);",
       "} finally {",
@@ -98,8 +103,25 @@ try {
       'const provenanceMoved = provenanceCad.transform("moved", provenanceExtrusion, [tf.rotate(angleVec3(deg(0), deg(0), deg(90))), tf.translate(vec3(mm(100), mm(5), mm(7)))]);',
       'const provenanceEdges = topology.edges.createdBy(provenanceExtrusion, { role: "extrude.edge.end-rim", source: { sketch: provenanceProfile, entity: "outline.e1" } }).and(topology.edges.modifiedBy(provenanceMoved)).select();',
       'provenanceCad.output("rounded", provenanceCad.fillet("rounded", provenanceMoved, { edges: provenanceEdges, radius: mm(2) }));',
-      "const provenanceJson = stringifyDocument(provenanceCad.build());",
+      'provenanceCad.output("beveled", provenanceCad.chamfer("beveled", provenanceMoved, { edges: provenanceEdges, distance: mm(2) }));',
+      "const provenanceDocument = provenanceCad.build();",
+      "const provenanceJson = stringifyDocument(provenanceDocument);",
       'if (!provenanceJson.includes("extrude.edge.end-rim") || !provenanceJson.includes("outline.e1")) throw new Error("Semantic provenance was not serialized");',
+      'if (!provenanceJson.includes("chamfer") || !provenanceJson.includes("distance")) throw new Error("Chamfer was not serialized");',
+      'await writeFile("model-chamfer.invariantcad.json", provenanceJson);',
+      "const provenanceEvaluator = await createEvaluator({ kernel: await createOcctKernel() });",
+      "try {",
+      '  const result = await provenanceEvaluator.evaluate(provenanceDocument, { outputs: ["beveled"] });',
+      "  if (!result.ok) throw new Error(JSON.stringify(result.diagnostics));",
+      "  try {",
+      '    const volume = result.value.output("beveled").measure().volume;',
+      '    if (Math.abs(volume - 7960) > 1e-8) throw new Error("Unexpected semantic chamfer volume " + volume);',
+      "  } finally {",
+      "    result.value.dispose();",
+      "  }",
+      "} finally {",
+      "  provenanceEvaluator.dispose();",
+      "}",
       'const filletCad = design("package-fillet");',
       'const filletBox = filletCad.box("box", { size: vec3(mm(10), mm(20), mm(30)) });',
       'const filletEdges = topology.edges.createdBy(filletBox).and(topology.edges.direction(scalarVec3(0, 0, 1))).exactly(4);',
@@ -112,15 +134,25 @@ try {
   await writeFile(
     join(consumer, "type-smoke.ts"),
     [
-      'import { EDGE_TOPOLOGY_ROLES, FACE_TOPOLOGY_ROLES, TOPOLOGY_ROLE_RULES, TOPOLOGY_ROLES, angleVec3, deg, design, mm, plane, scalarVec3, tf, topology, vec3, type DesignDocument, type EdgeTopologyRole, type FaceTopologyRole, type ProfileRef, type SolidRef, type TopologyOriginOptions, type TopologyRole, type TopologySelection } from "invariantcad";',
+      'import { EDGE_TOPOLOGY_ROLES, FACE_TOPOLOGY_ROLES, TOPOLOGY_ROLE_RULES, TOPOLOGY_ROLES, angleVec3, deg, design, mm, plane, scalarVec3, tf, topology, vec3, type ChamferNodeIR, type DesignDocument, type EdgeTopologyRole, type FaceTopologyRole, type ProfileRef, type SolidRef, type TopologyOriginOptions, type TopologyRole, type TopologySelection } from "invariantcad";',
       'import { createOcctKernel, type OcctKernelOptions } from "invariantcad/kernels/occt";',
       "",
       'const cad = design("type-smoke");',
       'const solid: SolidRef = cad.box("solid", { size: vec3(mm(1), mm(2), mm(3)) });',
       'const edges = topology.edges.createdBy(solid).and(topology.edges.direction(scalarVec3(0, 0, 1))).exactly(4);',
       'const rounded: SolidRef = cad.fillet("rounded", solid, { edges, radius: mm(0.1) });',
+      'const beveled: SolidRef = cad.chamfer("beveled", solid, { edges, distance: mm(0.1) });',
+      "// @ts-expect-error Chamfers require edge selections.",
+      'cad.chamfer("invalid-faces", solid, { edges: topology.faces.all().select(), distance: mm(0.1) });',
+      "// @ts-expect-error Chamfer distance must be a length expression.",
+      'cad.chamfer("invalid-distance", solid, { edges, distance: deg(45) });',
       'cad.output("solid", rounded);',
+      'cad.output("beveled", beveled);',
       "const document: DesignDocument = cad.build();",
+      'const maybeChamfer = document.nodes[beveled.node];',
+      'if (maybeChamfer?.kind !== "chamfer") throw new Error("Missing chamfer IR");',
+      'const chamferNode: ChamferNodeIR = maybeChamfer;',
+      'if (chamferNode.distance.dimension !== "length") throw new Error("Invalid chamfer distance type");',
       "const options: OcctKernelOptions = {};",
       "void createOcctKernel(options);",
       "void document;",
@@ -143,7 +175,9 @@ try {
       "// @ts-expect-error Modified lineage cannot carry creation roles or sketch sources.",
       "topology.edges.modifiedBy(moved, origin);",
       'const provenanceRounded = provenanceCad.fillet("rounded", moved, { edges: selected, radius: mm(2) });',
+      'const provenanceBeveled: SolidRef = provenanceCad.chamfer("beveled", moved, { edges: selected, distance: mm(2) });',
       'provenanceCad.output("rounded", provenanceRounded);',
+      'provenanceCad.output("beveled", provenanceBeveled);',
       "const provenanceDocument: DesignDocument = provenanceCad.build();",
       "const allRoles: readonly TopologyRole[] = TOPOLOGY_ROLES;",
       "const edgeRoles: readonly EdgeTopologyRole[] = EDGE_TOPOLOGY_ROLES;",
@@ -194,6 +228,7 @@ try {
   );
   run(bin, ["--help"], consumer);
   run(bin, ["validate", "model.invariantcad.json"], consumer);
+  run(bin, ["validate", "model-chamfer.invariantcad.json"], consumer);
   run(
     bin,
     ["export", "model.invariantcad.json", "--to", "model.step"],
@@ -201,6 +236,21 @@ try {
   );
   if ((await stat(join(consumer, "model.step"))).size < 100) {
     throw new Error("Installed CLI produced an empty STEP file");
+  }
+  run(
+    bin,
+    [
+      "export",
+      "model-chamfer.invariantcad.json",
+      "--output",
+      "beveled",
+      "--to",
+      "beveled.step",
+    ],
+    consumer,
+  );
+  if ((await stat(join(consumer, "beveled.step"))).size < 100) {
+    throw new Error("Installed CLI produced an empty chamfer STEP file");
   }
   process.stdout.write("Packed package smoke test passed.\n");
 } finally {

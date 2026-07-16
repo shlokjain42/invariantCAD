@@ -50,7 +50,11 @@ describe("document IR", () => {
   it("uses semantic hashes that ignore display metadata by default", async () => {
     const first = orderedDocument(false, "first");
     const second = orderedDocument(false, "second");
-    expect(await hashDocument(first)).toBe(await hashDocument(second));
+    const firstHash = await hashDocument(first);
+    expect(firstHash).toBe(await hashDocument(second));
+    expect(firstHash).toBe(
+      "3fbe5c59c8de1daaaf6146c2875c491817533f5818059a0c58be0d32fdb34565",
+    );
     expect(await hashDocument(first, { includeMetadata: true })).not.toBe(
       await hashDocument(second, { includeMetadata: true }),
     );

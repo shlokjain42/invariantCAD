@@ -38,6 +38,7 @@ import { curveStart } from "./protocol/profile.js";
 
 const OCCT_SHAPE = Symbol("InvariantCAD.OcctShape");
 const TOPOLOGY_HASH_UPPER_BOUND = 2_147_483_647;
+let nextTopologyNamespace = 1;
 
 type TopologyHistory = KernelTopologySnapshot["history"];
 
@@ -126,11 +127,12 @@ function vectorFromOcct(value: OcctVec3): Vec3 {
 }
 
 function topologyKey(
+  namespace: number,
   serial: number,
   topology: "face" | "edge",
   index: number,
 ): KernelTopologyKey {
-  return `${serial}:${topology}:${index}` as KernelTopologyKey;
+  return `${namespace}:${serial}:${topology}:${index}` as KernelTopologyKey;
 }
 
 function uniqueLineage(
@@ -220,7 +222,14 @@ class OcctKernel implements GeometryKernel {
     representation: "brep",
     exact: true,
     primitives: ["box", "cylinder", "sphere"],
-    features: ["extrude", "revolve", "boolean", "transform", "fillet"],
+    features: [
+      "extrude",
+      "revolve",
+      "boolean",
+      "transform",
+      "fillet",
+      "chamfer",
+    ],
     nativeImports: ["step", "brep", "brep-binary"],
     nativeExports: ["step", "brep", "brep-binary"],
     topology: {
@@ -236,6 +245,7 @@ class OcctKernel implements GeometryKernel {
   private readonly tessellation: MeshOptions;
   private readonly modelingTolerance: number;
   private readonly liveShapes = new Set<OcctShape>();
+  private readonly topologyNamespace = nextTopologyNamespace++;
   private nextShapeSerial = 1;
   private disposed = false;
 
@@ -1257,10 +1267,10 @@ class OcctKernel implements GeometryKernel {
       edgeHandles.push(...this.raw.getSubShapes(owned[OCCT_SHAPE], "edge"));
 
       const faceKeys = faceHandles.map((_, index) =>
-        topologyKey(owned.serial, "face", index),
+        topologyKey(this.topologyNamespace, owned.serial, "face", index),
       );
       const edgeKeys = edgeHandles.map((_, index) =>
-        topologyKey(owned.serial, "edge", index),
+        topologyKey(this.topologyNamespace, owned.serial, "edge", index),
       );
       const faceEdges = faceHandles.map(() => new Set<KernelTopologyKey>());
       const edgeFaces = edgeHandles.map(() => new Set<KernelTopologyKey>());
@@ -1451,6 +1461,47 @@ class OcctKernel implements GeometryKernel {
       input[OCCT_SHAPE],
       handles,
       options.radius,
+      faceHashes,
+      TOPOLOGY_HASH_UPPER_BOUND,
+    );
+    return this.own(evolution.result, context, {
+      inherited: input.lineage,
+      relation: "modified",
+      history: "partial",
+    });
+  }
+
+  chamfer(
+    shape: KernelShape,
+    edges: readonly KernelTopologyKey[],
+    options: { readonly distance: number },
+    context?: KernelFeatureContext,
+  ): KernelShape {
+    checkContext(context);
+    if (!Number.isFinite(options.distance) || !(options.distance > 0)) {
+      throw new RangeError("Chamfer distance must be finite and positive");
+    }
+    if (edges.length === 0) {
+      throw new RangeError("Chamfer requires at least one edge");
+    }
+    const input = this.shape(shape);
+    this.topology(input);
+    const handles = [...new Set(edges)].map((key) => {
+      const retained = input.topologyHandles.get(key);
+      if (retained?.topology !== "edge") {
+        throw new TypeError(`Topology key '${key}' is not an edge of the input shape`);
+      }
+      return retained.handle;
+    });
+    const faceHashes = this.raw.subShapeHashes(
+      input[OCCT_SHAPE],
+      "face",
+      TOPOLOGY_HASH_UPPER_BOUND,
+    );
+    const evolution = this.raw.chamferWithHistory(
+      input[OCCT_SHAPE],
+      handles,
+      options.distance,
       faceHashes,
       TOPOLOGY_HASH_UPPER_BOUND,
     );

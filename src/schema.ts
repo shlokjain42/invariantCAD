@@ -320,6 +320,14 @@ const NodeSchema = z.discriminatedUnion("kind", [
       radius: ExpressionSchema,
     })
     .strict(),
+  z
+    .object({
+      kind: z.literal("chamfer"),
+      input: RefSchema,
+      edges: TopologySelectionSchema,
+      distance: ExpressionSchema,
+    })
+    .strict(),
   z.object({
     kind: z.literal("part"),
     solid: RefSchema,
