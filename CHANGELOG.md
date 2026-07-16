@@ -14,6 +14,7 @@
 - Deterministically release every native evolution wrapper and temporary vector used by exact fillet/chamfer history calls while preserving chained-operation behavior
 - Pin the OCCT facade source, kernel source, toolchain, and rootless offline build path for reproducible InvariantCAD-owned native extensions
 - Add an internal owned-OCCT atomic multi-face draft ABI and native smoke corpus with arbitrary neutral planes, pre-build seed validation, the pinned kernel's minimum-angle guard, and explicit result ownership; keep public TypeScript draft gated on exact topology history
+- Add a versioned, report-owned indexed topology-evolution ABI for atomic draft, with exact face/edge/vertex bijection checks, stable numeric enums, explicit history-stage diagnostics, and immutable history across report clones and result transfer
 - Make exact boolean unions produce shellable fused solids and normalize reversed one-solid imports before topology-sensitive features
 - Reject shapes passed across OCCT kernel instances before their raw arena IDs can alias unrelated geometry
 - Add a closed, typed primitive/extrusion topology-role registry and sketch-curve source selectors

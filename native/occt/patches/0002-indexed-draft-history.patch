@@ -1,0 +1,447 @@
+diff --git a/facade/include/occt_kernel.h b/facade/include/occt_kernel.h
+index b708e71..8a1da20 100644
+--- a/facade/include/occt_kernel.h
++++ b/facade/include/occt_kernel.h
+@@ -20,0 +21,45 @@ struct InvariantCadDraftTransferState;
++/// Evaluation-scoped topology kinds used by the indexed evolution ABI.
++/// These numeric values are stable across facade ABI 0.2.x.
++enum InvariantCadTopologyKind : int {
++    InvariantCadTopologyKindNone = -1,
++    InvariantCadTopologyKindFace = 0,
++    InvariantCadTopologyKindEdge = 1,
++    InvariantCadTopologyKindVertex = 2,
++};
++
++/// Source-to-result relations used by the generic indexed evolution envelope.
++/// Atomic draft emits only Preserved and Modified records. Generated, Deleted,
++/// and Created are reserved for later topology-changing facade operations.
++enum InvariantCadTopologyRelation : int {
++    InvariantCadTopologyRelationPreserved = 0,
++    InvariantCadTopologyRelationModified = 1,
++    InvariantCadTopologyRelationGenerated = 2,
++    InvariantCadTopologyRelationDeleted = 3,
++    InvariantCadTopologyRelationCreated = 4,
++};
++
++/// Number of unique located subshapes indexed by TopExp::MapShapes for each
++/// topology kind. Orientation occurrences are deliberately not separate IDs;
++/// however, the canonical input/result occurrences' orientations participate
++/// in Preserved-versus-Modified classification.
++struct InvariantCadTopologyCounts {
++    int faces = 0;
++    int edges = 0;
++    int vertices = 0;
++};
++
++/// One generic indexed evolution link. All indices are zero-based. A deleted
++/// record uses -1 for resultKind/resultIndex; a source-less created record uses
++/// -1 for all three source fields. sourceShapeIndex distinguishes operands.
++/// Records are canonicalized by source operand, source kind, source index,
++/// relation, result kind, and result index. Atomic draft's stricter one-to-one
++/// subset is emitted as faces, then edges, then vertices, each by input index.
++struct InvariantCadTopologyEvolutionRecord {
++    int sourceShapeIndex = -1;
++    int sourceKind = InvariantCadTopologyKindNone;
++    int sourceIndex = -1;
++    int relation = InvariantCadTopologyRelationPreserved;
++    int resultKind = InvariantCadTopologyKindNone;
++    int resultIndex = -1;
++};
++
+@@ -55,0 +101,4 @@ struct InvariantCadDraftReport {
++    std::string historyProblemDomain = "none";
++    int historyProblemSourceShapeIndex = -1;
++    int historyProblemKind = InvariantCadTopologyKindNone;
++    int historyProblemIndex = -1;
+@@ -59,0 +109,2 @@ struct InvariantCadDraftReport {
++    InvariantCadDraftReport(InvariantCadDraftReport&&) noexcept = default;
++    InvariantCadDraftReport& operator=(InvariantCadDraftReport&&) noexcept = default;
+@@ -72,0 +124,4 @@ struct InvariantCadDraftReport {
++    std::string getHistoryProblemDomain() const { return historyProblemDomain; }
++    int getHistoryProblemSourceShapeIndex() const { return historyProblemSourceShapeIndex; }
++    int getHistoryProblemKind() const { return historyProblemKind; }
++    int getHistoryProblemIndex() const { return historyProblemIndex; }
+@@ -81,0 +137,11 @@ struct InvariantCadDraftReport {
++    /// Leak-free, read-only access to immutable indexed topology evolution.
++    /// Counts and records cross Embind as value objects, never native vectors.
++    /// topologyHistoryVersion() returns zero when history is unavailable.
++    int topologyHistoryVersion() const;
++    bool topologyHistoryComplete() const;
++    int topologyInputShapeCount() const;
++    InvariantCadTopologyCounts topologyInputCounts(int sourceShapeIndex) const;
++    InvariantCadTopologyCounts topologyResultCounts() const;
++    int topologyRecordCount() const;
++    InvariantCadTopologyEvolutionRecord topologyRecord(int recordIndex) const;
++
+diff --git a/facade/src/invariantcad_bindings.cpp b/facade/src/invariantcad_bindings.cpp
+index 2518bd7..f4b4ec8 100644
+--- a/facade/src/invariantcad_bindings.cpp
++++ b/facade/src/invariantcad_bindings.cpp
+@@ -13,0 +14,26 @@ EMSCRIPTEN_BINDINGS(invariantcad_facade) {
++    enum_<InvariantCadTopologyKind>("InvariantCadTopologyKind", enum_value_type::number)
++        .value("NONE", InvariantCadTopologyKindNone)
++        .value("FACE", InvariantCadTopologyKindFace)
++        .value("EDGE", InvariantCadTopologyKindEdge)
++        .value("VERTEX", InvariantCadTopologyKindVertex);
++
++    enum_<InvariantCadTopologyRelation>("InvariantCadTopologyRelation", enum_value_type::number)
++        .value("PRESERVED", InvariantCadTopologyRelationPreserved)
++        .value("MODIFIED", InvariantCadTopologyRelationModified)
++        .value("GENERATED", InvariantCadTopologyRelationGenerated)
++        .value("DELETED", InvariantCadTopologyRelationDeleted)
++        .value("CREATED", InvariantCadTopologyRelationCreated);
++
++    value_object<InvariantCadTopologyCounts>("InvariantCadTopologyCounts")
++        .field("faces", &InvariantCadTopologyCounts::faces)
++        .field("edges", &InvariantCadTopologyCounts::edges)
++        .field("vertices", &InvariantCadTopologyCounts::vertices);
++
++    value_object<InvariantCadTopologyEvolutionRecord>("InvariantCadTopologyEvolutionRecord")
++        .field("sourceShapeIndex", &InvariantCadTopologyEvolutionRecord::sourceShapeIndex)
++        .field("sourceKind", &InvariantCadTopologyEvolutionRecord::sourceKind)
++        .field("sourceIndex", &InvariantCadTopologyEvolutionRecord::sourceIndex)
++        .field("relation", &InvariantCadTopologyEvolutionRecord::relation)
++        .field("resultKind", &InvariantCadTopologyEvolutionRecord::resultKind)
++        .field("resultIndex", &InvariantCadTopologyEvolutionRecord::resultIndex);
++
+@@ -26,0 +53,5 @@ EMSCRIPTEN_BINDINGS(invariantcad_facade) {
++        .property("historyProblemDomain", &InvariantCadDraftReport::getHistoryProblemDomain)
++        .property("historyProblemSourceShapeIndex",
++                  &InvariantCadDraftReport::getHistoryProblemSourceShapeIndex)
++        .property("historyProblemKind", &InvariantCadDraftReport::getHistoryProblemKind)
++        .property("historyProblemIndex", &InvariantCadDraftReport::getHistoryProblemIndex)
+@@ -28,0 +60,7 @@ EMSCRIPTEN_BINDINGS(invariantcad_facade) {
++        .function("topologyHistoryVersion", &InvariantCadDraftReport::topologyHistoryVersion)
++        .function("topologyHistoryComplete", &InvariantCadDraftReport::topologyHistoryComplete)
++        .function("topologyInputShapeCount", &InvariantCadDraftReport::topologyInputShapeCount)
++        .function("topologyInputCounts", &InvariantCadDraftReport::topologyInputCounts)
++        .function("topologyResultCounts", &InvariantCadDraftReport::topologyResultCounts)
++        .function("topologyRecordCount", &InvariantCadDraftReport::topologyRecordCount)
++        .function("topologyRecord", &InvariantCadDraftReport::topologyRecord)
+diff --git a/facade/src/invariantcad_facade.cpp b/facade/src/invariantcad_facade.cpp
+index 18c0a2f..5ef594e 100644
+--- a/facade/src/invariantcad_facade.cpp
++++ b/facade/src/invariantcad_facade.cpp
+@@ -26,0 +27,9 @@
++#include <utility>
++
++struct InvariantCadIndexedTopologyEvolution {
++    int version = 1;
++    bool complete = false;
++    std::vector<InvariantCadTopologyCounts> inputCounts;
++    InvariantCadTopologyCounts resultCounts;
++    std::vector<InvariantCadTopologyEvolutionRecord> records;
++};
+@@ -31,0 +41 @@ struct InvariantCadDraftTransferState {
++    InvariantCadIndexedTopologyEvolution topologyHistory;
+@@ -36,0 +47 @@ constexpr double kHalfPi = 1.57079632679489661923;
++constexpr int kTopologyHistoryVersion = 1;
+@@ -54,0 +66,212 @@ struct TopologyCounts {
++using IndexedShapeMap =
++    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher>;
++
++const char* topologyKindName(int kind) {
++    switch (kind) {
++    case InvariantCadTopologyKindFace: return "face";
++    case InvariantCadTopologyKindEdge: return "edge";
++    case InvariantCadTopologyKindVertex: return "vertex";
++    default: return "none";
++    }
++}
++
++class HistoryContractError final : public std::runtime_error {
++  public:
++    HistoryContractError(std::string code, std::string message,
++                         int problematicKind = InvariantCadTopologyKindNone,
++                         int problematicIndex = -1,
++                         std::string problemDomain = "none",
++                         int sourceShapeIndex = -1)
++        : std::runtime_error(std::move(message)),
++          code_(std::move(code)),
++          problematicKind_(problematicKind),
++          problematicIndex_(problematicIndex),
++          problemDomain_(std::move(problemDomain)),
++          sourceShapeIndex_(sourceShapeIndex) {}
++
++    const std::string& code() const noexcept { return code_; }
++    int problematicKind() const noexcept { return problematicKind_; }
++    int problematicIndex() const noexcept { return problematicIndex_; }
++    const std::string& problemDomain() const noexcept { return problemDomain_; }
++    int sourceShapeIndex() const noexcept { return sourceShapeIndex_; }
++
++  private:
++    std::string code_;
++    int problematicKind_;
++    int problematicIndex_;
++    std::string problemDomain_;
++    int sourceShapeIndex_;
++};
++
++void indexTopology(const TopoDS_Shape& shape, TopAbs_ShapeEnum type, int kind,
++                   const char* problemDomain, int sourceShapeIndex,
++                   IndexedShapeMap& output) {
++    try {
++        TopExp::MapShapes(shape, type, output);
++    } catch (const Standard_Failure&) {
++        throw HistoryContractError("HISTORY_MAP_OCCT_EXCEPTION",
++                                   "OCCT raised while indexing topology history", kind, -1,
++                                   problemDomain, sourceShapeIndex);
++    } catch (const std::exception&) {
++        throw HistoryContractError("HISTORY_MAP_NATIVE_EXCEPTION",
++                                   "Native code raised while indexing topology history", kind, -1,
++                                   problemDomain, sourceShapeIndex);
++    } catch (...) {
++        throw HistoryContractError("HISTORY_MAP_NATIVE_EXCEPTION",
++                                   "Unknown native failure while indexing topology history", kind,
++                                   -1, problemDomain, sourceShapeIndex);
++    }
++}
++
++void requireEqualHistoryCounts(const IndexedShapeMap& input, const IndexedShapeMap& result,
++                               int kind) {
++    if (input.Extent() != result.Extent()) {
++        throw HistoryContractError(
++            "HISTORY_COUNT_CHANGED",
++            std::string("Draft changed the indexed ") + topologyKindName(kind) + " count", kind);
++    }
++}
++
++void appendDraftTopologyRecords(BRepOffsetAPI_DraftAngle& maker, int kind,
++                                TopAbs_ShapeEnum shapeType, const IndexedShapeMap& input,
++                                const IndexedShapeMap& result,
++                                std::vector<InvariantCadTopologyEvolutionRecord>& records) {
++    std::vector<int> claimedResultIndices(static_cast<size_t>(result.Extent()), -1);
++    for (int oneBasedInputIndex = 1; oneBasedInputIndex <= input.Extent();
++         ++oneBasedInputIndex) {
++        const TopoDS_Shape& source = input.FindKey(oneBasedInputIndex);
++        const int inputIndex = oneBasedInputIndex - 1;
++        TopoDS_Shape successor;
++        try {
++            successor = maker.ModifiedShape(source);
++        } catch (const Standard_Failure&) {
++            throw HistoryContractError(
++                "HISTORY_SUCCESSOR_OCCT_EXCEPTION",
++                "OCCT raised while resolving an indexed topology successor", kind, inputIndex,
++                "source", 0);
++        } catch (const std::exception&) {
++            throw HistoryContractError(
++                "HISTORY_SUCCESSOR_NATIVE_EXCEPTION",
++                "Native code raised while resolving an indexed topology successor", kind,
++                inputIndex, "source", 0);
++        } catch (...) {
++            throw HistoryContractError(
++                "HISTORY_SUCCESSOR_NATIVE_EXCEPTION",
++                "Unknown native failure while resolving an indexed topology successor", kind,
++                inputIndex, "source", 0);
++        }
++
++        if (successor.IsNull()) {
++            throw HistoryContractError(
++                "HISTORY_NULL_SUCCESSOR",
++                "Draft returned a null indexed topology successor at input index " +
++                    std::to_string(inputIndex),
++                kind, inputIndex, "source", 0);
++        }
++        if (successor.ShapeType() != shapeType) {
++            throw HistoryContractError(
++                "HISTORY_SUCCESSOR_TYPE_CHANGED",
++                "Draft changed the topology kind of the successor at input index " +
++                    std::to_string(inputIndex),
++                kind, inputIndex, "source", 0);
++        }
++
++        const int oneBasedResultIndex = result.FindIndex(successor);
++        if (oneBasedResultIndex <= 0) {
++            throw HistoryContractError(
++                "HISTORY_SUCCESSOR_NOT_IN_RESULT",
++                "Draft successor is absent from the final result at input index " +
++                    std::to_string(inputIndex),
++                kind, inputIndex, "source", 0);
++        }
++        const int resultIndex = oneBasedResultIndex - 1;
++        if (claimedResultIndices[static_cast<size_t>(resultIndex)] >= 0) {
++            throw HistoryContractError(
++                "HISTORY_NON_INJECTIVE",
++                "Multiple draft inputs claim result topology index " +
++                    std::to_string(resultIndex),
++                kind, inputIndex, "source", 0);
++        }
++        claimedResultIndices[static_cast<size_t>(resultIndex)] = inputIndex;
++
++        // Map identity is IsSame-based (TShape + Location) so it exactly
++        // matches occt-wasm's TopExp/getSubShapes enumeration. Relation
++        // classification additionally compares the canonical occurrences'
++        // orientations: an orientation-only change is still a modification.
++        const TopoDS_Shape& canonicalResult = result.FindKey(oneBasedResultIndex);
++
++        InvariantCadTopologyEvolutionRecord record;
++        record.sourceShapeIndex = 0;
++        record.sourceKind = kind;
++        record.sourceIndex = inputIndex;
++        record.relation = source.IsEqual(canonicalResult)
++                              ? InvariantCadTopologyRelationPreserved
++                              : InvariantCadTopologyRelationModified;
++        record.resultKind = kind;
++        record.resultIndex = resultIndex;
++        records.push_back(record);
++    }
++
++    for (size_t resultIndex = 0; resultIndex < claimedResultIndices.size(); ++resultIndex) {
++        if (claimedResultIndices[resultIndex] < 0) {
++            throw HistoryContractError(
++                "HISTORY_RESULT_UNCLAIMED",
++                "Draft result topology index has no input successor: " +
++                    std::to_string(resultIndex),
++                kind, static_cast<int>(resultIndex), "result", -1);
++        }
++    }
++}
++
++InvariantCadIndexedTopologyEvolution buildDraftTopologyHistory(
++    BRepOffsetAPI_DraftAngle& maker, const TopoDS_Shape& inputShape,
++    const TopoDS_Shape& resultShape) {
++    IndexedShapeMap inputFaces;
++    IndexedShapeMap inputEdges;
++    IndexedShapeMap inputVertices;
++    IndexedShapeMap resultFaces;
++    IndexedShapeMap resultEdges;
++    IndexedShapeMap resultVertices;
++
++    indexTopology(inputShape, TopAbs_FACE, InvariantCadTopologyKindFace, "source", 0,
++                  inputFaces);
++    indexTopology(inputShape, TopAbs_EDGE, InvariantCadTopologyKindEdge, "source", 0,
++                  inputEdges);
++    indexTopology(inputShape, TopAbs_VERTEX, InvariantCadTopologyKindVertex, "source", 0,
++                  inputVertices);
++    indexTopology(resultShape, TopAbs_FACE, InvariantCadTopologyKindFace, "result", -1,
++                  resultFaces);
++    indexTopology(resultShape, TopAbs_EDGE, InvariantCadTopologyKindEdge, "result", -1,
++                  resultEdges);
++    indexTopology(resultShape, TopAbs_VERTEX, InvariantCadTopologyKindVertex, "result", -1,
++                  resultVertices);
++
++    requireEqualHistoryCounts(inputFaces, resultFaces, InvariantCadTopologyKindFace);
++    requireEqualHistoryCounts(inputEdges, resultEdges, InvariantCadTopologyKindEdge);
++    requireEqualHistoryCounts(inputVertices, resultVertices, InvariantCadTopologyKindVertex);
++
++    InvariantCadIndexedTopologyEvolution history;
++    history.version = kTopologyHistoryVersion;
++    history.inputCounts.push_back(
++        {inputFaces.Extent(), inputEdges.Extent(), inputVertices.Extent()});
++    history.resultCounts =
++        {resultFaces.Extent(), resultEdges.Extent(), resultVertices.Extent()};
++    const uint64_t recordCount = static_cast<uint64_t>(inputFaces.Extent()) +
++                                 static_cast<uint64_t>(inputEdges.Extent()) +
++                                 static_cast<uint64_t>(inputVertices.Extent());
++    if (recordCount > static_cast<uint64_t>(std::numeric_limits<int>::max())) {
++        throw HistoryContractError("HISTORY_RECORD_COUNT_OVERFLOW",
++                                   "Indexed topology history exceeds the ABI record range");
++    }
++    history.records.reserve(static_cast<size_t>(recordCount));
++
++    appendDraftTopologyRecords(maker, InvariantCadTopologyKindFace, TopAbs_FACE, inputFaces,
++                               resultFaces, history.records);
++    appendDraftTopologyRecords(maker, InvariantCadTopologyKindEdge, TopAbs_EDGE, inputEdges,
++                               resultEdges, history.records);
++    appendDraftTopologyRecords(maker, InvariantCadTopologyKindVertex, TopAbs_VERTEX,
++                               inputVertices, resultVertices, history.records);
++    history.complete = true;
++    return history;
++}
++
+@@ -188,0 +412,61 @@ std::string InvariantCadDraftReport::transferCode(const OcctKernel& kernel) cons
++int InvariantCadDraftReport::topologyHistoryVersion() const {
++    return topologyHistoryComplete() ? transfer_->topologyHistory.version : 0;
++}
++
++bool InvariantCadDraftReport::topologyHistoryComplete() const {
++    return transfer_ && transfer_->topologyHistory.complete;
++}
++
++int InvariantCadDraftReport::topologyInputShapeCount() const {
++    if (!topologyHistoryComplete()) {
++        return 0;
++    }
++    if (transfer_->topologyHistory.inputCounts.size() >
++        static_cast<size_t>(std::numeric_limits<int>::max())) {
++        throw std::overflow_error("InvariantCAD topology input count exceeds the ABI range");
++    }
++    return static_cast<int>(transfer_->topologyHistory.inputCounts.size());
++}
++
++InvariantCadTopologyCounts InvariantCadDraftReport::topologyInputCounts(
++    int sourceShapeIndex) const {
++    if (!topologyHistoryComplete()) {
++        throw std::logic_error("InvariantCAD draft topology history is unavailable");
++    }
++    if (sourceShapeIndex < 0 ||
++        static_cast<size_t>(sourceShapeIndex) >= transfer_->topologyHistory.inputCounts.size()) {
++        throw std::out_of_range("InvariantCAD topology input shape index is out of range");
++    }
++    return transfer_->topologyHistory.inputCounts[static_cast<size_t>(sourceShapeIndex)];
++}
++
++InvariantCadTopologyCounts InvariantCadDraftReport::topologyResultCounts() const {
++    if (!topologyHistoryComplete()) {
++        throw std::logic_error("InvariantCAD draft topology history is unavailable");
++    }
++    return transfer_->topologyHistory.resultCounts;
++}
++
++int InvariantCadDraftReport::topologyRecordCount() const {
++    if (!topologyHistoryComplete()) {
++        return 0;
++    }
++    if (transfer_->topologyHistory.records.size() >
++        static_cast<size_t>(std::numeric_limits<int>::max())) {
++        throw std::overflow_error("InvariantCAD topology record count exceeds the ABI range");
++    }
++    return static_cast<int>(transfer_->topologyHistory.records.size());
++}
++
++InvariantCadTopologyEvolutionRecord InvariantCadDraftReport::topologyRecord(
++    int recordIndex) const {
++    if (!topologyHistoryComplete()) {
++        throw std::logic_error("InvariantCAD draft topology history is unavailable");
++    }
++    if (recordIndex < 0 ||
++        static_cast<size_t>(recordIndex) >= transfer_->topologyHistory.records.size()) {
++        throw std::out_of_range("InvariantCAD topology record index is out of range");
++    }
++    return transfer_->topologyHistory.records[static_cast<size_t>(recordIndex)];
++}
++
+@@ -190 +474 @@ std::string invariantcadFacadeVersion() {
+-    return "invariantcad-facade@0.1.0+occt-wasm.3.7.0";
++    return "invariantcad-facade@0.2.0+occt-wasm.3.7.0";
+@@ -514,0 +799,28 @@ InvariantCadDraftReport invariantcadDraftFacesAtomic(
++    InvariantCadIndexedTopologyEvolution topologyHistory;
++    try {
++        topologyHistory = buildDraftTopologyHistory(*maker, inputShape, result);
++    } catch (const HistoryContractError& error) {
++        auto report = failure("history", error.code().c_str(), error.what());
++        attachMakerFailure(report, *maker, inputShape);
++        report.historyProblemDomain = error.problemDomain();
++        report.historyProblemSourceShapeIndex = error.sourceShapeIndex();
++        report.historyProblemKind = error.problematicKind();
++        report.historyProblemIndex = error.problematicIndex();
++        return report;
++    } catch (const Standard_Failure&) {
++        auto report = failure("history", "HISTORY_OCCT_EXCEPTION",
++                              "OCCT raised while proving indexed topology history");
++        attachMakerFailure(report, *maker, inputShape);
++        return report;
++    } catch (const std::exception&) {
++        auto report = failure("history", "HISTORY_STORAGE_NATIVE_EXCEPTION",
++                              "Native code could not store indexed topology history");
++        attachMakerFailure(report, *maker, inputShape);
++        return report;
++    } catch (...) {
++        auto report = failure("history", "HISTORY_NATIVE_EXCEPTION",
++                              "Unknown native failure while proving indexed topology history");
++        attachMakerFailure(report, *maker, inputShape);
++        return report;
++    }
++
+@@ -518,0 +831 @@ InvariantCadDraftReport invariantcadDraftFacesAtomic(
++        transfer->topologyHistory = std::move(topologyHistory);

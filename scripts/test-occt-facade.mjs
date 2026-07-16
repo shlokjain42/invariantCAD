@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-const EXPECTED_FACADE_VERSION = "invariantcad-facade@0.1.0+occt-wasm.3.7.0";
+const EXPECTED_FACADE_VERSION = "invariantcad-facade@0.2.0+occt-wasm.3.7.0";
+const EXPECTED_TOPOLOGY_HISTORY_VERSION = 1;
 const LINEAR_TOLERANCE = 1e-10;
 const VOLUME_TOLERANCE = 1e-8;
 const SELECTION_TOLERANCE = 1e-8;
@@ -41,6 +42,9 @@ const fixtures = {
       zmax: 20.20978043583053,
     },
   },
+  obliqueNeutralPlane: {
+    volume: 3841.914228170569,
+  },
 };
 
 const projectRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -53,6 +57,29 @@ const Module = await createOcctWasm({
 });
 
 assert.equal(Module.invariantcadFacadeVersion(), EXPECTED_FACADE_VERSION);
+
+const topologyKinds = Object.freeze({
+  none: Module.InvariantCadTopologyKind.NONE,
+  face: Module.InvariantCadTopologyKind.FACE,
+  edge: Module.InvariantCadTopologyKind.EDGE,
+  vertex: Module.InvariantCadTopologyKind.VERTEX,
+});
+const topologyRelations = Object.freeze({
+  preserved: Module.InvariantCadTopologyRelation.PRESERVED,
+  modified: Module.InvariantCadTopologyRelation.MODIFIED,
+  generated: Module.InvariantCadTopologyRelation.GENERATED,
+  deleted: Module.InvariantCadTopologyRelation.DELETED,
+  created: Module.InvariantCadTopologyRelation.CREATED,
+});
+
+assert.deepEqual(topologyKinds, { none: -1, face: 0, edge: 1, vertex: 2 });
+assert.deepEqual(topologyRelations, {
+  preserved: 0,
+  modified: 1,
+  generated: 2,
+  deleted: 3,
+  created: 4,
+});
 
 const radians = (degrees) => (degrees * Math.PI) / 180;
 const near = (actual, expected, tolerance = SELECTION_TOLERANCE) =>
@@ -197,6 +224,123 @@ function assertSolidFixture(shape, expected, label) {
   );
 }
 
+function topologyCounts(value) {
+  return {
+    faces: value.faces,
+    edges: value.edges,
+    vertices: value.vertices,
+  };
+}
+
+function topologyRecord(value) {
+  return {
+    sourceShapeIndex: value.sourceShapeIndex,
+    sourceKind: value.sourceKind,
+    sourceIndex: value.sourceIndex,
+    relation: value.relation,
+    resultKind: value.resultKind,
+    resultIndex: value.resultIndex,
+  };
+}
+
+function readTopologyHistory(report) {
+  const records = [];
+  for (let index = 0; index < report.topologyRecordCount(); index += 1) {
+    records.push(topologyRecord(report.topologyRecord(index)));
+  }
+  return {
+    version: report.topologyHistoryVersion(),
+    complete: report.topologyHistoryComplete(),
+    inputShapeCount: report.topologyInputShapeCount(),
+    inputCounts: topologyCounts(report.topologyInputCounts(0)),
+    resultCounts: topologyCounts(report.topologyResultCounts()),
+    records,
+  };
+}
+
+function expectedDraftRecords(modifiedIndices) {
+  const kinds = [
+    [topologyKinds.face, 6, new Set(modifiedIndices.faces)],
+    [topologyKinds.edge, 12, new Set(modifiedIndices.edges)],
+    [topologyKinds.vertex, 8, new Set(modifiedIndices.vertices)],
+  ];
+  return kinds.flatMap(([kind, count, modified]) =>
+    Array.from({ length: count }, (_, index) => ({
+      sourceShapeIndex: 0,
+      sourceKind: kind,
+      sourceIndex: index,
+      relation: modified.has(index)
+        ? topologyRelations.modified
+        : topologyRelations.preserved,
+      resultKind: kind,
+      resultIndex: index,
+    })),
+  );
+}
+
+function assertDraftHistory(report, modifiedIndices, label) {
+  const history = readTopologyHistory(report);
+  assert.deepEqual(
+    history,
+    {
+      version: EXPECTED_TOPOLOGY_HISTORY_VERSION,
+      complete: true,
+      inputShapeCount: 1,
+      inputCounts: { faces: 6, edges: 12, vertices: 8 },
+      resultCounts: { faces: 6, edges: 12, vertices: 8 },
+      records: expectedDraftRecords(modifiedIndices),
+    },
+    `${label}.history`,
+  );
+  assert.throws(
+    () => report.topologyInputCounts(-1),
+    `${label}: negative input history index must fail`,
+  );
+  assert.throws(
+    () => report.topologyInputCounts(1),
+    `${label}: out-of-range input history index must fail`,
+  );
+  assert.throws(
+    () => report.topologyRecord(-1),
+    `${label}: negative history record index must fail`,
+  );
+  assert.throws(
+    () => report.topologyRecord(history.records.length),
+    `${label}: out-of-range history record index must fail`,
+  );
+  return history;
+}
+
+function assertNoTopologyHistory(report, label) {
+  assert.equal(report.topologyHistoryVersion(), 0, `${label}.historyVersion`);
+  assert.equal(report.topologyHistoryComplete(), false, `${label}.historyComplete`);
+  assert.equal(report.topologyInputShapeCount(), 0, `${label}.historyInputCount`);
+  assert.equal(report.topologyRecordCount(), 0, `${label}.historyRecordCount`);
+  assert.throws(
+    () => report.topologyInputCounts(0),
+    `${label}: failed reports must not expose input topology counts`,
+  );
+  assert.throws(
+    () => report.topologyResultCounts(),
+    `${label}: failed reports must not expose result topology counts`,
+  );
+  assert.throws(
+    () => report.topologyRecord(0),
+    `${label}: failed reports must not expose topology records`,
+  );
+}
+
+const singleWallModifiedIndices = Object.freeze({
+  faces: [0, 2, 3, 4, 5],
+  edges: [0, 1, 2, 3, 8, 9, 10, 11],
+  vertices: [0, 1, 2, 3],
+});
+const allModifiedIndices = Object.freeze({
+  faces: [0, 1, 2, 3, 4, 5],
+  edges: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+  vertices: [0, 1, 2, 3, 4, 5, 6, 7],
+});
+
 function runFixture(label, action) {
   assert.equal(kernel.getShapeCount(), 0, `${label}: dirty arena before fixture`);
   try {
@@ -252,6 +396,10 @@ try {
         "buildCount",
         "problematicShapeType",
         "problematicShapeIndex",
+        "historyProblemDomain",
+        "historyProblemSourceShapeIndex",
+        "historyProblemKind",
+        "historyProblemIndex",
       ]) {
         const valueBeforeAssignment = ownedReport[property];
         assert.throws(
@@ -264,10 +412,35 @@ try {
         assert.deepEqual(ownedReport[property], valueBeforeAssignment);
       }
 
+      const historyBeforeTransfer = assertDraftHistory(
+        ownedReport,
+        singleWallModifiedIndices,
+        "singleWall",
+      );
+      const detachedCounts = ownedReport.topologyInputCounts(0);
+      detachedCounts.faces = 999;
+      assert.deepEqual(
+        topologyCounts(ownedReport.topologyInputCounts(0)),
+        { faces: 6, edges: 12, vertices: 8 },
+        "mutating a returned counts value must not mutate report history",
+      );
+      const detachedRecord = ownedReport.topologyRecord(0);
+      detachedRecord.resultIndex = 999;
+      assert.deepEqual(
+        topologyRecord(ownedReport.topologyRecord(0)),
+        historyBeforeTransfer.records[0],
+        "mutating a returned record value must not mutate report history",
+      );
+
       const sharedReport = ownedReport.clone();
       try {
         assert.equal(sharedReport.hasResult(), true);
         assert.equal(sharedReport.transferCode(kernel), "READY");
+        assert.deepEqual(
+          readTopologyHistory(sharedReport),
+          historyBeforeTransfer,
+          "a cloned report must share immutable topology history",
+        );
 
         const otherKernel = new Module.OcctKernel();
         try {
@@ -300,6 +473,16 @@ try {
         assert.equal(ownedReport.transferCode(kernel), "ALREADY_TRANSFERRED");
         assert.equal(sharedReport.transferCode(kernel), "ALREADY_TRANSFERRED");
         assert.equal(kernel.getShapeCount(), arenaBefore + 1);
+        assert.deepEqual(
+          readTopologyHistory(ownedReport),
+          historyBeforeTransfer,
+          "topology history must survive result transfer",
+        );
+        assert.deepEqual(
+          readTopologyHistory(sharedReport),
+          historyBeforeTransfer,
+          "a cloned report must retain history after transfer through an alias",
+        );
         try {
           assertSolidFixture(result, fixtures.singleWall, "singleWall");
           assert.throws(
@@ -349,6 +532,7 @@ try {
       assert.equal(ownedReport.skippedSeedCount, 0);
       assert.equal(ownedReport.buildCount, 1);
       assert.equal(kernel.getShapeCount(), arenaBefore);
+      assertDraftHistory(ownedReport, allModifiedIndices, "fourWalls");
       const result = ownedReport.takeResultId(kernel);
       try {
         assertSolidFixture(result, fixtures.fourWalls, "fourWalls");
@@ -377,9 +561,57 @@ try {
       assert.equal(ownedReport.addCount, 4);
       assert.equal(ownedReport.skippedSeedCount, 0);
       assert.equal(ownedReport.buildCount, 1);
+      assertDraftHistory(ownedReport, allModifiedIndices, "yzNeutralPlane");
       const result = ownedReport.takeResultId(kernel);
       try {
         assertSolidFixture(result, fixtures.yzNeutralPlane, "yzNeutralPlane");
+      } finally {
+        kernel.release(result);
+      }
+    });
+  });
+
+  runFixture("oblique neutral plane independent of pull", () => {
+    const box = kernel.makeBox(20, 20, 10);
+    const wall = faceOnPlane(box, "x", 0);
+    const report = draft(
+      box,
+      [wall],
+      radians(5),
+      [0, 0, 1],
+      [1, 2, 3],
+      [1, 1, 1],
+    );
+
+    withReport(report, (ownedReport) => {
+      assert.equal(ownedReport.ok, true, `${ownedReport.code}: ${ownedReport.message}`);
+      assert.equal(ownedReport.stage, "complete");
+      assert.equal(ownedReport.addCount, 1);
+      assert.equal(ownedReport.buildCount, 1);
+      assertDraftHistory(
+        ownedReport,
+        singleWallModifiedIndices,
+        "obliqueNeutralPlane",
+      );
+      const result = ownedReport.takeResultId(kernel);
+      try {
+        assert.equal(kernel.getShapeType(result), "solid");
+        assert.equal(kernel.isValid(result), true);
+        assertClose(
+          kernel.getVolume(result),
+          fixtures.obliqueNeutralPlane.volume,
+          VOLUME_TOLERANCE,
+          "obliqueNeutralPlane.volume",
+        );
+        assert.deepEqual(
+          {
+            faces: kernel.subShapeCount(result, "face"),
+            edges: kernel.subShapeCount(result, "edge"),
+            vertices: kernel.subShapeCount(result, "vertex"),
+          },
+          { faces: 6, edges: 12, vertices: 8 },
+          "obliqueNeutralPlane.topology",
+        );
       } finally {
         kernel.release(result);
       }
@@ -405,12 +637,77 @@ try {
       assert.equal(ownedReport.addCount, 1);
       assert.equal(ownedReport.skippedSeedCount, 1);
       assert.equal(ownedReport.buildCount, 1);
+      assertDraftHistory(ownedReport, singleWallModifiedIndices, "duplicateSeed");
       const result = ownedReport.takeResultId(kernel);
       try {
         assertSolidFixture(result, fixtures.singleWall, "duplicateSeed");
       } finally {
         kernel.release(result);
       }
+    });
+  });
+
+  runFixture("reversed occurrence seed idempotence", () => {
+    const box = kernel.makeBox(20, 20, 10);
+    const wall = faceOnPlane(box, "x", 0);
+    const reversedWall = kernel.reverseShape(wall);
+    const report = draft(
+      box,
+      [wall, reversedWall],
+      radians(5),
+      [0, 0, 1],
+      [0, 0, 0],
+      [0, 0, 1],
+    );
+
+    withReport(report, (ownedReport) => {
+      assert.equal(ownedReport.ok, true, `${ownedReport.code}: ${ownedReport.message}`);
+      assert.equal(ownedReport.stage, "complete");
+      assert.equal(ownedReport.requestedSeedCount, 2);
+      assert.equal(ownedReport.addCount, 1);
+      assert.equal(ownedReport.skippedSeedCount, 1);
+      assert.equal(ownedReport.buildCount, 1);
+      assertDraftHistory(
+        ownedReport,
+        singleWallModifiedIndices,
+        "reversedOccurrenceSeed",
+      );
+      const result = ownedReport.takeResultId(kernel);
+      try {
+        assertSolidFixture(result, fixtures.singleWall, "reversedOccurrenceSeed");
+      } finally {
+        kernel.release(result);
+      }
+    });
+  });
+
+  runFixture("later seed failure remains atomic", () => {
+    const box = kernel.makeBox(20, 20, 10);
+    const wall = faceOnPlane(box, "x", 0);
+    const bottom = faceOnPlane(box, "z", 0);
+    const arenaBefore = kernel.getShapeCount();
+    const report = draft(
+      box,
+      [wall, bottom],
+      radians(5),
+      [0, 0, 1],
+      [0, 0, 0],
+      [0, 0, 1],
+    );
+
+    withReport(report, (ownedReport) => {
+      assert.equal(ownedReport.ok, false);
+      assert.equal(ownedReport.stage, "add");
+      assert.equal(ownedReport.code, "ADD_REJECTED");
+      assert.equal(ownedReport.failedSeedIndex, 1);
+      assert.equal(ownedReport.requestedSeedCount, 2);
+      assert.equal(ownedReport.addCount, 2);
+      assert.equal(ownedReport.skippedSeedCount, 0);
+      assert.equal(ownedReport.buildCount, 0);
+      assert.equal(ownedReport.hasResult(), false);
+      assert.equal(ownedReport.transferCode(kernel), "NO_RESULT");
+      assertNoTopologyHistory(ownedReport, "laterSeedFailure");
+      assert.equal(kernel.getShapeCount(), arenaBefore);
     });
   });
 
@@ -438,6 +735,7 @@ try {
       assert.equal(ownedReport.buildCount, 0);
       assert.equal(ownedReport.hasResult(), false);
       assert.equal(ownedReport.transferCode(kernel), "NO_RESULT");
+      assertNoTopologyHistory(ownedReport, "foreignFace");
       assert.equal(kernel.getShapeCount(), arenaBefore);
       assert.throws(
         () => ownedReport.takeResultId(kernel),
@@ -474,6 +772,7 @@ try {
       assert.equal(ownedReport.buildCount, 0);
       assert.equal(ownedReport.hasResult(), false);
       assert.equal(ownedReport.transferCode(kernel), "NO_RESULT");
+      assertNoTopologyHistory(ownedReport, "compoundInput");
       assert.equal(kernel.getShapeCount(), arenaBefore);
     });
   });
@@ -505,6 +804,7 @@ try {
       assert.equal(ownedReport.transferCode(kernel), "NO_RESULT");
       assert.equal(ownedReport.problematicShapeType, "face");
       assert.equal(ownedReport.problematicShapeIndex, 0);
+      assertNoTopologyHistory(ownedReport, "unsupportedSphericalFace");
       assert.equal(kernel.getShapeCount(), arenaBefore);
     });
   });
@@ -531,6 +831,7 @@ try {
       assert.equal(ownedReport.buildCount, 0);
       assert.equal(ownedReport.hasResult(), false);
       assert.equal(ownedReport.transferCode(kernel), "NO_RESULT");
+      assertNoTopologyHistory(ownedReport, "tinyAngle");
       assert.equal(kernel.getShapeCount(), arenaBefore);
     });
   });

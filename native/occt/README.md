@@ -89,10 +89,39 @@ result into its originating kernel exactly once, after which normal kernel
 `release()` or `releaseAll()` ownership applies.
 
 The facade rejects `abs(angleRad) <= 1e-4`, because the pinned OCCT build can
-otherwise report a successful no-op. This ABI is not yet a document node,
-`GeometryKernel` method, capability, or exported TypeScript feature. Public
-draft remains gated on deterministic indexed face/edge/vertex evolution records
-and their TypeScript lineage reducer.
+otherwise report a successful no-op. Facade version 0.2 also makes a successful
+draft conditional on a complete indexed face/edge/vertex evolution proof. It
+requires one same-kind result successor for every input subshape, rejects
+duplicate claims and unclaimed result subshapes, and exposes no result if that
+proof fails.
+
+The version-1 evolution envelope is report-owned and immutable. It records
+`sourceShapeIndex`, `sourceKind`, `sourceIndex`, `relation`, `resultKind`, and
+`resultIndex`, so later operations can describe multiple source operands and
+topology-changing relations without changing the record shape. Draft currently
+has one source operand and emits only one-to-one `PRESERVED` or `MODIFIED`
+records. The history remains readable through cloned reports and after result
+transfer; failed reports advertise version zero and no complete history.
+Schema version 1 describes N source shapes evolving into one aggregate result.
+`GENERATED` is reserved for additional topology derived from a source link; it
+does not inherit the naming or incomplete semantics of OCCT's `Generated()`
+method. `GENERATED`, `DELETED`, and source-less `CREATED` remain unadvertised
+until topology-changing emitters prove their respective completeness rules.
+
+All indices are zero-based positions in evaluation-scoped
+`TopExp::MapShapes` maps of unique located faces, edges, or vertices. These are
+not persistent document IDs, oriented occurrence indices, an assembly instance
+graph, or a proof of full incidence-graph equivalence. Map membership uses
+OCCT's unoriented `IsSame` identity; preservation compares the canonical input
+and result occurrences with `IsEqual`, so an orientation-only change is
+classified as modified.
+
+This ABI is not yet a document node, `GeometryKernel` method, capability, or
+exported TypeScript feature. Public draft remains gated on the TypeScript
+lineage reducer and a loader path that receives the matched generated
+JavaScript module factory together with its WASM binary. A stock 3.7.0 module
+without the recognized facade probe remains usable but must not advertise
+draft.
 
 ## License, source, and replacement boundary
 

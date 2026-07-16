@@ -5,8 +5,12 @@ import { describe, expect, it } from "vitest";
 
 const lockUrl = new URL("../native/occt/upstream.lock.json", import.meta.url);
 const scriptUrl = new URL("../scripts/build-occt-facade.sh", import.meta.url);
-const patchUrl = new URL(
+const draftPatchUrl = new URL(
   "../native/occt/patches/0001-atomic-multi-face-draft.patch",
+  import.meta.url,
+);
+const historyPatchUrl = new URL(
+  "../native/occt/patches/0002-indexed-draft-history.patch",
   import.meta.url,
 );
 const smokeUrl = new URL("../scripts/test-occt-facade.mjs", import.meta.url);
@@ -65,11 +69,24 @@ describe("owned OCCT facade build boundary", () => {
     expect(source).not.toContain(":latest");
   });
 
-  it("tracks the hardened draft extension and a syntax-valid native smoke test", async () => {
-    const patch = await readFile(patchUrl, "utf8");
-    expect(patch).toContain("invariantcadDraftFacesAtomic");
-    expect(patch).toContain("ANGLE_BELOW_KERNEL_LIMIT");
-    expect(patch).toContain("transferCode");
+  it("tracks the hardened draft extension and its exact indexed history ABI", async () => {
+    const draftPatch = await readFile(draftPatchUrl, "utf8");
+    expect(draftPatch).toContain("invariantcadDraftFacesAtomic");
+    expect(draftPatch).toContain("ANGLE_BELOW_KERNEL_LIMIT");
+    expect(draftPatch).toContain("transferCode");
+
+    const historyPatch = await readFile(historyPatchUrl, "utf8");
+    expect(historyPatch).toContain("InvariantCadIndexedTopologyEvolution");
+    expect(historyPatch).toContain("topologyHistoryComplete");
+    expect(historyPatch).toContain("enum_value_type::number");
+    expect(historyPatch).toContain(
+      "const TopoDS_Shape& canonicalResult = result.FindKey",
+    );
+    expect(historyPatch).toContain("source.IsEqual(canonicalResult)");
+    expect(historyPatch).toContain("HISTORY_NON_INJECTIVE");
+    expect(historyPatch).toContain(
+      "InvariantCadDraftReport(InvariantCadDraftReport&&) noexcept",
+    );
 
     const syntax = spawnSync(process.execPath, ["--check", smokeUrl.pathname], {
       encoding: "utf8",
