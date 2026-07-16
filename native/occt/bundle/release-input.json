@@ -1,0 +1,117 @@
+{
+  "schemaVersion": 1,
+  "bundle": {
+    "name": "invariantcad-occt-facade",
+    "version": "0.2.0",
+    "layoutVersion": 1,
+    "sourceDateEpoch": 0
+  },
+  "archive": {
+    "format": "ustar+gzip",
+    "size": 7088212,
+    "sha256": "e14e29d327e052bcc38434c6e4cab31ca883ec39d2d4d0b4637155c6ececb859"
+  },
+  "facade": {
+    "marker": "invariantcad-facade@0.2.0+occt-wasm.3.7.0",
+    "abiVersion": "0.2.0",
+    "upstreamOcctWasmVersion": "3.7.0"
+  },
+  "runtime": [
+    {
+      "source": "occt-wasm.js",
+      "target": "runtime/occt-wasm.js",
+      "mediaType": "text/javascript",
+      "size": 129219,
+      "sha256": "5b9486053fc0a0f2cc3f6ea62c3d78283d40c4ca17aa9f93f2e9a09fc168b08e"
+    },
+    {
+      "source": "occt-wasm.wasm",
+      "target": "runtime/occt-wasm.wasm",
+      "mediaType": "application/wasm",
+      "size": 22123222,
+      "sha256": "c1f810279d219254ad9e0801d3cf5d6111890824fdba8f57fdb49497a6ab4c0e"
+    }
+  ],
+  "inputs": [
+    {
+      "source": "native/occt/upstream.lock.json",
+      "target": "source/native/occt/upstream.lock.json",
+      "role": "source-lock",
+      "mode": "0644",
+      "size": 574,
+      "sha256": "69667cf9cf1f434bc5e9fa80d9a4be347f54296ce1d887580716008d1f2150e8"
+    },
+    {
+      "source": "native/occt/patches/0001-atomic-multi-face-draft.patch",
+      "target": "source/native/occt/patches/0001-atomic-multi-face-draft.patch",
+      "role": "source-patch",
+      "mode": "0644",
+      "size": 30631,
+      "sha256": "c533f7d0fd1a26f62fc92acdbd680d590abb868a637201239035d06151924a20"
+    },
+    {
+      "source": "native/occt/patches/0002-indexed-draft-history.patch",
+      "target": "source/native/occt/patches/0002-indexed-draft-history.patch",
+      "role": "source-patch",
+      "mode": "0644",
+      "size": 22296,
+      "sha256": "e436c3f7380d05e567a7fee27760d3620eee53cf3a1b4327102261100347cd48"
+    },
+    {
+      "source": "scripts/build-occt-facade.sh",
+      "target": "source/scripts/build-occt-facade.sh",
+      "role": "build-script",
+      "mode": "0755",
+      "size": 10774,
+      "sha256": "cfae1966af9870c1025f347ed5c37949b0699adbee28de1a43e5b7a6f5d55779"
+    },
+    {
+      "source": "native/occt/bundle/SOURCE_AND_RELINK.md",
+      "target": "SOURCE_AND_RELINK.md",
+      "role": "source-relink-guide",
+      "mode": "0644",
+      "size": 5662,
+      "sha256": "1e427d7b708195349c3e04dd7506a28460607f401eaa519ec0db4641076478cb"
+    },
+    {
+      "source": "LICENSE",
+      "target": "LICENSE",
+      "role": "project-license",
+      "mode": "0644",
+      "size": 11355,
+      "sha256": "7e512d584d3b04781b4d649847e4409e1c8392bda2c79a255389cb60641c11f3"
+    },
+    {
+      "source": "THIRD_PARTY_NOTICES.md",
+      "target": "THIRD_PARTY_NOTICES.md",
+      "role": "third-party-notices",
+      "mode": "0644",
+      "size": 3424,
+      "sha256": "65dbbafe1e5bb86b0d5249e00e9e41d121edd70e44d92037b839439cbb014838"
+    },
+    {
+      "source": "licenses/LGPL-2.1.txt",
+      "target": "licenses/LGPL-2.1.txt",
+      "role": "third-party-license",
+      "mode": "0644",
+      "size": 26521,
+      "sha256": "592987e8510228d546540b84a22444bde98e48d03078d3b2eefcd889bec5ce8c"
+    },
+    {
+      "source": "licenses/OCCT_LGPL_EXCEPTION.txt",
+      "target": "licenses/OCCT_LGPL_EXCEPTION.txt",
+      "role": "third-party-license",
+      "mode": "0644",
+      "size": 663,
+      "sha256": "04580a884ea6cea294402649ff7b5cbb167d47462d1340a4ed33e550db10a81b"
+    },
+    {
+      "source": "licenses/occt-wasm-MIT.txt",
+      "target": "licenses/occt-wasm-MIT.txt",
+      "role": "third-party-license",
+      "mode": "0644",
+      "size": 1065,
+      "sha256": "0c6ec66bfa0b33581cb449b395cbc0eaee0591908fcd939170eb989e1778e129"
+    }
+  ]
+}

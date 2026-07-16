@@ -72,7 +72,19 @@ The owned facade now also contains an internal atomic multi-face draft ABI with 
 
 The TypeScript adapter validates the versioned envelope as an exact face/edge/vertex bijection before replacing broad output lineage by result index. Preserved topology inherits its source lineage; modified topology additionally records the current feature when one is available. Partial input history remains partial, while malformed exact-capability data fails as a protocol error instead of silently downgrading. It remaps semantic face keys to facade indices, cross-checks declared input and result counts against raw OCCT topology, copies report-owned data before transfer, and adopts the result transactionally.
 
-`createOcctKernel` advertises draft only when the supplied InvariantCAD-owned generated JavaScript `moduleFactory` loads a module whose exact facade probe succeeds. The factory may locate its matched sibling WASM, or callers may provide `wasm` as an explicit binary override. Default initialization loads stock OCCT, retains its other exact features, and leaves draft plus `exactIndexedTopologyEvolution` unadvertised. A partial, unknown, or mismatched facade probe fails closed. The owned generated pair is currently source-built and excluded from the npm tarball; a versioned checksummed and license-complete distribution bundle remains a release requirement.
+`createOcctKernel` advertises draft only when the supplied InvariantCAD-owned generated JavaScript `moduleFactory` loads a module whose exact facade probe succeeds. The factory may locate its matched sibling WASM, or callers may provide `wasm` as an explicit binary override. Default initialization loads stock OCCT, retains its other exact features, and leaves draft plus `exactIndexedTopologyEvolution` unadvertised. A partial, unknown, or mismatched facade probe fails closed.
+
+The owned generated pair remains outside the npm tarball. Repository tooling can
+copy a completed local build into a versioned, package-neutral directory and
+deterministic `.tar.gz`, add checksums, provenance, an SBOM, source/relinking
+information, notices, and licenses, and verify both representations before the
+packed npm library is installed in a clean temporary consumer and its public
+adapter is exercised against the explicitly supplied bundled runtime. The
+ordinary npm package smoke stays artifact-independent. Packaging never builds
+or downloads native code, and runtime initialization never discovers or fetches
+the bundle implicitly. These generated compliance materials support a release
+review but do not certify legal compliance. Publishing the bundle remains a
+separate, externally reviewed release step.
 
 `ManifoldKernel` is the initial implementation. It copies upstream mesh buffers into InvariantCAD's stable `MeshData`, checks kernel status, and destroys every WASM object. The public API sees only typed arrays and measurements.
 

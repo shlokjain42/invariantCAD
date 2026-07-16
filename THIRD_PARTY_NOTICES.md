@@ -37,16 +37,28 @@ This source repository can also build an optional, locally modified matched
 JavaScript/WebAssembly pair from the verified upstream source plus the ordered
 patches under `native/occt/patches/`. Outputs under
 `.artifacts/occt-facade/` are ignored, uncommitted, and excluded from the
-current npm tarball. Anyone distributing that modified pair must make the
+current npm tarball.
+
+Repository tooling can copy that already-built pair into an ignored, local,
+package-neutral directory and `.tar.gz` archive under
+`.artifacts/occt-facade-bundle/`. The bundle collects SHA-256 digests, release
+metadata, a CycloneDX SBOM, build provenance, locked inputs, ordered patches,
+applicable notices and license texts, and source/relinking instructions. It is
+not an npm package, has not been published, and is never downloaded or selected
+implicitly by InvariantCAD.
+
+The generated materials make the distribution inputs inspectable; generation
+or verification is not legal certification. Anyone distributing that modified
+pair must still review the actual bundle and delivery channel, make the
 upstream wrapper source, every local patch, locked build inputs, corresponding
-OCCT source, and applicable notices available, together with a practical
-relink and replacement path.
+OCCT source, and applicable notices available, and preserve a practical relink
+and replacement path. Publication remains pending external review.
 
 For the existing compatible public ABI, `createOcctKernel({ wasm })` accepts a
 URL, filesystem path, `ArrayBuffer`, or `Uint8Array`. This keeps the WASM
 component replaceable with a compatible user-built version rather than
-hard-wiring the distributed binary into InvariantCAD. The internal extension
-smoke test instead loads its matching generated JavaScript glue and WASM pair
-directly.
+hard-wiring a facade binary into InvariantCAD. The owned extension requires an
+explicit matching JavaScript module factory as well; local raw-build and bundle
+smoke tests load both files directly from their selected runtime directory.
 
 Anyone redistributing a bundle containing the OCCT WASM binary must preserve these notices and satisfy the applicable LGPL source, modification, reverse-engineering, and replacement requirements.

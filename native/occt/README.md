@@ -71,7 +71,66 @@ The native fixture exercises the raw ABI; the public smoke loads the same
 generated pair through `createOcctKernel` and exercises direct and evaluated
 draft. These heavyweight tests are intentionally separate from normal
 `pnpm verify`. Generated artifacts stay under the ignored
-`.artifacts/occt-facade/` directory and are not committed or packed.
+`.artifacts/occt-facade/` directory and are not committed or included in the
+`invariantcad` npm package.
+
+## Local distribution bundle
+
+After building the raw pair, package and verify a package-neutral local bundle:
+
+```sh
+pnpm bundle:occt-facade
+pnpm verify:occt-facade-bundle
+pnpm test:occt-facade-bundle
+```
+
+Bundle generation requires GNU `tar` and GNU `gzip`; the packager checks both
+tools and supplies a minimal deterministic environment before invoking them.
+
+The packager reads `.artifacts/occt-facade/` and writes both of these ignored
+outputs:
+
+```text
+.artifacts/occt-facade-bundle/invariantcad-occt-facade-0.2.0/
+.artifacts/occt-facade-bundle/invariantcad-occt-facade-0.2.0.tar.gz
+```
+
+`0.2.0` is the owned facade ABI and bundle version; it is independent of the
+InvariantCAD npm package version and document schema version.
+
+The directory and archive have the same single-root layout. The matched pair is
+under `runtime/`; the root `SHA256SUMS` covers the bundled files; and
+release, CycloneDX SBOM, and build-provenance records are under `metadata/`.
+The bundle also carries the locked inputs, ordered patches, applicable license
+and notice material, and source/relinking instructions needed for review.
+
+Packaging performs no network access and never substitutes a stock runtime. It
+only packages an already-built pair, and `native/occt/bundle/release-input.json`
+pins the expected byte size and SHA-256 of that pair plus every repository input
+copied into the bundle. It also pins the final compressed archive's format,
+size, and SHA-256, so compressor or packaging drift fails before output
+publication. The verifier then checks the directory or archive without
+executing native code.
+`pnpm test:occt-facade-bundle` packages the pair, verifies both representations,
+packs the `invariantcad` npm tarball, installs it in a fresh temporary consumer,
+and explicitly points compact direct and document-evaluated draft checks at the
+bundled `runtime/` directory. The normal `pnpm test:package` remains independent
+of owned-facade build artifacts. To check byte-for-byte packager determinism as
+well, run:
+
+```sh
+pnpm bundle:occt-facade --check-reproducible
+```
+
+“Package-neutral” means that the archive is not an npm package and does not
+install or register itself. InvariantCAD never downloads, extracts, or selects
+it implicitly; an application must explicitly load `runtime/occt-wasm.js` and
+pass its matched `runtime/occt-wasm.wasm` to `createOcctKernel`.
+
+The generated bundle is a review artifact, not a legal certification. It has
+not been published to npm or another release channel. Public distribution and
+any durable corresponding-source/relinking offer remain pending external legal,
+release, and security review.
 
 ## Owned draft ABI and public adapter
 
@@ -139,13 +198,11 @@ not promoted to complete history by the draft-specific proof. Default
 features, but it does not advertise or execute draft. Partial, unknown, or
 mismatched facade markers fail closed.
 
-The generated pair remains an ignored source-build artifact and is not included
-in the `invariantcad` npm tarball. Before a release can claim an installable
-draft runtime, the exact JS/WASM pair must be published together as a versioned
-compliance bundle with its SHA-256 manifest, build provenance, SBOM, and all
-required license material. Until then, use the pinned local build above or an
-equivalently trusted matching bundle; the library never fetches native code
-implicitly.
+The generated pair and its local package-neutral bundle remain ignored build
+artifacts and are not included in the `invariantcad` npm tarball. Until an
+externally reviewed release is published, use the pinned local build above or
+an equivalently trusted matching bundle supplied through an explicit channel;
+the library never fetches native code implicitly.
 
 ## License, source, and replacement boundary
 
@@ -175,3 +232,8 @@ replacement, check out the locked OCCT fork and commit, rebuild the builder
 image from upstream's `Dockerfile.builder`, audit the result, and deliberately
 update the image digest in the lock. Facade-only changes should be carried as
 ordered patches here so the replacement path remains inspectable.
+
+Likewise, successful local bundle generation and verification show that the
+declared files and digests are internally consistent. They do not establish
+publisher identity, certify legal compliance, or replace external review of
+the actual distribution channel and corresponding-source offer.

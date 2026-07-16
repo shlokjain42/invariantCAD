@@ -14,6 +14,11 @@ pnpm add invariantcad
 
 Node.js 20.19 or newer is required. The core API is ESM and also targets modern browsers.
 
+The npm package contains the TypeScript API and declares stock `occt-wasm` as a
+dependency; it does not contain the InvariantCAD-owned facade runtime or its
+local compliance bundle. No facade bundle has been published to npm yet, and
+InvariantCAD never downloads one implicitly.
+
 ## Quick start
 
 ```ts
@@ -98,7 +103,7 @@ if (result.ok) {
 evaluator.dispose();
 ```
 
-The backend is explicitly selected; a design document never contains OCCT handles or backend-specific objects. The default `createOcctKernel()` loads stock `occt-wasm` and supports the exact features listed below except draft. Draft is advertised only when `moduleFactory` loads the matched InvariantCAD-owned facade build; `wasm` is an optional explicit binary override for environments where that factory cannot locate its sibling binary. See [Browser initialization](#browser-initialization).
+The backend is explicitly selected; a design document never contains OCCT handles or backend-specific objects. The default `createOcctKernel()` loads stock `occt-wasm` and supports the exact features listed below except draft. Draft is advertised only when `moduleFactory` loads the matched InvariantCAD-owned facade build; `wasm` is an optional explicit binary override for environments where that factory cannot locate its sibling binary. The repository can turn that local build into a verified, package-neutral bundle, but applications must still supply its runtime explicitly. See [Browser initialization](#browser-initialization).
 
 ### Semantic topology, fillets, chamfers, shells, offsets, and draft
 
@@ -284,7 +289,7 @@ The solver API is replaceable. The built-in solver is intentionally a v0.1 refer
 | Chamfer | OCCT equal-distance mode with semantic edge selectors | Yes |
 | Shell | OCCT inward/outward constant-thickness mode with semantic face openings | Yes |
 | Whole-solid offset | OCCT inward/outward mode with fixed round joins | Yes |
-| Draft | Matched owned OCCT facade with semantic face selectors | Yes |
+| Draft | Explicitly supplied matched owned OCCT facade with semantic face selectors | Yes |
 | Persistent face/edge selectors | Primitive/extrusion roles and sources; origin/geometry/adjacency queries | Yes |
 | Drawings, GD&T, PMI | No | Yes |
 | Sheet metal | No | Yes |
@@ -398,7 +403,36 @@ const kernel = await createOcctKernel({
 
 The paths and `?url` syntax are application/bundler-specific. InvariantCAD probes the loaded module before advertising draft. A stock module remains usable for its other exact features, while a partial, mismatched, or unknown owned-facade marker fails closed instead of claiming exact draft history.
 
-The owned facade is currently a source-built development artifact, not part of the `invariantcad` npm tarball. Until a versioned compliance bundle is published, consumers must build the matched pair from the pinned recipe in [native/occt](native/occt/README.md) or obtain both files from the same trusted build. Publishing the facade pair with checksums, licenses, and provenance is a release blocker, not an implicit runtime download.
+The owned facade is not part of the `invariantcad` npm tarball and no separate
+facade package is currently published. This repository can package a local
+source build as a versioned, package-neutral directory plus `.tar.gz` archive:
+
+```bash
+pnpm build:occt-facade
+pnpm bundle:occt-facade
+pnpm verify:occt-facade-bundle
+pnpm test:occt-facade-bundle
+```
+
+The unpacked runtime is under
+`.artifacts/occt-facade-bundle/invariantcad-occt-facade-0.2.0/runtime/`.
+Here `0.2.0` is the facade ABI/bundle version, not the npm package version.
+Its JavaScript and WASM files must be loaded as a matched pair using the
+`moduleFactory` and `wasm` options shown above. The archive is package-manager
+neutral: it is not an npm package, does not install itself, and is never found,
+downloaded, or extracted by `createOcctKernel`.
+
+`pnpm test:occt-facade-bundle` also packs the npm library, installs that tarball
+in a fresh temporary consumer, and runs direct and document-evaluated draft by
+passing the verified bundle runtime explicitly. The ordinary
+`pnpm test:package` does not require or discover owned-facade artifacts.
+
+The bundle also collects checksums, build provenance, an SBOM, source and
+relinking information, and applicable notices for review. Those materials are
+engineering compliance inputs, not legal certification. Public distribution
+remains pending external legal, release, and security review; until then,
+consumers must build the pinned recipe in [native/occt](native/occt/README.md)
+or obtain an equivalently reviewed matching pair through an explicit channel.
 
 ## Architecture
 
@@ -428,6 +462,9 @@ pnpm test
 pnpm build
 pnpm example:bracket
 pnpm verify
+
+# Heavyweight owned-facade release checks (after building the facade)
+pnpm test:occt-facade-bundle
 ```
 
 The bracket example writes its document and STL to `.artifacts/`.

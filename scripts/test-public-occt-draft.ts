@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { access } from "node:fs/promises";
+import { resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   createEvaluator,
@@ -24,12 +25,26 @@ import {
 type Descriptor = KernelFaceDescriptor | KernelEdgeDescriptor;
 
 const projectRoot = fileURLToPath(new URL("..", import.meta.url));
-const gluePath = fileURLToPath(
-  new URL("../.artifacts/occt-facade/occt-wasm.js", import.meta.url),
-);
-const wasmPath = fileURLToPath(
-  new URL("../.artifacts/occt-facade/occt-wasm.wasm", import.meta.url),
-);
+
+function parseRuntimeDirectory(arguments_: readonly string[]): string {
+  if (arguments_.length === 0) {
+    return resolve(projectRoot, ".artifacts/occt-facade");
+  }
+  if (
+    arguments_.length === 2 &&
+    arguments_[0] === "--runtime-dir" &&
+    arguments_[1] !== undefined
+  ) {
+    return resolve(arguments_[1]);
+  }
+  throw new Error(
+    "Usage: tsx scripts/test-public-occt-draft.ts [--runtime-dir DIRECTORY]",
+  );
+}
+
+const runtimeDirectory = parseRuntimeDirectory(process.argv.slice(2));
+const gluePath = resolve(runtimeDirectory, "occt-wasm.js");
+const wasmPath = resolve(runtimeDirectory, "occt-wasm.wasm");
 
 function closeTo(
   actual: number,
@@ -244,7 +259,7 @@ async function assertDocumentDraft(kernel: GeometryKernel): Promise<void> {
 
 await Promise.all([access(gluePath), access(wasmPath)]).catch((error) => {
   throw new Error(
-    `Owned OCCT facade artifacts are missing under ${projectRoot}/.artifacts/occt-facade; run pnpm build:occt-facade first`,
+    `Owned OCCT facade runtime files are missing under ${runtimeDirectory}`,
     { cause: error },
   );
 });

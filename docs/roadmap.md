@@ -31,7 +31,8 @@ InvariantCAD's goal is one coherent TypeScript CAD system, not one monolithic ge
 - Atomic signed multi-face neutral-plane draft through semantic face selectors, enabled by the matched owned OCCT facade with exact indexed face/edge/vertex evolution
 - Leak-free native evolution ownership for exact fillet and chamfer operations
 - Reproducible, digest-pinned OCCT facade build foundation
-- Versioned distribution of the owned OCCT facade JS/WASM pair with checksums, provenance, SBOM, and complete license material
+- Local package-neutral distribution-bundle generation and strict verification for the owned OCCT facade JS/WASM pair, with checksums, provenance, SBOM, source/relinking information, notices, and licenses
+- External legal, release, and security review followed by publication through an explicit durable channel; the bundle remains separate from the `invariantcad` npm package and is never an implicit runtime download
 
 ## 0.3 — persistent design intent
 

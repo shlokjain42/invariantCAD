@@ -1,10 +1,39 @@
 import { spawnSync } from "node:child_process";
 import { access, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const projectRoot = fileURLToPath(new URL("..", import.meta.url));
+
+function parseOptions(arguments_) {
+  let ownedFacadeRuntimeDirectory;
+  for (let index = 0; index < arguments_.length; index += 1) {
+    const argument = arguments_[index];
+    if (argument !== "--owned-facade-runtime-dir") {
+      throw new Error(`Unknown package-smoke option: ${argument}`);
+    }
+    if (ownedFacadeRuntimeDirectory !== undefined) {
+      throw new Error("--owned-facade-runtime-dir may be provided only once");
+    }
+    const value = arguments_[index + 1];
+    if (value === undefined || value.startsWith("--")) {
+      throw new Error("--owned-facade-runtime-dir requires a directory");
+    }
+    ownedFacadeRuntimeDirectory = resolve(value);
+    index += 1;
+  }
+  return { ownedFacadeRuntimeDirectory };
+}
+
+const { ownedFacadeRuntimeDirectory } = parseOptions(process.argv.slice(2));
+if (ownedFacadeRuntimeDirectory !== undefined) {
+  await Promise.all([
+    access(join(ownedFacadeRuntimeDirectory, "occt-wasm.js")),
+    access(join(ownedFacadeRuntimeDirectory, "occt-wasm.wasm")),
+  ]);
+}
+
 const packageJson = JSON.parse(
   await readFile(join(projectRoot, "package.json"), "utf8"),
 );
@@ -15,6 +44,16 @@ const archiveName =
   ".tgz";
 const archive = join(projectRoot, ".artifacts", archiveName);
 await access(archive);
+
+async function assertMissing(path, label) {
+  try {
+    await access(path);
+  } catch (error) {
+    if (error?.code === "ENOENT") return;
+    throw error;
+  }
+  throw new Error(label + " must remain outside the invariantcad npm package");
+}
 
 function run(command, arguments_, cwd) {
   const result = spawnSync(command, arguments_, {
@@ -181,6 +220,86 @@ try {
       "",
     ].join("\n"),
   );
+  if (ownedFacadeRuntimeDirectory !== undefined) {
+    await writeFile(
+      join(consumer, "owned-facade-smoke.mjs"),
+      [
+        'import assert from "node:assert/strict";',
+        'import { join, resolve } from "node:path";',
+        'import { pathToFileURL } from "node:url";',
+        'import { createEvaluator, deg, design, mm, scalarVec3, topology, vec3 } from "invariantcad";',
+        'import { createOcctKernel } from "invariantcad/kernels/occt";',
+        "",
+        'if (process.argv.length !== 3) throw new Error("Expected one explicit owned-facade runtime directory");',
+        "const runtimeDirectory = resolve(process.argv[2]);",
+        'const gluePath = join(runtimeDirectory, "occt-wasm.js");',
+        'const wasmPath = join(runtimeDirectory, "occt-wasm.wasm");',
+        "const loaded = await import(pathToFileURL(gluePath).href);",
+        'if (typeof loaded.default !== "function") throw new Error("Owned facade glue has no default module factory");',
+        "const kernel = await createOcctKernel({ moduleFactory: loaded.default, wasm: wasmPath });",
+        "try {",
+        '  if (!kernel.capabilities.features.includes("draft")) throw new Error("Installed kernel did not advertise owned draft");',
+        "  assert.deepEqual(kernel.capabilities.exactIndexedTopologyEvolution, { protocolVersion: 1, features: [\"draft\"] });",
+        '  if (kernel.draft === undefined || kernel.topology === undefined) throw new Error("Installed owned facade lacks draft topology support");',
+        "",
+        "  let directBox;",
+        "  let directDraft;",
+        "  try {",
+        '    directBox = kernel.box([20, 20, 10], false, { feature: "installed-direct-box" });',
+        "    const input = kernel.topology(directBox);",
+        "    const selected = input.faces.filter((face) => face.lineage.some((lineage) =>",
+        '      lineage.feature === "installed-direct-box" && lineage.role === "box.face.x-min"',
+        "    ));",
+        '    assert.equal(selected.length, 1, "installed direct selector seed");',
+        "    directDraft = kernel.draft(directBox, [selected[0].key], {",
+        "      angle: (5 * Math.PI) / 180,",
+        "      pullDirection: [0, 0, 1],",
+        "      neutralPlane: { origin: [0, 0, 0], normal: [0, 0, 1] },",
+        '    }, { feature: "installed-direct-draft" });',
+        '    assert.deepEqual(kernel.status(directDraft), { ok: true, code: "VALID" });',
+        "    const directVolume = kernel.measure(directDraft).volume;",
+        '    assert.ok(Math.abs(directVolume - 3912.5113364740755) <= 1e-8, `unexpected installed direct draft volume ${directVolume}`);',
+        "    const evolved = kernel.topology(directDraft);",
+        '    assert.equal(evolved.history, "complete");',
+        "    const modifiedFaces = evolved.faces.filter((face) => face.lineage.some((lineage) =>",
+        '      lineage.feature === "installed-direct-draft" && lineage.relation === "modified"',
+        "    ));",
+        '    assert.equal(modifiedFaces.length, 5, "installed exact draft face evolution");',
+        "  } finally {",
+        "    if (directDraft !== undefined) kernel.disposeShape(directDraft);",
+        "    if (directBox !== undefined) kernel.disposeShape(directBox);",
+        "  }",
+        "",
+        '  const cad = design("installed-owned-facade-draft");',
+        '  const box = cad.box("box", { size: vec3(mm(20), mm(20), mm(10)) });',
+        '  const drafted = cad.draft("drafted", box, {',
+        '    faces: topology.faces.createdBy(box, { role: "box.face.x-min" }).exactly(1),',
+        "    angle: deg(5),",
+        "    pullDirection: scalarVec3(0, 0, 1),",
+        "    neutralPlane: { origin: vec3(mm(0), mm(0), mm(0)), normal: scalarVec3(0, 0, 1) },",
+        "  });",
+        '  cad.output("drafted", drafted);',
+        "  const evaluator = await createEvaluator({ kernel });",
+        "  try {",
+        "    const result = await evaluator.evaluate(cad.build());",
+        "    if (!result.ok) throw new Error(JSON.stringify(result.diagnostics));",
+        "    try {",
+        '      const evaluatedVolume = result.value.output("drafted").measure().volume;',
+        '      assert.ok(Math.abs(evaluatedVolume - 3912.5113364740755) <= 1e-8, `unexpected installed evaluated draft volume ${evaluatedVolume}`);',
+        "    } finally {",
+        "      result.value.dispose();",
+        "    }",
+        "  } finally {",
+        "    evaluator.dispose();",
+        "  }",
+        "} finally {",
+        "  kernel.dispose();",
+        "}",
+        'process.stdout.write("installed-owned-facade-draft=ok\\n");',
+        "",
+      ].join("\n"),
+    );
+  }
   await writeFile(
     join(consumer, "type-smoke.ts"),
     [
@@ -302,12 +421,28 @@ try {
     ["install", "--ignore-scripts", "--no-audit", "--no-fund", archive],
     consumer,
   );
+  const installedPackage = join(consumer, "node_modules", "invariantcad");
+  await assertMissing(
+    join(installedPackage, ".artifacts"),
+    "Local build artifacts",
+  );
+  await assertMissing(
+    join(installedPackage, "native"),
+    "Native facade sources and bundles",
+  );
   run(
     process.execPath,
     [join(projectRoot, "node_modules", "typescript", "bin", "tsc"), "-p", "."],
     consumer,
   );
   run(process.execPath, ["smoke.mjs"], consumer);
+  if (ownedFacadeRuntimeDirectory !== undefined) {
+    run(
+      process.execPath,
+      ["owned-facade-smoke.mjs", ownedFacadeRuntimeDirectory],
+      consumer,
+    );
+  }
 
   const bin = join(
     consumer,
