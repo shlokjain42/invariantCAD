@@ -105,11 +105,13 @@ export interface ManifoldKernelOptions {
 export class ManifoldKernel implements GeometryKernel {
   readonly id = "manifold";
   readonly capabilities: KernelCapabilities = {
+    protocolVersion: 1,
     representation: "mesh",
     exact: false,
     primitives: ["box", "cylinder", "sphere"],
     features: ["extrude", "revolve", "boolean", "transform"],
-    exports: ["stl", "obj"],
+    nativeImports: [],
+    nativeExports: [],
   };
   private readonly module: ManifoldToplevel;
   private readonly liveShapes = new Set<ManifoldShape>();
@@ -270,12 +272,21 @@ export class ManifoldKernel implements GeometryKernel {
     };
   }
 
-  status(shape: KernelShape): string {
-    return asManifoldShape(shape)[MANIFOLD_SHAPE].status();
+  status(shape: KernelShape) {
+    const code = asManifoldShape(shape)[MANIFOLD_SHAPE].status();
+    return {
+      ok: code === "NoError",
+      code,
+      ...(code === "NoError" ? {} : { message: `Manifold reported ${code}` }),
+    };
   }
 
   disposeShape(shape: KernelShape): void {
-    const wrapped = asManifoldShape(shape);
+    if (!(shape instanceof ManifoldShape)) {
+      throw new TypeError("Expected a Manifold kernel shape");
+    }
+    const wrapped = shape;
+    if (wrapped.disposed) return;
     wrapped[MANIFOLD_SHAPE].delete();
     wrapped.disposed = true;
     this.liveShapes.delete(wrapped);

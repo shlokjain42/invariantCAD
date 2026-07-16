@@ -110,6 +110,7 @@ export {
   type EvaluatedOutput,
   type EvaluationOptions,
   type ParameterOverride,
+  type ShapeExportFormat,
 } from "./evaluator.js";
 export {
   createManifoldKernel,
@@ -118,17 +119,22 @@ export {
 } from "./manifold-kernel.js";
 export {
   mergeMeshes,
+  GEOMETRY_KERNEL_PROTOCOL_VERSION,
   kernelSupports,
   transformMesh,
   type BoundingBox,
   type GeometryKernel,
   type KernelCapabilityKind,
   type KernelCapabilities,
+  type KernelExchangeFormat,
   type KernelFeature,
+  type KernelFeatureContext,
   type KernelPrimitive,
   type KernelRepresentation,
   type KernelShape,
+  type KernelShapeStatus,
   type MeshData,
+  type MeshOptions,
   type ResolvedTransformOperation,
   type ShapeMeasurements,
 } from "./kernel.js";

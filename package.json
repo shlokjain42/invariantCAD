@@ -7,6 +7,7 @@
   "sideEffects": false,
   "files": [
     "dist",
+    "licenses",
     "README.md",
     "LICENSE",
     "THIRD_PARTY_NOTICES.md"
@@ -18,6 +19,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./kernels/occt": {
+      "types": "./dist/occt-kernel.d.ts",
+      "import": "./dist/occt-kernel.js"
     },
     "./package.json": "./package.json"
   },
@@ -53,6 +58,7 @@
   ],
   "dependencies": {
     "manifold-3d": "^3.5.1",
+    "occt-wasm": "3.7.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {

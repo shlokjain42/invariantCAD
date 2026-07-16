@@ -2,8 +2,11 @@
 
 import { readFile, writeFile } from "node:fs/promises";
 import { extname } from "node:path";
-import { createEvaluator, type EvaluatedOutput } from "./evaluator.js";
-import type { MeshExportFormat } from "./exporters.js";
+import {
+  createEvaluator,
+  type EvaluatedOutput,
+  type ShapeExportFormat,
+} from "./evaluator.js";
 import { parseDocument } from "./serialization.js";
 import type { Diagnostic } from "./core/result.js";
 
@@ -41,8 +44,8 @@ function usage(): string {
 
 Usage:
   invariantcad validate <document.json>
-  invariantcad inspect <document.json> [--parameters values.json]
-  invariantcad export <document.json> --to model.stl [--output name] [--format stl|stl-ascii|obj] [--parameters values.json]
+  invariantcad inspect <document.json> [--kernel manifold|occt] [--parameters values.json]
+  invariantcad export <document.json> --to model.stl [--kernel manifold|occt] [--output name] [--format stl|stl-ascii|obj|step|brep|brep-binary] [--parameters values.json]
 `;
 }
 
@@ -71,14 +74,32 @@ async function loadParameters(path: string | true | undefined): Promise<Record<s
   return output;
 }
 
-function inferFormat(path: string, explicit?: string | true): MeshExportFormat {
+function inferFormat(path: string, explicit?: string | true): ShapeExportFormat {
   if (typeof explicit === "string") {
-    if (explicit === "stl" || explicit === "stl-ascii" || explicit === "obj") {
+    if (
+      explicit === "stl" ||
+      explicit === "stl-ascii" ||
+      explicit === "obj" ||
+      explicit === "step" ||
+      explicit === "brep" ||
+      explicit === "brep-binary"
+    ) {
       return explicit;
     }
     throw new TypeError(`Unsupported export format '${explicit}'`);
   }
-  return extname(path).toLowerCase() === ".obj" ? "obj" : "stl";
+  switch (extname(path).toLowerCase()) {
+    case ".obj":
+      return "obj";
+    case ".step":
+    case ".stp":
+      return "step";
+    case ".brep":
+    case ".brp":
+      return "brep";
+    default:
+      return "stl";
+  }
 }
 
 function measurements(output: EvaluatedOutput): object {
@@ -122,7 +143,31 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
     process.stderr.write(`Unknown command '${args.command}'\n${usage()}`);
     return 2;
   }
-  const evaluator = await createEvaluator();
+  const requestedKernel = args.flags.kernel;
+  if (
+    requestedKernel !== undefined &&
+    requestedKernel !== "manifold" &&
+    requestedKernel !== "occt"
+  ) {
+    process.stderr.write(`Unsupported kernel '${String(requestedKernel)}'\n`);
+    return 2;
+  }
+  const destination = args.command === "export" ? args.flags.to : undefined;
+  const exportFormat =
+    typeof destination === "string"
+      ? inferFormat(destination, args.flags.format)
+      : undefined;
+  const exactExport =
+    exportFormat === "step" ||
+    exportFormat === "brep" ||
+    exportFormat === "brep-binary";
+  const kernelChoice = requestedKernel ?? (exactExport ? "occt" : "manifold");
+  const evaluator =
+    kernelChoice === "occt"
+      ? await import("./occt-kernel.js").then(async ({ createOcctKernel }) =>
+          createEvaluator({ kernel: await createOcctKernel() }),
+        )
+      : await createEvaluator();
   try {
     const evaluated = await evaluator.evaluate(parsed.value, {
       parameters: await loadParameters(args.flags.parameters),
@@ -145,7 +190,6 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
         process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
         return 0;
       }
-      const destination = args.flags.to;
       if (typeof destination !== "string") {
         process.stderr.write("export requires --to <path>\n");
         return 2;
@@ -156,7 +200,7 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
           : evaluated.value.outputNames[0];
       if (outputName === undefined) throw new Error("No output is available to export");
       const data = evaluated.value.output(outputName).export(
-        inferFormat(destination, args.flags.format),
+        exportFormat ?? inferFormat(destination, args.flags.format),
       );
       await writeFile(destination, data);
       process.stdout.write(`Wrote ${destination}\n`);

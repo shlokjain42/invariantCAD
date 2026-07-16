@@ -4,14 +4,23 @@ import type { ResolvedProfile } from "./protocol/profile.js";
 export type KernelRepresentation = "mesh" | "brep" | "sdf";
 export type KernelPrimitive = "box" | "cylinder" | "sphere";
 export type KernelFeature = "extrude" | "revolve" | "boolean" | "transform";
-export type KernelCapabilityKind = "primitive" | "feature" | "export";
+export type KernelCapabilityKind =
+  | "primitive"
+  | "feature"
+  | "nativeImport"
+  | "nativeExport";
+export type KernelExchangeFormat = "step" | "brep" | "brep-binary";
+
+export const GEOMETRY_KERNEL_PROTOCOL_VERSION = 1 as const;
 
 export interface KernelCapabilities {
+  readonly protocolVersion: typeof GEOMETRY_KERNEL_PROTOCOL_VERSION;
   readonly representation: KernelRepresentation;
   readonly exact: boolean;
   readonly primitives: readonly KernelPrimitive[];
   readonly features: readonly KernelFeature[];
-  readonly exports: readonly string[];
+  readonly nativeImports: readonly KernelExchangeFormat[];
+  readonly nativeExports: readonly KernelExchangeFormat[];
 }
 
 export function kernelSupports(
@@ -26,8 +35,8 @@ export function kernelSupports(
 ): boolean;
 export function kernelSupports(
   capabilities: KernelCapabilities,
-  kind: "export",
-  capability: string,
+  kind: "nativeImport" | "nativeExport",
+  capability: KernelExchangeFormat,
 ): boolean;
 export function kernelSupports(
   capabilities: KernelCapabilities,
@@ -39,7 +48,9 @@ export function kernelSupports(
       ? capabilities.primitives
       : kind === "feature"
         ? capabilities.features
-        : capabilities.exports;
+        : kind === "nativeImport"
+          ? capabilities.nativeImports
+          : capabilities.nativeExports;
   return (supported as readonly string[]).includes(capability);
 }
 
@@ -47,9 +58,21 @@ export interface KernelShape {
   readonly kernel: string;
 }
 
+export interface KernelShapeStatus {
+  readonly ok: boolean;
+  readonly code: string;
+  readonly message?: string;
+}
+
 export interface MeshData {
   readonly positions: Float32Array;
   readonly indices: Uint32Array;
+}
+
+export interface MeshOptions {
+  readonly linearDeflection?: number;
+  readonly angularDeflection?: number;
+  readonly relative?: boolean;
 }
 
 export interface BoundingBox {
@@ -71,20 +94,35 @@ export type ResolvedTransformOperation =
   | { readonly kind: "scale"; readonly value: Vec3 }
   | { readonly kind: "mirror"; readonly normal: Vec3 };
 
+export interface KernelFeatureContext {
+  readonly feature?: string;
+  readonly signal?: AbortSignal;
+  readonly tolerance?: number;
+}
+
 export interface GeometryKernel {
   readonly id: string;
   readonly capabilities: KernelCapabilities;
 
-  box(size: Vec3, center: boolean): KernelShape;
-  cylinder(
+  box?(
+    size: Vec3,
+    center: boolean,
+    context?: KernelFeatureContext,
+  ): KernelShape;
+  cylinder?(
     height: number,
     radiusBottom: number,
     radiusTop: number,
     center: boolean,
     segments?: number,
+    context?: KernelFeatureContext,
   ): KernelShape;
-  sphere(radius: number, segments?: number): KernelShape;
-  extrude(
+  sphere?(
+    radius: number,
+    segments?: number,
+    context?: KernelFeatureContext,
+  ): KernelShape;
+  extrude?(
     profile: ResolvedProfile,
     options: {
       readonly distance: number;
@@ -93,23 +131,37 @@ export interface GeometryKernel {
       readonly scaleTop: readonly [number, number];
       readonly divisions: number;
     },
+    context?: KernelFeatureContext,
   ): KernelShape;
-  revolve(
+  revolve?(
     profile: ResolvedProfile,
     options: { readonly angle: number; readonly segments?: number },
+    context?: KernelFeatureContext,
   ): KernelShape;
-  boolean(
+  boolean?(
     operation: "union" | "subtract" | "intersect",
     target: KernelShape,
     tools: readonly KernelShape[],
+    context?: KernelFeatureContext,
   ): KernelShape;
-  transform(
+  transform?(
     shape: KernelShape,
     operations: readonly ResolvedTransformOperation[],
+    context?: KernelFeatureContext,
   ): KernelShape;
-  mesh(shape: KernelShape): MeshData;
+  importShape?(
+    data: string | ArrayBuffer | Uint8Array,
+    format: KernelExchangeFormat,
+    context?: KernelFeatureContext,
+  ): KernelShape;
+  exportShape?(
+    shape: KernelShape,
+    format: KernelExchangeFormat,
+    context?: KernelFeatureContext,
+  ): Uint8Array;
+  mesh(shape: KernelShape, options?: MeshOptions): MeshData;
   measure(shape: KernelShape): ShapeMeasurements;
-  status(shape: KernelShape): string;
+  status(shape: KernelShape): KernelShapeStatus;
   disposeShape(shape: KernelShape): void;
   dispose(): void;
 }

@@ -4,7 +4,7 @@ Comprehensive, type-safe CAD-as-code for TypeScript.
 
 InvariantCAD represents a design as immutable, versioned JSON and evaluates it through replaceable geometry and sketch-solver backends. The public API never exposes WASM pointers or kernel-specific objects.
 
-> **Project status:** `0.1.0` is a working foundation and mesh-CAD vertical slice. It creates, measures, assembles, serializes, validates, and exports real watertight geometry. It is not yet an exact B-Rep replacement for SolidWorks, OpenCascade, or Parasolid; see the [support matrix](#support-matrix) and [roadmap](docs/roadmap.md).
+> **Project status:** `0.1.0` is the released-foundation target. Current main adds an exact OpenCascade B-Rep backend, analytic sketch-profile transfer, and STEP/BREP exchange. Advanced mechanical features and persistent topology are still under active development; see the [support matrix](#support-matrix) and [roadmap](docs/roadmap.md).
 
 ## Install
 
@@ -12,7 +12,7 @@ InvariantCAD represents a design as immutable, versioned JSON and evaluates it t
 pnpm add invariantcad
 ```
 
-Node.js 20 or newer is required. The core API is ESM and also targets modern browsers.
+Node.js 20.19 or newer is required. The core API is ESM and also targets modern browsers.
 
 ## Quick start
 
@@ -74,6 +74,32 @@ evaluator.dispose();
 
 Every feature, entity, constraint, parameter, instance, and output has an explicit stable ID. Those IDs are the basis for reproducible diffs, caching, diagnostics, and future persistent-topology naming.
 
+### Exact B-Rep evaluation
+
+Use the OCCT backend when the result must retain exact analytic geometry or be exported through STEP/BREP:
+
+```ts
+import { createEvaluator } from "invariantcad";
+import { createOcctKernel } from "invariantcad/kernels/occt";
+
+const evaluator = await createEvaluator({
+  kernel: await createOcctKernel(),
+});
+
+const result = await evaluator.evaluate(document);
+if (result.ok) {
+  try {
+    const step = result.value.output("plate").export("step");
+    // Uint8Array containing an ISO-10303-21 STEP file.
+  } finally {
+    result.value.dispose();
+  }
+}
+evaluator.dispose();
+```
+
+The backend is explicitly selected; a design document never contains OCCT handles or backend-specific objects.
+
 ## What works today
 
 ### Modeling
@@ -84,7 +110,8 @@ Every feature, entity, constraint, parameter, instance, and output has an explic
 - Sketches on XY, XZ, and YZ planes
 - Points, lines, circles, arcs, polylines, rectangles, and regular polygons
 - Explicit outer loops and hole loops
-- Extrude, symmetric extrude, twist, taper, and revolve
+- Extrude, symmetric extrude, and revolve on both kernels
+- Twist and top-scale extrusion through the Manifold mesh backend
 - Union, subtraction, and intersection
 - Translation, Euler rotation, nonuniform scale, and mirror
 - Parts with part number, material, description, and metadata
@@ -99,6 +126,8 @@ The solver API is replaceable. The built-in solver is intentionally a v0.1 refer
 ### Evaluation and interchange
 
 - Reliable manifold-mesh CSG through `manifold-3d` WebAssembly
+- Exact B-Rep primitives, analytic profile extrusion/revolution, CSG, and transforms through OpenCascade WebAssembly
+- Native STEP, text BREP, and binary BREP import/export in the exact-kernel protocol
 - Volume, surface area, axis-aligned bounds, genus, and kernel tolerance
 - Typed-array mesh extraction
 - Binary STL, ASCII STL, and OBJ export
@@ -109,7 +138,7 @@ The solver API is replaceable. The built-in solver is intentionally a v0.1 refer
 
 ## Support matrix
 
-| Capability | `0.1.0` | Intended stable system |
+| Capability | Current main | Intended stable system |
 |---|---:|---:|
 | Versioned, kernel-neutral design IR | Yes | Yes |
 | Parametric feature graph | Yes | Yes |
@@ -117,8 +146,9 @@ The solver API is replaceable. The built-in solver is intentionally a v0.1 refer
 | Sketch constraints | Reference solver | Pluggable industrial solvers |
 | Parts and fixed-placement assemblies | Yes | Yes |
 | Assembly mates and joints | No | Yes |
-| Exact NURBS/B-Rep geometry | No | OCCT backend |
-| STEP/IGES import and export | No | OCCT backend |
+| Exact B-Rep primitives and core features | OCCT backend | Yes |
+| STEP and BREP import/export | OCCT backend | Yes |
+| IGES import/export | No | Exact backend |
 | Fillet, chamfer, shell, draft | No | Exact backend |
 | Persistent face/edge selectors | Schema work | Yes |
 | Drawings, GD&T, PMI | No | Yes |
@@ -189,9 +219,12 @@ invariantcad inspect design.invariantcad.json
 invariantcad inspect design.invariantcad.json --parameters dimensions.json
 invariantcad export design.invariantcad.json --output plate --to plate.stl
 invariantcad export design.invariantcad.json --output plate --format obj --to plate.obj
+invariantcad export design.invariantcad.json --output plate --to plate.step
+invariantcad inspect design.invariantcad.json --kernel occt
 ```
 
 Parameter JSON values use base units: millimetres, radians, and unitless scalars.
+The CLI selects OCCT automatically for `.step` and `.brep` destinations. Use `--kernel manifold|occt` to select a backend explicitly.
 
 ## Browser initialization
 
@@ -206,6 +239,15 @@ const evaluator = await createEvaluator({ manifold: { wasmUrl } });
 
 The `?url` syntax is bundler-specific; InvariantCAD itself only accepts a normal URL and does not couple its API to Vite.
 
+The exact backend likewise accepts an explicit OCCT WASM location:
+
+```ts
+import occtWasmUrl from "occt-wasm/dist/occt-wasm.wasm?url";
+import { createOcctKernel } from "invariantcad/kernels/occt";
+
+const kernel = await createOcctKernel({ wasm: occtWasmUrl });
+```
+
 ## Architecture
 
 ```text
@@ -217,10 +259,10 @@ immutable DesignDocument v1 ──► validation / canonical JSON / hashing
         ├──► sketch-solver protocol ──► reference solver (v0.1)
         │
         └──► geometry-kernel protocol ──► Manifold mesh kernel
-                                      └─► exact OCCT kernel (planned)
+                                      └─► exact OCCT B-Rep kernel
         │
         ▼
-evaluated parts / assemblies ──► measurement / mesh / STL / OBJ
+evaluated parts / assemblies ──► measurement / mesh / STL / OBJ / STEP / BREP
 ```
 
 See [Architecture](docs/architecture.md) for the invariants and backend contracts.
@@ -240,4 +282,4 @@ The bracket example writes its document and STL to `.artifacts/`.
 
 ## License
 
-InvariantCAD is Apache-2.0 licensed. The default mesh backend uses the Apache-2.0 licensed Manifold library. Dependency notices and source-license obligations must be preserved in distributions.
+InvariantCAD is Apache-2.0 licensed. The default mesh backend uses the Apache-2.0 licensed Manifold library. The optional-at-runtime OCCT backend depends on `occt-wasm` and compiled OpenCascade code under LGPL-2.1 with the OCCT exception. Dependency notices, corresponding-source information, and replacement rights must be preserved in distributions.

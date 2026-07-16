@@ -58,7 +58,9 @@ export function geometryKernelConformance(
 
     function expectLiveShape(shape: KernelShape): ShapeMeasurements {
       expect(shape.kernel).toBe(kernel.id);
-      expect(kernel.status(shape)).toBe("NoError");
+      expect(kernel.status(shape)).toEqual(
+        expect.objectContaining({ ok: true }),
+      );
       const measurement = kernel.measure(shape);
       expect(Number.isFinite(measurement.volume)).toBe(true);
       expect(Number.isFinite(measurement.surfaceArea)).toBe(true);
@@ -69,6 +71,7 @@ export function geometryKernelConformance(
 
     it("publishes internally consistent capability metadata", () => {
       expect(kernel.id).toBe(options.id);
+      expect(kernel.capabilities.protocolVersion).toBe(1);
       expect(["mesh", "brep", "sdf"]).toContain(
         kernel.capabilities.representation,
       );
@@ -78,18 +81,27 @@ export function geometryKernelConformance(
       expect(new Set(kernel.capabilities.features).size).toBe(
         kernel.capabilities.features.length,
       );
-      expect(new Set(kernel.capabilities.exports).size).toBe(
-        kernel.capabilities.exports.length,
+      expect(new Set(kernel.capabilities.nativeImports).size).toBe(
+        kernel.capabilities.nativeImports.length,
       );
+      expect(new Set(kernel.capabilities.nativeExports).size).toBe(
+        kernel.capabilities.nativeExports.length,
+      );
+      if (kernel.capabilities.nativeImports.length > 0) {
+        expect(kernel.importShape).toBeTypeOf("function");
+      }
+      if (kernel.capabilities.nativeExports.length > 0) {
+        expect(kernel.exportShape).toBeTypeOf("function");
+      }
     });
 
     it("constructs every declared primitive", () => {
       if (kernelSupports(kernel.capabilities, "primitive", "box")) {
-        const box = kernel.box([2, 3, 4], false);
+        const box = kernel.box!([2, 3, 4], false);
         expectMeasurement(expectLiveShape(box), "volume", 24, relativeTolerance);
       }
       if (kernelSupports(kernel.capabilities, "primitive", "cylinder")) {
-        const cylinder = kernel.cylinder(4, 2, 2, false, 256);
+        const cylinder = kernel.cylinder!(4, 2, 2, false, 256);
         expectMeasurement(
           expectLiveShape(cylinder),
           "volume",
@@ -98,7 +110,7 @@ export function geometryKernelConformance(
         );
       }
       if (kernelSupports(kernel.capabilities, "primitive", "sphere")) {
-        const sphere = kernel.sphere(2, 256);
+        const sphere = kernel.sphere!(2, 256);
         expectMeasurement(
           expectLiveShape(sphere),
           "volume",
@@ -115,7 +127,7 @@ export function geometryKernelConformance(
         holes: [],
       };
       if (kernelSupports(kernel.capabilities, "feature", "extrude")) {
-        const extrusion = kernel.extrude(rectangle, {
+        const extrusion = kernel.extrude!(rectangle, {
           distance: 4,
           symmetric: false,
           twist: 0,
@@ -135,7 +147,7 @@ export function geometryKernelConformance(
           outer: rectangleLoop(2, -2, 3, 2),
           holes: [],
         };
-        const revolution = kernel.revolve(annulus, {
+        const revolution = kernel.revolve!(annulus, {
           angle: Math.PI * 2,
           segments: 256,
         });
@@ -156,14 +168,14 @@ export function geometryKernelConformance(
       ) {
         return;
       }
-      const first = kernel.box([2, 2, 2], false);
-      const rawSecond = kernel.box([2, 2, 2], false);
-      const second = kernel.transform(rawSecond, [
+      const first = kernel.box!([2, 2, 2], false);
+      const rawSecond = kernel.box!([2, 2, 2], false);
+      const second = kernel.transform!(rawSecond, [
         { kind: "translate", value: [1, 0, 0] },
       ]);
-      const union = kernel.boolean("union", first, [second]);
-      const intersection = kernel.boolean("intersect", first, [second]);
-      const subtraction = kernel.boolean("subtract", first, [second]);
+      const union = kernel.boolean!("union", first, [second]);
+      const intersection = kernel.boolean!("intersect", first, [second]);
+      const subtraction = kernel.boolean!("subtract", first, [second]);
 
       expectMeasurement(expectLiveShape(first), "volume", 8, relativeTolerance);
       expectMeasurement(expectLiveShape(rawSecond), "volume", 8, relativeTolerance);
@@ -175,7 +187,7 @@ export function geometryKernelConformance(
 
     it("extracts a valid standalone triangle mesh", () => {
       if (!kernelSupports(kernel.capabilities, "primitive", "box")) return;
-      const shape = kernel.box([2, 3, 4], true);
+      const shape = kernel.box!([2, 3, 4], true);
       const mesh = kernel.mesh(shape);
       expect(mesh.positions).toBeInstanceOf(Float32Array);
       expect(mesh.indices).toBeInstanceOf(Uint32Array);

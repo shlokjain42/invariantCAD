@@ -14,8 +14,9 @@ describe("kernel capability negotiation", () => {
     try {
       expect(kernelSupports(kernel.capabilities, "primitive", "box")).toBe(true);
       expect(kernelSupports(kernel.capabilities, "feature", "boolean")).toBe(true);
-      expect(kernelSupports(kernel.capabilities, "export", "stl")).toBe(true);
-      expect(kernelSupports(kernel.capabilities, "export", "step")).toBe(false);
+      expect(kernelSupports(kernel.capabilities, "nativeExport", "step")).toBe(
+        false,
+      );
     } finally {
       kernel.dispose();
     }
@@ -36,9 +37,11 @@ describe("kernel capability negotiation", () => {
           };
         }
         if (property === "sphere") {
-          return (...arguments_: Parameters<GeometryKernel["sphere"]>) => {
+          return (
+            ...arguments_: Parameters<NonNullable<GeometryKernel["sphere"]>>
+          ) => {
             sphereInvoked = true;
-            return target.sphere(...arguments_);
+            return target.sphere!(...arguments_);
           };
         }
         const value: unknown = Reflect.get(target, property, target);

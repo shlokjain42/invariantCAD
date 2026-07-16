@@ -46,9 +46,11 @@ The built-in reference solver uses damped nonlinear least squares with numerical
 
 `GeometryKernel` owns primitives, profile features, booleans, transformations, tessellation, measurements, status, and lifetime management.
 
+The protocol is explicitly versioned. Backends declare primitive, feature, native-import, and native-export capabilities; the evaluator rejects unsupported operations before invoking them. Shape validity is normalized into backend-neutral status data, while meshing accepts explicit linear/angular deflection options. Stable feature IDs and cancellation signals travel through `KernelFeatureContext` without entering kernel shape handles.
+
 `ManifoldKernel` is the initial implementation. It copies upstream mesh buffers into InvariantCAD's stable `MeshData`, checks kernel status, and destroys every WASM object. The public API sees only typed arrays and measurements.
 
-The exact backend uses OpenCascade for NURBS/B-Rep, healing, exact exchange, mechanical features, and persistent topology. It must implement the same conformance corpus but compare toleranced geometry rather than byte-identical tessellations.
+The exact backend uses OpenCascade for analytic profiles, NURBS/B-Rep, healing, exact exchange, mechanical features, and persistent topology. STEP and BREP are native kernel exchange formats; STL and OBJ remain backend-neutral exports of explicitly tessellated meshes. Every backend implements the same conformance corpus, comparing toleranced geometry rather than byte-identical tessellations.
 
 ### Evaluation layer
 
@@ -63,6 +65,8 @@ Evaluation performs these operations in order:
 7. construction of disposable evaluated outputs.
 
 One feature is evaluated once per run. Cross-run content-addressed caching is planned after topology and kernel-version fingerprints are formalized.
+
+Evaluated shapes are owned by exactly one evaluation result. Disposing that result releases its backend handles; disposing it again is safe. A kernel rejects foreign handles, and destroying the kernel releases any shapes that remain live.
 
 ## Coordinate conventions
 

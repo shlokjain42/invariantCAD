@@ -9,6 +9,7 @@ import {
   type Vec3,
 } from "./core/math.js";
 import {
+  CadError,
   diagnostic,
   hasErrors,
   success,
@@ -31,15 +32,19 @@ import type {
   TransformOperationIR,
 } from "./ir.js";
 import {
+  GEOMETRY_KERNEL_PROTOCOL_VERSION,
   mergeMeshes,
   transformMesh,
   type BoundingBox,
   type GeometryKernel,
   type KernelCapabilityKind,
+  type KernelExchangeFormat,
   type KernelFeature,
+  type KernelFeatureContext,
   type KernelPrimitive,
   type KernelShape,
   type MeshData,
+  type MeshOptions,
   type ResolvedTransformOperation,
   type ShapeMeasurements,
   kernelSupports,
@@ -56,6 +61,7 @@ import {
 import { validateDocument } from "./validation.js";
 
 export type ParameterOverride = number | Expression<Dimension>;
+export type ShapeExportFormat = MeshExportFormat | KernelExchangeFormat;
 
 export interface EvaluationOptions {
   readonly parameters?: Readonly<Record<string, ParameterOverride>>;
@@ -380,9 +386,9 @@ export class EvaluatedSolid {
     this.shape = shape;
   }
 
-  mesh(): MeshData {
+  mesh(options?: MeshOptions): MeshData {
     this.owner.assertLive();
-    return this.owner.kernel.mesh(this.shape);
+    return this.owner.kernel.mesh(this.shape, options);
   }
 
   measure(): ShapeMeasurements {
@@ -390,8 +396,32 @@ export class EvaluatedSolid {
     return this.owner.kernel.measure(this.shape);
   }
 
-  export(format: MeshExportFormat): Uint8Array | string {
-    return exportMesh(this.mesh(), format, this.name);
+  export(format: ShapeExportFormat): Uint8Array | string {
+    if (
+      format === "stl" ||
+      format === "stl-ascii" ||
+      format === "obj"
+    ) {
+      return exportMesh(this.mesh(), format, this.name);
+    }
+    this.owner.assertLive();
+    if (
+      !kernelSupports(this.owner.kernel.capabilities, "nativeExport", format) ||
+      this.owner.kernel.exportShape === undefined
+    ) {
+      const value = diagnostic(
+        "EXPORT_UNSUPPORTED",
+        `Kernel '${this.owner.kernel.id}' cannot export ${format}`,
+        {
+          severity: "error",
+          details: { kernel: this.owner.kernel.id, format },
+        },
+      );
+      throw new CadError(value.message, [value]);
+    }
+    return this.owner.kernel.exportShape(this.shape, format, {
+      feature: this.name,
+    });
   }
 }
 
@@ -439,11 +469,14 @@ export class EvaluatedAssembly {
     }));
   }
 
-  mesh(): MeshData {
+  mesh(options?: MeshOptions): MeshData {
     this.owner.assertLive();
     return mergeMeshes(
       this.occurrences.map((occurrence) =>
-        transformMesh(this.owner.kernel.mesh(occurrence.part.shape), occurrence.transform),
+        transformMesh(
+          this.owner.kernel.mesh(occurrence.part.shape, options),
+          occurrence.transform,
+        ),
       ),
     );
   }
@@ -452,7 +485,22 @@ export class EvaluatedAssembly {
     return meshMeasurements(this.mesh());
   }
 
-  export(format: MeshExportFormat): Uint8Array | string {
+  export(format: ShapeExportFormat): Uint8Array | string {
+    if (
+      format !== "stl" &&
+      format !== "stl-ascii" &&
+      format !== "obj"
+    ) {
+      const value = diagnostic(
+        "EXPORT_UNSUPPORTED",
+        `Assembly '${this.name}' cannot be exported as ${format} yet`,
+        {
+          severity: "error",
+          details: { output: this.name, format },
+        },
+      );
+      throw new CadError(value.message, [value]);
+    }
     return exportMesh(this.mesh(), format, this.name);
   }
 }
@@ -506,6 +554,28 @@ export class Evaluator {
     options: EvaluationOptions = {},
   ): Promise<CadResult<EvaluatedDesign>> {
     if (this.disposed) throw new Error("This evaluator has been disposed");
+    if (
+      (this.kernel.capabilities.protocolVersion as number) !==
+      GEOMETRY_KERNEL_PROTOCOL_VERSION
+    ) {
+      return {
+        ok: false,
+        diagnostics: [
+          diagnostic(
+            "KERNEL_CAPABILITY_MISSING",
+            `Kernel '${this.kernel.id}' uses unsupported protocol version ${this.kernel.capabilities.protocolVersion}`,
+            {
+              severity: "error",
+              details: {
+                kernel: this.kernel.id,
+                expected: GEOMETRY_KERNEL_PROTOCOL_VERSION,
+                actual: this.kernel.capabilities.protocolVersion,
+              },
+            },
+          ),
+        ],
+      };
+    }
     const validation = validateDocument(document);
     if (!validation.ok) return validation;
     const parameterResult = resolveParameters(document, options.parameters ?? {});
@@ -551,14 +621,18 @@ export class Evaluator {
     const ownShape = (shape: KernelShape, id: NodeId): SolidValue => {
       createdShapes.add(shape);
       const status = this.kernel.status(shape);
-      if (status !== "NoError") {
+      if (!status.ok) {
         throw new EvaluationFailure(
-          diagnostic("KERNEL_ERROR", `Kernel failed with status ${status}`, {
+          diagnostic(
+            "KERNEL_ERROR",
+            status.message ?? `Kernel failed with status ${status.code}`,
+            {
             severity: "error",
             node: id,
             path: `/nodes/${id}`,
-            details: { kernel: this.kernel.id, status },
-          }),
+              details: { kernel: this.kernel.id, status: status.code },
+            },
+          ),
         );
       }
       const measured = this.kernel.measure(shape);
@@ -575,7 +649,7 @@ export class Evaluator {
     };
     const requireKernelCapability = (
       kind: KernelCapabilityKind,
-      capability: KernelPrimitive | KernelFeature | string,
+      capability: KernelPrimitive | KernelFeature | KernelExchangeFormat,
       id: NodeId,
     ): void => {
       const supported =
@@ -591,22 +665,53 @@ export class Evaluator {
                 "feature",
                 capability as KernelFeature,
               )
-            : kernelSupports(this.kernel.capabilities, "export", capability);
-      if (supported) return;
-      throw new EvaluationFailure(
-        diagnostic(
-          "KERNEL_CAPABILITY_MISSING",
-          `Kernel '${this.kernel.id}' does not support ${kind} '${capability}'`,
-          {
-            severity: "error",
-            node: id,
-            path: `/nodes/${id}`,
-            hints: ["Choose a compatible geometry kernel for this design"],
-            details: { kernel: this.kernel.id, kind, capability },
-          },
-        ),
-      );
+            : kernelSupports(
+                this.kernel.capabilities,
+                kind,
+                capability as KernelExchangeFormat,
+              );
+      if (!supported) {
+        throw new EvaluationFailure(
+          diagnostic(
+            "KERNEL_CAPABILITY_MISSING",
+            `Kernel '${this.kernel.id}' does not support ${kind} '${capability}'`,
+            {
+              severity: "error",
+              node: id,
+              path: `/nodes/${id}`,
+              hints: ["Choose a compatible geometry kernel for this design"],
+              details: { kernel: this.kernel.id, kind, capability },
+            },
+          ),
+        );
+      }
+      const implementation = this.kernel[
+        capability as keyof GeometryKernel
+      ];
+      if (typeof implementation !== "function") {
+        throw new EvaluationFailure(
+          diagnostic(
+            "KERNEL_ERROR",
+            `Kernel '${this.kernel.id}' declares ${kind} '${capability}' without implementing it`,
+            {
+              severity: "error",
+              node: id,
+              path: `/nodes/${id}`,
+              details: {
+                kernel: this.kernel.id,
+                kind,
+                capability,
+                protocolViolation: true,
+              },
+            },
+          ),
+        );
+      }
     };
+    const featureContext = (id: NodeId): KernelFeatureContext => ({
+      feature: id,
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    });
     const positive = (value: number, id: NodeId, field: string): number => {
       if (!(value > 0)) {
         throw new EvaluationFailure(
@@ -652,11 +757,12 @@ export class Evaluator {
           case "box":
             requireKernelCapability("primitive", "box", id);
             result = ownShape(
-              this.kernel.box(
+              this.kernel.box!(
                 node.size.map((value, index) =>
                   positive(expression(value), id, `size/${index}`),
                 ) as unknown as Vec3,
                 node.center,
+                featureContext(id),
               ),
               id,
             );
@@ -680,12 +786,13 @@ export class Evaluator {
               );
             }
             result = ownShape(
-              this.kernel.cylinder(
+              this.kernel.cylinder!(
                 height,
                 radiusBottom,
                 radiusTop,
                 node.center,
                 node.segments,
+                featureContext(id),
               ),
               id,
             );
@@ -694,9 +801,10 @@ export class Evaluator {
           case "sphere":
             requireKernelCapability("primitive", "sphere", id);
             result = ownShape(
-              this.kernel.sphere(
+              this.kernel.sphere!(
                 positive(expression(node.radius), id, "radius"),
                 node.segments,
+                featureContext(id),
               ),
               id,
             );
@@ -738,13 +846,13 @@ export class Evaluator {
             const profile = evaluateNode(node.profile.node);
             if (profile.kind !== "profile") throw new Error("Extrude profile mismatch");
             result = ownShape(
-              this.kernel.extrude(profile.profile, {
+              this.kernel.extrude!(profile.profile, {
                 distance: positive(expression(node.distance), id, "distance"),
                 symmetric: node.symmetric,
                 twist: expression(node.twist),
                 scaleTop: [expression(node.scaleTop[0]), expression(node.scaleTop[1])],
                 divisions: node.divisions,
-              }),
+              }, featureContext(id)),
               id,
             );
             break;
@@ -764,10 +872,10 @@ export class Evaluator {
               );
             }
             result = ownShape(
-              this.kernel.revolve(profile.profile, {
+              this.kernel.revolve!(profile.profile, {
                 angle,
                 ...(node.segments === undefined ? {} : { segments: node.segments }),
-              }),
+              }, featureContext(id)),
               id,
             );
             break;
@@ -775,10 +883,11 @@ export class Evaluator {
           case "boolean":
             requireKernelCapability("feature", "boolean", id);
             result = ownShape(
-              this.kernel.boolean(
+              this.kernel.boolean!(
                 node.operation,
                 solidRef(node.target),
                 node.tools.map(solidRef),
+                featureContext(id),
               ),
               id,
             );
@@ -786,9 +895,10 @@ export class Evaluator {
           case "transform":
             requireKernelCapability("feature", "transform", id);
             result = ownShape(
-              this.kernel.transform(
+              this.kernel.transform!(
                 solidRef(node.input),
                 node.operations.map(resolvedTransform),
+                featureContext(id),
               ),
               id,
             );

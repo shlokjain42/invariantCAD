@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -55,6 +55,7 @@ try {
     [
       'import { writeFile } from "node:fs/promises";',
       'import { createEvaluator, design, mm, stringifyDocument, vec3 } from "invariantcad";',
+      'import { createOcctKernel } from "invariantcad/kernels/occt";',
       "",
       'const cad = design("package-smoke");',
       'const solid = cad.box("solid", { size: vec3(mm(2), mm(3), mm(4)) });',
@@ -73,6 +74,15 @@ try {
       "} finally {",
       "  evaluator.dispose();",
       "}",
+      "const exactKernel = await createOcctKernel();",
+      "try {",
+      "  const exactBox = exactKernel.box([2, 3, 4], false);",
+      '  if (Math.abs(exactKernel.measure(exactBox).volume - 24) > 1e-9) throw new Error("Unexpected exact volume");',
+      '  if (exactKernel.exportShape(exactBox, "step").byteLength < 100) throw new Error("STEP export was empty");',
+      "  exactKernel.disposeShape(exactBox);",
+      "} finally {",
+      "  exactKernel.dispose();",
+      "}",
       'await writeFile("model.invariantcad.json", stringifyDocument(document));',
       'process.stdout.write("package-consumer-volume=24\\n");',
       "",
@@ -82,11 +92,14 @@ try {
     join(consumer, "type-smoke.ts"),
     [
       'import { design, mm, vec3, type DesignDocument, type SolidRef } from "invariantcad";',
+      'import { createOcctKernel, type OcctKernelOptions } from "invariantcad/kernels/occt";',
       "",
       'const cad = design("type-smoke");',
       'const solid: SolidRef = cad.box("solid", { size: vec3(mm(1), mm(2), mm(3)) });',
       'cad.output("solid", solid);',
       "const document: DesignDocument = cad.build();",
+      "const options: OcctKernelOptions = {};",
+      "void createOcctKernel(options);",
       "void document;",
       "",
     ].join("\n"),
@@ -131,6 +144,14 @@ try {
   );
   run(bin, ["--help"], consumer);
   run(bin, ["validate", "model.invariantcad.json"], consumer);
+  run(
+    bin,
+    ["export", "model.invariantcad.json", "--to", "model.step"],
+    consumer,
+  );
+  if ((await stat(join(consumer, "model.step"))).size < 100) {
+    throw new Error("Installed CLI produced an empty STEP file");
+  }
   process.stdout.write("Packed package smoke test passed.\n");
 } finally {
   await rm(consumer, { recursive: true, force: true });
