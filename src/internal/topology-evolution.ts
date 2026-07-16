@@ -291,11 +291,7 @@ function aggregateInputCounts(
   );
 }
 
-function validateEvolution(
-  evolution: IndexedTopologyEvolutionEnvelope,
-  inputs: readonly KernelTopologySnapshot[],
-  output: KernelTopologySnapshot,
-): {
+function validateEvolutionEnvelope(evolution: IndexedTopologyEvolutionEnvelope): {
   readonly records: readonly ValidatedRecord[];
   readonly inputCounts: readonly IndexedTopologyCounts[];
   readonly resultCounts: IndexedTopologyCounts;
@@ -321,21 +317,10 @@ function validateEvolution(
       `inputCounts has ${evolution.inputCounts.length} entries; expected ${evolution.inputShapeCount}`,
     );
   }
-  if (!Array.isArray(inputs) || inputs.length !== evolution.inputShapeCount) {
-    protocolError(
-      `inputs has ${Array.isArray(inputs) ? inputs.length : "an invalid"} count; expected ${evolution.inputShapeCount}`,
-    );
-  }
-
   const inputCounts = Array.from(evolution.inputCounts, (counts, index) =>
     validateCounts(counts, `inputCounts[${index}]`),
   );
   const resultCounts = validateCounts(evolution.resultCounts, "resultCounts");
-  for (let index = 0; index < inputCounts.length; index += 1) {
-    const counts = inputCounts[index]!;
-    validateSnapshot(inputs[index]!, counts, `inputs[${index}]`);
-  }
-  validateSnapshot(output, resultCounts, "output");
 
   const kinds = [
     INDEXED_TOPOLOGY_KIND.FACE,
@@ -442,6 +427,18 @@ function validateEvolution(
   return { records, inputCounts, resultCounts };
 }
 
+/**
+ * Validates the version-1 exact preserved/modified bijection without touching
+ * any topology snapshots. Raw-kernel adapters use this before transferring an
+ * owned native result; malformed exact-capability data must fail while the
+ * native report still owns that result.
+ */
+export function validateExactIndexedTopologyEvolutionEnvelope(
+  evolution: IndexedTopologyEvolutionEnvelope,
+): void {
+  validateEvolutionEnvelope(evolution);
+}
+
 function inheritedLineage(
   source: KernelFaceDescriptor | KernelEdgeDescriptor,
   relation: SupportedEvolutionRelation,
@@ -492,11 +489,23 @@ export function reduceIndexedTopologyEvolution(
       "Topology evolution feature must be a non-empty string when provided",
     );
   }
-  const validated = validateEvolution(
-    options.evolution,
-    options.inputs,
-    options.output,
-  );
+  const validated = validateEvolutionEnvelope(options.evolution);
+  if (
+    !Array.isArray(options.inputs) ||
+    options.inputs.length !== options.evolution.inputShapeCount
+  ) {
+    protocolError(
+      `inputs has ${Array.isArray(options.inputs) ? options.inputs.length : "an invalid"} count; expected ${options.evolution.inputShapeCount}`,
+    );
+  }
+  for (let index = 0; index < validated.inputCounts.length; index += 1) {
+    validateSnapshot(
+      options.inputs[index]!,
+      validated.inputCounts[index]!,
+      `inputs[${index}]`,
+    );
+  }
+  validateSnapshot(options.output, validated.resultCounts, "output");
   const faceEvolution: Array<DescriptorEvolution | undefined> = Array.from(
     { length: validated.resultCounts.faces },
   );

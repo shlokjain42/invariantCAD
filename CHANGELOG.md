@@ -17,6 +17,7 @@
 - Add a versioned, report-owned indexed topology-evolution ABI for atomic draft, with exact face/edge/vertex bijection checks, stable numeric enums, explicit history-stage diagnostics, and immutable history across report clones and result transfer
 - Add an internal fail-closed TypeScript reducer for exact indexed topology evolution, including complete-bijection validation, preserved/modified lineage reduction, partial-history propagation, safe integer bounds, sparse-array rejection, and detached immutable lineage
 - Add the explicit document, builder, kernel, capability-negotiation, and evaluator contract for signed atomic draft with semantic face selection, independent pull direction and neutral plane, strict numeric bounds, and feature-scoped exact indexed evolution; kernels without that exact capability fail before selection or execution
+- Add an internal OCCT draft transaction boundary that probes the exact matched facade, copies and validates all report/history data before transfer, preserves native failure diagnostics, and guarantees report/vector cleanup plus exactly-once rollback when post-transfer adoption fails
 - Make exact boolean unions produce shellable fused solids and normalize reversed one-solid imports before topology-sensitive features
 - Reject shapes passed across OCCT kernel instances before their raw arena IDs can alias unrelated geometry
 - Add a closed, typed primitive/extrusion topology-role registry and sketch-curve source selectors
