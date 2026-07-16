@@ -6,6 +6,7 @@ import {
   type ShapeMeasurements,
 } from "../src/index.js";
 import type { ResolvedLoop, ResolvedProfile } from "../src/index.js";
+import { EXACT_INDEXED_TOPOLOGY_EVOLUTION_PROTOCOL_VERSION } from "../src/kernel.js";
 
 export interface KernelConformanceOptions {
   readonly id: string;
@@ -128,6 +129,46 @@ export function geometryKernelConformance(
         expect(kernel.capabilities.topology.sketchSources).toBeTypeOf("boolean");
         expect(kernel.capabilities.topology.geometry).toBeTypeOf("boolean");
         expect(kernel.capabilities.topology.adjacency).toBeTypeOf("boolean");
+      }
+      const exactEvolution =
+        kernel.capabilities.exactIndexedTopologyEvolution;
+      if (exactEvolution !== undefined) {
+        const exactFeatures = Array.from(exactEvolution.features);
+        expect(exactEvolution.protocolVersion).toBe(
+          EXACT_INDEXED_TOPOLOGY_EVOLUTION_PROTOCOL_VERSION,
+        );
+        expect(
+          exactFeatures.every((feature) => typeof feature === "string"),
+        ).toBe(true);
+        expect(new Set(exactFeatures).size).toBe(
+          exactFeatures.length,
+        );
+        expect(kernel.capabilities.exact).toBe(true);
+        for (const feature of exactFeatures) {
+          expect(kernel.capabilities.features).toContain(feature);
+          expect(
+            kernelSupports(
+              kernel.capabilities,
+              "exactIndexedTopologyEvolution",
+              feature,
+            ),
+          ).toBe(true);
+        }
+        if (exactFeatures.length > 0) {
+          expect(kernel.capabilities.topology).toBeDefined();
+          expect(kernel.capabilities.topology?.provenance).not.toBe("none");
+        }
+      }
+      if (kernelSupports(kernel.capabilities, "feature", "draft")) {
+        expect(
+          kernelSupports(
+            kernel.capabilities,
+            "exactIndexedTopologyEvolution",
+            "draft",
+          ),
+        ).toBe(true);
+        expect(kernel.capabilities.topology?.kinds).toContain("face");
+        expect(kernel.capabilities.topology?.provenance).not.toBe("none");
       }
       if (kernelSupports(kernel.capabilities, "feature", "shell")) {
         expect(kernel.capabilities.topology).toBeDefined();

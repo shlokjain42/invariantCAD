@@ -33,6 +33,11 @@ function canonicalizeDocumentTopology(
                 ...node,
                 openings: canonicalizeTopologySelectionIR(node.openings),
               }
+          : node.kind === "draft"
+            ? {
+                ...node,
+                faces: canonicalizeTopologySelectionIR(node.faces),
+              }
           : node,
       ]),
     ) as DesignDocument["nodes"],

@@ -562,6 +562,59 @@ export class DesignBuilder {
     return new SolidRef(this, key);
   }
 
+  draft(
+    id: string,
+    input: SolidRef,
+    options: {
+      /** Exact input faces drafted together in one atomic operation. */
+      readonly faces: TopologySelection<"face">;
+      /** Signed draft angle. */
+      readonly angle: AngleExpression;
+      /** Direction along which the drafted faces are pulled. */
+      readonly pullDirection: ScalarVec3Expression;
+      /** Arbitrary plane whose intersection with the drafted faces remains fixed. */
+      readonly neutralPlane: {
+        readonly origin: Vec3Expression;
+        readonly normal: ScalarVec3Expression;
+      };
+    },
+  ): SolidRef {
+    this.assertOwned(input);
+    if (!(options.faces instanceof TopologySelection)) {
+      throw new TypeError("Draft faces must be an explicit topology selection");
+    }
+    if (options.faces.topology !== "face") {
+      throw new TypeError("A draft requires a face topology selection");
+    }
+    for (const reference of options.faces.references) {
+      this.assertOwned(reference);
+    }
+    const key = this.addNode(id, {
+      kind: "draft",
+      input: input.toIR(),
+      faces: options.faces.toIR(),
+      angle: options.angle.ir,
+      pullDirection: [
+        options.pullDirection[0].ir,
+        options.pullDirection[1].ir,
+        options.pullDirection[2].ir,
+      ],
+      neutralPlane: {
+        origin: [
+          options.neutralPlane.origin[0].ir,
+          options.neutralPlane.origin[1].ir,
+          options.neutralPlane.origin[2].ir,
+        ],
+        normal: [
+          options.neutralPlane.normal[0].ir,
+          options.neutralPlane.normal[1].ir,
+          options.neutralPlane.normal[2].ir,
+        ],
+      },
+    });
+    return new SolidRef(this, key);
+  }
+
   part(
     id: string,
     solid: SolidRef,

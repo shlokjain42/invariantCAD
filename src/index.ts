@@ -80,6 +80,8 @@ export {
   type CircleEntityIR,
   type CylinderNodeIR,
   type DesignDocument,
+  type DraftNeutralPlaneIR,
+  type DraftNodeIR,
   type EdgeUseIR,
   type ExtrudeNodeIR,
   type FilletNodeIR,
@@ -127,6 +129,7 @@ export {
   type ManifoldKernelOptions,
 } from "./manifold-kernel.js";
 export {
+  EXACT_INDEXED_TOPOLOGY_EVOLUTION_PROTOCOL_VERSION,
   mergeMeshes,
   GEOMETRY_KERNEL_PROTOCOL_VERSION,
   kernelSupports,
@@ -136,6 +139,7 @@ export {
   type GeometryKernel,
   type KernelCapabilityKind,
   type KernelCapabilities,
+  type KernelExactIndexedTopologyEvolutionCapabilities,
   type KernelExchangeFormat,
   type KernelFeature,
   type KernelFeatureContext,
@@ -178,6 +182,11 @@ export {
   type ResolvedShellOptions,
   type ShellDirection,
 } from "./protocol/shell.js";
+export {
+  DRAFT_MIN_ANGLE_RADIANS,
+  type ResolvedDraftNeutralPlane,
+  type ResolvedDraftOptions,
+} from "./protocol/draft.js";
 export {
   topology,
   type TopologyOriginOptions,

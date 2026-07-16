@@ -1,5 +1,6 @@
 import type { Mat4, Vec3 } from "./core/math.js";
 import type { ResolvedProfile } from "./protocol/profile.js";
+import type { ResolvedDraftOptions } from "./protocol/draft.js";
 import type { ResolvedShellOptions } from "./protocol/shell.js";
 import type { ResolvedOffsetOptions } from "./protocol/offset.js";
 import type {
@@ -18,15 +19,30 @@ export type KernelFeature =
   | "fillet"
   | "chamfer"
   | "shell"
-  | "offset";
+  | "offset"
+  | "draft";
 export type KernelCapabilityKind =
   | "primitive"
   | "feature"
+  | "exactIndexedTopologyEvolution"
   | "nativeImport"
   | "nativeExport";
 export type KernelExchangeFormat = "step" | "brep" | "brep-binary";
 
 export const GEOMETRY_KERNEL_PROTOCOL_VERSION = 1 as const;
+export const EXACT_INDEXED_TOPOLOGY_EVOLUTION_PROTOCOL_VERSION = 1 as const;
+
+/**
+ * Feature-scoped support for complete, exact, indexed topology evolution.
+ *
+ * Advertising a feature here is a stronger promise than advertising the
+ * corresponding modeling method in `features`: the kernel must also return
+ * complete topology history for that feature through the indexed protocol.
+ */
+export interface KernelExactIndexedTopologyEvolutionCapabilities {
+  readonly protocolVersion: typeof EXACT_INDEXED_TOPOLOGY_EVOLUTION_PROTOCOL_VERSION;
+  readonly features: readonly KernelFeature[];
+}
 
 export interface KernelCapabilities {
   readonly protocolVersion: typeof GEOMETRY_KERNEL_PROTOCOL_VERSION;
@@ -37,6 +53,7 @@ export interface KernelCapabilities {
   readonly nativeImports: readonly KernelExchangeFormat[];
   readonly nativeExports: readonly KernelExchangeFormat[];
   readonly topology?: KernelTopologyCapabilities;
+  readonly exactIndexedTopologyEvolution?: KernelExactIndexedTopologyEvolutionCapabilities;
 }
 
 export function kernelSupports(
@@ -47,6 +64,11 @@ export function kernelSupports(
 export function kernelSupports(
   capabilities: KernelCapabilities,
   kind: "feature",
+  capability: KernelFeature,
+): boolean;
+export function kernelSupports(
+  capabilities: KernelCapabilities,
+  kind: "exactIndexedTopologyEvolution",
   capability: KernelFeature,
 ): boolean;
 export function kernelSupports(
@@ -64,6 +86,12 @@ export function kernelSupports(
       ? capabilities.primitives
       : kind === "feature"
         ? capabilities.features
+        : kind === "exactIndexedTopologyEvolution"
+          ? capabilities.exactIndexedTopologyEvolution?.protocolVersion ===
+              EXACT_INDEXED_TOPOLOGY_EVOLUTION_PROTOCOL_VERSION &&
+            Array.isArray(capabilities.exactIndexedTopologyEvolution.features)
+            ? capabilities.exactIndexedTopologyEvolution.features
+            : []
         : kind === "nativeImport"
           ? capabilities.nativeImports
           : capabilities.nativeExports;
@@ -193,6 +221,13 @@ export interface GeometryKernel {
     shape: KernelShape,
     /** Protocol v1 requires round/arc joins at face transitions. */
     options: ResolvedOffsetOptions,
+    context?: KernelFeatureContext,
+  ): KernelShape;
+  draft?(
+    shape: KernelShape,
+    /** Exact input faces drafted together in one atomic operation. */
+    faces: readonly KernelTopologyKey[],
+    options: ResolvedDraftOptions,
     context?: KernelFeatureContext,
   ): KernelShape;
   topology?(shape: KernelShape): KernelTopologySnapshot;

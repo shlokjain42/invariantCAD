@@ -349,6 +349,21 @@ const NodeSchema = z.discriminatedUnion("kind", [
       tolerance: ExpressionSchema,
     })
     .strict(),
+  z
+    .object({
+      kind: z.literal("draft"),
+      input: RefSchema,
+      faces: TopologySelectionSchema,
+      angle: ExpressionSchema,
+      pullDirection: Vec3ExpressionSchema,
+      neutralPlane: z
+        .object({
+          origin: Vec3ExpressionSchema,
+          normal: Vec3ExpressionSchema,
+        })
+        .strict(),
+    })
+    .strict(),
   z.object({
     kind: z.literal("part"),
     solid: RefSchema,

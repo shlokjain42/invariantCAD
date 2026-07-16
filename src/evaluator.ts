@@ -33,6 +33,7 @@ import type {
   TransformOperationIR,
 } from "./ir.js";
 import {
+  EXACT_INDEXED_TOPOLOGY_EVOLUTION_PROTOCOL_VERSION,
   GEOMETRY_KERNEL_PROTOCOL_VERSION,
   mergeMeshes,
   transformMesh,
@@ -69,6 +70,10 @@ import type {
   KernelTopologyKey,
   TopologyKind,
 } from "./protocol/topology.js";
+import {
+  DRAFT_MIN_ANGLE_RADIANS,
+  type ResolvedDraftOptions,
+} from "./protocol/draft.js";
 
 export type ParameterOverride = number | Expression<Dimension>;
 export type ShapeExportFormat = MeshExportFormat | KernelExchangeFormat;
@@ -658,7 +663,7 @@ export class Evaluator {
       return { kind: "solid", shape };
     };
     const requireKernelCapability = (
-      kind: KernelCapabilityKind,
+      kind: Exclude<KernelCapabilityKind, "exactIndexedTopologyEvolution">,
       capability: KernelPrimitive | KernelFeature | KernelExchangeFormat,
       id: NodeId,
     ): void => {
@@ -718,6 +723,154 @@ export class Evaluator {
         );
       }
     };
+    const requireExactIndexedTopologyEvolution = (
+      capability: KernelFeature,
+      id: NodeId,
+    ): void => {
+      const kind = "exactIndexedTopologyEvolution" as const;
+      const raw: unknown = this.kernel.capabilities.exactIndexedTopologyEvolution;
+      const capabilityDetails = {
+        kernel: this.kernel.id,
+        kind,
+        capability,
+      } as const;
+      if (raw === undefined) {
+        throw new EvaluationFailure(
+          diagnostic(
+            "KERNEL_CAPABILITY_MISSING",
+            `Kernel '${this.kernel.id}' does not support exact indexed topology evolution for feature '${capability}'`,
+            {
+              severity: "error",
+              node: id,
+              path: `/nodes/${id}`,
+              hints: ["Choose an exact geometry kernel with indexed topology history"],
+              details: {
+                ...capabilityDetails,
+                protocolVersion:
+                  EXACT_INDEXED_TOPOLOGY_EVOLUTION_PROTOCOL_VERSION,
+              },
+            },
+          ),
+        );
+      }
+
+      const protocolViolation = (
+        reason: string,
+        details: Readonly<Record<string, unknown>> = {},
+      ): never => {
+        throw new EvaluationFailure(
+          diagnostic(
+            "KERNEL_ERROR",
+            `Kernel '${this.kernel.id}' declares malformed exact indexed topology evolution metadata`,
+            {
+              severity: "error",
+              node: id,
+              path: `/nodes/${id}`,
+              details: {
+                ...capabilityDetails,
+                protocolViolation: true,
+                reason,
+                ...details,
+              },
+            },
+          ),
+        );
+      };
+      if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+        protocolViolation("capability metadata must be an object");
+      }
+      const metadata = raw as {
+        readonly protocolVersion?: unknown;
+        readonly features?: unknown;
+      };
+      if (
+        metadata.protocolVersion !==
+        EXACT_INDEXED_TOPOLOGY_EVOLUTION_PROTOCOL_VERSION
+      ) {
+        protocolViolation("unsupported protocol version", {
+          expectedProtocolVersion:
+            EXACT_INDEXED_TOPOLOGY_EVOLUTION_PROTOCOL_VERSION,
+          actualProtocolVersion: metadata.protocolVersion,
+        });
+      }
+      const rawFeatures = metadata.features;
+      if (!Array.isArray(rawFeatures)) {
+        protocolViolation("features must be an array of feature names");
+      }
+      const exactFeatures = Array.from(rawFeatures as readonly unknown[]);
+      if (exactFeatures.some((feature) => typeof feature !== "string")) {
+        protocolViolation("features must be a dense array of feature names");
+      }
+      const exactFeatureNames = exactFeatures as readonly string[];
+      if (new Set(exactFeatureNames).size !== exactFeatureNames.length) {
+        protocolViolation("features must not contain duplicates");
+      }
+      const undeclared = exactFeatureNames.filter(
+        (feature) =>
+          !(this.kernel.capabilities.features as readonly string[]).includes(
+            feature,
+          ),
+      );
+      if (undeclared.length > 0) {
+        protocolViolation("exact evolution features must be declared kernel features", {
+          undeclared,
+        });
+      }
+      if (!this.kernel.capabilities.exact) {
+        protocolViolation("exact evolution requires an exact kernel");
+      }
+      if (
+        !kernelSupports(
+          this.kernel.capabilities,
+          "exactIndexedTopologyEvolution",
+          capability,
+        )
+      ) {
+        throw new EvaluationFailure(
+          diagnostic(
+            "KERNEL_CAPABILITY_MISSING",
+            `Kernel '${this.kernel.id}' does not support exact indexed topology evolution for feature '${capability}'`,
+            {
+              severity: "error",
+              node: id,
+              path: `/nodes/${id}`,
+              hints: ["Choose an exact geometry kernel with indexed topology history"],
+              details: {
+                ...capabilityDetails,
+                protocolVersion:
+                  EXACT_INDEXED_TOPOLOGY_EVOLUTION_PROTOCOL_VERSION,
+              },
+            },
+          ),
+        );
+      }
+
+      if (capability === "draft") {
+        const topology: unknown = this.kernel.capabilities.topology;
+        const topologyProvenance = (
+          topology as { readonly provenance?: unknown } | undefined
+        )?.provenance;
+        if (
+          typeof topology !== "object" ||
+          topology === null ||
+          !Array.isArray((topology as { readonly kinds?: unknown }).kinds) ||
+          !(topology as { readonly kinds: readonly unknown[] }).kinds.includes(
+            "face",
+          ) ||
+          (topologyProvenance !== "feature" &&
+            topologyProvenance !== "history") ||
+          typeof this.kernel.topology !== "function"
+        ) {
+          protocolViolation(
+            "draft evolution requires face topology with feature provenance",
+            {
+              requiredTopologyKind: "face",
+              requiredTopologyProvenance: "feature-or-history",
+            },
+          );
+        }
+      }
+    };
     const featureContext = (id: NodeId): KernelFeatureContext => ({
       feature: id,
       ...(options.signal === undefined ? {} : { signal: options.signal }),
@@ -734,6 +887,61 @@ export class Evaluator {
         );
       }
       return value;
+    };
+    const resolvedDraftNumber = (
+      value: ExpressionIR,
+      id: NodeId,
+      path: string,
+      label: string,
+    ): number => {
+      let resolved: number;
+      try {
+        resolved = expression(value);
+      } catch (error) {
+        throw new EvaluationFailure(
+          diagnostic("FEATURE_INVALID", `${label} must evaluate to a finite number`, {
+            severity: "error",
+            node: id,
+            path: `/nodes/${id}/${path}`,
+            details: {
+              cause: error instanceof Error ? error.message : String(error),
+            },
+          }),
+        );
+      }
+      if (!Number.isFinite(resolved)) {
+        throw new EvaluationFailure(
+          diagnostic("FEATURE_INVALID", `${label} must be finite`, {
+            severity: "error",
+            node: id,
+            path: `/nodes/${id}/${path}`,
+            details: { value: resolved },
+          }),
+        );
+      }
+      return resolved;
+    };
+    const resolvedDraftVector = (
+      values: readonly [ExpressionIR, ExpressionIR, ExpressionIR],
+      id: NodeId,
+      path: string,
+      label: string,
+      nonzero: boolean,
+    ): Vec3 => {
+      const resolved = values.map((value, index) =>
+        resolvedDraftNumber(value, id, `${path}/${index}`, `${label} component`),
+      ) as unknown as Vec3;
+      if (nonzero && !resolved.some((component) => component !== 0)) {
+        throw new EvaluationFailure(
+          diagnostic("FEATURE_INVALID", `${label} must be nonzero`, {
+            severity: "error",
+            node: id,
+            path: `/nodes/${id}/${path}`,
+            details: { value: resolved },
+          }),
+        );
+      }
+      return resolved;
     };
     const resolveSelectedTopology = <K extends TopologyKind>(
       id: NodeId,
@@ -1122,6 +1330,80 @@ export class Evaluator {
                   direction: node.direction,
                   tolerance,
                 },
+                featureContext(id),
+              ),
+              id,
+            );
+            break;
+          }
+          case "draft": {
+            requireKernelCapability("feature", "draft", id);
+            requireExactIndexedTopologyEvolution("draft", id);
+            const angle = resolvedDraftNumber(
+              node.angle,
+              id,
+              "angle",
+              "Draft angle",
+            );
+            const absoluteAngle = Math.abs(angle);
+            if (
+              !(absoluteAngle > DRAFT_MIN_ANGLE_RADIANS) ||
+              !(absoluteAngle < Math.PI / 2)
+            ) {
+              throw new EvaluationFailure(
+                diagnostic(
+                  "FEATURE_INVALID",
+                  "Draft angle must satisfy 1e-4 < abs(angle) < pi / 2 radians",
+                  {
+                    severity: "error",
+                    node: id,
+                    path: `/nodes/${id}/angle`,
+                    details: {
+                      value: angle,
+                      minimumExclusive: DRAFT_MIN_ANGLE_RADIANS,
+                      maximumExclusive: Math.PI / 2,
+                    },
+                  },
+                ),
+              );
+            }
+            const draftOptions: ResolvedDraftOptions = {
+              angle,
+              pullDirection: resolvedDraftVector(
+                node.pullDirection,
+                id,
+                "pullDirection",
+                "Draft pull direction",
+                true,
+              ),
+              neutralPlane: {
+                origin: resolvedDraftVector(
+                  node.neutralPlane.origin,
+                  id,
+                  "neutralPlane/origin",
+                  "Draft neutral-plane origin",
+                  false,
+                ),
+                normal: resolvedDraftVector(
+                  node.neutralPlane.normal,
+                  id,
+                  "neutralPlane/normal",
+                  "Draft neutral-plane normal",
+                  true,
+                ),
+              },
+            };
+            const selected = resolveSelectedTopology(
+              id,
+              "faces",
+              node.faces,
+              () => solidRef(node.input),
+            );
+            result = ownShape(
+              this.kernel.draft!(
+                selected.input,
+                selected.keys,
+                draftOptions,
                 featureContext(id),
               ),
               id,

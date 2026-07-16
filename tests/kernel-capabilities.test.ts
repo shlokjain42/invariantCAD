@@ -6,6 +6,7 @@ import {
   kernelSupports,
   mm,
   type GeometryKernel,
+  type KernelCapabilities,
 } from "../src/index.js";
 
 describe("kernel capability negotiation", () => {
@@ -14,9 +15,49 @@ describe("kernel capability negotiation", () => {
     try {
       expect(kernelSupports(kernel.capabilities, "primitive", "box")).toBe(true);
       expect(kernelSupports(kernel.capabilities, "feature", "boolean")).toBe(true);
+      expect(
+        kernelSupports(
+          kernel.capabilities,
+          "exactIndexedTopologyEvolution",
+          "draft",
+        ),
+      ).toBe(false);
       expect(kernelSupports(kernel.capabilities, "nativeExport", "step")).toBe(
         false,
       );
+    } finally {
+      kernel.dispose();
+    }
+  });
+
+  it("negotiates exact indexed topology evolution by protocol and feature", async () => {
+    const kernel = await createManifoldKernel();
+    try {
+      const capable: KernelCapabilities = {
+        ...kernel.capabilities,
+        exact: true,
+        exactIndexedTopologyEvolution: {
+          protocolVersion: 1,
+          features: ["draft"],
+        },
+      };
+      expect(
+        kernelSupports(capable, "exactIndexedTopologyEvolution", "draft"),
+      ).toBe(true);
+      expect(
+        kernelSupports(capable, "exactIndexedTopologyEvolution", "fillet"),
+      ).toBe(false);
+
+      const stale = {
+        ...capable,
+        exactIndexedTopologyEvolution: {
+          protocolVersion: 2,
+          features: ["draft"],
+        },
+      } as unknown as KernelCapabilities;
+      expect(
+        kernelSupports(stale, "exactIndexedTopologyEvolution", "draft"),
+      ).toBe(false);
     } finally {
       kernel.dispose();
     }

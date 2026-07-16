@@ -883,6 +883,27 @@ function validateNode(
       }
       expression(node.tolerance, "length", "tolerance");
       break;
+    case "draft":
+      validateRef(node.input, "solid", document, `${path}/input`, diagnostics);
+      validateTopologySelection(
+        node.faces,
+        "face",
+        node.input.node,
+        document,
+        `${path}/faces`,
+        diagnostics,
+      );
+      expression(node.angle, "angle", "angle");
+      node.pullDirection.forEach((value, index) =>
+        expression(value, "scalar", `pullDirection/${index}`),
+      );
+      node.neutralPlane.origin.forEach((value, index) =>
+        expression(value, "length", `neutralPlane/origin/${index}`),
+      );
+      node.neutralPlane.normal.forEach((value, index) =>
+        expression(value, "scalar", `neutralPlane/normal/${index}`),
+      );
+      break;
     case "part":
       validateRef(node.solid, "solid", document, `${path}/solid`, diagnostics);
       break;

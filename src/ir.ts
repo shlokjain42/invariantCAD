@@ -315,6 +315,24 @@ export interface OffsetNodeIR {
   readonly tolerance: ExpressionIR;
 }
 
+export interface DraftNeutralPlaneIR {
+  readonly origin: Vec3ExpressionIR;
+  readonly normal: Vec3ExpressionIR;
+}
+
+export interface DraftNodeIR {
+  readonly kind: "draft";
+  readonly input: RefIR<"solid">;
+  /** Exact input faces drafted together in one atomic operation. */
+  readonly faces: TopologySelectionIR<"face">;
+  /** Signed draft angle. */
+  readonly angle: ExpressionIR;
+  /** Scalar direction along which the drafted faces are pulled. */
+  readonly pullDirection: Vec3ExpressionIR;
+  /** Arbitrary plane whose intersection with the drafted faces remains fixed. */
+  readonly neutralPlane: DraftNeutralPlaneIR;
+}
+
 export interface PartNodeIR {
   readonly kind: "part";
   readonly solid: RefIR<"solid">;
@@ -349,6 +367,7 @@ export type NodeIR =
   | ChamferNodeIR
   | ShellNodeIR
   | OffsetNodeIR
+  | DraftNodeIR
   | PartNodeIR
   | AssemblyNodeIR;
 
@@ -386,6 +405,7 @@ export function nodeDependencies(node: NodeIR): readonly RefIR[] {
     case "chamfer":
     case "shell":
     case "offset":
+    case "draft":
       return [node.input];
     case "part":
       return [node.solid];
