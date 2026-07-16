@@ -37,6 +37,7 @@ import type {
 import { curveStart } from "./protocol/profile.js";
 import type { ResolvedOffsetOptions } from "./protocol/offset.js";
 import type { ResolvedShellOptions } from "./protocol/shell.js";
+import { adoptOcctEdgeEvolution } from "./internal/occt-evolution.js";
 
 const OCCT_SHAPE = Symbol("InvariantCAD.OcctShape");
 const TOPOLOGY_HASH_UPPER_BOUND = 2_147_483_647;
@@ -1498,17 +1499,27 @@ class OcctKernel implements GeometryKernel {
       "face",
       TOPOLOGY_HASH_UPPER_BOUND,
     );
-    const evolution = this.raw.filletWithHistory(
-      input[OCCT_SHAPE],
-      handles,
-      options.radius,
-      faceHashes,
-      TOPOLOGY_HASH_UPPER_BOUND,
-    );
-    return this.own(evolution.result, context, {
-      inherited: input.lineage,
-      relation: "modified",
-      history: "partial",
+    const module = this.raw.getRawModule();
+    const rawKernel = this.raw.getRawKernel();
+    return adoptOcctEdgeEvolution({
+      module,
+      kernel: rawKernel,
+      edgeIds: handles,
+      inputFaceHashes: faceHashes,
+      invoke: (edgeIds, inputHashes) =>
+        rawKernel.filletWithHistory(
+          input[OCCT_SHAPE],
+          edgeIds as Parameters<typeof rawKernel.filletWithHistory>[1],
+          options.radius,
+          inputHashes as Parameters<typeof rawKernel.filletWithHistory>[3],
+          TOPOLOGY_HASH_UPPER_BOUND,
+        ),
+      adopt: (evolution) =>
+        this.own(evolution.resultId as ShapeHandle, context, {
+          inherited: input.lineage,
+          relation: "modified",
+          history: "partial",
+        }),
     });
   }
 
@@ -1539,17 +1550,27 @@ class OcctKernel implements GeometryKernel {
       "face",
       TOPOLOGY_HASH_UPPER_BOUND,
     );
-    const evolution = this.raw.chamferWithHistory(
-      input[OCCT_SHAPE],
-      handles,
-      options.distance,
-      faceHashes,
-      TOPOLOGY_HASH_UPPER_BOUND,
-    );
-    return this.own(evolution.result, context, {
-      inherited: input.lineage,
-      relation: "modified",
-      history: "partial",
+    const module = this.raw.getRawModule();
+    const rawKernel = this.raw.getRawKernel();
+    return adoptOcctEdgeEvolution({
+      module,
+      kernel: rawKernel,
+      edgeIds: handles,
+      inputFaceHashes: faceHashes,
+      invoke: (edgeIds, inputHashes) =>
+        rawKernel.chamferWithHistory(
+          input[OCCT_SHAPE],
+          edgeIds as Parameters<typeof rawKernel.chamferWithHistory>[1],
+          options.distance,
+          inputHashes as Parameters<typeof rawKernel.chamferWithHistory>[3],
+          TOPOLOGY_HASH_UPPER_BOUND,
+        ),
+      adopt: (evolution) =>
+        this.own(evolution.resultId as ShapeHandle, context, {
+          inherited: input.lineage,
+          relation: "modified",
+          history: "partial",
+        }),
     });
   }
 

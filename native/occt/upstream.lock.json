@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "upstream": {
+    "repository": "https://github.com/andymai/occt-wasm.git",
+    "tag": "v3.7.0",
+    "commit": "fe3d5effdaa1ca9a4007a86fde46abd62722fbba"
+  },
+  "occt": {
+    "repository": "https://github.com/andymai/OCCT.git",
+    "commit": "6e1fe656bf028bf0004482c389661587b269fc65"
+  },
+  "toolchain": {
+    "emscripten": "5.0.3",
+    "rust": "1.95"
+  },
+  "builder": {
+    "image": "ghcr.io/andymai/occt-wasm-builder",
+    "digest": "sha256:d4d9b7232c92eda68e478aba5bbf1e8880e0f6c8aeeee627d8296f994642848b",
+    "platform": "linux/amd64"
+  }
+}

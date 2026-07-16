@@ -11,6 +11,8 @@
 - Add exact equal-distance selector-driven chamfers with tangent-contour seed semantics, negotiated kernel capability, and partial-history diagnostics
 - Add exact constant-thickness inward/outward shells with fixed round joins, non-propagating semantic face openings, materialized direction and tolerance, strict solid/opening checks, negotiated kernel capability, and partial-history diagnostics
 - Add exact whole-solid inward/outward offsets with fixed round joins, materialized direction and tolerance, strict one-body validation, collapse checks, negotiated kernel capability, and partial-history diagnostics
+- Deterministically release every native evolution wrapper and temporary vector used by exact fillet/chamfer history calls while preserving chained-operation behavior
+- Pin the OCCT facade source, kernel source, toolchain, and rootless offline build path for reproducible InvariantCAD-owned native extensions
 - Make exact boolean unions produce shellable fused solids and normalize reversed one-solid imports before topology-sensitive features
 - Reject shapes passed across OCCT kernel instances before their raw arena IDs can alias unrelated geometry
 - Add a closed, typed primitive/extrusion topology-role registry and sketch-curve source selectors

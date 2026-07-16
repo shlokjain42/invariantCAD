@@ -38,6 +38,7 @@
     "lint:package": "publint && attw --pack . --profile esm-only",
     "test:package": "pnpm pack --pack-destination .artifacts && node scripts/package-smoke.mjs",
     "example:bracket": "tsx examples/bracket.ts",
+    "build:occt-facade": "./scripts/build-occt-facade.sh",
     "prepack": "pnpm build",
     "verify": "pnpm check && pnpm test && pnpm lint:package && pnpm test:package"
   },

@@ -24,3 +24,7 @@ pnpm verify
 Geometry tests should assert topology class, toleranced bounds, volume, and area. Do not assert triangle ordering or exact floating-point export bytes unless testing an exporter format itself.
 
 Every WASM-backed test must dispose evaluated results and evaluators.
+
+## Native OCCT facade
+
+The current exact backend consumes the pinned `occt-wasm` package. InvariantCAD-owned native extensions are built through the locked, rootless process documented in `native/occt/README.md`; do not hand-edit or commit generated WASM artifacts. Keep build outputs under `.artifacts/`, verify their hashes, and preserve the OCCT LGPL exception, corresponding-source path, and user-replaceable `createOcctKernel({ wasm })` boundary.
