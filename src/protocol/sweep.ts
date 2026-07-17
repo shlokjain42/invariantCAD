@@ -8,6 +8,7 @@ import {
   type ResolvedProfile,
 } from "./profile.js";
 import {
+  resolvedAdjacentPathSegmentsHaveRemoteClearance,
   resolvedCompositePathSegments,
   resolvedCircularArcGeometry,
   resolvedPathInitialTangent,
@@ -315,6 +316,22 @@ export function validateResolvedSweep(
           reason: "path-clearance",
           message:
             "Composite arc-junction tangent mismatch exceeds the profile-envelope tolerance",
+          input: "path",
+          segmentIndex: index,
+          otherSegmentIndex: index - 1,
+        };
+      }
+      if (
+        !resolvedAdjacentPathSegmentsHaveRemoteClearance(
+          prior,
+          current,
+          radius * 2 + tolerance,
+        )
+      ) {
+        return {
+          reason: "path-clearance",
+          message:
+            "Adjacent composite path segments make an uncertified nonlocal return into the profile envelope",
           input: "path",
           segmentIndex: index,
           otherSegmentIndex: index - 1,

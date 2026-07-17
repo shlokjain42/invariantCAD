@@ -95,10 +95,12 @@ export type PathValidationReason =
   | "degenerate-arc"
   | "segment-count"
   | "line-only-composite"
+  // Retained for source compatibility; composite validation no longer emits
+  // these superseded blanket-rejection reasons.
   | "major-arc-unsupported"
+  | "adjacent-arc-reach"
   | "non-tangent-junction"
   | "redundant-segments"
-  | "adjacent-arc-reach"
   | "uncertified-clearance"
   | "self-intersection";
 
@@ -590,13 +592,18 @@ function curvePiece(
   depth: number,
 ): CertifiedCurvePiece {
   if (segment.kind === "line") {
+    const direction = subtract(segment.end, segment.start);
     return {
       kind: "line",
       segment,
-      from: 0,
-      to: 1,
-      start: segment.start,
-      end: segment.end,
+      from,
+      to,
+      start:
+        from <= 0
+          ? segment.start
+          : add(segment.start, scale(direction, from)),
+      end:
+        to >= 1 ? segment.end : add(segment.start, scale(direction, to)),
       deviation: 0,
       depth,
     };
@@ -629,8 +636,8 @@ function initialCurvePieces(
 function subdivideCurvePiece(
   piece: CertifiedCurvePiece,
 ): readonly [CertifiedCurvePiece, CertifiedCurvePiece] | undefined {
-  if (piece.kind !== "circularArc") return undefined;
   const midpoint = (piece.from + piece.to) / 2;
+  if (!(midpoint > piece.from && midpoint < piece.to)) return undefined;
   return [
     curvePiece(piece.segment, piece.from, midpoint, piece.depth + 1),
     curvePiece(piece.segment, midpoint, piece.to, piece.depth + 1),
@@ -644,6 +651,63 @@ function subdivideCurvePiece(
  * unresolved floating-point threshold case fails closed instead of sampling.
  */
 type PathClearanceCertification = "clear" | "blocked" | "uncertain";
+
+function resolvedPathSegmentNumericScale(segment: ResolvedPathSegment): number {
+  if (segment.kind === "line") {
+    return Math.max(
+      ...segment.start.map(Math.abs),
+      ...segment.end.map(Math.abs),
+      resolvedPathSegmentLength(segment),
+    );
+  }
+  const geometry = resolvedCircularArcGeometry(segment)!;
+  return Math.max(
+    ...segment.start.map(Math.abs),
+    ...segment.through.map(Math.abs),
+    ...segment.end.map(Math.abs),
+    ...geometry.center.map(Math.abs),
+    geometry.radius,
+    geometry.length,
+  );
+}
+
+function curvePieceDistanceBounds(
+  firstPiece: CertifiedCurvePiece,
+  secondPiece: CertifiedCurvePiece,
+  clearance: number,
+): { readonly lower: number; readonly upper: number } {
+  const chordDistance = resolvedPolylineSegmentDistance(
+    firstPiece.start,
+    firstPiece.end,
+    secondPiece.start,
+    secondPiece.end,
+  );
+  const numericScale = Math.max(
+    1,
+    clearance,
+    ...firstPiece.start.map(Math.abs),
+    ...firstPiece.end.map(Math.abs),
+    ...secondPiece.start.map(Math.abs),
+    ...secondPiece.end.map(Math.abs),
+    firstPiece.deviation,
+    secondPiece.deviation,
+    resolvedPathSegmentNumericScale(firstPiece.segment),
+    resolvedPathSegmentNumericScale(secondPiece.segment),
+  );
+  const numericGuard = Number.EPSILON * numericScale * 256;
+  return {
+    lower:
+      chordDistance -
+      firstPiece.deviation -
+      secondPiece.deviation -
+      numericGuard,
+    upper:
+      chordDistance +
+      firstPiece.deviation +
+      secondPiece.deviation +
+      numericGuard,
+  };
+}
 
 function certifyResolvedPathSegmentClearance(
   first: ResolvedPathSegment,
@@ -662,58 +726,19 @@ function certifyResolvedPathSegmentClearance(
     work += 1;
     if (work > 32_768) return "uncertain";
     const [firstPiece, secondPiece] = pending.pop()!;
-    const chordDistance = resolvedPolylineSegmentDistance(
-      firstPiece.start,
-      firstPiece.end,
-      secondPiece.start,
-      secondPiece.end,
-    );
-    const numericScale = Math.max(
-      1,
+    const bounds = curvePieceDistanceBounds(
+      firstPiece,
+      secondPiece,
       clearance,
-      ...firstPiece.start.map(Math.abs),
-      ...firstPiece.end.map(Math.abs),
-      ...secondPiece.start.map(Math.abs),
-      ...secondPiece.end.map(Math.abs),
-      firstPiece.deviation,
-      secondPiece.deviation,
-      ...(firstPiece.segment.kind === "circularArc"
-        ? [
-            resolvedCircularArcGeometry(firstPiece.segment)!.radius,
-            ...resolvedCircularArcGeometry(firstPiece.segment)!.center.map(
-              Math.abs,
-            ),
-            ...firstPiece.segment.start.map(Math.abs),
-            ...firstPiece.segment.through.map(Math.abs),
-            ...firstPiece.segment.end.map(Math.abs),
-          ]
-        : []),
-      ...(secondPiece.segment.kind === "circularArc"
-        ? [
-            resolvedCircularArcGeometry(secondPiece.segment)!.radius,
-            ...resolvedCircularArcGeometry(secondPiece.segment)!.center.map(
-              Math.abs,
-            ),
-            ...secondPiece.segment.start.map(Math.abs),
-            ...secondPiece.segment.through.map(Math.abs),
-            ...secondPiece.segment.end.map(Math.abs),
-          ]
-        : []),
     );
-    const numericGuard = Number.EPSILON * numericScale * 256;
-    if (
-      chordDistance - firstPiece.deviation - secondPiece.deviation -
-        numericGuard >
-      clearance
-    ) {
+    if (bounds.lower > clearance) {
       continue;
     }
-    if (
-      chordDistance + firstPiece.deviation + secondPiece.deviation +
-        numericGuard <=
-      clearance
-    ) {
+    if (bounds.upper <= clearance) {
       return "blocked";
+    }
+    if (firstPiece.kind === "line" && secondPiece.kind === "line") {
+      return "uncertain";
     }
     const splitFirst =
       firstPiece.kind === "circularArc" &&
@@ -739,6 +764,166 @@ export function resolvedPathSegmentsHaveClearance(
 ): boolean {
   return (
     certifyResolvedPathSegmentClearance(first, second, clearance) === "clear"
+  );
+}
+
+function adjacentPieceDistanceRange(
+  piece: CertifiedCurvePiece,
+  first: boolean,
+): { readonly min: number; readonly max: number } {
+  const segmentLength = resolvedPathSegmentLength(piece.segment);
+  return first
+    ? {
+        min: (1 - piece.to) * segmentLength,
+        max: (1 - piece.from) * segmentLength,
+      }
+    : {
+        min: piece.from * segmentLength,
+        max: piece.to * segmentLength,
+      };
+}
+
+function certifyResolvedAdjacentPathSegmentClearance(
+  first: ResolvedPathSegment,
+  second: ResolvedPathSegment,
+  clearance: number,
+): PathClearanceCertification {
+  if (!Number.isFinite(clearance) || clearance < 0) return "uncertain";
+  const arcRadii = [first, second].flatMap((segment) =>
+    segment.kind === "circularArc"
+      ? [resolvedCircularArcGeometry(segment)!.radius]
+      : [],
+  );
+  if (arcRadii.length === 0) return "clear";
+  const firstTangent = resolvedPathSegmentEndTangent(first);
+  const secondTangent = resolvedPathSegmentStartTangent(second);
+  const junctionSine = length(cross(firstTangent, secondTangent));
+  const junctionDot = dot(firstTangent, secondTangent);
+  const junctionTurn = Math.atan2(junctionSine, junctionDot);
+  const minimumRadius = Math.min(...arcRadii);
+  const firstLength = resolvedPathSegmentLength(first);
+  const secondLength = resolvedPathSegmentLength(second);
+  if (
+    !Number.isFinite(junctionTurn) ||
+    !(junctionDot > 0) ||
+    !Number.isFinite(minimumRadius) ||
+    !(minimumRadius > 0) ||
+    !Number.isFinite(firstLength) ||
+    !Number.isFinite(secondLength)
+  ) {
+    return "uncertain";
+  }
+
+  // Schur comparison makes the intrinsic neighborhood below this gate locally
+  // unambiguous. This conservative implementation does not extend the gate:
+  // every parameter box beyond it earns a chord/sagitta certificate.
+  const localLength = Math.max(
+    0,
+    (Math.PI - junctionTurn) * minimumRadius,
+  );
+  const arithmeticGuard =
+    Number.EPSILON *
+    Math.max(
+      1,
+      clearance,
+      minimumRadius,
+      firstLength,
+      secondLength,
+      resolvedPathSegmentNumericScale(first),
+      resolvedPathSegmentNumericScale(second),
+    ) *
+    256;
+  if (!(arithmeticGuard < minimumRadius)) return "uncertain";
+  // With a tangent turn at the joint, the conservative boundary chord is the
+  // symmetric saturated-curvature case. A strict margin makes boxes that
+  // straddle the gate converge without sampling or accepting equality.
+  const localBoundaryDistance =
+    2 * minimumRadius * (1 - Math.sin(junctionTurn / 2));
+  if (
+    !Number.isFinite(localBoundaryDistance) ||
+    !(localBoundaryDistance - arithmeticGuard > clearance)
+  ) {
+    return "uncertain";
+  }
+
+  const pending: Array<readonly [CertifiedCurvePiece, CertifiedCurvePiece]> = [];
+  for (const firstPiece of initialCurvePieces(first)) {
+    for (const secondPiece of initialCurvePieces(second)) {
+      pending.push([firstPiece, secondPiece]);
+    }
+  }
+  let work = 0;
+  while (pending.length > 0) {
+    work += 1;
+    if (work > 65_536) return "uncertain";
+    const [firstPiece, secondPiece] = pending.pop()!;
+    const firstRange = adjacentPieceDistanceRange(firstPiece, true);
+    const secondRange = adjacentPieceDistanceRange(secondPiece, false);
+    const minimumCombinedLength = firstRange.min + secondRange.min;
+    const maximumCombinedLength = firstRange.max + secondRange.max;
+    if (maximumCombinedLength + arithmeticGuard <= localLength) {
+      continue;
+    }
+
+    const bounds = curvePieceDistanceBounds(
+      firstPiece,
+      secondPiece,
+      clearance,
+    );
+    if (bounds.lower > clearance) continue;
+    if (
+      bounds.upper <= clearance &&
+      minimumCombinedLength - arithmeticGuard >= localLength
+    ) {
+      return "blocked";
+    }
+
+    const crossesLocalBoundary =
+      minimumCombinedLength - arithmeticGuard < localLength &&
+      maximumCombinedLength + arithmeticGuard > localLength;
+    const firstSpan = firstRange.max - firstRange.min;
+    const secondSpan = secondRange.max - secondRange.min;
+    let splitFirst: boolean;
+    if (crossesLocalBoundary) {
+      splitFirst = firstSpan >= secondSpan;
+    } else if (
+      firstPiece.kind === "circularArc" &&
+      secondPiece.kind === "circularArc"
+    ) {
+      splitFirst = firstPiece.deviation >= secondPiece.deviation;
+    } else if (firstPiece.kind === "circularArc") {
+      splitFirst = true;
+    } else if (secondPiece.kind === "circularArc") {
+      splitFirst = false;
+    } else {
+      splitFirst = firstSpan >= secondSpan;
+    }
+    const selectedPiece = splitFirst ? firstPiece : secondPiece;
+    if (selectedPiece.depth >= 30) return "uncertain";
+    const pieces = subdivideCurvePiece(selectedPiece);
+    if (pieces === undefined) return "uncertain";
+    for (const piece of pieces) {
+      pending.push(
+        splitFirst ? [piece, secondPiece] : [firstPiece, piece],
+      );
+    }
+  }
+  return "clear";
+}
+
+/**
+ * @internal
+ * Certifies remote clearance outside the intrinsic neighborhood of two valid,
+ * forward-tangent ordered segments that share `first.end === second.start`.
+ */
+export function resolvedAdjacentPathSegmentsHaveRemoteClearance(
+  first: ResolvedPathSegment,
+  second: ResolvedPathSegment,
+  clearance: number,
+): boolean {
+  return (
+    certifyResolvedAdjacentPathSegmentClearance(first, second, clearance) ===
+    "clear"
   );
 }
 
@@ -839,14 +1024,6 @@ export function validateResolvedCompositePath(
         ...(pointRole === undefined ? {} : { pointRole }),
       };
     }
-    if (resolvedCircularArcGeometry(segment)!.sweep > Math.PI + 1e-12) {
-      return {
-        reason: "major-arc-unsupported",
-        message:
-          "Composite paths currently require each circular arc to be minor or semicircular",
-        segmentIndex: index,
-      };
-    }
   }
   if (distance(path.start, segments.at(-1)!.end) <= tolerance) {
     return {
@@ -909,25 +1086,25 @@ export function validateResolvedCompositePath(
         otherSegmentIndex: index - 1,
       };
     }
-    if (prior.kind === "circularArc" && current.kind === "circularArc") {
-      const priorGeometry = resolvedCircularArcGeometry(prior)!;
-      const currentGeometry = resolvedCircularArcGeometry(current)!;
-      const junctionTurn = Math.atan2(tangentSine, tangentDot);
-      // A piecewise-smooth chain with curvature bounded by 1 / min(radius)
-      // cannot make a nonlocal return before its accumulated arclength plus
-      // junction turn reaches pi at that curvature bound.
-      const localReach =
-        (Math.PI - junctionTurn) *
-        Math.min(priorGeometry.radius, currentGeometry.radius);
-      if (priorGeometry.length + currentGeometry.length > localReach) {
-        return {
-          reason: "adjacent-arc-reach",
-          message:
-            "Adjacent composite arcs must remain within their certified local-curvature reach",
-          segmentIndex: index,
-          otherSegmentIndex: index - 1,
-        };
-      }
+    const adjacentCertification =
+      certifyResolvedAdjacentPathSegmentClearance(
+        prior,
+        current,
+        tolerance,
+      );
+    if (adjacentCertification !== "clear") {
+      return {
+        reason:
+          adjacentCertification === "blocked"
+            ? "self-intersection"
+            : "uncertified-clearance",
+        message:
+          adjacentCertification === "blocked"
+            ? `Composite path segments ${index - 1} and ${index} make a nonlocal return within tolerance`
+            : `Composite path segments ${index - 1} and ${index} cannot certify their remote domains at this numeric scale`,
+        segmentIndex: index,
+        otherSegmentIndex: index - 1,
+      };
     }
   }
   for (let first = 0; first < segments.length; first += 1) {

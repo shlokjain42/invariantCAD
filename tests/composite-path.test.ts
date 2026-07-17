@@ -46,6 +46,7 @@ import {
   type Vec3,
   type Vec3Expression,
 } from "../src/index.js";
+import { resolvedAdjacentPathSegmentsHaveRemoteClearance } from "../src/protocol/path.js";
 
 const PATH_TOLERANCE = 1e-7;
 const ROOT_HALF = Math.SQRT1_2;
@@ -78,6 +79,80 @@ function canonicalResolvedPath(): ResolvedCompositePath {
         end: [5, 0, 15],
       },
       { kind: "line", end: [10, 0, 15] },
+    ],
+    closed: false,
+  };
+}
+
+function majorLineArcLinePath(): ResolvedCompositePath {
+  return {
+    kind: "composite",
+    start: [0, 0, -3],
+    segments: [
+      { kind: "line", end: [0, 0, 0] },
+      {
+        kind: "circularArc",
+        through: [20, 0, 0],
+        end: [10, 0, -10],
+      },
+      { kind: "line", end: [7, 0, -10] },
+    ],
+    closed: false,
+  };
+}
+
+function majorArcArcPath(): ResolvedCompositePath {
+  return {
+    kind: "composite",
+    start: [0, 0, 0],
+    segments: [
+      {
+        kind: "circularArc",
+        through: [20, 0, 0],
+        end: [10, 0, -10],
+      },
+      {
+        kind: "circularArc",
+        through: [10 - 10 * ROOT_HALF, 10 - 10 * ROOT_HALF, -10],
+        end: [0, 10, -10],
+      },
+    ],
+    closed: false,
+  };
+}
+
+function nearFullLineArcLinePath(
+  gap: number,
+  incomingLength = 0.1,
+  outgoingLength = 0.1,
+): ResolvedCompositePath {
+  const radius = 20;
+  const sweep = Math.PI * 2 - gap;
+  const point = (angle: number): Vec3 => [
+    radius - radius * Math.cos(angle),
+    0,
+    radius * Math.sin(angle),
+  ];
+  const end = point(sweep);
+  const endTangent: Vec3 = [Math.sin(sweep), 0, Math.cos(sweep)];
+  return {
+    kind: "composite",
+    start: [0, 0, -incomingLength],
+    segments: [
+      { kind: "line", end: point(0) },
+      {
+        kind: "circularArc",
+        through: point(sweep / 2),
+        end,
+      },
+      {
+        kind: "line",
+        end: [
+          end[0] + endTangent[0] * outgoingLength,
+          end[1] + endTangent[1] * outgoingLength,
+          end[2] + endTangent[2] * outgoingLength,
+        ],
+      },
     ],
     closed: false,
   };
@@ -678,7 +753,6 @@ describe("resolved composite path admission and geometry", () => {
         | "degenerate-segment"
         | "closed-path"
         | "collinear-arc-points"
-        | "major-arc-unsupported"
         | "non-tangent-junction"
         | "redundant-segments"
         | "self-intersection";
@@ -752,22 +826,6 @@ describe("resolved composite path admission and geometry", () => {
         },
       },
       {
-        reason: "major-arc-unsupported",
-        path: {
-          kind: "composite",
-          start: [0, 0, 0],
-          segments: [
-            { kind: "line", end: [0, 0, 10] },
-            {
-              kind: "circularArc",
-              through: [10, 0, 10],
-              end: [5, 0, 5],
-            },
-          ],
-          closed: false,
-        },
-      },
-      {
         reason: "non-tangent-junction",
         path: {
           kind: "composite",
@@ -811,6 +869,78 @@ describe("resolved composite path admission and geometry", () => {
     }
   });
 
+  it("admits certified major and near-full arcs without a closing-chord rule", () => {
+    const major = majorLineArcLinePath();
+    expect(validateResolvedCompositePath(major, PATH_TOLERANCE)).toBeUndefined();
+    const majorArc = resolvedCompositePathSegments(major)[1]!;
+    expect(majorArc.kind).toBe("circularArc");
+    expect(
+      resolvedCircularArcGeometry(
+        majorArc as Extract<ResolvedPathSegment, { kind: "circularArc" }>,
+      )!.sweep,
+    ).toBeCloseTo((Math.PI * 3) / 2, 12);
+    expect(
+      validateResolvedSweep(
+        rectangleProfile({
+          origin: major.start,
+          halfWidth: 0.5,
+          halfHeight: 0.5,
+        }),
+        major,
+        PATH_TOLERANCE,
+      ),
+    ).toBeUndefined();
+
+    const arcChain = majorArcArcPath();
+    expect(
+      validateResolvedCompositePath(arcChain, PATH_TOLERANCE),
+    ).toBeUndefined();
+    const arcChainSegments = resolvedCompositePathSegments(arcChain);
+    expect(
+      resolvedAdjacentPathSegmentsHaveRemoteClearance(
+        arcChainSegments[0]!,
+        arcChainSegments[1]!,
+        Math.SQRT2 + PATH_TOLERANCE,
+      ),
+    ).toBe(true);
+    expect(
+      validateResolvedSweep(
+        rectangleProfile({
+          origin: arcChain.start,
+          halfWidth: 0.5,
+          halfHeight: 0.5,
+        }),
+        arcChain,
+        PATH_TOLERANCE,
+      ),
+    ).toBeUndefined();
+
+    const nearFull = nearFullLineArcLinePath(0.02);
+    expect(
+      validateResolvedCompositePath(nearFull, PATH_TOLERANCE),
+    ).toBeUndefined();
+    const nearFullArc = resolvedCompositePathSegments(nearFull)[1]!;
+    const geometry = resolvedCircularArcGeometry(
+      nearFullArc as Extract<
+        ResolvedPathSegment,
+        { kind: "circularArc" }
+      >,
+    )!;
+    expect(geometry.closingSweep).toBeCloseTo(0.02, 12);
+    expect(geometry.closingLength).toBeCloseTo(0.4, 10);
+    expect(
+      validateResolvedSweep(
+        rectangleProfile({
+          origin: nearFull.start,
+          halfWidth: 0.01,
+          halfHeight: 0.01,
+        }),
+        nearFull,
+        PATH_TOLERANCE,
+      ),
+    ).toBeUndefined();
+  });
+
   it("certifies exact mixed-segment separation and conservative sweep clearance", () => {
     const clearLine: ResolvedPathSegment = {
       kind: "line",
@@ -844,6 +974,31 @@ describe("resolved composite path admission and geometry", () => {
     expect(resolvedPathSegmentsHaveClearance(quarterArc, quarterArc, 0)).toBe(
       false,
     );
+    const gateLine: ResolvedPathSegment = {
+      kind: "line",
+      start: [0, 0, -1],
+      end: [0, 0, 0],
+    };
+    const gateSemicircle: ResolvedPathSegment = {
+      kind: "circularArc",
+      start: [0, 0, 0],
+      through: [10, 0, 10],
+      end: [20, 0, 0],
+    };
+    expect(
+      resolvedAdjacentPathSegmentsHaveRemoteClearance(
+        gateLine,
+        gateSemicircle,
+        20 - 1e-6,
+      ),
+    ).toBe(true);
+    expect(
+      resolvedAdjacentPathSegmentsHaveRemoteClearance(
+        gateLine,
+        gateSemicircle,
+        20,
+      ),
+    ).toBe(false);
     const cancellationScaleArc: ResolvedPathSegment = {
       kind: "circularArc",
       start: [0, 0, 0],
@@ -916,9 +1071,36 @@ describe("resolved composite path admission and geometry", () => {
         otherSegmentIndex: 1,
       }),
     );
+
+    const worldOffset = 1e16;
+    const uncertifiableAdjacent: ResolvedCompositePath = {
+      kind: "composite",
+      start: [worldOffset, 0, -3],
+      segments: [
+        { kind: "line", end: [worldOffset, 0, 0] },
+        {
+          kind: "circularArc",
+          through: [worldOffset + 20, 0, 0],
+          end: [worldOffset + 10, 0, -10],
+        },
+      ],
+      closed: false,
+    };
+    expect(
+      validateResolvedCompositePath(
+        uncertifiableAdjacent,
+        PATH_TOLERANCE,
+      ),
+    ).toEqual(
+      expect.objectContaining({
+        reason: "uncertified-clearance",
+        segmentIndex: 1,
+        otherSegmentIndex: 0,
+      }),
+    );
   });
 
-  it("rejects remote adjacent-arc returns and shallow-arc profile skew", () => {
+  it("separates adjacent topology from remote profile-envelope returns", () => {
     const rotation = 0.1;
     const remoteReturn: ResolvedCompositePath = {
       kind: "composite",
@@ -937,13 +1119,93 @@ describe("resolved composite path admission and geometry", () => {
       ],
       closed: false,
     };
-    expect(validateResolvedCompositePath(remoteReturn, PATH_TOLERANCE)).toEqual(
+    expect(
+      validateResolvedCompositePath(remoteReturn, PATH_TOLERANCE),
+    ).toBeUndefined();
+    const remoteSegments = resolvedCompositePathSegments(remoteReturn);
+    expect(
+      resolvedAdjacentPathSegmentsHaveRemoteClearance(
+        remoteSegments[0]!,
+        remoteSegments[1]!,
+        PATH_TOLERANCE,
+      ),
+    ).toBe(true);
+    expect(
+      resolvedAdjacentPathSegmentsHaveRemoteClearance(
+        remoteSegments[0]!,
+        remoteSegments[1]!,
+        2 * Math.SQRT2 + PATH_TOLERANCE,
+      ),
+    ).toBe(false);
+    expect(
+      validateResolvedSweep(
+        rectangleProfile({ plane: "YZ", origin: remoteReturn.start }),
+        remoteReturn,
+        PATH_TOLERANCE,
+      ),
+    ).toEqual(
       expect.objectContaining({
-        reason: "adjacent-arc-reach",
+        reason: "path-clearance",
         segmentIndex: 1,
         otherSegmentIndex: 0,
       }),
     );
+
+    const pathReturn = nearFullLineArcLinePath(5e-5, 1);
+    expect(
+      validateResolvedCompositePath(pathReturn, PATH_TOLERANCE),
+    ).toEqual(
+      expect.objectContaining({
+        reason: "self-intersection",
+        segmentIndex: 1,
+        otherSegmentIndex: 0,
+      }),
+    );
+
+    const sweepReturn = nearFullLineArcLinePath(0.02, 1);
+    expect(
+      validateResolvedCompositePath(sweepReturn, PATH_TOLERANCE),
+    ).toBeUndefined();
+    expect(
+      validateResolvedSweep(
+        rectangleProfile({
+          origin: sweepReturn.start,
+          halfWidth: 0.01,
+          halfHeight: 0.01,
+        }),
+        sweepReturn,
+        PATH_TOLERANCE,
+      ),
+    ).toEqual(
+      expect.objectContaining({
+        reason: "path-clearance",
+        segmentIndex: 1,
+        otherSegmentIndex: 0,
+      }),
+    );
+
+    const pathReturnSegments = resolvedCompositePathSegments(pathReturn);
+    const reversedArc: ResolvedPathSegment = {
+      kind: "circularArc",
+      start: pathReturnSegments[1]!.end,
+      through: (pathReturnSegments[1] as Extract<
+        ResolvedPathSegment,
+        { kind: "circularArc" }
+      >).through,
+      end: pathReturnSegments[1]!.start,
+    };
+    const reversedIncoming: ResolvedPathSegment = {
+      kind: "line",
+      start: pathReturnSegments[1]!.start,
+      end: pathReturnSegments[0]!.start,
+    };
+    expect(
+      resolvedAdjacentPathSegmentsHaveRemoteClearance(
+        reversedArc,
+        reversedIncoming,
+        PATH_TOLERANCE,
+      ),
+    ).toBe(false);
 
     const radius = 1_000;
     const sweep = 1e-4;

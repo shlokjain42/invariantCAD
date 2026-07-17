@@ -7,6 +7,7 @@
 - Added first-class parameterized open 3D polyline paths and a bounded exact solid-sweep contract with corrected-Frenet transport, right-corner transitions, conservative self-overlap rejection, transactional OCCT ownership, and package-level coverage.
 - Added exact three-point 3D circular-arc paths and additive circular-arc sweep capability negotiation with analytic curvature clearance, specialized OCCT revolution transfer, and stable analytic volume measurement.
 - Added structurally connected ordered line/arc composite paths, certified exact path clearance, additive composite-sweep capability negotiation, and one-wire transactional OCCT PipeShell transfer.
+- Extended the kernel-neutral composite contract to certified major and near-full arcs with adjacent remote-domain clearance. The stock OCCT adapter admits the bounded centered-profile, single-arc composite case with native tangent and analytic-volume postconditions; multi-arc and eccentric-profile major transfers fail closed. The superseded `major-arc-unsupported` and `adjacent-arc-reach` reason literals remain type-compatible but are no longer emitted.
 - Fixed nonuniform OCCT transforms of already-meshed exact shapes by stripping stale triangulation before applying the affine map.
 
 - Preserve analytic sketch lines, arcs, circles, and their source entity IDs in resolved profiles

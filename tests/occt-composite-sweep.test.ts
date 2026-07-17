@@ -122,6 +122,101 @@ function planarCompositeWithLineCorner(): ResolvedCompositePath {
   };
 }
 
+function majorCompositePath(): ResolvedCompositePath {
+  return {
+    kind: "composite",
+    start: [0, 0, 0],
+    segments: [
+      { kind: "line", end: [0, 0, 3] },
+      {
+        kind: "circularArc",
+        through: [20, 0, 3],
+        end: [10, 0, -7],
+      },
+      { kind: "line", end: [7, 0, -7] },
+    ],
+    closed: false,
+  };
+}
+
+function majorArcChainPath(): ResolvedCompositePath {
+  return {
+    kind: "composite",
+    start: [0, 0, 0],
+    segments: [
+      {
+        kind: "circularArc",
+        through: [20, 0, 0],
+        end: [10, 0, -10],
+      },
+      {
+        kind: "circularArc",
+        through: [10 - 10 / Math.sqrt(2), 10 - 10 / Math.sqrt(2), -10],
+        end: [0, 10, -10],
+      },
+    ],
+    closed: false,
+  };
+}
+
+function nearFullCompositePath(): ResolvedCompositePath {
+  const radius = 20;
+  const gap = 0.02;
+  const sweep = Math.PI * 2 - gap;
+  const arcStartZ = 0.1;
+  const point = (angle: number): Vec3 => [
+    radius - radius * Math.cos(angle),
+    0,
+    arcStartZ + radius * Math.sin(angle),
+  ];
+  const end = point(sweep);
+  const endTangent: Vec3 = [Math.sin(sweep), 0, Math.cos(sweep)];
+  return {
+    kind: "composite",
+    start: [0, 0, 0],
+    segments: [
+      { kind: "line", end: point(0) },
+      {
+        kind: "circularArc",
+        through: point(sweep / 2),
+        end,
+      },
+      { kind: "line", end: add(end, scale(endTangent, 0.1)) },
+    ],
+    closed: false,
+  };
+}
+
+function angularlyConditionedNearFullPath(): ResolvedCompositePath {
+  const radius = 5;
+  const sweep = Math.PI * 2 - 0.05;
+  const tilt = Math.PI / 1_800;
+  const point = (angle: number): Vec3 => [
+    radius * Math.sin(angle),
+    radius * Math.cos(tilt) * (1 - Math.cos(angle)),
+    radius * Math.sin(tilt) * (1 - Math.cos(angle)),
+  ];
+  const end = point(sweep);
+  const endTangent: Vec3 = [
+    Math.cos(sweep),
+    Math.cos(tilt) * Math.sin(sweep),
+    Math.sin(tilt) * Math.sin(sweep),
+  ];
+  return {
+    kind: "composite",
+    start: point(0),
+    segments: [
+      {
+        kind: "circularArc",
+        through: point(sweep / 2),
+        end,
+      },
+      { kind: "line", end: add(end, scale(endTangent, 0.1)) },
+    ],
+    closed: false,
+  };
+}
+
 function add(first: Vec3, second: Vec3): Vec3 {
   return [
     first[0] + second[0],
@@ -329,6 +424,124 @@ describe("OCCT exact composite solid sweep", () => {
     }
   });
 
+  it("preserves selected major and near-full composite traversals", async () => {
+    const kernel = await createOcctKernel();
+    try {
+      const majorShape = kernel.compositeSweep!(
+        rectangleProfile("major-composite-profile", 1, 1),
+        majorCompositePath(),
+        SWEEP_OPTIONS,
+        { feature: "major-composite-sweep", tolerance: 1e-7 },
+      );
+      try {
+        expect(kernel.status(majorShape)).toEqual({ ok: true, code: "VALID" });
+        const measured = kernel.measure(majorShape);
+        expect(measured.volume).toBeCloseTo(6 + 15 * Math.PI, 8);
+        expect(measured.surfaceArea).toBeCloseTo(26 + 60 * Math.PI, 8);
+        const snapshot = topology(kernel, majorShape);
+        expectClosedSolidTopology(snapshot, 14, 28);
+        expectBroadSweepCreation(snapshot, "major-composite-sweep");
+      } finally {
+        kernel.disposeShape(majorShape);
+      }
+
+      const nearFullShape = kernel.compositeSweep!(
+        rectangleProfile("near-full-composite-profile", 0.02, 0.02),
+        nearFullCompositePath(),
+        SWEEP_OPTIONS,
+        { feature: "near-full-composite-sweep", tolerance: 1e-7 },
+      );
+      try {
+        expect(kernel.status(nearFullShape)).toEqual({
+          ok: true,
+          code: "VALID",
+        });
+        const pathLength = 0.2 + 20 * (Math.PI * 2 - 0.02);
+        const measured = kernel.measure(nearFullShape);
+        expect(measured.volume).toBeCloseTo(0.0004 * pathLength, 9);
+        expect(measured.surfaceArea).toBeCloseTo(
+          0.08 * pathLength + 0.0008,
+          8,
+        );
+        const snapshot = topology(kernel, nearFullShape);
+        expectClosedSolidTopology(snapshot, 14, 28);
+        expectBroadSweepCreation(snapshot, "near-full-composite-sweep");
+      } finally {
+        kernel.disposeShape(nearFullShape);
+      }
+    } finally {
+      kernel.dispose();
+    }
+  });
+
+  it("fails closed on PipeShell angular conditioning and unbounded eccentric major profiles", async () => {
+    const kernel = await createOcctKernel();
+    const raw = (kernel as any).raw as { readonly shapeCount: number };
+    const baselineShapeCount = raw.shapeCount;
+    try {
+      expect(() =>
+        kernel.compositeSweep!(
+          rectangleProfile("conditioned-near-full-profile", 0.01, 0.01, "YZ"),
+          angularlyConditionedNearFullPath(),
+          SWEEP_OPTIONS,
+          { feature: "conditioned-near-full-sweep", tolerance: 1e-7 },
+        ),
+      ).toThrow("centered-profile analytic volume postcondition");
+      expect(raw.shapeCount).toBe(baselineShapeCount);
+
+      expect(() =>
+        kernel.compositeSweep!(
+          rectangleProfile("multi-arc-major-profile", 1, 1),
+          majorArcChainPath(),
+          SWEEP_OPTIONS,
+          { feature: "multi-arc-major-sweep", tolerance: 1e-7 },
+        ),
+      ).toThrow("require exactly one circular-arc segment");
+      expect(raw.shapeCount).toBe(baselineShapeCount);
+
+      const centered = rectangleProfile("eccentric-major-profile", 1, 1);
+      const eccentric: ResolvedProfile = {
+        ...centered,
+        outer: {
+          curves: centered.outer.curves.map((curve) => {
+            if (curve.kind !== "line") {
+              throw new Error("Expected a rectangular line profile");
+            }
+            return {
+              ...curve,
+              start: [curve.start[0] + 1, curve.start[1]] as const,
+              end: [curve.end[0] + 1, curve.end[1]] as const,
+            };
+          }),
+        },
+      };
+      expect(() =>
+        kernel.compositeSweep!(
+          eccentric,
+          majorCompositePath(),
+          SWEEP_OPTIONS,
+          { feature: "eccentric-major-sweep", tolerance: 1e-7 },
+        ),
+      ).toThrow("require the profile area centroid at the path start");
+      expect(raw.shapeCount).toBe(baselineShapeCount);
+
+      const recovered = kernel.compositeSweep!(
+        rectangleProfile("postcondition-recovery-profile", 1, 1),
+        majorCompositePath(),
+        SWEEP_OPTIONS,
+        { feature: "postcondition-recovery-sweep", tolerance: 1e-7 },
+      );
+      try {
+        expect(kernel.status(recovered)).toEqual({ ok: true, code: "VALID" });
+      } finally {
+        kernel.disposeShape(recovered);
+      }
+      expect(raw.shapeCount).toBe(baselineShapeCount);
+    } finally {
+      kernel.dispose();
+    }
+  });
+
   it("rejects sub-tolerance PipeShell geometry and unstable arc points", async () => {
     const kernel = await createOcctKernel();
     try {
@@ -413,12 +626,14 @@ describe("OCCT exact composite solid sweep", () => {
     const raw = (kernel as any).raw as {
       makeArcEdge: (...args: any[]) => any;
       makeWire: (...args: any[]) => any;
+      curveTangent: (...args: any[]) => any;
       sweep: (...args: any[]) => any;
       makeNullShape: (...args: any[]) => any;
       readonly shapeCount: number;
     };
     const originalMakeArcEdge = raw.makeArcEdge!.bind(raw);
     const originalMakeWire = raw.makeWire!.bind(raw);
+    const originalCurveTangent = raw.curveTangent!.bind(raw);
     const originalSweep = raw.sweep!.bind(raw);
     const originalMakeNullShape = raw.makeNullShape!.bind(raw);
     const baselineShapeCount = raw.shapeCount;
@@ -460,6 +675,13 @@ describe("OCCT exact composite solid sweep", () => {
       }
 
       try {
+        raw.curveTangent = () => ({ x: 0, y: 1, z: 0 });
+        expectCleanFailure("changed its authored tangents");
+      } finally {
+        raw.curveTangent = originalCurveTangent;
+      }
+
+      try {
         raw.sweep = () => {
           throw new Error("injected composite sweep failure");
         };
@@ -494,6 +716,7 @@ describe("OCCT exact composite solid sweep", () => {
     } finally {
       raw.makeArcEdge = originalMakeArcEdge;
       raw.makeWire = originalMakeWire;
+      raw.curveTangent = originalCurveTangent;
       raw.sweep = originalSweep;
       kernel.dispose();
     }
