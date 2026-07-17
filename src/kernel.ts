@@ -32,16 +32,32 @@ export type KernelFeature =
   | "shell"
   | "offset"
   | "draft";
+export type KernelCompositeSweepRefinement =
+  | "major-multiple-arcs"
+  | "major-eccentric-profile";
 export type KernelCapabilityKind =
   | "primitive"
   | "feature"
+  | "compositeSweepRefinement"
   | "exactIndexedTopologyEvolution"
   | "nativeImport"
   | "nativeExport";
 export type KernelExchangeFormat = "step" | "brep" | "brep-binary";
 
 export const GEOMETRY_KERNEL_PROTOCOL_VERSION = 1 as const;
+export const COMPOSITE_SWEEP_REFINEMENT_PROTOCOL_VERSION = 1 as const;
 export const EXACT_INDEXED_TOPOLOGY_EVOLUTION_PROTOCOL_VERSION = 1 as const;
+
+/**
+ * Additive guarantees beyond the base `compositeSweep` feature contract.
+ *
+ * The envelope is optional so kernels that implement the original composite
+ * sweep contract remain compatible without claiming either stronger case.
+ */
+export interface KernelCompositeSweepCapabilities {
+  readonly protocolVersion: typeof COMPOSITE_SWEEP_REFINEMENT_PROTOCOL_VERSION;
+  readonly refinements: readonly KernelCompositeSweepRefinement[];
+}
 
 /**
  * Feature-scoped support for complete, exact, indexed topology evolution.
@@ -64,7 +80,36 @@ export interface KernelCapabilities {
   readonly nativeImports: readonly KernelExchangeFormat[];
   readonly nativeExports: readonly KernelExchangeFormat[];
   readonly topology?: KernelTopologyCapabilities;
+  readonly compositeSweep?: KernelCompositeSweepCapabilities;
   readonly exactIndexedTopologyEvolution?: KernelExactIndexedTopologyEvolutionCapabilities;
+}
+
+function supportedCompositeSweepRefinements(
+  capabilities: KernelCapabilities,
+): readonly KernelCompositeSweepRefinement[] {
+  if (!capabilities.features.includes("compositeSweep")) return [];
+
+  const envelope = capabilities.compositeSweep;
+  if (
+    envelope?.protocolVersion !==
+      COMPOSITE_SWEEP_REFINEMENT_PROTOCOL_VERSION ||
+    !Array.isArray(envelope.refinements)
+  ) {
+    return [];
+  }
+
+  const seen = new Set<KernelCompositeSweepRefinement>();
+  for (const refinement of envelope.refinements) {
+    if (
+      (refinement !== "major-multiple-arcs" &&
+        refinement !== "major-eccentric-profile") ||
+      seen.has(refinement)
+    ) {
+      return [];
+    }
+    seen.add(refinement);
+  }
+  return envelope.refinements;
 }
 
 export function kernelSupports(
@@ -76,6 +121,11 @@ export function kernelSupports(
   capabilities: KernelCapabilities,
   kind: "feature",
   capability: KernelFeature,
+): boolean;
+export function kernelSupports(
+  capabilities: KernelCapabilities,
+  kind: "compositeSweepRefinement",
+  capability: KernelCompositeSweepRefinement,
 ): boolean;
 export function kernelSupports(
   capabilities: KernelCapabilities,
@@ -97,6 +147,8 @@ export function kernelSupports(
       ? capabilities.primitives
       : kind === "feature"
         ? capabilities.features
+        : kind === "compositeSweepRefinement"
+          ? supportedCompositeSweepRefinements(capabilities)
         : kind === "exactIndexedTopologyEvolution"
           ? capabilities.exactIndexedTopologyEvolution?.protocolVersion ===
               EXACT_INDEXED_TOPOLOGY_EVOLUTION_PROTOCOL_VERSION &&

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  COMPOSITE_SWEEP_REFINEMENT_PROTOCOL_VERSION,
   createEvaluator,
   createManifoldKernel,
   design,
@@ -7,6 +8,7 @@ import {
   mm,
   type GeometryKernel,
   type KernelCapabilities,
+  type KernelCompositeSweepRefinement,
 } from "../src/index.js";
 
 describe("kernel capability negotiation", () => {
@@ -58,6 +60,73 @@ describe("kernel capability negotiation", () => {
       expect(
         kernelSupports(stale, "exactIndexedTopologyEvolution", "draft"),
       ).toBe(false);
+    } finally {
+      kernel.dispose();
+    }
+  });
+
+  it("negotiates versioned composite-sweep refinements fail closed", async () => {
+    const kernel = await createManifoldKernel();
+    try {
+      const refinements: readonly KernelCompositeSweepRefinement[] = [
+        "major-multiple-arcs",
+        "major-eccentric-profile",
+      ];
+      const capable: KernelCapabilities = {
+        ...kernel.capabilities,
+        features: [...kernel.capabilities.features, "compositeSweep"],
+        compositeSweep: {
+          protocolVersion: COMPOSITE_SWEEP_REFINEMENT_PROTOCOL_VERSION,
+          refinements,
+        },
+      };
+      for (const refinement of refinements) {
+        expect(
+          kernelSupports(capable, "compositeSweepRefinement", refinement),
+        ).toBe(true);
+      }
+
+      const withoutBaseFeature: KernelCapabilities = {
+        ...capable,
+        features: capable.features.filter(
+          (feature) => feature !== "compositeSweep",
+        ),
+      };
+      expect(
+        kernelSupports(
+          withoutBaseFeature,
+          "compositeSweepRefinement",
+          "major-multiple-arcs",
+        ),
+      ).toBe(false);
+
+      for (const malformedEnvelope of [
+        { protocolVersion: 2, refinements },
+        {
+          protocolVersion: COMPOSITE_SWEEP_REFINEMENT_PROTOCOL_VERSION,
+          refinements: ["major-multiple-arcs", "major-multiple-arcs"],
+        },
+        {
+          protocolVersion: COMPOSITE_SWEEP_REFINEMENT_PROTOCOL_VERSION,
+          refinements: ["major-multiple-arcs", "unknown-refinement"],
+        },
+        {
+          protocolVersion: COMPOSITE_SWEEP_REFINEMENT_PROTOCOL_VERSION,
+          refinements: "major-multiple-arcs",
+        },
+      ]) {
+        const malformed = {
+          ...capable,
+          compositeSweep: malformedEnvelope,
+        } as unknown as KernelCapabilities;
+        expect(
+          kernelSupports(
+            malformed,
+            "compositeSweepRefinement",
+            "major-multiple-arcs",
+          ),
+        ).toBe(false);
+      }
     } finally {
       kernel.dispose();
     }

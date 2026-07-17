@@ -68,10 +68,15 @@ import { adoptOcctEdgeEvolution } from "./internal/occt-evolution.js";
 import {
   OcctDraftFacadeProtocolError,
   adoptOcctDraft,
-  probeOcctDraftFacade,
   type OcctDraftFacadeModule,
   type OcctDraftReportSnapshot,
 } from "./internal/occt-draft.js";
+import {
+  probeOcctFacade,
+  type OcctFacadeProbe,
+} from "./internal/occt-facade.js";
+import { adoptOcctControlledPipeShell } from "./internal/occt-pipe-shell.js";
+import { resolvedCompositeSweepVolumeOracle } from "./internal/transported-profile-volume.js";
 import {
   TopologyEvolutionProtocolError,
   reduceIndexedTopologyEvolution,
@@ -267,8 +272,9 @@ function arcSweep(curve: ResolvedArcCurve): number {
   return sweep;
 }
 
-// Polyline and composite sweeps use BRepOffsetAPI_MakePipeShell, whose Tol3d
-// and BoundTol both default to 1e-4 in the stock binding.
+// Polyline and composite sweeps use BRepOffsetAPI_MakePipeShell. Its stock
+// Tol3d/BoundTol defaults are 1e-4; keep that conservative construction floor
+// even when ABI 0.3 supplies stricter controls explicitly.
 const OCCT_PIPE_SHELL_LINEAR_TOLERANCE = 1e-4;
 const OCCT_PIPE_SHELL_TANGENT_SINE_TOLERANCE = 1e-9;
 const OCCT_PIPE_SHELL_VOLUME_RELATIVE_TOLERANCE = 1e-7;
@@ -447,6 +453,7 @@ class OcctKernel implements GeometryKernel {
     },
   };
   private readonly raw: RawOcctKernel;
+  private readonly facade: OcctFacadeProbe | undefined;
   private readonly tessellation: MeshOptions;
   private readonly modelingTolerance: number;
   private readonly ownedShapes = new WeakSet<OcctShape>();
@@ -457,27 +464,40 @@ class OcctKernel implements GeometryKernel {
 
   constructor(
     raw: RawOcctKernel,
-    draftFacade: OcctDraftFacadeModule | undefined,
+    facade: OcctFacadeProbe | undefined,
     options: OcctKernelOptions = {},
   ) {
     this.raw = raw;
+    this.facade = facade;
     this.tessellation = options.tessellation ?? {};
     this.modelingTolerance = options.modelingTolerance ?? 1e-7;
-    this.capabilities =
-      draftFacade === undefined
-        ? OcctKernel.BASE_CAPABILITIES
+    this.capabilities = {
+      ...OcctKernel.BASE_CAPABILITIES,
+      ...(facade?.draft === undefined
+        ? {}
         : {
-            ...OcctKernel.BASE_CAPABILITIES,
             features: [...OcctKernel.BASE_CAPABILITIES.features, "draft"],
             exactIndexedTopologyEvolution: {
-              protocolVersion: 1,
-              features: ["draft"],
+              protocolVersion: 1 as const,
+              features: ["draft" as const],
             },
-          };
-    if (draftFacade !== undefined) {
+          }),
+      ...(facade?.pipeShell === undefined
+        ? {}
+        : {
+            compositeSweep: {
+              protocolVersion: 1 as const,
+              refinements: [
+                "major-multiple-arcs" as const,
+                "major-eccentric-profile" as const,
+              ],
+            },
+          }),
+    };
+    if (facade?.draft !== undefined) {
       this.draft = (shape, faces, resolved, context) =>
         this.draftWithExactEvolution(
-          draftFacade,
+          facade.draft,
           shape,
           faces,
           resolved,
@@ -1447,12 +1467,17 @@ class OcctKernel implements GeometryKernel {
           (segment) =>
             resolvedCircularArcGeometry(segment)!.sweep > Math.PI + 1e-12,
         );
-        if (hasMajorArc && arcSegments.length !== 1) {
+        if (
+          this.facade?.pipeShell === undefined &&
+          hasMajorArc &&
+          arcSegments.length !== 1
+        ) {
           throw new RangeError(
-            "OCCT major-arc composite sweeps currently require exactly one circular-arc segment",
+            "Stock OCCT major-arc composite sweeps require exactly one circular-arc segment",
           );
         }
         if (
+          this.facade?.pipeShell === undefined &&
           hasMajorArc &&
           !(
             Number.isFinite(centroidDistance) &&
@@ -1460,41 +1485,48 @@ class OcctKernel implements GeometryKernel {
           )
         ) {
           throw new RangeError(
-            "OCCT major-arc composite sweeps currently require the profile area centroid at the path start",
+            "Stock OCCT major-arc composite sweeps require the profile area centroid at the path start",
           );
         }
+        const volumeOracle = resolvedCompositeSweepVolumeOracle(
+          {
+            area: profileArea,
+            centroid,
+            normal: planeBasis(seatedProfile.plane).n,
+          },
+          path,
+          tolerance,
+        );
+        if (!volumeOracle.ok) {
+          throw new RangeError(
+            `Composite sweep does not have a stable transported-profile volume postcondition: ${volumeOracle.message}`,
+          );
+        }
+        const expected = volumeOracle.volume;
+        const arcSweep = segments.reduce(
+          (total, segment) =>
+            total +
+            (segment.kind === "circularArc"
+              ? resolvedCircularArcGeometry(segment)!.sweep
+              : 0),
+          0,
+        );
+        const allowance =
+          expected * OCCT_PIPE_SHELL_VOLUME_RELATIVE_TOLERANCE +
+          volumeOracle.diagnostics.roundoffBound +
+          profileArea * this.modelingTolerance * (1 + arcSweep);
         if (
-          Number.isFinite(centroidDistance) &&
-          centroidDistance <= this.modelingTolerance
+          !Number.isFinite(expected) ||
+          !(expected > minimumVolume) ||
+          !Number.isFinite(allowance) ||
+          !(allowance >= 0)
         ) {
-          const expectedPathLength = segments.reduce(
-            (total, segment) => total + resolvedPathSegmentLength(segment),
-            0,
+          throw new RangeError(
+            "Composite sweep does not have a stable transported-profile volume postcondition",
           );
-          const arcSweep = segments.reduce(
-            (total, segment) =>
-              total +
-              (segment.kind === "circularArc"
-                ? resolvedCircularArcGeometry(segment)!.sweep
-                : 0),
-            0,
-          );
-          const expected = profileArea * expectedPathLength;
-          const allowance =
-            expected * OCCT_PIPE_SHELL_VOLUME_RELATIVE_TOLERANCE +
-            profileArea * centroidDistance * arcSweep;
-          if (
-            !Number.isFinite(expected) ||
-            !(expected > minimumVolume) ||
-            !Number.isFinite(allowance) ||
-            !(allowance >= 0)
-          ) {
-            throw new RangeError(
-              "Composite sweep does not have a stable centered-profile volume postcondition",
-            );
-          }
-          pipeShellVolumePostcondition = { expected, allowance };
         }
+        exactVolume = expected;
+        pipeShellVolumePostcondition = { expected, allowance };
       }
       if (path.kind === "circularArc") {
         const geometry = resolvedCircularArcGeometry(path)!;
@@ -1687,11 +1719,29 @@ class OcctKernel implements GeometryKernel {
           }
         }
         checkContext(context);
-        result = this.raw.sweep(
-          built.outerWire,
-          spine,
-          TransitionMode.RightCorner,
-        );
+        if (this.facade?.pipeShell === undefined) {
+          result = this.raw.sweep(
+            built.outerWire,
+            spine,
+            TransitionMode.RightCorner,
+          );
+        } else {
+          const controlledLinearTolerance = Math.min(
+            tolerance,
+            OCCT_PIPE_SHELL_LINEAR_TOLERANCE,
+          );
+          result = adoptOcctControlledPipeShell({
+            module: this.facade.module,
+            kernel: this.raw.getRawKernel(),
+            profileWireId: built.outerWire,
+            spineWireId: spine,
+            tolerance3d: controlledLinearTolerance,
+            boundaryTolerance: controlledLinearTolerance,
+            angularTolerance: OCCT_PIPE_SHELL_TANGENT_SINE_TOLERANCE,
+            maxSurfaceError: controlledLinearTolerance,
+            adopt: ({ resultId }) => resultId as ShapeHandle,
+          });
+        }
       } else {
         const geometry = resolvedCircularArcGeometry(path)!;
         checkContext(context);
@@ -1773,7 +1823,7 @@ class OcctKernel implements GeometryKernel {
           pipeShellVolumePostcondition.allowance
       ) {
         throw new RangeError(
-          "OCCT pipe-shell sweep failed the centered-profile analytic volume postcondition",
+          "OCCT pipe-shell sweep failed the transported-profile analytic volume postcondition",
         );
       }
       return this.own(result, context, {
@@ -3054,13 +3104,13 @@ export async function createOcctKernel(
       path.endsWith(".wasm") ? location : path;
   }
   const module = await createModule(moduleOptions);
-  const draftFacade = probeOcctDraftFacade(module);
+  const facade = probeOcctFacade(module);
   const KernelConstructor = RawKernel as unknown as new (
     module: unknown,
   ) => RawOcctKernel;
   const raw = new KernelConstructor(module);
   try {
-    return new OcctKernel(raw, draftFacade, options);
+    return new OcctKernel(raw, facade, options);
   } catch (error) {
     raw[Symbol.dispose]();
     throw error;

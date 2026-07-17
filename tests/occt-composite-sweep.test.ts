@@ -122,6 +122,32 @@ function planarCompositeWithLineCorner(): ResolvedCompositePath {
   };
 }
 
+function rotateCompositePathAboutY(
+  path: ResolvedCompositePath,
+  angle: number,
+): ResolvedCompositePath {
+  const sine = Math.sin(angle);
+  const cosine = Math.cos(angle);
+  const rotate = ([x, y, z]: Vec3): Vec3 => [
+    x * cosine + z * sine,
+    y,
+    -x * sine + z * cosine,
+  ];
+  return {
+    ...path,
+    start: rotate(path.start),
+    segments: path.segments.map((segment) =>
+      segment.kind === "line"
+        ? { ...segment, end: rotate(segment.end) }
+        : {
+            ...segment,
+            through: rotate(segment.through),
+            end: rotate(segment.end),
+          },
+    ),
+  };
+}
+
 function majorCompositePath(): ResolvedCompositePath {
   return {
     kind: "composite",
@@ -353,6 +379,21 @@ describe("OCCT exact composite solid sweep", () => {
       expect(
         kernelSupports(kernel.capabilities, "feature", "compositeSweep"),
       ).toBe(true);
+      expect(kernel.capabilities.compositeSweep).toBeUndefined();
+      expect(
+        kernelSupports(
+          kernel.capabilities,
+          "compositeSweepRefinement",
+          "major-multiple-arcs",
+        ),
+      ).toBe(false);
+      expect(
+        kernelSupports(
+          kernel.capabilities,
+          "compositeSweepRefinement",
+          "major-eccentric-profile",
+        ),
+      ).toBe(false);
       expect(kernel.compositeSweep).toBeTypeOf("function");
 
       const shape = kernel.compositeSweep!(
@@ -391,6 +432,29 @@ describe("OCCT exact composite solid sweep", () => {
         );
       } finally {
         kernel.disposeShape(cornerShape);
+      }
+    } finally {
+      kernel.dispose();
+    }
+  });
+
+  it("preserves the profile alignment tolerance admitted by the sweep protocol", async () => {
+    const kernel = await createOcctKernel();
+    try {
+      const shape = kernel.compositeSweep!(
+        rectangleProfile("tolerance-aligned-profile", 2, 4),
+        rotateCompositePathAboutY(planarCompositePath(), 5e-8),
+        SWEEP_OPTIONS,
+        { feature: "tolerance-aligned-sweep", tolerance: 1e-6 },
+      );
+      try {
+        expect(kernel.status(shape)).toEqual({ ok: true, code: "VALID" });
+        expect(kernel.measure(shape).volume).toBeCloseTo(
+          80 + 20 * Math.PI,
+          8,
+        );
+      } finally {
+        kernel.disposeShape(shape);
       }
     } finally {
       kernel.dispose();
@@ -486,7 +550,7 @@ describe("OCCT exact composite solid sweep", () => {
           SWEEP_OPTIONS,
           { feature: "conditioned-near-full-sweep", tolerance: 1e-7 },
         ),
-      ).toThrow("centered-profile analytic volume postcondition");
+      ).toThrow("transported-profile analytic volume postcondition");
       expect(raw.shapeCount).toBe(baselineShapeCount);
 
       expect(() =>

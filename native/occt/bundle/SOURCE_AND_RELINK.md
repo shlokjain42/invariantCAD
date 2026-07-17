@@ -14,7 +14,8 @@ every recipient's licensing obligations.
 - `source/native/occt/upstream.lock.json` fixes the upstream `occt-wasm` and
   OCCT commits, compiler versions, builder platform, and builder image digest.
 - `source/native/occt/patches/` contains every InvariantCAD-owned change in the
-  bytewise filename order used by the build.
+  bytewise filename order used by the build: atomic draft, exact indexed draft
+  history, and the controlled transactional PipeShell ABI.
 - `source/scripts/build-occt-facade.sh` is the exact rootless, digest-pinned
   build driver. Its compilation phase has networking disabled.
 - `metadata/provenance.json` records verified artifact digests and the locked

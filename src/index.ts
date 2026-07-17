@@ -140,6 +140,7 @@ export {
   type ManifoldKernelOptions,
 } from "./manifold-kernel.js";
 export {
+  COMPOSITE_SWEEP_REFINEMENT_PROTOCOL_VERSION,
   EXACT_INDEXED_TOPOLOGY_EVOLUTION_PROTOCOL_VERSION,
   mergeMeshes,
   GEOMETRY_KERNEL_PROTOCOL_VERSION,
@@ -150,6 +151,8 @@ export {
   type GeometryKernel,
   type KernelCapabilityKind,
   type KernelCapabilities,
+  type KernelCompositeSweepCapabilities,
+  type KernelCompositeSweepRefinement,
   type KernelExactIndexedTopologyEvolutionCapabilities,
   type KernelExchangeFormat,
   type KernelFeature,

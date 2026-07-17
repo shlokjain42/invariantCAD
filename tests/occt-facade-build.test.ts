@@ -1,4 +1,4 @@
-import { access, readFile, stat } from "node:fs/promises";
+import { access, readFile, readdir, stat } from "node:fs/promises";
 import { constants } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
@@ -13,7 +13,20 @@ const historyPatchUrl = new URL(
   "../native/occt/patches/0002-indexed-draft-history.patch",
   import.meta.url,
 );
+const pipeShellPatchUrl = new URL(
+  "../native/occt/patches/0003-controlled-pipe-shell.patch",
+  import.meta.url,
+);
 const smokeUrl = new URL("../scripts/test-occt-facade.mjs", import.meta.url);
+const packagerUrl = new URL(
+  "../scripts/package-occt-facade-bundle.mjs",
+  import.meta.url,
+);
+const releaseInputUrl = new URL(
+  "../native/occt/bundle/release-input.json",
+  import.meta.url,
+);
+const patchDirectoryUrl = new URL("../native/occt/patches/", import.meta.url);
 
 describe("owned OCCT facade build boundary", () => {
   it("pins every upstream and toolchain input to the audited baseline", async () => {
@@ -69,7 +82,7 @@ describe("owned OCCT facade build boundary", () => {
     expect(source).not.toContain(":latest");
   });
 
-  it("tracks the hardened draft extension and its exact indexed history ABI", async () => {
+  it("tracks the complete ordered owned-facade patch ABI", async () => {
     const draftPatch = await readFile(draftPatchUrl, "utf8");
     expect(draftPatch).toContain("invariantcadDraftFacesAtomic");
     expect(draftPatch).toContain("ANGLE_BELOW_KERNEL_LIMIT");
@@ -86,6 +99,33 @@ describe("owned OCCT facade build boundary", () => {
     expect(historyPatch).toContain("HISTORY_NON_INJECTIVE");
     expect(historyPatch).toContain(
       "InvariantCadDraftReport(InvariantCadDraftReport&&) noexcept",
+    );
+
+    const pipeShellPatch = await readFile(pipeShellPatchUrl, "utf8");
+    expect(pipeShellPatch).toContain("InvariantCadPipeShellReport");
+    expect(pipeShellPatch).toContain("invariantcadPipeShellSolid");
+    expect(pipeShellPatch).toContain(
+      "invariantcad-facade@0.3.0+occt-wasm.3.7.0",
+    );
+
+    const releaseInput = JSON.parse(await readFile(releaseInputUrl, "utf8")) as {
+      inputs: Array<{ source: string; role: string }>;
+    };
+    const pinnedPatchNames = releaseInput.inputs
+      .filter((entry) => entry.role === "source-patch")
+      .map((entry) => entry.source.split("/").at(-1));
+    const actualPatchNames = (await readdir(patchDirectoryUrl, {
+      withFileTypes: true,
+    }))
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".patch"))
+      .map((entry) => entry.name)
+      .sort();
+    expect(pinnedPatchNames).toEqual(actualPatchNames);
+
+    const packager = await readFile(packagerUrl, "utf8");
+    expect(packager).toContain("does not exactly match bytewise build series");
+    expect(packager).toContain(
+      "await readdir(PATCH_DIRECTORY, { withFileTypes: true })",
     );
 
     const syntax = spawnSync(process.execPath, ["--check", smokeUrl.pathname], {

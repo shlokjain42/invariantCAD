@@ -69,7 +69,9 @@ pnpm test:occt-draft-public
 
 The native fixture exercises the raw ABI; the public smoke loads the same
 generated pair through `createOcctKernel` and exercises direct and evaluated
-draft. These heavyweight tests are intentionally separate from normal
+draft plus controlled major multi-arc, eccentric-profile, and conditioned
+near-full PipeShell transfers. These heavyweight tests are intentionally
+separate from normal
 `pnpm verify`. Generated artifacts stay under the ignored
 `.artifacts/occt-facade/` directory and are not committed or included in the
 `invariantcad` npm package.
@@ -91,11 +93,11 @@ The packager reads `.artifacts/occt-facade/` and writes both of these ignored
 outputs:
 
 ```text
-.artifacts/occt-facade-bundle/invariantcad-occt-facade-0.2.0/
-.artifacts/occt-facade-bundle/invariantcad-occt-facade-0.2.0.tar.gz
+.artifacts/occt-facade-bundle/invariantcad-occt-facade-0.3.0/
+.artifacts/occt-facade-bundle/invariantcad-occt-facade-0.3.0.tar.gz
 ```
 
-`0.2.0` is the owned facade ABI and bundle version; it is independent of the
+`0.3.0` is the owned facade ABI and bundle version; it is independent of the
 InvariantCAD npm package version and document schema version.
 
 The directory and archive have the same single-root layout. The matched pair is
@@ -113,7 +115,7 @@ publication. The verifier then checks the directory or archive without
 executing native code.
 `pnpm test:occt-facade-bundle` packages the pair, verifies both representations,
 packs the `invariantcad` npm tarball, installs it in a fresh temporary consumer,
-and explicitly points compact direct and document-evaluated draft checks at the
+and explicitly points compact draft and owned composite-refinement checks at the
 bundled `runtime/` directory. The normal `pnpm test:package` remains independent
 of owned-facade build artifacts. To check byte-for-byte packager determinism as
 well, run:
@@ -132,7 +134,7 @@ not been published to npm or another release channel. Public distribution and
 any durable corresponding-source/relinking offer remain pending external legal,
 release, and security review.
 
-## Owned draft ABI and public adapter
+## Owned facade ABIs and public adapters
 
 The first owned extension is an atomic multi-face draft operation. It
 stages every unique selected face in one `BRepOffsetAPI_DraftAngle`, checks each
@@ -152,7 +154,7 @@ result into its originating kernel exactly once, after which normal kernel
 
 The facade rejects `abs(angleRad) <= 1e-4`, because the pinned OCCT build can
 otherwise report a successful no-op. The public protocol also requires
-`abs(angleRad) < pi/2`. Facade version 0.2 makes a successful
+`abs(angleRad) < pi/2`. Facade ABI 0.2 makes a successful
 draft conditional on a complete indexed face/edge/vertex evolution proof. It
 requires one same-kind result successor for every input subshape, rejects
 duplicate claims and unclaimed result subshapes, and exposes no result if that
@@ -197,6 +199,26 @@ not promoted to complete history by the draft-specific proof. Default
 `createOcctKernel()` loads stock OCCT and remains usable for its other exact
 features, but it does not advertise or execute draft. Partial, unknown, or
 mismatched facade markers fail closed.
+
+Facade ABI 0.3 is additive: it retains the complete draft surface and adds a
+controlled transactional PipeShell operation. The operation accepts one
+profile wire, one spine wire, and explicit 3D, boundary, and angular
+tolerances. Native code fixes corrected-Frenet transport and right-corner
+transitions, validates both wire IDs, calls `Build()` and `MakeSolid()` at most
+once, and reports OCCT's measured surface approximation error. The successful
+solid remains outside the arena until a checked same-kernel one-shot transfer;
+deleting an untaken report releases it.
+
+The TypeScript adapter requires exact tolerance echoes, successful build and
+solidification counts, a `READY` transfer preflight, and a surface error no
+greater than the selected linear tolerance. It retains all public profile/path,
+authored-edge, topology, body-purity, and volume postconditions. The independent
+volume oracle transports profile area and centroid through lines, circular
+arcs, and supported right-corner miters with compensated summation and
+cancellation diagnostics. Only after the native and analytic corpus passed
+does the 0.3 kernel advertise the version-1 `major-multiple-arcs` and
+`major-eccentric-profile` composite refinements. Stock OCCT and legacy ABI 0.2
+remain supported but advertise neither stronger guarantee.
 
 The generated pair and its local package-neutral bundle remain ignored build
 artifacts and are not included in the `invariantcad` npm tarball. Until an

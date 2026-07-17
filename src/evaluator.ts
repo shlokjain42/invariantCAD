@@ -678,7 +678,10 @@ export class Evaluator {
       return { kind: "solid", shape };
     };
     const requireKernelCapability = (
-      kind: Exclude<KernelCapabilityKind, "exactIndexedTopologyEvolution">,
+      kind: Exclude<
+        KernelCapabilityKind,
+        "compositeSweepRefinement" | "exactIndexedTopologyEvolution"
+      >,
       capability: KernelPrimitive | KernelFeature | KernelExchangeFormat,
       id: NodeId,
     ): void => {

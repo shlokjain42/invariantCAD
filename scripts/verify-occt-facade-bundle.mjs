@@ -8,9 +8,11 @@ import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
 const BUNDLE_NAME = "invariantcad-occt-facade";
-const BUNDLE_VERSION = "0.2.0";
+const BUNDLE_VERSION = "0.3.0";
 const BUNDLE_DIRECTORY = `${BUNDLE_NAME}-${BUNDLE_VERSION}`;
 const FACADE_MARKER =
+  "invariantcad-facade@0.3.0+occt-wasm.3.7.0";
+const DRAFT_FACADE_MARKER =
   "invariantcad-facade@0.2.0+occt-wasm.3.7.0";
 const UPSTREAM_OCCT_WASM_VERSION = "3.7.0";
 const RELEASE_INPUT_URL = new URL(
@@ -28,6 +30,7 @@ const RUNTIME_PATHS = Object.freeze([
 const PATCH_PATHS = Object.freeze([
   "source/native/occt/patches/0001-atomic-multi-face-draft.patch",
   "source/native/occt/patches/0002-indexed-draft-history.patch",
+  "source/native/occt/patches/0003-controlled-pipe-shell.patch",
 ]);
 const LICENSE_PATHS = Object.freeze([
   "LICENSE",
@@ -79,6 +82,13 @@ function parentDirectories(path) {
 
 function compareBytewise(left, right) {
   return Buffer.from(left).compare(Buffer.from(right));
+}
+
+function assertNormalizedMode(stat, expectedMode, description) {
+  const mode = stat.mode & 0o7777;
+  if (mode !== expectedMode) {
+    fail(`${description} mode is ${mode.toString(8)}; expected ${expectedMode.toString(8)}`);
+  }
 }
 
 function sha256(bytes) {
@@ -334,6 +344,7 @@ async function collectDirectory(inputPath) {
   if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
     fail("bundle directory must be a real directory, not a symlink or other file type");
   }
+  assertNormalizedMode(rootStat, 0o755, "bundle directory root");
 
   const files = new Map();
   const directories = [];
@@ -350,6 +361,7 @@ async function collectDirectory(inputPath) {
         fail(`bundle entry may not be a symbolic link: ${relativePath}`);
       }
       if (entryStat.isDirectory()) {
+        assertNormalizedMode(entryStat, 0o755, `bundle directory ${relativePath}`);
         directories.push(relativePath);
         await walk(absolutePath, relativePath);
         continue;
@@ -357,6 +369,10 @@ async function collectDirectory(inputPath) {
       if (!entryStat.isFile()) {
         fail(`bundle entry must be a regular file: ${relativePath}`);
       }
+      const expectedMode = relativePath === "source/scripts/build-occt-facade.sh"
+        ? 0o755
+        : 0o644;
+      assertNormalizedMode(entryStat, expectedMode, `bundle file ${relativePath}`);
       if (entryStat.size > MAX_FILE_BYTES) {
         fail(`bundle entry exceeds the size limit: ${relativePath}`);
       }
@@ -710,8 +726,10 @@ function verifyRuntime(files, manifest, release, runtimePins) {
     "invariantcadFacadeVersion",
     "invariantcadDraftFacesAtomic",
     "InvariantCadDraftReport",
+    "InvariantCadPipeShellReport",
     "InvariantCadTopologyKind",
     "InvariantCadTopologyRelation",
+    "invariantcadPipeShellSolid",
   ]) {
     if (!wasm.includes(Buffer.from(marker))) {
       fail(`runtime WASM does not contain the required facade ABI marker: ${marker}`);
@@ -736,7 +754,9 @@ function verifyRelease(files, manifest, releaseInput, runtimePins) {
   const facade = asObject(release.facade, "release.facade");
   assertExactKeys(facade, ["marker", "abiVersion", "upstreamOcctWasmVersion"], "release.facade");
   if (facade.marker !== FACADE_MARKER) fail(`release.facade.marker must be ${FACADE_MARKER}`);
-  if (facade.abiVersion !== "0.2.0") fail('release.facade.abiVersion must be "0.2.0"');
+  if (facade.abiVersion !== BUNDLE_VERSION) {
+    fail(`release.facade.abiVersion must be "${BUNDLE_VERSION}"`);
+  }
   if (facade.upstreamOcctWasmVersion !== UPSTREAM_OCCT_WASM_VERSION) {
     fail(`release.facade.upstreamOcctWasmVersion must be ${UPSTREAM_OCCT_WASM_VERSION}`);
   }
@@ -822,7 +842,11 @@ function verifySourceInputs(files) {
   }
   const requiredContent = new Map([
     [PATCH_PATHS[0], ["invariantcadDraftFacesAtomic", "ANGLE_BELOW_KERNEL_LIMIT"]],
-    [PATCH_PATHS[1], ["InvariantCadIndexedTopologyEvolution", FACADE_MARKER]],
+    [PATCH_PATHS[1], ["InvariantCadIndexedTopologyEvolution", DRAFT_FACADE_MARKER]],
+    [
+      PATCH_PATHS[2],
+      ["InvariantCadPipeShellReport", "invariantcadPipeShellSolid", FACADE_MARKER],
+    ],
     ["source/scripts/build-occt-facade.sh", ["--network=none", "CARGO_NET_OFFLINE=true", "--fuzz=0"]],
     ["SOURCE_AND_RELINK.md", ["source", "relink", "replace"]],
   ]);
@@ -1374,8 +1398,10 @@ function verifyProvenance(files, manifest, release, releaseInput, runtimePins, l
   void releaseInput;
 }
 
-async function verifyBundle(inputPath, trustedRuntime) {
-  const releaseInput = await readTrustedReleaseInput();
+async function verifyBundle(inputPath, trustedRuntime, trustedReleaseInput) {
+  const releaseInput = trustedReleaseInput === undefined
+    ? await readTrustedReleaseInput()
+    : validateReleaseInput(trustedReleaseInput);
   const collected = await collectInput(
     inputPath,
     trustedRuntime === undefined ? releaseInput.archive : undefined,
@@ -1433,17 +1459,18 @@ export async function verifyOcctFacadeBundle(inputPath) {
 export async function verifyOcctFacadeBundleWithTestRuntime(
   inputPath,
   trustedRuntime,
+  trustedReleaseInput,
 ) {
   if (process.env.NODE_ENV !== "test" && process.env.VITEST !== "true") {
     fail("the synthetic-runtime verifier is available only under a test runner");
   }
-  return verifyBundle(inputPath, trustedRuntime);
+  return verifyBundle(inputPath, trustedRuntime, trustedReleaseInput);
 }
 
 function usage() {
   return `Usage: node scripts/verify-occt-facade-bundle.mjs [--json] PATH
 
-Verify the complete InvariantCAD OCCT facade 0.2.0 compliance bundle at PATH.
+Verify the complete InvariantCAD OCCT facade 0.3.0 compliance bundle at PATH.
 PATH must be the versioned bundle directory or its deterministic .tar.gz archive.
 
 Options:

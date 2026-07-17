@@ -104,7 +104,7 @@ if (result.ok) {
 evaluator.dispose();
 ```
 
-The backend is explicitly selected; a design document never contains OCCT handles or backend-specific objects. The default `createOcctKernel()` loads stock `occt-wasm` and supports the exact features listed below except draft. Draft is advertised only when `moduleFactory` loads the matched InvariantCAD-owned facade build; `wasm` is an optional explicit binary override for environments where that factory cannot locate its sibling binary. The repository can turn that local build into a verified, package-neutral bundle, but applications must still supply its runtime explicitly. See [Browser initialization](#browser-initialization).
+The backend is explicitly selected; a design document never contains OCCT handles or backend-specific objects. The default `createOcctKernel()` loads stock `occt-wasm` and supports the exact features listed below except draft. Draft and the stronger major multi-arc/eccentric-profile composite guarantees are advertised only when `moduleFactory` loads the matched InvariantCAD-owned facade build; `wasm` is an optional explicit binary override for environments where that factory cannot locate its sibling binary. The repository can turn that local build into a verified, package-neutral bundle, but applications must still supply its runtime explicitly. See [Browser initialization](#browser-initialization).
 
 ### Exact path sweeps
 
@@ -157,7 +157,9 @@ const route = cad.compositePath("route", {
 const routed = cad.sweep("routed", section, route);
 ```
 
-Document-v1 sweeps require an open, simple path; a closed, hole-free profile seated at its start; an initial tangent parallel to the profile-plane normal in either direction; corrected-Frenet transport; and conservative profile clearance. Polyline paths reject repeated or redundant collinear vertices and use right-corner intersections. Circular-arc paths are one exact three-point arc below a full turn and require their circumradius to exceed the complete profile envelope. Composite paths contain at least two structurally connected segments and at least one arc. Junctions touching an arc must be forward G1 tangent, while line-line junctions retain right-corner semantics. Minor, major, and certified near-full composite arcs are supported without an artificial endpoint-chord rule. Adjacent segments exclude only their curvature-bounded intrinsic neighborhood, then recursively certify every remote line/arc parameter domain against path tolerance and the full profile diameter; redundant adjacent segments, actual remote returns, and numerical ambiguity fail explicitly. The OCCT adapter realizes the one-edge circular case as an exact revolution about the resolved circle axis. Ordered composites use one exact PipeShell wire. Every composite arc must exceed the profile-envelope radius and pass the `3e-8` three-point conditioning floor. Every PipeShell profile/path edge and all three authored point-pair separations of a composite arc must exceed the native `1e-4 mm` linear tolerance. Because the stock PipeShell binding does not expose its angular tolerance, the OCCT adapter currently admits a major-arc composite only when it contains one arc and the profile area centroid is at the path start; it also rejects centered-profile results that violate the analytic `area × pathLength` volume postcondition. Multi-arc or eccentric-profile major composites remain pending an owned, tighter native facade. Guided, variable-section, full-circle, Bézier, B-spline, and helix paths remain explicit future contracts.
+Document-v1 sweeps require an open, simple path; a closed, hole-free profile seated at its start; an initial tangent parallel to the profile-plane normal in either direction; corrected-Frenet transport; and conservative profile clearance. Polyline paths reject repeated or redundant collinear vertices and use right-corner intersections. Circular-arc paths are one exact three-point arc below a full turn and require their circumradius to exceed the complete profile envelope. Composite paths contain at least two structurally connected segments and at least one arc. Junctions touching an arc must be forward G1 tangent, while line-line junctions retain right-corner semantics. Minor, major, and certified near-full composite arcs are supported without an artificial endpoint-chord rule. Adjacent segments exclude only their curvature-bounded intrinsic neighborhood, then recursively certify every remote line/arc parameter domain against path tolerance and the full profile diameter; redundant adjacent segments, actual remote returns, and numerical ambiguity fail explicitly. The OCCT adapter realizes the one-edge circular case as an exact revolution about the resolved circle axis. Ordered composites use one exact PipeShell wire. Every composite arc must exceed the profile-envelope radius and pass the `3e-8` three-point conditioning floor. Every PipeShell profile/path edge and all three authored point-pair separations of a composite arc must exceed the native `1e-4 mm` transfer floor.
+
+Stock PipeShell does not expose its angular tolerance, so stock OCCT admits a major-arc composite only when it contains one arc and the profile area centroid is at the path start. The matched owned facade ABI 0.3 instead fixes corrected-Frenet/right-corner mode, applies explicit linear, boundary, and `1e-9` angular tolerances, bounds OCCT's measured surface error, and transfers the solid transactionally. It certifies major multi-arc and eccentric-profile composites and advertises those guarantees as versioned refinements. Every composite result is also checked against an exact transported-centroid volume oracle covering lines, arcs, and supported RightCorner miters; ill-conditioned cancellation fails closed. Guided, variable-section, full-circle, Bézier, B-spline, and helix paths remain explicit future contracts.
 
 ### Semantic topology, fillets, chamfers, shells, offsets, and draft
 
@@ -347,14 +349,14 @@ The solver API is replaceable. The built-in solver is intentionally a v0.1 refer
 | Whole-solid offset | OCCT inward/outward mode with fixed round joins | Yes |
 | Draft | Explicitly supplied matched owned OCCT facade with semantic face selectors | Yes |
 | Loft | OCCT ordered ruled-solid mode with matched hole-free sections | Smooth, guided, and open modes |
-| Sweep | OCCT open-polyline, one-edge circular-arc, and certified ordered line/arc composite solid modes, including centered-profile single-arc major and near-full composites, with corrected-Frenet transport | Multi-arc or eccentric-profile major composites; Bézier, B-spline, helix, guided, and variable-section modes |
+| Sweep | OCCT open-polyline, one-edge circular-arc, and certified ordered line/arc composite solid modes with corrected-Frenet transport; owned facade ABI 0.3 adds certified major multi-arc and eccentric-profile composites | Bézier, B-spline, helix, guided, and variable-section modes |
 | Persistent face/edge selectors | Primitive/extrusion roles and sources; origin/geometry/adjacency queries | Yes |
 | Drawings, GD&T, PMI | No | Yes |
 | Sheet metal | No | Yes |
 | CAM and CAE adapters | No | Yes |
 | STL and OBJ export | Yes | Yes |
 
-Capabilities are negotiated by backends. InvariantCAD will not silently pretend a mesh operation is exact B-Rep or silently downgrade exact geometry. The current loft contract is deliberately bounded to ruled solids through at least two distinct, ordered, hole-free profiles on parallel planes, with matching directed curve signatures. The current sweep contract is similarly bounded to simple open polyline paths, one exact circular arc, or a certified ordered line/arc composite, with conservative profile clearance and fixed corrected-Frenet/right-corner semantics. Circular-arc and composite sweeping are separate additive capabilities, so an existing polyline-only kernel fails before evaluating unsupported path dependencies. Draft requires both the ordinary `draft` feature and `exactIndexedTopologyEvolution` v1 scoped to draft; a stock/default OCCT module advertises neither.
+Capabilities are negotiated by backends. InvariantCAD will not silently pretend a mesh operation is exact B-Rep or silently downgrade exact geometry. The current loft contract is deliberately bounded to ruled solids through at least two distinct, ordered, hole-free profiles on parallel planes, with matching directed curve signatures. The current sweep contract is similarly bounded to simple open polyline paths, one exact circular arc, or a certified ordered line/arc composite, with conservative profile clearance and fixed corrected-Frenet/right-corner semantics. Circular-arc and composite sweeping are separate additive capabilities, so an existing polyline-only kernel fails before evaluating unsupported path dependencies. Composite guarantees beyond the base contract use the versioned `compositeSweep` refinement envelope; ABI 0.3 advertises `major-multiple-arcs` and `major-eccentric-profile`, while stock and legacy runtimes advertise neither. Refinements are currently discovery/runtime-selection guarantees queried through `kernelSupports`; document evaluation preflights the base composite feature and the selected backend enforces refinement-specific geometry until a shared exact profile-moments classifier can preflight both refinements consistently. Draft requires both the ordinary `draft` feature and `exactIndexedTopologyEvolution` v1 scoped to draft; a stock/default OCCT module advertises neither.
 
 ## Assemblies
 
@@ -422,7 +424,7 @@ invariantcad inspect design.invariantcad.json --kernel occt
 ```
 
 Parameter JSON values use base units: millimetres, radians, and unitless scalars.
-The CLI selects stock OCCT automatically for `.step` and `.brep` destinations. Use `--kernel manifold|occt` to select a backend explicitly. The current CLI does not inject a custom module factory, so document draft evaluation requires programmatic initialization with the matched owned facade pair.
+The CLI selects stock OCCT automatically for `.step` and `.brep` destinations. Use `--kernel manifold|occt` to select a backend explicitly. The current CLI does not inject a custom module factory, so document draft evaluation and owned-facade-only composite refinements require programmatic initialization with the matched pair.
 
 ## Browser initialization
 
@@ -473,16 +475,17 @@ pnpm test:occt-facade-bundle
 ```
 
 The unpacked runtime is under
-`.artifacts/occt-facade-bundle/invariantcad-occt-facade-0.2.0/runtime/`.
-Here `0.2.0` is the facade ABI/bundle version, not the npm package version.
+`.artifacts/occt-facade-bundle/invariantcad-occt-facade-0.3.0/runtime/`.
+Here `0.3.0` is the facade ABI/bundle version, not the npm package version.
 Its JavaScript and WASM files must be loaded as a matched pair using the
 `moduleFactory` and `wasm` options shown above. The archive is package-manager
 neutral: it is not an npm package, does not install itself, and is never found,
 downloaded, or extracted by `createOcctKernel`.
 
 `pnpm test:occt-facade-bundle` also packs the npm library, installs that tarball
-in a fresh temporary consumer, and runs direct and document-evaluated draft by
-passing the verified bundle runtime explicitly. The ordinary
+in a fresh temporary consumer, and runs direct/document-evaluated draft plus
+major multi-arc and eccentric-major composite sweeps by passing the verified
+bundle runtime explicitly. The ordinary
 `pnpm test:package` does not require or discover owned-facade artifacts.
 
 The bundle also collects checksums, build provenance, an SBOM, source and

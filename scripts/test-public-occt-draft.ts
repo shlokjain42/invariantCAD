@@ -6,6 +6,7 @@ import {
   createEvaluator,
   deg,
   design,
+  kernelSupports,
   mm,
   scalarVec3,
   topology,
@@ -16,6 +17,8 @@ import {
   type KernelShape,
   type KernelTopologyLineage,
   type KernelTopologySnapshot,
+  type ResolvedCompositePath,
+  type ResolvedProfile,
 } from "../src/index.js";
 import {
   createOcctKernel,
@@ -257,6 +260,166 @@ async function assertDocumentDraft(kernel: GeometryKernel): Promise<void> {
   }
 }
 
+function rectangleProfile(
+  offset: number,
+  size: number,
+  plane: ResolvedProfile["plane"]["plane"] = "XY",
+): ResolvedProfile {
+  const minimum = offset - size / 2;
+  const maximum = offset + size / 2;
+  const half = size / 2;
+  return {
+    plane: { plane, origin: [0, 0, 0] },
+    outer: {
+      curves: [
+        { kind: "line", start: [minimum, -half], end: [maximum, -half] },
+        { kind: "line", start: [maximum, -half], end: [maximum, half] },
+        { kind: "line", start: [maximum, half], end: [minimum, half] },
+        { kind: "line", start: [minimum, half], end: [minimum, -half] },
+      ],
+    },
+    holes: [],
+  };
+}
+
+function assertControlledPipeShell(kernel: GeometryKernel): void {
+  for (const refinement of [
+    "major-multiple-arcs",
+    "major-eccentric-profile",
+  ] as const) {
+    assert.equal(
+      kernelSupports(
+        kernel.capabilities,
+        "compositeSweepRefinement",
+        refinement,
+      ),
+      true,
+      `owned facade must advertise ${refinement}`,
+    );
+  }
+  const sweep = kernel.compositeSweep;
+  if (sweep === undefined) {
+    throw new Error("Owned OCCT composite sweep support was not advertised");
+  }
+  const options = {
+    transition: "right-corner",
+    frame: "corrected-frenet",
+  } as const;
+  const multiMajorPath: ResolvedCompositePath = {
+    kind: "composite",
+    start: [0, 0, 0],
+    segments: [
+      {
+        kind: "circularArc",
+        through: [20, 0, 0],
+        end: [10, 0, -10],
+      },
+      {
+        kind: "circularArc",
+        through: [
+          10 - 10 / Math.sqrt(2),
+          10 - 10 / Math.sqrt(2),
+          -10,
+        ],
+        end: [0, 10, -10],
+      },
+    ],
+    closed: false,
+  };
+  const eccentricMajorPath: ResolvedCompositePath = {
+    kind: "composite",
+    start: [0, 0, 0],
+    segments: [
+      { kind: "line", end: [0, 0, 3] },
+      {
+        kind: "circularArc",
+        through: [20, 0, 3],
+        end: [10, 0, -7],
+      },
+      { kind: "line", end: [7, 0, -7] },
+    ],
+    closed: false,
+  };
+  const nearFullRadius = 5;
+  const nearFullSweep = Math.PI * 2 - 0.05;
+  const tilt = Math.PI / 1_800;
+  const nearFullPoint = (angle: number): readonly [number, number, number] => [
+    nearFullRadius * Math.sin(angle),
+    nearFullRadius * Math.cos(tilt) * (1 - Math.cos(angle)),
+    nearFullRadius * Math.sin(tilt) * (1 - Math.cos(angle)),
+  ];
+  const nearFullEnd = nearFullPoint(nearFullSweep);
+  const nearFullTangent: readonly [number, number, number] = [
+    Math.cos(nearFullSweep),
+    Math.cos(tilt) * Math.sin(nearFullSweep),
+    Math.sin(tilt) * Math.sin(nearFullSweep),
+  ];
+  const conditionedNearFullPath: ResolvedCompositePath = {
+    kind: "composite",
+    start: nearFullPoint(0),
+    segments: [
+      {
+        kind: "circularArc",
+        through: nearFullPoint(nearFullSweep / 2),
+        end: nearFullEnd,
+      },
+      {
+        kind: "line",
+        end: [
+          nearFullEnd[0] + nearFullTangent[0] * 0.1,
+          nearFullEnd[1] + nearFullTangent[1] * 0.1,
+          nearFullEnd[2] + nearFullTangent[2] * 0.1,
+        ],
+      },
+    ],
+    closed: false,
+  };
+
+  for (const fixture of [
+    {
+      name: "multi-major",
+      profile: rectangleProfile(0, 1),
+      path: multiMajorPath,
+      volume: 20 * Math.PI,
+      faces: 10,
+    },
+    {
+      name: "eccentric-major",
+      profile: rectangleProfile(1, 1),
+      path: eccentricMajorPath,
+      volume: 6 + 13.5 * Math.PI,
+      faces: 14,
+    },
+    {
+      name: "conditioned-near-full",
+      profile: rectangleProfile(0, 0.01, "YZ"),
+      path: conditionedNearFullPath,
+      volume: 0.0001 * (nearFullRadius * nearFullSweep + 0.1),
+      faces: 10,
+    },
+  ] as const) {
+    const shape = sweep.call(kernel, fixture.profile, fixture.path, options, {
+      feature: `owned-${fixture.name}`,
+      tolerance: 1e-7,
+    });
+    try {
+      assert.deepEqual(kernel.status(shape), { ok: true, code: "VALID" });
+      closeTo(
+        kernel.measure(shape).volume,
+        fixture.volume,
+        1e-10,
+        `${fixture.name} volume`,
+      );
+      const output = snapshot(kernel, shape);
+      assert.equal(output.history, "complete");
+      assert.equal(output.faces.length, fixture.faces);
+      assert.ok(output.edges.every((edge) => edge.faces.length === 2));
+    } finally {
+      kernel.disposeShape(shape);
+    }
+  }
+}
+
 await Promise.all([access(gluePath), access(wasmPath)]).catch((error) => {
   throw new Error(
     `Owned OCCT facade runtime files are missing under ${runtimeDirectory}`,
@@ -273,9 +436,10 @@ const kernel = await createOcctKernel({
 });
 try {
   assertDirectDraft(kernel);
+  assertControlledPipeShell(kernel);
   await assertDocumentDraft(kernel);
 } finally {
   kernel.dispose();
 }
 
-console.log("public OCCT draft smoke passed");
+console.log("public OCCT draft and controlled PipeShell smoke passed");

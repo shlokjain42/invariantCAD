@@ -1,42 +1,24 @@
 import {
-  INDEXED_TOPOLOGY_KIND,
-  INDEXED_TOPOLOGY_RELATION,
   TopologyEvolutionProtocolError,
   validateExactIndexedTopologyEvolutionEnvelope,
   type IndexedTopologyCounts,
   type IndexedTopologyEvolutionEnvelope,
   type IndexedTopologyEvolutionRecord,
 } from "./topology-evolution.js";
+import {
+  OcctDraftFacadeProtocolError,
+  probeOcctDraftFacade,
+} from "./occt-facade.js";
+
+export {
+  OCCT_DRAFT_FACADE_VERSION,
+  OcctDraftFacadeProtocolError,
+  probeOcctDraftFacade,
+} from "./occt-facade.js";
 
 const INT32_MAX = 2_147_483_647;
 const INT32_MIN = -2_147_483_648;
 const UINT32_MAX = 4_294_967_295;
-
-export const OCCT_DRAFT_FACADE_VERSION =
-  "invariantcad-facade@0.2.0+occt-wasm.3.7.0";
-
-const FACADE_MARKERS = Object.freeze([
-  "InvariantCadDraftReport",
-  "InvariantCadTopologyKind",
-  "InvariantCadTopologyRelation",
-  "invariantcadDraftFacesAtomic",
-  "invariantcadFacadeVersion",
-] as const);
-
-const TOPOLOGY_KIND_MEMBERS = Object.freeze({
-  NONE: INDEXED_TOPOLOGY_KIND.NONE,
-  FACE: INDEXED_TOPOLOGY_KIND.FACE,
-  EDGE: INDEXED_TOPOLOGY_KIND.EDGE,
-  VERTEX: INDEXED_TOPOLOGY_KIND.VERTEX,
-});
-
-const TOPOLOGY_RELATION_MEMBERS = Object.freeze({
-  PRESERVED: INDEXED_TOPOLOGY_RELATION.PRESERVED,
-  MODIFIED: INDEXED_TOPOLOGY_RELATION.MODIFIED,
-  GENERATED: INDEXED_TOPOLOGY_RELATION.GENERATED,
-  DELETED: INDEXED_TOPOLOGY_RELATION.DELETED,
-  CREATED: INDEXED_TOPOLOGY_RELATION.CREATED,
-});
 
 type Vec3 = readonly [number, number, number];
 
@@ -176,13 +158,6 @@ export interface AdoptOcctDraftOptions<T> {
   readonly adopt: (result: OcctDraftTransferredResult) => T;
 }
 
-export class OcctDraftFacadeProtocolError extends Error {
-  constructor(message: string) {
-    super(`Invalid InvariantCAD OCCT draft facade: ${message}`);
-    this.name = "OcctDraftFacadeProtocolError";
-  }
-}
-
 export class OcctDraftUnsupportedError extends Error {
   constructor() {
     super("The loaded stock OCCT module does not provide the InvariantCAD draft facade");
@@ -208,94 +183,6 @@ function facadeProtocolError(message: string): never {
 
 function isObject(value: unknown): value is Record<PropertyKey, unknown> {
   return (typeof value === "object" && value !== null) || typeof value === "function";
-}
-
-function exactOwnNames(
-  value: unknown,
-  expected: readonly string[],
-  label: string,
-): asserts value is Record<string, unknown> {
-  if (!isObject(value)) facadeProtocolError(`${label} must be an object`);
-  const actual = Object.getOwnPropertyNames(value).sort();
-  const wanted = [...expected].sort();
-  if (
-    actual.length !== wanted.length ||
-    actual.some((name, index) => name !== wanted[index])
-  ) {
-    facadeProtocolError(
-      `${label} members are '${actual.join(",")}', expected '${wanted.join(",")}'`,
-    );
-  }
-}
-
-function assertExactNumericEnum(
-  value: unknown,
-  expected: Readonly<Record<string, number>>,
-  label: string,
-): void {
-  exactOwnNames(value, Object.keys(expected), label);
-  for (const [name, number] of Object.entries(expected)) {
-    if (typeof value[name] !== "number" || !Object.is(value[name], number)) {
-      facadeProtocolError(`${label}.${name} must be the number ${number}`);
-    }
-  }
-}
-
-/**
- * Detects only the exact owned facade. A marker-free module is ordinary stock
- * OCCT and returns `undefined`; partial, extended, or unknown marker sets are
- * incompatible and fail closed.
- */
-export function probeOcctDraftFacade(
-  module: unknown,
-): OcctDraftFacadeModule | undefined {
-  if (!isObject(module)) facadeProtocolError("module must be an object");
-  const markers = Object.getOwnPropertyNames(module)
-    .filter((name) => /^invariantcad/iu.test(name))
-    .sort();
-  if (markers.length === 0) return undefined;
-
-  const expectedMarkers = [...FACADE_MARKERS].sort();
-  if (
-    markers.length !== expectedMarkers.length ||
-    markers.some((name, index) => name !== expectedMarkers[index])
-  ) {
-    facadeProtocolError(
-      `marker set is '${markers.join(",")}', expected '${expectedMarkers.join(",")}'`,
-    );
-  }
-
-  const candidate = module as Record<string, unknown>;
-  if (typeof candidate.VectorUint32 !== "function") {
-    facadeProtocolError("VectorUint32 must be an Embind constructor");
-  }
-  if (typeof candidate.InvariantCadDraftReport !== "function") {
-    facadeProtocolError("InvariantCadDraftReport must be an Embind class marker");
-  }
-  if (typeof candidate.invariantcadFacadeVersion !== "function") {
-    facadeProtocolError("invariantcadFacadeVersion must be a function");
-  }
-  if (typeof candidate.invariantcadDraftFacesAtomic !== "function") {
-    facadeProtocolError("invariantcadDraftFacesAtomic must be a function");
-  }
-
-  const version = candidate.invariantcadFacadeVersion();
-  if (version !== OCCT_DRAFT_FACADE_VERSION) {
-    facadeProtocolError(
-      `version is '${String(version)}', expected '${OCCT_DRAFT_FACADE_VERSION}'`,
-    );
-  }
-  assertExactNumericEnum(
-    candidate.InvariantCadTopologyKind,
-    TOPOLOGY_KIND_MEMBERS,
-    "InvariantCadTopologyKind",
-  );
-  assertExactNumericEnum(
-    candidate.InvariantCadTopologyRelation,
-    TOPOLOGY_RELATION_MEMBERS,
-    "InvariantCadTopologyRelation",
-  );
-  return module as unknown as OcctDraftFacadeModule;
 }
 
 function assertSignedInt32(value: unknown, label: string): asserts value is number {

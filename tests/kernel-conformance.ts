@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  COMPOSITE_SWEEP_REFINEMENT_PROTOCOL_VERSION,
   kernelSupports,
   type GeometryKernel,
   type KernelShape,
@@ -162,6 +163,24 @@ export function geometryKernelConformance(
         if (exactFeatures.length > 0) {
           expect(kernel.capabilities.topology).toBeDefined();
           expect(kernel.capabilities.topology?.provenance).not.toBe("none");
+        }
+      }
+      const compositeSweep = kernel.capabilities.compositeSweep;
+      if (compositeSweep !== undefined) {
+        const refinements = Array.from(compositeSweep.refinements);
+        expect(compositeSweep.protocolVersion).toBe(
+          COMPOSITE_SWEEP_REFINEMENT_PROTOCOL_VERSION,
+        );
+        expect(new Set(refinements).size).toBe(refinements.length);
+        expect(kernel.capabilities.features).toContain("compositeSweep");
+        for (const refinement of refinements) {
+          expect(
+            kernelSupports(
+              kernel.capabilities,
+              "compositeSweepRefinement",
+              refinement,
+            ),
+          ).toBe(true);
         }
       }
       if (kernelSupports(kernel.capabilities, "feature", "draft")) {

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import {
   chmod,
   copyFile,
@@ -25,8 +25,12 @@ const verifierPath = join(repoRoot, "scripts/verify-occt-facade-bundle.mjs");
 const packagerPath = join(repoRoot, "scripts/package-occt-facade-bundle.mjs");
 const descriptorPath = join(repoRoot, "native/occt/bundle/release-input.json");
 const lockPath = join(repoRoot, "native/occt/upstream.lock.json");
-const bundleName = "invariantcad-occt-facade-0.2.0";
-const facadeMarker = "invariantcad-facade@0.2.0+occt-wasm.3.7.0";
+const bundleVersion = "0.3.0";
+const bundleName = `invariantcad-occt-facade-${bundleVersion}`;
+const facadeMarker = `invariantcad-facade@${bundleVersion}+occt-wasm.3.7.0`;
+const pipeShellPatchSource =
+  "native/occt/patches/0003-controlled-pipe-shell.patch";
+const pipeShellPatchTarget = `source/${pipeShellPatchSource}`;
 const temporaryRoots: string[] = [];
 
 interface LockedEntry {
@@ -69,6 +73,7 @@ interface Fixture {
   readonly root: string;
   readonly bundle: string;
   readonly trustedRuntime: readonly RuntimePin[];
+  readonly trustedReleaseInput: ReleaseInput;
 }
 
 interface TestVerifier {
@@ -76,6 +81,7 @@ interface TestVerifier {
   verifyOcctFacadeBundleWithTestRuntime(
     inputPath: string,
     trustedRuntime: readonly RuntimePin[],
+    trustedReleaseInput: ReleaseInput,
   ): Promise<unknown>;
 }
 
@@ -114,6 +120,22 @@ async function listFiles(root: string, directory = root): Promise<string[]> {
   return files;
 }
 
+async function normalizeFixtureModes(root: string, directory = root): Promise<void> {
+  await chmod(directory, 0o755);
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) {
+      await normalizeFixtureModes(root, path);
+      continue;
+    }
+    const relative = path.slice(root.length + 1).split("\\").join("/");
+    await chmod(
+      path,
+      relative === "source/scripts/build-occt-facade.sh" ? 0o755 : 0o644,
+    );
+  }
+}
+
 async function refreshManifest(bundle: string): Promise<void> {
   const paths = (await listFiles(bundle))
     .filter((path) => path !== "SHA256SUMS")
@@ -133,11 +155,48 @@ function syntheticWasm(): Buffer {
         "invariantcadFacadeVersion",
         "invariantcadDraftFacesAtomic",
         "InvariantCadDraftReport",
+        "InvariantCadPipeShellReport",
         "InvariantCadTopologyKind",
         "InvariantCadTopologyRelation",
+        "invariantcadPipeShellSolid",
       ].join("\0"),
     ),
   ]);
+}
+
+async function makeFixtureReleaseInput(): Promise<ReleaseInput> {
+  const current = JSON.parse(
+    await readFile(descriptorPath, "utf8"),
+  ) as ReleaseInput;
+  const patchBytes = await readFile(join(repoRoot, pipeShellPatchSource));
+  const pipeShellPatch: LockedEntry = {
+    source: pipeShellPatchSource,
+    target: pipeShellPatchTarget,
+    role: "source-patch",
+    mode: "0644",
+    size: patchBytes.length,
+    sha256: sha256(patchBytes),
+  };
+  const inputs = current.inputs.filter(
+    (entry) => entry.target !== pipeShellPatchTarget,
+  );
+  const buildScriptIndex = inputs.findIndex(
+    (entry) => entry.target === "source/scripts/build-occt-facade.sh",
+  );
+  if (buildScriptIndex === -1) {
+    throw new Error("Fixture release input lacks the owned-facade build script");
+  }
+  inputs.splice(buildScriptIndex, 0, pipeShellPatch);
+  return {
+    ...current,
+    bundle: { ...current.bundle, version: bundleVersion },
+    facade: {
+      ...current.facade,
+      marker: facadeMarker,
+      abiVersion: bundleVersion,
+    },
+    inputs,
+  };
 }
 
 function makeRelease(descriptor: ReleaseInput, runtime: readonly LockedEntry[]) {
@@ -368,7 +427,7 @@ async function makeFixture(): Promise<Fixture> {
   temporaryRoots.push(root);
   const bundle = join(root, bundleName);
   await mkdir(bundle, { recursive: true });
-  const descriptor = JSON.parse(await readFile(descriptorPath, "utf8")) as ReleaseInput;
+  const descriptor = await makeFixtureReleaseInput();
   const lock = JSON.parse(await readFile(lockPath, "utf8")) as any;
   for (const entry of descriptor.inputs) {
     const target = join(bundle, ...entry.target.split("/"));
@@ -397,6 +456,7 @@ async function makeFixture(): Promise<Fixture> {
     makeProvenance(descriptor, runtime, lock),
   );
   await refreshManifest(bundle);
+  await normalizeFixtureModes(bundle);
   return {
     root,
     bundle,
@@ -405,6 +465,7 @@ async function makeFixture(): Promise<Fixture> {
       size: entry.size,
       sha256: entry.sha256,
     })),
+    trustedReleaseInput: descriptor,
   };
 }
 
@@ -413,6 +474,7 @@ async function verifyFixture(fixture: Fixture): Promise<unknown> {
   return verifier.verifyOcctFacadeBundleWithTestRuntime(
     fixture.bundle,
     fixture.trustedRuntime,
+    fixture.trustedReleaseInput,
   );
 }
 
@@ -586,7 +648,7 @@ describe("OCCT facade compliance bundle verification", () => {
       ok: true,
       format: "directory",
       name: "invariantcad-occt-facade",
-      version: "0.2.0",
+      version: bundleVersion,
     });
   });
 
@@ -595,8 +657,23 @@ describe("OCCT facade compliance bundle verification", () => {
     const { archive } = await makeNormalizedArchive(fixture);
     const verifier = await loadVerifier();
     await expect(
-      verifier.verifyOcctFacadeBundleWithTestRuntime(archive, fixture.trustedRuntime),
+      verifier.verifyOcctFacadeBundleWithTestRuntime(
+        archive,
+        fixture.trustedRuntime,
+        fixture.trustedReleaseInput,
+      ),
     ).resolves.toMatchObject({ ok: true, format: "tar.gz" });
+  });
+
+  it("rejects a directory bundle with non-normalized file modes", async () => {
+    const fixture = await makeFixture();
+    await chmod(
+      join(fixture.bundle, "source/scripts/build-occt-facade.sh"),
+      0o644,
+    );
+    await expect(verifyFixture(fixture)).rejects.toThrow(
+      /bundle file .* mode is 644; expected 755/u,
+    );
   });
 
   it.each(["runtime/occt-wasm.js", "runtime/occt-wasm.wasm"])(
@@ -620,7 +697,7 @@ describe("OCCT facade compliance bundle verification", () => {
     const fixture = await makeFixture();
     const releasePath = join(fixture.bundle, "metadata/release.json");
     const release = JSON.parse(await readFile(releasePath, "utf8"));
-    release.bundle.version = "0.2.1";
+    release.bundle.version = "0.3.1";
     await writeJson(releasePath, release);
     await refreshManifest(fixture.bundle);
     await expect(verifyFixture(fixture)).rejects.toThrow(
@@ -673,6 +750,7 @@ describe("OCCT facade compliance bundle verification", () => {
       verifier.verifyOcctFacadeBundleWithTestRuntime(
         traversalArchive,
         fixture.trustedRuntime,
+        fixture.trustedReleaseInput,
       ),
     ).rejects.toThrow(/tar entry path is unsafe/u);
 
@@ -691,6 +769,7 @@ describe("OCCT facade compliance bundle verification", () => {
       verifier.verifyOcctFacadeBundleWithTestRuntime(
         duplicateArchive,
         fixture.trustedRuntime,
+        fixture.trustedReleaseInput,
       ),
     ).rejects.toThrow(/duplicate tar entry/u);
   });
@@ -708,6 +787,7 @@ describe("OCCT facade compliance bundle verification", () => {
       verifier.verifyOcctFacadeBundleWithTestRuntime(
         gzipMtimePath,
         fixture.trustedRuntime,
+        fixture.trustedReleaseInput,
       ),
     ).rejects.toThrow(/gzip header is not normalized/u);
 
@@ -722,6 +802,7 @@ describe("OCCT facade compliance bundle verification", () => {
       verifier.verifyOcctFacadeBundleWithTestRuntime(
         ownershipPath,
         fixture.trustedRuntime,
+        fixture.trustedReleaseInput,
       ),
     ).rejects.toThrow(/ownership or timestamp is not normalized/u);
 
@@ -737,7 +818,11 @@ describe("OCCT facade compliance bundle verification", () => {
     const orderPath = join(fixture.root, "order.tar.gz");
     await writeFile(orderPath, normalizedGzip(reordered));
     await expect(
-      verifier.verifyOcctFacadeBundleWithTestRuntime(orderPath, fixture.trustedRuntime),
+      verifier.verifyOcctFacadeBundleWithTestRuntime(
+        orderPath,
+        fixture.trustedRuntime,
+        fixture.trustedReleaseInput,
+      ),
     ).rejects.toThrow(/bytewise path order/u);
   });
 
@@ -755,6 +840,7 @@ describe("OCCT facade compliance bundle verification", () => {
       verifier.verifyOcctFacadeBundleWithTestRuntime(
         concatenatedPath,
         fixture.trustedRuntime,
+        fixture.trustedReleaseInput,
       ),
     ).rejects.toThrow(/exactly one gzip member/u);
   });
@@ -772,7 +858,11 @@ describe("OCCT facade compliance bundle verification", () => {
     const hiddenPath = join(fixture.root, "hidden-header.tar.gz");
     await writeFile(hiddenPath, normalizedGzip(hidden));
     await expect(
-      verifier.verifyOcctFacadeBundleWithTestRuntime(hiddenPath, fixture.trustedRuntime),
+      verifier.verifyOcctFacadeBundleWithTestRuntime(
+        hiddenPath,
+        fixture.trustedRuntime,
+        fixture.trustedReleaseInput,
+      ),
     ).rejects.toThrow(/non-zero bytes after its NUL terminator/u);
 
     const slashless = Buffer.from(original);
@@ -786,6 +876,7 @@ describe("OCCT facade compliance bundle verification", () => {
       verifier.verifyOcctFacadeBundleWithTestRuntime(
         slashlessPath,
         fixture.trustedRuntime,
+        fixture.trustedReleaseInput,
       ),
     ).rejects.toThrow(/directory name must end/u);
   });
@@ -797,8 +888,13 @@ describe("OCCT facade compliance bundle verification", () => {
     await writeFile(archive, "");
     await truncate(archive, 512 * 1024 * 1024 + 1);
     const verifier = await loadVerifier();
+    const trustedReleaseInput = await makeFixtureReleaseInput();
     await expect(
-      verifier.verifyOcctFacadeBundleWithTestRuntime(archive, []),
+      verifier.verifyOcctFacadeBundleWithTestRuntime(
+        archive,
+        [],
+        trustedReleaseInput,
+      ),
     ).rejects.toThrow(/compressed bundle exceeds the size limit/u);
   });
 
@@ -814,8 +910,11 @@ describe("OCCT facade compliance bundle verification", () => {
 
   it("rejects unexpected files", async () => {
     const fixture = await makeFixture();
-    await writeFile(join(fixture.bundle, "unexpected.bin"), "surprise");
+    const unexpectedPath = join(fixture.bundle, "unexpected.bin");
+    await writeFile(unexpectedPath, "surprise");
+    await chmod(unexpectedPath, 0o644);
     await refreshManifest(fixture.bundle);
+    await chmod(join(fixture.bundle, "SHA256SUMS"), 0o644);
     await expect(verifyFixture(fixture)).rejects.toThrow(/unexpected unexpected\.bin/u);
   });
 
@@ -934,7 +1033,20 @@ describe("OCCT facade compliance bundle verification", () => {
   });
 
   const runtimeDirectory = join(repoRoot, ".artifacts/occt-facade");
-  const hasLockedRuntime = existsSync(join(runtimeDirectory, "occt-wasm.js")) &&
+  const releaseInputIsCurrent = (() => {
+    try {
+      const descriptor = JSON.parse(readFileSync(descriptorPath, "utf8"));
+      return descriptor.bundle?.version === bundleVersion &&
+        descriptor.facade?.marker === facadeMarker &&
+        descriptor.inputs?.some(
+          (entry: LockedEntry) => entry.target === pipeShellPatchTarget,
+        );
+    } catch {
+      return false;
+    }
+  })();
+  const hasLockedRuntime = releaseInputIsCurrent &&
+    existsSync(join(runtimeDirectory, "occt-wasm.js")) &&
     existsSync(join(runtimeDirectory, "occt-wasm.wasm")) &&
     existsSync(join(runtimeDirectory, "SHA256SUMS"));
 

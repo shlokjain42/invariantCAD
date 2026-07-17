@@ -1,0 +1,424 @@
+diff --git a/facade/include/occt_kernel.h b/facade/include/occt_kernel.h
+index 8a1da20..4189bc3 100644
+--- a/facade/include/occt_kernel.h
++++ b/facade/include/occt_kernel.h
+@@ -17,9 +17,10 @@
+ 
+ class OcctKernel;
+ struct InvariantCadDraftTransferState;
++struct InvariantCadPipeShellTransferState;
+ 
+ /// Evaluation-scoped topology kinds used by the indexed evolution ABI.
+-/// These numeric values are stable across facade ABI 0.2.x.
++/// These numeric values are stable across facade ABI 0.3.x.
+ enum InvariantCadTopologyKind : int {
+     InvariantCadTopologyKindNone = -1,
+     InvariantCadTopologyKindFace = 0,
+@@ -155,9 +156,61 @@ struct InvariantCadDraftReport {
+         double neutralNormalZ);
+ };
+ 
++/// Transactional result of the controlled InvariantCAD PipeShell facade.
++/// A successful untaken report owns its result outside the kernel arena.
++struct InvariantCadPipeShellReport {
++    bool ok = false;
++    std::string stage = "validation";
++    std::string code = "INTERNAL_ERROR";
++    std::string message;
++    int occtStatus = -1;
++    double errorOnSurface = -1.0;
++    double tolerance3d = -1.0;
++    double boundaryTolerance = -1.0;
++    double angularTolerance = -1.0;
++    int buildCount = 0;
++    int solidificationCount = 0;
++
++    InvariantCadPipeShellReport() = default;
++    InvariantCadPipeShellReport(const InvariantCadPipeShellReport&) = default;
++    InvariantCadPipeShellReport& operator=(const InvariantCadPipeShellReport&) = default;
++    InvariantCadPipeShellReport(InvariantCadPipeShellReport&&) noexcept = default;
++    InvariantCadPipeShellReport& operator=(InvariantCadPipeShellReport&&) noexcept = default;
++
++    bool getOk() const { return ok; }
++    std::string getStage() const { return stage; }
++    std::string getCode() const { return code; }
++    std::string getMessage() const { return message; }
++    int getOcctStatus() const { return occtStatus; }
++    double getErrorOnSurface() const { return errorOnSurface; }
++    double getTolerance3d() const { return tolerance3d; }
++    double getBoundaryTolerance() const { return boundaryTolerance; }
++    double getAngularTolerance() const { return angularTolerance; }
++    int getBuildCount() const { return buildCount; }
++    int getSolidificationCount() const { return solidificationCount; }
++
++    uint32_t takeResultId(OcctKernel& kernel);
++    bool hasResult() const;
++    std::string transferCode(const OcctKernel& kernel) const;
++
++  private:
++    std::shared_ptr<InvariantCadPipeShellTransferState> transfer_;
++
++    friend InvariantCadPipeShellReport invariantcadPipeShellSolid(
++        OcctKernel& kernel, uint32_t profileWireId, uint32_t spineWireId,
++        double tolerance3d, double boundaryTolerance, double angularTolerance);
++};
++
+ /// Versioned InvariantCAD extension probe, independent of occt-wasm's API.
+ std::string invariantcadFacadeVersion();
+ 
++/// Builds one corrected-Frenet, right-corner solid PipeShell with explicit
++/// native tolerances. The report exposes OCCT's measured surface error and
++/// retains the result outside the arena until a checked one-shot transfer.
++InvariantCadPipeShellReport invariantcadPipeShellSolid(
++    OcctKernel& kernel, uint32_t profileWireId, uint32_t spineWireId,
++    double tolerance3d, double boundaryTolerance, double angularTolerance);
++
+ /// Applies all requested draft faces to one BRepOffsetAPI_DraftAngle maker,
+ /// verifies every Add(), and calls Build() once after all additions succeed.
+ /// Raw arena IDs are adapter-trusted capability handles. This facade validates
+@@ -592,11 +645,15 @@ class OcctKernel {
+ 
+   private:
+     friend struct InvariantCadDraftReport;
++    friend struct InvariantCadPipeShellReport;
+     friend InvariantCadDraftReport invariantcadDraftFacesAtomic(
+         OcctKernel& kernel, uint32_t shapeId, std::vector<uint32_t> faceIds, double angleRad,
+         double pullX, double pullY, double pullZ, double neutralOriginX, double neutralOriginY,
+         double neutralOriginZ, double neutralNormalX, double neutralNormalY,
+         double neutralNormalZ);
++    friend InvariantCadPipeShellReport invariantcadPipeShellSolid(
++        OcctKernel& kernel, uint32_t profileWireId, uint32_t spineWireId,
++        double tolerance3d, double boundaryTolerance, double angularTolerance);
+     uint32_t store(const TopoDS_Shape& shape);
+     uint32_t invariantcadStoreTransferredShape(const TopoDS_Shape& shape);
+     const TopoDS_Shape& get(uint32_t id) const;
+diff --git a/facade/src/invariantcad_bindings.cpp b/facade/src/invariantcad_bindings.cpp
+index f4b4ec8..b99a14e 100644
+--- a/facade/src/invariantcad_bindings.cpp
++++ b/facade/src/invariantcad_bindings.cpp
+@@ -66,6 +66,23 @@ EMSCRIPTEN_BINDINGS(invariantcad_facade) {
+         .function("topologyRecord", &InvariantCadDraftReport::topologyRecord)
+         .function("takeResultId", &InvariantCadDraftReport::takeResultId);
+ 
++    class_<InvariantCadPipeShellReport>("InvariantCadPipeShellReport")
++        .property("ok", &InvariantCadPipeShellReport::getOk)
++        .property("stage", &InvariantCadPipeShellReport::getStage)
++        .property("code", &InvariantCadPipeShellReport::getCode)
++        .property("message", &InvariantCadPipeShellReport::getMessage)
++        .property("occtStatus", &InvariantCadPipeShellReport::getOcctStatus)
++        .property("errorOnSurface", &InvariantCadPipeShellReport::getErrorOnSurface)
++        .property("tolerance3d", &InvariantCadPipeShellReport::getTolerance3d)
++        .property("boundaryTolerance", &InvariantCadPipeShellReport::getBoundaryTolerance)
++        .property("angularTolerance", &InvariantCadPipeShellReport::getAngularTolerance)
++        .property("buildCount", &InvariantCadPipeShellReport::getBuildCount)
++        .property("solidificationCount", &InvariantCadPipeShellReport::getSolidificationCount)
++        .function("hasResult", &InvariantCadPipeShellReport::hasResult)
++        .function("transferCode", &InvariantCadPipeShellReport::transferCode)
++        .function("takeResultId", &InvariantCadPipeShellReport::takeResultId);
++
+     function("invariantcadFacadeVersion", &invariantcadFacadeVersion);
+     function("invariantcadDraftFacesAtomic", &invariantcadDraftFacesAtomic);
++    function("invariantcadPipeShellSolid", &invariantcadPipeShellSolid);
+ }
+diff --git a/facade/src/invariantcad_facade.cpp b/facade/src/invariantcad_facade.cpp
+index 5ef594e..9c52765 100644
+--- a/facade/src/invariantcad_facade.cpp
++++ b/facade/src/invariantcad_facade.cpp
+@@ -8,7 +8,9 @@
+ 
+ #include <BRepCheck_Analyzer.hxx>
+ #include <BRepGProp.hxx>
++#include <BRepBuilderAPI_TransitionMode.hxx>
+ #include <BRepOffsetAPI_DraftAngle.hxx>
++#include <BRepOffsetAPI_MakePipeShell.hxx>
+ #include <GProp_GProps.hxx>
+ #include <NCollection_IndexedMap.hxx>
+ #include <Standard_Failure.hxx>
+@@ -41,6 +43,12 @@ struct InvariantCadDraftTransferState {
+     InvariantCadIndexedTopologyEvolution topologyHistory;
+ };
+ 
++struct InvariantCadPipeShellTransferState {
++    TopoDS_Shape result;
++    uint64_t kernelInstanceToken = 0;
++    bool transferred = false;
++};
++
+ namespace {
+ 
+ constexpr double kHalfPi = 1.57079632679489661923;
+@@ -409,6 +417,41 @@ std::string InvariantCadDraftReport::transferCode(const OcctKernel& kernel) cons
+     return "READY";
+ }
+ 
++uint32_t InvariantCadPipeShellReport::takeResultId(OcctKernel& kernel) {
++    const std::string state = transferCode(kernel);
++    if (state == "NO_RESULT") {
++        throw std::runtime_error("InvariantCAD PipeShell report has no transferable result");
++    }
++    if (state == "ALREADY_TRANSFERRED") {
++        throw std::runtime_error("InvariantCAD PipeShell result was already transferred");
++    }
++    if (state == "WRONG_KERNEL") {
++        throw std::runtime_error(
++            "InvariantCAD PipeShell result belongs to another kernel instance");
++    }
++    const uint32_t resultId = kernel.invariantcadStoreTransferredShape(transfer_->result);
++    transfer_->transferred = true;
++    transfer_->result.Nullify();
++    return resultId;
++}
++
++bool InvariantCadPipeShellReport::hasResult() const {
++    return transfer_ && !transfer_->transferred && !transfer_->result.IsNull();
++}
++
++std::string InvariantCadPipeShellReport::transferCode(const OcctKernel& kernel) const {
++    if (!transfer_) {
++        return "NO_RESULT";
++    }
++    if (transfer_->transferred || transfer_->result.IsNull()) {
++        return "ALREADY_TRANSFERRED";
++    }
++    if (transfer_->kernelInstanceToken != kernel.invariantcadInstanceToken_) {
++        return "WRONG_KERNEL";
++    }
++    return "READY";
++}
++
+ int InvariantCadDraftReport::topologyHistoryVersion() const {
+     return topologyHistoryComplete() ? transfer_->topologyHistory.version : 0;
+ }
+@@ -471,7 +514,231 @@ InvariantCadTopologyEvolutionRecord InvariantCadDraftReport::topologyRecord(
+ }
+ 
+ std::string invariantcadFacadeVersion() {
+-    return "invariantcad-facade@0.2.0+occt-wasm.3.7.0";
++    return "invariantcad-facade@0.3.0+occt-wasm.3.7.0";
++}
++
++InvariantCadPipeShellReport invariantcadPipeShellSolid(
++    OcctKernel& kernel, uint32_t profileWireId, uint32_t spineWireId,
++    double tolerance3d, double boundaryTolerance, double angularTolerance) {
++    int buildCount = 0;
++    int solidificationCount = 0;
++    auto failure = [&](const char* stage, const char* code, const char* message,
++                       int occtStatus = -1, double errorOnSurface = -1.0) {
++        InvariantCadPipeShellReport report;
++        report.stage = stage;
++        report.code = code;
++        report.message = message;
++        report.occtStatus = occtStatus;
++        report.errorOnSurface = errorOnSurface;
++        report.tolerance3d = tolerance3d;
++        report.boundaryTolerance = boundaryTolerance;
++        report.angularTolerance = angularTolerance;
++        report.buildCount = buildCount;
++        report.solidificationCount = solidificationCount;
++        return report;
++    };
++    const auto finitePositive = [](double value) {
++        return std::isfinite(value) && value > 0.0;
++    };
++    if (!finitePositive(tolerance3d) || !finitePositive(boundaryTolerance) ||
++        !finitePositive(angularTolerance)) {
++        return failure("validation", "INVALID_TOLERANCE",
++                       "PipeShell tolerances must be finite and positive");
++    }
++    if (tolerance3d > 1.0 || boundaryTolerance > 1.0 || angularTolerance > 0.1) {
++        return failure("validation", "TOLERANCE_OUT_OF_RANGE",
++                       "PipeShell tolerances exceed the facade ABI bounds");
++    }
++
++    const auto profileIt = kernel.arena_.find(profileWireId);
++    const auto spineIt = kernel.arena_.find(spineWireId);
++    if (profileIt == kernel.arena_.end()) {
++        return failure("input-validation", "INVALID_PROFILE_ID",
++                       "Profile ID is not present in the kernel arena");
++    }
++    if (spineIt == kernel.arena_.end()) {
++        return failure("input-validation", "INVALID_SPINE_ID",
++                       "Spine ID is not present in the kernel arena");
++    }
++    const TopoDS_Shape& profile = profileIt->second;
++    const TopoDS_Shape& spine = spineIt->second;
++    if (profile.IsNull() || profile.ShapeType() != TopAbs_WIRE) {
++        return failure("input-validation", "PROFILE_NOT_WIRE",
++                       "PipeShell profile must be a non-null top-level wire");
++    }
++    if (spine.IsNull() || spine.ShapeType() != TopAbs_WIRE) {
++        return failure("input-validation", "SPINE_NOT_WIRE",
++                       "PipeShell spine must be a non-null top-level wire");
++    }
++    try {
++        if (!BRepCheck_Analyzer(profile).IsValid() ||
++            !BRepCheck_Analyzer(spine).IsValid()) {
++            return failure("input-validation", "INVALID_INPUT_WIRE",
++                           "PipeShell profile and spine wires must be valid");
++        }
++    } catch (const Standard_Failure&) {
++        return failure("input-validation", "INPUT_VALIDATION_OCCT_EXCEPTION",
++                       "OCCT raised while validating PipeShell input wires");
++    } catch (const std::exception&) {
++        return failure("input-validation", "INPUT_VALIDATION_NATIVE_EXCEPTION",
++                       "Native code raised while validating PipeShell input wires");
++    } catch (...) {
++        return failure("input-validation", "INPUT_VALIDATION_UNKNOWN_EXCEPTION",
++                       "Unknown native failure while validating PipeShell input wires");
++    }
++
++    std::unique_ptr<BRepOffsetAPI_MakePipeShell> maker;
++    try {
++        maker = std::make_unique<BRepOffsetAPI_MakePipeShell>(TopoDS::Wire(spine));
++        maker->SetMode(Standard_False);
++        maker->SetTransitionMode(BRepBuilderAPI_RightCorner);
++        maker->SetTolerance(tolerance3d, boundaryTolerance, angularTolerance);
++        maker->Add(profile, Standard_False, Standard_False);
++        if (!maker->IsReady()) {
++            return failure("prepare", "NOT_READY",
++                           "PipeShell is not ready after adding the profile");
++        }
++    } catch (const Standard_Failure&) {
++        return failure("prepare", "PREPARE_OCCT_EXCEPTION",
++                       "OCCT raised while preparing PipeShell");
++    } catch (const std::exception&) {
++        return failure("prepare", "PREPARE_NATIVE_EXCEPTION",
++                       "Native code raised while preparing PipeShell");
++    } catch (...) {
++        return failure("prepare", "PREPARE_UNKNOWN_EXCEPTION",
++                       "Unknown native failure while preparing PipeShell");
++    }
++
++    try {
++        ++buildCount;
++        maker->Build();
++    } catch (const Standard_Failure&) {
++        return failure("build", "BUILD_OCCT_EXCEPTION",
++                       "OCCT raised while building PipeShell");
++    } catch (const std::exception&) {
++        return failure("build", "BUILD_NATIVE_EXCEPTION",
++                       "Native code raised while building PipeShell");
++    } catch (...) {
++        return failure("build", "BUILD_UNKNOWN_EXCEPTION",
++                       "Unknown native failure while building PipeShell");
++    }
++
++    int occtStatus = -1;
++    bool buildDone = false;
++    try {
++        occtStatus = static_cast<int>(maker->GetStatus());
++        buildDone = maker->IsDone();
++    } catch (...) {
++        // Stable build diagnostics survive optional status extraction.
++    }
++    if (!buildDone) {
++        return failure("build", "BUILD_FAILED", "OCCT did not complete PipeShell",
++                       occtStatus);
++    }
++
++    double errorOnSurface = -1.0;
++    try {
++        errorOnSurface = maker->ErrorOnSurface();
++    } catch (const Standard_Failure&) {
++        return failure("quality", "SURFACE_ERROR_OCCT_EXCEPTION",
++                       "OCCT raised while reading PipeShell surface error", occtStatus);
++    } catch (const std::exception&) {
++        return failure("quality", "SURFACE_ERROR_NATIVE_EXCEPTION",
++                       "Native code raised while reading PipeShell surface error", occtStatus);
++    } catch (...) {
++        return failure("quality", "SURFACE_ERROR_UNKNOWN_EXCEPTION",
++                       "Unknown native failure while reading PipeShell surface error",
++                       occtStatus);
++    }
++    if (!std::isfinite(errorOnSurface) || errorOnSurface < 0.0) {
++        return failure("quality", "INVALID_SURFACE_ERROR",
++                       "PipeShell returned an invalid surface error", occtStatus,
++                       errorOnSurface);
++    }
++
++    bool solidDone = false;
++    try {
++        ++solidificationCount;
++        solidDone = maker->MakeSolid();
++    } catch (const Standard_Failure&) {
++        return failure("solid", "SOLID_OCCT_EXCEPTION",
++                       "OCCT raised while closing PipeShell as a solid", occtStatus,
++                       errorOnSurface);
++    } catch (const std::exception&) {
++        return failure("solid", "SOLID_NATIVE_EXCEPTION",
++                       "Native code raised while closing PipeShell as a solid", occtStatus,
++                       errorOnSurface);
++    } catch (...) {
++        return failure("solid", "SOLID_UNKNOWN_EXCEPTION",
++                       "Unknown native failure while closing PipeShell as a solid", occtStatus,
++                       errorOnSurface);
++    }
++    if (!solidDone) {
++        return failure("solid", "SOLID_FAILED",
++                       "PipeShell could not close the profile into a solid", occtStatus,
++                       errorOnSurface);
++    }
++
++    TopoDS_Shape result;
++    try {
++        result = maker->Shape();
++        if (result.IsNull()) {
++            return failure("result-validation", "NULL_RESULT",
++                           "PipeShell completed without a result", occtStatus,
++                           errorOnSurface);
++        }
++        if (result.ShapeType() != TopAbs_SOLID) {
++            return failure("result-validation", "RESULT_NOT_SOLID",
++                           "PipeShell result is not a top-level solid", occtStatus,
++                           errorOnSurface);
++        }
++        if (!BRepCheck_Analyzer(result).IsValid()) {
++            return failure("result-validation", "INVALID_RESULT",
++                           "PipeShell produced an invalid solid", occtStatus,
++                           errorOnSurface);
++        }
++    } catch (const Standard_Failure&) {
++        return failure("result-validation", "RESULT_VALIDATION_OCCT_EXCEPTION",
++                       "OCCT raised while validating the PipeShell result", occtStatus,
++                       errorOnSurface);
++    } catch (const std::exception&) {
++        return failure("result-validation", "RESULT_VALIDATION_NATIVE_EXCEPTION",
++                       "Native code raised while validating the PipeShell result", occtStatus,
++                       errorOnSurface);
++    } catch (...) {
++        return failure("result-validation", "RESULT_VALIDATION_UNKNOWN_EXCEPTION",
++                       "Unknown native failure while validating the PipeShell result", occtStatus,
++                       errorOnSurface);
++    }
++
++    try {
++        auto transfer = std::make_shared<InvariantCadPipeShellTransferState>();
++        transfer->result = result;
++        transfer->kernelInstanceToken = kernel.invariantcadInstanceToken_;
++
++        InvariantCadPipeShellReport report;
++        report.ok = true;
++        report.stage = "complete";
++        report.code = "OK";
++        report.message = "Controlled PipeShell completed";
++        report.occtStatus = occtStatus;
++        report.errorOnSurface = errorOnSurface;
++        report.tolerance3d = tolerance3d;
++        report.boundaryTolerance = boundaryTolerance;
++        report.angularTolerance = angularTolerance;
++        report.buildCount = buildCount;
++        report.solidificationCount = solidificationCount;
++        report.transfer_ = std::move(transfer);
++        return report;
++    } catch (const std::exception&) {
++        return failure("result-ownership", "RESULT_OWNERSHIP_NATIVE_EXCEPTION",
++                       "Native code could not own the PipeShell result", occtStatus,
++                       errorOnSurface);
++    } catch (...) {
++        return failure("result-ownership", "RESULT_OWNERSHIP_UNKNOWN_EXCEPTION",
++                       "Unknown native failure while owning the PipeShell result", occtStatus,
++                       errorOnSurface);
++    }
+ }
+ 
+ InvariantCadDraftReport invariantcadDraftFacesAtomic(

@@ -28,6 +28,7 @@ const RELEASE_INPUT_PATH = join(
   REPO_ROOT,
   "native/occt/bundle/release-input.json",
 );
+const PATCH_DIRECTORY = join(REPO_ROOT, "native/occt/patches");
 const DEFAULT_RUNTIME_DIR = join(REPO_ROOT, ".artifacts/occt-facade");
 const DEFAULT_OUTPUT_DIR = join(REPO_ROOT, ".artifacts/occt-facade-bundle");
 const HASH_PATTERN = /^[0-9a-f]{64}$/u;
@@ -435,6 +436,36 @@ async function validateRuntimeDirectory(runtimeDir, releaseInput) {
 }
 
 async function validateRepositoryInputs(releaseInput) {
+  const pinnedPatches = releaseInput.inputs.filter(
+    (entry) => entry.role === "source-patch",
+  );
+  const pinnedPatchNames = pinnedPatches.map((entry) => {
+    const expectedSource = `native/occt/patches/${basename(entry.source)}`;
+    if (entry.source !== expectedSource || !entry.source.endsWith(".patch")) {
+      fail(
+        `source-patch input must be a direct .patch file under native/occt/patches: ${entry.source}`,
+      );
+    }
+    return basename(entry.source);
+  });
+  const patchEntries = await readdir(PATCH_DIRECTORY, { withFileTypes: true });
+  const actualPatchNames = patchEntries
+    .filter((entry) => entry.name.endsWith(".patch"))
+    .map((entry) => {
+      if (!entry.isFile() || entry.isSymbolicLink()) {
+        fail(`owned patch must be an ordinary file: ${join(PATCH_DIRECTORY, entry.name)}`);
+      }
+      return entry.name;
+    })
+    .sort();
+  if (
+    pinnedPatchNames.length !== actualPatchNames.length ||
+    pinnedPatchNames.some((name, index) => name !== actualPatchNames[index])
+  ) {
+    fail(
+      `release input source-patch series '${pinnedPatchNames.join(",")}' does not exactly match bytewise build series '${actualPatchNames.join(",")}'`,
+    );
+  }
   for (const entry of releaseInput.inputs) {
     await validateFile(
       join(REPO_ROOT, entry.source),

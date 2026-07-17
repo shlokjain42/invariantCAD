@@ -293,6 +293,14 @@ describe("OCCT module-factory and facade probing", () => {
         protocolVersion: 1,
         features: ["draft"],
       });
+      expect(kernel.capabilities.compositeSweep).toBeUndefined();
+      expect(
+        kernelSupports(
+          kernel.capabilities,
+          "compositeSweepRefinement",
+          "major-multiple-arcs",
+        ),
+      ).toBe(false);
     } finally {
       kernel.dispose();
     }

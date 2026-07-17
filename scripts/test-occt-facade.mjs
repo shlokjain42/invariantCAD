@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-const EXPECTED_FACADE_VERSION = "invariantcad-facade@0.2.0+occt-wasm.3.7.0";
+const EXPECTED_FACADE_VERSION = "invariantcad-facade@0.3.0+occt-wasm.3.7.0";
 const EXPECTED_TOPOLOGY_HISTORY_VERSION = 1;
 const LINEAR_TOLERANCE = 1e-10;
 const VOLUME_TOLERANCE = 1e-8;
@@ -57,6 +57,8 @@ const Module = await createOcctWasm({
 });
 
 assert.equal(Module.invariantcadFacadeVersion(), EXPECTED_FACADE_VERSION);
+assert.equal(typeof Module.InvariantCadPipeShellReport, "function");
+assert.equal(typeof Module.invariantcadPipeShellSolid, "function");
 
 const topologyKinds = Object.freeze({
   none: Module.InvariantCadTopologyKind.NONE,
@@ -96,6 +98,142 @@ function vector(ids) {
   const value = new Module.VectorUint32();
   for (const id of ids) value.push_back(id);
   return value;
+}
+
+function addVectors(...vectors) {
+  return vectors.reduce(
+    (sum, value) => [
+      sum[0] + value[0],
+      sum[1] + value[1],
+      sum[2] + value[2],
+    ],
+    [0, 0, 0],
+  );
+}
+
+function scaleVector(value, factor) {
+  return [value[0] * factor, value[1] * factor, value[2] * factor];
+}
+
+function lineEdge(start, end) {
+  return kernel.makeLineEdge(...start, ...end);
+}
+
+function arcEdge(start, through, end) {
+  return kernel.makeArcEdge(...start, ...through, ...end);
+}
+
+function wireFromEdges(edges) {
+  const ids = vector(edges);
+  try {
+    return kernel.makeWire(ids);
+  } finally {
+    ids.delete();
+  }
+}
+
+function rectangleWire(center, u, v, width, height) {
+  const corners = [
+    addVectors(center, scaleVector(u, -width / 2), scaleVector(v, -height / 2)),
+    addVectors(center, scaleVector(u, width / 2), scaleVector(v, -height / 2)),
+    addVectors(center, scaleVector(u, width / 2), scaleVector(v, height / 2)),
+    addVectors(center, scaleVector(u, -width / 2), scaleVector(v, height / 2)),
+  ];
+  return wireFromEdges(
+    corners.map((start, index) =>
+      lineEdge(start, corners[(index + 1) % corners.length]),
+    ),
+  );
+}
+
+function controlledPipeShell(
+  profileWire,
+  spineWire,
+  tolerance3d = 1e-7,
+  boundaryTolerance = 1e-7,
+  angularTolerance = 1e-9,
+) {
+  return Module.invariantcadPipeShellSolid(
+    kernel,
+    profileWire,
+    spineWire,
+    tolerance3d,
+    boundaryTolerance,
+    angularTolerance,
+  );
+}
+
+function assertControlledPipeShellSuccess(
+  report,
+  arenaBefore,
+  expectedVolume,
+  expectedTopology,
+  label,
+) {
+  assert.equal(report.ok, true, `${report.code}: ${report.message}`);
+  assert.equal(report.stage, "complete");
+  assert.equal(report.code, "OK");
+  assert.equal(report.occtStatus, 0);
+  assert.ok(Number.isFinite(report.errorOnSurface));
+  assert.ok(report.errorOnSurface >= 0);
+  assert.ok(report.errorOnSurface <= 1e-7);
+  assert.equal(report.tolerance3d, 1e-7);
+  assert.equal(report.boundaryTolerance, 1e-7);
+  assert.equal(report.angularTolerance, 1e-9);
+  assert.equal(report.buildCount, 1);
+  assert.equal(report.solidificationCount, 1);
+  assert.equal(report.hasResult(), true);
+  assert.equal(report.transferCode(kernel), "READY");
+  assert.equal(
+    kernel.getShapeCount(),
+    arenaBefore,
+    `${label}: report-owned result entered the arena before transfer`,
+  );
+
+  for (const property of [
+    "ok",
+    "stage",
+    "code",
+    "message",
+    "occtStatus",
+    "errorOnSurface",
+    "tolerance3d",
+    "boundaryTolerance",
+    "angularTolerance",
+    "buildCount",
+    "solidificationCount",
+  ]) {
+    const value = report[property];
+    assert.throws(
+      () => {
+        report[property] = value;
+      },
+      /read-only property/i,
+      `${label}.${property} must be read-only`,
+    );
+  }
+
+  const result = report.takeResultId(kernel);
+  assert.equal(report.hasResult(), false);
+  assert.equal(report.transferCode(kernel), "ALREADY_TRANSFERRED");
+  assert.equal(kernel.getShapeCount(), arenaBefore + 1);
+  assert.equal(kernel.getShapeType(result), "solid");
+  assert.equal(kernel.isValid(result), true);
+  assertClose(kernel.getVolume(result), expectedVolume, VOLUME_TOLERANCE, `${label}.volume`);
+  assert.deepEqual(
+    {
+      faces: kernel.subShapeCount(result, "face"),
+      edges: kernel.subShapeCount(result, "edge"),
+      vertices: kernel.subShapeCount(result, "vertex"),
+    },
+    expectedTopology,
+    `${label}.topology`,
+  );
+  assert.throws(
+    () => report.takeResultId(kernel),
+    `${label}: the result must transfer exactly once`,
+  );
+  return result;
 }
 
 function drainVector(value) {
@@ -353,6 +491,197 @@ function runFixture(label, action) {
 
 try {
   kernel = new Module.OcctKernel();
+
+  runFixture("controlled PipeShell validation", () => {
+    const invalidTolerance = controlledPipeShell(0, 0, 0, 1e-7, 1e-9);
+    withReport(invalidTolerance, (report) => {
+      assert.equal(report.ok, false);
+      assert.equal(report.stage, "validation");
+      assert.equal(report.code, "INVALID_TOLERANCE");
+      assert.equal(report.tolerance3d, 0);
+      assert.equal(report.boundaryTolerance, 1e-7);
+      assert.equal(report.angularTolerance, 1e-9);
+      assert.equal(report.buildCount, 0);
+      assert.equal(report.solidificationCount, 0);
+      assert.equal(report.errorOnSurface, -1);
+      assert.equal(report.hasResult(), false);
+      assert.equal(report.transferCode(kernel), "NO_RESULT");
+      assert.throws(() => report.takeResultId(kernel));
+    });
+
+    const edge = lineEdge([0, 0, 0], [0, 0, 1]);
+    const spine = wireFromEdges([lineEdge([0, 0, 0], [0, 0, 2])]);
+    const invalidProfile = controlledPipeShell(edge, spine);
+    withReport(invalidProfile, (report) => {
+      assert.equal(report.ok, false);
+      assert.equal(report.stage, "input-validation");
+      assert.equal(report.code, "PROFILE_NOT_WIRE");
+      assert.equal(report.buildCount, 0);
+      assert.equal(report.solidificationCount, 0);
+      assert.equal(report.hasResult(), false);
+    });
+  });
+
+  runFixture("controlled untaken PipeShell cleanup", () => {
+    const profile = rectangleWire(
+      [0, 0, 0],
+      [1, 0, 0],
+      [0, 1, 0],
+      1,
+      1,
+    );
+    const spine = wireFromEdges([lineEdge([0, 0, 0], [0, 0, 2])]);
+    const arenaBefore = kernel.getShapeCount();
+    for (let iteration = 0; iteration < 3; iteration += 1) {
+      withReport(controlledPipeShell(profile, spine), (report) => {
+        assert.equal(report.ok, true, `${report.code}: ${report.message}`);
+        assert.equal(report.hasResult(), true);
+        assert.equal(report.transferCode(kernel), "READY");
+        assert.equal(kernel.getShapeCount(), arenaBefore);
+      });
+      assert.equal(
+        kernel.getShapeCount(),
+        arenaBefore,
+        "deleting an untaken report must not enter or retain an arena result",
+      );
+    }
+  });
+
+  runFixture("controlled open-profile solidification failure", () => {
+    const profile = wireFromEdges([
+      lineEdge([-1, 0, 0], [1, 0, 0]),
+    ]);
+    const spine = wireFromEdges([lineEdge([0, 0, 0], [0, 0, 2])]);
+    const arenaBefore = kernel.getShapeCount();
+    withReport(controlledPipeShell(profile, spine), (report) => {
+      assert.equal(report.ok, false);
+      assert.equal(report.stage, "solid");
+      assert.equal(report.code, "SOLID_FAILED");
+      assert.equal(report.buildCount, 1);
+      assert.equal(report.solidificationCount, 1);
+      assert.ok(Number.isFinite(report.errorOnSurface));
+      assert.ok(report.errorOnSurface >= 0);
+      assert.equal(report.hasResult(), false);
+      assert.equal(report.transferCode(kernel), "NO_RESULT");
+      assert.equal(kernel.getShapeCount(), arenaBefore);
+      assert.throws(() => report.takeResultId(kernel));
+    });
+  });
+
+  runFixture("controlled multi-major PipeShell", () => {
+    const profile = rectangleWire(
+      [0, 0, 0],
+      [1, 0, 0],
+      [0, 1, 0],
+      1,
+      1,
+    );
+    const firstEnd = [10, 0, -10];
+    const spine = wireFromEdges([
+      arcEdge([0, 0, 0], [20, 0, 0], firstEnd),
+      arcEdge(
+        firstEnd,
+        [10 - 10 / Math.sqrt(2), 10 - 10 / Math.sqrt(2), -10],
+        [0, 10, -10],
+      ),
+    ]);
+    const arenaBefore = kernel.getShapeCount();
+    const report = controlledPipeShell(profile, spine);
+    withReport(report, (ownedReport) => {
+      const clone = ownedReport.clone();
+      try {
+        const otherKernel = new Module.OcctKernel();
+        try {
+          assert.equal(clone.transferCode(otherKernel), "WRONG_KERNEL");
+          assert.throws(() => clone.takeResultId(otherKernel));
+          assert.equal(otherKernel.getShapeCount(), 0);
+        } finally {
+          otherKernel.delete();
+        }
+        const result = assertControlledPipeShellSuccess(
+          clone,
+          arenaBefore,
+          20 * Math.PI,
+          { faces: 10, edges: 20, vertices: 12 },
+          "multiMajor",
+        );
+        try {
+          assert.equal(ownedReport.hasResult(), false);
+          assert.equal(ownedReport.transferCode(kernel), "ALREADY_TRANSFERRED");
+        } finally {
+          kernel.release(result);
+        }
+      } finally {
+        clone.delete();
+      }
+      assert.equal(kernel.getShapeCount(), arenaBefore);
+    });
+  });
+
+  runFixture("controlled eccentric-major PipeShell", () => {
+    const profile = rectangleWire(
+      [1, 0, 0],
+      [1, 0, 0],
+      [0, 1, 0],
+      1,
+      1,
+    );
+    const spine = wireFromEdges([
+      lineEdge([0, 0, 0], [0, 0, 3]),
+      arcEdge([0, 0, 3], [20, 0, 3], [10, 0, -7]),
+      lineEdge([10, 0, -7], [7, 0, -7]),
+    ]);
+    const arenaBefore = kernel.getShapeCount();
+    withReport(controlledPipeShell(profile, spine), (report) => {
+      const result = assertControlledPipeShellSuccess(
+        report,
+        arenaBefore,
+        6 + 13.5 * Math.PI,
+        { faces: 14, edges: 28, vertices: 16 },
+        "eccentricMajor",
+      );
+      kernel.release(result);
+    });
+  });
+
+  runFixture("controlled conditioned near-full PipeShell", () => {
+    const radius = 5;
+    const sweep = Math.PI * 2 - 0.05;
+    const tilt = Math.PI / 1_800;
+    const point = (angle) => [
+      radius * Math.sin(angle),
+      radius * Math.cos(tilt) * (1 - Math.cos(angle)),
+      radius * Math.sin(tilt) * (1 - Math.cos(angle)),
+    ];
+    const end = point(sweep);
+    const tangent = [
+      Math.cos(sweep),
+      Math.cos(tilt) * Math.sin(sweep),
+      Math.sin(tilt) * Math.sin(sweep),
+    ];
+    const profile = rectangleWire(
+      point(0),
+      [0, 1, 0],
+      [0, 0, 1],
+      0.01,
+      0.01,
+    );
+    const spine = wireFromEdges([
+      arcEdge(point(0), point(sweep / 2), end),
+      lineEdge(end, addVectors(end, scaleVector(tangent, 0.1))),
+    ]);
+    const arenaBefore = kernel.getShapeCount();
+    withReport(controlledPipeShell(profile, spine), (report) => {
+      const result = assertControlledPipeShellSuccess(
+        report,
+        arenaBefore,
+        0.0001 * (radius * sweep + 0.1),
+        { faces: 10, edges: 20, vertices: 12 },
+        "conditionedNearFull",
+      );
+      kernel.release(result);
+    });
+  });
 
   runFixture("single wall", () => {
     const box = kernel.makeBox(20, 20, 10);
