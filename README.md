@@ -4,7 +4,7 @@ Comprehensive, type-safe CAD-as-code for TypeScript.
 
 InvariantCAD represents a design as immutable, versioned JSON and evaluates it through replaceable geometry and sketch-solver backends. The public API never exposes WASM pointers or kernel-specific objects.
 
-> **Project status:** `0.1.0` is the released-foundation target. Current main adds an exact OpenCascade B-Rep backend, analytic sketch-profile transfer, STEP/BREP exchange, bounded ruled solid lofts, explicit 3D polyline and circular-arc paths with bounded exact solid sweeps, closed semantic topology roles, sketch-boundary provenance, exact selector-driven fillets and equal-distance chamfers, exact face-selected inward/outward shells, exact whole-solid inward/outward offsets, and atomic semantic-face draft with exact indexed topology evolution when the matched InvariantCAD-owned OCCT facade is loaded. Complete topology history across the other topology-changing features and additional advanced mechanical features remain under active development; see the [support matrix](#support-matrix) and [roadmap](docs/roadmap.md).
+> **Project status:** `0.1.0` is the released-foundation target. Current main adds an exact OpenCascade B-Rep backend, analytic sketch-profile transfer, STEP/BREP exchange, bounded ruled solid lofts, explicit 3D polyline, circular-arc, and ordered line/arc composite paths with bounded exact solid sweeps, closed semantic topology roles, sketch-boundary provenance, exact selector-driven fillets and equal-distance chamfers, exact face-selected inward/outward shells, exact whole-solid inward/outward offsets, and atomic semantic-face draft with exact indexed topology evolution when the matched InvariantCAD-owned OCCT facade is loaded. Complete topology history across the other topology-changing features and additional advanced mechanical features remain under active development; see the [support matrix](#support-matrix) and [roadmap](docs/roadmap.md).
 
 ## Install
 
@@ -139,7 +139,25 @@ const bend = cad.circularArcPath("bend", {
 const curved = cad.sweep("curved", section, bend);
 ```
 
-Document-v1 sweeps require an open, simple path; a closed, hole-free profile seated at its start; an initial tangent parallel to the profile-plane normal in either direction; corrected-Frenet transport; and conservative profile clearance. Polyline paths reject repeated or redundant collinear vertices and use right-corner intersections. Circular-arc paths are one exact three-point arc below a full turn and require their circumradius to exceed the complete profile envelope. The OCCT adapter realizes the one-edge circular case as an exact revolution about the resolved circle axis, including near-full major arcs, and requires the minimum triangle-angle sine across the three authored points to exceed `3e-8`. Its polyline PipeShell path additionally requires every swept profile/path edge to exceed the native `1e-4 mm` linear tolerance. Composite, guided, variable-section, full-circle, Bézier, B-spline, and helix paths fail explicitly until their separate contracts are available.
+An ordered exact route mixes lines and circular arcs without repeating joint coordinates:
+
+```ts
+const route = cad.compositePath("route", {
+  start: vec3(mm(0), mm(0), mm(0)),
+  segments: [
+    { kind: "line", end: vec3(mm(5), mm(0), mm(0)) },
+    {
+      kind: "circularArc",
+      through: vec3(mm(5 + 5 / Math.sqrt(2)), mm(5 - 5 / Math.sqrt(2)), mm(0)),
+      end: vec3(mm(10), mm(5), mm(0)),
+    },
+    { kind: "line", end: vec3(mm(10), mm(10), mm(0)) },
+  ],
+});
+const routed = cad.sweep("routed", section, route);
+```
+
+Document-v1 sweeps require an open, simple path; a closed, hole-free profile seated at its start; an initial tangent parallel to the profile-plane normal in either direction; corrected-Frenet transport; and conservative profile clearance. Polyline paths reject repeated or redundant collinear vertices and use right-corner intersections. Circular-arc paths are one exact three-point arc below a full turn and require their circumradius to exceed the complete profile envelope. Composite paths contain at least two structurally connected segments and at least one arc. Junctions touching an arc must be forward G1 tangent; line-line junctions retain right-corner semantics; adjacent arc pairs must stay within their certified local-curvature reach; redundant adjacent segments, major composite arcs, and uncertified nonadjacent clearance fail explicitly. The OCCT adapter realizes the one-edge circular case as an exact revolution about the resolved circle axis, including near-full major arcs. Ordered composites use one exact PipeShell wire. Every composite arc must be minor or semicircular, exceed the profile-envelope radius, and pass the `3e-8` three-point conditioning floor. Every PipeShell profile/path edge and all three authored point-pair separations of a composite arc must exceed the native `1e-4 mm` linear tolerance. Guided, variable-section, full-circle, Bézier, B-spline, and helix paths remain explicit future contracts.
 
 ### Semantic topology, fillets, chamfers, shells, offsets, and draft
 
@@ -277,7 +295,7 @@ Selectors also support curve/surface kind, edge direction, face normal, radius, 
 - Explicit outer loops and hole loops
 - Extrude, symmetric extrude, and revolve on both kernels
 - Ordered, ruled, hole-free solid lofts through parallel principal-plane profiles on the exact OCCT backend
-- Explicit open 3D polyline and three-point circular-arc paths with hole-free solid sweeps on the exact OCCT backend
+- Explicit open 3D polyline, three-point circular-arc, and ordered exact line/arc composite paths with hole-free solid sweeps on the exact OCCT backend
 - Twist and top-scale extrusion through the Manifold mesh backend
 - Union, subtraction, and intersection
 - Semantic face/edge set selectors with closed roles, sketch sources, and explicit cardinality
@@ -329,14 +347,14 @@ The solver API is replaceable. The built-in solver is intentionally a v0.1 refer
 | Whole-solid offset | OCCT inward/outward mode with fixed round joins | Yes |
 | Draft | Explicitly supplied matched owned OCCT facade with semantic face selectors | Yes |
 | Loft | OCCT ordered ruled-solid mode with matched hole-free sections | Smooth, guided, and open modes |
-| Sweep | OCCT open-polyline and one-edge circular-arc solid modes with corrected-Frenet transport | Composite, Bézier, B-spline, helix, guided, and variable-section modes |
+| Sweep | OCCT open-polyline, one-edge circular-arc, and ordered line/arc composite solid modes with corrected-Frenet transport | Major-arc composites, Bézier, B-spline, helix, guided, and variable-section modes |
 | Persistent face/edge selectors | Primitive/extrusion roles and sources; origin/geometry/adjacency queries | Yes |
 | Drawings, GD&T, PMI | No | Yes |
 | Sheet metal | No | Yes |
 | CAM and CAE adapters | No | Yes |
 | STL and OBJ export | Yes | Yes |
 
-Capabilities are negotiated by backends. InvariantCAD will not silently pretend a mesh operation is exact B-Rep or silently downgrade exact geometry. The current loft contract is deliberately bounded to ruled solids through at least two distinct, ordered, hole-free profiles on parallel planes, with matching directed curve signatures. The current sweep contract is similarly bounded to simple open polyline paths or one exact circular arc, conservative profile clearance, and fixed corrected-Frenet/right-corner semantics. Circular-arc sweeping is an additive capability, so an existing polyline-only kernel fails before evaluating unsupported path dependencies. Draft requires both the ordinary `draft` feature and `exactIndexedTopologyEvolution` v1 scoped to draft; a stock/default OCCT module advertises neither.
+Capabilities are negotiated by backends. InvariantCAD will not silently pretend a mesh operation is exact B-Rep or silently downgrade exact geometry. The current loft contract is deliberately bounded to ruled solids through at least two distinct, ordered, hole-free profiles on parallel planes, with matching directed curve signatures. The current sweep contract is similarly bounded to simple open polyline paths, one exact circular arc, or a certified ordered line/arc composite, with conservative profile clearance and fixed corrected-Frenet/right-corner semantics. Circular-arc and composite sweeping are separate additive capabilities, so an existing polyline-only kernel fails before evaluating unsupported path dependencies. Draft requires both the ordinary `draft` feature and `exactIndexedTopologyEvolution` v1 scoped to draft; a stock/default OCCT module advertises neither.
 
 ## Assemblies
 

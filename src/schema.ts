@@ -311,6 +311,33 @@ const NodeSchema = z.discriminatedUnion("kind", [
       tolerance: z.number().positive(),
     })
     .strict(),
+  z
+    .object({
+      kind: z.literal("compositePath"),
+      start: Vec3ExpressionSchema,
+      segments: z
+        .array(
+          z.discriminatedUnion("kind", [
+            z
+              .object({
+                kind: z.literal("line"),
+                end: Vec3ExpressionSchema,
+              })
+              .strict(),
+            z
+              .object({
+                kind: z.literal("circularArc"),
+                through: Vec3ExpressionSchema,
+                end: Vec3ExpressionSchema,
+              })
+              .strict(),
+          ]),
+        )
+        .min(2),
+      closed: z.literal(false),
+      tolerance: z.number().positive(),
+    })
+    .strict(),
   z.object({
     kind: z.literal("extrude"),
     profile: RefSchema,

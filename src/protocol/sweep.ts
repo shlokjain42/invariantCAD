@@ -8,12 +8,18 @@ import {
   type ResolvedProfile,
 } from "./profile.js";
 import {
+  resolvedCompositePathSegments,
   resolvedCircularArcGeometry,
   resolvedPathInitialTangent,
+  resolvedPathSegmentEndTangent,
+  resolvedPathSegmentLength,
+  resolvedPathSegmentsHaveClearance,
+  resolvedPathSegmentStartTangent,
   resolvedPathStart,
   resolvedPolylineSegmentDistance,
   validateResolvedPath,
   type PathValidationReason,
+  type ResolvedCompositePath,
   type ResolvedPath,
 } from "./path.js";
 
@@ -211,10 +217,18 @@ export function validateResolvedSweep(
     };
   }
   const tangent = resolvedPathInitialTangent(path);
+  const firstCompositeSegment =
+    path.kind === "composite"
+      ? resolvedCompositePathSegments(path)[0]!
+      : undefined;
   const tangentScale =
     path.kind === "polyline"
       ? distance(path.points[0]!, path.points[1]!)
-      : resolvedCircularArcGeometry(path)!.radius;
+      : path.kind === "circularArc"
+        ? resolvedCircularArcGeometry(path)!.radius
+        : firstCompositeSegment!.kind === "circularArc"
+          ? resolvedCircularArcGeometry(firstCompositeSegment!)!.radius
+          : resolvedPathSegmentLength(firstCompositeSegment!);
   const normal = planeNormal(profile);
   const cross: Vec3 = [
     normal[1] * tangent[2] - normal[2] * tangent[1],
@@ -253,7 +267,7 @@ export function validateResolvedSweep(
         }
       }
     }
-  } else {
+  } else if (path.kind === "circularArc") {
     const geometry = resolvedCircularArcGeometry(path)!;
     if (!(geometry.radius > radius + tolerance)) {
       return {
@@ -263,6 +277,70 @@ export function validateResolvedSweep(
         input: "path",
         segmentIndex: 0,
       };
+    }
+  } else {
+    const segments = resolvedCompositePathSegments(
+      path as ResolvedCompositePath,
+    );
+    for (const [index, segment] of segments.entries()) {
+      if (
+        segment.kind === "circularArc" &&
+        !(resolvedCircularArcGeometry(segment)!.radius > radius + tolerance)
+      ) {
+        return {
+          reason: "path-clearance",
+          message:
+            "Every composite circular-arc radius must exceed the profile envelope radius",
+          input: "path",
+          segmentIndex: index,
+        };
+      }
+    }
+    for (let index = 1; index < segments.length; index += 1) {
+      const prior = segments[index - 1]!;
+      const current = segments[index]!;
+      if (prior.kind === "line" && current.kind === "line") continue;
+      const priorTangent = resolvedPathSegmentEndTangent(prior);
+      const currentTangent = resolvedPathSegmentStartTangent(current);
+      const mismatch = Math.hypot(
+        priorTangent[1] * currentTangent[2] -
+          priorTangent[2] * currentTangent[1],
+        priorTangent[2] * currentTangent[0] -
+          priorTangent[0] * currentTangent[2],
+        priorTangent[0] * currentTangent[1] -
+          priorTangent[1] * currentTangent[0],
+      );
+      if (radius * mismatch > tolerance) {
+        return {
+          reason: "path-clearance",
+          message:
+            "Composite arc-junction tangent mismatch exceeds the profile-envelope tolerance",
+          input: "path",
+          segmentIndex: index,
+          otherSegmentIndex: index - 1,
+        };
+      }
+    }
+    const clearance = radius * 2 + tolerance;
+    for (let first = 0; first < segments.length; first += 1) {
+      for (let second = first + 2; second < segments.length; second += 1) {
+        if (
+          !resolvedPathSegmentsHaveClearance(
+            segments[first]!,
+            segments[second]!,
+            clearance,
+          )
+        ) {
+          return {
+            reason: "path-clearance",
+            message:
+              "Non-adjacent composite path segments are too close for the profile envelope or cannot be certified clear",
+            input: "path",
+            segmentIndex: second,
+            otherSegmentIndex: first,
+          };
+        }
+      }
     }
   }
   return undefined;

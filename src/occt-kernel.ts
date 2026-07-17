@@ -41,10 +41,15 @@ import {
   type ResolvedLoftOptions,
 } from "./protocol/loft.js";
 import {
+  resolvedCompositePathSegments,
   resolvedCircularArcGeometry,
   resolvedPathEdgeCount,
+  resolvedPathSegmentLength,
+  type ResolvedCircularArcDefinition,
   type ResolvedCircularArcPath,
+  type ResolvedCompositePath,
   type ResolvedPath,
+  type ResolvedPathSegment,
   type ResolvedPolylinePath,
 } from "./protocol/path.js";
 import {
@@ -164,6 +169,14 @@ function vectorFromOcct(value: OcctVec3): Vec3 {
   return [value.x, value.y, value.z];
 }
 
+function vectorDistance(first: Vec3, second: Vec3): number {
+  return Math.hypot(
+    first[0] - second[0],
+    first[1] - second[1],
+    first[2] - second[2],
+  );
+}
+
 function topologyKey(
   namespace: number,
   serial: number,
@@ -237,7 +250,9 @@ const OCCT_PIPE_SHELL_LINEAR_TOLERANCE = 1e-4;
 // three authored arc points below this scale-independent conditioning floor.
 const OCCT_CIRCULAR_ARC_MIN_POINT_SINE = 3e-8;
 
-function circularArcMinimumPointSine(path: ResolvedCircularArcPath): number {
+function circularArcMinimumPointSine(
+  path: ResolvedCircularArcDefinition,
+): number {
   const through: Vec3 = [
     path.through[0] - path.start[0],
     path.through[1] - path.start[1],
@@ -386,6 +401,7 @@ class OcctKernel implements GeometryKernel {
       "loft",
       "sweep",
       "circularArcSweep",
+      "compositeSweep",
       "boolean",
       "transform",
       "fillet",
@@ -1246,6 +1262,18 @@ class OcctKernel implements GeometryKernel {
     return this.sweepPath(profile, path, options, context);
   }
 
+  compositeSweep(
+    profile: ResolvedProfile,
+    path: ResolvedCompositePath,
+    options: ResolvedSweepOptions,
+    context?: KernelFeatureContext,
+  ): KernelShape {
+    if (path.kind !== "composite") {
+      throw new TypeError("Composite sweep requires an exact composite path");
+    }
+    return this.sweepPath(profile, path, options, context);
+  }
+
   private sweepPath(
     profile: ResolvedProfile,
     path: ResolvedPath,
@@ -1268,7 +1296,7 @@ class OcctKernel implements GeometryKernel {
       throw new RangeError("Path tolerance must be finite and positive");
     }
     const tolerance =
-      path.kind === "circularArc"
+      path.kind === "circularArc" || path.kind === "composite"
         ? Math.max(requestedTolerance, this.modelingTolerance)
         : requestedTolerance;
     const issue = validateResolvedSweep(profile, path, tolerance);
@@ -1284,7 +1312,22 @@ class OcctKernel implements GeometryKernel {
         `Circular-arc path points must exceed the OCCT three-point angular resolution (sine > ${OCCT_CIRCULAR_ARC_MIN_POINT_SINE})`,
       );
     }
-    if (path.kind === "polyline") {
+    if (path.kind === "composite") {
+      const poorlyConditionedArc = resolvedCompositePathSegments(path).findIndex(
+        (segment) =>
+          segment.kind === "circularArc" &&
+          !(
+            circularArcMinimumPointSine(segment) >
+            OCCT_CIRCULAR_ARC_MIN_POINT_SINE
+          ),
+      );
+      if (poorlyConditionedArc !== -1) {
+        throw new RangeError(
+          `Composite circular-arc segment ${poorlyConditionedArc} points must exceed the OCCT three-point angular resolution (sine > ${OCCT_CIRCULAR_ARC_MIN_POINT_SINE})`,
+        );
+      }
+    }
+    if (path.kind === "polyline" || path.kind === "composite") {
       const shortProfileCurve = profile.outer.curves.findIndex(
         (curve) =>
           !(resolvedProfileCurveLength(curve) >
@@ -1295,14 +1338,26 @@ class OcctKernel implements GeometryKernel {
           `Sweep profile curve ${shortProfileCurve} must exceed the OCCT pipe-shell linear tolerance (${OCCT_PIPE_SHELL_LINEAR_TOLERANCE} mm)`,
         );
       }
-      const shortPathSegment = path.points.findIndex(
-        (point, index) =>
-          index < path.points.length - 1 &&
-          !(Math.hypot(
-            path.points[index + 1]![0] - point[0],
-            path.points[index + 1]![1] - point[1],
-            path.points[index + 1]![2] - point[2],
-          ) > OCCT_PIPE_SHELL_LINEAR_TOLERANCE),
+      const pipeSegments: readonly ResolvedPathSegment[] =
+        path.kind === "polyline"
+          ? path.points.slice(0, -1).map((start, index) => ({
+              kind: "line" as const,
+              start,
+              end: path.points[index + 1]!,
+            }))
+          : resolvedCompositePathSegments(path);
+      const shortPathSegment = pipeSegments.findIndex(
+        (segment) =>
+          !(resolvedPathSegmentLength(segment) >
+            OCCT_PIPE_SHELL_LINEAR_TOLERANCE) ||
+          (segment.kind === "circularArc" &&
+            !(
+              Math.min(
+                vectorDistance(segment.start, segment.through),
+                vectorDistance(segment.through, segment.end),
+                vectorDistance(segment.start, segment.end),
+              ) > OCCT_PIPE_SHELL_LINEAR_TOLERANCE
+            )),
       );
       if (shortPathSegment !== -1) {
         throw new RangeError(
@@ -1312,7 +1367,7 @@ class OcctKernel implements GeometryKernel {
     }
 
     const seatedProfile: ResolvedProfile =
-      path.kind === "circularArc"
+      path.kind === "circularArc" || path.kind === "composite"
         ? {
             ...profile,
             plane: { ...profile.plane, origin: path.start },
@@ -1380,14 +1435,30 @@ class OcctKernel implements GeometryKernel {
       }
 
       const segmentCount = resolvedPathEdgeCount(path);
-      if (path.kind === "polyline") {
+      if (path.kind !== "circularArc") {
+        const pipeSegments: readonly ResolvedPathSegment[] =
+          path.kind === "polyline"
+            ? path.points.slice(0, -1).map((start, index) => ({
+                kind: "line" as const,
+                start,
+                end: path.points[index + 1]!,
+              }))
+            : resolvedCompositePathSegments(path);
         const pathEdges: ShapeHandle[] = [];
-        for (let index = 0; index < path.points.length - 1; index += 1) {
+        let expectedPathLength = 0;
+        for (const [index, segment] of pipeSegments.entries()) {
           checkContext(context);
-          const edge = this.raw.makeLineEdge(
-            occtVector(path.points[index]!),
-            occtVector(path.points[index + 1]!),
-          );
+          const edge =
+            segment.kind === "line"
+              ? this.raw.makeLineEdge(
+                  occtVector(segment.start),
+                  occtVector(segment.end),
+                )
+              : this.raw.makeArcEdge(
+                  occtVector(segment.start),
+                  occtVector(segment.through),
+                  occtVector(segment.end),
+                );
           pathAllocated.push(edge);
           pathEdges.push(edge);
           if (
@@ -1399,6 +1470,46 @@ class OcctKernel implements GeometryKernel {
             throw new RangeError(
               `Sweep path segment ${index} does not form a valid edge`,
             );
+          }
+          const expectedLength = resolvedPathSegmentLength(segment);
+          expectedPathLength += expectedLength;
+          if (path.kind === "composite") {
+            const measuredLength = this.raw.curveLength(edge);
+            const lengthTolerance = Math.max(
+              this.modelingTolerance * 8,
+              expectedLength * 1e-9,
+            );
+            const expectedCurveType =
+              segment.kind === "line" ? "line" : "circle";
+            if (
+              this.raw.curveType(edge) !== expectedCurveType ||
+              this.raw.curveIsClosed(edge) ||
+              !Number.isFinite(measuredLength) ||
+              Math.abs(measuredLength - expectedLength) > lengthTolerance
+            ) {
+              throw new RangeError(
+                `Composite sweep path segment ${index} changed its exact curve geometry`,
+              );
+            }
+            const parameters = this.raw.curveParameters(edge);
+            const nativeStart = vectorFromOcct(
+              this.raw.curvePointAtParam(edge, parameters.first),
+            );
+            const nativeEnd = vectorFromOcct(
+              this.raw.curvePointAtParam(edge, parameters.last),
+            );
+            const endpointTolerance = Math.max(
+              this.modelingTolerance * 8,
+              1e-10,
+            );
+            if (
+              vectorDistance(nativeStart, segment.start) > endpointTolerance ||
+              vectorDistance(nativeEnd, segment.end) > endpointTolerance
+            ) {
+              throw new RangeError(
+                `Composite sweep path segment ${index} changed its authored endpoints`,
+              );
+            }
           }
         }
         const spine = this.raw.makeWire(pathEdges);
@@ -1413,6 +1524,51 @@ class OcctKernel implements GeometryKernel {
           throw new RangeError(
             "Sweep path does not form one valid unmodified open wire",
           );
+        }
+        if (path.kind === "composite") {
+          const expectedVertices = [
+            path.start,
+            ...path.segments.map((segment) => segment.end),
+          ];
+          const spineVertices = this.raw.getSubShapes(spine, "vertex");
+          try {
+            const positions = spineVertices.map((vertex) =>
+              vectorFromOcct(this.raw.vertexPosition(vertex)),
+            );
+            const endpointTolerance = Math.max(
+              this.modelingTolerance * 8,
+              1e-10,
+            );
+            if (
+              positions.length !== expectedVertices.length ||
+              expectedVertices.some(
+                (expected) =>
+                  positions.filter(
+                    (position) =>
+                      vectorDistance(position, expected) <= endpointTolerance,
+                  ).length !== 1,
+              )
+            ) {
+              throw new RangeError(
+                "Composite sweep path wire changed its authored joints",
+              );
+            }
+          } finally {
+            this.releaseHandles(spineVertices);
+          }
+          const measuredPathLength = this.raw.getLength(spine);
+          if (
+            !Number.isFinite(measuredPathLength) ||
+            Math.abs(measuredPathLength - expectedPathLength) >
+              Math.max(
+                this.modelingTolerance * segmentCount * 8,
+                expectedPathLength * 1e-9,
+              )
+          ) {
+            throw new RangeError(
+              "Composite sweep path wire changed its exact authored length",
+            );
+          }
         }
         checkContext(context);
         result = this.raw.sweep(

@@ -856,6 +856,65 @@ function validateNode(
         );
       }
       break;
+    case "compositePath":
+      if (node.segments.length < 2) {
+        diagnostics.push(
+          diagnostic(
+            "FEATURE_INVALID",
+            "A composite path requires at least two ordered segments",
+            { severity: "error", node: id, path: `${path}/segments` },
+          ),
+        );
+      }
+      if (!node.segments.some((segment) => segment.kind === "circularArc")) {
+        diagnostics.push(
+          diagnostic(
+            "FEATURE_INVALID",
+            "A composite path requires at least one circular-arc segment; use polylinePath for line-only paths",
+            { severity: "error", node: id, path: `${path}/segments` },
+          ),
+        );
+      }
+      node.start.forEach((value, coordinateIndex) =>
+        expression(value, "length", `start/${coordinateIndex}`),
+      );
+      node.segments.forEach((segment, segmentIndex) => {
+        if (segment.kind === "circularArc") {
+          segment.through.forEach((value, coordinateIndex) =>
+            expression(
+              value,
+              "length",
+              `segments/${segmentIndex}/through/${coordinateIndex}`,
+            ),
+          );
+        }
+        segment.end.forEach((value, coordinateIndex) =>
+          expression(
+            value,
+            "length",
+            `segments/${segmentIndex}/end/${coordinateIndex}`,
+          ),
+        );
+      });
+      if (node.closed !== false) {
+        diagnostics.push(
+          diagnostic(
+            "FEATURE_INVALID",
+            "Document v1 composite paths must be open",
+            { severity: "error", node: id, path: `${path}/closed` },
+          ),
+        );
+      }
+      if (!Number.isFinite(node.tolerance) || !(node.tolerance > 0)) {
+        diagnostics.push(
+          diagnostic(
+            "FEATURE_INVALID",
+            "Composite path tolerance must be finite and positive",
+            { severity: "error", node: id, path: `${path}/tolerance` },
+          ),
+        );
+      }
+      break;
     case "extrude":
       validateRef(node.profile, "profile", document, `${path}/profile`, diagnostics);
       expression(node.distance, "length", "distance");

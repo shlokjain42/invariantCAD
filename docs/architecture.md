@@ -120,8 +120,9 @@ Evaluated shapes are owned by exactly one evaluation result. Disposing that resu
 - Loft section stations follow the sketch-plane normal and must be strictly monotonic; document-v1 lofts are ruled solids with ordered curve-index correspondence.
 - Polyline sweep paths are open, explicitly segmented 3D values. Document-v1 solid sweeps seat a hole-free profile at the path start, require its plane normal to be parallel to the first segment in either direction, and use corrected-Frenet transport with right-corner intersection transitions.
 - Circular-arc sweep paths are one exact oriented circle trajectory selected by authored start, through, and end points. They use the analytic start tangent, admit minor or major arcs below one full turn, and require the profile envelope to remain strictly inside the circumradius. For one circular edge, corrected-Frenet transport is exactly a revolution about the resolved circle axis; the OCCT adapter snaps a profile origin already within the admitted tolerance to the exact path start, uses that specialized construction, supports near-full open arcs without an artificial endpoint-clearance rule, and adds a minimum three-point triangle-angle sine floor of `3e-8`.
+- Composite sweep paths are ordered exact line/circular-arc chains. Every segment start is structurally the preceding endpoint, so no tolerance healing or independent reorientation is permitted. The current bounded contract requires at least two segments and one arc, permits right-corner line-line joins, requires forward G1 tangency at every arc-bearing join, bounds adjacent arc pairs to a `(π - junctionTurn) * min(radius)` local-curvature reach, rejects redundant same-line/same-circle splits, limits composite arcs to minor or semicircular traversal, and certifies nonadjacent line/arc separation with recursive chord-and-sagitta lower bounds rather than sampling. Numeric ambiguity fails explicitly instead of becoming sampled acceptance.
 - Circular-revolution results retain the exact swept volume computed from the planar profile area, the profile-normal component of its centroid's rotational velocity, and the selected sweep. This is Pappus's theorem under exact tangent alignment and remains correct for the small tolerance-admitted angular mismatch. It avoids cancellation in OCCT's native volume integration for very thin sections at large radii; rigid transforms preserve the value and scale transforms apply their absolute determinant.
-- The current OCCT pipe-shell transfer is used for polyline sweeps and rejects profile or spine edges at or below its fixed `1e-4 mm` linear/boundary tolerance before allocating native sweep topology.
+- The current OCCT pipe-shell transfer is used for polyline and composite sweeps and rejects profile or spine edges at or below its fixed `1e-4 mm` linear/boundary tolerance before allocating native sweep topology. Composite arcs also require all three authored point-pair separations above that floor and the `3e-8` three-point conditioning floor. Exact segment type, endpoints, length, wire cardinality/length, result validity, body purity, and segment-to-profile face correspondence are checked before ownership transfers.
 - Transform operations are applied in list order.
 
 ## Backend conformance
@@ -131,7 +132,7 @@ Every geometry kernel should run the same corpus for:
 - primitives and transforms;
 - nested profile holes;
 - extrude, partial/full revolve, and bounded ruled solid lofts;
-- explicit open polyline/circular-arc paths and bounded exact solid sweeps;
+- explicit open polyline/circular-arc/composite paths and bounded exact solid sweeps;
 - overlapping and empty booleans;
 - bounds, volume, surface area, and topological class;
 - parameter extremes and degenerate geometry;
@@ -143,7 +144,7 @@ Every geometry kernel should run the same corpus for:
 - exact whole-solid offsets, fixed round joins, direction/volume monotonicity, strict body cardinality, and collapse rejection;
 - atomic semantic-face draft, signed-angle bounds, independent pull/neutral-plane vectors, exact indexed evolution, and transactional ownership;
 - ruled loft profile compatibility, monotonic section order, strict output topology cardinality, and transactional ownership;
-- polyline and circular-arc sweep simplicity/clearance, additive capabilities, frame and transition semantics, strict one-body validation, and transactional ownership;
+- polyline, circular-arc, and composite sweep simplicity/clearance, additive capabilities, frame and transition semantics, strict one-body validation, and transactional ownership;
 - Node and browser initialization.
 
 Results are compared by tolerances and topological expectations, never by triangle ordering or exported-file bytes.

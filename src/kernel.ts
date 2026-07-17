@@ -5,6 +5,7 @@ import type { ResolvedShellOptions } from "./protocol/shell.js";
 import type { ResolvedOffsetOptions } from "./protocol/offset.js";
 import type { ResolvedLoftOptions } from "./protocol/loft.js";
 import type {
+  ResolvedCompositePath,
   ResolvedCircularArcPath,
   ResolvedPolylinePath,
 } from "./protocol/path.js";
@@ -23,6 +24,7 @@ export type KernelFeature =
   | "loft"
   | "sweep"
   | "circularArcSweep"
+  | "compositeSweep"
   | "boolean"
   | "transform"
   | "fillet"
@@ -205,6 +207,12 @@ export interface GeometryKernel {
   circularArcSweep?(
     profile: ResolvedProfile,
     path: ResolvedCircularArcPath,
+    options: ResolvedSweepOptions,
+    context?: KernelFeatureContext,
+  ): KernelShape;
+  compositeSweep?(
+    profile: ResolvedProfile,
+    path: ResolvedCompositePath,
     options: ResolvedSweepOptions,
     context?: KernelFeatureContext,
   ): KernelShape;

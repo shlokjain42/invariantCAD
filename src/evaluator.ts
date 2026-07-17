@@ -56,6 +56,7 @@ import { validateRuledSolidLoftProfiles } from "./protocol/loft.js";
 import {
   validateResolvedPath,
   type ResolvedCircularArcPath,
+  type ResolvedCompositePath,
   type ResolvedPath,
 } from "./protocol/path.js";
 import { validateResolvedSweep } from "./protocol/sweep.js";
@@ -1221,6 +1222,50 @@ export class Evaluator {
             result = { kind: "path", path, tolerance: node.tolerance };
             break;
           }
+          case "compositePath": {
+            const point = (value: typeof node.start): Vec3 =>
+              value.map(expression) as unknown as Vec3;
+            const path: ResolvedCompositePath = {
+              kind: "composite",
+              start: point(node.start),
+              segments: node.segments.map((segment) =>
+                segment.kind === "line"
+                  ? { kind: "line", end: point(segment.end) }
+                  : {
+                      kind: "circularArc",
+                      through: point(segment.through),
+                      end: point(segment.end),
+                    },
+              ),
+              closed: node.closed,
+            };
+            const issue = validateResolvedPath(path, node.tolerance);
+            if (issue !== undefined) {
+              const { message, segmentIndex, pointRole, ...details } = issue;
+              const issuePath =
+                segmentIndex === undefined
+                  ? pointRole === "start"
+                    ? `/nodes/${id}/start`
+                    : `/nodes/${id}`
+                  : pointRole === "through" || pointRole === "end"
+                    ? `/nodes/${id}/segments/${segmentIndex}/${pointRole}`
+                    : `/nodes/${id}/segments/${segmentIndex}`;
+              throw new EvaluationFailure(
+                diagnostic("FEATURE_INVALID", message, {
+                  severity: "error",
+                  node: id,
+                  path: issuePath,
+                  details: {
+                    ...details,
+                    ...(segmentIndex === undefined ? {} : { segmentIndex }),
+                    ...(pointRole === undefined ? {} : { pointRole }),
+                  },
+                }),
+              );
+            }
+            result = { kind: "path", path, tolerance: node.tolerance };
+            break;
+          }
           case "extrude": {
             requireKernelCapability("feature", "extrude", id);
             const profile = evaluateNode(node.profile.node);
@@ -1306,7 +1351,9 @@ export class Evaluator {
             const capability =
               pathNode?.kind === "circularArcPath"
                 ? "circularArcSweep"
-                : "sweep";
+                : pathNode?.kind === "compositePath"
+                  ? "compositeSweep"
+                  : "sweep";
             requireKernelCapability("feature", capability, id);
             const profileValue = evaluateNode(node.profile.node);
             if (profileValue.kind !== "profile") {
@@ -1345,12 +1392,19 @@ export class Evaluator {
                     { transition: node.transition, frame: node.frame },
                     { ...featureContext(id), tolerance },
                   )
-                : this.kernel.sweep!(
-                    profileValue.profile,
-                    pathValue.path,
-                    { transition: node.transition, frame: node.frame },
-                    { ...featureContext(id), tolerance },
-                  ),
+                : pathValue.path.kind === "composite"
+                  ? this.kernel.compositeSweep!(
+                      profileValue.profile,
+                      pathValue.path,
+                      { transition: node.transition, frame: node.frame },
+                      { ...featureContext(id), tolerance },
+                    )
+                  : this.kernel.sweep!(
+                      profileValue.profile,
+                      pathValue.path,
+                      { transition: node.transition, frame: node.frame },
+                      { ...featureContext(id), tolerance },
+                    ),
               id,
             );
             break;

@@ -104,6 +104,17 @@ export interface ParameterOptions<D extends Dimension> {
   readonly description?: string;
 }
 
+export type CompositePathSegmentExpression =
+  | {
+      readonly kind: "line";
+      readonly end: Vec3Expression;
+    }
+  | {
+      readonly kind: "circularArc";
+      readonly through: Vec3Expression;
+      readonly end: Vec3Expression;
+    };
+
 export interface Plane {
   readonly ir: PlaneIR;
 }
@@ -387,6 +398,50 @@ export class DesignBuilder {
       start: vector(points.start),
       through: vector(points.through),
       end: vector(points.end),
+      closed: false,
+      tolerance,
+    });
+    return new PathRef(this, key);
+  }
+
+  compositePath(
+    id: string,
+    path: {
+      readonly start: Vec3Expression;
+      readonly segments: readonly CompositePathSegmentExpression[];
+    },
+    options: { readonly tolerance?: number } = {},
+  ): PathRef {
+    if (path.segments.length < 2) {
+      throw new TypeError(
+        "A composite path requires at least two ordered segments",
+      );
+    }
+    if (!path.segments.some((segment) => segment.kind === "circularArc")) {
+      throw new TypeError(
+        "A composite path requires at least one circular-arc segment; use polylinePath for line-only paths",
+      );
+    }
+    const tolerance = options.tolerance ?? 1e-7;
+    if (!Number.isFinite(tolerance) || !(tolerance > 0)) {
+      throw new RangeError(
+        "Composite path tolerance must be finite and positive",
+      );
+    }
+    const vector = (point: Vec3Expression) =>
+      [point[0].ir, point[1].ir, point[2].ir] as const;
+    const key = this.addNode(id, {
+      kind: "compositePath",
+      start: vector(path.start),
+      segments: path.segments.map((segment) =>
+        segment.kind === "line"
+          ? { kind: "line", end: vector(segment.end) }
+          : {
+              kind: "circularArc",
+              through: vector(segment.through),
+              end: vector(segment.end),
+            },
+      ),
       closed: false,
       tolerance,
     });

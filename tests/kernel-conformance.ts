@@ -8,6 +8,7 @@ import {
 import type { ResolvedLoop, ResolvedProfile } from "../src/index.js";
 import type {
   ResolvedCircularArcPath,
+  ResolvedCompositePath,
   ResolvedPolylinePath,
 } from "../src/index.js";
 import { EXACT_INDEXED_TOPOLOGY_EVOLUTION_PROTOCOL_VERSION } from "../src/kernel.js";
@@ -534,6 +535,44 @@ export function geometryKernelConformance(
         expectLiveShape(sweep),
         "volume",
         20 * Math.PI,
+        relativeTolerance,
+      );
+      kernel.disposeShape(sweep);
+    });
+
+    it("sweeps a closed profile along an exact composite path when declared", () => {
+      if (!kernelSupports(kernel.capabilities, "feature", "compositeSweep")) {
+        return;
+      }
+      const profile: ResolvedProfile = {
+        plane: { plane: "YZ", origin: [0, 0, 0] },
+        outer: rectangleLoop(-1, -1, 1, 1),
+        holes: [],
+      };
+      const path: ResolvedCompositePath = {
+        kind: "composite",
+        start: [0, 0, 0],
+        segments: [
+          { kind: "line", end: [5, 0, 0] },
+          {
+            kind: "circularArc",
+            through: [5 + 5 * Math.SQRT1_2, 5 - 5 * Math.SQRT1_2, 0],
+            end: [10, 5, 0],
+          },
+          { kind: "line", end: [10, 10, 0] },
+        ],
+        closed: false,
+      };
+      const sweep = kernel.compositeSweep!(
+        profile,
+        path,
+        { frame: "corrected-frenet", transition: "right-corner" },
+        { tolerance: 1e-7 },
+      );
+      expectMeasurement(
+        expectLiveShape(sweep),
+        "volume",
+        40 + 10 * Math.PI,
         relativeTolerance,
       );
       kernel.disposeShape(sweep);

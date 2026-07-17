@@ -6,6 +6,7 @@
 - Added strict profile compatibility, station ordering, exact OCCT result-topology validation, capability negotiation, and conformance coverage for the bounded loft contract.
 - Added first-class parameterized open 3D polyline paths and a bounded exact solid-sweep contract with corrected-Frenet transport, right-corner transitions, conservative self-overlap rejection, transactional OCCT ownership, and package-level coverage.
 - Added exact three-point 3D circular-arc paths and additive circular-arc sweep capability negotiation with analytic curvature clearance, specialized OCCT revolution transfer, and stable analytic volume measurement.
+- Added structurally connected ordered line/arc composite paths, certified exact path clearance, additive composite-sweep capability negotiation, and one-wire transactional OCCT PipeShell transfer.
 - Fixed nonuniform OCCT transforms of already-meshed exact shapes by stripping stale triangulation before applying the affine map.
 
 - Preserve analytic sketch lines, arcs, circles, and their source entity IDs in resolved profiles

@@ -197,6 +197,33 @@ export interface CircularArcPathNodeIR {
   readonly tolerance: number;
 }
 
+export interface CompositeLinePathSegmentIR {
+  readonly kind: "line";
+  /** The start is the preceding segment endpoint, or the path start. */
+  readonly end: Vec3ExpressionIR;
+}
+
+export interface CompositeCircularArcPathSegmentIR {
+  readonly kind: "circularArc";
+  /** Authored interior point selecting the exact oriented arc. */
+  readonly through: Vec3ExpressionIR;
+  /** The start is the preceding segment endpoint, or the path start. */
+  readonly end: Vec3ExpressionIR;
+}
+
+export type CompositePathSegmentIR =
+  | CompositeLinePathSegmentIR
+  | CompositeCircularArcPathSegmentIR;
+
+export interface CompositePathNodeIR {
+  readonly kind: "compositePath";
+  readonly start: Vec3ExpressionIR;
+  /** Ordered exact segments whose starts are structurally connected. */
+  readonly segments: readonly CompositePathSegmentIR[];
+  readonly closed: false;
+  readonly tolerance: number;
+}
+
 export interface ExtrudeNodeIR {
   readonly kind: "extrude";
   readonly profile: RefIR<"profile">;
@@ -395,6 +422,7 @@ export type NodeIR =
   | SketchNodeIR
   | PolylinePathNodeIR
   | CircularArcPathNodeIR
+  | CompositePathNodeIR
   | ExtrudeNodeIR
   | RevolveNodeIR
   | LoftNodeIR
@@ -433,6 +461,7 @@ export function nodeDependencies(node: NodeIR): readonly RefIR[] {
     case "sketch":
     case "polylinePath":
     case "circularArcPath":
+    case "compositePath":
       return [];
     case "extrude":
     case "revolve":
@@ -464,6 +493,7 @@ export function outputKindForNode(node: NodeIR): OutputKind {
       return "profile";
     case "polylinePath":
     case "circularArcPath":
+    case "compositePath":
       return "path";
     case "part":
       return "part";
