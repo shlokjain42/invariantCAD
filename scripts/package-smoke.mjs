@@ -93,7 +93,7 @@ try {
     join(consumer, "smoke.mjs"),
     [
       'import { writeFile } from "node:fs/promises";',
-      'import { OFFSET_DIRECTIONS, OFFSET_JOIN_SEMANTICS, SHELL_DIRECTIONS, SHELL_JOIN_SEMANTICS, SWEEP_FRAMES, SWEEP_TRANSITIONS, TOPOLOGY_ROLE_RULES, angleVec3, createEvaluator, deg, design, kernelSupports, mm, plane, scalarVec3, stringifyDocument, tf, topology, vec3 } from "invariantcad";',
+      'import { CIRCULAR_ARC_PATH_MIN_POINT_SINE, OFFSET_DIRECTIONS, OFFSET_JOIN_SEMANTICS, SHELL_DIRECTIONS, SHELL_JOIN_SEMANTICS, SWEEP_FRAMES, SWEEP_TRANSITIONS, TOPOLOGY_ROLE_RULES, angleVec3, createEvaluator, deg, design, kernelSupports, mm, plane, scalarVec3, stringifyDocument, tf, topology, vec3 } from "invariantcad";',
       'import { createOcctKernel } from "invariantcad/kernels/occt";',
       "",
       'const cad = design("package-smoke");',
@@ -133,6 +133,10 @@ try {
       '  if (SWEEP_FRAMES.join(",") !== "corrected-frenet" || SWEEP_TRANSITIONS.join(",") !== "right-corner") throw new Error("Sweep semantic registries were not packaged");',
       '  const directSweep = exactKernel.sweep({ plane: { plane: "YZ", origin: [0, 0, 0] }, outer: { curves: [{ kind: "line", start: [-1, -1], end: [1, -1] }, { kind: "line", start: [1, -1], end: [1, 1] }, { kind: "line", start: [1, 1], end: [-1, 1] }, { kind: "line", start: [-1, 1], end: [-1, -1] }] }, holes: [] }, { kind: "polyline", points: [[0, 0, 0], [5, 0, 0], [5, 5, 0]], closed: false }, { frame: "corrected-frenet", transition: "right-corner" }, { tolerance: 1e-7 });',
       '  if (Math.abs(exactKernel.measure(directSweep).volume - 40) > 1e-8) throw new Error("Unexpected exact sweep volume");',
+      '  if (!kernelSupports(exactKernel.capabilities, "feature", "circularArcSweep")) throw new Error("Exact circular-arc sweep capability was not packaged");',
+      '  if (CIRCULAR_ARC_PATH_MIN_POINT_SINE !== 1e-10) throw new Error("Circular-arc path conditioning constant was not packaged");',
+      '  const directArcSweep = exactKernel.circularArcSweep({ plane: { plane: "YZ", origin: [0, 0, 0] }, outer: { curves: [{ kind: "line", start: [-1, -1], end: [1, -1] }, { kind: "line", start: [1, -1], end: [1, 1] }, { kind: "line", start: [1, 1], end: [-1, 1] }, { kind: "line", start: [-1, 1], end: [-1, -1] }] }, holes: [] }, { kind: "circularArc", start: [0, 0, 0], through: [10 / Math.sqrt(2), 10 - 10 / Math.sqrt(2), 0], end: [10, 10, 0], closed: false }, { frame: "corrected-frenet", transition: "right-corner" }, { tolerance: 1e-7 });',
+      '  if (Math.abs(exactKernel.measure(directArcSweep).volume - 20 * Math.PI) > 1e-8) throw new Error("Unexpected exact circular-arc sweep volume");',
       "  const vertical = snapshot.edges.filter((edge) => Math.abs(edge.curve.direction?.[2] ?? 0) > 0.999);",
       '  if (vertical.length !== 4) throw new Error("Unexpected vertical edge count");',
       "  const rounded = exactKernel.fillet(exactBox, vertical.map((edge) => edge.key), { radius: 0.2 });",
@@ -148,6 +152,7 @@ try {
       "  exactKernel.disposeShape(expanded);",
       "  exactKernel.disposeShape(directLoft);",
       "  exactKernel.disposeShape(directSweep);",
+      "  exactKernel.disposeShape(directArcSweep);",
       "  exactKernel.disposeShape(beveled);",
       "  exactKernel.disposeShape(rounded);",
       "  exactKernel.disposeShape(exactBox);",
@@ -262,6 +267,27 @@ try {
       '} finally {',
       '  sweepEvaluator.dispose();',
       '}',
+      'const arcSweepCad = design("package-circular-arc-sweep");',
+      'const arcSweepProfile = arcSweepCad.sketch("profile", plane.yz(), (sketch) => sketch.profile(sketch.rectangle("section", { width: mm(2), height: mm(2) })));',
+      'const arcSweepPath = arcSweepCad.circularArcPath("path", { start: vec3(mm(0), mm(0), mm(0)), through: vec3(mm(10 / Math.sqrt(2)), mm(10 - 10 / Math.sqrt(2)), mm(0)), end: vec3(mm(10), mm(10), mm(0)) });',
+      'arcSweepCad.output("sweep", arcSweepCad.sweep("sweep", arcSweepProfile, arcSweepPath));',
+      'const arcSweepDocument = arcSweepCad.build();',
+      'const arcSweepJson = stringifyDocument(arcSweepDocument);',
+      'if (!arcSweepJson.includes("circularArcPath") || !arcSweepJson.includes("through")) throw new Error("Circular-arc sweep was not serialized");',
+      'await writeFile("model-circular-arc-sweep.invariantcad.json", arcSweepJson);',
+      'const arcSweepEvaluator = await createEvaluator({ kernel: await createOcctKernel() });',
+      'try {',
+      '  const result = await arcSweepEvaluator.evaluate(arcSweepDocument);',
+      '  if (!result.ok) throw new Error(JSON.stringify(result.diagnostics));',
+      '  try {',
+      '    const volume = result.value.output("sweep").measure().volume;',
+      '    if (Math.abs(volume - 20 * Math.PI) > 1e-8) throw new Error("Unexpected semantic circular-arc sweep volume " + volume);',
+      '  } finally {',
+      '    result.value.dispose();',
+      '  }',
+      '} finally {',
+      '  arcSweepEvaluator.dispose();',
+      '}',
       'const filletCad = design("package-fillet");',
       'const filletBox = filletCad.box("box", { size: vec3(mm(10), mm(20), mm(30)) });',
       'const filletEdges = topology.edges.createdBy(filletBox).and(topology.edges.direction(scalarVec3(0, 0, 1))).exactly(4);',
@@ -354,7 +380,7 @@ try {
   await writeFile(
     join(consumer, "type-smoke.ts"),
     [
-      'import { EDGE_TOPOLOGY_ROLES, FACE_TOPOLOGY_ROLES, OFFSET_DIRECTIONS, SHELL_DIRECTIONS, TOPOLOGY_ROLE_RULES, TOPOLOGY_ROLES, angleVec3, deg, design, mm, plane, scalarVec3, tf, topology, vec3, type ChamferNodeIR, type DesignDocument, type DraftNodeIR, type EdgeTopologyRole, type FaceTopologyRole, type LoftNodeIR, type OffsetDirection, type OffsetNodeIR, type PathRef, type PolylinePathNodeIR, type ProfileRef, type ShellDirection, type ShellNodeIR, type SolidRef, type SweepNodeIR, type TopologyOriginOptions, type TopologyRole, type TopologySelection } from "invariantcad";',
+      'import { EDGE_TOPOLOGY_ROLES, FACE_TOPOLOGY_ROLES, OFFSET_DIRECTIONS, SHELL_DIRECTIONS, TOPOLOGY_ROLE_RULES, TOPOLOGY_ROLES, angleVec3, deg, design, mm, plane, scalarVec3, tf, topology, vec3, type ChamferNodeIR, type CircularArcPathNodeIR, type DesignDocument, type DraftNodeIR, type EdgeTopologyRole, type FaceTopologyRole, type LoftNodeIR, type OffsetDirection, type OffsetNodeIR, type PathRef, type PolylinePathNodeIR, type ProfileRef, type ShellDirection, type ShellNodeIR, type SolidRef, type SweepNodeIR, type TopologyOriginOptions, type TopologyRole, type TopologySelection } from "invariantcad";',
       'import { createOcctKernel, type OcctKernelOptions, type OcctModuleFactory, type OcctModuleOptions } from "invariantcad/kernels/occt";',
       "",
       'const cad = design("type-smoke");',
@@ -371,6 +397,8 @@ try {
       'const lofted: SolidRef = cad.loft("lofted", [loftBottom, loftTop], { ruled: true });',
       'const sweepPath: PathRef = cad.polylinePath("sweep-path", [vec3(mm(0), mm(0), mm(0)), vec3(mm(0), mm(0), mm(3)), vec3(mm(3), mm(0), mm(3))]);',
       'const swept: SolidRef = cad.sweep("swept", loftBottom, sweepPath, { frame: "corrected-frenet", transition: "right-corner" });',
+      'const arcPath: PathRef = cad.circularArcPath("arc-path", { start: vec3(mm(0), mm(0), mm(0)), through: vec3(mm(3 - 3 / Math.sqrt(2)), mm(0), mm(3 / Math.sqrt(2))), end: vec3(mm(3), mm(0), mm(3)) });',
+      'const arcSwept: SolidRef = cad.sweep("arc-swept", loftBottom, arcPath);',
       '// @ts-expect-error Document v1 lofts must be ruled.',
       'cad.loft("smooth", [loftBottom, loftTop], { ruled: false });',
       '// @ts-expect-error Document v1 sweeps use corrected-Frenet transport only.',
@@ -401,6 +429,7 @@ try {
       'cad.output("drafted", drafted);',
       'cad.output("lofted", lofted);',
       'cad.output("swept", swept);',
+      'cad.output("arc-swept", arcSwept);',
       "const document: DesignDocument = cad.build();",
       'const maybeChamfer = document.nodes[beveled.node];',
       'if (maybeChamfer?.kind !== "chamfer") throw new Error("Missing chamfer IR");',
@@ -430,6 +459,10 @@ try {
       'if (maybePath?.kind !== "polylinePath") throw new Error("Missing path IR");',
       'const pathNode: PolylinePathNodeIR = maybePath;',
       'if (pathNode.closed !== false || pathNode.points.length !== 3) throw new Error("Invalid path IR types");',
+      'const maybeArcPath = document.nodes[arcPath.node];',
+      'if (maybeArcPath?.kind !== "circularArcPath") throw new Error("Missing circular-arc path IR");',
+      'const arcPathNode: CircularArcPathNodeIR = maybeArcPath;',
+      'if (arcPathNode.closed !== false || arcPathNode.through.length !== 3) throw new Error("Invalid circular-arc path IR types");',
       'const maybeSweep = document.nodes[swept.node];',
       'if (maybeSweep?.kind !== "sweep") throw new Error("Missing sweep IR");',
       'const sweepNode: SweepNodeIR = maybeSweep;',
@@ -533,6 +566,11 @@ try {
   run(bin, ["validate", "model-sweep.invariantcad.json"], consumer);
   run(
     bin,
+    ["validate", "model-circular-arc-sweep.invariantcad.json"],
+    consumer,
+  );
+  run(
+    bin,
     ["export", "model.invariantcad.json", "--to", "model.step"],
     consumer,
   );
@@ -613,6 +651,23 @@ try {
   );
   if ((await stat(join(consumer, "sweep.step"))).size < 100) {
     throw new Error("Installed CLI produced an empty sweep STEP file");
+  }
+  run(
+    bin,
+    [
+      "export",
+      "model-circular-arc-sweep.invariantcad.json",
+      "--output",
+      "sweep",
+      "--to",
+      "circular-arc-sweep.step",
+    ],
+    consumer,
+  );
+  if ((await stat(join(consumer, "circular-arc-sweep.step"))).size < 100) {
+    throw new Error(
+      "Installed CLI produced an empty circular-arc sweep STEP file",
+    );
   }
   process.stdout.write("Packed package smoke test passed.\n");
 } finally {

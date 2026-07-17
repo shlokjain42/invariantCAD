@@ -4,7 +4,10 @@ import type { ResolvedDraftOptions } from "./protocol/draft.js";
 import type { ResolvedShellOptions } from "./protocol/shell.js";
 import type { ResolvedOffsetOptions } from "./protocol/offset.js";
 import type { ResolvedLoftOptions } from "./protocol/loft.js";
-import type { ResolvedPath } from "./protocol/path.js";
+import type {
+  ResolvedCircularArcPath,
+  ResolvedPolylinePath,
+} from "./protocol/path.js";
 import type { ResolvedSweepOptions } from "./protocol/sweep.js";
 import type {
   KernelTopologyCapabilities,
@@ -19,6 +22,7 @@ export type KernelFeature =
   | "revolve"
   | "loft"
   | "sweep"
+  | "circularArcSweep"
   | "boolean"
   | "transform"
   | "fillet"
@@ -194,7 +198,13 @@ export interface GeometryKernel {
   ): KernelShape;
   sweep?(
     profile: ResolvedProfile,
-    path: ResolvedPath,
+    path: ResolvedPolylinePath,
+    options: ResolvedSweepOptions,
+    context?: KernelFeatureContext,
+  ): KernelShape;
+  circularArcSweep?(
+    profile: ResolvedProfile,
+    path: ResolvedCircularArcPath,
     options: ResolvedSweepOptions,
     context?: KernelFeatureContext,
   ): KernelShape;

@@ -6,7 +6,10 @@ import {
   type ShapeMeasurements,
 } from "../src/index.js";
 import type { ResolvedLoop, ResolvedProfile } from "../src/index.js";
-import type { ResolvedPolylinePath } from "../src/index.js";
+import type {
+  ResolvedCircularArcPath,
+  ResolvedPolylinePath,
+} from "../src/index.js";
 import { EXACT_INDEXED_TOPOLOGY_EVOLUTION_PROTOCOL_VERSION } from "../src/kernel.js";
 
 export interface KernelConformanceOptions {
@@ -496,6 +499,43 @@ export function geometryKernelConformance(
         { tolerance: 1e-7 },
       );
       expectMeasurement(expectLiveShape(sweep), "volume", 40, relativeTolerance);
+      kernel.disposeShape(sweep);
+    });
+
+    it("sweeps a closed profile along an exact circular arc when declared", () => {
+      if (
+        !kernelSupports(
+          kernel.capabilities,
+          "feature",
+          "circularArcSweep",
+        )
+      ) {
+        return;
+      }
+      const profile: ResolvedProfile = {
+        plane: { plane: "YZ", origin: [0, 0, 0] },
+        outer: rectangleLoop(-1, -1, 1, 1),
+        holes: [],
+      };
+      const path: ResolvedCircularArcPath = {
+        kind: "circularArc",
+        start: [0, 0, 0],
+        through: [Math.SQRT1_2 * 10, (1 - Math.SQRT1_2) * 10, 0],
+        end: [10, 10, 0],
+        closed: false,
+      };
+      const sweep = kernel.circularArcSweep!(
+        profile,
+        path,
+        { frame: "corrected-frenet", transition: "right-corner" },
+        { tolerance: 1e-7 },
+      );
+      expectMeasurement(
+        expectLiveShape(sweep),
+        "volume",
+        20 * Math.PI,
+        relativeTolerance,
+      );
       kernel.disposeShape(sweep);
     });
 

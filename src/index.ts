@@ -96,6 +96,7 @@ export {
   type RefIR,
   type RevolveNodeIR,
   type LoftNodeIR,
+  type CircularArcPathNodeIR,
   type PolylinePathNodeIR,
   type SketchConstraintIR,
   type SketchEntityIR,
@@ -182,11 +183,20 @@ export {
   type ResolvedLoftOptions,
 } from "./protocol/loft.js";
 export {
+  CIRCULAR_ARC_PATH_MIN_POINT_SINE,
   POLYLINE_PATH_MIN_CORNER_SINE,
+  resolvedCircularArcGeometry,
+  resolvedPathEdgeCount,
+  resolvedPathInitialTangent,
+  resolvedPathStart,
   resolvedPolylineSegmentDistance,
+  validateResolvedCircularArcPath,
+  validateResolvedPath,
   validateResolvedPolylinePath,
   type PathValidationIssue,
   type PathValidationReason,
+  type ResolvedCircularArcGeometry,
+  type ResolvedCircularArcPath,
   type ResolvedPath,
   type ResolvedPolylinePath,
 } from "./protocol/path.js";

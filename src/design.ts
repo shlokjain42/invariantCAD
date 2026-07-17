@@ -365,6 +365,34 @@ export class DesignBuilder {
     return new PathRef(this, key);
   }
 
+  circularArcPath(
+    id: string,
+    points: {
+      readonly start: Vec3Expression;
+      readonly through: Vec3Expression;
+      readonly end: Vec3Expression;
+    },
+    options: { readonly tolerance?: number } = {},
+  ): PathRef {
+    const tolerance = options.tolerance ?? 1e-7;
+    if (!Number.isFinite(tolerance) || !(tolerance > 0)) {
+      throw new RangeError(
+        "Circular-arc path tolerance must be finite and positive",
+      );
+    }
+    const vector = (point: Vec3Expression) =>
+      [point[0].ir, point[1].ir, point[2].ir] as const;
+    const key = this.addNode(id, {
+      kind: "circularArcPath",
+      start: vector(points.start),
+      through: vector(points.through),
+      end: vector(points.end),
+      closed: false,
+      tolerance,
+    });
+    return new PathRef(this, key);
+  }
+
   extrude(
     id: string,
     profile: ProfileRef,

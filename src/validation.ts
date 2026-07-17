@@ -827,6 +827,35 @@ function validateNode(
         );
       }
       break;
+    case "circularArcPath":
+      for (const [pointName, point] of [
+        ["start", node.start],
+        ["through", node.through],
+        ["end", node.end],
+      ] as const) {
+        point.forEach((value, coordinateIndex) =>
+          expression(value, "length", `${pointName}/${coordinateIndex}`),
+        );
+      }
+      if (node.closed !== false) {
+        diagnostics.push(
+          diagnostic(
+            "FEATURE_INVALID",
+            "Document v1 circular-arc paths must be open",
+            { severity: "error", node: id, path: `${path}/closed` },
+          ),
+        );
+      }
+      if (!Number.isFinite(node.tolerance) || !(node.tolerance > 0)) {
+        diagnostics.push(
+          diagnostic(
+            "FEATURE_INVALID",
+            "Circular-arc path tolerance must be finite and positive",
+            { severity: "error", node: id, path: `${path}/tolerance` },
+          ),
+        );
+      }
+      break;
     case "extrude":
       validateRef(node.profile, "profile", document, `${path}/profile`, diagnostics);
       expression(node.distance, "length", "distance");

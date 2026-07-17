@@ -346,6 +346,29 @@ describe("OCCT bounded solid sweep", () => {
   it("releases failed sweeps and remains usable", async () => {
     const kernel = await createOcctKernel();
     try {
+      expect(() =>
+        kernel.sweep!(
+          rectangleProfile("sub-pipe-profile", 2e-5, 2e-5),
+          path([
+            [0, 0, 0],
+            [0, 0, 1],
+          ]),
+          SWEEP_OPTIONS,
+          { feature: "sub-pipe-profile-sweep", tolerance: 1e-12 },
+        ),
+      ).toThrow("OCCT pipe-shell linear tolerance");
+      expect(() =>
+        kernel.sweep!(
+          rectangleProfile("sub-pipe-path-profile", 2, 2),
+          path([
+            [0, 0, 0],
+            [0, 0, 5e-5],
+          ]),
+          SWEEP_OPTIONS,
+          { feature: "sub-pipe-path-sweep", tolerance: 1e-12 },
+        ),
+      ).toThrow("OCCT pipe-shell linear tolerance");
+
       const oversized = circleProfile("oversized-profile", 5);
       const tightCorner = path([
         [0, 0, 0],

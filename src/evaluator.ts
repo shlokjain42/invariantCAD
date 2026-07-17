@@ -54,8 +54,9 @@ import {
 } from "./kernel.js";
 import { validateRuledSolidLoftProfiles } from "./protocol/loft.js";
 import {
-  validateResolvedPolylinePath,
-  type ResolvedPolylinePath,
+  validateResolvedPath,
+  type ResolvedCircularArcPath,
+  type ResolvedPath,
 } from "./protocol/path.js";
 import { validateResolvedSweep } from "./protocol/sweep.js";
 import { createManifoldKernel, type ManifoldKernelOptions } from "./manifold-kernel.js";
@@ -105,7 +106,7 @@ interface ProfileValue {
 
 interface PathValue {
   readonly kind: "path";
-  readonly path: ResolvedPolylinePath;
+  readonly path: ResolvedPath;
   readonly tolerance: number;
 }
 
@@ -1157,14 +1158,14 @@ export class Evaluator {
             break;
           }
           case "polylinePath": {
-            const path: ResolvedPolylinePath = {
+            const path: ResolvedPath = {
               kind: "polyline",
               points: node.points.map(
                 (point) => point.map(expression) as unknown as Vec3,
               ),
               closed: node.closed,
             };
-            const issue = validateResolvedPolylinePath(path, node.tolerance);
+            const issue = validateResolvedPath(path, node.tolerance);
             if (issue !== undefined) {
               const { message, pointIndex, ...details } = issue;
               throw new EvaluationFailure(
@@ -1175,6 +1176,41 @@ export class Evaluator {
                     pointIndex === undefined
                       ? `/nodes/${id}/points`
                       : `/nodes/${id}/points/${pointIndex}`,
+                  details: {
+                    ...details,
+                    ...(pointIndex === undefined ? {} : { pointIndex }),
+                  },
+                }),
+              );
+            }
+            result = { kind: "path", path, tolerance: node.tolerance };
+            break;
+          }
+          case "circularArcPath": {
+            const point = (value: typeof node.start): Vec3 =>
+              value.map(expression) as unknown as Vec3;
+            const path: ResolvedCircularArcPath = {
+              kind: "circularArc",
+              start: point(node.start),
+              through: point(node.through),
+              end: point(node.end),
+              closed: node.closed,
+            };
+            const issue = validateResolvedPath(path, node.tolerance);
+            if (issue !== undefined) {
+              const { message, pointIndex, ...details } = issue;
+              const pointName =
+                pointIndex === undefined
+                  ? undefined
+                  : (["start", "through", "end"] as const)[pointIndex];
+              throw new EvaluationFailure(
+                diagnostic("FEATURE_INVALID", message, {
+                  severity: "error",
+                  node: id,
+                  path:
+                    pointName === undefined
+                      ? `/nodes/${id}`
+                      : `/nodes/${id}/${pointName}`,
                   details: {
                     ...details,
                     ...(pointIndex === undefined ? {} : { pointIndex }),
@@ -1266,7 +1302,12 @@ export class Evaluator {
             break;
           }
           case "sweep": {
-            requireKernelCapability("feature", "sweep", id);
+            const pathNode = document.nodes[node.path.node];
+            const capability =
+              pathNode?.kind === "circularArcPath"
+                ? "circularArcSweep"
+                : "sweep";
+            requireKernelCapability("feature", capability, id);
             const profileValue = evaluateNode(node.profile.node);
             if (profileValue.kind !== "profile") {
               throw new Error("Sweep profile mismatch");
@@ -1297,12 +1338,19 @@ export class Evaluator {
               );
             }
             result = ownShape(
-              this.kernel.sweep!(
-                profileValue.profile,
-                pathValue.path,
-                { transition: node.transition, frame: node.frame },
-                { ...featureContext(id), tolerance },
-              ),
+              pathValue.path.kind === "circularArc"
+                ? this.kernel.circularArcSweep!(
+                    profileValue.profile,
+                    pathValue.path,
+                    { transition: node.transition, frame: node.frame },
+                    { ...featureContext(id), tolerance },
+                  )
+                : this.kernel.sweep!(
+                    profileValue.profile,
+                    pathValue.path,
+                    { transition: node.transition, frame: node.frame },
+                    { ...featureContext(id), tolerance },
+                  ),
               id,
             );
             break;

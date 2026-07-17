@@ -40,7 +40,13 @@ import {
   validateRuledSolidLoftProfiles,
   type ResolvedLoftOptions,
 } from "./protocol/loft.js";
-import type { ResolvedPath } from "./protocol/path.js";
+import {
+  resolvedCircularArcGeometry,
+  resolvedPathEdgeCount,
+  type ResolvedCircularArcPath,
+  type ResolvedPath,
+  type ResolvedPolylinePath,
+} from "./protocol/path.js";
 import {
   validateResolvedSweep,
   type ResolvedSweepOptions,
@@ -106,6 +112,7 @@ class OcctShape implements KernelShape {
   readonly lineage: readonly KernelTopologyLineage[];
   readonly history: TopologyHistory;
   readonly annotation: TopologyAnnotation | undefined;
+  readonly volumeOverride: number | undefined;
   readonly topologyHandles = new Map<KernelTopologyKey, RetainedTopologyHandle>();
   topologySnapshot: KernelTopologySnapshot | undefined;
   disposed = false;
@@ -116,12 +123,14 @@ class OcctShape implements KernelShape {
     lineage: readonly KernelTopologyLineage[],
     history: TopologyHistory,
     annotation?: TopologyAnnotation,
+    volumeOverride?: number,
   ) {
     this[OCCT_SHAPE] = handle;
     this.serial = serial;
     this.lineage = lineage;
     this.history = history;
     this.annotation = annotation;
+    this.volumeOverride = volumeOverride;
   }
 }
 
@@ -219,6 +228,58 @@ function arcSweep(curve: ResolvedArcCurve): number {
   if (curve.clockwise && sweep > 0) sweep -= Math.PI * 2;
   if (!curve.clockwise && sweep < 0) sweep += Math.PI * 2;
   return sweep;
+}
+
+// Polyline sweeps use BRepOffsetAPI_MakePipeShell, whose Tol3d and BoundTol
+// both default to 1e-4.
+const OCCT_PIPE_SHELL_LINEAR_TOLERANCE = 1e-4;
+// The exact circular-revolution transfer cannot reliably distinguish all
+// three authored arc points below this scale-independent conditioning floor.
+const OCCT_CIRCULAR_ARC_MIN_POINT_SINE = 3e-8;
+
+function circularArcMinimumPointSine(path: ResolvedCircularArcPath): number {
+  const through: Vec3 = [
+    path.through[0] - path.start[0],
+    path.through[1] - path.start[1],
+    path.through[2] - path.start[2],
+  ];
+  const end: Vec3 = [
+    path.end[0] - path.start[0],
+    path.end[1] - path.start[1],
+    path.end[2] - path.start[2],
+  ];
+  const planeNormal: Vec3 = [
+    through[1] * end[2] - through[2] * end[1],
+    through[2] * end[0] - through[0] * end[2],
+    through[0] * end[1] - through[1] * end[0],
+  ];
+  const startThrough = Math.hypot(...through);
+  const startEnd = Math.hypot(...end);
+  const throughEnd = Math.hypot(
+    path.end[0] - path.through[0],
+    path.end[1] - path.through[1],
+    path.end[2] - path.through[2],
+  );
+  const doubleArea = Math.hypot(...planeNormal);
+  return Math.min(
+    doubleArea / (startThrough * startEnd),
+    doubleArea / (startThrough * throughEnd),
+    doubleArea / (startEnd * throughEnd),
+  );
+}
+
+function resolvedProfileCurveLength(curve: ResolvedCurve): number {
+  switch (curve.kind) {
+    case "line":
+      return Math.hypot(
+        curve.end[0] - curve.start[0],
+        curve.end[1] - curve.start[1],
+      );
+    case "arc":
+      return curve.radius * Math.abs(arcSweep(curve));
+    case "circle":
+      return curve.radius * Math.PI * 2;
+  }
 }
 
 function arcPoint(curve: ResolvedArcCurve, angle: number): Vec2 {
@@ -324,6 +385,7 @@ class OcctKernel implements GeometryKernel {
       "revolve",
       "loft",
       "sweep",
+      "circularArcSweep",
       "boolean",
       "transform",
       "fillet",
@@ -406,6 +468,7 @@ class OcctKernel implements GeometryKernel {
       readonly relation?: "created" | "modified";
       readonly history?: TopologyHistory;
       readonly annotation?: TopologyAnnotation;
+      readonly volumeOverride?: number;
     } = {},
   ): OcctShape {
     this.assertKernelLive();
@@ -426,6 +489,7 @@ class OcctKernel implements GeometryKernel {
       lineage,
       options.history ?? "complete",
       options.annotation,
+      options.volumeOverride,
     );
     this.nextShapeSerial += 1;
     this.ownedShapes.add(shape);
@@ -1158,6 +1222,32 @@ class OcctKernel implements GeometryKernel {
 
   sweep(
     profile: ResolvedProfile,
+    path: ResolvedPolylinePath,
+    options: ResolvedSweepOptions,
+    context?: KernelFeatureContext,
+  ): KernelShape {
+    if (path.kind !== "polyline") {
+      throw new TypeError("Polyline sweep requires a polyline path");
+    }
+    return this.sweepPath(profile, path, options, context);
+  }
+
+  circularArcSweep(
+    profile: ResolvedProfile,
+    path: ResolvedCircularArcPath,
+    options: ResolvedSweepOptions,
+    context?: KernelFeatureContext,
+  ): KernelShape {
+    if (path.kind !== "circularArc") {
+      throw new TypeError(
+        "Circular-arc sweep requires a three-point circular-arc path",
+      );
+    }
+    return this.sweepPath(profile, path, options, context);
+  }
+
+  private sweepPath(
+    profile: ResolvedProfile,
     path: ResolvedPath,
     options: ResolvedSweepOptions,
     context?: KernelFeatureContext,
@@ -1173,16 +1263,65 @@ class OcctKernel implements GeometryKernel {
         "Document v1 sweeps require corrected-Frenet transport and right-corner transitions",
       );
     }
-    if (path.kind !== "polyline") {
-      throw new TypeError("Document v1 sweeps require a polyline path");
+    const requestedTolerance = context?.tolerance ?? this.modelingTolerance;
+    if (!Number.isFinite(requestedTolerance) || !(requestedTolerance > 0)) {
+      throw new RangeError("Path tolerance must be finite and positive");
     }
-    const tolerance = context?.tolerance ?? this.modelingTolerance;
+    const tolerance =
+      path.kind === "circularArc"
+        ? Math.max(requestedTolerance, this.modelingTolerance)
+        : requestedTolerance;
     const issue = validateResolvedSweep(profile, path, tolerance);
     if (issue !== undefined) throw new RangeError(issue.message);
+    if (
+      path.kind === "circularArc" &&
+      !(
+        circularArcMinimumPointSine(path) >
+        OCCT_CIRCULAR_ARC_MIN_POINT_SINE
+      )
+    ) {
+      throw new RangeError(
+        `Circular-arc path points must exceed the OCCT three-point angular resolution (sine > ${OCCT_CIRCULAR_ARC_MIN_POINT_SINE})`,
+      );
+    }
+    if (path.kind === "polyline") {
+      const shortProfileCurve = profile.outer.curves.findIndex(
+        (curve) =>
+          !(resolvedProfileCurveLength(curve) >
+            OCCT_PIPE_SHELL_LINEAR_TOLERANCE),
+      );
+      if (shortProfileCurve !== -1) {
+        throw new RangeError(
+          `Sweep profile curve ${shortProfileCurve} must exceed the OCCT pipe-shell linear tolerance (${OCCT_PIPE_SHELL_LINEAR_TOLERANCE} mm)`,
+        );
+      }
+      const shortPathSegment = path.points.findIndex(
+        (point, index) =>
+          index < path.points.length - 1 &&
+          !(Math.hypot(
+            path.points[index + 1]![0] - point[0],
+            path.points[index + 1]![1] - point[1],
+            path.points[index + 1]![2] - point[2],
+          ) > OCCT_PIPE_SHELL_LINEAR_TOLERANCE),
+      );
+      if (shortPathSegment !== -1) {
+        throw new RangeError(
+          `Sweep path segment ${shortPathSegment} must exceed the OCCT pipe-shell linear tolerance (${OCCT_PIPE_SHELL_LINEAR_TOLERANCE} mm)`,
+        );
+      }
+    }
 
-    const built = this.profileFace(profile);
+    const seatedProfile: ResolvedProfile =
+      path.kind === "circularArc"
+        ? {
+            ...profile,
+            plane: { ...profile.plane, origin: path.start },
+          }
+        : profile;
+    const built = this.profileFace(seatedProfile);
     const pathAllocated: ShapeHandle[] = [];
     let result: ShapeHandle | undefined;
+    let exactVolume: number | undefined;
     try {
       const curveCount = profile.outer.curves.length;
       if (
@@ -1207,49 +1346,94 @@ class OcctKernel implements GeometryKernel {
           "Sweep profile does not form a valid simple planar face",
         );
       }
-
-      const pathEdges: ShapeHandle[] = [];
-      for (let index = 0; index < path.points.length - 1; index += 1) {
-        checkContext(context);
-        const start = path.points[index]!;
-        const end = path.points[index + 1]!;
-        const edge = this.raw.makeLineEdge(occtVector(start), occtVector(end));
-        pathAllocated.push(edge);
-        pathEdges.push(edge);
-        if (
-          this.raw.isNull(edge) ||
-          this.raw.getShapeType(edge) !== "edge" ||
-          !this.raw.isValid(edge) ||
-          this.raw.subShapeCount(edge, "vertex") !== 2
-        ) {
+      const minimumVolume = tolerance ** 3;
+      if (path.kind === "circularArc") {
+        const geometry = resolvedCircularArcGeometry(path)!;
+        const centroid = vectorFromOcct(
+          this.raw.getSurfaceCenterOfMass(built.face),
+        );
+        const offset: Vec3 = [
+          centroid[0] - geometry.center[0],
+          centroid[1] - geometry.center[1],
+          centroid[2] - geometry.center[2],
+        ];
+        const centroidVelocity: Vec3 = [
+          geometry.normal[1] * offset[2] -
+            geometry.normal[2] * offset[1],
+          geometry.normal[2] * offset[0] -
+            geometry.normal[0] * offset[2],
+          geometry.normal[0] * offset[1] -
+            geometry.normal[1] * offset[0],
+        ];
+        const profileNormal = planeBasis(seatedProfile.plane).n;
+        const normalSpeed = Math.abs(
+          profileNormal[0] * centroidVelocity[0] +
+            profileNormal[1] * centroidVelocity[1] +
+            profileNormal[2] * centroidVelocity[2],
+        );
+        exactVolume = profileArea * normalSpeed * geometry.sweep;
+        if (!Number.isFinite(exactVolume) || !(exactVolume > minimumVolume)) {
           throw new RangeError(
-            `Sweep path segment ${index} does not form a valid edge`,
+            "Circular-arc sweep does not have a stable positive analytic volume",
           );
         }
       }
-      const spine = this.raw.makeWire(pathEdges);
-      pathAllocated.push(spine);
-      const segmentCount = pathEdges.length;
-      if (
-        this.raw.isNull(spine) ||
-        this.raw.getShapeType(spine) !== "wire" ||
-        !this.raw.isValid(spine) ||
-        this.raw.subShapeCount(spine, "edge") !== segmentCount ||
-        this.raw.subShapeCount(spine, "vertex") !== segmentCount + 1
-      ) {
-        throw new RangeError(
-          "Sweep path does not form one valid unmodified open wire",
+
+      const segmentCount = resolvedPathEdgeCount(path);
+      if (path.kind === "polyline") {
+        const pathEdges: ShapeHandle[] = [];
+        for (let index = 0; index < path.points.length - 1; index += 1) {
+          checkContext(context);
+          const edge = this.raw.makeLineEdge(
+            occtVector(path.points[index]!),
+            occtVector(path.points[index + 1]!),
+          );
+          pathAllocated.push(edge);
+          pathEdges.push(edge);
+          if (
+            this.raw.isNull(edge) ||
+            this.raw.getShapeType(edge) !== "edge" ||
+            !this.raw.isValid(edge) ||
+            this.raw.subShapeCount(edge, "vertex") !== 2
+          ) {
+            throw new RangeError(
+              `Sweep path segment ${index} does not form a valid edge`,
+            );
+          }
+        }
+        const spine = this.raw.makeWire(pathEdges);
+        pathAllocated.push(spine);
+        if (
+          this.raw.isNull(spine) ||
+          this.raw.getShapeType(spine) !== "wire" ||
+          !this.raw.isValid(spine) ||
+          this.raw.subShapeCount(spine, "edge") !== segmentCount ||
+          this.raw.subShapeCount(spine, "vertex") !== segmentCount + 1
+        ) {
+          throw new RangeError(
+            "Sweep path does not form one valid unmodified open wire",
+          );
+        }
+        checkContext(context);
+        result = this.raw.sweep(
+          built.outerWire,
+          spine,
+          TransitionMode.RightCorner,
+        );
+      } else {
+        const geometry = resolvedCircularArcGeometry(path)!;
+        checkContext(context);
+        result = this.raw.revolve(
+          built.face,
+          {
+            point: occtVector(geometry.center),
+            direction: occtVector(geometry.normal),
+          },
+          geometry.sweep,
         );
       }
 
       checkContext(context);
-      result = this.raw.sweep(
-        built.outerWire,
-        spine,
-        TransitionMode.RightCorner,
-      );
-      checkContext(context);
-      const minimumVolume = Math.max(tolerance ** 3, Number.EPSILON);
       const expectedFaces = segmentCount * curveCount + 2;
 
       const validateResult = (): number => {
@@ -1270,6 +1454,15 @@ class OcctKernel implements GeometryKernel {
         if (this.raw.subShapeCount(result, "face") !== expectedFaces) {
           throw new RangeError(
             "Sweep changed the profile-segment face correspondence",
+          );
+        }
+        if (
+          path.kind === "circularArc" &&
+          (this.raw.subShapeCount(result, "edge") !== curveCount * 3 ||
+            this.raw.subShapeCount(result, "vertex") !== curveCount * 2)
+        ) {
+          throw new RangeError(
+            "Sweep changed the circular-arc profile topology correspondence",
           );
         }
         const solids = this.raw.getSubShapes(result, "solid");
@@ -1302,7 +1495,9 @@ class OcctKernel implements GeometryKernel {
       if (!(volume > minimumVolume)) {
         throw new RangeError("Sweep did not produce a positive-volume solid");
       }
-      return this.own(result, context);
+      return this.own(result, context, {
+        ...(exactVolume === undefined ? {} : { volumeOverride: exactVolume }),
+      });
     } catch (error) {
       if (result !== undefined) this.raw.release(result);
       throw error;
@@ -1406,18 +1601,14 @@ class OcctKernel implements GeometryKernel {
             }
             break;
           }
-          case "scale":
-            if (
-              Math.abs(operation.value[0] - operation.value[1]) <=
-                this.modelingTolerance &&
-              Math.abs(operation.value[1] - operation.value[2]) <=
-                this.modelingTolerance
-            ) {
+          case "scale": {
+            const uniformFactor = this.uniformScaleFactor(operation.value);
+            if (uniformFactor !== undefined) {
               replace(
                 this.raw.scale(
                   current,
                   { x: 0, y: 0, z: 0 },
-                  operation.value[0],
+                  uniformFactor,
                 ),
               );
             } else {
@@ -1430,6 +1621,7 @@ class OcctKernel implements GeometryKernel {
               );
             }
             break;
+          }
           case "mirror":
             replace(
               this.raw.mirror(
@@ -1450,6 +1642,20 @@ class OcctKernel implements GeometryKernel {
       if (ownsCurrent) this.raw.release(current);
       throw error;
     }
+  }
+
+  private uniformScaleFactor(value: Vec3): number | undefined {
+    return Math.abs(value[0] - value[1]) <= this.modelingTolerance &&
+      Math.abs(value[1] - value[2]) <= this.modelingTolerance
+      ? value[0]
+      : undefined;
+  }
+
+  private effectiveScaleDeterminant(value: Vec3): number {
+    const uniformFactor = this.uniformScaleFactor(value);
+    return uniformFactor === undefined
+      ? value[0] * value[1] * value[2]
+      : uniformFactor ** 3;
   }
 
   transform(
@@ -1500,11 +1706,23 @@ class OcctKernel implements GeometryKernel {
         }
         annotation = { seeds, requireSeedCoverage: true };
       }
+      const volumeOverride =
+        inputShape.volumeOverride === undefined
+          ? undefined
+          : operations.reduce(
+              (volume, operation) =>
+                operation.kind === "scale"
+                  ? volume *
+                    Math.abs(this.effectiveScaleDeterminant(operation.value))
+                  : volume,
+              inputShape.volumeOverride,
+            );
       return this.own(current, context, {
         inherited: inputShape.lineage,
         relation: "modified",
         history: inputSnapshot.history,
         ...(annotation === undefined ? {} : { annotation }),
+        ...(volumeOverride === undefined ? {} : { volumeOverride }),
       });
     } catch (error) {
       this.raw.release(current);
@@ -2447,14 +2665,15 @@ class OcctKernel implements GeometryKernel {
   }
 
   measure(shape: KernelShape): ShapeMeasurements {
-    const handle = this.shape(shape)[OCCT_SHAPE];
+    const owned = this.shape(shape);
+    const handle = owned[OCCT_SHAPE];
     const bounds = this.raw.getBoundingBox(handle, false);
     const vertices = this.raw.subShapeCount(handle, "vertex");
     const edges = this.raw.subShapeCount(handle, "edge");
     const faces = this.raw.subShapeCount(handle, "face");
     const eulerCharacteristic = vertices - edges + faces;
     return {
-      volume: this.raw.getVolume(handle),
+      volume: owned.volumeOverride ?? this.raw.getVolume(handle),
       surfaceArea: this.raw.getSurfaceArea(handle),
       boundingBox: {
         min: [bounds.xmin, bounds.ymin, bounds.zmin],

@@ -188,6 +188,15 @@ export interface PolylinePathNodeIR {
   readonly tolerance: number;
 }
 
+export interface CircularArcPathNodeIR {
+  readonly kind: "circularArcPath";
+  readonly start: Vec3ExpressionIR;
+  readonly through: Vec3ExpressionIR;
+  readonly end: Vec3ExpressionIR;
+  readonly closed: false;
+  readonly tolerance: number;
+}
+
 export interface ExtrudeNodeIR {
   readonly kind: "extrude";
   readonly profile: RefIR<"profile">;
@@ -385,6 +394,7 @@ export type NodeIR =
   | SphereNodeIR
   | SketchNodeIR
   | PolylinePathNodeIR
+  | CircularArcPathNodeIR
   | ExtrudeNodeIR
   | RevolveNodeIR
   | LoftNodeIR
@@ -422,6 +432,7 @@ export function nodeDependencies(node: NodeIR): readonly RefIR[] {
     case "sphere":
     case "sketch":
     case "polylinePath":
+    case "circularArcPath":
       return [];
     case "extrude":
     case "revolve":
@@ -452,6 +463,7 @@ export function outputKindForNode(node: NodeIR): OutputKind {
     case "sketch":
       return "profile";
     case "polylinePath":
+    case "circularArcPath":
       return "path";
     case "part":
       return "part";
