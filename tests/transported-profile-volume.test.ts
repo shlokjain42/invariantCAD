@@ -5,7 +5,11 @@ import {
   type TransportedProfileVolumeResult,
   type TransportedProfileVolumeSuccess,
 } from "../src/internal/transported-profile-volume.js";
-import type { ResolvedCompositePath } from "../src/protocol/path.js";
+import {
+  resolvedCircularArcGeometry,
+  resolvedCompositePathSegments,
+  type ResolvedCompositePath,
+} from "../src/protocol/path.js";
 
 function expectSuccess(
   result: TransportedProfileVolumeResult,
@@ -113,6 +117,41 @@ function lineThenQuarterArc(): ResolvedCompositePath {
   };
 }
 
+function fractionalCircumcenterPath(): ResolvedCompositePath {
+  return {
+    kind: "composite",
+    start: [0, 0, 0],
+    segments: [
+      {
+        kind: "circularArc",
+        through: [1, 0, 3],
+        end: [5, 0, 0],
+      },
+      { kind: "line", end: [4, 0, -3] },
+    ],
+    closed: false,
+  };
+}
+
+function translateCompositePath(
+  path: ResolvedCompositePath,
+  translation: Vec3,
+): ResolvedCompositePath {
+  return {
+    ...path,
+    start: add(path.start, translation),
+    segments: path.segments.map((segment) =>
+      segment.kind === "line"
+        ? { kind: "line", end: add(segment.end, translation) }
+        : {
+            kind: "circularArc",
+            through: add(segment.through, translation),
+            end: add(segment.end, translation),
+          },
+    ),
+  };
+}
+
 describe("resolvedCompositeSweepVolumeOracle", () => {
   it("reduces a centered line-arc-line sweep to area times path length", () => {
     const area = 2;
@@ -122,7 +161,7 @@ describe("resolvedCompositeSweepVolumeOracle", () => {
       [0, 0, -1],
     ] as const) {
       const result = resolvedCompositeSweepVolumeOracle(
-        { area, centroid: [0, 0, 0], normal },
+        { area, centroidOffsetFromPathStart: [0, 0, 0], normal },
         planarCompositePath(),
         1e-7,
       );
@@ -144,7 +183,7 @@ describe("resolvedCompositeSweepVolumeOracle", () => {
     const result = resolvedCompositeSweepVolumeOracle(
       {
         area,
-        centroid: [0, 0.1, 0.1],
+        centroidOffsetFromPathStart: [0, 0.1, 0.1],
         normal: [1, 0, 0],
       },
       spatialTangentArcChain(),
@@ -161,6 +200,39 @@ describe("resolvedCompositeSweepVolumeOracle", () => {
     )).toBe(true);
   });
 
+  it("preserves fractional-center arc geometry and volume diagnostics under a 1e12 translation", () => {
+    const path = fractionalCircumcenterPath();
+    const translatedPath = translateCompositePath(path, [1e12, -1e12, 1e12]);
+    const arc = resolvedCompositePathSegments(path)[0]!;
+    const translatedArc = resolvedCompositePathSegments(translatedPath)[0]!;
+    if (arc.kind !== "circularArc" || translatedArc.kind !== "circularArc") {
+      throw new Error("Expected the fractional-circumcenter arc fixture");
+    }
+    const { center: _center, ...relativeGeometry } =
+      resolvedCircularArcGeometry(arc)!;
+    const { center: _translatedCenter, ...translatedRelativeGeometry } =
+      resolvedCircularArcGeometry(translatedArc)!;
+    expect(relativeGeometry.centerOffsetFromStart).toEqual([2.5, 0, 5 / 6]);
+    expect(translatedRelativeGeometry).toEqual(relativeGeometry);
+
+    const profile = {
+      area: 0.32,
+      centroidOffsetFromPathStart: [0, 0, 0] as Vec3,
+      normal: [-1 / Math.sqrt(10), 0, 3 / Math.sqrt(10)] as Vec3,
+    };
+
+    const local = resolvedCompositeSweepVolumeOracle(profile, path, 1e-7);
+    const translated = resolvedCompositeSweepVolumeOracle(
+      profile,
+      translatedPath,
+      1e-7,
+    );
+
+    expectSuccess(local);
+    expectSuccess(translated);
+    expect(translated).toEqual(local);
+  });
+
   it("includes the exact eccentric RightCorner miter correction", () => {
     const area = 0.32;
     const basePath = planarCompositePath();
@@ -174,7 +246,7 @@ describe("resolvedCompositeSweepVolumeOracle", () => {
     const result = resolvedCompositeSweepVolumeOracle(
       {
         area,
-        centroid: [0.1, 0.1, 0],
+        centroidOffsetFromPathStart: [0.1, 0.1, 0],
         normal: [0, 0, 1],
       },
       path,
@@ -214,7 +286,11 @@ describe("resolvedCompositeSweepVolumeOracle", () => {
     };
 
     const result = resolvedCompositeSweepVolumeOracle(
-      { area: 1, centroid: [0, 0, 0], normal: [0, 0, 1] },
+      {
+        area: 1,
+        centroidOffsetFromPathStart: [0, 0, 0],
+        normal: [0, 0, 1],
+      },
       path,
       1e-7,
     );
@@ -238,7 +314,11 @@ describe("resolvedCompositeSweepVolumeOracle", () => {
     };
 
     const result = resolvedCompositeSweepVolumeOracle(
-      { area: 1, centroid: [0, 0, 0], normal: [0, 0, 1] },
+      {
+        area: 1,
+        centroidOffsetFromPathStart: [0, 0, 0],
+        normal: [0, 0, 1],
+      },
       path,
       1e-7,
     );
@@ -255,7 +335,7 @@ describe("resolvedCompositeSweepVolumeOracle", () => {
     const result = resolvedCompositeSweepVolumeOracle(
       {
         area: 1,
-        centroid: [1 + 1 / Math.PI, 0, -1],
+        centroidOffsetFromPathStart: [1 + 1 / Math.PI, 0, 0],
         normal: [0, 0, 1],
       },
       lineThenQuarterArc(),
@@ -273,7 +353,7 @@ describe("resolvedCompositeSweepVolumeOracle", () => {
     const result = resolvedCompositeSweepVolumeOracle(
       {
         area: 1,
-        centroid: [1 + 2 / Math.PI, 0, -1],
+        centroidOffsetFromPathStart: [1 + 2 / Math.PI, 0, 0],
         normal: [0, 0, 1],
       },
       lineThenQuarterArc(),
@@ -295,7 +375,7 @@ describe("resolvedCompositeSweepVolumeOracle", () => {
     const angle = 5e-8;
     const profile = {
       area: 1,
-      centroid: [0, 0, 0] as Vec3,
+      centroidOffsetFromPathStart: [0, 0, 0] as Vec3,
       normal: [Math.sin(angle), 0, Math.cos(angle)] as Vec3,
     };
 
@@ -321,7 +401,11 @@ describe("resolvedCompositeSweepVolumeOracle", () => {
 
   it("rejects a profile plane that is not seated normal to the path", () => {
     const result = resolvedCompositeSweepVolumeOracle(
-      { area: 1, centroid: [0, 0, 0], normal: [1, 0, 0] },
+      {
+        area: 1,
+        centroidOffsetFromPathStart: [0, 0, 0],
+        normal: [1, 0, 0],
+      },
       planarCompositePath(),
       1e-7,
     );
@@ -331,5 +415,19 @@ describe("resolvedCompositeSweepVolumeOracle", () => {
       reason: "unsupported-profile-alignment",
       segmentIndex: 0,
     });
+  });
+
+  it("rejects a non-finite centroid offset", () => {
+    expect(
+      resolvedCompositeSweepVolumeOracle(
+        {
+          area: 1,
+          centroidOffsetFromPathStart: [Number.NaN, 0, 0],
+          normal: [0, 0, 1],
+        },
+        planarCompositePath(),
+        1e-7,
+      ),
+    ).toMatchObject({ ok: false, reason: "invalid-profile" });
   });
 });

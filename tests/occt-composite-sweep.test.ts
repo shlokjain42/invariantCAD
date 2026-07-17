@@ -9,7 +9,10 @@ import {
   type ResolvedCompositePath,
   type ResolvedProfile,
 } from "../src/index.js";
-import { createOcctKernel } from "../src/occt-kernel.js";
+import {
+  OcctProfileMassPropertyError,
+  createOcctKernel,
+} from "../src/occt-kernel.js";
 
 const SWEEP_OPTIONS = {
   transition: "right-corner",
@@ -17,6 +20,20 @@ const SWEEP_OPTIONS = {
 } as const;
 
 type Vec3 = ResolvedCompositePath["start"];
+
+interface InjectableOcctRaw {
+  getSurfaceArea: (...args: any[]) => number;
+  getSurfaceCenterOfMass: (...args: any[]) => {
+    readonly x: number;
+    readonly y: number;
+    readonly z: number;
+  };
+  makeLineEdge: (...args: any[]) => any;
+  makeArcEdge: (...args: any[]) => any;
+  makeWire: (...args: any[]) => any;
+  sweep: (...args: any[]) => any;
+  readonly shapeCount: number;
+}
 
 function source(sketch: string, entity: string): ProfileCurveSource {
   return {
@@ -147,6 +164,42 @@ function planarCompositeWithLineCorner(): ResolvedCompositePath {
   return {
     ...path,
     segments: [...path.segments, { kind: "line", end: [10, 5, 10] }],
+  };
+}
+
+function integerPlanarCompositePath(): ResolvedCompositePath {
+  return {
+    kind: "composite",
+    start: [0, 0, 0],
+    segments: [
+      { kind: "line", end: [0, 0, 5] },
+      {
+        kind: "circularArc",
+        through: [1, 0, 8],
+        end: [5, 0, 10],
+      },
+      { kind: "line", end: [10, 0, 10] },
+    ],
+    closed: false,
+  };
+}
+
+function translateCompositePath(
+  path: ResolvedCompositePath,
+  translation: Vec3,
+): ResolvedCompositePath {
+  return {
+    ...path,
+    start: add(path.start, translation),
+    segments: path.segments.map((segment) =>
+      segment.kind === "line"
+        ? { ...segment, end: add(segment.end, translation) }
+        : {
+            ...segment,
+            through: add(segment.through, translation),
+            end: add(segment.end, translation),
+          },
+    ),
   };
 }
 
@@ -562,6 +615,444 @@ describe("OCCT exact composite solid sweep", () => {
         kernel.disposeShape(nearFullShape);
       }
     } finally {
+      kernel.dispose();
+    }
+  });
+
+  it("keeps analytic profile moments authoritative while certifying admitted native noise", async () => {
+    const kernel = await createOcctKernel();
+    const raw = (kernel as any).raw as InjectableOcctRaw;
+    const originalArea = raw.getSurfaceArea.bind(raw);
+    const originalCentroid = raw.getSurfaceCenterOfMass.bind(raw);
+    const baselineShapeCount = raw.shapeCount;
+    let areaCalls = 0;
+    let centroidCalls = 0;
+    let shape: KernelShape | undefined;
+    try {
+      raw.getSurfaceArea = (...args) => {
+        areaCalls += 1;
+        return originalArea(...args) * (1 + 5e-10);
+      };
+      raw.getSurfaceCenterOfMass = (...args) => {
+        centroidCalls += 1;
+        const centroid = originalCentroid(...args);
+        return { ...centroid, x: centroid.x + 5e-7 };
+      };
+
+      try {
+        shape = kernel.compositeSweep!(
+          rectangleProfile("native-noise-profile", 2, 4),
+          planarCompositePath(),
+          SWEEP_OPTIONS,
+          { feature: "native-noise-sweep", tolerance: 1e-6 },
+        );
+      } finally {
+        raw.getSurfaceArea = originalArea;
+        raw.getSurfaceCenterOfMass = originalCentroid;
+      }
+
+      expect(areaCalls).toBe(1);
+      expect(centroidCalls).toBe(1);
+      expect(kernel.measure(shape).volume).toBeCloseTo(
+        80 + 20 * Math.PI,
+        10,
+      );
+    } finally {
+      try {
+        raw.getSurfaceArea = originalArea;
+        raw.getSurfaceCenterOfMass = originalCentroid;
+        if (shape !== undefined) kernel.disposeShape(shape);
+        expect(raw.shapeCount).toBe(baselineShapeCount);
+      } finally {
+        kernel.dispose();
+      }
+    }
+  });
+
+  it("rejects structured native mass-property mismatches before allocating a path and recovers", async () => {
+    const kernel = await createOcctKernel();
+    const raw = (kernel as any).raw as InjectableOcctRaw;
+    const originalArea = raw.getSurfaceArea.bind(raw);
+    const originalCentroid = raw.getSurfaceCenterOfMass.bind(raw);
+    const originalMakeLineEdge = raw.makeLineEdge.bind(raw);
+    const originalMakeArcEdge = raw.makeArcEdge.bind(raw);
+    const originalMakeWire = raw.makeWire.bind(raw);
+    const originalSweep = raw.sweep.bind(raw);
+    const baselineShapeCount = raw.shapeCount;
+    const profile = circleProfile("native-mismatch-profile", 1);
+    const path = planarCompositePath();
+    let makeLineEdgeCalls = 0;
+    let makeArcEdgeCalls = 0;
+    let makeWireCalls = 0;
+    let sweepCalls = 0;
+
+    const resetAllocationCalls = (): void => {
+      makeLineEdgeCalls = 0;
+      makeArcEdgeCalls = 0;
+      makeWireCalls = 0;
+      sweepCalls = 0;
+    };
+    const expectPreallocationFailure = (
+      reason: "area-mismatch" | "centroid-mismatch",
+    ): OcctProfileMassPropertyError => {
+      let thrown: unknown;
+      try {
+        kernel.compositeSweep!(profile, path, SWEEP_OPTIONS, {
+          feature: `native-${reason}`,
+          tolerance: 1e-7,
+        });
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(OcctProfileMassPropertyError);
+      if (!(thrown instanceof OcctProfileMassPropertyError)) {
+        throw new Error("Expected a structured OCCT profile mass-property error");
+      }
+      const massPropertyError = thrown as OcctProfileMassPropertyError;
+      expect(massPropertyError.reason).toBe(reason);
+      expect(massPropertyError.diagnostics).toMatchObject({
+        analyticArea: Math.PI,
+        nativeArea: expect.any(Number),
+        areaError: expect.any(Number),
+        areaAllowance: expect.any(Number),
+      });
+      expect(makeWireCalls).toBe(1);
+      expect(makeLineEdgeCalls).toBe(0);
+      expect(makeArcEdgeCalls).toBe(0);
+      expect(sweepCalls).toBe(0);
+      expect(raw.shapeCount).toBe(baselineShapeCount);
+      return massPropertyError;
+    };
+
+    raw.makeLineEdge = (...args) => {
+      makeLineEdgeCalls += 1;
+      return originalMakeLineEdge(...args);
+    };
+    raw.makeArcEdge = (...args) => {
+      makeArcEdgeCalls += 1;
+      return originalMakeArcEdge(...args);
+    };
+    raw.makeWire = (...args) => {
+      makeWireCalls += 1;
+      return originalMakeWire(...args);
+    };
+    raw.sweep = (...args) => {
+      sweepCalls += 1;
+      return originalSweep(...args);
+    };
+
+    try {
+      raw.getSurfaceArea = (...args) => originalArea(...args) * 2;
+      const areaError = expectPreallocationFailure("area-mismatch");
+      expect(areaError.diagnostics!.areaError).toBeGreaterThan(
+        areaError.diagnostics!.areaAllowance,
+      );
+
+      raw.getSurfaceArea = originalArea;
+      raw.getSurfaceCenterOfMass = (...args) => {
+        const centroid = originalCentroid(...args);
+        return { ...centroid, x: centroid.x + 1e-3 };
+      };
+      resetAllocationCalls();
+      const centroidError = expectPreallocationFailure("centroid-mismatch");
+      expect(centroidError.diagnostics!.centroidError?.[0]).toBeGreaterThan(
+        centroidError.diagnostics!.centroidAllowance?.[0] ??
+          Number.POSITIVE_INFINITY,
+      );
+
+      raw.getSurfaceCenterOfMass = originalCentroid;
+      resetAllocationCalls();
+      const recovered = kernel.compositeSweep!(
+        profile,
+        path,
+        SWEEP_OPTIONS,
+        { feature: "native-mismatch-recovery", tolerance: 1e-7 },
+      );
+      try {
+        expect(kernel.status(recovered)).toEqual({ ok: true, code: "VALID" });
+        expect(kernel.measure(recovered).volume).toBeCloseTo(
+          Math.PI * (10 + (5 * Math.PI) / 2),
+          8,
+        );
+      } finally {
+        kernel.disposeShape(recovered);
+      }
+      expect(raw.shapeCount).toBe(baselineShapeCount);
+    } finally {
+      raw.getSurfaceArea = originalArea;
+      raw.getSurfaceCenterOfMass = originalCentroid;
+      raw.makeLineEdge = originalMakeLineEdge;
+      raw.makeArcEdge = originalMakeArcEdge;
+      raw.makeWire = originalMakeWire;
+      raw.sweep = originalSweep;
+      kernel.dispose();
+    }
+  });
+
+  it("rolls back invalid or throwing native integration before path allocation and recovers", async () => {
+    const kernel = await createOcctKernel();
+    const raw = (kernel as any).raw as InjectableOcctRaw;
+    const originalArea = raw.getSurfaceArea.bind(raw);
+    const originalCentroid = raw.getSurfaceCenterOfMass.bind(raw);
+    const originalMakeLineEdge = raw.makeLineEdge.bind(raw);
+    const originalMakeArcEdge = raw.makeArcEdge.bind(raw);
+    const originalMakeWire = raw.makeWire.bind(raw);
+    const originalSweep = raw.sweep.bind(raw);
+    const baselineShapeCount = raw.shapeCount;
+    const profile = circleProfile("native-integration-failure-profile", 1);
+    const path = planarCompositePath();
+    const centroidFailure = new Error("injected native centroid failure");
+    let makeLineEdgeCalls = 0;
+    let makeArcEdgeCalls = 0;
+    let makeWireCalls = 0;
+    let sweepCalls = 0;
+
+    raw.makeLineEdge = (...args) => {
+      makeLineEdgeCalls += 1;
+      return originalMakeLineEdge(...args);
+    };
+    raw.makeArcEdge = (...args) => {
+      makeArcEdgeCalls += 1;
+      return originalMakeArcEdge(...args);
+    };
+    raw.makeWire = (...args) => {
+      makeWireCalls += 1;
+      return originalMakeWire(...args);
+    };
+    raw.sweep = (...args) => {
+      sweepCalls += 1;
+      return originalSweep(...args);
+    };
+
+    const failures = [
+      {
+        feature: "non-finite-native-area",
+        inject: () => {
+          raw.getSurfaceArea = () => Number.NaN;
+        },
+        assertError: (error: unknown) => {
+          expect(error).toBeInstanceOf(RangeError);
+          expect((error as Error).message).toContain(
+            "valid simple planar face",
+          );
+        },
+      },
+      {
+        feature: "throwing-native-centroid",
+        inject: () => {
+          raw.getSurfaceCenterOfMass = () => {
+            throw centroidFailure;
+          };
+        },
+        assertError: (error: unknown) => {
+          expect(error).toBe(centroidFailure);
+        },
+      },
+    ] as const;
+
+    try {
+      for (const failure of failures) {
+        makeLineEdgeCalls = 0;
+        makeArcEdgeCalls = 0;
+        makeWireCalls = 0;
+        sweepCalls = 0;
+        failure.inject();
+        let thrown: unknown;
+        let unexpectedShape: KernelShape | undefined;
+        try {
+          unexpectedShape = kernel.compositeSweep!(
+            profile,
+            path,
+            SWEEP_OPTIONS,
+            { feature: failure.feature, tolerance: 1e-7 },
+          );
+        } catch (error) {
+          thrown = error;
+        } finally {
+          raw.getSurfaceArea = originalArea;
+          raw.getSurfaceCenterOfMass = originalCentroid;
+          if (unexpectedShape !== undefined) {
+            kernel.disposeShape(unexpectedShape);
+          }
+        }
+
+        failure.assertError(thrown);
+        expect(makeWireCalls).toBe(1);
+        expect(makeLineEdgeCalls).toBe(0);
+        expect(makeArcEdgeCalls).toBe(0);
+        expect(sweepCalls).toBe(0);
+        expect(raw.shapeCount).toBe(baselineShapeCount);
+      }
+
+      const recovered = kernel.compositeSweep!(
+        profile,
+        path,
+        SWEEP_OPTIONS,
+        { feature: "native-integration-failure-recovery", tolerance: 1e-7 },
+      );
+      try {
+        expect(kernel.status(recovered)).toEqual({ ok: true, code: "VALID" });
+      } finally {
+        kernel.disposeShape(recovered);
+      }
+    } finally {
+      try {
+        raw.getSurfaceArea = originalArea;
+        raw.getSurfaceCenterOfMass = originalCentroid;
+        raw.makeLineEdge = originalMakeLineEdge;
+        raw.makeArcEdge = originalMakeArcEdge;
+        raw.makeWire = originalMakeWire;
+        raw.sweep = originalSweep;
+        expect(raw.shapeCount).toBe(baselineShapeCount);
+      } finally {
+        kernel.dispose();
+      }
+    }
+  });
+
+  it("keeps analytic composite volume invariant at a large world translation", async () => {
+    const kernel = await createOcctKernel();
+    const raw = (kernel as any).raw as InjectableOcctRaw;
+    const originalCentroid = raw.getSurfaceCenterOfMass.bind(raw);
+    const baselineShapeCount = raw.shapeCount;
+    const path = integerPlanarCompositePath();
+    const profile = translatedRectangleProfile(
+      "large-world-local-profile",
+      2,
+      4,
+      [0.1, 0],
+    );
+    const translation: Vec3 = [2 ** 31, -(2 ** 31), 2 ** 31];
+    const translatedProfile: ResolvedProfile = {
+      ...profile,
+      plane: { ...profile.plane, origin: translation },
+    };
+    const translatedPath = translateCompositePath(path, translation);
+    let localShape: KernelShape | undefined;
+    let translatedShape: KernelShape | undefined;
+    let capturedNativeCentroid:
+      | { readonly x: number; readonly y: number; readonly z: number }
+      | undefined;
+    try {
+      localShape = kernel.compositeSweep!(
+        profile,
+        path,
+        SWEEP_OPTIONS,
+        { feature: "large-world-local-sweep", tolerance: 1e-8 },
+      );
+      raw.getSurfaceCenterOfMass = (...args) => {
+        const centroid = originalCentroid(...args);
+        capturedNativeCentroid = centroid;
+        return centroid;
+      };
+      try {
+        translatedShape = kernel.compositeSweep!(
+          translatedProfile,
+          translatedPath,
+          SWEEP_OPTIONS,
+          { feature: "large-world-translated-sweep", tolerance: 1e-8 },
+        );
+      } finally {
+        raw.getSurfaceCenterOfMass = originalCentroid;
+      }
+
+      expect(capturedNativeCentroid).toBeDefined();
+      const capturedLocalX = capturedNativeCentroid!.x - translation[0];
+      expect(Math.abs(capturedLocalX - 0.1)).toBeGreaterThan(1e-8);
+      const expectedVolume = 80 + 19.6 * Math.PI;
+      const localVolume = kernel.measure(localShape).volume;
+      const translatedVolume = kernel.measure(translatedShape).volume;
+      expect(localVolume).toBeCloseTo(expectedVolume, 12);
+      expect(translatedVolume).toBe(localVolume);
+    } finally {
+      try {
+        raw.getSurfaceCenterOfMass = originalCentroid;
+        if (translatedShape !== undefined) kernel.disposeShape(translatedShape);
+        if (localShape !== undefined) kernel.disposeShape(localShape);
+        expect(raw.shapeCount).toBe(baselineShapeCount);
+      } finally {
+        kernel.dispose();
+      }
+    }
+  });
+
+  it("does not let a large X coordinate mask a native Y centroid mismatch", async () => {
+    const kernel = await createOcctKernel();
+    const raw = (kernel as any).raw as InjectableOcctRaw;
+    const originalCentroid = raw.getSurfaceCenterOfMass.bind(raw);
+    const originalMakeLineEdge = raw.makeLineEdge.bind(raw);
+    const originalMakeArcEdge = raw.makeArcEdge.bind(raw);
+    const originalMakeWire = raw.makeWire.bind(raw);
+    const originalSweep = raw.sweep.bind(raw);
+    const baselineShapeCount = raw.shapeCount;
+    const translation: Vec3 = [2 ** 31, 0, 0];
+    const profile: ResolvedProfile = {
+      ...circleProfile("large-x-y-mismatch-profile", 1),
+      plane: { plane: "XY", origin: translation },
+    };
+    const path = translateCompositePath(
+      integerPlanarCompositePath(),
+      translation,
+    );
+    let makeLineEdgeCalls = 0;
+    let makeArcEdgeCalls = 0;
+    let makeWireCalls = 0;
+    let sweepCalls = 0;
+    try {
+      raw.getSurfaceCenterOfMass = (...args) => {
+        const centroid = originalCentroid(...args);
+        return { ...centroid, y: centroid.y + 1e-5 };
+      };
+      raw.makeLineEdge = (...args) => {
+        makeLineEdgeCalls += 1;
+        return originalMakeLineEdge(...args);
+      };
+      raw.makeArcEdge = (...args) => {
+        makeArcEdgeCalls += 1;
+        return originalMakeArcEdge(...args);
+      };
+      raw.makeWire = (...args) => {
+        makeWireCalls += 1;
+        return originalMakeWire(...args);
+      };
+      raw.sweep = (...args) => {
+        sweepCalls += 1;
+        return originalSweep(...args);
+      };
+
+      let thrown: unknown;
+      try {
+        kernel.compositeSweep!(profile, path, SWEEP_OPTIONS, {
+          feature: "large-x-y-mismatch-sweep",
+          tolerance: 1e-8,
+        });
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(OcctProfileMassPropertyError);
+      if (!(thrown instanceof OcctProfileMassPropertyError)) {
+        throw new Error("Expected a structured OCCT profile mass-property error");
+      }
+      const massPropertyError = thrown as OcctProfileMassPropertyError;
+      expect(massPropertyError.reason).toBe("centroid-mismatch");
+      expect(massPropertyError.diagnostics!.centroidError?.[1]).toBeGreaterThan(
+        massPropertyError.diagnostics!.centroidAllowance?.[1] ??
+          Number.POSITIVE_INFINITY,
+      );
+      expect(
+        massPropertyError.diagnostics!.coordinateRoundoffBound?.[1],
+      ).toBeLessThan(1e-10);
+      expect(makeWireCalls).toBe(1);
+      expect(makeLineEdgeCalls).toBe(0);
+      expect(makeArcEdgeCalls).toBe(0);
+      expect(sweepCalls).toBe(0);
+      expect(raw.shapeCount).toBe(baselineShapeCount);
+    } finally {
+      raw.getSurfaceCenterOfMass = originalCentroid;
+      raw.makeLineEdge = originalMakeLineEdge;
+      raw.makeArcEdge = originalMakeArcEdge;
+      raw.makeWire = originalMakeWire;
+      raw.sweep = originalSweep;
       kernel.dispose();
     }
   });

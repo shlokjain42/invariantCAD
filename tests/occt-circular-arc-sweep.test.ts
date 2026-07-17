@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   kernelSupports,
   resolvedCircularArcGeometry,
+  resolvedProfileLocalAreaMoments,
   type GeometryKernel,
   type KernelShape,
   type KernelTopologySnapshot,
@@ -9,7 +10,10 @@ import {
   type ResolvedCircularArcPath,
   type ResolvedProfile,
 } from "../src/index.js";
-import { createOcctKernel } from "../src/occt-kernel.js";
+import {
+  OcctProfileMassPropertyError,
+  createOcctKernel,
+} from "../src/occt-kernel.js";
 
 const SWEEP_OPTIONS = {
   transition: "right-corner",
@@ -263,6 +267,252 @@ describe("OCCT exact circular-arc solid sweep", () => {
         kernel.disposeShape(shape);
       }
     } finally {
+      kernel.dispose();
+    }
+  });
+
+  it("keeps analytic volume exact when native profile area and centroid contain admitted noise", async () => {
+    const kernel = await createOcctKernel();
+    const raw = (kernel as any).raw as {
+      getSurfaceArea: (...args: any[]) => number;
+      getSurfaceCenterOfMass: (...args: any[]) => {
+        readonly x: number;
+        readonly y: number;
+        readonly z: number;
+      };
+    };
+    const originalArea = raw.getSurfaceArea.bind(raw);
+    const originalCentroid = raw.getSurfaceCenterOfMass.bind(raw);
+    let areaNoiseInjected = false;
+    let centroidNoiseInjected = false;
+    try {
+      raw.getSurfaceArea = (...args: any[]) => {
+        const area = originalArea(...args);
+        if (areaNoiseInjected) return area;
+        areaNoiseInjected = true;
+        return area + 4e-9;
+      };
+      raw.getSurfaceCenterOfMass = (...args: any[]) => {
+        const centroid = originalCentroid(...args);
+        if (centroidNoiseInjected) return centroid;
+        centroidNoiseInjected = true;
+        return {
+          x: centroid.x + 2e-7,
+          y: centroid.y - 3e-7,
+          z: centroid.z + 1e-7,
+        };
+      };
+
+      const shape = kernel.circularArcSweep!(
+        rectangleProfile("noisy-native-profile", 2, 4),
+        quarterArc(),
+        SWEEP_OPTIONS,
+        { feature: "noisy-native-arc-sweep", tolerance: 1e-7 },
+      );
+      try {
+        expect(areaNoiseInjected).toBe(true);
+        expect(centroidNoiseInjected).toBe(true);
+        expect(kernel.measure(shape).volume).toBeCloseTo(20 * Math.PI, 12);
+      } finally {
+        kernel.disposeShape(shape);
+      }
+    } finally {
+      raw.getSurfaceArea = originalArea;
+      raw.getSurfaceCenterOfMass = originalCentroid;
+      kernel.dispose();
+    }
+  });
+
+  it("admits certified translated circular-revolution drift and preserves analytic volume", async () => {
+    const kernel = await createOcctKernel();
+    const raw = (kernel as any).raw as { readonly shapeCount: number };
+    const baselineShapeCount = raw.shapeCount;
+    const translation = 1e12;
+    const nominalRadius = 5 / 6;
+    const start: Vec3 = [translation, 0, translation];
+    const fractionalRadiusPath = arcPath(
+      start,
+      [translation + nominalRadius, 0, translation + nominalRadius],
+      [translation, 0, translation + 2 * nominalRadius],
+    );
+    const halfSize = 0.05;
+    const translatedProfile: ResolvedProfile = {
+      plane: { plane: "YZ", origin: start },
+      outer: {
+        curves: [
+          {
+            kind: "line",
+            start: [-halfSize, -halfSize],
+            end: [halfSize, -halfSize],
+          },
+          {
+            kind: "line",
+            start: [halfSize, -halfSize],
+            end: [halfSize, halfSize],
+          },
+          {
+            kind: "line",
+            start: [halfSize, halfSize],
+            end: [-halfSize, halfSize],
+          },
+          {
+            kind: "line",
+            start: [-halfSize, halfSize],
+            end: [-halfSize, -halfSize],
+          },
+        ],
+      },
+      holes: [],
+    };
+
+    try {
+      const translated = kernel.circularArcSweep!(
+        translatedProfile,
+        fractionalRadiusPath,
+        SWEEP_OPTIONS,
+        {
+          feature: "translated-fractional-radius-sweep",
+          tolerance: 1e-4,
+        },
+      );
+      try {
+        const geometry = resolvedCircularArcGeometry(fractionalRadiusPath)!;
+        const moments = resolvedProfileLocalAreaMoments(
+          translatedProfile,
+          1e-4,
+        );
+        expect(moments.ok).toBe(true);
+        if (!moments.ok) throw new Error(moments.message);
+        const centroidFromCenter: Vec3 = [
+          -geometry.centerOffsetFromStart[0],
+          moments.localCentroid[0] - geometry.centerOffsetFromStart[1],
+          moments.localCentroid[1] - geometry.centerOffsetFromStart[2],
+        ];
+        const normalSpeed = Math.abs(
+          geometry.normal[1] * centroidFromCenter[2] -
+            geometry.normal[2] * centroidFromCenter[1],
+        );
+        expect(kernel.status(translated)).toEqual({ ok: true, code: "VALID" });
+        expect(kernel.measure(translated).volume).toBeCloseTo(
+          moments.area * normalSpeed * geometry.sweep,
+          14,
+        );
+      } finally {
+        kernel.disposeShape(translated);
+      }
+      expect(raw.shapeCount).toBe(baselineShapeCount);
+
+      const recovered = kernel.circularArcSweep!(
+        rectangleProfile("postcondition-recovery-profile", 2, 4),
+        quarterArc(),
+        SWEEP_OPTIONS,
+        { feature: "postcondition-recovery-sweep", tolerance: 1e-7 },
+      );
+      try {
+        expect(kernel.status(recovered)).toEqual({ ok: true, code: "VALID" });
+        expect(kernel.measure(recovered).volume).toBeCloseTo(20 * Math.PI, 12);
+      } finally {
+        kernel.disposeShape(recovered);
+      }
+      expect(raw.shapeCount).toBe(baselineShapeCount);
+    } finally {
+      kernel.dispose();
+    }
+  });
+
+  it("reports native centroid disagreement before revolve, rolls back, and recovers", async () => {
+    const kernel = await createOcctKernel();
+    const raw = (kernel as any).raw as {
+      getSurfaceCenterOfMass: (...args: any[]) => {
+        readonly x: number;
+        readonly y: number;
+        readonly z: number;
+      };
+      revolve: (...args: any[]) => any;
+      readonly shapeCount: number;
+    };
+    const originalCentroid = raw.getSurfaceCenterOfMass.bind(raw);
+    const originalRevolve = raw.revolve.bind(raw);
+    const baselineShapeCount = raw.shapeCount;
+    let centroidMismatchInjected = false;
+    let revolveCalls = 0;
+    try {
+      raw.getSurfaceCenterOfMass = (...args: any[]) => {
+        const centroid = originalCentroid(...args);
+        if (centroidMismatchInjected) return centroid;
+        centroidMismatchInjected = true;
+        return {
+          x: centroid.x + 1e-4,
+          y: centroid.y,
+          z: centroid.z,
+        };
+      };
+      raw.revolve = (...args: any[]) => {
+        revolveCalls += 1;
+        return originalRevolve(...args);
+      };
+
+      let error: unknown;
+      try {
+        kernel.circularArcSweep!(
+          rectangleProfile("mismatched-native-profile", 2, 4),
+          quarterArc(),
+          SWEEP_OPTIONS,
+          { feature: "mismatched-native-arc-sweep", tolerance: 1e-7 },
+        );
+      } catch (caught) {
+        error = caught;
+      }
+      expect(centroidMismatchInjected).toBe(true);
+      expect(error).toBeInstanceOf(OcctProfileMassPropertyError);
+      if (!(error instanceof OcctProfileMassPropertyError)) {
+        throw new Error("Expected a structured profile mass-property error");
+      }
+      const profileError = error;
+      expect(profileError.reason).toBe("centroid-mismatch");
+      expect(Object.isFrozen(profileError)).toBe(true);
+      expect(Object.isFrozen(profileError.diagnostics)).toBe(true);
+      expect(profileError.diagnostics).toMatchObject({
+        analyticArea: 8,
+        nativeArea: 8,
+        analyticCentroidOffset: [0, 0, 0],
+        centroidError: [
+          expect.any(Number),
+          expect.any(Number),
+          expect.any(Number),
+        ],
+        centroidAllowance: expect.any(Array),
+      });
+      expect(
+        Object.isFrozen(profileError.diagnostics!.centroidError),
+      ).toBe(true);
+      expect(profileError.diagnostics!.centroidError![0]).toBeGreaterThan(
+        profileError.diagnostics!.centroidAllowance![0],
+      );
+      expect(revolveCalls).toBe(0);
+      expect(raw.shapeCount).toBe(baselineShapeCount);
+
+      raw.getSurfaceCenterOfMass = originalCentroid;
+      const recovered = kernel.circularArcSweep!(
+        rectangleProfile("recovered-native-profile", 2, 4),
+        quarterArc(),
+        SWEEP_OPTIONS,
+        { feature: "recovered-native-arc-sweep", tolerance: 1e-7 },
+      );
+      try {
+        expect(kernel.status(recovered)).toEqual({ ok: true, code: "VALID" });
+        expect(kernel.measure(recovered).volume).toBeCloseTo(
+          20 * Math.PI,
+          12,
+        );
+        expect(revolveCalls).toBe(1);
+      } finally {
+        kernel.disposeShape(recovered);
+      }
+      expect(raw.shapeCount).toBe(baselineShapeCount);
+    } finally {
+      raw.getSurfaceCenterOfMass = originalCentroid;
+      raw.revolve = originalRevolve;
       kernel.dispose();
     }
   });

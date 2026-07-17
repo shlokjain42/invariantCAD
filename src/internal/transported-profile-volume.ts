@@ -12,13 +12,14 @@ import {
 /**
  * The area moments needed by the transported-profile volume identity.
  *
- * `centroid` is the absolute world-space centroid of the section seated at the
- * composite path start. `normal` may have either orientation, but its plane
- * must be normal to the initial path tangent.
+ * `centroidOffsetFromPathStart` is the translation-invariant vector from the
+ * composite path start to the seated section's centroid. `normal` may have
+ * either orientation, but its plane must be normal to the initial path
+ * tangent.
  */
 export interface TransportedProfileMoments {
   readonly area: number;
-  readonly centroid: Vec3;
+  readonly centroidOffsetFromPathStart: Vec3;
   readonly normal: Vec3;
 }
 
@@ -329,6 +330,7 @@ function segmentFacts(
       !(arc.closingSweep > 0) ||
       !(arc.closingLength > 0) ||
       !finiteVector(arc.center) ||
+      !finiteVector(arc.centerOffsetFromStart) ||
       !finiteVector(arc.normal) ||
       !finiteVector(arc.startTangent) ||
       !finiteVector(arc.endTangent)
@@ -383,12 +385,12 @@ export function resolvedCompositeSweepVolumeOracle(
   if (
     !Number.isFinite(profile.area) ||
     !(profile.area > 0) ||
-    !finiteVector(profile.centroid) ||
+    !finiteVector(profile.centroidOffsetFromPathStart) ||
     !finiteVector(profile.normal)
   ) {
     return failure(
       "invalid-profile",
-      "Transported profile area must be finite and positive, and its centroid and normal must be finite",
+      "Transported profile area must be finite and positive, and its centroid offset and normal must be finite",
     );
   }
   const initialNormal = normalize(profile.normal);
@@ -427,7 +429,7 @@ export function resolvedCompositeSweepVolumeOracle(
       TRANSPORTED_FRAME_ROUNDOFF_SINE,
   );
   let transportedNormal = initialNormal;
-  let centroidOffset = subtract(profile.centroid, path.start);
+  let centroidOffset = profile.centroidOffsetFromPathStart;
   const volume = compensatedAccumulator();
   const absoluteTerms = compensatedAccumulator();
   const terms: TransportedProfileVolumeTerm[] = [];
@@ -468,9 +470,9 @@ export function resolvedCompositeSweepVolumeOracle(
       }
     } else {
       const arc = facts.arc!;
-      const centroidFromCenter = add(
-        subtract(facts.segment.start, arc.center),
+      const centroidFromCenter = subtract(
         centroidOffset,
+        arc.centerOffsetFromStart,
       );
       const centroidOrbitRadius = dot(
         transportedNormal,

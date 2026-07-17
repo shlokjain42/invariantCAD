@@ -36,10 +36,12 @@ import type {
   ResolvedProfile,
 } from "./protocol/profile.js";
 import {
+  curveEnd,
   curveStart,
   numericPlaneBasis,
   resolvedArcSweep,
 } from "./protocol/profile.js";
+import { resolvedProfileLocalAreaMoments } from "./protocol/profile-moments.js";
 import {
   validateRuledSolidLoftProfiles,
   type ResolvedLoftOptions,
@@ -82,6 +84,13 @@ import {
 } from "./internal/occt-facade.js";
 import { adoptOcctControlledPipeShell } from "./internal/occt-pipe-shell.js";
 import { resolvedCompositeSweepVolumeOracle } from "./internal/transported-profile-volume.js";
+import {
+  certifyNativeProfileMassProperties,
+  NATIVE_PROFILE_COORDINATE_ULP_FACTOR,
+  type AnalyticProfileMassProperties,
+  type NativeProfileMassPropertyCertificationFailureReason,
+  type NativeProfileMassPropertyDiagnostics,
+} from "./internal/profile-mass-properties.js";
 import {
   TopologyEvolutionProtocolError,
   reduceIndexedTopologyEvolution,
@@ -263,6 +272,12 @@ const OCCT_PIPE_SHELL_VOLUME_RELATIVE_TOLERANCE = 1e-7;
 // three authored arc points below this scale-independent conditioning floor.
 const OCCT_CIRCULAR_ARC_MIN_POINT_SINE = 3e-8;
 
+function binary64Ulp(value: number): number {
+  const magnitude = Math.abs(value);
+  if (magnitude === 0 || magnitude < 2 ** -1022) return Number.MIN_VALUE;
+  return 2 ** (Math.floor(Math.log2(magnitude)) - 52);
+}
+
 function circularArcMinimumPointSine(
   path: ResolvedCircularArcDefinition,
 ): number {
@@ -308,6 +323,56 @@ function resolvedProfileCurveLength(curve: ResolvedCurve): number {
     case "circle":
       return curve.radius * Math.PI * 2;
   }
+}
+
+function resolvedProfileBoundaryGeometry(
+  profile: ResolvedProfile,
+  centroid: Vec2,
+): {
+  readonly perimeter: number;
+  readonly maxBoundaryRadius: number;
+} | undefined {
+  let perimeter = 0;
+  let maxBoundaryRadius = 0;
+  for (const loop of [profile.outer, ...profile.holes]) {
+    for (const [index, curve] of loop.curves.entries()) {
+      const curveLength = resolvedProfileCurveLength(curve);
+      perimeter += curveLength;
+      if (curve.kind === "line") {
+        maxBoundaryRadius = Math.max(
+          maxBoundaryRadius,
+          Math.hypot(
+            curve.start[0] - centroid[0],
+            curve.start[1] - centroid[1],
+          ),
+          Math.hypot(
+            curve.end[0] - centroid[0],
+            curve.end[1] - centroid[1],
+          ),
+        );
+      } else {
+        maxBoundaryRadius = Math.max(
+          maxBoundaryRadius,
+          Math.hypot(
+            curve.center[0] - centroid[0],
+            curve.center[1] - centroid[1],
+          ) + curve.radius,
+        );
+      }
+      const next = loop.curves[(index + 1) % loop.curves.length];
+      if (next !== undefined) {
+        const end = curveEnd(curve);
+        const start = curveStart(next);
+        perimeter += Math.hypot(end[0] - start[0], end[1] - start[1]);
+      }
+    }
+  }
+  return Number.isFinite(perimeter) &&
+    perimeter > 0 &&
+    Number.isFinite(maxBoundaryRadius) &&
+    maxBoundaryRadius >= 0
+    ? { perimeter, maxBoundaryRadius }
+    : undefined;
 }
 
 function arcPoint(curve: ResolvedArcCurve, angle: number): Vec2 {
@@ -372,6 +437,72 @@ function validateDraftOptions(options: ResolvedDraftOptions): void {
 }
 
 export type OcctWasmSource = string | URL | ArrayBuffer | Uint8Array;
+
+export type OcctProfileMassPropertyFailureReason =
+  NativeProfileMassPropertyCertificationFailureReason;
+export type OcctProfileMassPropertyDiagnostics =
+  NativeProfileMassPropertyDiagnostics;
+
+function immutableProfileMassPropertyDiagnostics(
+  diagnostics: OcctProfileMassPropertyDiagnostics | undefined,
+): OcctProfileMassPropertyDiagnostics | undefined {
+  if (diagnostics === undefined) return undefined;
+  const {
+    analyticCentroidOffset,
+    nativeCentroid,
+    nativeCentroidOffset,
+    centroidError,
+    centroidAllowance,
+    boundaryCoordinateRoundoffBound,
+    coordinateRoundoffBound,
+    ...scalars
+  } = diagnostics;
+  const immutableVector = (value: Vec3): Vec3 =>
+    Object.freeze([...value]) as unknown as Vec3;
+  return Object.freeze({
+    ...scalars,
+    ...(analyticCentroidOffset === undefined
+      ? {}
+      : { analyticCentroidOffset: immutableVector(analyticCentroidOffset) }),
+    ...(nativeCentroid === undefined
+      ? {}
+      : { nativeCentroid: immutableVector(nativeCentroid) }),
+    ...(nativeCentroidOffset === undefined
+      ? {}
+      : { nativeCentroidOffset: immutableVector(nativeCentroidOffset) }),
+    ...(centroidError === undefined
+      ? {}
+      : { centroidError: immutableVector(centroidError) }),
+    ...(centroidAllowance === undefined
+      ? {}
+      : { centroidAllowance: immutableVector(centroidAllowance) }),
+    boundaryCoordinateRoundoffBound: immutableVector(
+      boundaryCoordinateRoundoffBound,
+    ),
+    coordinateRoundoffBound: immutableVector(coordinateRoundoffBound),
+  });
+}
+
+/**
+ * Raised when OCCT's independent planar-face integration disagrees with the
+ * analytic profile moments that define sweep semantics.
+ */
+export class OcctProfileMassPropertyError extends RangeError {
+  readonly reason: OcctProfileMassPropertyFailureReason;
+  readonly diagnostics: OcctProfileMassPropertyDiagnostics | undefined;
+
+  constructor(
+    reason: OcctProfileMassPropertyFailureReason,
+    message: string,
+    diagnostics?: OcctProfileMassPropertyDiagnostics,
+  ) {
+    super(`OCCT sweep profile mass-property certification failed: ${message}`);
+    this.name = "OcctProfileMassPropertyError";
+    this.reason = reason;
+    this.diagnostics = immutableProfileMassPropertyDiagnostics(diagnostics);
+    Object.freeze(this);
+  }
+}
 
 /** Options accepted by stock or InvariantCAD-owned Emscripten module glue. */
 export interface OcctModuleOptions {
@@ -1430,14 +1561,63 @@ class OcctKernel implements GeometryKernel {
             plane: { ...profile.plane, origin: path.start },
           }
         : profile;
+    let analyticProfile:
+      | {
+          readonly properties: AnalyticProfileMassProperties;
+          readonly normal: Vec3;
+        }
+      | undefined;
+    if (path.kind === "circularArc" || path.kind === "composite") {
+      const moments = resolvedProfileLocalAreaMoments(
+        seatedProfile,
+        tolerance,
+      );
+      if (!moments.ok) {
+        throw new RangeError(
+          `Sweep profile does not have stable analytic area moments: ${moments.message}`,
+        );
+      }
+      const basis = numericPlaneBasis(seatedProfile.plane);
+      const centroidOffset: Vec3 = [
+        basis.u[0] * moments.localCentroid[0] +
+          basis.v[0] * moments.localCentroid[1],
+        basis.u[1] * moments.localCentroid[0] +
+          basis.v[1] * moments.localCentroid[1],
+        basis.u[2] * moments.localCentroid[0] +
+          basis.v[2] * moments.localCentroid[1],
+      ];
+      const boundary = resolvedProfileBoundaryGeometry(
+        seatedProfile,
+        moments.localCentroid,
+      );
+      if (boundary === undefined) {
+        throw new RangeError(
+          "Sweep profile does not have stable analytic boundary geometry",
+        );
+      }
+      analyticProfile = {
+        properties: {
+          area: moments.area,
+          areaRoundoffBound: moments.diagnostics.areaRoundoffBound,
+          perimeter: boundary.perimeter,
+          maxBoundaryRadius: boundary.maxBoundaryRadius,
+          plane: seatedProfile.plane.plane,
+          centroidOffset,
+          centroidRoundoffBound:
+            moments.diagnostics.centroidRoundoffBound,
+        },
+        normal: moments.normal,
+      };
+    }
     const built = this.profileFace(seatedProfile);
     const pathAllocated: ShapeHandle[] = [];
     let result: ShapeHandle | undefined;
     let exactVolume: number | undefined;
-    let pipeShellVolumePostcondition:
+    let nativeVolumePostcondition:
       | {
           readonly expected: number;
           readonly allowance: number;
+          readonly message: string;
         }
       | undefined;
     try {
@@ -1458,23 +1638,56 @@ class OcctKernel implements GeometryKernel {
           "Sweep profile does not form a valid simple planar face",
         );
       }
-      const profileArea = this.raw.getSurfaceArea(built.face);
-      if (!Number.isFinite(profileArea) || !(profileArea > tolerance ** 2)) {
+      const nativeProfileArea = this.raw.getSurfaceArea(built.face);
+      if (
+        !Number.isFinite(nativeProfileArea) ||
+        !(nativeProfileArea > tolerance ** 2)
+      ) {
         throw new RangeError(
           "Sweep profile does not form a valid simple planar face",
         );
       }
+      let profileArea = nativeProfileArea;
+      let profileCentroidOffset: Vec3 | undefined;
+      let profileNormal: Vec3 | undefined;
+      let nativeProfileCentroid: Vec3 | undefined;
+      let profileMassPropertyDiagnostics:
+        | NativeProfileMassPropertyDiagnostics
+        | undefined;
+      if (analyticProfile !== undefined) {
+        const nativeCentroid = vectorFromOcct(
+          this.raw.getSurfaceCenterOfMass(built.face),
+        );
+        const certification = certifyNativeProfileMassProperties(
+          analyticProfile.properties,
+          { area: nativeProfileArea, centroid: nativeCentroid },
+          seatedProfile.plane.origin as Vec3,
+          {
+            modelingTolerance: this.modelingTolerance,
+            requireCentroid: true,
+          },
+        );
+        if (!certification.ok) {
+          throw new OcctProfileMassPropertyError(
+            certification.reason,
+            certification.message,
+            certification.diagnostics,
+          );
+        }
+        profileArea = certification.properties.area;
+        profileCentroidOffset = certification.properties.centroidOffset;
+        profileNormal = analyticProfile.normal;
+        nativeProfileCentroid = nativeCentroid;
+        profileMassPropertyDiagnostics = certification.diagnostics;
+      }
       const minimumVolume = tolerance ** 3;
       if (path.kind === "composite") {
         const segments = resolvedCompositePathSegments(path);
-        const centroid = vectorFromOcct(
-          this.raw.getSurfaceCenterOfMass(built.face),
-        );
         const volumeOracle = resolvedCompositeSweepVolumeOracle(
           {
             area: profileArea,
-            centroid,
-            normal: numericPlaneBasis(seatedProfile.plane).n,
+            centroidOffsetFromPathStart: profileCentroidOffset!,
+            normal: profileNormal!,
           },
           path,
           tolerance,
@@ -1493,10 +1706,40 @@ class OcctKernel implements GeometryKernel {
               : 0),
           0,
         );
+        const areaRoundoffBound =
+          analyticProfile!.properties.areaRoundoffBound;
+        const centroidRoundoffBound =
+          analyticProfile!.properties.centroidRoundoffBound!;
+        const areaMomentAllowance =
+          (volumeOracle.diagnostics.absoluteTermSum / profileArea) *
+          areaRoundoffBound;
+        const centroidSensitivity = volumeOracle.diagnostics.terms.reduce(
+          (total, term) =>
+            total +
+            (term.kind === "circularArc"
+              ? Math.abs(term.sweep)
+              : term.kind === "rightCorner"
+                ? 2 *
+                  Math.abs(
+                    term.normalProjection * term.tangentHalfTurn,
+                  )
+                : 0),
+          0,
+        );
+        const centroidMomentAllowance =
+          (profileArea + areaRoundoffBound) *
+          centroidRoundoffBound *
+          centroidSensitivity;
+        const constructionTolerance =
+          this.facade?.pipeShell === undefined
+            ? OCCT_PIPE_SHELL_LINEAR_TOLERANCE
+            : Math.min(tolerance, OCCT_PIPE_SHELL_LINEAR_TOLERANCE);
         const allowance =
           expected * OCCT_PIPE_SHELL_VOLUME_RELATIVE_TOLERANCE +
           volumeOracle.diagnostics.roundoffBound +
-          profileArea * this.modelingTolerance * (1 + arcSweep);
+          areaMomentAllowance +
+          centroidMomentAllowance +
+          profileArea * constructionTolerance * (1 + arcSweep);
         if (
           !Number.isFinite(expected) ||
           !(expected > minimumVolume) ||
@@ -1508,17 +1751,19 @@ class OcctKernel implements GeometryKernel {
           );
         }
         exactVolume = expected;
-        pipeShellVolumePostcondition = { expected, allowance };
+        nativeVolumePostcondition = {
+          expected,
+          allowance,
+          message:
+            "OCCT pipe-shell sweep failed the transported-profile analytic volume postcondition",
+        };
       }
       if (path.kind === "circularArc") {
         const geometry = resolvedCircularArcGeometry(path)!;
-        const centroid = vectorFromOcct(
-          this.raw.getSurfaceCenterOfMass(built.face),
-        );
         const offset: Vec3 = [
-          centroid[0] - geometry.center[0],
-          centroid[1] - geometry.center[1],
-          centroid[2] - geometry.center[2],
+          profileCentroidOffset![0] - geometry.centerOffsetFromStart[0],
+          profileCentroidOffset![1] - geometry.centerOffsetFromStart[1],
+          profileCentroidOffset![2] - geometry.centerOffsetFromStart[2],
         ];
         const centroidVelocity: Vec3 = [
           geometry.normal[1] * offset[2] -
@@ -1528,16 +1773,106 @@ class OcctKernel implements GeometryKernel {
           geometry.normal[0] * offset[1] -
             geometry.normal[1] * offset[0],
         ];
-        const profileNormal = numericPlaneBasis(seatedProfile.plane).n;
         const normalSpeed = Math.abs(
-          profileNormal[0] * centroidVelocity[0] +
-            profileNormal[1] * centroidVelocity[1] +
-            profileNormal[2] * centroidVelocity[2],
+          profileNormal![0] * centroidVelocity[0] +
+            profileNormal![1] * centroidVelocity[1] +
+            profileNormal![2] * centroidVelocity[2],
         );
         exactVolume = profileArea * normalSpeed * geometry.sweep;
         if (!Number.isFinite(exactVolume) || !(exactVolume > minimumVolume)) {
           throw new RangeError(
             "Circular-arc sweep does not have a stable positive analytic volume",
+          );
+        }
+        const roundedCenterOffset: Vec3 = [
+          geometry.center[0] - path.start[0],
+          geometry.center[1] - path.start[1],
+          geometry.center[2] - path.start[2],
+        ];
+        const centerOffsetError: Vec3 = [
+          Math.abs(
+            roundedCenterOffset[0] - geometry.centerOffsetFromStart[0],
+          ),
+          Math.abs(
+            roundedCenterOffset[1] - geometry.centerOffsetFromStart[1],
+          ),
+          Math.abs(
+            roundedCenterOffset[2] - geometry.centerOffsetFromStart[2],
+          ),
+        ];
+        const centerOffsetAllowance: Vec3 = [
+          tolerance +
+            NATIVE_PROFILE_COORDINATE_ULP_FACTOR *
+              Math.max(
+                binary64Ulp(path.start[0]),
+                binary64Ulp(geometry.center[0]),
+              ),
+          tolerance +
+            NATIVE_PROFILE_COORDINATE_ULP_FACTOR *
+              Math.max(
+                binary64Ulp(path.start[1]),
+                binary64Ulp(geometry.center[1]),
+              ),
+          tolerance +
+            NATIVE_PROFILE_COORDINATE_ULP_FACTOR *
+              Math.max(
+                binary64Ulp(path.start[2]),
+                binary64Ulp(geometry.center[2]),
+              ),
+        ];
+        if (
+          centerOffsetError.some((value) => !Number.isFinite(value)) ||
+          centerOffsetAllowance.some((value) => !Number.isFinite(value)) ||
+          centerOffsetError.some(
+            (value, index) => value > centerOffsetAllowance[index]!,
+          )
+        ) {
+          throw new RangeError(
+            "OCCT circular-revolution axis exceeds the certified coordinate-resolution envelope",
+          );
+        }
+        const nativeOffset: Vec3 = [
+          nativeProfileCentroid![0] - geometry.center[0],
+          nativeProfileCentroid![1] - geometry.center[1],
+          nativeProfileCentroid![2] - geometry.center[2],
+        ];
+        const nativeCentroidVelocity: Vec3 = [
+          geometry.normal[1] * nativeOffset[2] -
+            geometry.normal[2] * nativeOffset[1],
+          geometry.normal[2] * nativeOffset[0] -
+            geometry.normal[0] * nativeOffset[2],
+          geometry.normal[0] * nativeOffset[1] -
+            geometry.normal[1] * nativeOffset[0],
+        ];
+        const nativeNormalSpeed = Math.abs(
+          profileNormal![0] * nativeCentroidVelocity[0] +
+            profileNormal![1] * nativeCentroidVelocity[1] +
+            profileNormal![2] * nativeCentroidVelocity[2],
+        );
+        const nativeDerivedVolume =
+          nativeProfileArea * nativeNormalSpeed * geometry.sweep;
+        const centroidAllowance =
+          profileMassPropertyDiagnostics!.centroidAllowance!;
+        const orbitRadiusAllowance = Math.hypot(
+          centroidAllowance[0] + centerOffsetAllowance[0],
+          centroidAllowance[1] + centerOffsetAllowance[1],
+          centroidAllowance[2] + centerOffsetAllowance[2],
+        );
+        const areaAllowance =
+          profileMassPropertyDiagnostics!.areaAllowance;
+        const allowance =
+          exactVolume * OCCT_PIPE_SHELL_VOLUME_RELATIVE_TOLERANCE +
+          geometry.sweep *
+            (normalSpeed * areaAllowance +
+              (profileArea + areaAllowance) * orbitRadiusAllowance);
+        if (
+          !Number.isFinite(nativeDerivedVolume) ||
+          !Number.isFinite(allowance) ||
+          !(allowance >= 0) ||
+          Math.abs(nativeDerivedVolume - exactVolume) > allowance
+        ) {
+          throw new RangeError(
+            "OCCT circular-revolution sweep failed the analytic volume postcondition",
           );
         }
       }
@@ -1800,13 +2135,11 @@ class OcctKernel implements GeometryKernel {
         throw new RangeError("Sweep did not produce a positive-volume solid");
       }
       if (
-        pipeShellVolumePostcondition !== undefined &&
-        Math.abs(volume - pipeShellVolumePostcondition.expected) >
-          pipeShellVolumePostcondition.allowance
+        nativeVolumePostcondition !== undefined &&
+        Math.abs(volume - nativeVolumePostcondition.expected) >
+          nativeVolumePostcondition.allowance
       ) {
-        throw new RangeError(
-          "OCCT pipe-shell sweep failed the transported-profile analytic volume postcondition",
-        );
+        throw new RangeError(nativeVolumePostcondition.message);
       }
       return this.own(result, context, {
         ...(exactVolume === undefined ? {} : { volumeOverride: exactVolume }),

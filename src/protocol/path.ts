@@ -64,6 +64,8 @@ export type ResolvedPath =
 
 export interface ResolvedCircularArcGeometry {
   readonly center: Vec3;
+  /** Translation-invariant vector from the authored arc start to its center. */
+  readonly centerOffsetFromStart: Vec3;
   readonly normal: Vec3;
   readonly radius: number;
   /** Oriented selected sweep in radians; conceptually below one full turn. */
@@ -177,9 +179,9 @@ export function resolvedCircularArcGeometry(
   );
   const center = add(path.start, centerOffset);
   const normal = scale(planeNormal, 1 / Math.sqrt(normalSquared));
-  const startRadius = subtract(path.start, center);
-  const throughRadius = subtract(path.through, center);
-  const endRadius = subtract(path.end, center);
+  const startRadius = scale(centerOffset, -1);
+  const throughRadius = subtract(startToThrough, centerOffset);
+  const endRadius = subtract(startToEnd, centerOffset);
   const radius = length(startRadius);
   const sweep =
     orientedAngle(startRadius, throughRadius, normal) +
@@ -204,6 +206,7 @@ export function resolvedCircularArcGeometry(
   }
   return {
     center,
+    centerOffsetFromStart: centerOffset,
     normal,
     radius,
     sweep,
@@ -572,7 +575,7 @@ function arcPoint(
   if (parameter <= 0) return segment.start;
   if (parameter >= 1) return segment.end;
   const geometry = resolvedCircularArcGeometry(segment)!;
-  const startRadius = subtract(segment.start, geometry.center);
+  const startRadius = scale(geometry.centerOffsetFromStart, -1);
   const angle = geometry.sweep * parameter;
   const sine = Math.sin(angle);
   const cosineMinusOne = -2 * Math.sin(angle / 2) ** 2;
