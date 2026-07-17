@@ -95,6 +95,120 @@ describe("OCCT exact-kernel integration", () => {
     }
   });
 
+  it("drops cached triangulation before a nonuniform affine transform", async () => {
+    const kernel = await createOcctKernel();
+    try {
+      const profileRadius = 0.001;
+      const phase = 0.123;
+      const points = [0, 1, 2].map((index) => {
+        const angle = phase + (index * Math.PI * 2) / 3;
+        return [
+          1_000 + profileRadius * Math.cos(angle),
+          profileRadius * Math.sin(angle),
+        ] as const;
+      });
+      const profile: ResolvedProfile = {
+        plane: { plane: "XY", origin: [0, 0, 0] },
+        outer: {
+          curves: points.map((start, index) => ({
+            kind: "line" as const,
+            start,
+            end: points[(index + 1) % points.length]!,
+          })),
+        },
+        holes: [],
+      };
+      const source = kernel.revolve!(profile, { angle: 1 });
+      try {
+        expect(kernel.status(source)).toEqual({ ok: true, code: "VALID" });
+        expect(
+          kernel.mesh(source, { linearDeflection: 0.001 }).indices.length,
+        ).toBeGreaterThan(0);
+        expect(kernel.status(source)).toEqual({ ok: true, code: "VALID" });
+
+        const transformed = kernel.transform!(
+          source,
+          [{ kind: "scale", value: [2, 0.5, 3] }],
+          { feature: "nonuniformly-scaled-meshed-revolve" },
+        );
+        try {
+          expect(kernel.status(transformed)).toEqual({
+            ok: true,
+            code: "VALID",
+          });
+          expect(
+            kernel.mesh(transformed, { linearDeflection: 0.001 }).indices
+              .length,
+          ).toBeGreaterThan(0);
+          expect(kernel.status(transformed)).toEqual({
+            ok: true,
+            code: "VALID",
+          });
+          expect(kernel.status(source)).toEqual({ ok: true, code: "VALID" });
+        } finally {
+          kernel.disposeShape(transformed);
+        }
+      } finally {
+        kernel.disposeShape(source);
+      }
+    } finally {
+      kernel.dispose();
+    }
+  });
+
+  it("releases the mesh-free affine input when native transform fails", async () => {
+    const kernel = await createOcctKernel();
+    const raw = (kernel as any).raw as Record<
+      string,
+      (...args: any[]) => any
+    >;
+    const originalCopy = raw.copy!.bind(raw);
+    const originalGeneralTransform = raw.generalTransform!.bind(raw);
+    const originalRelease = raw.release!.bind(raw);
+    const source = kernel.box!([2, 3, 4], false);
+    let copied: unknown;
+    let copiedReleased = false;
+    try {
+      try {
+        raw.copy = (handle: unknown) => {
+          copied = originalCopy(handle);
+          return copied;
+        };
+        raw.release = (handle: unknown) => {
+          if (handle === copied) copiedReleased = true;
+          return originalRelease(handle);
+        };
+        raw.generalTransform = () => {
+          throw new Error("injected nonuniform affine transform failure");
+        };
+        expect(() =>
+          kernel.transform!(source, [
+            { kind: "scale", value: [2, 0.5, 3] },
+          ]),
+        ).toThrow("injected nonuniform affine transform failure");
+        expect(copied).toBeDefined();
+        expect(copiedReleased).toBe(true);
+        expect(kernel.status(source)).toEqual({ ok: true, code: "VALID" });
+      } finally {
+        raw.copy = originalCopy;
+        raw.generalTransform = originalGeneralTransform;
+        raw.release = originalRelease;
+      }
+
+      const recovered = kernel.transform!(source, [
+        { kind: "scale", value: [2, 0.5, 3] },
+      ]);
+      try {
+        expect(kernel.status(recovered)).toEqual({ ok: true, code: "VALID" });
+      } finally {
+        kernel.disposeShape(recovered);
+      }
+    } finally {
+      kernel.disposeShape(source);
+      kernel.dispose();
+    }
+  });
+
   it("normalizes reversed imported solids before directional features", async () => {
     const raw = await RawOcctKernel.init();
     let reversedBrep: string;

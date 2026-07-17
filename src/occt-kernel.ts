@@ -1612,13 +1612,20 @@ class OcctKernel implements GeometryKernel {
                 ),
               );
             } else {
-              replace(
-                this.raw.generalTransform(current, [
+              // BRepBuilderAPI_GTransform carries cached triangulation from its
+              // input. Strip mesh/polygon caches first so a nonuniform affine
+              // map cannot leave otherwise exact transformed geometry invalid.
+              const cleanSource = this.raw.copy(current);
+              try {
+                const transformed = this.raw.generalTransform(cleanSource, [
                   operation.value[0], 0, 0, 0,
                   0, operation.value[1], 0, 0,
                   0, 0, operation.value[2], 0,
-                ]),
-              );
+                ]);
+                replace(transformed);
+              } finally {
+                this.raw.release(cleanSource);
+              }
             }
             break;
           }
