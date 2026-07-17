@@ -13,6 +13,7 @@ import type {
   ShapeMeasurements,
 } from "./kernel.js";
 import {
+  numericPlaneBasis,
   tessellateProfile,
   type NumericPlane,
   type ResolvedProfile,
@@ -59,21 +60,6 @@ function asManifoldShape(shape: KernelShape): ManifoldShape {
   return shape;
 }
 
-function planeBasis(plane: NumericPlane): {
-  readonly u: Vec3;
-  readonly v: Vec3;
-  readonly n: Vec3;
-} {
-  switch (plane.plane) {
-    case "XY":
-      return { u: [1, 0, 0], v: [0, 1, 0], n: [0, 0, 1] };
-    case "XZ":
-      return { u: [1, 0, 0], v: [0, 0, 1], n: [0, -1, 0] };
-    case "YZ":
-      return { u: [0, 1, 0], v: [0, 0, 1], n: [1, 0, 0] };
-  }
-}
-
 function matrixFromColumns(a: Vec3, b: Vec3, c: Vec3, origin: Vec3): Mat4 {
   return [
     a[0], a[1], a[2], 0,
@@ -84,12 +70,12 @@ function matrixFromColumns(a: Vec3, b: Vec3, c: Vec3, origin: Vec3): Mat4 {
 }
 
 function extrusionMatrix(plane: NumericPlane): Mat4 {
-  const { u, v, n } = planeBasis(plane);
+  const { u, v, n } = numericPlaneBasis(plane);
   return matrixFromColumns(u, v, n, plane.origin);
 }
 
 function revolutionMatrix(plane: NumericPlane): Mat4 {
-  const { u, v, n } = planeBasis(plane);
+  const { u, v, n } = numericPlaneBasis(plane);
   const negativeNormal: Vec3 = [-n[0], -n[1], -n[2]];
   return matrixFromColumns(u, negativeNormal, v, plane.origin);
 }

@@ -1,12 +1,11 @@
-import type { Vec2 } from "../core/math.js";
 import {
-  curveStart,
+  resolvedCurveIsFinite,
   resolvedLoopIsClosed,
   type NumericPlane,
   type ResolvedCurve,
-  type ResolvedLoop,
   type ResolvedProfile,
 } from "./profile.js";
+import { resolvedLoopSignedArea } from "./profile-moments.js";
 
 /** Document v1 lofts connect corresponding section curves with ruled faces. */
 export const LOFT_RULED_SEMANTICS = true as const;
@@ -35,86 +34,6 @@ export interface LoftProfileValidationIssue {
   readonly curveIndex?: number;
   readonly expected?: unknown;
   readonly actual?: unknown;
-}
-
-function finitePoint(point: Vec2): boolean {
-  return Number.isFinite(point[0]) && Number.isFinite(point[1]);
-}
-
-function curveIsFinite(curve: ResolvedCurve, tolerance: number): boolean {
-  switch (curve.kind) {
-    case "line":
-      return (
-        finitePoint(curve.start) &&
-        finitePoint(curve.end) &&
-        Math.hypot(
-          curve.end[0] - curve.start[0],
-          curve.end[1] - curve.start[1],
-        ) > tolerance
-      );
-    case "arc": {
-      const sweep = Math.abs(arcSweep(curve));
-      return (
-        finitePoint(curve.center) &&
-        Number.isFinite(curve.radius) &&
-        curve.radius > tolerance &&
-        Number.isFinite(curve.startAngle) &&
-        Number.isFinite(curve.endAngle) &&
-        curve.radius * sweep > tolerance &&
-        curve.radius * (Math.PI * 2 - sweep) > tolerance
-      );
-    }
-    case "circle":
-      return (
-        finitePoint(curve.center) &&
-        Number.isFinite(curve.radius) &&
-        curve.radius > tolerance
-      );
-  }
-}
-
-function arcSweep(curve: Extract<ResolvedCurve, { readonly kind: "arc" }>): number {
-  let sweep = curve.endAngle - curve.startAngle;
-  if (curve.clockwise && sweep > 0) sweep -= Math.PI * 2;
-  if (!curve.clockwise && sweep < 0) sweep += Math.PI * 2;
-  return sweep;
-}
-
-function curveSignedArea(curve: ResolvedCurve, reference: Vec2): number {
-  switch (curve.kind) {
-    case "line":
-      return (
-        ((curve.start[0] - reference[0]) *
-          (curve.end[1] - reference[1]) -
-          (curve.end[0] - reference[0]) *
-            (curve.start[1] - reference[1])) /
-        2
-      );
-    case "arc": {
-      const sweep = arcSweep(curve);
-      const start = curve.startAngle;
-      const end = start + sweep;
-      return (
-        (curve.radius *
-          ((curve.center[0] - reference[0]) *
-            (Math.sin(end) - Math.sin(start)) -
-            (curve.center[1] - reference[1]) *
-              (Math.cos(end) - Math.cos(start))) +
-          curve.radius ** 2 * sweep) /
-        2
-      );
-    }
-    case "circle":
-      return Math.PI * curve.radius ** 2 * (curve.reversed ? -1 : 1);
-  }
-}
-
-function loopSignedArea(loop: ResolvedLoop): number {
-  const reference = curveStart(loop.curves[0]!);
-  return loop.curves.reduce(
-    (area, curve) => area + curveSignedArea(curve, reference),
-    0,
-  );
 }
 
 function normalStation(plane: NumericPlane): number {
@@ -210,7 +129,9 @@ export function validateRuledSolidLoftProfiles(
       };
     }
     if (
-      profile.outer.curves.some((curve) => !curveIsFinite(curve, tolerance))
+      profile.outer.curves.some(
+        (curve) => !resolvedCurveIsFinite(curve, tolerance),
+      )
     ) {
       return {
         message: `Loft profile ${index} contains a degenerate or non-finite curve`,
@@ -220,8 +141,8 @@ export function validateRuledSolidLoftProfiles(
       };
     }
 
-    const area = loopSignedArea(profile.outer);
-    if (!Number.isFinite(area) || !(Math.abs(area) > tolerance ** 2)) {
+    const area = resolvedLoopSignedArea(profile.outer, tolerance);
+    if (!area.ok) {
       return {
         message: `Loft profile ${index} must enclose nonzero finite area`,
         path: profilePath,
@@ -229,7 +150,7 @@ export function validateRuledSolidLoftProfiles(
         profileIndex: index,
       };
     }
-    const profileOrientation = Math.sign(area);
+    const profileOrientation = Math.sign(area.signedArea);
     orientation ??= profileOrientation;
     if (profileOrientation !== orientation) {
       return {

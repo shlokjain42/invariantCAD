@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  COMPOSITE_SWEEP_MAJOR_ARC_ANGLE_EPSILON,
+  COMPOSITE_SWEEP_MAJOR_ARC_THRESHOLD,
+  COMPOSITE_SWEEP_REFINEMENT_PROTOCOL_VERSION,
   COMPOSITE_PATH_MAX_JUNCTION_SINE,
+  classifyResolvedCompositeSweepRefinements,
   cloneDocument,
   createEvaluator,
   design,
@@ -29,6 +33,8 @@ import {
   type CompositePathSegmentExpression,
   type DesignDocument,
   type GeometryKernel,
+  type KernelCapabilities,
+  type KernelCompositeSweepRefinement,
   type KernelFeatureContext,
   type KernelShape,
   type PrincipalPlane,
@@ -211,21 +217,40 @@ function fixtureCompositeDocument(
   return cad.build();
 }
 
+function fixtureResolvedCompositeDocument(
+  path: ResolvedCompositePath,
+): DesignDocument {
+  return fixtureCompositeDocument(
+    path.segments.map((segment): CompositePathSegmentExpression =>
+      segment.kind === "line"
+        ? { kind: "line", end: expressionPoint(segment.end) }
+        : {
+            kind: "circularArc",
+            through: expressionPoint(segment.through),
+            end: expressionPoint(segment.end),
+          },
+    ),
+    { start: expressionPoint(path.start) },
+  );
+}
+
 function rectangleProfile(
   options: {
     readonly plane?: PrincipalPlane;
     readonly origin?: Vec3;
+    readonly center?: readonly [number, number];
     readonly halfWidth?: number;
     readonly halfHeight?: number;
   } = {},
 ): ResolvedProfile {
   const halfWidth = options.halfWidth ?? 1;
   const halfHeight = options.halfHeight ?? 1;
+  const [centerX, centerY] = options.center ?? [0, 0];
   const points = [
-    [-halfWidth, -halfHeight],
-    [halfWidth, -halfHeight],
-    [halfWidth, halfHeight],
-    [-halfWidth, halfHeight],
+    [centerX - halfWidth, centerY - halfHeight],
+    [centerX + halfWidth, centerY - halfHeight],
+    [centerX + halfWidth, centerY + halfHeight],
+    [centerX - halfWidth, centerY + halfHeight],
   ] as const;
   return {
     plane: {
@@ -258,6 +283,8 @@ function recordingSweepKernel(
     readonly implementsPolyline?: boolean;
     readonly declaresCircularArc?: boolean;
     readonly implementsCircularArc?: boolean;
+    readonly compositeSweepRefinements?: readonly KernelCompositeSweepRefinement[];
+    readonly compositeSweepEnvelope?: unknown;
   } = {},
 ): {
   readonly kernel: GeometryKernel;
@@ -272,6 +299,15 @@ function recordingSweepKernel(
   const implementsPolyline = options.implementsPolyline ?? true;
   const declaresCircularArc = options.declaresCircularArc ?? true;
   const implementsCircularArc = options.implementsCircularArc ?? true;
+  const compositeSweepEnvelope =
+    options.compositeSweepEnvelope !== undefined
+      ? options.compositeSweepEnvelope
+      : options.compositeSweepRefinements === undefined
+        ? undefined
+        : {
+            protocolVersion: COMPOSITE_SWEEP_REFINEMENT_PROTOCOL_VERSION,
+            refinements: options.compositeSweepRefinements,
+          };
   const compositeInvocations: SweepInvocation<ResolvedCompositePath>[] = [];
   const polylineInvocations: SweepInvocation<ResolvedPolylinePath>[] = [];
   const arcInvocations: SweepInvocation<ResolvedCircularArcPath>[] = [];
@@ -292,6 +328,14 @@ function recordingSweepKernel(
       ],
       nativeImports: [],
       nativeExports: [],
+      ...(compositeSweepEnvelope === undefined
+        ? {}
+        : {
+            compositeSweep:
+              compositeSweepEnvelope as NonNullable<
+                KernelCapabilities["compositeSweep"]
+              >,
+          }),
     },
     ...(implementsPolyline
       ? {
@@ -941,6 +985,280 @@ describe("resolved composite path admission and geometry", () => {
     ).toBeUndefined();
   });
 
+  it("classifies composite refinements at the exact major and centering boundaries", () => {
+    const belowMajorSweep =
+      Math.PI + COMPOSITE_SWEEP_MAJOR_ARC_ANGLE_EPSILON / 2;
+    const aboveMajorSweep =
+      COMPOSITE_SWEEP_MAJOR_ARC_THRESHOLD +
+      COMPOSITE_SWEEP_MAJOR_ARC_ANGLE_EPSILON;
+    const pathForSweep = (sweep: number): ResolvedCompositePath =>
+      nearFullLineArcLinePath(Math.PI * 2 - sweep);
+    const centeredProfile = (path: ResolvedCompositePath): ResolvedProfile =>
+      rectangleProfile({
+        origin: path.start,
+        halfWidth: 0.5,
+        halfHeight: 0.5,
+      });
+
+    const below = classifyResolvedCompositeSweepRefinements(
+      centeredProfile(pathForSweep(belowMajorSweep)),
+      pathForSweep(belowMajorSweep),
+      PATH_TOLERANCE,
+    );
+    expect(below).toEqual(expect.objectContaining({ ok: true }));
+    if (!below.ok) throw new Error(below.message);
+    expect(below.evidence.arcs).toHaveLength(1);
+    expect(below.evidence.arcs[0]!.sweep).toBeCloseTo(belowMajorSweep, 12);
+    expect(below.evidence.arcs[0]!.major).toBe(false);
+    expect(below.requiredRefinements).toEqual([]);
+    expect(below.evidence.profile).toBeUndefined();
+
+    const thresholdPath = pathForSweep(COMPOSITE_SWEEP_MAJOR_ARC_THRESHOLD);
+    const atThreshold = classifyResolvedCompositeSweepRefinements(
+      centeredProfile(thresholdPath),
+      thresholdPath,
+      PATH_TOLERANCE,
+    );
+    expect(atThreshold).toEqual(expect.objectContaining({ ok: true }));
+    if (!atThreshold.ok) throw new Error(atThreshold.message);
+    expect(atThreshold.evidence.arcs[0]!.sweep).toBe(
+      COMPOSITE_SWEEP_MAJOR_ARC_THRESHOLD,
+    );
+    expect(atThreshold.evidence.arcs[0]!.major).toBe(false);
+    expect(atThreshold.requiredRefinements).toEqual([]);
+    expect(atThreshold.evidence.profile).toBeUndefined();
+
+    const abovePath = pathForSweep(aboveMajorSweep);
+    const above = classifyResolvedCompositeSweepRefinements(
+      centeredProfile(abovePath),
+      abovePath,
+      PATH_TOLERANCE,
+    );
+    expect(above).toEqual(expect.objectContaining({ ok: true }));
+    if (!above.ok) throw new Error(above.message);
+    expect(above.evidence.arcs[0]!.sweep).toBeCloseTo(aboveMajorSweep, 12);
+    expect(above.evidence.arcs[0]!.major).toBe(true);
+    expect(above.requiredRefinements).toEqual([]);
+
+    const majorPath = majorLineArcLinePath();
+    const atTolerance = classifyResolvedCompositeSweepRefinements(
+      rectangleProfile({
+        origin: majorPath.start,
+        center: [PATH_TOLERANCE, 0],
+        halfWidth: 0.5,
+        halfHeight: 0.5,
+      }),
+      majorPath,
+      PATH_TOLERANCE,
+    );
+    expect(atTolerance).toEqual(expect.objectContaining({ ok: true }));
+    if (!atTolerance.ok) throw new Error(atTolerance.message);
+    expect(atTolerance.requiredRefinements).toEqual([]);
+    expect(
+      atTolerance.evidence.profile!
+        .certifiedSeatedCentroidDistanceLowerBound,
+    ).toBeLessThanOrEqual(PATH_TOLERANCE);
+
+    const beyondTolerance = classifyResolvedCompositeSweepRefinements(
+      rectangleProfile({
+        origin: majorPath.start,
+        center: [PATH_TOLERANCE + 1e-10, 0],
+        halfWidth: 0.5,
+        halfHeight: 0.5,
+      }),
+      majorPath,
+      PATH_TOLERANCE,
+    );
+    expect(beyondTolerance).toEqual(expect.objectContaining({ ok: true }));
+    if (!beyondTolerance.ok) throw new Error(beyondTolerance.message);
+    expect(beyondTolerance.requiredRefinements).toEqual([
+      "major-eccentric-profile",
+    ]);
+    expect(
+      beyondTolerance.evidence.profile!
+        .certifiedSeatedCentroidDistanceLowerBound,
+    ).toBeGreaterThan(PATH_TOLERANCE);
+  });
+
+  it("keeps refinement classification local to the transferred section", () => {
+    const major = majorLineArcLinePath();
+    const centered = rectangleProfile({
+      origin: major.start,
+      halfWidth: 0.5,
+      halfHeight: 0.5,
+    });
+    const admittedOriginMismatch: ResolvedProfile = {
+      ...centered,
+      plane: {
+        ...centered.plane,
+        origin: [
+          centered.plane.origin[0] + PATH_TOLERANCE / 2,
+          centered.plane.origin[1],
+          centered.plane.origin[2],
+        ],
+      },
+    };
+    expect(
+      validateResolvedSweep(admittedOriginMismatch, major, PATH_TOLERANCE),
+    ).toBeUndefined();
+    for (const profile of [centered, admittedOriginMismatch]) {
+      const classification = classifyResolvedCompositeSweepRefinements(
+        profile,
+        major,
+        PATH_TOLERANCE,
+      );
+      expect(classification).toEqual(expect.objectContaining({ ok: true }));
+      if (!classification.ok) throw new Error(classification.message);
+      expect(classification.requiredRefinements).toEqual([]);
+      expect(classification.evidence.profile?.localCentroid).toEqual([0, 0]);
+      expect(classification.evidence.profile?.seatedCentroidDistance).toBe(0);
+    }
+
+    const sameDirectionMismatch = rectangleProfile({
+      origin: [
+        major.start[0] + (PATH_TOLERANCE * 3) / 4,
+        major.start[1],
+        major.start[2],
+      ],
+      center: [(PATH_TOLERANCE * 3) / 4, 0],
+      halfWidth: 0.5,
+      halfHeight: 0.5,
+    });
+    expect(
+      validateResolvedSweep(sameDirectionMismatch, major, PATH_TOLERANCE),
+    ).toBeUndefined();
+    const localClassification =
+      classifyResolvedCompositeSweepRefinements(
+        sameDirectionMismatch,
+        major,
+        PATH_TOLERANCE,
+      );
+    expect(localClassification).toEqual(
+      expect.objectContaining({ ok: true }),
+    );
+    if (!localClassification.ok) throw new Error(localClassification.message);
+    expect(localClassification.requiredRefinements).toEqual([]);
+    expect(
+      localClassification.evidence.profile?.seatedCentroidDistance,
+    ).toBeCloseTo((PATH_TOLERANCE * 3) / 4, 14);
+
+    const cancellingOriginMismatch = rectangleProfile({
+      origin: [
+        major.start[0] - (PATH_TOLERANCE * 3) / 4,
+        major.start[1],
+        major.start[2],
+      ],
+      center: [(PATH_TOLERANCE * 3) / 2, 0],
+      halfWidth: 0.5,
+      halfHeight: 0.5,
+    });
+    expect(
+      validateResolvedSweep(cancellingOriginMismatch, major, PATH_TOLERANCE),
+    ).toBeUndefined();
+    const eccentricLocalClassification =
+      classifyResolvedCompositeSweepRefinements(
+        cancellingOriginMismatch,
+        major,
+        PATH_TOLERANCE,
+      );
+    expect(eccentricLocalClassification).toEqual(
+      expect.objectContaining({ ok: true }),
+    );
+    if (!eccentricLocalClassification.ok) {
+      throw new Error(eccentricLocalClassification.message);
+    }
+    expect(eccentricLocalClassification.requiredRefinements).toEqual([
+      "major-eccentric-profile",
+    ]);
+
+    const minor = canonicalResolvedPath();
+    const eccentricMinor = classifyResolvedCompositeSweepRefinements(
+      rectangleProfile({
+        origin: minor.start,
+        center: [0.25, 0],
+      }),
+      minor,
+      PATH_TOLERANCE,
+    );
+    expect(eccentricMinor).toEqual(expect.objectContaining({ ok: true }));
+    if (!eccentricMinor.ok) throw new Error(eccentricMinor.message);
+    expect(eccentricMinor.requiredRefinements).toEqual([]);
+    expect(eccentricMinor.evidence.profile).toBeUndefined();
+
+    const combined = classifyResolvedCompositeSweepRefinements(
+      rectangleProfile({
+        origin: majorArcArcPath().start,
+        center: [0.25, 0],
+        halfWidth: 0.5,
+        halfHeight: 0.5,
+      }),
+      majorArcArcPath(),
+      PATH_TOLERANCE,
+    );
+    expect(combined).toEqual(expect.objectContaining({ ok: true }));
+    if (!combined.ok) throw new Error(combined.message);
+    expect(combined.requiredRefinements).toEqual([
+      "major-multiple-arcs",
+      "major-eccentric-profile",
+    ]);
+  });
+
+  it("keeps local eccentricity invariant under large world translation", () => {
+    const originalPath = majorLineArcLinePath();
+    const offset: Vec3 = [1e12, 0, 0];
+    const translatedPoint = (point: Vec3): Vec3 => [
+      point[0] + offset[0],
+      point[1] + offset[1],
+      point[2] + offset[2],
+    ];
+    const translatedPath: ResolvedCompositePath = {
+      ...originalPath,
+      start: translatedPoint(originalPath.start),
+      segments: originalPath.segments.map((segment) =>
+        segment.kind === "line"
+          ? { ...segment, end: translatedPoint(segment.end) }
+          : {
+              ...segment,
+              through: translatedPoint(segment.through),
+              end: translatedPoint(segment.end),
+            },
+      ),
+    };
+    const originalProfile = rectangleProfile({
+      origin: originalPath.start,
+      center: [0.1, 0],
+      halfWidth: 0.5,
+      halfHeight: 0.5,
+    });
+    const translatedProfile: ResolvedProfile = {
+      ...originalProfile,
+      plane: {
+        ...originalProfile.plane,
+        origin: translatedPath.start,
+      },
+    };
+
+    for (const [profile, path] of [
+      [originalProfile, originalPath],
+      [translatedProfile, translatedPath],
+    ] as const) {
+      expect(validateResolvedSweep(profile, path, PATH_TOLERANCE)).toBeUndefined();
+      const classification = classifyResolvedCompositeSweepRefinements(
+        profile,
+        path,
+        PATH_TOLERANCE,
+      );
+      expect(classification).toEqual(expect.objectContaining({ ok: true }));
+      if (!classification.ok) throw new Error(classification.message);
+      expect(classification.requiredRefinements).toEqual([
+        "major-eccentric-profile",
+      ]);
+      expect(
+        classification.evidence.profile?.seatedCentroidDistance,
+      ).toBeCloseTo(0.1, 12);
+    }
+  });
+
   it("certifies exact mixed-segment separation and conservative sweep clearance", () => {
     const clearLine: ResolvedPathSegment = {
       kind: "line",
@@ -1458,6 +1776,285 @@ describe("composite sweep evaluator protocol", () => {
       } finally {
         evaluator.dispose();
       }
+    }
+  });
+
+  it("preflights exactly the refinements required by major composite geometry", async () => {
+    const singleMajor = majorLineArcLinePath();
+    const majorAndMinor = majorArcArcPath();
+    const minor = canonicalResolvedPath();
+    const bothRefinements = [
+      "major-multiple-arcs",
+      "major-eccentric-profile",
+    ] as const;
+    const cases: readonly {
+      readonly label: string;
+      readonly path: ResolvedCompositePath;
+      readonly profile: ResolvedProfile;
+      readonly refinements?: readonly KernelCompositeSweepRefinement[];
+    }[] = [
+      {
+        label: "centered single-major",
+        path: singleMajor,
+        profile: rectangleProfile({
+          origin: singleMajor.start,
+          halfWidth: 0.5,
+          halfHeight: 0.5,
+        }),
+      },
+      {
+        label: "centered major-plus-minor",
+        path: majorAndMinor,
+        profile: rectangleProfile({
+          origin: majorAndMinor.start,
+          halfWidth: 0.5,
+          halfHeight: 0.5,
+        }),
+        refinements: ["major-multiple-arcs"],
+      },
+      {
+        label: "eccentric single-major",
+        path: singleMajor,
+        profile: rectangleProfile({
+          origin: singleMajor.start,
+          center: [0.25, 0],
+          halfWidth: 0.5,
+          halfHeight: 0.5,
+        }),
+        refinements: ["major-eccentric-profile"],
+      },
+      {
+        label: "eccentric major-plus-minor",
+        path: majorAndMinor,
+        profile: rectangleProfile({
+          origin: majorAndMinor.start,
+          center: [0.25, 0],
+          halfWidth: 0.5,
+          halfHeight: 0.5,
+        }),
+        refinements: bothRefinements,
+      },
+      {
+        label: "minor composite",
+        path: minor,
+        profile: rectangleProfile({
+          origin: minor.start,
+          halfWidth: 0.5,
+          halfHeight: 0.5,
+        }),
+      },
+    ];
+
+    for (const testCase of cases) {
+      const harness = recordingSweepKernel({
+        ...(testCase.refinements === undefined
+          ? {}
+          : { compositeSweepRefinements: testCase.refinements }),
+      });
+      const solver = new FixtureSketchSolver(testCase.profile);
+      const evaluator = await createEvaluator({
+        kernel: harness.kernel,
+        sketchSolver: solver,
+      });
+      try {
+        const result = await evaluator.evaluate(
+          fixtureResolvedCompositeDocument(testCase.path),
+        );
+        expect(result.ok, testCase.label).toBe(true);
+        if (result.ok) result.value.dispose();
+        expect(harness.compositeInvocations, testCase.label).toHaveLength(1);
+      } finally {
+        evaluator.dispose();
+      }
+    }
+  });
+
+  it("reports every missing composite refinement before backend invocation", async () => {
+    const singleMajor = majorLineArcLinePath();
+    const majorAndMinor = majorArcArcPath();
+    const cases: readonly {
+      readonly label: string;
+      readonly path: ResolvedCompositePath;
+      readonly profile: ResolvedProfile;
+      readonly refinements?: readonly KernelCompositeSweepRefinement[];
+      readonly missing: KernelCompositeSweepRefinement;
+    }[] = [
+      {
+        label: "major-plus-minor without an envelope",
+        path: majorAndMinor,
+        profile: rectangleProfile({
+          origin: majorAndMinor.start,
+          halfWidth: 0.5,
+          halfHeight: 0.5,
+        }),
+        missing: "major-multiple-arcs",
+      },
+      {
+        label: "eccentric single-major with an empty envelope",
+        path: singleMajor,
+        profile: rectangleProfile({
+          origin: singleMajor.start,
+          center: [0.25, 0],
+          halfWidth: 0.5,
+          halfHeight: 0.5,
+        }),
+        refinements: [],
+        missing: "major-eccentric-profile",
+      },
+      {
+        label: "combined geometry with only multiple-arcs",
+        path: majorAndMinor,
+        profile: rectangleProfile({
+          origin: majorAndMinor.start,
+          center: [0.25, 0],
+          halfWidth: 0.5,
+          halfHeight: 0.5,
+        }),
+        refinements: ["major-multiple-arcs"],
+        missing: "major-eccentric-profile",
+      },
+      {
+        label: "combined geometry with only eccentric-profile",
+        path: majorAndMinor,
+        profile: rectangleProfile({
+          origin: majorAndMinor.start,
+          center: [0.25, 0],
+          halfWidth: 0.5,
+          halfHeight: 0.5,
+        }),
+        refinements: ["major-eccentric-profile"],
+        missing: "major-multiple-arcs",
+      },
+    ];
+
+    for (const testCase of cases) {
+      const harness = recordingSweepKernel({
+        ...(testCase.refinements === undefined
+          ? {}
+          : { compositeSweepRefinements: testCase.refinements }),
+      });
+      const evaluator = await createEvaluator({
+        kernel: harness.kernel,
+        sketchSolver: new FixtureSketchSolver(testCase.profile),
+      });
+      try {
+        const result = await evaluator.evaluate(
+          fixtureResolvedCompositeDocument(testCase.path),
+        );
+        expect(result.ok, testCase.label).toBe(false);
+        expect(result.diagnostics, testCase.label).toContainEqual(
+          expect.objectContaining({
+            code: "KERNEL_CAPABILITY_MISSING",
+            node: "body",
+            path: "/nodes/body",
+            details: expect.objectContaining({
+              kernel: "recording-composite-kernel",
+              kind: "compositeSweepRefinement",
+              capability: testCase.missing,
+              requiredRefinements: expect.arrayContaining([
+                testCase.missing,
+              ]),
+              evidence: expect.any(Object),
+            }),
+          }),
+        );
+        expect(harness.compositeInvocations, testCase.label).toEqual([]);
+      } finally {
+        evaluator.dispose();
+      }
+    }
+  });
+
+  it("fails closed on malformed composite refinement envelopes", async () => {
+    const path = majorArcArcPath();
+    const profile = rectangleProfile({
+      origin: path.start,
+      center: [0.25, 0],
+      halfWidth: 0.5,
+      halfHeight: 0.5,
+    });
+    const refinements = [
+      "major-multiple-arcs",
+      "major-eccentric-profile",
+    ] as const;
+    const cases = [
+      {
+        label: "stale protocol",
+        envelope: { protocolVersion: 2, refinements },
+        reason: "unsupported-protocol-version",
+      },
+      {
+        label: "duplicate refinement",
+        envelope: {
+          protocolVersion: COMPOSITE_SWEEP_REFINEMENT_PROTOCOL_VERSION,
+          refinements: ["major-multiple-arcs", "major-multiple-arcs"],
+        },
+        reason: "duplicate-refinement",
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const harness = recordingSweepKernel({
+        compositeSweepEnvelope: testCase.envelope,
+      });
+      const evaluator = await createEvaluator({
+        kernel: harness.kernel,
+        sketchSolver: new FixtureSketchSolver(profile),
+      });
+      try {
+        const result = await evaluator.evaluate(
+          fixtureResolvedCompositeDocument(path),
+        );
+        expect(result.ok, testCase.label).toBe(false);
+        expect(result.diagnostics, testCase.label).toContainEqual(
+          expect.objectContaining({
+            code: "KERNEL_ERROR",
+            node: "body",
+            path: "/nodes/body",
+            details: expect.objectContaining({
+              kernel: "recording-composite-kernel",
+              kind: "compositeSweepRefinement",
+              capability: "major-multiple-arcs",
+              protocolViolation: true,
+              reason: testCase.reason,
+              requiredRefinements: expect.arrayContaining([
+                "major-multiple-arcs",
+                "major-eccentric-profile",
+              ]),
+              evidence: expect.any(Object),
+            }),
+          }),
+        );
+        expect(harness.compositeInvocations, testCase.label).toEqual([]);
+      } finally {
+        evaluator.dispose();
+      }
+    }
+  });
+
+  it("ignores optional refinement metadata when the geometry needs none", async () => {
+    const path = canonicalResolvedPath();
+    const harness = recordingSweepKernel({
+      compositeSweepEnvelope: {
+        protocolVersion: 2,
+        refinements: ["future-refinement"],
+      },
+    });
+    const evaluator = await createEvaluator({
+      kernel: harness.kernel,
+      sketchSolver: new FixtureSketchSolver(
+        rectangleProfile({ origin: path.start, center: [0.25, 0] }),
+      ),
+    });
+    try {
+      const result = await evaluator.evaluate(
+        fixtureResolvedCompositeDocument(path),
+      );
+      expect(result.ok).toBe(true);
+      if (result.ok) result.value.dispose();
+      expect(harness.compositeInvocations).toHaveLength(1);
+    } finally {
+      evaluator.dispose();
     }
   });
 

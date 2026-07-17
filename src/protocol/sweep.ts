@@ -1,12 +1,15 @@
 import type { Vec2, Vec3 } from "../core/math.js";
 import {
-  curveStart,
+  numericPlaneBasis,
+  resolvedCurveIsFinite,
   resolvedLoopIsClosed,
-  type ResolvedArcCurve,
-  type ResolvedCurve,
-  type ResolvedLoop,
   type ResolvedProfile,
 } from "./profile.js";
+import {
+  resolvedLoopSignedArea,
+  resolvedProfileLocalAreaMoments,
+  type ResolvedProfileLocalAreaMomentsResult,
+} from "./profile-moments.js";
 import {
   resolvedAdjacentPathSegmentsHaveRemoteClearance,
   resolvedCompositePathSegments,
@@ -28,6 +31,86 @@ export const SWEEP_TRANSITIONS = Object.freeze(["right-corner"] as const);
 export type SweepTransition = (typeof SWEEP_TRANSITIONS)[number];
 export const SWEEP_FRAMES = Object.freeze(["corrected-frenet"] as const);
 export type SweepFrame = (typeof SWEEP_FRAMES)[number];
+
+/**
+ * Canonical order for additive guarantees beyond the base composite-sweep
+ * contract. A classifier result always follows this order, independently of
+ * the order in which a kernel advertises its guarantees.
+ */
+export const COMPOSITE_SWEEP_REFINEMENTS = Object.freeze([
+  "major-multiple-arcs",
+  "major-eccentric-profile",
+] as const);
+export type CompositeSweepRefinement =
+  (typeof COMPOSITE_SWEEP_REFINEMENTS)[number];
+
+/** Angular ambiguity retained around an exact semicircle, in radians. */
+export const COMPOSITE_SWEEP_MAJOR_ARC_ANGLE_EPSILON = 1e-12;
+/** Strict lower bound for classifying a selected composite arc as major. */
+export const COMPOSITE_SWEEP_MAJOR_ARC_THRESHOLD =
+  Math.PI + COMPOSITE_SWEEP_MAJOR_ARC_ANGLE_EPSILON;
+
+export interface CompositeSweepArcRefinementEvidence {
+  readonly segmentIndex: number;
+  readonly sweep: number;
+  readonly major: boolean;
+}
+
+export interface CompositeSweepProfileRefinementEvidence {
+  readonly area: number;
+  /** Area centroid in the authored profile plane's local coordinates. */
+  readonly localCentroid: Vec2;
+  /**
+   * Translation-invariant distance from the centroid of the profile after its
+  * plane origin is seated exactly at the composite path start.
+  */
+  readonly seatedCentroidDistance: number;
+  /** Conservative Euclidean error bound for `localCentroid`. */
+  readonly centroidRoundoffBound: number;
+  /**
+   * Lower bound on the true seated distance after accounting for analytic
+   * moment roundoff. Eccentricity is required only when this exceeds the
+   * selected centering tolerance.
+   */
+  readonly certifiedSeatedCentroidDistanceLowerBound: number;
+  readonly centeringTolerance: number;
+}
+
+export interface CompositeSweepRefinementEvidence {
+  readonly majorArcThreshold: number;
+  readonly circularArcCount: number;
+  readonly arcs: readonly CompositeSweepArcRefinementEvidence[];
+  readonly majorArcSegmentIndices: readonly number[];
+  /** Present only when at least one arc is classified as major. */
+  readonly profile?: CompositeSweepProfileRefinementEvidence;
+}
+
+export interface CompositeSweepRefinementClassificationSuccess {
+  readonly ok: true;
+  /** A duplicate-free subset of `COMPOSITE_SWEEP_REFINEMENTS`, in its order. */
+  readonly requiredRefinements: readonly CompositeSweepRefinement[];
+  readonly evidence: CompositeSweepRefinementEvidence;
+}
+
+export type CompositeSweepRefinementClassificationFailureReason =
+  | "invalid-tolerance"
+  | "invalid-path"
+  | "invalid-profile-moments";
+
+export interface CompositeSweepRefinementClassificationFailure {
+  readonly ok: false;
+  readonly reason: CompositeSweepRefinementClassificationFailureReason;
+  readonly message: string;
+  readonly segmentIndex?: number;
+  readonly profileMoments?: Extract<
+    ResolvedProfileLocalAreaMomentsResult,
+    { readonly ok: false }
+  >;
+}
+
+export type CompositeSweepRefinementClassification =
+  | CompositeSweepRefinementClassificationSuccess
+  | CompositeSweepRefinementClassificationFailure;
 
 export interface ResolvedSweepOptions {
   /** Document v1 uses intersected right-corner transitions at spine vertices. */
@@ -59,97 +142,6 @@ function distance(a: Vec3, b: Vec3): number {
   return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 }
 
-function planeNormal(profile: ResolvedProfile): Vec3 {
-  switch (profile.plane.plane) {
-    case "XY":
-      return [0, 0, 1];
-    case "XZ":
-      return [0, -1, 0];
-    case "YZ":
-      return [1, 0, 0];
-  }
-}
-
-function finitePoint(point: Vec2): boolean {
-  return Number.isFinite(point[0]) && Number.isFinite(point[1]);
-}
-
-function arcSweep(curve: ResolvedArcCurve): number {
-  let sweep = curve.endAngle - curve.startAngle;
-  if (curve.clockwise && sweep > 0) sweep -= Math.PI * 2;
-  if (!curve.clockwise && sweep < 0) sweep += Math.PI * 2;
-  return sweep;
-}
-
-function curveIsFinite(curve: ResolvedCurve, tolerance: number): boolean {
-  switch (curve.kind) {
-    case "line":
-      return (
-        finitePoint(curve.start) &&
-        finitePoint(curve.end) &&
-        Math.hypot(
-          curve.end[0] - curve.start[0],
-          curve.end[1] - curve.start[1],
-        ) > tolerance
-      );
-    case "arc": {
-      const sweep = Math.abs(arcSweep(curve));
-      return (
-        finitePoint(curve.center) &&
-        Number.isFinite(curve.radius) &&
-        curve.radius > tolerance &&
-        Number.isFinite(curve.startAngle) &&
-        Number.isFinite(curve.endAngle) &&
-        curve.radius * sweep > tolerance &&
-        curve.radius * (Math.PI * 2 - sweep) > tolerance
-      );
-    }
-    case "circle":
-      return (
-        finitePoint(curve.center) &&
-        Number.isFinite(curve.radius) &&
-        curve.radius > tolerance
-      );
-  }
-}
-
-function curveSignedArea(curve: ResolvedCurve, reference: Vec2): number {
-  switch (curve.kind) {
-    case "line":
-      return (
-        ((curve.start[0] - reference[0]) *
-          (curve.end[1] - reference[1]) -
-          (curve.end[0] - reference[0]) *
-            (curve.start[1] - reference[1])) /
-        2
-      );
-    case "arc": {
-      const sweep = arcSweep(curve);
-      const start = curve.startAngle;
-      const end = start + sweep;
-      return (
-        (curve.radius *
-          ((curve.center[0] - reference[0]) *
-            (Math.sin(end) - Math.sin(start)) -
-            (curve.center[1] - reference[1]) *
-              (Math.cos(end) - Math.cos(start))) +
-          curve.radius ** 2 * sweep) /
-        2
-      );
-    }
-    case "circle":
-      return Math.PI * curve.radius ** 2 * (curve.reversed ? -1 : 1);
-  }
-}
-
-function loopSignedArea(loop: ResolvedLoop): number {
-  const reference = curveStart(loop.curves[0]!);
-  return loop.curves.reduce(
-    (area, curve) => area + curveSignedArea(curve, reference),
-    0,
-  );
-}
-
 function profileRadius(profile: ResolvedProfile): number {
   return profile.outer.curves.reduce((maximum, curve) => {
     switch (curve.kind) {
@@ -164,6 +156,144 @@ function profileRadius(profile: ResolvedProfile): number {
         return Math.max(maximum, Math.hypot(...curve.center) + curve.radius);
     }
   }, 0);
+}
+
+/**
+ * Classifies the additive guarantees needed by one validated composite sweep.
+ *
+ * Profile eccentricity is intentionally measured in profile-local
+ * coordinates. Composite transfer seats the profile plane origin exactly at
+ * `path.start`, so including an admitted authored origin mismatch would make
+ * the classification translation-dependent and disagree with the transferred
+ * section.
+ */
+export function classifyResolvedCompositeSweepRefinements(
+  profile: ResolvedProfile,
+  path: ResolvedCompositePath,
+  centeringTolerance: number,
+): CompositeSweepRefinementClassification {
+  if (
+    !Number.isFinite(centeringTolerance) ||
+    !(centeringTolerance > 0)
+  ) {
+    return {
+      ok: false,
+      reason: "invalid-tolerance",
+      message:
+        "Composite-sweep refinement centering tolerance must be finite and positive",
+    };
+  }
+
+  const pathIssue = validateResolvedPath(path, centeringTolerance);
+  if (pathIssue !== undefined) {
+    return {
+      ok: false,
+      reason: "invalid-path",
+      message: pathIssue.message,
+      ...(pathIssue.segmentIndex === undefined
+        ? {}
+        : { segmentIndex: pathIssue.segmentIndex }),
+    };
+  }
+
+  const segments = resolvedCompositePathSegments(path);
+  const arcs: CompositeSweepArcRefinementEvidence[] = [];
+  for (const [segmentIndex, segment] of segments.entries()) {
+    if (segment.kind !== "circularArc") continue;
+    const geometry = resolvedCircularArcGeometry(segment);
+    if (
+      geometry === undefined ||
+      !Number.isFinite(geometry.sweep) ||
+      !(geometry.sweep > 0)
+    ) {
+      return {
+        ok: false,
+        reason: "invalid-path",
+        message: `Composite circular-arc segment ${segmentIndex} does not resolve to a finite positive sweep`,
+        segmentIndex,
+      };
+    }
+    arcs.push({
+      segmentIndex,
+      sweep: geometry.sweep,
+      major: geometry.sweep > COMPOSITE_SWEEP_MAJOR_ARC_THRESHOLD,
+    });
+  }
+
+  const majorArcSegmentIndices = arcs
+    .filter((arc) => arc.major)
+    .map((arc) => arc.segmentIndex);
+  const pathEvidence = {
+    majorArcThreshold: COMPOSITE_SWEEP_MAJOR_ARC_THRESHOLD,
+    circularArcCount: arcs.length,
+    arcs,
+    majorArcSegmentIndices,
+  } as const;
+  if (majorArcSegmentIndices.length === 0) {
+    return {
+      ok: true,
+      requiredRefinements: [],
+      evidence: pathEvidence,
+    };
+  }
+
+  const profileMoments = resolvedProfileLocalAreaMoments(
+    profile,
+    centeringTolerance,
+  );
+  if (!profileMoments.ok) {
+    return {
+      ok: false,
+      reason: "invalid-profile-moments",
+      message: profileMoments.message,
+      profileMoments,
+    };
+  }
+  const localCentroid = profileMoments.localCentroid;
+  const seatedCentroidDistance = Math.hypot(
+    localCentroid[0],
+    localCentroid[1],
+  );
+  const centroidRoundoffBound =
+    profileMoments.diagnostics.centroidRoundoffBound;
+  const certifiedSeatedCentroidDistanceLowerBound = Math.max(
+    0,
+    seatedCentroidDistance - centroidRoundoffBound,
+  );
+  if (
+    !Number.isFinite(seatedCentroidDistance) ||
+    !Number.isFinite(centroidRoundoffBound) ||
+    !Number.isFinite(certifiedSeatedCentroidDistanceLowerBound)
+  ) {
+    return {
+      ok: false,
+      reason: "invalid-profile-moments",
+      message:
+        "Composite-sweep profile area centroid must have a finite certified seated distance",
+    };
+  }
+
+  const requiredRefinements = COMPOSITE_SWEEP_REFINEMENTS.filter(
+    (refinement) =>
+      refinement === "major-multiple-arcs"
+        ? arcs.length !== 1
+        : certifiedSeatedCentroidDistanceLowerBound > centeringTolerance,
+  );
+  return {
+    ok: true,
+    requiredRefinements,
+    evidence: {
+      ...pathEvidence,
+      profile: {
+        area: profileMoments.area,
+        localCentroid,
+        seatedCentroidDistance,
+        centroidRoundoffBound,
+        certifiedSeatedCentroidDistanceLowerBound,
+        centeringTolerance,
+      },
+    },
+  };
 }
 
 /** Checks the bounded document-v1 solid-sweep admission contract. */
@@ -185,7 +315,9 @@ export function validateResolvedSweep(
   }
   if (
     profile.plane.origin.some((component) => !Number.isFinite(component)) ||
-    profile.outer.curves.some((curve) => !curveIsFinite(curve, tolerance))
+    profile.outer.curves.some(
+      (curve) => !resolvedCurveIsFinite(curve, tolerance),
+    )
   ) {
     return {
       reason: "non-finite-profile",
@@ -200,8 +332,8 @@ export function validateResolvedSweep(
       input: "profile",
     };
   }
-  const area = loopSignedArea(profile.outer);
-  if (!Number.isFinite(area) || !(Math.abs(area) > tolerance ** 2)) {
+  const area = resolvedLoopSignedArea(profile.outer, tolerance);
+  if (!area.ok) {
     return {
       reason: "degenerate-profile",
       message: "Sweep profile must enclose nonzero finite area",
@@ -230,7 +362,7 @@ export function validateResolvedSweep(
         : firstCompositeSegment!.kind === "circularArc"
           ? resolvedCircularArcGeometry(firstCompositeSegment!)!.radius
           : resolvedPathSegmentLength(firstCompositeSegment!);
-  const normal = planeNormal(profile);
+  const normal = numericPlaneBasis(profile.plane).n;
   const cross: Vec3 = [
     normal[1] * tangent[2] - normal[2] * tangent[1],
     normal[2] * tangent[0] - normal[0] * tangent[2],

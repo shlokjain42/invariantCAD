@@ -33,13 +33,16 @@ import type {
   TransformOperationIR,
 } from "./ir.js";
 import {
+  COMPOSITE_SWEEP_REFINEMENT_PROTOCOL_VERSION,
   EXACT_INDEXED_TOPOLOGY_EVOLUTION_PROTOCOL_VERSION,
   GEOMETRY_KERNEL_PROTOCOL_VERSION,
+  inspectKernelCompositeSweepCapabilities,
   mergeMeshes,
   transformMesh,
   type BoundingBox,
   type GeometryKernel,
   type KernelCapabilityKind,
+  type KernelCompositeSweepRefinement,
   type KernelExchangeFormat,
   type KernelFeature,
   type KernelFeatureContext,
@@ -59,7 +62,11 @@ import {
   type ResolvedCompositePath,
   type ResolvedPath,
 } from "./protocol/path.js";
-import { validateResolvedSweep } from "./protocol/sweep.js";
+import {
+  classifyResolvedCompositeSweepRefinements,
+  validateResolvedSweep,
+  type CompositeSweepRefinementClassificationSuccess,
+} from "./protocol/sweep.js";
 import { createManifoldKernel, type ManifoldKernelOptions } from "./manifold-kernel.js";
 import {
   createReferenceSketchSolver,
@@ -889,6 +896,77 @@ export class Evaluator {
         }
       }
     };
+    const requireCompositeSweepRefinements = (
+      classification: CompositeSweepRefinementClassificationSuccess,
+      id: NodeId,
+    ): void => {
+      if (classification.requiredRefinements.length === 0) return;
+
+      const kind = "compositeSweepRefinement" as const;
+      const inspection = inspectKernelCompositeSweepCapabilities(
+        this.kernel.capabilities,
+      );
+      const requiredRefinements = classification.requiredRefinements;
+      const capability = requiredRefinements[0]!;
+      const sharedDetails = {
+        kernel: this.kernel.id,
+        kind,
+        capability,
+        protocolVersion: COMPOSITE_SWEEP_REFINEMENT_PROTOCOL_VERSION,
+        requiredRefinements,
+        evidence: classification.evidence,
+      } as const;
+
+      if (inspection.status === "malformed") {
+        throw new EvaluationFailure(
+          diagnostic(
+            "KERNEL_ERROR",
+            `Kernel '${this.kernel.id}' declares malformed composite-sweep refinement metadata`,
+            {
+              severity: "error",
+              node: id,
+              path: `/nodes/${id}`,
+              details: {
+                ...sharedDetails,
+                protocolViolation: true,
+                reason: inspection.reason,
+                ...inspection.details,
+              },
+            },
+          ),
+        );
+      }
+
+      const advertised: readonly KernelCompositeSweepRefinement[] =
+        inspection.status === "valid"
+          ? inspection.capabilities.refinements
+          : [];
+      const missingRefinements = requiredRefinements.filter(
+        (refinement) => !advertised.includes(refinement),
+      );
+      if (missingRefinements.length === 0) return;
+
+      throw new EvaluationFailure(
+        diagnostic(
+          "KERNEL_CAPABILITY_MISSING",
+          `Kernel '${this.kernel.id}' does not support composite-sweep refinement '${missingRefinements[0]}'`,
+          {
+            severity: "error",
+            node: id,
+            path: `/nodes/${id}`,
+            hints: [
+              "Choose a geometry kernel whose composite-sweep refinements cover this design",
+            ],
+            details: {
+              ...sharedDetails,
+              capability: missingRefinements[0],
+              advertisedRefinements: advertised,
+              missingRefinements,
+            },
+          },
+        ),
+      );
+    };
     const featureContext = (id: NodeId): KernelFeatureContext => ({
       feature: id,
       ...(options.signal === undefined ? {} : { signal: options.signal }),
@@ -1386,6 +1464,35 @@ export class Evaluator {
                   details: { ...details, input },
                 }),
               );
+            }
+            if (pathValue.path.kind === "composite") {
+              const classification =
+                classifyResolvedCompositeSweepRefinements(
+                  profileValue.profile,
+                  pathValue.path,
+                  tolerance,
+                );
+              if (!classification.ok) {
+                throw new EvaluationFailure(
+                  diagnostic("FEATURE_INVALID", classification.message, {
+                    severity: "error",
+                    node: id,
+                    path: `/nodes/${id}/profile`,
+                    details: {
+                      reason: classification.reason,
+                      ...(classification.segmentIndex === undefined
+                        ? {}
+                        : { segmentIndex: classification.segmentIndex }),
+                      ...(classification.profileMoments === undefined
+                        ? {}
+                        : {
+                            profileMoments: classification.profileMoments,
+                          }),
+                    },
+                  }),
+                );
+              }
+              requireCompositeSweepRefinements(classification, id);
             }
             result = ownShape(
               pathValue.path.kind === "circularArc"

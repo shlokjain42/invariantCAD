@@ -35,7 +35,11 @@ import type {
   ResolvedLoop,
   ResolvedProfile,
 } from "./protocol/profile.js";
-import { curveStart } from "./protocol/profile.js";
+import {
+  curveStart,
+  numericPlaneBasis,
+  resolvedArcSweep,
+} from "./protocol/profile.js";
 import {
   validateRuledSolidLoftProfiles,
   type ResolvedLoftOptions,
@@ -55,6 +59,7 @@ import {
   type ResolvedPolylinePath,
 } from "./protocol/path.js";
 import {
+  classifyResolvedCompositeSweepRefinements,
   validateResolvedSweep,
   type ResolvedSweepOptions,
 } from "./protocol/sweep.js";
@@ -146,26 +151,9 @@ class OcctShape implements KernelShape {
   }
 }
 
-interface PlaneBasis {
-  readonly u: Vec3;
-  readonly v: Vec3;
-  readonly n: Vec3;
-}
-
 interface ProfileCurveHandle {
   readonly curve: ResolvedCurve;
   readonly handle: ShapeHandle;
-}
-
-function planeBasis(plane: NumericPlane): PlaneBasis {
-  switch (plane.plane) {
-    case "XY":
-      return { u: [1, 0, 0], v: [0, 1, 0], n: [0, 0, 1] };
-    case "XZ":
-      return { u: [1, 0, 0], v: [0, 0, 1], n: [0, -1, 0] };
-    case "YZ":
-      return { u: [0, 1, 0], v: [0, 0, 1], n: [1, 0, 0] };
-  }
 }
 
 function occtVector(value: Vec3): OcctVec3 {
@@ -257,19 +245,12 @@ function arrayBufferCopy(value: Uint8Array): ArrayBuffer {
 }
 
 function pointOnPlane(point: Vec2, plane: NumericPlane): OcctVec3 {
-  const { u, v } = planeBasis(plane);
+  const { u, v } = numericPlaneBasis(plane);
   return {
     x: plane.origin[0] + point[0] * u[0] + point[1] * v[0],
     y: plane.origin[1] + point[0] * u[1] + point[1] * v[1],
     z: plane.origin[2] + point[0] * u[2] + point[1] * v[2],
   };
-}
-
-function arcSweep(curve: ResolvedArcCurve): number {
-  let sweep = curve.endAngle - curve.startAngle;
-  if (curve.clockwise && sweep > 0) sweep -= Math.PI * 2;
-  if (!curve.clockwise && sweep < 0) sweep += Math.PI * 2;
-  return sweep;
 }
 
 // Polyline and composite sweeps use BRepOffsetAPI_MakePipeShell. Its stock
@@ -323,7 +304,7 @@ function resolvedProfileCurveLength(curve: ResolvedCurve): number {
         curve.end[1] - curve.start[1],
       );
     case "arc":
-      return curve.radius * Math.abs(arcSweep(curve));
+      return curve.radius * Math.abs(resolvedArcSweep(curve));
     case "circle":
       return curve.radius * Math.PI * 2;
   }
@@ -618,7 +599,7 @@ class OcctKernel implements GeometryKernel {
         );
         break;
       case "arc": {
-        const sweep = arcSweep(curve);
+        const sweep = resolvedArcSweep(curve);
         const middle = curve.startAngle + sweep / 2;
         handle = this.raw.makeArcEdge(
           pointOnPlane(arcPoint(curve, curve.startAngle), plane),
@@ -628,7 +609,7 @@ class OcctKernel implements GeometryKernel {
         break;
       }
       case "circle": {
-        const basis = planeBasis(plane);
+        const basis = numericPlaneBasis(plane);
         handle = this.raw.makeCircleEdge(
           pointOnPlane(curve.center, plane),
           occtVector(basis.n),
@@ -848,7 +829,7 @@ class OcctKernel implements GeometryKernel {
     options: { readonly distance: number; readonly symmetric: boolean },
     context?: KernelFeatureContext,
   ): TopologyAnnotation {
-    const basis = planeBasis(profile.plane);
+    const basis = numericPlaneBasis(profile.plane);
     const vector: Vec3 = basis.n.map(
       (value) => value * options.distance,
     ) as unknown as Vec3;
@@ -1087,7 +1068,7 @@ class OcctKernel implements GeometryKernel {
       );
     }
     const built = this.profileFace(profile);
-    const normal = planeBasis(profile.plane).n;
+    const normal = numericPlaneBasis(profile.plane).n;
     let result: ShapeHandle | undefined;
     try {
       result = this.raw.extrude(
@@ -1129,7 +1110,7 @@ class OcctKernel implements GeometryKernel {
   ): KernelShape {
     checkContext(context);
     const built = this.profileFace(profile);
-    const axis = planeBasis(profile.plane).v;
+    const axis = numericPlaneBasis(profile.plane).v;
     try {
       return this.own(
         this.raw.revolve(
@@ -1347,6 +1328,36 @@ class OcctKernel implements GeometryKernel {
         : requestedTolerance;
     const issue = validateResolvedSweep(profile, path, tolerance);
     if (issue !== undefined) throw new RangeError(issue.message);
+    if (path.kind === "composite") {
+      const classification = classifyResolvedCompositeSweepRefinements(
+        profile,
+        path,
+        requestedTolerance,
+      );
+      if (!classification.ok) {
+        throw new RangeError(classification.message);
+      }
+      if (this.facade?.pipeShell === undefined) {
+        if (
+          classification.requiredRefinements.includes(
+            "major-multiple-arcs",
+          )
+        ) {
+          throw new RangeError(
+            "Stock OCCT major-arc composite sweeps require exactly one circular-arc segment",
+          );
+        }
+        if (
+          classification.requiredRefinements.includes(
+            "major-eccentric-profile",
+          )
+        ) {
+          throw new RangeError(
+            "Stock OCCT major-arc composite sweeps require the profile area centroid at the path start",
+          );
+        }
+      }
+    }
     if (
       path.kind === "circularArc" &&
       !(
@@ -1456,43 +1467,14 @@ class OcctKernel implements GeometryKernel {
       const minimumVolume = tolerance ** 3;
       if (path.kind === "composite") {
         const segments = resolvedCompositePathSegments(path);
-        const arcSegments = segments.filter(
-          (segment) => segment.kind === "circularArc",
-        );
         const centroid = vectorFromOcct(
           this.raw.getSurfaceCenterOfMass(built.face),
         );
-        const centroidDistance = vectorDistance(centroid, path.start);
-        const hasMajorArc = arcSegments.some(
-          (segment) =>
-            resolvedCircularArcGeometry(segment)!.sweep > Math.PI + 1e-12,
-        );
-        if (
-          this.facade?.pipeShell === undefined &&
-          hasMajorArc &&
-          arcSegments.length !== 1
-        ) {
-          throw new RangeError(
-            "Stock OCCT major-arc composite sweeps require exactly one circular-arc segment",
-          );
-        }
-        if (
-          this.facade?.pipeShell === undefined &&
-          hasMajorArc &&
-          !(
-            Number.isFinite(centroidDistance) &&
-            centroidDistance <= this.modelingTolerance
-          )
-        ) {
-          throw new RangeError(
-            "Stock OCCT major-arc composite sweeps require the profile area centroid at the path start",
-          );
-        }
         const volumeOracle = resolvedCompositeSweepVolumeOracle(
           {
             area: profileArea,
             centroid,
-            normal: planeBasis(seatedProfile.plane).n,
+            normal: numericPlaneBasis(seatedProfile.plane).n,
           },
           path,
           tolerance,
@@ -1546,7 +1528,7 @@ class OcctKernel implements GeometryKernel {
           geometry.normal[0] * offset[1] -
             geometry.normal[1] * offset[0],
         ];
-        const profileNormal = planeBasis(seatedProfile.plane).n;
+        const profileNormal = numericPlaneBasis(seatedProfile.plane).n;
         const normalSpeed = Math.abs(
           profileNormal[0] * centroidVelocity[0] +
             profileNormal[1] * centroidVelocity[1] +

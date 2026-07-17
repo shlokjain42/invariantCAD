@@ -19,6 +19,7 @@ InvariantCAD's goal is one coherent TypeScript CAD system, not one monolithic ge
 - Exact primitives, extrude, revolve, booleans, and transforms
 - Bounded ruled solid lofts through ordered, compatible, hole-free profiles
 - Bounded exact solid sweeps along explicit open 3D polyline, three-point circular-arc, and ordered exact line/arc composite paths with corrected-Frenet transport
+- Exact kernel-neutral profile area/centroid moments and geometry-derived capability refinement preflight for bounded composite sweeps
 - Exact lines, circles, conics, NURBS curves, and NURBS surfaces
 - STEP and OCCT BREP import/export, followed by IGES
 - Shape healing and validity diagnostics

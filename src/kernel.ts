@@ -9,7 +9,11 @@ import type {
   ResolvedCircularArcPath,
   ResolvedPolylinePath,
 } from "./protocol/path.js";
-import type { ResolvedSweepOptions } from "./protocol/sweep.js";
+import {
+  COMPOSITE_SWEEP_REFINEMENTS,
+  type CompositeSweepRefinement,
+  type ResolvedSweepOptions,
+} from "./protocol/sweep.js";
 import type {
   KernelTopologyCapabilities,
   KernelTopologyKey,
@@ -32,9 +36,8 @@ export type KernelFeature =
   | "shell"
   | "offset"
   | "draft";
-export type KernelCompositeSweepRefinement =
-  | "major-multiple-arcs"
-  | "major-eccentric-profile";
+/** @see CompositeSweepRefinement */
+export type KernelCompositeSweepRefinement = CompositeSweepRefinement;
 export type KernelCapabilityKind =
   | "primitive"
   | "feature"
@@ -58,6 +61,36 @@ export interface KernelCompositeSweepCapabilities {
   readonly protocolVersion: typeof COMPOSITE_SWEEP_REFINEMENT_PROTOCOL_VERSION;
   readonly refinements: readonly KernelCompositeSweepRefinement[];
 }
+
+export type KernelCompositeSweepCapabilitiesMalformedReason =
+  | "not-object"
+  | "unsupported-protocol-version"
+  | "refinements-not-array"
+  | "invalid-refinement"
+  | "unknown-refinement"
+  | "duplicate-refinement";
+
+export interface KernelCompositeSweepCapabilitiesAbsent {
+  readonly status: "absent";
+}
+
+export interface KernelCompositeSweepCapabilitiesValid {
+  readonly status: "valid";
+  /** A validated snapshot, isolated from later mutation of kernel metadata. */
+  readonly capabilities: KernelCompositeSweepCapabilities;
+}
+
+export interface KernelCompositeSweepCapabilitiesMalformed {
+  readonly status: "malformed";
+  readonly reason: KernelCompositeSweepCapabilitiesMalformedReason;
+  readonly message: string;
+  readonly details: Readonly<Record<string, unknown>>;
+}
+
+export type KernelCompositeSweepCapabilitiesInspection =
+  | KernelCompositeSweepCapabilitiesAbsent
+  | KernelCompositeSweepCapabilitiesValid
+  | KernelCompositeSweepCapabilitiesMalformed;
 
 /**
  * Feature-scoped support for complete, exact, indexed topology evolution.
@@ -84,32 +117,117 @@ export interface KernelCapabilities {
   readonly exactIndexedTopologyEvolution?: KernelExactIndexedTopologyEvolutionCapabilities;
 }
 
+function metadataType(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  return typeof value;
+}
+
+/**
+ * Inspects the optional composite-sweep refinement envelope without conflating
+ * absent support with malformed metadata. The base `compositeSweep` feature is
+ * deliberately checked separately by `kernelSupports` and evaluator preflight.
+ */
+export function inspectKernelCompositeSweepCapabilities(
+  capabilities: KernelCapabilities,
+): KernelCompositeSweepCapabilitiesInspection {
+  const raw: unknown = capabilities.compositeSweep;
+  if (raw === undefined) return { status: "absent" };
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return {
+      status: "malformed",
+      reason: "not-object",
+      message: "Composite-sweep capability metadata must be an object",
+      details: { actualType: metadataType(raw) },
+    };
+  }
+
+  const metadata = raw as {
+    readonly protocolVersion?: unknown;
+    readonly refinements?: unknown;
+  };
+  if (
+    metadata.protocolVersion !==
+    COMPOSITE_SWEEP_REFINEMENT_PROTOCOL_VERSION
+  ) {
+    return {
+      status: "malformed",
+      reason: "unsupported-protocol-version",
+      message: "Composite-sweep capability metadata uses an unsupported protocol version",
+      details: {
+        expectedProtocolVersion:
+          COMPOSITE_SWEEP_REFINEMENT_PROTOCOL_VERSION,
+        actualProtocolVersion: metadata.protocolVersion,
+      },
+    };
+  }
+  if (!Array.isArray(metadata.refinements)) {
+    return {
+      status: "malformed",
+      reason: "refinements-not-array",
+      message: "Composite-sweep refinements must be an array",
+      details: { actualType: metadataType(metadata.refinements) },
+    };
+  }
+
+  const knownRefinements = new Set<string>(COMPOSITE_SWEEP_REFINEMENTS);
+  const seen = new Set<KernelCompositeSweepRefinement>();
+  const refinements: KernelCompositeSweepRefinement[] = [];
+  for (let index = 0; index < metadata.refinements.length; index += 1) {
+    if (!Object.hasOwn(metadata.refinements, index)) {
+      return {
+        status: "malformed",
+        reason: "invalid-refinement",
+        message: "Composite-sweep refinements must be a dense array of names",
+        details: { index, actualType: "missing" },
+      };
+    }
+    const refinement: unknown = metadata.refinements[index];
+    if (typeof refinement !== "string") {
+      return {
+        status: "malformed",
+        reason: "invalid-refinement",
+        message: "Composite-sweep refinements must be a dense array of names",
+        details: { index, actualType: metadataType(refinement) },
+      };
+    }
+    if (!knownRefinements.has(refinement)) {
+      return {
+        status: "malformed",
+        reason: "unknown-refinement",
+        message: `Composite-sweep refinement '${refinement}' is unknown`,
+        details: { index, refinement },
+      };
+    }
+    const known = refinement as KernelCompositeSweepRefinement;
+    if (seen.has(known)) {
+      return {
+        status: "malformed",
+        reason: "duplicate-refinement",
+        message: `Composite-sweep refinement '${known}' is duplicated`,
+        details: { index, refinement: known },
+      };
+    }
+    seen.add(known);
+    refinements.push(known);
+  }
+  return {
+    status: "valid",
+    capabilities: Object.freeze({
+      protocolVersion: COMPOSITE_SWEEP_REFINEMENT_PROTOCOL_VERSION,
+      refinements: Object.freeze(refinements),
+    }),
+  };
+}
+
 function supportedCompositeSweepRefinements(
   capabilities: KernelCapabilities,
 ): readonly KernelCompositeSweepRefinement[] {
   if (!capabilities.features.includes("compositeSweep")) return [];
-
-  const envelope = capabilities.compositeSweep;
-  if (
-    envelope?.protocolVersion !==
-      COMPOSITE_SWEEP_REFINEMENT_PROTOCOL_VERSION ||
-    !Array.isArray(envelope.refinements)
-  ) {
-    return [];
-  }
-
-  const seen = new Set<KernelCompositeSweepRefinement>();
-  for (const refinement of envelope.refinements) {
-    if (
-      (refinement !== "major-multiple-arcs" &&
-        refinement !== "major-eccentric-profile") ||
-      seen.has(refinement)
-    ) {
-      return [];
-    }
-    seen.add(refinement);
-  }
-  return envelope.refinements;
+  const inspection = inspectKernelCompositeSweepCapabilities(capabilities);
+  return inspection.status === "valid"
+    ? inspection.capabilities.refinements
+    : [];
 }
 
 export function kernelSupports(

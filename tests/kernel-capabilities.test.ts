@@ -4,6 +4,7 @@ import {
   createEvaluator,
   createManifoldKernel,
   design,
+  inspectKernelCompositeSweepCapabilities,
   kernelSupports,
   mm,
   type GeometryKernel,
@@ -12,6 +13,124 @@ import {
 } from "../src/index.js";
 
 describe("kernel capability negotiation", () => {
+  it("distinguishes absent, valid, and malformed composite refinement metadata", () => {
+    const base: KernelCapabilities = {
+      protocolVersion: 1,
+      representation: "brep",
+      exact: true,
+      primitives: [],
+      features: ["compositeSweep"],
+      nativeImports: [],
+      nativeExports: [],
+    };
+    expect(inspectKernelCompositeSweepCapabilities(base)).toEqual({
+      status: "absent",
+    });
+
+    const refinements = ["major-multiple-arcs"];
+    const valid = inspectKernelCompositeSweepCapabilities({
+      ...base,
+      compositeSweep: {
+        protocolVersion: COMPOSITE_SWEEP_REFINEMENT_PROTOCOL_VERSION,
+        refinements: refinements as KernelCompositeSweepRefinement[],
+      },
+    });
+    expect(valid).toEqual({
+      status: "valid",
+      capabilities: {
+        protocolVersion: COMPOSITE_SWEEP_REFINEMENT_PROTOCOL_VERSION,
+        refinements: ["major-multiple-arcs"],
+      },
+    });
+    expect(valid.status === "valid" && Object.isFrozen(valid.capabilities)).toBe(
+      true,
+    );
+    expect(
+      valid.status === "valid" &&
+        Object.isFrozen(valid.capabilities.refinements),
+    ).toBe(true);
+    refinements.push("major-eccentric-profile");
+    expect(
+      valid.status === "valid" ? valid.capabilities.refinements : [],
+    ).toEqual(["major-multiple-arcs"]);
+
+    const sparseRefinements = new Array(1) as string[];
+    const malformedCases: readonly {
+      readonly envelope: unknown;
+      readonly reason: string;
+      readonly details?: Readonly<Record<string, unknown>>;
+    }[] = [
+      {
+        envelope: null,
+        reason: "not-object",
+        details: { actualType: "null" },
+      },
+      {
+        envelope: { protocolVersion: 2, refinements: [] },
+        reason: "unsupported-protocol-version",
+      },
+      {
+        envelope: {
+          protocolVersion: COMPOSITE_SWEEP_REFINEMENT_PROTOCOL_VERSION,
+          refinements: "major-multiple-arcs",
+        },
+        reason: "refinements-not-array",
+        details: { actualType: "string" },
+      },
+      {
+        envelope: {
+          protocolVersion: COMPOSITE_SWEEP_REFINEMENT_PROTOCOL_VERSION,
+          refinements: sparseRefinements,
+        },
+        reason: "invalid-refinement",
+        details: { index: 0, actualType: "missing" },
+      },
+      {
+        envelope: {
+          protocolVersion: COMPOSITE_SWEEP_REFINEMENT_PROTOCOL_VERSION,
+          refinements: [42],
+        },
+        reason: "invalid-refinement",
+        details: { index: 0, actualType: "number" },
+      },
+      {
+        envelope: {
+          protocolVersion: COMPOSITE_SWEEP_REFINEMENT_PROTOCOL_VERSION,
+          refinements: ["future-refinement"],
+        },
+        reason: "unknown-refinement",
+        details: { index: 0, refinement: "future-refinement" },
+      },
+      {
+        envelope: {
+          protocolVersion: COMPOSITE_SWEEP_REFINEMENT_PROTOCOL_VERSION,
+          refinements: ["major-multiple-arcs", "major-multiple-arcs"],
+        },
+        reason: "duplicate-refinement",
+        details: { index: 1, refinement: "major-multiple-arcs" },
+      },
+    ];
+    for (const testCase of malformedCases) {
+      expect(
+        inspectKernelCompositeSweepCapabilities({
+          ...base,
+          compositeSweep:
+            testCase.envelope as NonNullable<
+              KernelCapabilities["compositeSweep"]
+            >,
+        }),
+      ).toEqual(
+        expect.objectContaining({
+          status: "malformed",
+          reason: testCase.reason,
+          ...(testCase.details === undefined
+            ? {}
+            : { details: expect.objectContaining(testCase.details) }),
+        }),
+      );
+    }
+  });
+
   it("queries primitive, feature, and export capabilities", async () => {
     const kernel = await createManifoldKernel();
     try {

@@ -70,6 +70,34 @@ function rectangleProfile(
   };
 }
 
+function translatedRectangleProfile(
+  sketch: string,
+  width: number,
+  height: number,
+  offset: readonly [number, number],
+  plane: ResolvedProfile["plane"]["plane"] = "XY",
+): ResolvedProfile {
+  const profile = rectangleProfile(sketch, width, height, plane);
+  return {
+    ...profile,
+    outer: {
+      curves: profile.outer.curves.map((curve) => {
+        if (curve.kind !== "line") {
+          throw new Error("Expected a rectangular line profile");
+        }
+        return {
+          ...curve,
+          start: [
+            curve.start[0] + offset[0],
+            curve.start[1] + offset[1],
+          ],
+          end: [curve.end[0] + offset[0], curve.end[1] + offset[1]],
+        };
+      }),
+    },
+  };
+}
+
 function circleProfile(
   sketch: string,
   radius: number,
@@ -563,22 +591,12 @@ describe("OCCT exact composite solid sweep", () => {
       ).toThrow("require exactly one circular-arc segment");
       expect(raw.shapeCount).toBe(baselineShapeCount);
 
-      const centered = rectangleProfile("eccentric-major-profile", 1, 1);
-      const eccentric: ResolvedProfile = {
-        ...centered,
-        outer: {
-          curves: centered.outer.curves.map((curve) => {
-            if (curve.kind !== "line") {
-              throw new Error("Expected a rectangular line profile");
-            }
-            return {
-              ...curve,
-              start: [curve.start[0] + 1, curve.start[1]] as const,
-              end: [curve.end[0] + 1, curve.end[1]] as const,
-            };
-          }),
-        },
-      };
+      const eccentric = translatedRectangleProfile(
+        "eccentric-major-profile",
+        1,
+        1,
+        [1, 0],
+      );
       expect(() =>
         kernel.compositeSweep!(
           eccentric,
@@ -603,6 +621,59 @@ describe("OCCT exact composite solid sweep", () => {
       expect(raw.shapeCount).toBe(baselineShapeCount);
     } finally {
       kernel.dispose();
+    }
+  });
+
+  it("uses the requested context tolerance for stock major eccentricity", async () => {
+    const path = majorCompositePath();
+    const profile = translatedRectangleProfile(
+      "requested-tolerance-major-profile",
+      1,
+      1,
+      [5e-6, 0],
+    );
+
+    const strictKernel = await createOcctKernel({ modelingTolerance: 1e-5 });
+    const strictRaw = (strictKernel as any).raw as {
+      readonly shapeCount: number;
+    };
+    const strictBaseline = strictRaw.shapeCount;
+    try {
+      expect(() =>
+        strictKernel.compositeSweep!(profile, path, SWEEP_OPTIONS, {
+          feature: "strict-requested-tolerance-sweep",
+          tolerance: 1e-7,
+        }),
+      ).toThrow("require the profile area centroid at the path start");
+      expect(strictRaw.shapeCount).toBe(strictBaseline);
+    } finally {
+      strictKernel.dispose();
+    }
+
+    const looseKernel = await createOcctKernel({ modelingTolerance: 1e-7 });
+    const looseRaw = (looseKernel as any).raw as {
+      readonly shapeCount: number;
+    };
+    const looseBaseline = looseRaw.shapeCount;
+    try {
+      const shape = looseKernel.compositeSweep!(
+        profile,
+        path,
+        SWEEP_OPTIONS,
+        {
+          feature: "loose-requested-tolerance-sweep",
+          tolerance: 1e-5,
+        },
+      );
+      try {
+        expect(looseKernel.status(shape)).toEqual({ ok: true, code: "VALID" });
+        expect(looseKernel.measure(shape).volume).toBeGreaterThan(0);
+      } finally {
+        looseKernel.disposeShape(shape);
+      }
+      expect(looseRaw.shapeCount).toBe(looseBaseline);
+    } finally {
+      looseKernel.dispose();
     }
   });
 

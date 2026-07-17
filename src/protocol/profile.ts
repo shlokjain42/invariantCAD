@@ -1,9 +1,15 @@
 import type { EntityId } from "../core/ids.js";
-import { distance2, type Vec2 } from "../core/math.js";
+import { distance2, type Vec2, type Vec3 } from "../core/math.js";
 
 export interface NumericPlane {
   readonly plane: "XY" | "XZ" | "YZ";
   readonly origin: readonly [number, number, number];
+}
+
+export interface NumericPlaneBasis {
+  readonly u: Vec3;
+  readonly v: Vec3;
+  readonly n: Vec3;
 }
 
 export interface ProfileCurveSource {
@@ -63,11 +69,82 @@ export interface TessellatedProfile {
   readonly plane: NumericPlane;
 }
 
-function arcSweep(curve: ResolvedArcCurve): number {
+/** Returns the signed authored traversal; curve validation bounds it below one turn. */
+export function resolvedArcSweep(curve: ResolvedArcCurve): number {
   let sweep = curve.endAngle - curve.startAngle;
   if (curve.clockwise && sweep > 0) sweep -= Math.PI * 2;
   if (!curve.clockwise && sweep < 0) sweep += Math.PI * 2;
   return sweep;
+}
+
+/** The right-handed world basis of a principal numeric sketch plane. */
+export function numericPlaneBasis(plane: NumericPlane): NumericPlaneBasis {
+  switch (plane.plane) {
+    case "XY":
+      return { u: [1, 0, 0], v: [0, 1, 0], n: [0, 0, 1] };
+    case "XZ":
+      return { u: [1, 0, 0], v: [0, 0, 1], n: [0, -1, 0] };
+    case "YZ":
+      return { u: [0, 1, 0], v: [0, 0, 1], n: [1, 0, 0] };
+  }
+}
+
+/** Lifts one sketch-local point into its principal plane in world space. */
+export function pointOnNumericPlane(point: Vec2, plane: NumericPlane): Vec3 {
+  const { u, v } = numericPlaneBasis(plane);
+  return [
+    plane.origin[0] + point[0] * u[0] + point[1] * v[0],
+    plane.origin[1] + point[0] * u[1] + point[1] * v[1],
+    plane.origin[2] + point[0] * u[2] + point[1] * v[2],
+  ];
+}
+
+function finitePoint(point: Vec2): boolean {
+  return Number.isFinite(point[0]) && Number.isFinite(point[1]);
+}
+
+/** Checks the shared finite, tolerance-bounded analytic curve contract. */
+export function resolvedCurveIsFinite(
+  curve: ResolvedCurve,
+  tolerance: number,
+): boolean {
+  if (!Number.isFinite(tolerance) || !(tolerance > 0)) return false;
+  switch (curve.kind) {
+    case "line": {
+      const length = distance2(curve.start, curve.end);
+      return (
+        finitePoint(curve.start) &&
+        finitePoint(curve.end) &&
+        Number.isFinite(length) &&
+        length > tolerance
+      );
+    }
+    case "arc": {
+      const sweep = Math.abs(resolvedArcSweep(curve));
+      const length = curve.radius * sweep;
+      const complementLength = curve.radius * (Math.PI * 2 - sweep);
+      return (
+        finitePoint(curve.center) &&
+        Number.isFinite(curve.radius) &&
+        curve.radius > tolerance &&
+        Number.isFinite(curve.startAngle) &&
+        Number.isFinite(curve.endAngle) &&
+        Number.isFinite(sweep) &&
+        sweep > 0 &&
+        sweep < Math.PI * 2 &&
+        Number.isFinite(length) &&
+        length > tolerance &&
+        Number.isFinite(complementLength) &&
+        complementLength > tolerance
+      );
+    }
+    case "circle":
+      return (
+        finitePoint(curve.center) &&
+        Number.isFinite(curve.radius) &&
+        curve.radius > tolerance
+      );
+  }
 }
 
 export function curveStart(curve: ResolvedCurve): Vec2 {
@@ -118,7 +195,7 @@ function tessellateCurve(curve: ResolvedCurve): readonly Vec2[] {
     case "line":
       return [curve.start, curve.end];
     case "arc": {
-      const sweep = arcSweep(curve);
+      const sweep = resolvedArcSweep(curve);
       const segments =
         curve.segments ??
         Math.max(2, Math.ceil(Math.abs(sweep) / (Math.PI / 24)));
