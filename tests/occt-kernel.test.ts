@@ -13,6 +13,7 @@ import {
   tf,
   vec2,
   vec3,
+  type KernelShape,
   type ProfileCurveSource,
   type ResolvedProfile,
 } from "../src/index.js";
@@ -34,6 +35,30 @@ function profileCurveSource(entity: string): ProfileCurveSource {
 }
 
 describe("OCCT exact-kernel integration", () => {
+  it("recenters native integration before measuring large world translations", async () => {
+    const kernel = await createOcctKernel();
+    const box = kernel.box!([2, 4, 6], true);
+    let translated: KernelShape | undefined;
+    try {
+      translated = kernel.transform!(box, [
+        { kind: "translate", value: [1e9, -2e9, 3e9] },
+      ]);
+      const measured = kernel.measure(translated);
+      expect(measured.volume).toBeCloseTo(48, 10);
+      expect(measured.centerOfMass).toEqual([1e9, -2e9, 3e9]);
+      expect(measured.inertiaTensor[0][0]).toBeCloseTo(208, 6);
+      expect(measured.inertiaTensor[1][1]).toBeCloseTo(160, 6);
+      expect(measured.inertiaTensor[2][2]).toBeCloseTo(80, 6);
+      expect(Math.abs(measured.inertiaTensor[0][1])).toBeLessThan(1e-6);
+      expect(Math.abs(measured.inertiaTensor[0][2])).toBeLessThan(1e-6);
+      expect(Math.abs(measured.inertiaTensor[1][2])).toBeLessThan(1e-6);
+    } finally {
+      if (translated !== undefined) kernel.disposeShape(translated);
+      kernel.disposeShape(box);
+      kernel.dispose();
+    }
+  });
+
   it("extrudes an analytic circular hole without polygonal volume loss", async () => {
     const kernel = await createOcctKernel();
     const evaluator = await createEvaluator({ kernel });

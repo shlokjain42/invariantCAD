@@ -22,6 +22,55 @@ describe("CLI", () => {
     expect(result.stdout).toContain("invariantcad export");
   });
 
+  it("reports center of mass and inertia in inspect JSON", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "invariantcad-cli-"));
+    try {
+      const cad = design("cli-measurements");
+      cad.output(
+        "solid",
+        cad.box("solid", { size: vec3(mm(2), mm(3), mm(4)) }),
+      );
+      const documentPath = join(directory, "model.json");
+      await writeFile(documentPath, stringifyDocument(cad.build()));
+
+      const result = spawnSync(
+        process.execPath,
+        ["--import", "tsx", "src/cli.ts", "inspect", documentPath],
+        { cwd: projectRoot, encoding: "utf8" },
+      );
+
+      expect(result.status).toBe(0);
+      expect(result.stderr).toBe("");
+      const report = JSON.parse(result.stdout) as {
+        readonly solid: {
+          readonly centerOfMass: readonly number[] | null;
+          readonly inertiaTensor: readonly (readonly number[])[];
+        };
+      };
+      expect(report.solid.centerOfMass).not.toBeNull();
+      report.solid.centerOfMass?.forEach((coordinate, index) => {
+        expect(coordinate).toBeCloseTo([1, 1.5, 2][index]!, 8);
+      });
+      const expectedTensor = [
+        [50, 0, 0],
+        [0, 40, 0],
+        [0, 0, 26],
+      ] as const;
+      expect(report.solid.inertiaTensor).toHaveLength(3);
+      report.solid.inertiaTensor.forEach((row, rowIndex) => {
+        expect(row).toHaveLength(3);
+        row.forEach((entry, columnIndex) => {
+          expect(entry).toBeCloseTo(
+            expectedTensor[rowIndex]![columnIndex]!,
+            8,
+          );
+        });
+      });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, 15_000);
+
   it("selects the exact kernel automatically for STEP export", async () => {
     const directory = await mkdtemp(join(tmpdir(), "invariantcad-cli-"));
     try {

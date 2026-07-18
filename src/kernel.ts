@@ -305,11 +305,29 @@ export interface BoundingBox {
   readonly max: Vec3;
 }
 
+/**
+ * Central volumetric inertia tensor in world-axis coordinates.
+ *
+ * Rows use the standard mechanics sign convention
+ * `integral((r dot r) I - r r^T) dV`. With millimetre model coordinates the
+ * entries have units of mm^5; multiply the tensor by a uniform material
+ * density to obtain physical mass moment of inertia.
+ */
+export type InertiaTensor = readonly [Vec3, Vec3, Vec3];
+
 export interface ShapeMeasurements {
+  /** Enclosed volume in cubic model units (mm^3 for authored documents). */
   readonly volume: number;
+  /** Boundary area in square model units (mm^2 for authored documents). */
   readonly surfaceArea: number;
+  /** World-coordinate centroid for homogeneous density, or `null` at zero volume. */
+  readonly centerOfMass: Vec3 | null;
+  /** Homogeneous unit-density inertia about `centerOfMass`. */
+  readonly inertiaTensor: InertiaTensor;
+  /** World-axis-aligned bounds in model coordinates. */
   readonly boundingBox: BoundingBox;
   readonly genus: number;
+  /** Kernel geometric tolerance in model units. */
   readonly tolerance: number;
 }
 
@@ -478,7 +496,19 @@ export function transformMesh(mesh: MeshData, matrix: Mat4): MeshData {
     positions[index + 2] =
       matrix[2] * x + matrix[6] * y + matrix[10] * z + matrix[14];
   }
-  return { positions, indices: mesh.indices.slice() };
+  const indices = mesh.indices.slice();
+  const determinant =
+    matrix[0] * (matrix[5] * matrix[10] - matrix[9] * matrix[6]) -
+    matrix[4] * (matrix[1] * matrix[10] - matrix[9] * matrix[2]) +
+    matrix[8] * (matrix[1] * matrix[6] - matrix[5] * matrix[2]);
+  if (determinant < 0) {
+    for (let index = 0; index < indices.length; index += 3) {
+      const second = indices[index + 1]!;
+      indices[index + 1] = indices[index + 2]!;
+      indices[index + 2] = second;
+    }
+  }
+  return { positions, indices };
 }
 
 export function mergeMeshes(meshes: readonly MeshData[]): MeshData {

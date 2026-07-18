@@ -150,6 +150,7 @@ export {
   transformMesh,
   type BoundingBox,
   type GeometryKernel,
+  type InertiaTensor,
   type KernelCapabilityKind,
   type KernelCapabilities,
   type KernelCompositeSweepCapabilities,

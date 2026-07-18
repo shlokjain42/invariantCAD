@@ -85,6 +85,13 @@ import {
 import { adoptOcctControlledPipeShell } from "./internal/occt-pipe-shell.js";
 import { resolvedCompositeSweepVolumeOracle } from "./internal/transported-profile-volume.js";
 import {
+  combineMassProperties,
+  inertiaTensorFromRowMajor,
+  rescaleMassProperties,
+  zeroMassProperties,
+  type GeometricMassProperties,
+} from "./internal/mesh-mass-properties.js";
+import {
   certifyNativeProfileMassProperties,
   NATIVE_PROFILE_COORDINATE_ULP_FACTOR,
   type AnalyticProfileMassProperties,
@@ -3321,13 +3328,70 @@ class OcctKernel implements GeometryKernel {
     const owned = this.shape(shape);
     const handle = owned[OCCT_SHAPE];
     const bounds = this.raw.getBoundingBox(handle, false);
+    const solids = this.raw.getSubShapes(handle, "solid");
+    let nativeMassProperties = zeroMassProperties();
+    try {
+      const components: GeometricMassProperties[] = [];
+      for (const solid of solids) {
+        const solidBounds = this.raw.getBoundingBox(solid, false);
+        const reference: Vec3 = [
+          solidBounds.xmin / 2 + solidBounds.xmax / 2,
+          solidBounds.ymin / 2 + solidBounds.ymax / 2,
+          solidBounds.zmin / 2 + solidBounds.zmax / 2,
+        ];
+        if (!reference.every(Number.isFinite)) {
+          throw new RangeError("OCCT returned non-finite solid bounds");
+        }
+        const centered = this.raw.translate(
+          solid,
+          -reference[0],
+          -reference[1],
+          -reference[2],
+        );
+        try {
+          const signedVolume = this.raw.getVolume(centered);
+          if (!Number.isFinite(signedVolume) || signedVolume === 0) {
+            throw new RangeError("OCCT returned a zero or non-finite solid volume");
+          }
+          const orientation = signedVolume < 0 ? -1 : 1;
+          const center = this.raw.getCenterOfMass(centered);
+          const inertia = this.raw
+            .getInertia(centered)
+            .map((value) => orientation * value);
+          const centerOfMass: Vec3 = [
+            center.x + reference[0],
+            center.y + reference[1],
+            center.z + reference[2],
+          ];
+          if (!centerOfMass.every(Number.isFinite)) {
+            throw new RangeError("OCCT returned a non-finite center of mass");
+          }
+          components.push({
+            volume: orientation * signedVolume,
+            centerOfMass,
+            inertiaTensor: inertiaTensorFromRowMajor(inertia),
+          });
+        } finally {
+          this.raw.release(centered);
+        }
+      }
+      nativeMassProperties = combineMassProperties(components);
+    } finally {
+      this.releaseHandles(solids);
+    }
+    const massProperties =
+      owned.volumeOverride === undefined
+        ? nativeMassProperties
+        : rescaleMassProperties(nativeMassProperties, owned.volumeOverride);
     const vertices = this.raw.subShapeCount(handle, "vertex");
     const edges = this.raw.subShapeCount(handle, "edge");
     const faces = this.raw.subShapeCount(handle, "face");
     const eulerCharacteristic = vertices - edges + faces;
     return {
-      volume: owned.volumeOverride ?? this.raw.getVolume(handle),
+      volume: massProperties.volume,
       surfaceArea: this.raw.getSurfaceArea(handle),
+      centerOfMass: massProperties.centerOfMass,
+      inertiaTensor: massProperties.inertiaTensor,
       boundingBox: {
         min: [bounds.xmin, bounds.ymin, bounds.zmin],
         max: [bounds.xmax, bounds.ymax, bounds.zmax],

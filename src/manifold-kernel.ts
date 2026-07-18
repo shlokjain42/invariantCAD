@@ -13,6 +13,11 @@ import type {
   ShapeMeasurements,
 } from "./kernel.js";
 import {
+  integrateTriangleMeshMassProperties,
+  rescaleMassProperties,
+  zeroMassProperties,
+} from "./internal/mesh-mass-properties.js";
+import {
   numericPlaneBasis,
   tessellateProfile,
   type NumericPlane,
@@ -246,15 +251,62 @@ export class ManifoldKernel implements GeometryKernel {
   measure(shape: KernelShape): ShapeMeasurements {
     const manifold = asManifoldShape(shape)[MANIFOLD_SHAPE];
     const bounds = manifold.boundingBox();
+    const volume = manifold.volume();
+    const surfaceArea = manifold.surfaceArea();
+    const tolerance = manifold.tolerance();
+    if (!Number.isFinite(volume) || volume < 0) {
+      throw new RangeError("Manifold returned an invalid solid volume");
+    }
+    let massProperties = zeroMassProperties();
+    if (volume > 0) {
+      const reference: Vec3 = [
+        bounds.min[0] / 2 + bounds.max[0] / 2,
+        bounds.min[1] / 2 + bounds.max[1] / 2,
+        bounds.min[2] / 2 + bounds.max[2] / 2,
+      ];
+      const centered = manifold.translate([
+        -reference[0],
+        -reference[1],
+        -reference[2],
+      ]);
+      try {
+        const mesh = centered.getMesh();
+        const integrated = integrateTriangleMeshMassProperties(
+          mesh.vertProperties,
+          mesh.triVerts,
+          {
+            stride: mesh.numProp,
+            worldOffset: reference,
+            winding: "positive",
+          },
+        );
+        const volumeAllowance = Math.max(
+          1e-12 * Math.max(1, volume),
+          5e-6 * volume,
+          8 * surfaceArea * tolerance,
+          integrated.volumeRoundoffBound,
+        );
+        if (Math.abs(integrated.volume - volume) > volumeAllowance) {
+          throw new RangeError(
+            "Manifold mesh and native volume disagree beyond the measurement tolerance",
+          );
+        }
+        massProperties = rescaleMassProperties(integrated, volume);
+      } finally {
+        centered.delete();
+      }
+    }
     return {
-      volume: manifold.volume(),
-      surfaceArea: manifold.surfaceArea(),
+      volume,
+      surfaceArea,
+      centerOfMass: massProperties.centerOfMass,
+      inertiaTensor: massProperties.inertiaTensor,
       boundingBox: {
         min: bounds.min as Vec3,
         max: bounds.max as Vec3,
       },
       genus: manifold.genus(),
-      tolerance: manifold.tolerance(),
+      tolerance,
     };
   }
 

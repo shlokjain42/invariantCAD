@@ -5,6 +5,7 @@ import {
   design,
   mm,
   plane,
+  scalarVec3,
   tf,
   vec2,
   vec3,
@@ -185,10 +186,48 @@ describe("geometry evaluation", () => {
         "sub/second",
       ]);
       expect(output.instances.every((instance) => instance.partNode === "part")).toBe(true);
-      expect(output.measure().volume).toBeCloseTo(2_000, 3);
-      expect(output.measure().boundingBox).toEqual({
+      const measured = output.measure();
+      expect(measured.volume).toBeCloseTo(2_000, 3);
+      expect(measured.boundingBox).toEqual({
         min: [0, 20, 0],
         max: [25, 30, 10],
+      });
+      expect(measured.centerOfMass).toEqual([12.5, 25, 5]);
+      expect(measured.inertiaTensor[0][0]).toBeCloseTo(100_000 / 3, 8);
+      expect(measured.inertiaTensor[1][1]).toBeCloseTo(437_500 / 3, 8);
+      expect(measured.inertiaTensor[2][2]).toBeCloseTo(437_500 / 3, 8);
+    } finally {
+      result.dispose();
+    }
+  });
+
+  it("aggregates mirrored assembly occurrences without signed-moment cancellation", async () => {
+    const cad = design("mirrored-assembly");
+    const solid = cad.box("solid", { size: vec3(mm(2), mm(3), mm(4)) });
+    const part = cad.part("part", solid);
+    const assembly = cad.assembly("assembly", (instances) => {
+      instances.instance("original", part);
+      instances.instance("mirrored", part, {
+        placement: [
+          tf.mirror(scalarVec3(1, 0, 0)),
+          tf.translate(vec3(mm(4), mm(0), mm(0))),
+        ],
+      });
+    });
+    cad.output("assembly", assembly);
+    const result = await evaluate(cad.build());
+    try {
+      const measured = result.output("assembly").measure();
+      expect(measured.volume).toBeCloseTo(48, 10);
+      expect(measured.centerOfMass).toEqual([2, 1.5, 2]);
+      expect(measured.inertiaTensor).toEqual([
+        [100, 0, 0],
+        [0, 128, 0],
+        [0, 0, 100],
+      ]);
+      expect(measured.boundingBox).toEqual({
+        min: [0, 0, 0],
+        max: [4, 3, 4],
       });
     } finally {
       result.dispose();

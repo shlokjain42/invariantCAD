@@ -692,7 +692,10 @@ describe("OCCT exact circular-arc solid sweep", () => {
       let nearUniformlyTransformed: KernelShape | undefined;
       try {
         expect(kernel.status(shape)).toEqual({ ok: true, code: "VALID" });
-        expect(kernel.measure(shape).volume).toBeCloseTo(expectedVolume, 14);
+        const measured = kernel.measure(shape);
+        expect(measured.volume).toBeCloseTo(expectedVolume, 14);
+        expect(measured.centerOfMass).not.toBeNull();
+        expect(measured.inertiaTensor.flat().every(Number.isFinite)).toBe(true);
         transformed = kernel.transform!(
           shape,
           [
@@ -702,10 +705,19 @@ describe("OCCT exact circular-arc solid sweep", () => {
           { feature: "scaled-thin-high-radius-sweep" },
         );
         expect(kernel.status(transformed)).toEqual({ ok: true, code: "VALID" });
-        expect(kernel.measure(transformed).volume).toBeCloseTo(
+        const transformedMeasurement = kernel.measure(transformed);
+        expect(transformedMeasurement.volume).toBeCloseTo(
           expectedVolume * 8,
           13,
         );
+        for (let row = 0; row < 3; row += 1) {
+          for (let column = 0; column < 3; column += 1) {
+            expect(transformedMeasurement.inertiaTensor[row]![column]!).toBeCloseTo(
+              measured.inertiaTensor[row]![column]! * 32,
+              7,
+            );
+          }
+        }
         nearUniformlyTransformed = kernel.transform!(
           shape,
           [{ kind: "scale", value: [2, 2 + 5e-8, 2] }],

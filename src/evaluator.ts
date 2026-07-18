@@ -69,6 +69,10 @@ import {
 } from "./protocol/sweep.js";
 import { createManifoldKernel, type ManifoldKernelOptions } from "./manifold-kernel.js";
 import {
+  combineMassProperties,
+  transformMassProperties,
+} from "./internal/mesh-mass-properties.js";
+import {
   createReferenceSketchSolver,
   type SketchSolverBackend,
 } from "./solver.js";
@@ -334,15 +338,15 @@ function operationsMatrix(operations: readonly ResolvedTransformOperation[]): Ma
   return result;
 }
 
-function meshMeasurements(mesh: MeshData): ShapeMeasurements {
+function meshGeometryMeasurements(mesh: MeshData): Pick<
+  ShapeMeasurements,
+  "surfaceArea" | "boundingBox"
+> {
   if (mesh.positions.length === 0) {
     const zero: Vec3 = [0, 0, 0];
     return {
-      volume: 0,
       surfaceArea: 0,
       boundingBox: { min: zero, max: zero },
-      genus: 0,
-      tolerance: 0,
     };
   }
   const min: [number, number, number] = [Infinity, Infinity, Infinity];
@@ -354,7 +358,6 @@ function meshMeasurements(mesh: MeshData): ShapeMeasurements {
       max[axis] = Math.max(max[axis]!, value);
     }
   }
-  let signedVolume = 0;
   let surfaceArea = 0;
   const vertex = (index: number): Vec3 => {
     const offset = index * 3;
@@ -376,18 +379,10 @@ function meshMeasurements(mesh: MeshData): ShapeMeasurements {
       ab[0] * ac[1] - ab[1] * ac[0],
     ];
     surfaceArea += Math.hypot(...cross) / 2;
-    signedVolume +=
-      (a[0] * (b[1] * c[2] - b[2] * c[1]) -
-        a[1] * (b[0] * c[2] - b[2] * c[0]) +
-        a[2] * (b[0] * c[1] - b[1] * c[0])) /
-      6;
   }
   return {
-    volume: Math.abs(signedVolume),
     surfaceArea,
     boundingBox: { min, max },
-    genus: 0,
-    tolerance: 0,
   };
 }
 
@@ -519,7 +514,31 @@ export class EvaluatedAssembly {
   }
 
   measure(): ShapeMeasurements {
-    return meshMeasurements(this.mesh());
+    const geometry = meshGeometryMeasurements(this.mesh());
+    const measuredShapes = new Map<KernelShape, ShapeMeasurements>();
+    const massProperties = combineMassProperties(
+      this.occurrences.map((occurrence) => {
+        let measured = measuredShapes.get(occurrence.part.shape);
+        if (measured === undefined) {
+          measured = this.owner.kernel.measure(occurrence.part.shape);
+          measuredShapes.set(occurrence.part.shape, measured);
+        }
+        return transformMassProperties(
+          {
+            volume: measured.volume,
+            centerOfMass: measured.centerOfMass,
+            inertiaTensor: measured.inertiaTensor,
+          },
+          occurrence.transform,
+        );
+      }),
+    );
+    return {
+      ...massProperties,
+      ...geometry,
+      genus: 0,
+      tolerance: 0,
+    };
   }
 
   export(format: ShapeExportFormat): Uint8Array | string {

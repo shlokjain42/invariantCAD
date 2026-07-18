@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added required world-space center-of-mass and centroidal inertia-tensor measurements across both built-in kernels and assemblies, with native recentered OCCT B-Rep integration, centered Manifold polyhedron integration, affine occurrence aggregation, parallel-axis semantics, zero-volume conventions, and CLI inspection output.
 - Added a kernel-neutral ordered ruled-solid loft node and TypeScript builder API.
 - Added strict profile compatibility, station ordering, exact OCCT result-topology validation, capability negotiation, and conformance coverage for the bounded loft contract.
 - Added first-class parameterized open 3D polyline paths and a bounded exact solid-sweep contract with corrected-Frenet transport, right-corner transitions, conservative self-overlap rejection, transactional OCCT ownership, and package-level coverage.

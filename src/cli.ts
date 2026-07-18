@@ -107,6 +107,8 @@ function measurements(output: EvaluatedOutput): object {
   return {
     volume: measured.volume,
     surfaceArea: measured.surfaceArea,
+    centerOfMass: measured.centerOfMass,
+    inertiaTensor: measured.inertiaTensor,
     boundingBox: measured.boundingBox,
     genus: measured.genus,
     tolerance: measured.tolerance,

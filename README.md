@@ -322,7 +322,7 @@ The solver API is replaceable. The built-in solver is intentionally a v0.1 refer
 - Exact B-Rep primitives, analytic profile extrusion/revolution, CSG, and transforms through OpenCascade WebAssembly
 - Exact topology enumeration, geometry/adjacency descriptors, selected-edge fillets/chamfers, face-selected shells, whole-solid offsets, and owned-facade atomic draft through OpenCascade WebAssembly
 - Native STEP, text BREP, and binary BREP import/export in the exact-kernel protocol
-- Volume, surface area, axis-aligned bounds, genus, and kernel tolerance
+- Volume, surface area, axis-aligned bounds, genus, kernel tolerance, center of mass, and centroidal inertia tensor
 - Typed-array mesh extraction
 - Binary STL, ASCII STL, and OBJ export
 - Canonical JSON serialization and structural/semantic validation
@@ -340,6 +340,7 @@ The solver API is replaceable. The built-in solver is intentionally a v0.1 refer
 | Sketch constraints | Reference solver | Pluggable industrial solvers |
 | Parts and fixed-placement assemblies | Yes | Yes |
 | Assembly mates and joints | No | Yes |
+| Center of mass and centroidal inertia tensor | Both kernels and assemblies | Yes |
 | Exact B-Rep primitives and core features | OCCT backend | Yes |
 | STEP and BREP import/export | OCCT backend | Yes |
 | IGES import/export | No | Exact backend |
@@ -358,6 +359,18 @@ The solver API is replaceable. The built-in solver is intentionally a v0.1 refer
 
 Capabilities are negotiated by backends. InvariantCAD will not silently pretend a mesh operation is exact B-Rep or silently downgrade exact geometry. The current loft contract is deliberately bounded to ruled solids through at least two distinct, ordered, hole-free profiles on parallel planes, with matching directed curve signatures. The current sweep contract is similarly bounded to simple open polyline paths, one exact circular arc, or a certified ordered line/arc composite, with conservative profile clearance and fixed corrected-Frenet/right-corner semantics. Circular-arc and composite sweeping are separate additive capabilities, so an existing polyline-only kernel fails before evaluating unsupported path dependencies. Composite guarantees beyond the base contract use the versioned `compositeSweep` refinement envelope; ABI 0.3 advertises `major-multiple-arcs` and `major-eccentric-profile`, while stock and legacy runtimes advertise neither. Document evaluation computes the duplicate-free required refinement set from exact path geometry and certified analytic profile moments, then reports a structured missing-capability or malformed-protocol diagnostic before invoking the backend. `kernelSupports` remains available for discovery and fails closed on malformed metadata; optional refinement metadata is irrelevant when the selected geometry requires no refinement. Direct OCCT calls use the same classifier and requested feature tolerance. Draft requires both the ordinary `draft` feature and `exactIndexedTopologyEvolution` v1 scoped to draft; a stock/default OCCT module advertises neither.
 
+## Measurements and mass properties
+
+`measure()` returns the kernel-neutral `ShapeMeasurements` contract. Its `centerOfMass` is a world-coordinate `Vec3`, or `null` for an empty or zero-volume result. Its `inertiaTensor` is a required `readonly [Vec3, Vec3, Vec3]`: the three rows of the symmetric centroidal tensor in world axes,
+
+```text
+integral(((r dot r) I - r r^T) dV)
+```
+
+where `r` is measured from the center of mass, for a homogeneous solid with unit volumetric density. Lengths are millimetres, so the tensor is in `mm^5`. For material density `rho`, physical mass is `rho * volume` and physical inertia is `rho * inertiaTensor`; density does not change the center. Empty and zero-volume results use a zero tensor.
+
+OCCT obtains these properties from its native B-Rep integration with recentered accumulation. Manifold integrates the centered closed polyhedron emitted by its mesh kernel. That representation boundary is intentional: mesh values describe the emitted polyhedral solid, while OCCT values describe the exact B-Rep, so compare cross-kernel results with an appropriate modeling or meshing tolerance rather than expecting identical floating-point values.
+
 ## Assemblies
 
 Modeling transforms create new geometry. Assembly placements create occurrences and preserve the shared part definition:
@@ -375,7 +388,7 @@ const product = cad.assembly("product", (assembly) => {
 cad.output("product", product);
 ```
 
-Nested assemblies are flattened into occurrence paths such as `frame/left-bracket` during evaluation while retaining the original part node.
+Nested assemblies are flattened into occurrence paths such as `frame/left-bracket` during evaluation while retaining the original part node. Assembly measurements aggregate every placed occurrence under its affine transform and apply the parallel-axis theorem, so shared definitions contribute independently at each placement.
 
 ## Documents and deterministic builds
 
@@ -424,6 +437,7 @@ invariantcad inspect design.invariantcad.json --kernel occt
 ```
 
 Parameter JSON values use base units: millimetres, radians, and unitless scalars.
+`inspect` includes `centerOfMass` and the three-row `inertiaTensor` alongside `volume`, `surfaceArea`, `boundingBox`, `genus`, `tolerance`, and `triangles`.
 The CLI selects stock OCCT automatically for `.step` and `.brep` destinations. Use `--kernel manifold|occt` to select a backend explicitly. The current CLI does not inject a custom module factory, so document draft evaluation and owned-facade-only composite refinements require programmatic initialization with the matched pair.
 
 ## Browser initialization

@@ -235,6 +235,12 @@ function recordingSweepKernel(
     measure: () => ({
       volume: 1,
       surfaceArea: 1,
+      centerOfMass: [0.5, 0.5, 0.5],
+      inertiaTensor: [
+        [0, 0, 0],
+        [0, 0, 0],
+        [0, 0, 0],
+      ],
       boundingBox: { min: [0, 0, 0], max: [1, 1, 1] },
       genus: 0,
       tolerance: PATH_TOLERANCE,

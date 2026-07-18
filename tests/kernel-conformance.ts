@@ -66,6 +66,34 @@ function expectBoundingBox(
   }
 }
 
+function expectVector(
+  actual: readonly number[],
+  expected: readonly number[],
+  relativeTolerance: number,
+): void {
+  expect(actual).toHaveLength(expected.length);
+  actual.forEach((coordinate, index) => {
+    const expectedCoordinate = expected[index]!;
+    expect(Math.abs(coordinate - expectedCoordinate)).toBeLessThanOrEqual(
+      Math.max(
+        Number.EPSILON,
+        Math.max(1, Math.abs(expectedCoordinate)) * relativeTolerance,
+      ),
+    );
+  });
+}
+
+function expectInertiaTensor(
+  actual: ShapeMeasurements["inertiaTensor"],
+  expected: ShapeMeasurements["inertiaTensor"],
+  relativeTolerance: number,
+): void {
+  expect(actual).toHaveLength(3);
+  actual.forEach((row, rowIndex) => {
+    expectVector(row, expected[rowIndex]!, relativeTolerance);
+  });
+}
+
 export function geometryKernelConformance(
   options: KernelConformanceOptions,
 ): void {
@@ -91,6 +119,39 @@ export function geometryKernelConformance(
       expect(Number.isFinite(measurement.surfaceArea)).toBe(true);
       expect(measurement.volume).toBeGreaterThan(0);
       expect(measurement.surfaceArea).toBeGreaterThan(0);
+      expect(measurement.centerOfMass).not.toBeNull();
+      if (measurement.centerOfMass !== null) {
+        expect(measurement.centerOfMass).toHaveLength(3);
+        for (const coordinate of measurement.centerOfMass) {
+          expect(Number.isFinite(coordinate)).toBe(true);
+        }
+      }
+      expect(measurement.inertiaTensor).toHaveLength(3);
+      for (const row of measurement.inertiaTensor) {
+        expect(row).toHaveLength(3);
+        for (const entry of row) expect(Number.isFinite(entry)).toBe(true);
+      }
+      const inertiaScale = Math.max(
+        1,
+        ...measurement.inertiaTensor.flatMap((row) =>
+          row.map((entry) => Math.abs(entry)),
+        ),
+      );
+      for (let row = 0; row < 3; row += 1) {
+        for (let column = row + 1; column < 3; column += 1) {
+          expect(
+            Math.abs(
+              measurement.inertiaTensor[row]![column]! -
+                measurement.inertiaTensor[column]![row]!,
+            ),
+          ).toBeLessThanOrEqual(
+            Math.max(
+              Number.EPSILON * 32 * inertiaScale,
+              relativeTolerance * inertiaScale,
+            ),
+          );
+        }
+      }
       return measurement;
     }
 
@@ -203,7 +264,26 @@ export function geometryKernelConformance(
     it("constructs every declared primitive", () => {
       if (kernelSupports(kernel.capabilities, "primitive", "box")) {
         const box = kernel.box!([2, 3, 4], false);
-        expectMeasurement(expectLiveShape(box), "volume", 24, relativeTolerance);
+        const measurement = expectLiveShape(box);
+        expectMeasurement(measurement, "volume", 24, relativeTolerance);
+        expect(measurement.centerOfMass).not.toBeNull();
+        if (measurement.centerOfMass !== null) {
+          expectVector(
+            measurement.centerOfMass,
+            [1, 1.5, 2],
+            relativeTolerance,
+          );
+        }
+        expectInertiaTensor(
+          measurement.inertiaTensor,
+          [
+            [50, 0, 0],
+            [0, 40, 0],
+            [0, 0, 26],
+          ],
+          relativeTolerance,
+        );
+        kernel.disposeShape(box);
       }
       if (kernelSupports(kernel.capabilities, "primitive", "cylinder")) {
         const cylinder = kernel.cylinder!(4, 2, 2, false, 256);
@@ -222,6 +302,44 @@ export function geometryKernelConformance(
           (4 / 3) * Math.PI * 8,
           Math.max(relativeTolerance, 5e-4),
         );
+      }
+    });
+
+    it("transports center of mass and central inertia through rigid transforms", () => {
+      if (
+        !kernelSupports(kernel.capabilities, "primitive", "box") ||
+        !kernelSupports(kernel.capabilities, "feature", "transform")
+      ) {
+        return;
+      }
+      const box = kernel.box!([2, 3, 4], false);
+      let transformed: KernelShape | undefined;
+      try {
+        transformed = kernel.transform!(box, [
+          { kind: "rotate", value: [0, 0, Math.PI / 2] },
+          { kind: "translate", value: [10, -2, 3] },
+        ]);
+        const measurement = expectLiveShape(transformed);
+        expect(measurement.centerOfMass).not.toBeNull();
+        if (measurement.centerOfMass !== null) {
+          expectVector(
+            measurement.centerOfMass,
+            [8.5, -1, 5],
+            Math.max(relativeTolerance, 1e-7),
+          );
+        }
+        expectInertiaTensor(
+          measurement.inertiaTensor,
+          [
+            [40, 0, 0],
+            [0, 50, 0],
+            [0, 0, 26],
+          ],
+          Math.max(relativeTolerance, 1e-7),
+        );
+      } finally {
+        if (transformed !== undefined) kernel.disposeShape(transformed);
+        kernel.disposeShape(box);
       }
     });
 
