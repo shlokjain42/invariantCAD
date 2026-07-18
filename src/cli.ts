@@ -52,9 +52,9 @@ function usage(): string {
 
 Usage:
   invariantcad validate <document.json>
-  invariantcad inspect <document.json> [--kernel manifold|occt] [--parameters values.json]
-  invariantcad bom <document.json> --output name [--kernel manifold|occt] [--parameters values.json]
-  invariantcad export <document.json> --to model.stl [--kernel manifold|occt] [--output name] [--format stl|stl-ascii|obj|step|brep|brep-binary] [--parameters values.json]
+  invariantcad inspect <document.json> [--configuration id] [--kernel manifold|occt] [--parameters values.json]
+  invariantcad bom <document.json> --output name [--configuration id] [--kernel manifold|occt] [--parameters values.json]
+  invariantcad export <document.json> --to model.stl [--configuration id] [--kernel manifold|occt] [--output name] [--format stl|stl-ascii|obj|step|brep|brep-binary] [--parameters values.json]
 `;
 }
 
@@ -185,6 +185,11 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
     process.stderr.write("bom requires --output <name>\n");
     return 2;
   }
+  const requestedConfiguration = args.flags.configuration;
+  if (requestedConfiguration === true || requestedConfiguration === "") {
+    process.stderr.write("--configuration requires <id>\n");
+    return 2;
+  }
   const requestedKernel = args.flags.kernel;
   if (
     requestedKernel !== undefined &&
@@ -213,6 +218,9 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
   try {
     const evaluated = await evaluator.evaluate(parsed.value, {
       parameters: await loadParameters(args.flags.parameters),
+      ...(typeof requestedConfiguration === "string"
+        ? { configuration: requestedConfiguration }
+        : {}),
       ...(typeof args.flags.output === "string"
         ? { outputs: [args.flags.output] }
         : {}),

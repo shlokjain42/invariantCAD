@@ -11,6 +11,7 @@ InvariantCAD's goal is one coherent TypeScript CAD system, not one monolithic ge
 - Parts and fixed-placement nested assemblies
 - Document-owned material definitions with explicit density, deterministic part references, and no name-based material lookup
 - Basic deterministic bills of materials for nested fixed-placement assemblies, including suppression, quantities, affine occurrence mass, and partial-mass diagnostics
+- Named definition-scoped configurations with parameter, instance-suppression, and part-material overrides, plus variant-aware bills of materials
 - Kernel-neutral volume, surface, bounds, center-of-mass, and centroidal-inertia measurement for solids and placed assemblies; deterministic principal/axis analysis, radii of gyration, explicit density-aware physical mass, and mesh/STL/OBJ export
 - Validation, diagnostics, hashing, CLI, examples, and conformance tests
 
@@ -63,7 +64,7 @@ InvariantCAD's goal is one coherent TypeScript CAD system, not one monolithic ge
 - Planar, cylindrical, concentric, distance, angle, gear, rack, and screw relations
 - Degrees of freedom and motion studies
 - Interference, clearance, and contact queries
-- Configurations, variant-aware bills of materials, effectivity, and alternate/substitute components
+- Effectivity, rule-driven variants, and alternate/substitute components
 
 ## 0.6 — documentation and manufacturing
 

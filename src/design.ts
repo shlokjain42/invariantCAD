@@ -1,9 +1,12 @@
 import {
   assertValidId,
+  configurationId,
   entityId,
   materialId,
   nodeId,
   parameterId,
+  type ConfigurationId,
+  type EntityId,
   type MaterialId,
   type NodeId,
   type ParameterId,
@@ -17,6 +20,7 @@ import {
   type AngleVec3Expression,
   type Dimension,
   type Expression,
+  type ExpressionIR,
   type LengthExpression,
   type MassDensityExpression,
   type Parameter,
@@ -30,6 +34,7 @@ import {
   DOCUMENT_VERSION,
   type AssemblyInstanceIR,
   type AssemblyNodeIR,
+  type DesignConfigurationIR,
   type DesignDocument,
   type DesignOutputKind,
   type MaterialDefinitionIR,
@@ -221,6 +226,113 @@ export class AssemblyBuilder {
   }
 }
 
+export interface ConfigurationOptions {
+  readonly description?: string;
+  readonly metadata?: Readonly<Record<string, JsonValue>>;
+}
+
+export class ConfigurationBuilder {
+  readonly owner: DesignBuilder;
+  private readonly parameterRecords = Object.create(null) as Record<
+    ParameterId,
+    ExpressionIR
+  >;
+  private readonly instanceSuppressionRecords = Object.create(null) as Record<
+    NodeId,
+    Record<EntityId, boolean>
+  >;
+  private readonly partMaterialRecords = Object.create(null) as Record<
+    NodeId,
+    MaterialId
+  >;
+
+  constructor(owner: DesignBuilder) {
+    this.owner = owner;
+  }
+
+  parameter<D extends Dimension>(
+    parameter: Parameter<D>,
+    value: Expression<NoInfer<D>>,
+  ): this {
+    this.owner.assertParameterOwned(parameter);
+    if (value.dimension !== parameter.dimension) {
+      throw new TypeError(
+        `Configuration value for '${parameter.id}' must have dimension ${parameter.dimension}`,
+      );
+    }
+    if (Object.hasOwn(this.parameterRecords, parameter.id)) {
+      throw new TypeError(
+        `Duplicate configuration parameter override '${parameter.id}'`,
+      );
+    }
+    this.parameterRecords[parameter.id] = value.ir;
+    return this;
+  }
+
+  instanceSuppressed(
+    assembly: AssemblyRef,
+    instanceId: string,
+    suppressed = true,
+  ): this {
+    const stableId = this.owner.assertAssemblyInstance(assembly, instanceId);
+    let instances = this.instanceSuppressionRecords[assembly.node];
+    if (instances === undefined) {
+      instances = Object.create(null) as Record<EntityId, boolean>;
+      this.instanceSuppressionRecords[assembly.node] = instances;
+    }
+    if (Object.hasOwn(instances, stableId)) {
+      throw new TypeError(
+        `Duplicate configuration instance override '${assembly.node}/${stableId}'`,
+      );
+    }
+    instances[stableId] = suppressed;
+    return this;
+  }
+
+  partMaterial(part: PartRef, material: MaterialRef): this {
+    this.owner.assertOwned(part);
+    this.owner.assertOwned(material);
+    if (Object.hasOwn(this.partMaterialRecords, part.node)) {
+      throw new TypeError(
+        `Duplicate configuration material override '${part.node}'`,
+      );
+    }
+    this.partMaterialRecords[part.node] = material.id;
+    return this;
+  }
+
+  toIR(options: ConfigurationOptions = {}): DesignConfigurationIR {
+    if (
+      Object.keys(this.parameterRecords).length === 0 &&
+      Object.keys(this.instanceSuppressionRecords).length === 0 &&
+      Object.keys(this.partMaterialRecords).length === 0
+    ) {
+      throw new TypeError("A configuration requires at least one override");
+    }
+    return deepFreeze({
+      ...(options.description === undefined
+        ? {}
+        : { description: options.description }),
+      ...(Object.keys(this.parameterRecords).length === 0
+        ? {}
+        : { parameterOverrides: { ...this.parameterRecords } }),
+      ...(Object.keys(this.instanceSuppressionRecords).length === 0
+        ? {}
+        : {
+            instanceSuppressions: Object.fromEntries(
+              Object.entries(this.instanceSuppressionRecords).map(
+                ([assembly, instances]) => [assembly, { ...instances }],
+              ),
+            ),
+          }),
+      ...(Object.keys(this.partMaterialRecords).length === 0
+        ? {}
+        : { partMaterialOverrides: { ...this.partMaterialRecords } }),
+      ...(options.metadata === undefined ? {} : { metadata: options.metadata }),
+    });
+  }
+}
+
 export interface DesignOptions {
   readonly metadata?: Readonly<Record<string, JsonValue>>;
 }
@@ -256,13 +368,24 @@ export type PartOptions = PartCommonOptions &
 export class DesignBuilder {
   readonly name: string;
   readonly metadata: Readonly<Record<string, JsonValue>> | undefined;
-  private readonly parameterRecords: Record<ParameterId, ParameterIR> = {};
+  private readonly parameterRecords = Object.create(null) as Record<
+    ParameterId,
+    ParameterIR
+  >;
+  private readonly parameterReferences = new WeakSet<object>();
   private readonly materialRecords = Object.create(null) as Record<
     MaterialId,
     MaterialDefinitionIR
   >;
-  private readonly nodeRecords: Record<NodeId, NodeIR> = {};
-  private readonly outputRecords: Record<string, RefIR<DesignOutputKind>> = {};
+  private readonly nodeRecords = Object.create(null) as Record<NodeId, NodeIR>;
+  private readonly configurationRecords = Object.create(null) as Record<
+    ConfigurationId,
+    DesignConfigurationIR
+  >;
+  private readonly outputRecords = Object.create(null) as Record<
+    string,
+    RefIR<DesignOutputKind>
+  >;
   private usesMassDensity = false;
 
   constructor(name: string, options: DesignOptions = {}) {
@@ -277,6 +400,29 @@ export class DesignBuilder {
     }
   }
 
+  assertParameterOwned(parameter: Parameter<Dimension>): void {
+    if (!this.parameterReferences.has(parameter)) {
+      throw new TypeError("Parameter references cannot cross design boundaries");
+    }
+  }
+
+  assertAssemblyInstance(assembly: AssemblyRef, id: string): EntityId {
+    this.assertOwned(assembly);
+    const stableId = entityId(id);
+    const node = Object.hasOwn(this.nodeRecords, assembly.node)
+      ? this.nodeRecords[assembly.node]
+      : undefined;
+    if (
+      node?.kind !== "assembly" ||
+      !node.instances.some((instance) => instance.id === stableId)
+    ) {
+      throw new RangeError(
+        `Assembly '${assembly.node}' has no instance '${id}'`,
+      );
+    }
+    return stableId;
+  }
+
   private parameterOf<D extends Dimension>(
     id: string,
     dimension: D,
@@ -284,7 +430,7 @@ export class DesignBuilder {
     options: ParameterOptions<D> = {},
   ): Parameter<D> {
     const key = parameterId(id);
-    if (this.parameterRecords[key] !== undefined) {
+    if (Object.hasOwn(this.parameterRecords, key)) {
       throw new TypeError(`Duplicate parameter '${id}'`);
     }
     if (defaultValue.dimension !== dimension) {
@@ -301,7 +447,9 @@ export class DesignBuilder {
         : { description: options.description }),
     });
     if (dimension === "massDensity") this.usesMassDensity = true;
-    return new ParameterClass(key, dimension);
+    const parameter = new ParameterClass(key, dimension);
+    this.parameterReferences.add(parameter);
+    return parameter;
   }
 
   readonly parameter = {
@@ -356,7 +504,7 @@ export class DesignBuilder {
 
   private addNode(id: string, node: NodeIR): NodeId {
     const key = nodeId(id);
-    if (this.nodeRecords[key] !== undefined) {
+    if (Object.hasOwn(this.nodeRecords, key)) {
       throw new TypeError(`Duplicate feature '${id}'`);
     }
     this.nodeRecords[key] = deepFreeze(node);
@@ -905,10 +1053,25 @@ export class DesignBuilder {
     return new AssemblyRef(this, key);
   }
 
+  configuration(
+    id: string,
+    build: (configuration: ConfigurationBuilder) => void,
+    options: ConfigurationOptions = {},
+  ): ConfigurationId {
+    const key = configurationId(id);
+    if (Object.hasOwn(this.configurationRecords, key)) {
+      throw new TypeError(`Duplicate configuration '${id}'`);
+    }
+    const builder = new ConfigurationBuilder(this);
+    build(builder);
+    this.configurationRecords[key] = builder.toIR(options);
+    return key;
+  }
+
   output(name: string, reference: SolidRef | PartRef | AssemblyRef): this {
     assertValidId(name, "Output name");
     this.assertOwned(reference);
-    if (this.outputRecords[name] !== undefined) {
+    if (Object.hasOwn(this.outputRecords, name)) {
       throw new TypeError(`Duplicate output '${name}'`);
     }
     this.outputRecords[name] = deepFreeze(reference.toIR());
@@ -929,6 +1092,9 @@ export class DesignBuilder {
       ...(Object.keys(this.materialRecords).length === 0
         ? {}
         : { materials: { ...this.materialRecords } }),
+      ...(Object.keys(this.configurationRecords).length === 0
+        ? {}
+        : { configurations: { ...this.configurationRecords } }),
       nodes: { ...this.nodeRecords },
       outputs: { ...this.outputRecords },
       ...(this.metadata === undefined ? {} : { metadata: this.metadata }),

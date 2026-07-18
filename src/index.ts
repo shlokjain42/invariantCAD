@@ -20,6 +20,7 @@ export {
   AssemblyRef,
   MaterialRef,
   AssemblyBuilder,
+  ConfigurationBuilder,
   design,
   plane,
   tf,
@@ -27,6 +28,7 @@ export {
   type MaterialOptions,
   type PartOptions,
   type CompositePathSegmentExpression,
+  type ConfigurationOptions,
   type ParameterOptions,
   type Plane,
 } from "./design.js";
@@ -108,6 +110,7 @@ export {
   type CircleEntityIR,
   type CylinderNodeIR,
   type DesignDocument,
+  type DesignConfigurationIR,
   type DesignOutputKind,
   type DraftNeutralPlaneIR,
   type DraftNodeIR,
@@ -165,7 +168,7 @@ export {
   type MassDensitySource,
   type ShapeExportFormat,
 } from "./evaluator.js";
-export type { MaterialId } from "./core/ids.js";
+export type { ConfigurationId, MaterialId } from "./core/ids.js";
 export {
   createManifoldKernel,
   ManifoldKernel,

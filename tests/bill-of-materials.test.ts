@@ -144,6 +144,7 @@ describe("evaluated bill of materials", () => {
       const density = densityInDocumentUnits(1_000);
       const mass = 24 * density;
       expect(bomValue(result)).toEqual({
+        configurationId: null,
         units: { mass: "kg" },
         items: [
           {
@@ -188,6 +189,7 @@ describe("evaluated bill of materials", () => {
       const bracketTotalMass = 5 * bracketDefinitionMass;
       const totalMass = boltTotalMass + bracketTotalMass;
       expect(bomValue(result)).toEqual({
+        configurationId: null,
         units: { mass: "kg" },
         items: [
           {
@@ -410,6 +412,7 @@ describe("evaluated bill of materials", () => {
       const result = output.billOfMaterials();
       expect(result.diagnostics).toEqual([]);
       expect(bomValue(result)).toEqual({
+        configurationId: null,
         units: { mass: "kg" },
         items: [],
         totalQuantity: 0,

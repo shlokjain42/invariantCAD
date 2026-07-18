@@ -459,6 +459,52 @@ const NodeSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 
+const ConfigurationSchema = z
+  .object({
+    description: z.string().optional(),
+    parameterOverrides: z
+      .record(IdSchema, ExpressionSchema)
+      .refine(
+        (parameters) => Object.keys(parameters).length > 0,
+        "Configuration parameter overrides cannot be empty; omit them instead",
+      )
+      .optional(),
+    instanceSuppressions: z
+      .record(
+        IdSchema,
+        z
+          .record(
+            IdSchema,
+            z.boolean(),
+          )
+          .refine(
+            (instances) => Object.keys(instances).length > 0,
+            "Configuration assembly instance overrides cannot be empty",
+          ),
+      )
+      .refine(
+        (assemblies) => Object.keys(assemblies).length > 0,
+        "Configuration assembly overrides cannot be empty; omit them instead",
+      )
+      .optional(),
+    partMaterialOverrides: z
+      .record(IdSchema, IdSchema)
+      .refine(
+        (parts) => Object.keys(parts).length > 0,
+        "Configuration part material overrides cannot be empty; omit them instead",
+      )
+      .optional(),
+    metadata: z.record(z.string(), z.json()).optional(),
+  })
+  .strict()
+  .refine(
+    (configuration) =>
+      configuration.parameterOverrides !== undefined ||
+      configuration.instanceSuppressions !== undefined ||
+      configuration.partMaterialOverrides !== undefined,
+    "A configuration requires at least one override",
+  );
+
 export const DesignDocumentSchema: z.ZodType<DesignDocument> = z.object({
   schema: z.literal(DOCUMENT_SCHEMA),
   version: z.literal(DOCUMENT_VERSION),
@@ -495,6 +541,13 @@ export const DesignDocumentSchema: z.ZodType<DesignDocument> = z.object({
     .refine(
       (materials) => Object.keys(materials).length > 0,
       "Material registry cannot be empty; omit it instead",
+    )
+    .optional(),
+  configurations: z
+    .record(IdSchema, ConfigurationSchema)
+    .refine(
+      (configurations) => Object.keys(configurations).length > 0,
+      "Configuration registry cannot be empty; omit it instead",
     )
     .optional(),
   nodes: z.record(z.string(), NodeSchema),

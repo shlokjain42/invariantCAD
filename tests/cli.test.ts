@@ -94,6 +94,7 @@ describe("CLI", () => {
       expect(result.stderr).toBe("");
       const report = JSON.parse(result.stdout) as {
         readonly output: string;
+        readonly configurationId: string | null;
         readonly units: { readonly mass: string };
         readonly items: readonly {
           readonly partNode: string;
@@ -114,6 +115,7 @@ describe("CLI", () => {
         readonly diagnostics: readonly unknown[];
       };
       expect(report.output).toBe("product");
+      expect(report.configurationId).toBeNull();
       expect(report.units).toEqual({ mass: "kg" });
       expect(report.totalQuantity).toBe(3);
       expect(report.massComplete).toBe(true);
@@ -159,6 +161,169 @@ describe("CLI", () => {
       await rm(directory, { recursive: true, force: true });
     }
   }, 15_000);
+
+  it("selects named configurations for inspect, BOM, and export", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "invariantcad-cli-"));
+    try {
+      const cad = design("cli-configuration");
+      const width = cad.parameter.length("width", mm(2));
+      const solid = cad.box("solid", {
+        size: vec3(width, mm(3), mm(4)),
+      });
+      const steel = cad.material("steel", {
+        name: "Steel",
+        massDensity: kgPerCubicMeter(7_850),
+      });
+      const part = cad.part("part", solid, {
+        partNumber: "CFG-001",
+        materialRef: steel,
+      });
+      const product = cad.assembly("product", (assembly) => {
+        assembly.instance("left", part);
+        assembly.instance("right", part, {
+          placement: [tf.translate(vec3(mm(10), mm(0), mm(0)))],
+        });
+      });
+      cad.configuration("wide-single", (configuration) => {
+        configuration.parameter(width, mm(5));
+        configuration.instanceSuppressed(product, "right");
+      });
+      cad.output("product", product);
+
+      const documentPath = join(directory, "model.json");
+      const outputPath = join(directory, "configured.obj");
+      await writeFile(documentPath, stringifyDocument(cad.build()));
+
+      const inspectResult = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          "tsx",
+          "src/cli.ts",
+          "inspect",
+          documentPath,
+          "--configuration",
+          "wide-single",
+        ],
+        { cwd: projectRoot, encoding: "utf8" },
+      );
+      expect(inspectResult.status).toBe(0);
+      expect(inspectResult.stderr).toBe("");
+      const inspection = JSON.parse(inspectResult.stdout) as {
+        readonly product: { readonly volume: number };
+      };
+      expect(inspection.product.volume).toBeCloseTo(60, 10);
+
+      const bomResult = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          "tsx",
+          "src/cli.ts",
+          "bom",
+          documentPath,
+          "--output",
+          "product",
+          "--configuration=wide-single",
+        ],
+        { cwd: projectRoot, encoding: "utf8" },
+      );
+      expect(bomResult.status).toBe(0);
+      expect(bomResult.stderr).toBe("");
+      const bom = JSON.parse(bomResult.stdout) as {
+        readonly configurationId: string | null;
+        readonly totalQuantity: number;
+        readonly items: readonly { readonly occurrenceIds: readonly string[] }[];
+      };
+      expect(bom.configurationId).toBe("wide-single");
+      expect(bom.totalQuantity).toBe(1);
+      expect(bom.items[0]?.occurrenceIds).toEqual(["left"]);
+
+      const exportResult = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          "tsx",
+          "src/cli.ts",
+          "export",
+          documentPath,
+          "--output",
+          "product",
+          "--configuration",
+          "wide-single",
+          "--to",
+          outputPath,
+        ],
+        { cwd: projectRoot, encoding: "utf8" },
+      );
+      expect(exportResult.status).toBe(0);
+      expect(exportResult.stderr).toBe("");
+      const vertexXs = (await readFile(outputPath, "utf8"))
+        .split("\n")
+        .filter((line) => line.startsWith("v "))
+        .map((line) => Number(line.split(/\s+/)[1]));
+      expect(vertexXs.length).toBeGreaterThan(0);
+      expect(Math.max(...vertexXs)).toBeCloseTo(5, 10);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it("requires configuration values and preserves evaluation diagnostics", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "invariantcad-cli-"));
+    try {
+      const cad = design("cli-configuration-errors");
+      const solid = cad.box("solid", {
+        size: vec3(mm(1), mm(1), mm(1)),
+      });
+      const part = cad.part("part", solid);
+      cad.output("part", part);
+      const documentPath = join(directory, "model.json");
+      await writeFile(documentPath, stringifyDocument(cad.build()));
+
+      const missingValueCommands = [
+        ["inspect", documentPath, "--configuration"],
+        ["bom", documentPath, "--output", "part", "--configuration"],
+        [
+          "export",
+          documentPath,
+          "--to",
+          join(directory, "part.obj"),
+          "--configuration",
+        ],
+      ] as const;
+      for (const command of missingValueCommands) {
+        const result = spawnSync(
+          process.execPath,
+          ["--import", "tsx", "src/cli.ts", ...command],
+          { cwd: projectRoot, encoding: "utf8" },
+        );
+        expect(result.status).toBe(2);
+        expect(result.stdout).toBe("");
+        expect(result.stderr).toContain("--configuration requires <id>");
+      }
+
+      const unknown = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          "tsx",
+          "src/cli.ts",
+          "inspect",
+          documentPath,
+          "--configuration",
+          "missing",
+        ],
+        { cwd: projectRoot, encoding: "utf8" },
+      );
+      expect(unknown.status).toBe(1);
+      expect(unknown.stdout).toBe("");
+      expect(unknown.stderr).toContain("CONFIGURATION_MISSING");
+      expect(unknown.stderr).toContain("/configurations/missing");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, 20_000);
 
   it("requires a BOM output and rejects raw-solid outputs", async () => {
     const directory = await mkdtemp(join(tmpdir(), "invariantcad-cli-"));

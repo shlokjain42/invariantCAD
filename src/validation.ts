@@ -1,4 +1,5 @@
 import type {
+  ConfigurationId,
   EntityId,
   MaterialId,
   NodeId,
@@ -16,6 +17,7 @@ import {
   nodeDependencies,
   outputKindForNode,
   type DesignDocument,
+  type DesignConfigurationIR,
   type NodeIR,
   type OutputKind,
   type RefIR,
@@ -179,6 +181,126 @@ function validateExpression(
         child(value, expression.dimension, `values/${index}`),
       );
       break;
+  }
+}
+
+function validateConfiguration(
+  id: ConfigurationId,
+  configuration: DesignConfigurationIR,
+  document: DesignDocument,
+  diagnostics: Diagnostic[],
+): void {
+  const path = `/configurations/${id}`;
+  for (const [parameterId, value] of Object.entries(
+    configuration.parameterOverrides ?? {},
+  ) as [ParameterId, ExpressionIR][]) {
+    const definition = Object.hasOwn(document.parameters, parameterId)
+      ? document.parameters[parameterId]
+      : undefined;
+    const valuePath = `${path}/parameterOverrides/${parameterId}`;
+    if (definition === undefined) {
+      diagnostics.push(
+        diagnostic(
+          "PARAMETER_MISSING",
+          `Configuration references missing parameter '${parameterId}'`,
+          { severity: "error", path: valuePath },
+        ),
+      );
+    } else {
+      validateExpression(
+        value,
+        definition.dimension,
+        document,
+        valuePath,
+        diagnostics,
+      );
+    }
+  }
+
+  for (const [assemblyId, instances] of Object.entries(
+    configuration.instanceSuppressions ?? {},
+  ) as [
+    NodeId,
+    NonNullable<DesignConfigurationIR["instanceSuppressions"]>[NodeId],
+  ][]) {
+    const assemblyPath = `${path}/instanceSuppressions/${assemblyId}`;
+    const node = Object.hasOwn(document.nodes, assemblyId)
+      ? document.nodes[assemblyId]
+      : undefined;
+    if (node === undefined) {
+      diagnostics.push(
+        diagnostic(
+          "REFERENCE_MISSING",
+          `Configuration references missing assembly '${assemblyId}'`,
+          { severity: "error", path: assemblyPath },
+        ),
+      );
+      continue;
+    }
+    if (node.kind !== "assembly") {
+      diagnostics.push(
+        diagnostic(
+          "REFERENCE_KIND_MISMATCH",
+          `Configuration target '${assemblyId}' is ${node.kind}, not assembly`,
+          { severity: "error", node: assemblyId, path: assemblyPath },
+        ),
+      );
+      continue;
+    }
+    for (const instanceId of Object.keys(instances) as EntityId[]) {
+      if (!node.instances.some((instance) => instance.id === instanceId)) {
+        diagnostics.push(
+          diagnostic(
+            "REFERENCE_MISSING",
+            `Assembly '${assemblyId}' has no instance '${instanceId}'`,
+            {
+              severity: "error",
+              node: assemblyId,
+              path: `${assemblyPath}/${instanceId}`,
+            },
+          ),
+        );
+      }
+    }
+  }
+
+  for (const [partId, materialId] of Object.entries(
+    configuration.partMaterialOverrides ?? {},
+  ) as [NodeId, MaterialId][]) {
+    const materialPath = `${path}/partMaterialOverrides/${partId}`;
+    const node = Object.hasOwn(document.nodes, partId)
+      ? document.nodes[partId]
+      : undefined;
+    if (node === undefined) {
+      diagnostics.push(
+        diagnostic(
+          "REFERENCE_MISSING",
+          `Configuration references missing part '${partId}'`,
+          { severity: "error", path: materialPath },
+        ),
+      );
+    } else if (node.kind !== "part") {
+      diagnostics.push(
+        diagnostic(
+          "REFERENCE_KIND_MISMATCH",
+          `Configuration target '${partId}' is ${node.kind}, not part`,
+          { severity: "error", node: partId, path: materialPath },
+        ),
+      );
+    }
+    if (!Object.hasOwn(document.materials ?? {}, materialId)) {
+      diagnostics.push(
+        diagnostic(
+          "REFERENCE_MISSING",
+          `Configuration references missing material '${materialId}'`,
+          {
+            severity: "error",
+            path: materialPath,
+            details: { materialId },
+          },
+        ),
+      );
+    }
   }
 }
 
@@ -1243,6 +1365,11 @@ export function validateDocument(
       `/materials/${id}/massDensity`,
       diagnostics,
     );
+  }
+  for (const [id, configuration] of Object.entries(
+    document.configurations ?? {},
+  ) as [ConfigurationId, DesignConfigurationIR][]) {
+    validateConfiguration(id, configuration, document, diagnostics);
   }
   for (const [id, node] of Object.entries(document.nodes) as [NodeId, NodeIR][]) {
     validateNode(id, node, document, diagnostics);

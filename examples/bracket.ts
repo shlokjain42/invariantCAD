@@ -25,6 +25,10 @@ const aluminum = cad.material("aluminum-6061-t6", {
   name: "6061-T6 Aluminum",
   massDensity: kgPerCubicMeter(2700),
 });
+const steel = cad.material("steel-a36", {
+  name: "A36 Steel",
+  massDensity: kgPerCubicMeter(7850),
+});
 
 const plateProfile = cad.sketch("plate-profile", plane.xy(), (sketch) => {
   const outer = sketch.rectangle("outline", { width, height: depth });
@@ -63,6 +67,15 @@ const pair = cad.assembly("bracket-pair", (assembly) => {
     placement: [tf.translate(vec3(width.add(mm(20)), mm(0), mm(0)))],
   });
 });
+const compactSteelSingle = cad.configuration(
+  "compact-steel-single",
+  (configuration) => {
+    configuration.parameter(width, mm(60));
+    configuration.instanceSuppressed(pair, "right");
+    configuration.partMaterial(bracket, steel);
+  },
+  { description: "One compact bracket manufactured from A36 steel" },
+);
 cad.output("bracket", bracket).output("pair", pair);
 
 const document = cad.build();
@@ -74,16 +87,26 @@ await writeFile(
 
 const evaluator = await createEvaluator();
 try {
-  const result = await evaluator.evaluate(document, { outputs: ["bracket"] });
+  const result = await evaluator.evaluate(document, {
+    configuration: compactSteelSingle,
+    outputs: ["pair"],
+  });
   if (!result.ok) {
     throw new Error(result.diagnostics.map((item) => item.message).join("\n"));
   }
   try {
-    const output = result.value.output("bracket");
-    await writeFile(".artifacts/bracket.stl", output.export("stl"));
+    const output = result.value.output("pair");
+    await writeFile(
+      ".artifacts/bracket-compact-steel-single.stl",
+      output.export("stl"),
+    );
+    console.log({ configurationId: result.value.configurationId });
     console.log(output.measure());
     if ("physicalMassProperties" in output) {
       console.log(output.physicalMassProperties());
+    }
+    if ("billOfMaterials" in output) {
+      console.log(output.billOfMaterials());
     }
   } finally {
     result.value.dispose();

@@ -28,12 +28,13 @@ Explicit names are required for public features and sketch entities. This makes 
 - base-unit policy;
 - parameter definitions and expression ASTs;
 - document-owned material definitions with stable IDs and required explicit density;
+- an optional canonical registry of named configurations containing definition-targeted parameter, assembly-instance suppression, and part-material overrides;
 - sketch geometry, constraints, and explicit profiles;
 - feature DAG;
 - parts, assembly occurrences, and outputs;
 - optional JSON metadata.
 
-Canonical serialization sorts object keys and rejects values JSON cannot preserve. Semantic hashes exclude display metadata by default.
+Canonical serialization sorts object keys and rejects values JSON cannot preserve. Semantic hashes exclude top-level document metadata by default; metadata nested on authored definitions remains semantic.
 
 Document schema v1 remains pre-freeze while the unreleased `0.1.0` foundation is assembled. Publishing `0.1.0` freezes that grammar: later strict grammar expansions require a new document version and an explicit migration path. Compatibility tests pin the canonical hash of a pre-chamfer v1 document.
 
@@ -102,24 +103,27 @@ The exact backend uses OpenCascade for analytic profile evaluation, B-Rep primit
 Evaluation performs these operations in order:
 
 1. structural and semantic validation;
-2. parameter dependency resolution and bounds checking;
-3. document-owned material-density resolution and positivity checks;
-4. lazy feature-DAG traversal from selected outputs;
-5. sketch solving;
-6. geometry-derived feature/refinement and topology capability preflight, plus selector resolution for consuming features;
-7. kernel feature execution and status checks;
-8. part and nested-assembly occurrence resolution;
-9. construction of disposable evaluated outputs.
+2. exact named-configuration selection;
+3. parameter dependency resolution and bounds checking, with call-time values taking precedence over selected-configuration expressions and then authored defaults;
+4. document-owned material-density resolution and positivity checks;
+5. lazy feature-DAG traversal from selected outputs;
+6. sketch solving;
+7. geometry-derived feature/refinement and topology capability preflight, plus selector resolution for consuming features;
+8. kernel feature execution and status checks;
+9. configuration-aware part and nested-assembly occurrence resolution;
+10. construction of disposable evaluated outputs.
 
 Evaluated assemblies aggregate occurrence mass properties rather than treating their combined tessellation as one opaque measurement. Each occurrence's center and central second moment follow its full affine placement; the aggregate center and tensor then use volume weighting and parallel-axis shifts. This preserves correct translation, rotation, reflection, and nonuniform-scale semantics while counting repeated definitions once per occurrence.
 
-Physical properties form a separate typed layer. `DesignDocument.materials` owns reusable definitions keyed by stable material ID; every definition contains an explicit `massDensity` expression in the canonical `kg/mm^3` unit. A part records that relationship as `PartNodeIR.materialId`, authored with a same-builder typed `materialRef`. The existing `PartNodeIR.material` string remains a descriptive compatibility field and has no implicit lookup behavior; authoring makes the label and reference mutually exclusive. Density resolution is strictly `part.massDensity` first, then the explicitly referenced definition's `massDensity`, then missing. IDs and names are never searched or heuristically matched. Every supplied density resolves during evaluation and must be finite and strictly positive.
+Physical properties form a separate typed layer. `DesignDocument.materials` owns reusable definitions keyed by stable material ID; every definition contains an explicit `massDensity` expression in the canonical `kg/mm^3` unit. A part records that relationship as `PartNodeIR.materialId`, authored with a same-builder typed `materialRef`. The existing `PartNodeIR.material` string remains a descriptive compatibility field and has no implicit lookup behavior; authoring makes the label and reference mutually exclusive. A selected configuration's `partMaterialOverrides` replaces the authored material reference for the targeted part definition. Density resolution is strictly `part.massDensity` first, then the effective referenced or substituted definition's `massDensity`, then missing. IDs and names are never searched or heuristically matched. Every supplied density resolves during evaluation and must be finite and strictly positive.
+
+`DesignDocument.configurations`, when present, is a canonical registry keyed by stable configuration ID. Each non-empty entry may contain `parameterOverrides`, `instanceSuppressions`, and `partMaterialOverrides`, plus description and metadata. The registry is omitted rather than serialized as an empty object when the design has no configurations. Parameter overrides are dimension-checked expressions. Instance suppression is keyed first by an assembly-definition node and then by one of its direct authored instance IDs; material substitution is keyed by a part-definition node and resolves to a document-owned material ID. These definition-scoped targets avoid ambiguous flattened occurrence paths and make a reused subassembly or part respond consistently in every occurrence. An explicit `false` suppression value re-enables an authored-suppressed instance.
 
 Geometry measurements may be cached by `KernelShape`, but density-scaled results may not: multiple part definitions can deliberately share geometry while using different densities. `EvaluatedPart` scales its central volumetric properties directly. `EvaluatedAssembly` first checks that every active flattened leaf has density, transforms each cached geometric property through the occurrence's full affine placement, scales it independently, and combines bodies by mass-weighted centers and parallel-axis shifts. Missing density is a structured `CadResult` failure for complete physical-property analysis, while suppressed leaves and empty assemblies retain explicit zero semantics.
 
-The bill-of-materials layer deliberately follows product structure rather than geometry identity or display text. Active nested assembly leaves are flattened to stable occurrence paths, suppressed branches are omitted, and items are grouped by part-node ID. Part number, description, and material are reported attributes; missing or duplicate values never cause two definitions to be silently merged. Item order, occurrence-path order, and diagnostics are deterministic.
+The bill-of-materials layer deliberately follows product structure rather than geometry identity or display text. Active nested assembly leaves are flattened to stable occurrence paths, authored- or configuration-suppressed branches are omitted, and items are grouped by part-node ID. Part number, description, and effective material are reported attributes; missing or duplicate values never cause two definitions to be silently merged. Item order, occurrence-path order, and diagnostics are deterministic.
 
-Each BOM item reports both its unplaced definition mass and the sum of its placed occurrence masses. The latter uses the full affine transform, including reflection and volume-changing scale, rather than assuming `definitionMass * quantity`. Overlap remains additive. Missing density is a warning-level partial result: quantity remains exact, `knownMass` sums the computable occurrences, `massComplete` is false, and `totalMass` is null. Complete and empty BOMs have a non-null total. This base contract intentionally excludes configurations, effectivity, alternate/substitute components, and variant selection.
+Each BOM item reports both its unplaced definition mass and the sum of its placed occurrence masses. The latter uses the full affine transform, including reflection and volume-changing scale, rather than assuming `definitionMass * quantity`. Overlap remains additive. Missing density is a warning-level partial result: quantity remains exact, `knownMass` sums the computable occurrences, `massComplete` is false, and `totalMass` is null. Complete and empty BOMs have a non-null total. Every successful BOM includes the selected `configurationId`, or `null` for the base design; `EvaluatedDesign` exposes the same identity alongside its effective parameter map. Effectivity and alternate/substitute components remain outside this base contract.
 
 Composite-sweep refinement preflight is kernel-neutral. A shared classifier resolves the exact arc sweeps, computes certified analytic profile area/centroid moments, and derives the canonical `major-multiple-arcs` / `major-eccentric-profile` subset before kernel execution. Missing support produces a capability diagnostic; malformed versioned metadata produces a protocol diagnostic. Geometry that needs neither refinement does not depend on the optional envelope.
 

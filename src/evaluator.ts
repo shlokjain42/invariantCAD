@@ -1,4 +1,5 @@
 import type {
+  ConfigurationId,
   EntityId,
   MaterialId,
   NodeId,
@@ -31,6 +32,7 @@ import {
 } from "./expressions.js";
 import type {
   AssemblyInstanceIR,
+  DesignConfigurationIR,
   DesignDocument,
   MaterialDefinitionIR,
   NodeIR,
@@ -111,6 +113,8 @@ export type ParameterOverride = number | Expression<Dimension>;
 export type ShapeExportFormat = MeshExportFormat | KernelExchangeFormat;
 
 export interface EvaluationOptions {
+  /** Exact document-owned configuration ID; omitted selects the base design. */
+  readonly configuration?: string;
   readonly parameters?: Readonly<Record<string, ParameterOverride>>;
   readonly outputs?: readonly string[];
   readonly signal?: AbortSignal;
@@ -150,6 +154,7 @@ export interface BillOfMaterialsItem {
 }
 
 export interface BillOfMaterials {
+  readonly configurationId: string | null;
   readonly units: { readonly mass: "kg" };
   readonly items: readonly BillOfMaterialsItem[];
   readonly totalQuantity: number;
@@ -181,6 +186,7 @@ interface PartValue {
   readonly node: NodeId;
   readonly definition: PartNodeIR;
   readonly shape: KernelShape;
+  readonly materialId?: MaterialId;
   readonly materialDefinition?: EvaluatedMaterial;
   readonly massDensity?: number;
   readonly massDensitySource?: MassDensitySource;
@@ -217,14 +223,26 @@ interface ParameterResolution {
 function resolveParameters(
   document: DesignDocument,
   overrides: Readonly<Record<string, ParameterOverride>>,
+  configurationId: ConfigurationId | null,
+  configuration: DesignConfigurationIR | undefined,
 ): CadResult<ParameterResolution> {
   const diagnostics: Diagnostic[] = [];
   const values = new Map<ParameterId, number>();
   const states = new Map<ParameterId, "visiting" | "resolved">();
+  const configurationOverrides = configuration?.parameterOverrides ?? {};
+  const sourcePath = (id: ParameterId): string => {
+    if (Object.hasOwn(overrides, id)) return `/parameters/${id}`;
+    if (Object.hasOwn(configurationOverrides, id)) {
+      return `/configurations/${configurationId}/parameterOverrides/${id}`;
+    }
+    return `/parameters/${id}/default`;
+  };
   const resolve = (id: ParameterId, expected: Dimension): number => {
     const existing = values.get(id);
     if (existing !== undefined) return existing;
-    const definition = document.parameters[id];
+    const definition = Object.hasOwn(document.parameters, id)
+      ? document.parameters[id]
+      : undefined;
     if (definition === undefined) {
       throw new EvaluationFailure(
         diagnostic("PARAMETER_MISSING", `Missing parameter '${id}'`, {
@@ -246,17 +264,25 @@ function resolveParameters(
       throw new EvaluationFailure(
         diagnostic("PARAMETER_CYCLE", `Parameter '${id}' is part of a cycle`, {
           severity: "error",
-          path: `/parameters/${id}/default`,
+          path: sourcePath(id),
         }),
       );
     }
     states.set(id, "visiting");
-    const override = overrides[id];
+    const override = Object.hasOwn(overrides, id)
+      ? overrides[id]
+      : undefined;
+    const hasConfigurationOverride = Object.hasOwn(configurationOverrides, id);
     let value: number;
     if (typeof override === "number") {
       value = override;
     } else {
-      const expression = override instanceof Expression ? override.ir : definition.default;
+      const expression =
+        override instanceof Expression
+          ? override.ir
+          : hasConfigurationOverride
+            ? configurationOverrides[id]!
+            : definition.default;
       if (override instanceof Expression && override.dimension !== definition.dimension) {
         throw new EvaluationFailure(
           diagnostic(
@@ -278,7 +304,7 @@ function resolveParameters(
           `Mass-density parameter '${id}' must be finite and strictly positive`,
           {
             severity: "error",
-            path: `/parameters/${id}`,
+            path: sourcePath(id),
             details: { value },
           },
         ),
@@ -288,7 +314,7 @@ function resolveParameters(
       throw new EvaluationFailure(
         diagnostic("EXPRESSION_INVALID", `Parameter '${id}' is not finite`, {
           severity: "error",
-          path: `/parameters/${id}`,
+          path: sourcePath(id),
         }),
       );
     }
@@ -298,7 +324,7 @@ function resolveParameters(
   };
 
   for (const key of Object.keys(overrides)) {
-    if (document.parameters[key as ParameterId] === undefined) {
+    if (!Object.hasOwn(document.parameters, key)) {
       diagnostics.push(
         diagnostic("PARAMETER_MISSING", `Unknown parameter override '${key}'`, {
           severity: "error",
@@ -322,7 +348,7 @@ function resolveParameters(
                 ? "MASS_DENSITY_INVALID"
                 : "EXPRESSION_INVALID",
               error instanceof Error ? error.message : String(error),
-              { severity: "error", path: `/parameters/${rawId}` },
+              { severity: "error", path: sourcePath(rawId) },
             ),
       );
     }
@@ -373,7 +399,7 @@ function resolveParameters(
             `Parameter '${rawId}' value ${value} is outside ${min ?? "-∞"}..${max ?? "∞"}`,
             {
               severity: "error",
-              path: `/parameters/${rawId}`,
+              path: sourcePath(rawId),
               details: { value, min, max },
             },
           ),
@@ -484,10 +510,16 @@ class EvaluationOwner {
   disposed = false;
   readonly kernel: GeometryKernel;
   readonly shapes: ReadonlySet<KernelShape>;
+  readonly configurationId: string | null;
 
-  constructor(kernel: GeometryKernel, shapes: ReadonlySet<KernelShape>) {
+  constructor(
+    kernel: GeometryKernel,
+    shapes: ReadonlySet<KernelShape>,
+    configurationId: string | null,
+  ) {
     this.kernel = kernel;
     this.shapes = shapes;
+    this.configurationId = configurationId;
   }
 
   assertLive(): void {
@@ -555,8 +587,8 @@ function partMassDensityPath(part: PartValue): string {
   if (part.definition.massDensity !== undefined) {
     return `/nodes/${part.node}/massDensity`;
   }
-  if (part.definition.materialId !== undefined) {
-    return `/materials/${part.definition.materialId}/massDensity`;
+  if (part.materialId !== undefined) {
+    return `/materials/${part.materialId}/massDensity`;
   }
   return `/nodes/${part.node}/massDensity`;
 }
@@ -659,7 +691,7 @@ function createBillOfMaterials(
           severity: "warning",
           node: part.node,
           path:
-            part.definition.materialId === undefined
+            part.materialId === undefined
               ? `/nodes/${part.node}/material`
               : `/nodes/${part.node}/materialId`,
           hints: ["Reference a document material or author a legacy material label"],
@@ -731,7 +763,7 @@ function createBillOfMaterials(
       partNode: part.node,
       partNumber,
       description: part.definition.description ?? null,
-      materialId: part.definition.materialId ?? null,
+      materialId: part.materialId ?? null,
       material,
       quantity,
       occurrenceIds,
@@ -773,6 +805,7 @@ function createBillOfMaterials(
   const massComplete = items.every((item) => item.totalMass !== null);
   return success(
     {
+      configurationId: owner.configurationId,
       units: { mass: "kg" },
       items,
       totalQuantity: items.reduce((sum, item) => sum + item.quantity, 0),
@@ -802,7 +835,7 @@ export class EvaluatedPart extends EvaluatedSolid {
     this.partNumber = part.definition.partNumber;
     this.description = part.definition.description;
     this.material = part.definition.material;
-    this.materialId = part.definition.materialId;
+    this.materialId = part.materialId;
     this.materialName = part.materialDefinition?.name;
     this.materialDefinition = part.materialDefinition;
     this.massDensity = part.massDensity;
@@ -894,9 +927,9 @@ export class EvaluatedAssembly {
       ...(occurrence.part.definition.material === undefined
         ? {}
         : { material: occurrence.part.definition.material }),
-      ...(occurrence.part.definition.materialId === undefined
+      ...(occurrence.part.materialId === undefined
         ? {}
-        : { materialId: occurrence.part.definition.materialId }),
+        : { materialId: occurrence.part.materialId }),
       ...(occurrence.part.materialDefinition === undefined
         ? {}
         : { materialName: occurrence.part.materialDefinition.name }),
@@ -1056,6 +1089,7 @@ export class EvaluatedAssembly {
 export type EvaluatedOutput = EvaluatedSolid | EvaluatedPart | EvaluatedAssembly;
 
 export class EvaluatedDesign {
+  readonly configurationId: string | null;
   readonly parameters: Readonly<Record<string, number>>;
   readonly diagnostics: readonly Diagnostic[];
   readonly outputNames: readonly string[];
@@ -1065,12 +1099,14 @@ export class EvaluatedDesign {
   constructor(
     owner: EvaluationOwner,
     outputs: ReadonlyMap<string, EvaluatedOutput>,
+    configurationId: string | null,
     parameters: Readonly<Record<string, number>>,
     diagnostics: readonly Diagnostic[],
   ) {
     this.owner = owner;
     this.outputs = outputs;
     this.outputNames = [...outputs.keys()];
+    this.configurationId = configurationId;
     this.parameters = parameters;
     this.diagnostics = diagnostics;
   }
@@ -1126,7 +1162,34 @@ export class Evaluator {
     }
     const validation = validateDocument(document);
     if (!validation.ok) return validation;
-    const parameterResult = resolveParameters(document, options.parameters ?? {});
+    let selectedConfigurationId: ConfigurationId | null = null;
+    let selectedConfiguration: DesignConfigurationIR | undefined;
+    if (options.configuration !== undefined) {
+      if (!Object.hasOwn(document.configurations ?? {}, options.configuration)) {
+        return failure(
+          diagnostic(
+            "CONFIGURATION_MISSING",
+            `Unknown configuration '${options.configuration}'`,
+            {
+              severity: "error",
+              path: `/configurations/${options.configuration}`,
+              details: {
+                available: Object.keys(document.configurations ?? {}).sort(),
+              },
+            },
+          ),
+        );
+      }
+      selectedConfigurationId = options.configuration as ConfigurationId;
+      selectedConfiguration =
+        document.configurations![selectedConfigurationId];
+    }
+    const parameterResult = resolveParameters(
+      document,
+      options.parameters ?? {},
+      selectedConfigurationId,
+      selectedConfiguration,
+    );
     if (!parameterResult.ok) return parameterResult;
     const diagnostics: Diagnostic[] = [
       ...validation.diagnostics,
@@ -1195,6 +1258,25 @@ export class Evaluator {
       );
     }
     if (hasErrors(diagnostics)) return { ok: false, diagnostics };
+    const configuredPartMaterial = (id: NodeId): MaterialId | undefined => {
+      const overrides = selectedConfiguration?.partMaterialOverrides;
+      return overrides !== undefined && Object.hasOwn(overrides, id)
+        ? overrides[id]
+        : undefined;
+    };
+    const configuredInstanceSuppression = (
+      assembly: NodeId,
+      instance: EntityId,
+    ): boolean | undefined => {
+      const assemblies = selectedConfiguration?.instanceSuppressions;
+      if (assemblies === undefined || !Object.hasOwn(assemblies, assembly)) {
+        return undefined;
+      }
+      const instances = assemblies[assembly]!;
+      return Object.hasOwn(instances, instance)
+        ? instances[instance]
+        : undefined;
+    };
     const resolvedTransform = (
       operation: TransformOperationIR,
     ): ResolvedTransformOperation => {
@@ -2313,10 +2395,12 @@ export class Evaluator {
             break;
           }
           case "part": {
+            const effectiveMaterialId =
+              configuredPartMaterial(id) ?? node.materialId;
             const materialDefinition =
-              node.materialId === undefined
+              effectiveMaterialId === undefined
                 ? undefined
-                : resolvedMaterials.get(node.materialId);
+                : resolvedMaterials.get(effectiveMaterialId);
             let massDensity: number | undefined;
             let massDensitySource: MassDensitySource | undefined;
             if (node.massDensity !== undefined) {
@@ -2362,6 +2446,9 @@ export class Evaluator {
               node: id,
               definition: node,
               shape: solidRef(node.solid),
+              ...(effectiveMaterialId === undefined
+                ? {}
+                : { materialId: effectiveMaterialId }),
               ...(materialDefinition === undefined
                 ? {}
                 : { materialDefinition }),
@@ -2375,7 +2462,10 @@ export class Evaluator {
           case "assembly": {
             const occurrences: AssemblyOccurrence[] = [];
             for (const instance of node.instances) {
-              if (instance.suppressed) continue;
+              const suppressed =
+                configuredInstanceSuppression(id, instance.id) ??
+                instance.suppressed;
+              if (suppressed) continue;
               const component = evaluateNode(instance.component.node);
               const placement = operationsMatrix(
                 instance.placement.map(resolvedTransform),
@@ -2457,7 +2547,11 @@ export class Evaluator {
         }
         rawOutputs.set(name, evaluateNode(reference.node));
       }
-      const owner = new EvaluationOwner(this.kernel, createdShapes);
+      const owner = new EvaluationOwner(
+        this.kernel,
+        createdShapes,
+        selectedConfigurationId,
+      );
       const outputs = new Map<string, EvaluatedOutput>();
       for (const [name, value] of rawOutputs) {
         if (value.kind === "solid") {
@@ -2482,6 +2576,7 @@ export class Evaluator {
       const evaluated = new EvaluatedDesign(
         owner,
         outputs,
+        selectedConfigurationId,
         publicParameters,
         diagnostics,
       );

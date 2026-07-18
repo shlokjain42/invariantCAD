@@ -4,7 +4,7 @@ Comprehensive, type-safe CAD-as-code for TypeScript.
 
 InvariantCAD represents a design as immutable, versioned JSON and evaluates it through replaceable geometry and sketch-solver backends. The public API never exposes WASM pointers or kernel-specific objects.
 
-> **Project status:** `0.1.0` is the released-foundation target. Current main adds an exact OpenCascade B-Rep backend, analytic sketch-profile transfer, STEP/BREP exchange, bounded ruled solid lofts, explicit 3D polyline, circular-arc, and ordered line/arc composite paths with bounded exact solid sweeps, closed semantic topology roles, sketch-boundary provenance, exact selector-driven fillets and equal-distance chamfers, exact face-selected inward/outward shells, exact whole-solid inward/outward offsets, and atomic semantic-face draft with exact indexed topology evolution when the matched InvariantCAD-owned OCCT facade is loaded. Complete topology history across the other topology-changing features and additional advanced mechanical features remain under active development; see the [support matrix](#support-matrix) and [roadmap](docs/roadmap.md).
+> **Project status:** `0.1.0` is the released-foundation target. Current main adds named definition-scoped configurations and variant-aware BOMs, an exact OpenCascade B-Rep backend, analytic sketch-profile transfer, STEP/BREP exchange, bounded ruled solid lofts, explicit 3D polyline, circular-arc, and ordered line/arc composite paths with bounded exact solid sweeps, closed semantic topology roles, sketch-boundary provenance, exact selector-driven fillets and equal-distance chamfers, exact face-selected inward/outward shells, exact whole-solid inward/outward offsets, and atomic semantic-face draft with exact indexed topology evolution when the matched InvariantCAD-owned OCCT facade is loaded. Complete topology history across the other topology-changing features and additional advanced mechanical features remain under active development; see the [support matrix](#support-matrix) and [roadmap](docs/roadmap.md).
 
 ## Install
 
@@ -310,7 +310,8 @@ Selectors also support curve/surface kind, edge direction, face normal, radius, 
 - Parts with part number, description, metadata, backward-compatible material labels, and explicit parameterized mass density
 - Document-owned material definitions with typed part references and explicit parameterized density
 - Fixed-placement and nested assemblies with shared part definitions
-- Deterministic bills of materials with nested quantity and affine mass rollups
+- Named configurations with parameter, assembly-instance suppression, and part-material overrides
+- Deterministic variant-aware bills of materials with nested quantity and affine mass rollups
 
 ### Sketch constraints
 
@@ -345,7 +346,8 @@ The solver API is replaceable. The built-in solver is intentionally a v0.1 refer
 | Center of mass and centroidal inertia tensor | Both kernels and assemblies | Yes |
 | Principal/axis inertia and radii of gyration | Kernel-neutral public analysis | Yes |
 | Density-aware part and heterogeneous-assembly mass | Explicit authored density | Yes |
-| Deterministic bill of materials | Fixed and nested assemblies | Configurations and variant BOMs |
+| Named configurations | Parameter, definition-scoped suppression, and part-material overrides | Effectivity and rule-driven variants |
+| Deterministic bill of materials | Fixed and nested assemblies, including selected configurations | Effectivity and alternate/substitute components |
 | Exact B-Rep primitives and core features | OCCT backend | Yes |
 | STEP and BREP import/export | OCCT backend | Yes |
 | IGES import/export | No | Exact backend |
@@ -438,7 +440,7 @@ if (evaluated.ok) {
 }
 ```
 
-Density resolution has one deterministic precedence rule: a part's own `massDensity` is an explicit per-part override; otherwise the referenced material definition's `massDensity` is used; otherwise density is missing. Neither a legacy `material` label nor a definition `name` participates in resolution. Material IDs and references are document-owned, so a reference created by another builder is rejected instead of being silently rebound by text.
+Density resolution has one deterministic precedence rule: a part's own `massDensity` is an explicit per-part override; otherwise the effective material definition's `massDensity` is used; otherwise density is missing. With a selected configuration, its `partMaterial` substitution determines that effective material instead of the part's authored `materialRef`, but an explicit part `massDensity` still wins over the substituted material's density. Neither a legacy `material` label nor a definition `name` participates in resolution. Material IDs and references are document-owned, so a reference created by another builder is rejected instead of being silently rebound by text.
 
 `EvaluatedPart.physicalMassProperties()` and `EvaluatedAssembly.physicalMassProperties()` return `CadResult<PhysicalMassProperties>`. An active part without density produces `MASS_DENSITY_MISSING`; zero, negative, or non-finite resolved density produces `MASS_DENSITY_INVALID`; a finite calculation that cannot produce representable, mechanically valid properties produces `MASS_PROPERTIES_INVALID`. Suppressed occurrences do not require density. Assemblies transform each leaf's volumetric properties through its complete affine placement, multiply by that leaf's own density, then use mass weighting and the parallel-axis theorem. Repeated definitions count once per occurrence, overlaps remain additive bodies, and an empty assembly returns zero mass, a null center, and a zero tensor. For a raw evaluated solid, call `physicalMassProperties(output.measure(), numericDensity)` explicitly.
 
@@ -496,9 +498,51 @@ if (evaluated.ok) {
 }
 ```
 
-`items` are grouped by stable part-node ID, not by mutable or potentially duplicate part numbers, descriptions, or material names. Each item reports `partNode`, nullable `partNumber`, `description`, `materialId`, and `material`, `quantity`, sorted flattened `occurrenceIds`, resolved `massDensity` and `massDensitySource`, base `definitionMass`, and occurrence-aware `totalMass`. A directly evaluated part produces definition quantity one and an empty occurrence-path list. Nested assemblies contribute their active leaf occurrences, while suppressed branches contribute neither quantity nor mass.
+`items` are grouped by stable part-node ID, not by mutable or potentially duplicate part numbers, descriptions, or material names. Each item reports `partNode`, nullable `partNumber`, `description`, effective `materialId` and `material`, `quantity`, sorted flattened `occurrenceIds`, resolved `massDensity` and `massDensitySource`, base `definitionMass`, and occurrence-aware `totalMass`. A directly evaluated part produces definition quantity one and an empty occurrence-path list. Nested assemblies contribute their active leaf occurrences, while authored or configuration-suppressed branches contribute neither quantity nor mass.
 
-BOM mass is physical occurrence mass. Rigid placements and reflections preserve the definition mass; affine scaling changes occurrence mass by its volume scale, so an item's mass rollup need not equal `definitionMass * quantity`. Occurrences remain additive even if their geometry overlaps. If any active item lacks density, the BOM still succeeds with warning diagnostics and exact quantities: `massComplete` is `false`, `knownMass` contains the sum of computable occurrence masses, and `totalMass` is `null`. An empty assembly has zero quantity, complete zero mass, and no items. Configurations, effectivity, alternates, and variant-aware BOMs remain roadmap work.
+BOM mass is physical occurrence mass. Rigid placements and reflections preserve the definition mass; affine scaling changes occurrence mass by its volume scale, so an item's mass rollup need not equal `definitionMass * quantity`. Occurrences remain additive even if their geometry overlaps. If any active item lacks density, the BOM still succeeds with warning diagnostics and exact quantities: `massComplete` is `false`, `knownMass` contains the sum of computable occurrence masses, and `totalMass` is `null`. An empty assembly has zero quantity, complete zero mass, and no items. The BOM's `configurationId` is the selected name or `null` for the base design, so a stored BOM always identifies its variant. Effectivity and alternate/substitute components remain roadmap work.
+
+## Named configurations
+
+A configuration is a document-owned, named set of explicit overrides. It can replace parameter expressions, suppress or re-enable a direct instance in an assembly definition, and substitute a material for a part definition:
+
+```ts
+const compactSingle = cad.configuration(
+  "compact-single",
+  (configuration) => {
+    configuration.parameter(width, mm(60));
+    configuration.instanceSuppressed(product, "right");
+    configuration.partMaterial(part, steel);
+  },
+  { description: "One compact bracket in steel" },
+);
+
+const evaluated = await evaluator.evaluate(cad.build(), {
+  configuration: compactSingle,
+  parameters: {
+    width: 72, // Call-time values override the selected configuration.
+  },
+});
+
+if (evaluated.ok) {
+  try {
+    console.log(evaluated.value.configurationId); // "compact-single"
+    const output = evaluated.value.output("product");
+    if (output instanceof EvaluatedAssembly) {
+      const bom = output.billOfMaterials();
+      if (bom.ok) console.log(bom.value.configurationId);
+    }
+  } finally {
+    evaluated.value.dispose();
+  }
+}
+```
+
+Parameter precedence is exact: call-time `parameters` > selected configuration `parameterOverrides` > authored parameter defaults. The resolved values in `EvaluatedDesign.parameters` are therefore the effective values used by geometry, material-density expressions, and placements.
+
+Suppression and material overrides target definitions, not flattened occurrence paths. `instanceSuppressed(product, "right")` addresses the authored `right` instance directly inside the `product` assembly node; if that assembly definition is reused, the override applies to every occurrence of the definition. Pass `false` as the third argument to re-enable an instance authored with `suppressed: true`. `partMaterial(part, steel)` similarly affects every occurrence of that part definition. A selected material replaces the authored material reference for reporting and density lookup, while an explicit density authored directly on the part remains the highest-priority density source.
+
+In canonical document IR, the optional top-level `configurations` registry is keyed by stable configuration ID. Each entry contains one or more of `parameterOverrides`, `instanceSuppressions`, and `partMaterialOverrides`, plus optional description and metadata. Suppression is encoded as assembly-node ID -> direct instance ID -> boolean; material substitution is part-node ID -> material ID. Documents without named configurations omit the registry entirely, preserving their existing serialization and semantic hash.
 
 ## Documents and deterministic builds
 
@@ -514,7 +558,7 @@ const parsed = parseDocument(json);
 const semanticHash = await hashDocument(document);
 ```
 
-Canonical serialization sorts record keys, normalizes negative zero, rejects non-finite numbers, and produces identical bytes regardless of feature construction order. Display metadata is excluded from semantic hashes unless requested.
+Canonical serialization sorts record keys, normalizes negative zero, rejects non-finite numbers, and produces identical bytes regardless of feature construction order. Top-level document metadata is excluded from semantic hashes unless requested; metadata attached to parameters, materials, nodes, and configurations remains part of their authored document semantics.
 
 The document schema version is independent of the npm package version.
 
@@ -530,7 +574,7 @@ if (!result.ok) {
 }
 ```
 
-Stable codes include `REFERENCE_MISSING`, `GRAPH_CYCLE`, `PARAMETER_OUT_OF_RANGE`, `MASS_DENSITY_INVALID`, `MASS_DENSITY_MISSING`, `MASS_PROPERTIES_INVALID`, `SKETCH_OVER_CONSTRAINED`, `EMPTY_RESULT`, `KERNEL_CAPABILITY_MISSING`, `TOPOLOGY_SELECTION_MISSING`, `TOPOLOGY_SELECTION_AMBIGUOUS`, `TOPOLOGY_HISTORY_UNAVAILABLE`, and `EVALUATION_ABORTED`.
+Stable codes include `REFERENCE_MISSING`, `GRAPH_CYCLE`, `PARAMETER_OUT_OF_RANGE`, `CONFIGURATION_MISSING`, `MASS_DENSITY_INVALID`, `MASS_DENSITY_MISSING`, `MASS_PROPERTIES_INVALID`, `SKETCH_OVER_CONSTRAINED`, `EMPTY_RESULT`, `KERNEL_CAPABILITY_MISSING`, `TOPOLOGY_SELECTION_MISSING`, `TOPOLOGY_SELECTION_AMBIGUOUS`, `TOPOLOGY_HISTORY_UNAVAILABLE`, and `EVALUATION_ABORTED`.
 
 ## CLI
 
@@ -540,16 +584,19 @@ The CLI operates on serialized InvariantCAD documents:
 invariantcad validate design.invariantcad.json
 invariantcad inspect design.invariantcad.json
 invariantcad inspect design.invariantcad.json --parameters dimensions.json
+invariantcad inspect design.invariantcad.json --configuration compact-single
 invariantcad bom design.invariantcad.json --output product
+invariantcad bom design.invariantcad.json --output product --configuration compact-single
 invariantcad export design.invariantcad.json --output plate --to plate.stl
+invariantcad export design.invariantcad.json --output product --configuration compact-single --to product.stl
 invariantcad export design.invariantcad.json --output plate --format obj --to plate.obj
 invariantcad export design.invariantcad.json --output plate --to plate.step
 invariantcad inspect design.invariantcad.json --kernel occt
 ```
 
-Parameter JSON values use base units: millimetres, radians, `kg/mm^3` mass density, and unitless scalars.
+Parameter JSON values use base units: millimetres, radians, `kg/mm^3` mass density, and unitless scalars. `--configuration <id>` selects the same named variant for `inspect`, `bom`, and `export`; `--parameters` remains higher precedence when both are supplied. `validate` checks every stored configuration without selecting one.
 `inspect` includes geometric `centerOfMass`, the three-row `inertiaTensor`, principal inertia, and world/principal radii alongside `volume`, `surfaceArea`, `boundingBox`, `genus`, `tolerance`, and `triangles`. Part and assembly reports additionally include analyzed `physicalMassProperties`; if an active density is missing, that field is `null` and `physicalMassDiagnostics` explains why.
-`bom` evaluates the selected part or assembly output and prints the same deterministic item, quantity, mass-completeness, and warning-diagnostic contract exposed by `billOfMaterials()`.
+`bom` evaluates the selected part or assembly output and prints the same deterministic item, quantity, mass-completeness, and warning-diagnostic contract exposed by `billOfMaterials()`, including its `configurationId`.
 The CLI selects stock OCCT automatically for `.step` and `.brep` destinations. Use `--kernel manifold|occt` to select a backend explicitly. The current CLI does not inject a custom module factory, so document draft evaluation and owned-facade-only composite refinements require programmatic initialization with the matched pair.
 
 ## Browser initialization

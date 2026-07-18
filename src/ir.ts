@@ -1,4 +1,5 @@
 import type {
+  ConfigurationId,
   EntityId,
   MaterialId,
   NodeId,
@@ -38,6 +39,17 @@ export interface MaterialDefinitionIR {
   readonly description?: string;
   /** Explicit physical density expression in kg/mm^3. */
   readonly massDensity: ExpressionIR;
+  readonly metadata?: Readonly<Record<string, JsonValue>>;
+}
+
+/** Definition-targeted overrides selected together as one named design variant. */
+export interface DesignConfigurationIR {
+  readonly description?: string;
+  readonly parameterOverrides?: Readonly<Record<ParameterId, ExpressionIR>>;
+  readonly instanceSuppressions?: Readonly<
+    Record<NodeId, Readonly<Record<EntityId, boolean>>>
+  >;
+  readonly partMaterialOverrides?: Readonly<Record<NodeId, MaterialId>>;
   readonly metadata?: Readonly<Record<string, JsonValue>>;
 }
 
@@ -468,6 +480,10 @@ export interface DesignDocument {
   readonly parameters: Readonly<Record<ParameterId, ParameterIR>>;
   /** Omitted for legacy documents that do not define a material catalogue. */
   readonly materials?: Readonly<Record<MaterialId, MaterialDefinitionIR>>;
+  /** Omitted when the design has no named configurations. */
+  readonly configurations?: Readonly<
+    Record<ConfigurationId, DesignConfigurationIR>
+  >;
   readonly nodes: Readonly<Record<NodeId, NodeIR>>;
   readonly outputs: Readonly<Record<string, RefIR<DesignOutputKind>>>;
   readonly metadata?: Readonly<Record<string, JsonValue>>;

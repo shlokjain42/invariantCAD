@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added document-owned named configurations with dimension-checked parameter expressions, definition-scoped instance suppression and part-material substitution, deterministic runtime/configuration/default precedence, configuration-aware evaluation and BOMs, CLI selection, and packed-consumer coverage.
 - Added document-owned material definitions with explicit parameterized density, typed part references, deterministic density precedence without name guessing, and backward-compatible descriptive part material labels.
 - Added deterministic part-node-grouped bills of materials for parts and nested assemblies, with suppression-aware quantities, affine occurrence mass rollups, partial-mass warning diagnostics, CLI output, and packed-consumer coverage.
 - Added explicit parameterized part density in `kg/mm^3`, density-aware physical mass and `kg*mm^2` inertia for parts and heterogeneous nested assemblies, deterministic principal moments/axes with degeneracy metadata, arbitrary point/axis inertia, radii of gyration, structured missing/invalid-density diagnostics, CLI analysis, and packed-consumer coverage.
