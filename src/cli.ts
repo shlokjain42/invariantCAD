@@ -53,6 +53,7 @@ function usage(): string {
 Usage:
   invariantcad validate <document.json>
   invariantcad inspect <document.json> [--kernel manifold|occt] [--parameters values.json]
+  invariantcad bom <document.json> --output name [--kernel manifold|occt] [--parameters values.json]
   invariantcad export <document.json> --to model.stl [--kernel manifold|occt] [--output name] [--format stl|stl-ascii|obj|step|brep|brep-binary] [--parameters values.json]
 `;
 }
@@ -172,8 +173,16 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
     process.stdout.write(`Valid InvariantCAD v${parsed.value.version} document: ${parsed.value.name}\n`);
     return 0;
   }
-  if (args.command !== "inspect" && args.command !== "export") {
+  if (
+    args.command !== "inspect" &&
+    args.command !== "bom" &&
+    args.command !== "export"
+  ) {
     process.stderr.write(`Unknown command '${args.command}'\n${usage()}`);
+    return 2;
+  }
+  if (args.command === "bom" && typeof args.flags.output !== "string") {
+    process.stderr.write("bom requires --output <name>\n");
     return 2;
   }
   const requestedKernel = args.flags.kernel;
@@ -221,6 +230,40 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
           ]),
         );
         process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+        return 0;
+      }
+      if (args.command === "bom") {
+        const outputName = args.flags.output as string;
+        const output = evaluated.value.output(outputName);
+        if (
+          !(output instanceof EvaluatedPart) &&
+          !(output instanceof EvaluatedAssembly)
+        ) {
+          const value: Diagnostic = {
+            code: "BOM_OUTPUT_UNSUPPORTED",
+            severity: "error",
+            message: `Output '${outputName}' is a solid; BOM requires a part or assembly`,
+            path: `/outputs/${outputName}`,
+          };
+          process.stderr.write(`${formatDiagnostics([value])}\n`);
+          return 1;
+        }
+        const bom = output.billOfMaterials();
+        if (!bom.ok) {
+          process.stderr.write(`${formatDiagnostics(bom.diagnostics)}\n`);
+          return 1;
+        }
+        process.stdout.write(
+          `${JSON.stringify(
+            {
+              output: outputName,
+              ...bom.value,
+              diagnostics: bom.diagnostics,
+            },
+            null,
+            2,
+          )}\n`,
+        );
         return 0;
       }
       if (typeof destination !== "string") {

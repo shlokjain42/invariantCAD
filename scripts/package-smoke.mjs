@@ -113,8 +113,10 @@ try {
       "",
       'const cad = design("package-smoke");',
       'const solid = cad.box("solid", { size: vec3(mm(2), mm(3), mm(4)) });',
-      'const part = cad.part("part", solid, { material: "Test steel", massDensity: kgPerCubicMeter(7850) });',
-      'cad.output("solid", solid).output("part", part);',
+      'const steel = cad.material("test-steel", { name: "Test steel", massDensity: kgPerCubicMeter(7850) });',
+      'const part = cad.part("part", solid, { partNumber: "P-001", materialRef: steel });',
+      'const assembly = cad.assembly("assembly", (instances) => { instances.instance("first", part); instances.instance("second", part, { placement: [tf.translate(vec3(mm(10), mm(0), mm(0)))] }); });',
+      'cad.output("solid", solid).output("part", part).output("assembly", assembly);',
       "const document = cad.build();",
       'await writeFile("model-mass.invariantcad.json", stringifyDocument(document));',
       "const evaluator = await createEvaluator();",
@@ -134,6 +136,12 @@ try {
       '    if (!physical.ok) throw new Error(JSON.stringify(physical.diagnostics));',
       '    assertNear(physical.value.mass, 0.0001884, "physical mass", 1e-12);',
       '    assertNear(physical.value.inertiaTensor[0][0], 0.0003925, "physical Ixx", 1e-12);',
+      '    const bom = result.value.output("assembly").billOfMaterials();',
+      '    if (!bom.ok) throw new Error(JSON.stringify(bom.diagnostics));',
+      '    if (bom.value.totalQuantity !== 2 || bom.value.items.length !== 1 || bom.value.items[0].quantity !== 2) throw new Error("Packed BOM quantity rollup failed");',
+      '    if (bom.value.items[0].materialId !== "test-steel" || bom.value.items[0].massDensitySource !== "material") throw new Error("Packed material resolution failed");',
+      '    assertNear(bom.value.knownMass, 0.0003768, "BOM known mass", 1e-12);',
+      '    assertNear(bom.value.totalMass, 0.0003768, "BOM total mass", 1e-12);',
       "  } finally {",
       "    result.value.dispose();",
       "  }",
@@ -454,13 +462,15 @@ try {
   await writeFile(
     join(consumer, "type-smoke.ts"),
     [
-      'import { EDGE_TOPOLOGY_ROLES, FACE_TOPOLOGY_ROLES, OFFSET_DIRECTIONS, SHELL_DIRECTIONS, TOPOLOGY_ROLE_RULES, TOPOLOGY_ROLES, angleVec3, combinePhysicalMassProperties, deg, design, gramsPerCubicCentimeter, inertiaTensorAboutPoint, kgPerCubicMeter, kgPerCubicMillimeter, mm, momentOfInertiaAboutAxis, physicalMassProperties, plane, principalInertia, principalRadiiOfGyration, radiusOfGyrationAboutAxis, scalarVec3, tf, topology, vec3, worldRadiiOfGyration, type ChamferNodeIR, type CircularArcPathNodeIR, type CompositePathNodeIR, type CompositePathSegmentExpression, type DesignDocument, type DraftNodeIR, type EdgeTopologyRole, type EvaluatedAssembly, type EvaluatedPart, type FaceTopologyRole, type InertiaAxis, type InertiaPropertySource, type InertiaTensor, type LoftNodeIR, type MassDensityExpression, type OffsetDirection, type OffsetNodeIR, type PathRef, type PhysicalInertiaTensor, type PhysicalMassProperties, type PolylinePathNodeIR, type PrincipalAxes, type PrincipalAxisStatus, type PrincipalInertiaDegeneracy, type PrincipalInertiaOptions, type PrincipalInertiaResult, type ProfileRef, type ResolvedCompositePath, type ShellDirection, type ShellNodeIR, type SolidRef, type SweepNodeIR, type TopologyOriginOptions, type TopologyRole, type TopologySelection, type VolumetricMassProperties } from "invariantcad";',
+      'import { EDGE_TOPOLOGY_ROLES, FACE_TOPOLOGY_ROLES, OFFSET_DIRECTIONS, SHELL_DIRECTIONS, TOPOLOGY_ROLE_RULES, TOPOLOGY_ROLES, angleVec3, combinePhysicalMassProperties, deg, design, gramsPerCubicCentimeter, inertiaTensorAboutPoint, kgPerCubicMeter, kgPerCubicMillimeter, mm, momentOfInertiaAboutAxis, physicalMassProperties, plane, principalInertia, principalRadiiOfGyration, radiusOfGyrationAboutAxis, scalarVec3, tf, topology, vec3, worldRadiiOfGyration, type BillOfMaterials, type BillOfMaterialsItem, type ChamferNodeIR, type CircularArcPathNodeIR, type CompositePathNodeIR, type CompositePathSegmentExpression, type DesignDocument, type DraftNodeIR, type EdgeTopologyRole, type EvaluatedAssembly, type EvaluatedPart, type FaceTopologyRole, type InertiaAxis, type InertiaPropertySource, type InertiaTensor, type LoftNodeIR, type MassDensityExpression, type MassDensitySource, type MaterialDefinitionIR, type MaterialRef, type OffsetDirection, type OffsetNodeIR, type PathRef, type PhysicalInertiaTensor, type PhysicalMassProperties, type PolylinePathNodeIR, type PrincipalAxes, type PrincipalAxisStatus, type PrincipalInertiaDegeneracy, type PrincipalInertiaOptions, type PrincipalInertiaResult, type ProfileRef, type ResolvedCompositePath, type ShellDirection, type ShellNodeIR, type SolidRef, type SweepNodeIR, type TopologyOriginOptions, type TopologyRole, type TopologySelection, type VolumetricMassProperties } from "invariantcad";',
       'import { createOcctKernel, type OcctKernelOptions, type OcctModuleFactory, type OcctModuleOptions } from "invariantcad/kernels/occt";',
       "",
       'const cad = design("type-smoke");',
       'const solid: SolidRef = cad.box("solid", { size: vec3(mm(1), mm(2), mm(3)) });',
       'const authoredDensity = cad.parameter.massDensity("density", kgPerCubicMeter(2700));',
-      'const densePart = cad.part("dense-part", solid, { material: "Aluminum", massDensity: authoredDensity });',
+      'const materialRef: MaterialRef = cad.material("aluminum", { name: "Aluminum", massDensity: authoredDensity });',
+      'const densePart = cad.part("dense-part", solid, { partNumber: "P-001", materialRef });',
+      'const materialDefinition: MaterialDefinitionIR = { name: "Aluminum", massDensity: kgPerCubicMeter(2700).ir };',
       'const inertiaTensor: InertiaTensor = [[1, 0, 0], [0, 2, 0], [0, 0, 3]];',
       'const volumetric: VolumetricMassProperties = { volume: 1, centerOfMass: [0, 0, 0], inertiaTensor };',
       'const propertySource: InertiaPropertySource = volumetric;',
@@ -477,8 +487,14 @@ try {
       'const inertiaAxis: InertiaAxis = { point: [0, 0, 0], direction: [1, 0, 0] };',
       'type PartPhysicalResult = ReturnType<EvaluatedPart["physicalMassProperties"]>;',
       'type AssemblyPhysicalResult = ReturnType<EvaluatedAssembly["physicalMassProperties"]>;',
+      'type PartBomResult = ReturnType<EvaluatedPart["billOfMaterials"]>;',
+      'type AssemblyBomResult = ReturnType<EvaluatedAssembly["billOfMaterials"]>;',
       'const acceptsPhysicalResult = (_value: PartPhysicalResult | AssemblyPhysicalResult): void => {};',
-      'void [propertySource, massDensity, baseDensity, gramDensity, physicalTensor, principalAxes, principalStatus, principalDegeneracy, acceptsPhysicalResult, combinePhysicalMassProperties([physical]), inertiaTensorAboutPoint(volumetric, [0, 0, 0]), momentOfInertiaAboutAxis(volumetric, inertiaAxis), worldRadiiOfGyration(volumetric), principalRadiiOfGyration(volumetric), radiusOfGyrationAboutAxis(volumetric, inertiaAxis)];',
+      'const acceptsBomResult = (_value: PartBomResult | AssemblyBomResult): void => {};',
+      'const densitySource: MassDensitySource = "material";',
+      'const bomItem: BillOfMaterialsItem = { partNode: "dense-part", partNumber: "P-001", description: null, materialId: "aluminum", material: "Aluminum", quantity: 1, occurrenceIds: [], massDensity: 2.7e-6, massDensitySource: densitySource, definitionMass: 0.0000162, totalMass: 0.0000162 };',
+      'const billOfMaterials: BillOfMaterials = { units: { mass: "kg" }, items: [bomItem], totalQuantity: 1, massComplete: true, knownMass: 0.0000162, totalMass: 0.0000162 };',
+      'void [propertySource, massDensity, baseDensity, gramDensity, physicalTensor, principalAxes, principalStatus, principalDegeneracy, materialDefinition, materialRef, billOfMaterials, acceptsPhysicalResult, acceptsBomResult, combinePhysicalMassProperties([physical]), inertiaTensorAboutPoint(volumetric, [0, 0, 0]), momentOfInertiaAboutAxis(volumetric, inertiaAxis), worldRadiiOfGyration(volumetric), principalRadiiOfGyration(volumetric), radiusOfGyrationAboutAxis(volumetric, inertiaAxis)];',
       'const edges = topology.edges.createdBy(solid).and(topology.edges.direction(scalarVec3(0, 0, 1))).exactly(4);',
       'const faces = topology.faces.createdBy(solid, { role: "box.face.z-max" }).select();',
       'const rounded: SolidRef = cad.fillet("rounded", solid, { edges, radius: mm(0.1) });',
@@ -522,6 +538,12 @@ try {
       'cad.offset("invalid-offset-direction", solid, { distance: mm(0.1), direction: "outside" });',
       "// @ts-expect-error Part density must be a mass-density expression.",
       'cad.part("invalid-density", solid, { massDensity: mm(1) });',
+      "// @ts-expect-error Material density must be a mass-density expression.",
+      'cad.material("invalid-material-density", { name: "Invalid", massDensity: mm(1) });',
+      "// @ts-expect-error Part materialRef requires a material reference.",
+      'cad.part("invalid-material-ref", solid, { materialRef: densePart });',
+      "// @ts-expect-error A part cannot mix a legacy label with a material reference.",
+      'cad.part("ambiguous-material", solid, { material: "Aluminum", materialRef });',
       'cad.output("solid", rounded);',
       'cad.output("dense-part", densePart);',
       'cad.output("beveled", beveled);',
@@ -689,6 +711,25 @@ try {
     massInspection.part.physicalMassProperties.principalRadiiOfGyration === null
   ) {
     throw new Error("Installed CLI omitted physical mass analysis");
+  }
+  const installedBom = JSON.parse(
+    run(
+      bin,
+      ["bom", "model-mass.invariantcad.json", "--output", "assembly"],
+      consumer,
+      { printOutput: false },
+    ),
+  );
+  if (
+    installedBom.output !== "assembly" ||
+    installedBom.totalQuantity !== 2 ||
+    installedBom.items.length !== 1 ||
+    installedBom.items[0].quantity !== 2 ||
+    installedBom.items[0].materialId !== "test-steel" ||
+    installedBom.items[0].massDensitySource !== "material" ||
+    Math.abs(installedBom.totalMass - 0.0003768) > 1e-12
+  ) {
+    throw new Error("Installed CLI omitted deterministic material BOM analysis");
   }
   run(
     bin,

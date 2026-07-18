@@ -1,4 +1,9 @@
-import type { EntityId, NodeId, ParameterId } from "./core/ids.js";
+import type {
+  EntityId,
+  MaterialId,
+  NodeId,
+  ParameterId,
+} from "./core/ids.js";
 import {
   diagnostic,
   hasErrors,
@@ -1103,6 +1108,32 @@ function validateNode(
       break;
     case "part":
       validateRef(node.solid, "solid", document, `${path}/solid`, diagnostics);
+      if (node.material !== undefined && node.materialId !== undefined) {
+        diagnostics.push(
+          diagnostic(
+            "IR_INVALID",
+            "A part cannot use both the legacy material label and materialId",
+            { severity: "error", node: id, path },
+          ),
+        );
+      }
+      if (
+        node.materialId !== undefined &&
+        !Object.hasOwn(document.materials ?? {}, node.materialId)
+      ) {
+        diagnostics.push(
+          diagnostic(
+            "REFERENCE_MISSING",
+            `Part references missing material '${node.materialId}'`,
+            {
+              severity: "error",
+              node: id,
+              path: `${path}/materialId`,
+              details: { materialId: node.materialId },
+            },
+          ),
+        );
+      }
       if (node.massDensity !== undefined) {
         validateExpression(
           node.massDensity,
@@ -1175,6 +1206,7 @@ export function validateDocument(
     Object.values(document.parameters).some(
       (parameter) => parameter.dimension === "massDensity",
     ) ||
+    Object.keys(document.materials ?? {}).length > 0 ||
     Object.values(document.nodes).some(
       (node) => node.kind === "part" && node.massDensity !== undefined,
     );
@@ -1199,6 +1231,18 @@ export function validateDocument(
     if (parameter.max !== undefined) {
       validateExpression(parameter.max, parameter.dimension, document, `${path}/max`, diagnostics);
     }
+  }
+  for (const [id, material] of Object.entries(document.materials ?? {}) as [
+    MaterialId,
+    NonNullable<DesignDocument["materials"]>[MaterialId],
+  ][]) {
+    validateExpression(
+      material.massDensity,
+      "massDensity",
+      document,
+      `/materials/${id}/massDensity`,
+      diagnostics,
+    );
   }
   for (const [id, node] of Object.entries(document.nodes) as [NodeId, NodeIR][]) {
     validateNode(id, node, document, diagnostics);

@@ -21,6 +21,10 @@ const depth = cad.parameter.length("depth", mm(50), { min: mm(20) });
 const thickness = cad.parameter.length("thickness", mm(6), { min: mm(1) });
 const holeRadius = cad.parameter.length("holeRadius", mm(4), { min: mm(1) });
 const holeSpacing = cad.parameter.length("holeSpacing", mm(60), { min: mm(10) });
+const aluminum = cad.material("aluminum-6061-t6", {
+  name: "6061-T6 Aluminum",
+  massDensity: kgPerCubicMeter(2700),
+});
 
 const plateProfile = cad.sketch("plate-profile", plane.xy(), (sketch) => {
   const outer = sketch.rectangle("outline", { width, height: depth });
@@ -51,8 +55,7 @@ const raisedFlange = cad.translate(
 const bracketSolid = cad.union("bracket-solid", plate, [raisedFlange]);
 const bracket = cad.part("bracket", bracketSolid, {
   partNumber: "INV-BRACKET-001",
-  material: "6061-T6 Aluminum",
-  massDensity: kgPerCubicMeter(2700),
+  materialRef: aluminum,
 });
 const pair = cad.assembly("bracket-pair", (assembly) => {
   assembly.instance("left", bracket);

@@ -12,6 +12,12 @@ import { SHELL_DIRECTIONS } from "./protocol/shell.js";
 import { OFFSET_DIRECTIONS } from "./protocol/offset.js";
 
 const DimensionSchema = z.enum(["scalar", "length", "angle", "massDensity"]);
+const IdSchema = z
+  .string()
+  .regex(
+    /^[A-Za-z][A-Za-z0-9_.:-]*$/,
+    "IDs must begin with a letter and contain only letters, digits, dots, colons, underscores, or hyphens",
+  );
 
 export const ExpressionSchema: z.ZodType<ExpressionIR> = z.lazy(() =>
   z.discriminatedUnion("op", [
@@ -436,6 +442,7 @@ const NodeSchema = z.discriminatedUnion("kind", [
     partNumber: z.string().optional(),
     description: z.string().optional(),
     material: z.string().optional(),
+    materialId: IdSchema.optional(),
     massDensity: ExpressionSchema.optional(),
     metadata: z.record(z.string(), z.json()).optional(),
   }),
@@ -472,6 +479,24 @@ export const DesignDocumentSchema: z.ZodType<DesignDocument> = z.object({
       description: z.string().optional(),
     }),
   ),
+  materials: z
+    .record(
+      IdSchema,
+      z.object({
+        name: z
+          .string()
+          .min(1)
+          .refine((value) => value.trim().length > 0, "Material name cannot be blank"),
+        description: z.string().optional(),
+        massDensity: ExpressionSchema,
+        metadata: z.record(z.string(), z.json()).optional(),
+      }),
+    )
+    .refine(
+      (materials) => Object.keys(materials).length > 0,
+      "Material registry cannot be empty; omit it instead",
+    )
+    .optional(),
   nodes: z.record(z.string(), NodeSchema),
   outputs: z.record(z.string(), DesignOutputRefSchema),
   metadata: z.record(z.string(), z.json()).optional(),

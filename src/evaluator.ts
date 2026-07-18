@@ -1,4 +1,9 @@
-import type { EntityId, NodeId, ParameterId } from "./core/ids.js";
+import type {
+  EntityId,
+  MaterialId,
+  NodeId,
+  ParameterId,
+} from "./core/ids.js";
 import {
   IDENTITY_MATRIX,
   multiplyMatrices,
@@ -27,6 +32,7 @@ import {
 import type {
   AssemblyInstanceIR,
   DesignDocument,
+  MaterialDefinitionIR,
   NodeIR,
   PartNodeIR,
   RefIR,
@@ -117,6 +123,43 @@ export interface CreateEvaluatorOptions {
   readonly sketchSolver?: SketchSolverBackend;
 }
 
+export type MassDensitySource = "part" | "material";
+
+export interface EvaluatedMaterial {
+  readonly id: string;
+  readonly name: string;
+  readonly description?: string;
+  readonly massDensity: number;
+  readonly metadata?: MaterialDefinitionIR["metadata"];
+}
+
+export interface BillOfMaterialsItem {
+  readonly partNode: string;
+  readonly partNumber: string | null;
+  readonly description: string | null;
+  readonly materialId: string | null;
+  readonly material: string | null;
+  readonly quantity: number;
+  readonly occurrenceIds: readonly string[];
+  readonly massDensity: number | null;
+  readonly massDensitySource: MassDensitySource | null;
+  /** Mass of the unplaced part definition, in kg. */
+  readonly definitionMass: number | null;
+  /** Mass of all actual occurrences after affine placement, in kg. */
+  readonly totalMass: number | null;
+}
+
+export interface BillOfMaterials {
+  readonly units: { readonly mass: "kg" };
+  readonly items: readonly BillOfMaterialsItem[];
+  readonly totalQuantity: number;
+  readonly massComplete: boolean;
+  /** Sum of rows whose density is known, in kg. */
+  readonly knownMass: number;
+  /** Complete mass in kg, or null when any row lacks density. */
+  readonly totalMass: number | null;
+}
+
 interface ProfileValue {
   readonly kind: "profile";
   readonly profile: ResolvedProfile;
@@ -138,7 +181,9 @@ interface PartValue {
   readonly node: NodeId;
   readonly definition: PartNodeIR;
   readonly shape: KernelShape;
+  readonly materialDefinition?: EvaluatedMaterial;
   readonly massDensity?: number;
+  readonly massDensitySource?: MassDensitySource;
 }
 
 interface AssemblyOccurrence {
@@ -506,20 +551,268 @@ export class EvaluatedSolid {
   }
 }
 
+function partMassDensityPath(part: PartValue): string {
+  if (part.definition.massDensity !== undefined) {
+    return `/nodes/${part.node}/massDensity`;
+  }
+  if (part.definition.materialId !== undefined) {
+    return `/materials/${part.definition.materialId}/massDensity`;
+  }
+  return `/nodes/${part.node}/massDensity`;
+}
+
+function lexicalCompare(first: string, second: string): number {
+  return first < second ? -1 : first > second ? 1 : 0;
+}
+
+function nonBlank(value: string | undefined): string | null {
+  return value === undefined || value.trim().length === 0 ? null : value;
+}
+
+function affineVolumeScale(matrix: Mat4): number {
+  if (!matrix.every(Number.isFinite)) {
+    throw new RangeError("Occurrence transform matrix must be finite");
+  }
+  if (
+    matrix[3] !== 0 ||
+    matrix[7] !== 0 ||
+    matrix[11] !== 0 ||
+    matrix[15] !== 1
+  ) {
+    throw new RangeError("Occurrence mass requires an affine transform matrix");
+  }
+  return Math.abs(
+    matrix[0] * (matrix[5] * matrix[10] - matrix[9] * matrix[6]) -
+      matrix[4] * (matrix[1] * matrix[10] - matrix[9] * matrix[2]) +
+      matrix[8] * (matrix[1] * matrix[6] - matrix[5] * matrix[2]),
+  );
+}
+
+function createBillOfMaterials(
+  name: string,
+  owner: EvaluationOwner,
+  occurrences: readonly AssemblyOccurrence[],
+  directPart?: PartValue,
+): CadResult<BillOfMaterials> {
+  owner.assertLive();
+  const grouped = new Map<
+    NodeId,
+    { readonly part: PartValue; readonly occurrences: AssemblyOccurrence[] }
+  >();
+  if (directPart !== undefined) {
+    grouped.set(directPart.node, { part: directPart, occurrences: [] });
+  }
+  for (const occurrence of occurrences) {
+    const existing = grouped.get(occurrence.part.node);
+    if (existing === undefined) {
+      grouped.set(occurrence.part.node, {
+        part: occurrence.part,
+        occurrences: [occurrence],
+      });
+    } else {
+      existing.occurrences.push(occurrence);
+    }
+  }
+
+  const groups = [...grouped.values()].sort((first, second) => {
+    const firstNumber = nonBlank(first.part.definition.partNumber);
+    const secondNumber = nonBlank(second.part.definition.partNumber);
+    if (firstNumber === null && secondNumber !== null) return 1;
+    if (firstNumber !== null && secondNumber === null) return -1;
+    if (firstNumber !== null && secondNumber !== null) {
+      const byNumber = lexicalCompare(firstNumber, secondNumber);
+      if (byNumber !== 0) return byNumber;
+    }
+    return lexicalCompare(first.part.node, second.part.node);
+  });
+  const diagnostics: Diagnostic[] = [];
+  const measuredShapes = new Map<KernelShape, ShapeMeasurements>();
+  const items: BillOfMaterialsItem[] = [];
+
+  for (const group of groups) {
+    const { part } = group;
+    const partNumber = nonBlank(part.definition.partNumber);
+    const material = nonBlank(
+      part.materialDefinition?.name ?? part.definition.material,
+    );
+    const occurrenceIds = group.occurrences
+      .map((occurrence) => occurrence.id)
+      .sort(lexicalCompare);
+    const quantity = directPart === part ? 1 : group.occurrences.length;
+
+    if (partNumber === null) {
+      diagnostics.push(
+        diagnostic(
+          "BOM_PART_NUMBER_MISSING",
+          `Part '${part.node}' has no part number`,
+          {
+            severity: "warning",
+            node: part.node,
+            path: `/nodes/${part.node}/partNumber`,
+          },
+        ),
+      );
+    }
+    if (material === null) {
+      diagnostics.push(
+        diagnostic("BOM_MATERIAL_MISSING", `Part '${part.node}' has no material`, {
+          severity: "warning",
+          node: part.node,
+          path:
+            part.definition.materialId === undefined
+              ? `/nodes/${part.node}/material`
+              : `/nodes/${part.node}/materialId`,
+          hints: ["Reference a document material or author a legacy material label"],
+        }),
+      );
+    }
+
+    let definitionMass: number | null = null;
+    let totalMass: number | null = null;
+    if (part.massDensity === undefined) {
+      diagnostics.push(
+        diagnostic(
+          "MASS_DENSITY_MISSING",
+          `Part '${part.node}' has no authored mass density`,
+          {
+            severity: "warning",
+            node: part.node,
+            path: partMassDensityPath(part),
+            hints: [
+              "Author massDensity on the part or reference a material definition",
+            ],
+            details: { occurrenceIds },
+          },
+        ),
+      );
+    } else {
+      try {
+        let measured = measuredShapes.get(part.shape);
+        if (measured === undefined) {
+          measured = owner.kernel.measure(part.shape);
+          measuredShapes.set(part.shape, measured);
+        }
+        definitionMass = measured.volume * part.massDensity;
+        if (!Number.isFinite(definitionMass) || definitionMass < 0) {
+          throw new RangeError("definition mass is not finite and non-negative");
+        }
+        if (directPart === part) {
+          totalMass = definitionMass;
+        } else {
+          totalMass = 0;
+          for (const occurrence of group.occurrences) {
+            totalMass += definitionMass * affineVolumeScale(occurrence.transform);
+          }
+          if (!Number.isFinite(totalMass)) {
+            throw new RangeError("occurrence mass total is not finite");
+          }
+        }
+      } catch (error) {
+        return failure(
+          diagnostic(
+            "MASS_PROPERTIES_INVALID",
+            `Bill-of-materials mass for part '${part.node}' could not be represented`,
+            {
+              severity: "error",
+              node: part.node,
+              path: partMassDensityPath(part),
+              details: {
+                massDensity: part.massDensity,
+                occurrenceIds,
+                cause: error instanceof Error ? error.message : String(error),
+              },
+            },
+          ),
+        );
+      }
+    }
+
+    items.push({
+      partNode: part.node,
+      partNumber,
+      description: part.definition.description ?? null,
+      materialId: part.definition.materialId ?? null,
+      material,
+      quantity,
+      occurrenceIds,
+      massDensity: part.massDensity ?? null,
+      massDensitySource: part.massDensitySource ?? null,
+      definitionMass,
+      totalMass,
+    });
+  }
+
+  const partNumbers = new Map<string, string[]>();
+  for (const item of items) {
+    if (item.partNumber === null || item.partNumber.trim().length === 0) continue;
+    const nodes = partNumbers.get(item.partNumber) ?? [];
+    nodes.push(item.partNode);
+    partNumbers.set(item.partNumber, nodes);
+  }
+  for (const [partNumber, partNodes] of [...partNumbers.entries()].sort(
+    ([first], [second]) => lexicalCompare(first, second),
+  )) {
+    if (partNodes.length < 2) continue;
+    diagnostics.push(
+      diagnostic(
+        "BOM_PART_NUMBER_DUPLICATE",
+        `Part number '${partNumber}' is used by ${partNodes.length} distinct part definitions`,
+        {
+          severity: "warning",
+          path: `/outputs/${name}`,
+          details: { partNumber, partNodes },
+        },
+      ),
+    );
+  }
+
+  const knownMass = items.reduce(
+    (sum, item) => sum + (item.totalMass ?? 0),
+    0,
+  );
+  const massComplete = items.every((item) => item.totalMass !== null);
+  return success(
+    {
+      units: { mass: "kg" },
+      items,
+      totalQuantity: items.reduce((sum, item) => sum + item.quantity, 0),
+      massComplete,
+      knownMass,
+      totalMass: massComplete ? knownMass : null,
+    },
+    diagnostics,
+  );
+}
+
 export class EvaluatedPart extends EvaluatedSolid {
   readonly partNumber: string | undefined;
   readonly description: string | undefined;
+  /** Legacy descriptive label, preserved exactly as authored. */
   readonly material: string | undefined;
+  readonly materialId: string | undefined;
+  readonly materialName: string | undefined;
+  readonly materialDefinition: EvaluatedMaterial | undefined;
   readonly massDensity: number | undefined;
+  readonly massDensitySource: MassDensitySource | undefined;
   private readonly partNode: NodeId;
+  private readonly part: PartValue;
 
   constructor(name: string, owner: EvaluationOwner, part: PartValue) {
     super(name, owner, part.shape);
     this.partNumber = part.definition.partNumber;
     this.description = part.definition.description;
     this.material = part.definition.material;
+    this.materialId = part.definition.materialId;
+    this.materialName = part.materialDefinition?.name;
+    this.materialDefinition = part.materialDefinition;
     this.massDensity = part.massDensity;
+    this.massDensitySource = part.massDensitySource;
     this.partNode = part.node;
+    this.part = part;
+  }
+
+  billOfMaterials(): CadResult<BillOfMaterials> {
+    return createBillOfMaterials(this.name, this.owner, [], this.part);
   }
 
   physicalMassProperties(): CadResult<PhysicalMassProperties> {
@@ -532,8 +825,10 @@ export class EvaluatedPart extends EvaluatedSolid {
           {
             severity: "error",
             node: this.partNode,
-            path: `/nodes/${this.partNode}/massDensity`,
-            hints: ["Author massDensity on the part definition"],
+            path: partMassDensityPath(this.part),
+            hints: [
+              "Author massDensity on the part or reference a material definition",
+            ],
           },
         ),
       );
@@ -548,7 +843,7 @@ export class EvaluatedPart extends EvaluatedSolid {
           {
             severity: "error",
             node: this.partNode,
-            path: `/nodes/${this.partNode}/massDensity`,
+            path: partMassDensityPath(this.part),
             details: {
               massDensity: this.massDensity,
               cause: error instanceof Error ? error.message : String(error),
@@ -564,8 +859,12 @@ export interface EvaluatedOccurrence {
   readonly id: string;
   readonly partNode: string;
   readonly partNumber?: string;
+  readonly description?: string;
   readonly material?: string;
+  readonly materialId?: string;
+  readonly materialName?: string;
   readonly massDensity?: number;
+  readonly massDensitySource?: MassDensitySource;
   readonly transform: Mat4;
 }
 
@@ -589,14 +888,34 @@ export class EvaluatedAssembly {
       ...(occurrence.part.definition.partNumber === undefined
         ? {}
         : { partNumber: occurrence.part.definition.partNumber }),
+      ...(occurrence.part.definition.description === undefined
+        ? {}
+        : { description: occurrence.part.definition.description }),
       ...(occurrence.part.definition.material === undefined
         ? {}
         : { material: occurrence.part.definition.material }),
+      ...(occurrence.part.definition.materialId === undefined
+        ? {}
+        : { materialId: occurrence.part.definition.materialId }),
+      ...(occurrence.part.materialDefinition === undefined
+        ? {}
+        : { materialName: occurrence.part.materialDefinition.name }),
       ...(occurrence.part.massDensity === undefined
         ? {}
         : { massDensity: occurrence.part.massDensity }),
+      ...(occurrence.part.massDensitySource === undefined
+        ? {}
+        : { massDensitySource: occurrence.part.massDensitySource }),
       transform: occurrence.transform,
     }));
+  }
+
+  billOfMaterials(): CadResult<BillOfMaterials> {
+    return createBillOfMaterials(
+      this.name,
+      this.owner,
+      this.occurrences,
+    );
   }
 
   mesh(options?: MeshOptions): MeshData {
@@ -660,7 +979,11 @@ export class EvaluatedAssembly {
             related: partNodes.map((partNode) => ({
               message: `Part '${partNode}' has no authored mass density`,
               node: partNode,
-              path: `/nodes/${partNode}/massDensity`,
+              path: partMassDensityPath(
+                missing.find(
+                  (occurrence) => occurrence.part.node === partNode,
+                )!.part,
+              ),
             })),
             details: { occurrenceIds, partNodes },
           },
@@ -818,6 +1141,60 @@ export class Evaluator {
           return resolved;
         },
       });
+    const resolvedMaterials = new Map<MaterialId, EvaluatedMaterial>();
+    for (const [id, definition] of Object.entries(document.materials ?? {}) as [
+      MaterialId,
+      MaterialDefinitionIR,
+    ][]) {
+      let massDensity: number;
+      try {
+        massDensity = expression(definition.massDensity);
+      } catch (error) {
+        diagnostics.push(
+          diagnostic(
+            "MASS_DENSITY_INVALID",
+            `Material '${id}' massDensity must evaluate to a finite, strictly positive number`,
+            {
+              severity: "error",
+              path: `/materials/${id}/massDensity`,
+              details: {
+                cause: error instanceof Error ? error.message : String(error),
+              },
+            },
+          ),
+        );
+        continue;
+      }
+      if (!Number.isFinite(massDensity) || !(massDensity > 0)) {
+        diagnostics.push(
+          diagnostic(
+            "MASS_DENSITY_INVALID",
+            `Material '${id}' massDensity must be finite and strictly positive`,
+            {
+              severity: "error",
+              path: `/materials/${id}/massDensity`,
+              details: { value: massDensity },
+            },
+          ),
+        );
+        continue;
+      }
+      resolvedMaterials.set(
+        id,
+        Object.freeze({
+          id,
+          name: definition.name,
+          ...(definition.description === undefined
+            ? {}
+            : { description: definition.description }),
+          massDensity,
+          ...(definition.metadata === undefined
+            ? {}
+            : { metadata: definition.metadata }),
+        }),
+      );
+    }
+    if (hasErrors(diagnostics)) return { ok: false, diagnostics };
     const resolvedTransform = (
       operation: TransformOperationIR,
     ): ResolvedTransformOperation => {
@@ -1936,7 +2313,12 @@ export class Evaluator {
             break;
           }
           case "part": {
+            const materialDefinition =
+              node.materialId === undefined
+                ? undefined
+                : resolvedMaterials.get(node.materialId);
             let massDensity: number | undefined;
+            let massDensitySource: MassDensitySource | undefined;
             if (node.massDensity !== undefined) {
               try {
                 massDensity = expression(node.massDensity);
@@ -1970,13 +2352,23 @@ export class Evaluator {
                   ),
                 );
               }
+              massDensitySource = "part";
+            } else if (materialDefinition !== undefined) {
+              massDensity = materialDefinition.massDensity;
+              massDensitySource = "material";
             }
             result = {
               kind: "part",
               node: id,
               definition: node,
               shape: solidRef(node.solid),
+              ...(materialDefinition === undefined
+                ? {}
+                : { materialDefinition }),
               ...(massDensity === undefined ? {} : { massDensity }),
+              ...(massDensitySource === undefined
+                ? {}
+                : { massDensitySource }),
             };
             break;
           }

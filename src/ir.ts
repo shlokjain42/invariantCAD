@@ -1,4 +1,9 @@
-import type { EntityId, NodeId, ParameterId } from "./core/ids.js";
+import type {
+  EntityId,
+  MaterialId,
+  NodeId,
+  ParameterId,
+} from "./core/ids.js";
 import type { JsonValue } from "./core/json.js";
 import type { Dimension, ExpressionIR } from "./expressions.js";
 import type { TopologyKind, TopologyRole } from "./protocol/topology.js";
@@ -25,6 +30,15 @@ export interface ParameterIR {
   readonly max?: ExpressionIR;
   readonly label?: string;
   readonly description?: string;
+}
+
+/** A document-owned material definition. No property is inferred from its name. */
+export interface MaterialDefinitionIR {
+  readonly name: string;
+  readonly description?: string;
+  /** Explicit physical density expression in kg/mm^3. */
+  readonly massDensity: ExpressionIR;
+  readonly metadata?: Readonly<Record<string, JsonValue>>;
 }
 
 export type Vec2ExpressionIR = readonly [ExpressionIR, ExpressionIR];
@@ -399,8 +413,11 @@ export interface PartNodeIR {
   readonly solid: RefIR<"solid">;
   readonly partNumber?: string;
   readonly description?: string;
+  /** Legacy descriptive material label; never used as a catalogue lookup key. */
   readonly material?: string;
-  /** Explicit physical density expression in kg/mm^3; never inferred from material. */
+  /** Explicit reference to a document-owned material definition. */
+  readonly materialId?: MaterialId;
+  /** Explicit per-part density in kg/mm^3; overrides referenced material density. */
   readonly massDensity?: ExpressionIR;
   readonly metadata?: Readonly<Record<string, JsonValue>>;
 }
@@ -449,6 +466,8 @@ export interface DesignDocument {
     readonly mass?: "kg";
   };
   readonly parameters: Readonly<Record<ParameterId, ParameterIR>>;
+  /** Omitted for legacy documents that do not define a material catalogue. */
+  readonly materials?: Readonly<Record<MaterialId, MaterialDefinitionIR>>;
   readonly nodes: Readonly<Record<NodeId, NodeIR>>;
   readonly outputs: Readonly<Record<string, RefIR<DesignOutputKind>>>;
   readonly metadata?: Readonly<Record<string, JsonValue>>;

@@ -1,8 +1,10 @@
 import {
   assertValidId,
   entityId,
+  materialId,
   nodeId,
   parameterId,
+  type MaterialId,
   type NodeId,
   type ParameterId,
 } from "./core/ids.js";
@@ -30,6 +32,7 @@ import {
   type AssemblyNodeIR,
   type DesignDocument,
   type DesignOutputKind,
+  type MaterialDefinitionIR,
   type NodeIR,
   type OutputKind,
   type ParameterIR,
@@ -95,6 +98,18 @@ export class PartRef extends ModelRef<"part"> {
 export class AssemblyRef extends ModelRef<"assembly"> {
   constructor(owner: DesignBuilder, node: NodeId) {
     super(owner, "assembly", node);
+  }
+}
+
+/** An immutable, design-owned reference to a material definition. */
+export class MaterialRef {
+  readonly id: MaterialId;
+  readonly [DESIGN_OWNER]: DesignBuilder;
+
+  constructor(owner: DesignBuilder, id: MaterialId) {
+    this[DESIGN_OWNER] = owner;
+    this.id = id;
+    Object.freeze(this);
   }
 }
 
@@ -210,10 +225,42 @@ export interface DesignOptions {
   readonly metadata?: Readonly<Record<string, JsonValue>>;
 }
 
+export interface MaterialOptions {
+  readonly name: string;
+  readonly massDensity: MassDensityExpression;
+  readonly description?: string;
+  readonly metadata?: Readonly<Record<string, JsonValue>>;
+}
+
+interface PartCommonOptions {
+  readonly partNumber?: string;
+  readonly description?: string;
+  /** Explicit per-part override; otherwise a referenced material supplies density. */
+  readonly massDensity?: MassDensityExpression;
+  readonly metadata?: Readonly<Record<string, JsonValue>>;
+}
+
+export type PartOptions = PartCommonOptions &
+  (
+    | {
+        /** Legacy descriptive label. It is never resolved against the material registry. */
+        readonly material?: string;
+        readonly materialRef?: never;
+      }
+    | {
+        readonly material?: never;
+        readonly materialRef: MaterialRef;
+      }
+  );
+
 export class DesignBuilder {
   readonly name: string;
   readonly metadata: Readonly<Record<string, JsonValue>> | undefined;
   private readonly parameterRecords: Record<ParameterId, ParameterIR> = {};
+  private readonly materialRecords = Object.create(null) as Record<
+    MaterialId,
+    MaterialDefinitionIR
+  >;
   private readonly nodeRecords: Record<NodeId, NodeIR> = {};
   private readonly outputRecords: Record<string, RefIR<DesignOutputKind>> = {};
   private usesMassDensity = false;
@@ -224,7 +271,7 @@ export class DesignBuilder {
     this.metadata = options.metadata;
   }
 
-  assertOwned(reference: ModelRef<OutputKind>): void {
+  assertOwned(reference: ModelRef<OutputKind> | MaterialRef): void {
     if (reference[DESIGN_OWNER] !== this) {
       throw new TypeError("Model references cannot cross design boundaries");
     }
@@ -283,6 +330,29 @@ export class DesignBuilder {
     ): Parameter<"massDensity"> =>
       this.parameterOf(id, "massDensity", defaultValue, options),
   };
+
+  material(id: string, options: MaterialOptions): MaterialRef {
+    const key = materialId(id);
+    if (Object.hasOwn(this.materialRecords, key)) {
+      throw new TypeError(`Duplicate material '${id}'`);
+    }
+    if (options.name.trim().length === 0) {
+      throw new TypeError(`Material '${id}' requires a non-empty name`);
+    }
+    if (options.massDensity.dimension !== "massDensity") {
+      throw new TypeError("Material massDensity must be a mass-density expression");
+    }
+    this.materialRecords[key] = deepFreeze({
+      name: options.name,
+      massDensity: options.massDensity.ir,
+      ...(options.description === undefined
+        ? {}
+        : { description: options.description }),
+      ...(options.metadata === undefined ? {} : { metadata: options.metadata }),
+    });
+    this.usesMassDensity = true;
+    return new MaterialRef(this, key);
+  }
 
   private addNode(id: string, node: NodeIR): NodeId {
     const key = nodeId(id);
@@ -796,27 +866,26 @@ export class DesignBuilder {
   part(
     id: string,
     solid: SolidRef,
-    options: {
-      readonly partNumber?: string;
-      readonly description?: string;
-      readonly material?: string;
-      readonly massDensity?: MassDensityExpression;
-      readonly metadata?: Readonly<Record<string, JsonValue>>;
-    } = {},
+    options: PartOptions = {},
   ): PartRef {
     this.assertOwned(solid);
+    if (options.material !== undefined && options.materialRef !== undefined) {
+      throw new TypeError("A part cannot use both material and materialRef");
+    }
+    if (options.materialRef !== undefined) this.assertOwned(options.materialRef);
     if (
       options.massDensity !== undefined &&
       options.massDensity.dimension !== "massDensity"
     ) {
       throw new TypeError("Part massDensity must be a mass-density expression");
     }
-    const { massDensity, ...definition } = options;
+    const { massDensity, materialRef, ...definition } = options;
     if (massDensity !== undefined) this.usesMassDensity = true;
     const key = this.addNode(id, {
       kind: "part",
       solid: solid.toIR(),
       ...definition,
+      ...(materialRef === undefined ? {} : { materialId: materialRef.id }),
       ...(massDensity === undefined ? {} : { massDensity: massDensity.ir }),
     });
     return new PartRef(this, key);
@@ -857,6 +926,9 @@ export class DesignBuilder {
         ...(this.usesMassDensity ? { mass: "kg" as const } : {}),
       },
       parameters: { ...this.parameterRecords },
+      ...(Object.keys(this.materialRecords).length === 0
+        ? {}
+        : { materials: { ...this.materialRecords } }),
       nodes: { ...this.nodeRecords },
       outputs: { ...this.outputRecords },
       ...(this.metadata === undefined ? {} : { metadata: this.metadata }),

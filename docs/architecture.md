@@ -27,6 +27,7 @@ Explicit names are required for public features and sketch entities. This makes 
 - schema and independent schema version;
 - base-unit policy;
 - parameter definitions and expression ASTs;
+- document-owned material definitions with stable IDs and required explicit density;
 - sketch geometry, constraints, and explicit profiles;
 - feature DAG;
 - parts, assembly occurrences, and outputs;
@@ -102,16 +103,23 @@ Evaluation performs these operations in order:
 
 1. structural and semantic validation;
 2. parameter dependency resolution and bounds checking;
-3. lazy feature-DAG traversal from selected outputs;
-4. sketch solving;
-5. geometry-derived feature/refinement and topology capability preflight, plus selector resolution for consuming features;
-6. kernel feature execution and status checks;
-7. part and nested-assembly occurrence resolution;
-8. construction of disposable evaluated outputs.
+3. document-owned material-density resolution and positivity checks;
+4. lazy feature-DAG traversal from selected outputs;
+5. sketch solving;
+6. geometry-derived feature/refinement and topology capability preflight, plus selector resolution for consuming features;
+7. kernel feature execution and status checks;
+8. part and nested-assembly occurrence resolution;
+9. construction of disposable evaluated outputs.
 
 Evaluated assemblies aggregate occurrence mass properties rather than treating their combined tessellation as one opaque measurement. Each occurrence's center and central second moment follow its full affine placement; the aggregate center and tensor then use volume weighting and parallel-axis shifts. This preserves correct translation, rotation, reflection, and nonuniform-scale semantics while counting repeated definitions once per occurrence.
 
-Physical properties form a separate typed layer. `PartNodeIR.massDensity` is an optional `massDensity` expression in the canonical `kg/mm^3` unit, while the existing `material` string stays descriptive and has no implicit lookup behavior. A supplied density resolves during part evaluation and must be finite and strictly positive. Geometry measurements may be cached by `KernelShape`, but density-scaled results may not: multiple part definitions can deliberately share geometry while using different densities. `EvaluatedPart` scales its central volumetric properties directly. `EvaluatedAssembly` first checks that every active flattened leaf has density, transforms each cached geometric property through the occurrence's full affine placement, scales it independently, and combines bodies by mass-weighted centers and parallel-axis shifts. Missing density is a structured `CadResult` failure, while suppressed leaves and empty assemblies retain explicit zero semantics.
+Physical properties form a separate typed layer. `DesignDocument.materials` owns reusable definitions keyed by stable material ID; every definition contains an explicit `massDensity` expression in the canonical `kg/mm^3` unit. A part records that relationship as `PartNodeIR.materialId`, authored with a same-builder typed `materialRef`. The existing `PartNodeIR.material` string remains a descriptive compatibility field and has no implicit lookup behavior; authoring makes the label and reference mutually exclusive. Density resolution is strictly `part.massDensity` first, then the explicitly referenced definition's `massDensity`, then missing. IDs and names are never searched or heuristically matched. Every supplied density resolves during evaluation and must be finite and strictly positive.
+
+Geometry measurements may be cached by `KernelShape`, but density-scaled results may not: multiple part definitions can deliberately share geometry while using different densities. `EvaluatedPart` scales its central volumetric properties directly. `EvaluatedAssembly` first checks that every active flattened leaf has density, transforms each cached geometric property through the occurrence's full affine placement, scales it independently, and combines bodies by mass-weighted centers and parallel-axis shifts. Missing density is a structured `CadResult` failure for complete physical-property analysis, while suppressed leaves and empty assemblies retain explicit zero semantics.
+
+The bill-of-materials layer deliberately follows product structure rather than geometry identity or display text. Active nested assembly leaves are flattened to stable occurrence paths, suppressed branches are omitted, and items are grouped by part-node ID. Part number, description, and material are reported attributes; missing or duplicate values never cause two definitions to be silently merged. Item order, occurrence-path order, and diagnostics are deterministic.
+
+Each BOM item reports both its unplaced definition mass and the sum of its placed occurrence masses. The latter uses the full affine transform, including reflection and volume-changing scale, rather than assuming `definitionMass * quantity`. Overlap remains additive. Missing density is a warning-level partial result: quantity remains exact, `knownMass` sums the computable occurrences, `massComplete` is false, and `totalMass` is null. Complete and empty BOMs have a non-null total. This base contract intentionally excludes configurations, effectivity, alternate/substitute components, and variant selection.
 
 Composite-sweep refinement preflight is kernel-neutral. A shared classifier resolves the exact arc sweeps, computes certified analytic profile area/centroid moments, and derives the canonical `major-multiple-arcs` / `major-eccentric-profile` subset before kernel execution. Missing support produces a capability diagnostic; malformed versioned metadata produces a protocol diagnostic. Geometry that needs neither refinement does not depend on the optional envelope.
 
@@ -151,6 +159,7 @@ Every geometry kernel should run the same corpus for:
 - overlapping and empty booleans;
 - bounds, volume, surface area, center of mass, centroidal inertia, and topological class;
 - translated, rotated, reflected, nonuniformly scaled, and multi-occurrence mass-property aggregation, including parallel-axis behavior;
+- nested and suppressed deterministic BOM quantities, part-node grouping, affine occurrence mass, and partial-mass warnings;
 - parameter extremes and degenerate geometry;
 - cancellation and resource teardown;
 - topology set semantics, cardinality, adjacency reciprocity, and history loss;

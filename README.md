@@ -307,8 +307,10 @@ Selectors also support curve/surface kind, edge direction, face normal, radius, 
 - Exact whole-solid inward/outward offsets with fixed round joins through the OCCT backend
 - Exact atomic multi-face draft through semantic face selectors when using the matched owned OCCT facade
 - Translation, Euler rotation, nonuniform scale, and mirror
-- Parts with part number, material, description, metadata, and explicit parameterized mass density
+- Parts with part number, description, metadata, backward-compatible material labels, and explicit parameterized mass density
+- Document-owned material definitions with typed part references and explicit parameterized density
 - Fixed-placement and nested assemblies with shared part definitions
+- Deterministic bills of materials with nested quantity and affine mass rollups
 
 ### Sketch constraints
 
@@ -343,6 +345,7 @@ The solver API is replaceable. The built-in solver is intentionally a v0.1 refer
 | Center of mass and centroidal inertia tensor | Both kernels and assemblies | Yes |
 | Principal/axis inertia and radii of gyration | Kernel-neutral public analysis | Yes |
 | Density-aware part and heterogeneous-assembly mass | Explicit authored density | Yes |
+| Deterministic bill of materials | Fixed and nested assemblies | Configurations and variant BOMs |
 | Exact B-Rep primitives and core features | OCCT backend | Yes |
 | STEP and BREP import/export | OCCT backend | Yes |
 | IGES import/export | No | Exact backend |
@@ -397,7 +400,9 @@ console.log(
 
 `principalInertia()` uses a deterministic symmetric decomposition. It returns an orthonormal, right-handed world-space frame, ascending moments, per-axis uniqueness, and explicit `distinct`, `minimum-repeated`, `maximum-repeated`, or `isotropic` degeneracy. Axis directions inside a repeated eigenspace are deterministic but are not physically unique. `worldRadiiOfGyration()` reports `sqrt(Ixx / weight)`, `sqrt(Iyy / weight)`, and `sqrt(Izz / weight)`; `principalRadiiOfGyration()` follows ascending principal moments. `inertiaTensorAboutPoint()`, `momentOfInertiaAboutAxis()`, and `radiusOfGyrationAboutAxis()` apply the parallel-axis theorem to arbitrary world-space points and lines. Zero-weight radii are `null`.
 
-Physical density is explicit authored part data and is never inferred from the descriptive `material` string. Documents store density in `kg/mm^3`; helpers accept the common forms `kgPerCubicMillimeter()`, `kgPerCubicMeter()`, and `gramsPerCubicCentimeter()`. Documents containing a density expression declare `units.mass: "kg"`, physical inertia is in `kg*mm^2`, and density may be parameterized and overridden like any other dimensioned expression:
+Physical density is explicit authored data and is never inferred from a material name. A document can own reusable material definitions, each with required density, and a part refers to one by stable ID through the typed `materialRef` authoring option. The legacy part `material` string remains a backward-compatible descriptive label only: matching it to a material definition's ID or name does not establish a reference and never supplies density. A part uses either that label or `materialRef`, never both.
+
+Documents store density in `kg/mm^3`; helpers accept the common forms `kgPerCubicMillimeter()`, `kgPerCubicMeter()`, and `gramsPerCubicCentimeter()`. Documents containing a density expression declare `units.mass: "kg"`, physical inertia is in `kg*mm^2`, and a definition's density may be parameterized and overridden like any other dimensioned expression:
 
 ```ts
 import { EvaluatedPart, kgPerCubicMeter } from "invariantcad";
@@ -406,9 +411,13 @@ const density = cad.parameter.massDensity(
   "density",
   kgPerCubicMeter(2700),
 );
-const part = cad.part("bracket", solid, {
-  material: "6061-T6 Aluminum",
+const aluminum = cad.material("aluminum-6061-t6", {
+  name: "6061-T6 Aluminum",
   massDensity: density,
+});
+const part = cad.part("bracket", solid, {
+  partNumber: "BRACKET-001",
+  materialRef: aluminum,
 });
 cad.output("bracket", part);
 
@@ -428,6 +437,8 @@ if (evaluated.ok) {
   }
 }
 ```
+
+Density resolution has one deterministic precedence rule: a part's own `massDensity` is an explicit per-part override; otherwise the referenced material definition's `massDensity` is used; otherwise density is missing. Neither a legacy `material` label nor a definition `name` participates in resolution. Material IDs and references are document-owned, so a reference created by another builder is rejected instead of being silently rebound by text.
 
 `EvaluatedPart.physicalMassProperties()` and `EvaluatedAssembly.physicalMassProperties()` return `CadResult<PhysicalMassProperties>`. An active part without density produces `MASS_DENSITY_MISSING`; zero, negative, or non-finite resolved density produces `MASS_DENSITY_INVALID`; a finite calculation that cannot produce representable, mechanically valid properties produces `MASS_PROPERTIES_INVALID`. Suppressed occurrences do not require density. Assemblies transform each leaf's volumetric properties through its complete affine placement, multiply by that leaf's own density, then use mass weighting and the parallel-axis theorem. Repeated definitions count once per occurrence, overlaps remain additive bodies, and an empty assembly returns zero mass, a null center, and a zero tensor. For a raw evaluated solid, call `physicalMassProperties(output.measure(), numericDensity)` explicitly.
 
@@ -451,6 +462,43 @@ cad.output("product", product);
 ```
 
 Nested assemblies are flattened into occurrence paths such as `frame/left-bracket` during evaluation while retaining the original part node. Assembly measurements aggregate every placed occurrence under its affine transform and apply the parallel-axis theorem, so shared definitions contribute independently at each placement.
+
+Parts and assemblies also expose a deterministic bill of materials:
+
+```ts
+import { EvaluatedAssembly } from "invariantcad";
+
+const evaluated = await evaluator.evaluate(cad.build(), {
+  outputs: ["product"],
+});
+if (evaluated.ok) {
+  try {
+    const output = evaluated.value.output("product");
+    if (output instanceof EvaluatedAssembly) {
+      const bom = output.billOfMaterials();
+      if (!bom.ok) {
+        console.error(bom.diagnostics);
+      } else {
+        console.table(bom.value.items);
+        console.log({
+          quantity: bom.value.totalQuantity,
+          massComplete: bom.value.massComplete,
+          knownMass: bom.value.knownMass,
+          totalMass: bom.value.totalMass,
+        });
+        // Successful partial BOMs can still carry warning diagnostics.
+        console.warn(bom.diagnostics);
+      }
+    }
+  } finally {
+    evaluated.value.dispose();
+  }
+}
+```
+
+`items` are grouped by stable part-node ID, not by mutable or potentially duplicate part numbers, descriptions, or material names. Each item reports `partNode`, nullable `partNumber`, `description`, `materialId`, and `material`, `quantity`, sorted flattened `occurrenceIds`, resolved `massDensity` and `massDensitySource`, base `definitionMass`, and occurrence-aware `totalMass`. A directly evaluated part produces definition quantity one and an empty occurrence-path list. Nested assemblies contribute their active leaf occurrences, while suppressed branches contribute neither quantity nor mass.
+
+BOM mass is physical occurrence mass. Rigid placements and reflections preserve the definition mass; affine scaling changes occurrence mass by its volume scale, so an item's mass rollup need not equal `definitionMass * quantity`. Occurrences remain additive even if their geometry overlaps. If any active item lacks density, the BOM still succeeds with warning diagnostics and exact quantities: `massComplete` is `false`, `knownMass` contains the sum of computable occurrence masses, and `totalMass` is `null`. An empty assembly has zero quantity, complete zero mass, and no items. Configurations, effectivity, alternates, and variant-aware BOMs remain roadmap work.
 
 ## Documents and deterministic builds
 
@@ -492,6 +540,7 @@ The CLI operates on serialized InvariantCAD documents:
 invariantcad validate design.invariantcad.json
 invariantcad inspect design.invariantcad.json
 invariantcad inspect design.invariantcad.json --parameters dimensions.json
+invariantcad bom design.invariantcad.json --output product
 invariantcad export design.invariantcad.json --output plate --to plate.stl
 invariantcad export design.invariantcad.json --output plate --format obj --to plate.obj
 invariantcad export design.invariantcad.json --output plate --to plate.step
@@ -500,6 +549,7 @@ invariantcad inspect design.invariantcad.json --kernel occt
 
 Parameter JSON values use base units: millimetres, radians, `kg/mm^3` mass density, and unitless scalars.
 `inspect` includes geometric `centerOfMass`, the three-row `inertiaTensor`, principal inertia, and world/principal radii alongside `volume`, `surfaceArea`, `boundingBox`, `genus`, `tolerance`, and `triangles`. Part and assembly reports additionally include analyzed `physicalMassProperties`; if an active density is missing, that field is `null` and `physicalMassDiagnostics` explains why.
+`bom` evaluates the selected part or assembly output and prints the same deterministic item, quantity, mass-completeness, and warning-diagnostic contract exposed by `billOfMaterials()`.
 The CLI selects stock OCCT automatically for `.step` and `.brep` destinations. Use `--kernel manifold|occt` to select a backend explicitly. The current CLI does not inject a custom module factory, so document draft evaluation and owned-facade-only composite refinements require programmatic initialization with the matched pair.
 
 ## Browser initialization
