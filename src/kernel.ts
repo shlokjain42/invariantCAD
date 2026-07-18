@@ -306,24 +306,26 @@ export interface BoundingBox {
 }
 
 /**
- * Central volumetric inertia tensor in world-axis coordinates.
+ * Symmetric 3x3 inertia tensor in world-axis coordinates.
  *
  * Rows use the standard mechanics sign convention
- * `integral((r dot r) I - r r^T) dV`. With millimetre model coordinates the
- * entries have units of mm^5; multiply the tensor by a uniform material
- * density to obtain physical mass moment of inertia.
+ * `integral((r dot r) I - r r^T)`. The property carrying the tensor defines
+ * its reference point and whether the integration measure is volume or mass.
  */
 export type InertiaTensor = readonly [Vec3, Vec3, Vec3];
 
-export interface ShapeMeasurements {
+export interface VolumetricMassProperties {
   /** Enclosed volume in cubic model units (mm^3 for authored documents). */
   readonly volume: number;
-  /** Boundary area in square model units (mm^2 for authored documents). */
-  readonly surfaceArea: number;
   /** World-coordinate centroid for homogeneous density, or `null` at zero volume. */
   readonly centerOfMass: Vec3 | null;
-  /** Homogeneous unit-density inertia about `centerOfMass`. */
+  /** Central volumetric inertia in mm^5 about `centerOfMass`. */
   readonly inertiaTensor: InertiaTensor;
+}
+
+export interface ShapeMeasurements extends VolumetricMassProperties {
+  /** Boundary area in square model units (mm^2 for authored documents). */
+  readonly surfaceArea: number;
   /** World-axis-aligned bounds in model coordinates. */
   readonly boundingBox: BoundingBox;
   readonly genus: number;

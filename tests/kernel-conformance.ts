@@ -2,6 +2,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   COMPOSITE_SWEEP_REFINEMENT_PROTOCOL_VERSION,
   kernelSupports,
+  momentOfInertiaAboutAxis,
+  principalInertia,
+  principalRadiiOfGyration,
   type GeometryKernel,
   type KernelShape,
   type ShapeMeasurements,
@@ -283,6 +286,28 @@ export function geometryKernelConformance(
           ],
           relativeTolerance,
         );
+        expectVector(
+          principalInertia(measurement.inertiaTensor).moments,
+          [26, 40, 50],
+          relativeTolerance,
+        );
+        const principalRadii = principalRadiiOfGyration(measurement);
+        expect(principalRadii).not.toBeNull();
+        if (principalRadii !== null) {
+          expectVector(
+            principalRadii,
+            [Math.sqrt(26 / 24), Math.sqrt(40 / 24), Math.sqrt(50 / 24)],
+            relativeTolerance,
+          );
+        }
+        expect(
+          Math.abs(
+            momentOfInertiaAboutAxis(measurement, {
+              point: [0, 0, 0],
+              direction: [1, 0, 0],
+            }) - 200,
+          ),
+        ).toBeLessThanOrEqual(200 * relativeTolerance);
         kernel.disposeShape(box);
       }
       if (kernelSupports(kernel.capabilities, "primitive", "cylinder")) {

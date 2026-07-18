@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added explicit parameterized part density in `kg/mm^3`, density-aware physical mass and `kg*mm^2` inertia for parts and heterogeneous nested assemblies, deterministic principal moments/axes with degeneracy metadata, arbitrary point/axis inertia, radii of gyration, structured missing/invalid-density diagnostics, CLI analysis, and packed-consumer coverage.
 - Added required world-space center-of-mass and centroidal inertia-tensor measurements across both built-in kernels and assemblies, with native recentered OCCT B-Rep integration, centered Manifold polyhedron integration, affine occurrence aggregation, parallel-axis semantics, zero-volume conventions, and CLI inspection output.
 - Added a kernel-neutral ordered ruled-solid loft node and TypeScript builder API.
 - Added strict profile compatibility, station ordering, exact OCCT result-topology validation, capability negotiation, and conformance coverage for the bounded loft contract.

@@ -16,6 +16,7 @@ import {
   type Dimension,
   type Expression,
   type LengthExpression,
+  type MassDensityExpression,
   type Parameter,
   Parameter as ParameterClass,
   type ScalarExpression,
@@ -215,6 +216,7 @@ export class DesignBuilder {
   private readonly parameterRecords: Record<ParameterId, ParameterIR> = {};
   private readonly nodeRecords: Record<NodeId, NodeIR> = {};
   private readonly outputRecords: Record<string, RefIR<DesignOutputKind>> = {};
+  private usesMassDensity = false;
 
   constructor(name: string, options: DesignOptions = {}) {
     if (name.trim().length === 0) throw new TypeError("A design requires a name");
@@ -251,6 +253,7 @@ export class DesignBuilder {
         ? {}
         : { description: options.description }),
     });
+    if (dimension === "massDensity") this.usesMassDensity = true;
     return new ParameterClass(key, dimension);
   }
 
@@ -273,6 +276,12 @@ export class DesignBuilder {
       options: ParameterOptions<"scalar"> = {},
     ): Parameter<"scalar"> =>
       this.parameterOf(id, "scalar", defaultValue, options),
+    massDensity: (
+      id: string,
+      defaultValue: MassDensityExpression,
+      options: ParameterOptions<"massDensity"> = {},
+    ): Parameter<"massDensity"> =>
+      this.parameterOf(id, "massDensity", defaultValue, options),
   };
 
   private addNode(id: string, node: NodeIR): NodeId {
@@ -791,14 +800,24 @@ export class DesignBuilder {
       readonly partNumber?: string;
       readonly description?: string;
       readonly material?: string;
+      readonly massDensity?: MassDensityExpression;
       readonly metadata?: Readonly<Record<string, JsonValue>>;
     } = {},
   ): PartRef {
     this.assertOwned(solid);
+    if (
+      options.massDensity !== undefined &&
+      options.massDensity.dimension !== "massDensity"
+    ) {
+      throw new TypeError("Part massDensity must be a mass-density expression");
+    }
+    const { massDensity, ...definition } = options;
+    if (massDensity !== undefined) this.usesMassDensity = true;
     const key = this.addNode(id, {
       kind: "part",
       solid: solid.toIR(),
-      ...options,
+      ...definition,
+      ...(massDensity === undefined ? {} : { massDensity: massDensity.ir }),
     });
     return new PartRef(this, key);
   }
@@ -832,7 +851,11 @@ export class DesignBuilder {
       schema: DOCUMENT_SCHEMA,
       version: DOCUMENT_VERSION,
       name: this.name,
-      units: { length: "mm", angle: "rad" },
+      units: {
+        length: "mm",
+        angle: "rad",
+        ...(this.usesMassDensity ? { mass: "kg" as const } : {}),
+      },
       parameters: { ...this.parameterRecords },
       nodes: { ...this.nodeRecords },
       outputs: { ...this.outputRecords },

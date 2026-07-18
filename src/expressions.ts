@@ -1,7 +1,7 @@
 import { deepFreeze } from "./core/json.js";
 import type { ParameterId } from "./core/ids.js";
 
-export type Dimension = "scalar" | "length" | "angle";
+export type Dimension = "scalar" | "length" | "angle" | "massDensity";
 
 export type ExpressionIR =
   | {
@@ -87,6 +87,8 @@ export class Parameter<D extends Dimension> extends Expression<D> {
 export type ScalarExpression = Expression<"scalar">;
 export type LengthExpression = Expression<"length">;
 export type AngleExpression = Expression<"angle">;
+/** Mass per volume in the document base unit kg/mm^3. */
+export type MassDensityExpression = Expression<"massDensity">;
 export type ScalarLike = ScalarExpression | number;
 
 export type Vec2Expression = readonly [LengthExpression, LengthExpression];
@@ -164,6 +166,21 @@ export function meters(value: number): LengthExpression {
 
 export function inch(value: number): LengthExpression {
   return mm(value * 25.4);
+}
+
+/** Kilograms per cubic millimetre, the document base mass-density unit. */
+export function kgPerCubicMillimeter(value: number): MassDensityExpression {
+  return literal("massDensity", value);
+}
+
+/** Kilograms per cubic metre converted to kg/mm^3. */
+export function kgPerCubicMeter(value: number): MassDensityExpression {
+  return kgPerCubicMillimeter(value * 1e-9);
+}
+
+/** Grams per cubic centimetre converted to kg/mm^3. */
+export function gramsPerCubicCentimeter(value: number): MassDensityExpression {
+  return kgPerCubicMillimeter(value * 1e-6);
 }
 
 export function rad(value: number): AngleExpression {

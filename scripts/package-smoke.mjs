@@ -55,13 +55,15 @@ async function assertMissing(path, label) {
   throw new Error(label + " must remain outside the invariantcad npm package");
 }
 
-function run(command, arguments_, cwd) {
+function run(command, arguments_, cwd, options = {}) {
   const result = spawnSync(command, arguments_, {
     cwd,
     encoding: "utf8",
     maxBuffer: 10 * 1024 * 1024,
   });
-  if (result.stdout) process.stdout.write(result.stdout);
+  if (result.stdout && options.printOutput !== false) {
+    process.stdout.write(result.stdout);
+  }
   if (result.stderr) process.stderr.write(result.stderr);
   if (result.error) throw result.error;
   if (result.status !== 0) {
@@ -73,6 +75,7 @@ function run(command, arguments_, cwd) {
         result.status,
     );
   }
+  return result.stdout;
 }
 
 const consumer = await mkdtemp(join(tmpdir(), "invariantcad-package-"));
@@ -93,7 +96,7 @@ try {
     join(consumer, "smoke.mjs"),
     [
       'import { writeFile } from "node:fs/promises";',
-      'import { CIRCULAR_ARC_PATH_MIN_POINT_SINE, COMPOSITE_PATH_MAX_JUNCTION_SINE, OFFSET_DIRECTIONS, OFFSET_JOIN_SEMANTICS, SHELL_DIRECTIONS, SHELL_JOIN_SEMANTICS, SWEEP_FRAMES, SWEEP_TRANSITIONS, TOPOLOGY_ROLE_RULES, angleVec3, createEvaluator, deg, design, kernelSupports, mm, plane, scalarVec3, stringifyDocument, tf, topology, vec3 } from "invariantcad";',
+      'import { CIRCULAR_ARC_PATH_MIN_POINT_SINE, COMPOSITE_PATH_MAX_JUNCTION_SINE, OFFSET_DIRECTIONS, OFFSET_JOIN_SEMANTICS, SHELL_DIRECTIONS, SHELL_JOIN_SEMANTICS, SWEEP_FRAMES, SWEEP_TRANSITIONS, TOPOLOGY_ROLE_RULES, angleVec3, createEvaluator, deg, design, kernelSupports, kgPerCubicMeter, mm, momentOfInertiaAboutAxis, plane, principalInertia, principalRadiiOfGyration, scalarVec3, stringifyDocument, tf, topology, vec3, worldRadiiOfGyration } from "invariantcad";',
       'import { createOcctKernel } from "invariantcad/kernels/occt";',
       "",
       "function assertNear(actual, expected, label, tolerance) {",
@@ -110,14 +113,27 @@ try {
       "",
       'const cad = design("package-smoke");',
       'const solid = cad.box("solid", { size: vec3(mm(2), mm(3), mm(4)) });',
-      'cad.output("solid", solid);',
+      'const part = cad.part("part", solid, { material: "Test steel", massDensity: kgPerCubicMeter(7850) });',
+      'cad.output("solid", solid).output("part", part);',
       "const document = cad.build();",
+      'await writeFile("model-mass.invariantcad.json", stringifyDocument(document));',
       "const evaluator = await createEvaluator();",
       "try {",
       "  const result = await evaluator.evaluate(document);",
       "  if (!result.ok) throw new Error(JSON.stringify(result.diagnostics));",
       "  try {",
-      '    assertBoxMassProperties(result.value.output("solid").measure(), "Manifold box", 1e-7);',
+      '    const measured = result.value.output("solid").measure();',
+      '    assertBoxMassProperties(measured, "Manifold box", 1e-7);',
+      '    const principal = principalInertia(measured.inertiaTensor);',
+      '    for (let index = 0; index < 3; index += 1) assertNear(principal.moments[index], [26, 40, 50][index], "principal moment[" + index + "]", 1e-7);',
+      '    const principalRadii = principalRadiiOfGyration(measured);',
+      '    const worldRadii = worldRadiiOfGyration(measured);',
+      '    if (principalRadii === null || worldRadii === null) throw new Error("Packed gyration analysis returned null");',
+      '    assertNear(momentOfInertiaAboutAxis(measured, { point: [0, 0, 0], direction: [1, 0, 0] }), 200, "global X inertia", 1e-7);',
+      '    const physical = result.value.output("part").physicalMassProperties();',
+      '    if (!physical.ok) throw new Error(JSON.stringify(physical.diagnostics));',
+      '    assertNear(physical.value.mass, 0.0001884, "physical mass", 1e-12);',
+      '    assertNear(physical.value.inertiaTensor[0][0], 0.0003925, "physical Ixx", 1e-12);',
       "  } finally {",
       "    result.value.dispose();",
       "  }",
@@ -438,13 +454,31 @@ try {
   await writeFile(
     join(consumer, "type-smoke.ts"),
     [
-      'import { EDGE_TOPOLOGY_ROLES, FACE_TOPOLOGY_ROLES, OFFSET_DIRECTIONS, SHELL_DIRECTIONS, TOPOLOGY_ROLE_RULES, TOPOLOGY_ROLES, angleVec3, deg, design, mm, plane, scalarVec3, tf, topology, vec3, type ChamferNodeIR, type CircularArcPathNodeIR, type CompositePathNodeIR, type CompositePathSegmentExpression, type DesignDocument, type DraftNodeIR, type EdgeTopologyRole, type FaceTopologyRole, type InertiaTensor, type LoftNodeIR, type OffsetDirection, type OffsetNodeIR, type PathRef, type PolylinePathNodeIR, type ProfileRef, type ResolvedCompositePath, type ShellDirection, type ShellNodeIR, type SolidRef, type SweepNodeIR, type TopologyOriginOptions, type TopologyRole, type TopologySelection } from "invariantcad";',
+      'import { EDGE_TOPOLOGY_ROLES, FACE_TOPOLOGY_ROLES, OFFSET_DIRECTIONS, SHELL_DIRECTIONS, TOPOLOGY_ROLE_RULES, TOPOLOGY_ROLES, angleVec3, combinePhysicalMassProperties, deg, design, gramsPerCubicCentimeter, inertiaTensorAboutPoint, kgPerCubicMeter, kgPerCubicMillimeter, mm, momentOfInertiaAboutAxis, physicalMassProperties, plane, principalInertia, principalRadiiOfGyration, radiusOfGyrationAboutAxis, scalarVec3, tf, topology, vec3, worldRadiiOfGyration, type ChamferNodeIR, type CircularArcPathNodeIR, type CompositePathNodeIR, type CompositePathSegmentExpression, type DesignDocument, type DraftNodeIR, type EdgeTopologyRole, type EvaluatedAssembly, type EvaluatedPart, type FaceTopologyRole, type InertiaAxis, type InertiaPropertySource, type InertiaTensor, type LoftNodeIR, type MassDensityExpression, type OffsetDirection, type OffsetNodeIR, type PathRef, type PhysicalInertiaTensor, type PhysicalMassProperties, type PolylinePathNodeIR, type PrincipalAxes, type PrincipalAxisStatus, type PrincipalInertiaDegeneracy, type PrincipalInertiaOptions, type PrincipalInertiaResult, type ProfileRef, type ResolvedCompositePath, type ShellDirection, type ShellNodeIR, type SolidRef, type SweepNodeIR, type TopologyOriginOptions, type TopologyRole, type TopologySelection, type VolumetricMassProperties } from "invariantcad";',
       'import { createOcctKernel, type OcctKernelOptions, type OcctModuleFactory, type OcctModuleOptions } from "invariantcad/kernels/occt";',
       "",
       'const cad = design("type-smoke");',
       'const solid: SolidRef = cad.box("solid", { size: vec3(mm(1), mm(2), mm(3)) });',
+      'const authoredDensity = cad.parameter.massDensity("density", kgPerCubicMeter(2700));',
+      'const densePart = cad.part("dense-part", solid, { material: "Aluminum", massDensity: authoredDensity });',
       'const inertiaTensor: InertiaTensor = [[1, 0, 0], [0, 2, 0], [0, 0, 3]];',
-      'void inertiaTensor;',
+      'const volumetric: VolumetricMassProperties = { volume: 1, centerOfMass: [0, 0, 0], inertiaTensor };',
+      'const propertySource: InertiaPropertySource = volumetric;',
+      'const massDensity: MassDensityExpression = kgPerCubicMeter(1000);',
+      'const baseDensity: MassDensityExpression = kgPerCubicMillimeter(1e-6);',
+      'const gramDensity: MassDensityExpression = gramsPerCubicCentimeter(1);',
+      'const physical: PhysicalMassProperties = physicalMassProperties(volumetric, 1e-6);',
+      'const physicalTensor: PhysicalInertiaTensor = physical.inertiaTensor;',
+      'const principalOptions: PrincipalInertiaOptions = { relativeDegeneracyTolerance: 1e-12 };',
+      'const principal: PrincipalInertiaResult = principalInertia(inertiaTensor, principalOptions);',
+      'const principalAxes: PrincipalAxes = principal.axes;',
+      'const principalStatus: PrincipalAxisStatus = principal.axisStatus[0];',
+      'const principalDegeneracy: PrincipalInertiaDegeneracy = principal.degeneracy;',
+      'const inertiaAxis: InertiaAxis = { point: [0, 0, 0], direction: [1, 0, 0] };',
+      'type PartPhysicalResult = ReturnType<EvaluatedPart["physicalMassProperties"]>;',
+      'type AssemblyPhysicalResult = ReturnType<EvaluatedAssembly["physicalMassProperties"]>;',
+      'const acceptsPhysicalResult = (_value: PartPhysicalResult | AssemblyPhysicalResult): void => {};',
+      'void [propertySource, massDensity, baseDensity, gramDensity, physicalTensor, principalAxes, principalStatus, principalDegeneracy, acceptsPhysicalResult, combinePhysicalMassProperties([physical]), inertiaTensorAboutPoint(volumetric, [0, 0, 0]), momentOfInertiaAboutAxis(volumetric, inertiaAxis), worldRadiiOfGyration(volumetric), principalRadiiOfGyration(volumetric), radiusOfGyrationAboutAxis(volumetric, inertiaAxis)];',
       'const edges = topology.edges.createdBy(solid).and(topology.edges.direction(scalarVec3(0, 0, 1))).exactly(4);',
       'const faces = topology.faces.createdBy(solid, { role: "box.face.z-max" }).select();',
       'const rounded: SolidRef = cad.fillet("rounded", solid, { edges, radius: mm(0.1) });',
@@ -486,7 +520,10 @@ try {
       "});",
       "// @ts-expect-error Offset direction is a closed string union.",
       'cad.offset("invalid-offset-direction", solid, { distance: mm(0.1), direction: "outside" });',
+      "// @ts-expect-error Part density must be a mass-density expression.",
+      'cad.part("invalid-density", solid, { massDensity: mm(1) });',
       'cad.output("solid", rounded);',
+      'cad.output("dense-part", densePart);',
       'cad.output("beveled", beveled);',
       'cad.output("hollow", hollow);',
       'cad.output("expanded", expanded);',
@@ -629,6 +666,7 @@ try {
   );
   run(bin, ["--help"], consumer);
   run(bin, ["validate", "model.invariantcad.json"], consumer);
+  run(bin, ["validate", "model-mass.invariantcad.json"], consumer);
   run(bin, ["validate", "model-chamfer.invariantcad.json"], consumer);
   run(bin, ["validate", "model-shell.invariantcad.json"], consumer);
   run(bin, ["validate", "model-offset.invariantcad.json"], consumer);
@@ -639,6 +677,19 @@ try {
     ["validate", "model-circular-arc-sweep.invariantcad.json"],
     consumer,
   );
+  const massInspection = JSON.parse(
+    run(bin, ["inspect", "model-mass.invariantcad.json"], consumer, {
+      printOutput: false,
+    }),
+  );
+  if (
+    massInspection.solid.principalInertia.moments.join(",") !== "26,40,50" ||
+    Math.abs(massInspection.part.physicalMassProperties.mass - 0.0001884) >
+      1e-12 ||
+    massInspection.part.physicalMassProperties.principalRadiiOfGyration === null
+  ) {
+    throw new Error("Installed CLI omitted physical mass analysis");
+  }
   run(
     bin,
     ["validate", "model-composite-sweep.invariantcad.json"],

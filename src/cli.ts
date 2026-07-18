@@ -4,9 +4,17 @@ import { readFile, writeFile } from "node:fs/promises";
 import { extname } from "node:path";
 import {
   createEvaluator,
+  EvaluatedAssembly,
+  EvaluatedPart,
   type EvaluatedOutput,
   type ShapeExportFormat,
 } from "./evaluator.js";
+import {
+  principalInertia,
+  principalRadiiOfGyration,
+  worldRadiiOfGyration,
+  type PhysicalMassProperties,
+} from "./mass-properties.js";
 import { parseDocument } from "./serialization.js";
 import type { Diagnostic } from "./core/result.js";
 
@@ -104,15 +112,38 @@ function inferFormat(path: string, explicit?: string | true): ShapeExportFormat 
 
 function measurements(output: EvaluatedOutput): object {
   const measured = output.measure();
+  const physical =
+    output instanceof EvaluatedPart || output instanceof EvaluatedAssembly
+      ? output.physicalMassProperties()
+      : undefined;
+  const analyzedPhysical = (
+    properties: PhysicalMassProperties,
+  ): object => ({
+    ...properties,
+    principalInertia: principalInertia(properties.inertiaTensor),
+    worldRadiiOfGyration: worldRadiiOfGyration(properties),
+    principalRadiiOfGyration: principalRadiiOfGyration(properties),
+  });
   return {
     volume: measured.volume,
     surfaceArea: measured.surfaceArea,
     centerOfMass: measured.centerOfMass,
     inertiaTensor: measured.inertiaTensor,
+    principalInertia: principalInertia(measured.inertiaTensor),
+    worldRadiiOfGyration: worldRadiiOfGyration(measured),
+    principalRadiiOfGyration: principalRadiiOfGyration(measured),
     boundingBox: measured.boundingBox,
     genus: measured.genus,
     tolerance: measured.tolerance,
     triangles: output.mesh().indices.length / 3,
+    ...(physical === undefined
+      ? {}
+      : physical.ok
+        ? { physicalMassProperties: analyzedPhysical(physical.value) }
+        : {
+            physicalMassProperties: null,
+            physicalMassDiagnostics: physical.diagnostics,
+          }),
   };
 }
 

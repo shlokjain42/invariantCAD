@@ -400,6 +400,8 @@ export interface PartNodeIR {
   readonly partNumber?: string;
   readonly description?: string;
   readonly material?: string;
+  /** Explicit physical density expression in kg/mm^3; never inferred from material. */
+  readonly massDensity?: ExpressionIR;
   readonly metadata?: Readonly<Record<string, JsonValue>>;
 }
 
@@ -444,6 +446,7 @@ export interface DesignDocument {
   readonly units: {
     readonly length: "mm";
     readonly angle: "rad";
+    readonly mass?: "kg";
   };
   readonly parameters: Readonly<Record<ParameterId, ParameterIR>>;
   readonly nodes: Readonly<Record<NodeId, NodeIR>>;

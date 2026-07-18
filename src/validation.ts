@@ -1103,6 +1103,15 @@ function validateNode(
       break;
     case "part":
       validateRef(node.solid, "solid", document, `${path}/solid`, diagnostics);
+      if (node.massDensity !== undefined) {
+        validateExpression(
+          node.massDensity,
+          "massDensity",
+          document,
+          `${path}/massDensity`,
+          diagnostics,
+        );
+      }
       break;
     case "assembly":
       node.instances.forEach((instance, index) => {
@@ -1162,6 +1171,22 @@ export function validateDocument(
   document: DesignDocument,
 ): CadResult<DesignDocument> {
   const diagnostics: Diagnostic[] = [];
+  const usesMassDensity =
+    Object.values(document.parameters).some(
+      (parameter) => parameter.dimension === "massDensity",
+    ) ||
+    Object.values(document.nodes).some(
+      (node) => node.kind === "part" && node.massDensity !== undefined,
+    );
+  if (usesMassDensity && document.units.mass !== "kg") {
+    diagnostics.push(
+      diagnostic(
+        "IR_INVALID",
+        "Documents with mass density must declare kilograms as their mass unit",
+        { severity: "error", path: "/units/mass" },
+      ),
+    );
+  }
   for (const [id, parameter] of Object.entries(document.parameters) as [
     ParameterId,
     DesignDocument["parameters"][ParameterId],

@@ -2,6 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import {
   createEvaluator,
   design,
+  kgPerCubicMeter,
   mm,
   plane,
   scalarVec3,
@@ -51,6 +52,7 @@ const bracketSolid = cad.union("bracket-solid", plate, [raisedFlange]);
 const bracket = cad.part("bracket", bracketSolid, {
   partNumber: "INV-BRACKET-001",
   material: "6061-T6 Aluminum",
+  massDensity: kgPerCubicMeter(2700),
 });
 const pair = cad.assembly("bracket-pair", (assembly) => {
   assembly.instance("left", bracket);
@@ -68,15 +70,21 @@ await writeFile(
 );
 
 const evaluator = await createEvaluator();
-const result = await evaluator.evaluate(document, { outputs: ["bracket"] });
-if (!result.ok) {
-  throw new Error(result.diagnostics.map((item) => item.message).join("\n"));
-}
 try {
-  const output = result.value.output("bracket");
-  await writeFile(".artifacts/bracket.stl", output.export("stl"));
-  console.log(output.measure());
+  const result = await evaluator.evaluate(document, { outputs: ["bracket"] });
+  if (!result.ok) {
+    throw new Error(result.diagnostics.map((item) => item.message).join("\n"));
+  }
+  try {
+    const output = result.value.output("bracket");
+    await writeFile(".artifacts/bracket.stl", output.export("stl"));
+    console.log(output.measure());
+    if ("physicalMassProperties" in output) {
+      console.log(output.physicalMassProperties());
+    }
+  } finally {
+    result.value.dispose();
+  }
 } finally {
-  result.value.dispose();
   evaluator.dispose();
 }

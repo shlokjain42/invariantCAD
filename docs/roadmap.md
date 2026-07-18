@@ -9,7 +9,7 @@ InvariantCAD's goal is one coherent TypeScript CAD system, not one monolithic ge
 - Sketch entities, explicit profiles, and reference constraint solver
 - Mesh primitives, extrude, revolve, booleans, and transforms
 - Parts and fixed-placement nested assemblies
-- Kernel-neutral volume, surface, bounds, center-of-mass, and centroidal-inertia measurement for solids and placed assemblies; mesh extraction and STL/OBJ export
+- Kernel-neutral volume, surface, bounds, center-of-mass, and centroidal-inertia measurement for solids and placed assemblies; deterministic principal/axis analysis, radii of gyration, explicit density-aware physical mass, and mesh/STL/OBJ export
 - Validation, diagnostics, hashing, CLI, examples, and conformance tests
 
 ## 0.2 — exact mechanical modeling

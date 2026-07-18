@@ -11,7 +11,7 @@ import { TOPOLOGY_ROLES } from "./protocol/topology.js";
 import { SHELL_DIRECTIONS } from "./protocol/shell.js";
 import { OFFSET_DIRECTIONS } from "./protocol/offset.js";
 
-const DimensionSchema = z.enum(["scalar", "length", "angle"]);
+const DimensionSchema = z.enum(["scalar", "length", "angle", "massDensity"]);
 
 export const ExpressionSchema: z.ZodType<ExpressionIR> = z.lazy(() =>
   z.discriminatedUnion("op", [
@@ -436,6 +436,7 @@ const NodeSchema = z.discriminatedUnion("kind", [
     partNumber: z.string().optional(),
     description: z.string().optional(),
     material: z.string().optional(),
+    massDensity: ExpressionSchema.optional(),
     metadata: z.record(z.string(), z.json()).optional(),
   }),
   z.object({
@@ -455,7 +456,11 @@ export const DesignDocumentSchema: z.ZodType<DesignDocument> = z.object({
   schema: z.literal(DOCUMENT_SCHEMA),
   version: z.literal(DOCUMENT_VERSION),
   name: z.string().min(1),
-  units: z.object({ length: z.literal("mm"), angle: z.literal("rad") }),
+  units: z.object({
+    length: z.literal("mm"),
+    angle: z.literal("rad"),
+    mass: z.literal("kg").optional(),
+  }),
   parameters: z.record(
     z.string(),
     z.object({

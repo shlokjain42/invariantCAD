@@ -11,6 +11,7 @@ import {
 import {
   CadError,
   diagnostic,
+  failure,
   hasErrors,
   success,
   type CadResult,
@@ -73,6 +74,11 @@ import {
   transformMassProperties,
 } from "./internal/mesh-mass-properties.js";
 import {
+  combinePhysicalMassProperties,
+  physicalMassProperties as scalePhysicalMassProperties,
+  type PhysicalMassProperties,
+} from "./mass-properties.js";
+import {
   createReferenceSketchSolver,
   type SketchSolverBackend,
 } from "./solver.js";
@@ -132,6 +138,7 @@ interface PartValue {
   readonly node: NodeId;
   readonly definition: PartNodeIR;
   readonly shape: KernelShape;
+  readonly massDensity?: number;
 }
 
 interface AssemblyOccurrence {
@@ -216,6 +223,22 @@ function resolveParameters(
       }
       value = evaluateExpression(expression, { resolveParameter: resolve });
     }
+    if (
+      definition.dimension === "massDensity" &&
+      (!Number.isFinite(value) || !(value > 0))
+    ) {
+      throw new EvaluationFailure(
+        diagnostic(
+          "MASS_DENSITY_INVALID",
+          `Mass-density parameter '${id}' must be finite and strictly positive`,
+          {
+            severity: "error",
+            path: `/parameters/${id}`,
+            details: { value },
+          },
+        ),
+      );
+    }
     if (!Number.isFinite(value)) {
       throw new EvaluationFailure(
         diagnostic("EXPRESSION_INVALID", `Parameter '${id}' is not finite`, {
@@ -250,7 +273,9 @@ function resolveParameters(
         error instanceof EvaluationFailure
           ? error.diagnostic
           : diagnostic(
-              "EXPRESSION_INVALID",
+              definition.dimension === "massDensity"
+                ? "MASS_DENSITY_INVALID"
+                : "EXPRESSION_INVALID",
               error instanceof Error ? error.message : String(error),
               { severity: "error", path: `/parameters/${rawId}` },
             ),
@@ -264,14 +289,38 @@ function resolveParameters(
       DesignDocument["parameters"][ParameterId],
     ][]) {
       const value = values.get(rawId)!;
-      const min =
-        definition.min === undefined
-          ? undefined
-          : evaluateExpression(definition.min, context);
-      const max =
-        definition.max === undefined
-          ? undefined
-          : evaluateExpression(definition.max, context);
+      let boundInvalid = false;
+      const bound = (
+        field: "min" | "max",
+        expression: ExpressionIR | undefined,
+      ): number | undefined => {
+        if (expression === undefined) return undefined;
+        try {
+          return evaluateExpression(expression, context);
+        } catch (error) {
+          boundInvalid = true;
+          diagnostics.push(
+            error instanceof EvaluationFailure
+              ? error.diagnostic
+              : diagnostic(
+                  definition.dimension === "massDensity"
+                    ? "MASS_DENSITY_INVALID"
+                    : "EXPRESSION_INVALID",
+                  `Parameter '${rawId}' ${field} bound is invalid: ${
+                    error instanceof Error ? error.message : String(error)
+                  }`,
+                  {
+                    severity: "error",
+                    path: `/parameters/${rawId}/${field}`,
+                  },
+                ),
+          );
+          return undefined;
+        }
+      };
+      const min = bound("min", definition.min);
+      const max = bound("max", definition.max);
+      if (boundInvalid) continue;
       if ((min !== undefined && value < min) || (max !== undefined && value > max)) {
         diagnostics.push(
           diagnostic(
@@ -461,12 +510,53 @@ export class EvaluatedPart extends EvaluatedSolid {
   readonly partNumber: string | undefined;
   readonly description: string | undefined;
   readonly material: string | undefined;
+  readonly massDensity: number | undefined;
+  private readonly partNode: NodeId;
 
   constructor(name: string, owner: EvaluationOwner, part: PartValue) {
     super(name, owner, part.shape);
     this.partNumber = part.definition.partNumber;
     this.description = part.definition.description;
     this.material = part.definition.material;
+    this.massDensity = part.massDensity;
+    this.partNode = part.node;
+  }
+
+  physicalMassProperties(): CadResult<PhysicalMassProperties> {
+    this.owner.assertLive();
+    if (this.massDensity === undefined) {
+      return failure(
+        diagnostic(
+          "MASS_DENSITY_MISSING",
+          `Part '${this.partNode}' has no authored mass density`,
+          {
+            severity: "error",
+            node: this.partNode,
+            path: `/nodes/${this.partNode}/massDensity`,
+            hints: ["Author massDensity on the part definition"],
+          },
+        ),
+      );
+    }
+    try {
+      return success(scalePhysicalMassProperties(this.measure(), this.massDensity));
+    } catch (error) {
+      return failure(
+        diagnostic(
+          "MASS_PROPERTIES_INVALID",
+          `Physical mass properties for part '${this.partNode}' could not be represented`,
+          {
+            severity: "error",
+            node: this.partNode,
+            path: `/nodes/${this.partNode}/massDensity`,
+            details: {
+              massDensity: this.massDensity,
+              cause: error instanceof Error ? error.message : String(error),
+            },
+          },
+        ),
+      );
+    }
   }
 }
 
@@ -474,6 +564,8 @@ export interface EvaluatedOccurrence {
   readonly id: string;
   readonly partNode: string;
   readonly partNumber?: string;
+  readonly material?: string;
+  readonly massDensity?: number;
   readonly transform: Mat4;
 }
 
@@ -497,6 +589,12 @@ export class EvaluatedAssembly {
       ...(occurrence.part.definition.partNumber === undefined
         ? {}
         : { partNumber: occurrence.part.definition.partNumber }),
+      ...(occurrence.part.definition.material === undefined
+        ? {}
+        : { material: occurrence.part.definition.material }),
+      ...(occurrence.part.massDensity === undefined
+        ? {}
+        : { massDensity: occurrence.part.massDensity }),
       transform: occurrence.transform,
     }));
   }
@@ -539,6 +637,77 @@ export class EvaluatedAssembly {
       genus: 0,
       tolerance: 0,
     };
+  }
+
+  physicalMassProperties(): CadResult<PhysicalMassProperties> {
+    this.owner.assertLive();
+    const missing = this.occurrences.filter(
+      (occurrence) => occurrence.part.massDensity === undefined,
+    );
+    if (missing.length > 0) {
+      const occurrenceIds = missing.map((occurrence) => occurrence.id);
+      const partNodes = [...new Set(missing.map((occurrence) => occurrence.part.node))];
+      return failure(
+        diagnostic(
+          "MASS_DENSITY_MISSING",
+          `Assembly '${this.name}' has ${missing.length} active occurrence${
+            missing.length === 1 ? "" : "s"
+          } without authored mass density`,
+          {
+            severity: "error",
+            path: `/outputs/${this.name}`,
+            hints: ["Author massDensity on every active leaf part definition"],
+            related: partNodes.map((partNode) => ({
+              message: `Part '${partNode}' has no authored mass density`,
+              node: partNode,
+              path: `/nodes/${partNode}/massDensity`,
+            })),
+            details: { occurrenceIds, partNodes },
+          },
+        ),
+      );
+    }
+
+    try {
+      const measuredShapes = new Map<KernelShape, ShapeMeasurements>();
+      return success(
+        combinePhysicalMassProperties(
+          this.occurrences.map((occurrence) => {
+            let measured = measuredShapes.get(occurrence.part.shape);
+            if (measured === undefined) {
+              measured = this.owner.kernel.measure(occurrence.part.shape);
+              measuredShapes.set(occurrence.part.shape, measured);
+            }
+            const transformed = transformMassProperties(
+              {
+                volume: measured.volume,
+                centerOfMass: measured.centerOfMass,
+                inertiaTensor: measured.inertiaTensor,
+              },
+              occurrence.transform,
+            );
+            return scalePhysicalMassProperties(
+              transformed,
+              occurrence.part.massDensity!,
+            );
+          }),
+        ),
+      );
+    } catch (error) {
+      return failure(
+        diagnostic(
+          "MASS_PROPERTIES_INVALID",
+          `Physical mass properties for assembly '${this.name}' could not be represented`,
+          {
+            severity: "error",
+            path: `/outputs/${this.name}`,
+            details: {
+              cause: error instanceof Error ? error.message : String(error),
+            },
+          },
+        ),
+      );
+    }
   }
 
   export(format: ShapeExportFormat): Uint8Array | string {
@@ -1766,14 +1935,51 @@ export class Evaluator {
             );
             break;
           }
-          case "part":
+          case "part": {
+            let massDensity: number | undefined;
+            if (node.massDensity !== undefined) {
+              try {
+                massDensity = expression(node.massDensity);
+              } catch (error) {
+                throw new EvaluationFailure(
+                  diagnostic(
+                    "MASS_DENSITY_INVALID",
+                    "Part massDensity must evaluate to a finite, strictly positive number",
+                    {
+                      severity: "error",
+                      node: id,
+                      path: `/nodes/${id}/massDensity`,
+                      details: {
+                        cause: error instanceof Error ? error.message : String(error),
+                      },
+                    },
+                  ),
+                );
+              }
+              if (!Number.isFinite(massDensity) || !(massDensity > 0)) {
+                throw new EvaluationFailure(
+                  diagnostic(
+                    "MASS_DENSITY_INVALID",
+                    "Part massDensity must be finite and strictly positive",
+                    {
+                      severity: "error",
+                      node: id,
+                      path: `/nodes/${id}/massDensity`,
+                      details: { value: massDensity },
+                    },
+                  ),
+                );
+              }
+            }
             result = {
               kind: "part",
               node: id,
               definition: node,
               shape: solidRef(node.solid),
+              ...(massDensity === undefined ? {} : { massDensity }),
             };
             break;
+          }
           case "assembly": {
             const occurrences: AssemblyOccurrence[] = [];
             for (const instance of node.instances) {

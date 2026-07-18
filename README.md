@@ -307,7 +307,7 @@ Selectors also support curve/surface kind, edge direction, face normal, radius, 
 - Exact whole-solid inward/outward offsets with fixed round joins through the OCCT backend
 - Exact atomic multi-face draft through semantic face selectors when using the matched owned OCCT facade
 - Translation, Euler rotation, nonuniform scale, and mirror
-- Parts with part number, material, description, and metadata
+- Parts with part number, material, description, metadata, and explicit parameterized mass density
 - Fixed-placement and nested assemblies with shared part definitions
 
 ### Sketch constraints
@@ -322,7 +322,7 @@ The solver API is replaceable. The built-in solver is intentionally a v0.1 refer
 - Exact B-Rep primitives, analytic profile extrusion/revolution, CSG, and transforms through OpenCascade WebAssembly
 - Exact topology enumeration, geometry/adjacency descriptors, selected-edge fillets/chamfers, face-selected shells, whole-solid offsets, and owned-facade atomic draft through OpenCascade WebAssembly
 - Native STEP, text BREP, and binary BREP import/export in the exact-kernel protocol
-- Volume, surface area, axis-aligned bounds, genus, kernel tolerance, center of mass, and centroidal inertia tensor
+- Volume, surface area, axis-aligned bounds, genus, kernel tolerance, center of mass, centroidal inertia, principal axes/moments, arbitrary-axis inertia, radii of gyration, and density-aware physical mass properties
 - Typed-array mesh extraction
 - Binary STL, ASCII STL, and OBJ export
 - Canonical JSON serialization and structural/semantic validation
@@ -341,6 +341,8 @@ The solver API is replaceable. The built-in solver is intentionally a v0.1 refer
 | Parts and fixed-placement assemblies | Yes | Yes |
 | Assembly mates and joints | No | Yes |
 | Center of mass and centroidal inertia tensor | Both kernels and assemblies | Yes |
+| Principal/axis inertia and radii of gyration | Kernel-neutral public analysis | Yes |
+| Density-aware part and heterogeneous-assembly mass | Explicit authored density | Yes |
 | Exact B-Rep primitives and core features | OCCT backend | Yes |
 | STEP and BREP import/export | OCCT backend | Yes |
 | IGES import/export | No | Exact backend |
@@ -367,7 +369,67 @@ Capabilities are negotiated by backends. InvariantCAD will not silently pretend 
 integral(((r dot r) I - r r^T) dV)
 ```
 
-where `r` is measured from the center of mass, for a homogeneous solid with unit volumetric density. Lengths are millimetres, so the tensor is in `mm^5`. For material density `rho`, physical mass is `rho * volume` and physical inertia is `rho * inertiaTensor`; density does not change the center. Empty and zero-volume results use a zero tensor.
+where `r` is measured from the center of mass, for a homogeneous solid with unit volumetric density. Lengths are millimetres, so the tensor is in `mm^5`. Empty and zero-volume results use a zero tensor.
+
+The public analysis functions operate only on copied numeric properties, so they are backend-neutral and remain usable after the evaluated shape is disposed:
+
+```ts
+import {
+  momentOfInertiaAboutAxis,
+  principalInertia,
+  principalRadiiOfGyration,
+  worldRadiiOfGyration,
+} from "invariantcad";
+
+const measured = output.measure();
+const principal = principalInertia(measured.inertiaTensor);
+// principal.moments is ascending; principal.axes[i] matches moments[i].
+console.log(principal.degeneracy, principal.moments, principal.axes);
+console.log(worldRadiiOfGyration(measured));
+console.log(principalRadiiOfGyration(measured));
+console.log(
+  momentOfInertiaAboutAxis(measured, {
+    point: [0, 0, 0],
+    direction: [0, 0, 1],
+  }),
+);
+```
+
+`principalInertia()` uses a deterministic symmetric decomposition. It returns an orthonormal, right-handed world-space frame, ascending moments, per-axis uniqueness, and explicit `distinct`, `minimum-repeated`, `maximum-repeated`, or `isotropic` degeneracy. Axis directions inside a repeated eigenspace are deterministic but are not physically unique. `worldRadiiOfGyration()` reports `sqrt(Ixx / weight)`, `sqrt(Iyy / weight)`, and `sqrt(Izz / weight)`; `principalRadiiOfGyration()` follows ascending principal moments. `inertiaTensorAboutPoint()`, `momentOfInertiaAboutAxis()`, and `radiusOfGyrationAboutAxis()` apply the parallel-axis theorem to arbitrary world-space points and lines. Zero-weight radii are `null`.
+
+Physical density is explicit authored part data and is never inferred from the descriptive `material` string. Documents store density in `kg/mm^3`; helpers accept the common forms `kgPerCubicMillimeter()`, `kgPerCubicMeter()`, and `gramsPerCubicCentimeter()`. Documents containing a density expression declare `units.mass: "kg"`, physical inertia is in `kg*mm^2`, and density may be parameterized and overridden like any other dimensioned expression:
+
+```ts
+import { EvaluatedPart, kgPerCubicMeter } from "invariantcad";
+
+const density = cad.parameter.massDensity(
+  "density",
+  kgPerCubicMeter(2700),
+);
+const part = cad.part("bracket", solid, {
+  material: "6061-T6 Aluminum",
+  massDensity: density,
+});
+cad.output("bracket", part);
+
+const evaluated = await evaluator.evaluate(cad.build(), {
+  // Parameter overrides use the document base unit, here kg/mm^3.
+  parameters: { density: 7.85e-6 },
+});
+if (evaluated.ok) {
+  try {
+    const output = evaluated.value.output("bracket");
+    if (output instanceof EvaluatedPart) {
+      const properties = output.physicalMassProperties();
+      if (properties.ok) console.log(properties.value.mass);
+    }
+  } finally {
+    evaluated.value.dispose();
+  }
+}
+```
+
+`EvaluatedPart.physicalMassProperties()` and `EvaluatedAssembly.physicalMassProperties()` return `CadResult<PhysicalMassProperties>`. An active part without density produces `MASS_DENSITY_MISSING`; zero, negative, or non-finite resolved density produces `MASS_DENSITY_INVALID`; a finite calculation that cannot produce representable, mechanically valid properties produces `MASS_PROPERTIES_INVALID`. Suppressed occurrences do not require density. Assemblies transform each leaf's volumetric properties through its complete affine placement, multiply by that leaf's own density, then use mass weighting and the parallel-axis theorem. Repeated definitions count once per occurrence, overlaps remain additive bodies, and an empty assembly returns zero mass, a null center, and a zero tensor. For a raw evaluated solid, call `physicalMassProperties(output.measure(), numericDensity)` explicitly.
 
 OCCT obtains these properties from its native B-Rep integration with recentered accumulation. Manifold integrates the centered closed polyhedron emitted by its mesh kernel. That representation boundary is intentional: mesh values describe the emitted polyhedral solid, while OCCT values describe the exact B-Rep, so compare cross-kernel results with an appropriate modeling or meshing tolerance rather than expecting identical floating-point values.
 
@@ -420,7 +482,7 @@ if (!result.ok) {
 }
 ```
 
-Stable codes include `REFERENCE_MISSING`, `GRAPH_CYCLE`, `PARAMETER_OUT_OF_RANGE`, `SKETCH_OVER_CONSTRAINED`, `EMPTY_RESULT`, `KERNEL_CAPABILITY_MISSING`, `TOPOLOGY_SELECTION_MISSING`, `TOPOLOGY_SELECTION_AMBIGUOUS`, `TOPOLOGY_HISTORY_UNAVAILABLE`, and `EVALUATION_ABORTED`.
+Stable codes include `REFERENCE_MISSING`, `GRAPH_CYCLE`, `PARAMETER_OUT_OF_RANGE`, `MASS_DENSITY_INVALID`, `MASS_DENSITY_MISSING`, `MASS_PROPERTIES_INVALID`, `SKETCH_OVER_CONSTRAINED`, `EMPTY_RESULT`, `KERNEL_CAPABILITY_MISSING`, `TOPOLOGY_SELECTION_MISSING`, `TOPOLOGY_SELECTION_AMBIGUOUS`, `TOPOLOGY_HISTORY_UNAVAILABLE`, and `EVALUATION_ABORTED`.
 
 ## CLI
 
@@ -436,8 +498,8 @@ invariantcad export design.invariantcad.json --output plate --to plate.step
 invariantcad inspect design.invariantcad.json --kernel occt
 ```
 
-Parameter JSON values use base units: millimetres, radians, and unitless scalars.
-`inspect` includes `centerOfMass` and the three-row `inertiaTensor` alongside `volume`, `surfaceArea`, `boundingBox`, `genus`, `tolerance`, and `triangles`.
+Parameter JSON values use base units: millimetres, radians, `kg/mm^3` mass density, and unitless scalars.
+`inspect` includes geometric `centerOfMass`, the three-row `inertiaTensor`, principal inertia, and world/principal radii alongside `volume`, `surfaceArea`, `boundingBox`, `genus`, `tolerance`, and `triangles`. Part and assembly reports additionally include analyzed `physicalMassProperties`; if an active density is missing, that field is `null` and `physicalMassDiagnostics` explains why.
 The CLI selects stock OCCT automatically for `.step` and `.brep` destinations. Use `--kernel manifold|occt` to select a backend explicitly. The current CLI does not inject a custom module factory, so document draft evaluation and owned-facade-only composite refinements require programmatic initialization with the matched pair.
 
 ## Browser initialization
