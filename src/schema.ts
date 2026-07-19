@@ -6,6 +6,9 @@ import {
   DOCUMENT_VERSION_V1,
   DOCUMENT_VERSION_V2,
   DOCUMENT_VERSION_V3,
+  NODE_KINDS_V1,
+  NODE_KINDS_V2,
+  NODE_KINDS_V3,
   type DesignDocument,
   type DesignDocumentV1,
   type DesignDocumentV2,
@@ -491,8 +494,16 @@ export const TopologyReferenceEntryV3Schema: z.ZodType<TopologyReferenceEntryIRV
 export const TopologyReferenceEntrySchema: z.ZodType<TopologyReferenceEntryIR> =
   TopologyReferenceEntryV3Schema;
 
-function createNodeSchema(topologySelectionSchema: z.ZodType) {
-  return z.discriminatedUnion("kind", [
+type VersionedNodeKind =
+  | NodeIRV1["kind"]
+  | NodeIRV2["kind"]
+  | NodeIRV3["kind"];
+
+function createNodeSchema(
+  topologySelectionSchema: z.ZodType,
+  nodeKinds: readonly VersionedNodeKind[],
+) {
+  const schemas = [
     z.object({
       kind: z.literal("box"),
       size: Vec3ExpressionSchema,
@@ -677,17 +688,36 @@ function createNodeSchema(topologySelectionSchema: z.ZodType) {
         }),
       ),
     }),
-  ]);
+  ] as const;
+
+  const allowedKinds = new Set<VersionedNodeKind>(nodeKinds);
+  const options = schemas.filter((schema) =>
+    allowedKinds.has(schema.shape.kind.value as VersionedNodeKind),
+  );
+  if (
+    nodeKinds.length !== allowedKinds.size ||
+    options.length !== nodeKinds.length
+  ) {
+    throw new Error("Document node-kind grammar has no matching node schema");
+  }
+
+  return z.discriminatedUnion(
+    "kind",
+    options as unknown as typeof schemas,
+  );
 }
 
 export const NodeV1Schema = createNodeSchema(
   TopologySelectionV1Schema,
+  NODE_KINDS_V1,
 ) as unknown as z.ZodType<NodeIRV1>;
 export const NodeV2Schema = createNodeSchema(
   TopologySelectionV2Schema,
+  NODE_KINDS_V2,
 ) as unknown as z.ZodType<NodeIRV2>;
 export const NodeV3Schema = createNodeSchema(
   TopologySelectionV3Schema,
+  NODE_KINDS_V3,
 ) as unknown as z.ZodType<NodeIRV3>;
 /** Current document-v3 node schema. */
 export const NodeSchema: z.ZodType<NodeIR> = NodeV3Schema;
@@ -738,60 +768,108 @@ const ConfigurationSchema = z
     "A configuration requires at least one override",
   );
 
-const DesignDocumentBodyShape = {
-  name: z.string().min(1),
-  units: z.object({
-    length: z.literal("mm"),
-    angle: z.literal("rad"),
-    mass: z.literal("kg").optional(),
+const DocumentNameSchema = z.string().min(1);
+const DocumentUnitsSchema = z.object({
+  length: z.literal("mm"),
+  angle: z.literal("rad"),
+  mass: z.literal("kg").optional(),
+});
+const DocumentParametersSchema = z.record(
+  z.string(),
+  z.object({
+    dimension: DimensionSchema,
+    default: ExpressionSchema,
+    min: ExpressionSchema.optional(),
+    max: ExpressionSchema.optional(),
+    label: z.string().optional(),
+    description: z.string().optional(),
   }),
-  parameters: z.record(
-    z.string(),
+);
+const DocumentMaterialsSchema = z
+  .record(
+    IdSchema,
     z.object({
-      dimension: DimensionSchema,
-      default: ExpressionSchema,
-      min: ExpressionSchema.optional(),
-      max: ExpressionSchema.optional(),
-      label: z.string().optional(),
+      name: z
+        .string()
+        .min(1)
+        .refine(
+          (value) => value.trim().length > 0,
+          "Material name cannot be blank",
+        ),
       description: z.string().optional(),
+      massDensity: ExpressionSchema,
+      metadata: z.record(z.string(), z.json()).optional(),
     }),
-  ),
-  materials: z
-    .record(
-      IdSchema,
-      z.object({
-        name: z
-          .string()
-          .min(1)
-          .refine((value) => value.trim().length > 0, "Material name cannot be blank"),
-        description: z.string().optional(),
-        massDensity: ExpressionSchema,
-        metadata: z.record(z.string(), z.json()).optional(),
-      }),
-    )
-    .refine(
-      (materials) => Object.keys(materials).length > 0,
-      "Material registry cannot be empty; omit it instead",
-    )
-    .optional(),
-  configurations: z
-    .record(IdSchema, ConfigurationSchema)
-    .refine(
-      (configurations) => Object.keys(configurations).length > 0,
-      "Configuration registry cannot be empty; omit it instead",
-    )
-    .optional(),
-  nodes: z.record(z.string(), NodeSchema),
-  outputs: z.record(z.string(), DesignOutputRefSchema),
-  metadata: z.record(z.string(), z.json()).optional(),
+  )
+  .refine(
+    (materials) => Object.keys(materials).length > 0,
+    "Material registry cannot be empty; omit it instead",
+  )
+  .optional();
+const DocumentConfigurationsSchema = z
+  .record(IdSchema, ConfigurationSchema)
+  .refine(
+    (configurations) => Object.keys(configurations).length > 0,
+    "Configuration registry cannot be empty; omit it instead",
+  )
+  .optional();
+const DocumentOutputsSchema = z.record(z.string(), DesignOutputRefSchema);
+const DocumentMetadataSchema = z.record(z.string(), z.json()).optional();
+const DocumentTopologyReferencesV2Schema = z
+  .record(IdSchema, TopologyReferenceEntryV2Schema)
+  .refine(
+    (references) => Object.keys(references).length > 0,
+    "Topology reference registry cannot be empty; omit it instead",
+  )
+  .optional();
+const DocumentTopologyReferencesV3Schema = z
+  .record(IdSchema, TopologyReferenceEntryV3Schema)
+  .refine(
+    (references) => Object.keys(references).length > 0,
+    "Topology reference registry cannot be empty; omit it instead",
+  )
+  .optional();
+
+const DesignDocumentBodyShapeV1 = {
+  name: DocumentNameSchema,
+  units: DocumentUnitsSchema,
+  parameters: DocumentParametersSchema,
+  materials: DocumentMaterialsSchema,
+  configurations: DocumentConfigurationsSchema,
+  nodes: z.record(z.string(), NodeV1Schema),
+  outputs: DocumentOutputsSchema,
+  metadata: DocumentMetadataSchema,
+} as const;
+
+const DesignDocumentBodyShapeV2 = {
+  name: DocumentNameSchema,
+  units: DocumentUnitsSchema,
+  parameters: DocumentParametersSchema,
+  materials: DocumentMaterialsSchema,
+  configurations: DocumentConfigurationsSchema,
+  nodes: z.record(z.string(), NodeV2Schema),
+  outputs: DocumentOutputsSchema,
+  metadata: DocumentMetadataSchema,
+  topologyReferences: DocumentTopologyReferencesV2Schema,
+} as const;
+
+const DesignDocumentBodyShapeV3 = {
+  name: DocumentNameSchema,
+  units: DocumentUnitsSchema,
+  parameters: DocumentParametersSchema,
+  materials: DocumentMaterialsSchema,
+  configurations: DocumentConfigurationsSchema,
+  nodes: z.record(z.string(), NodeV3Schema),
+  outputs: DocumentOutputsSchema,
+  metadata: DocumentMetadataSchema,
+  topologyReferences: DocumentTopologyReferencesV3Schema,
 } as const;
 
 export const DesignDocumentV1Schema: z.ZodType<DesignDocumentV1> = z
   .object({
     schema: z.literal(DOCUMENT_SCHEMA_V1),
     version: z.literal(DOCUMENT_VERSION_V1),
-    ...DesignDocumentBodyShape,
-    nodes: z.record(z.string(), NodeV1Schema),
+    ...DesignDocumentBodyShapeV1,
   })
   .strict() as unknown as z.ZodType<DesignDocumentV1>;
 
@@ -799,15 +877,7 @@ export const DesignDocumentV2Schema: z.ZodType<DesignDocumentV2> = z
   .object({
     schema: z.literal(DOCUMENT_SCHEMA_V2),
     version: z.literal(DOCUMENT_VERSION_V2),
-    ...DesignDocumentBodyShape,
-    nodes: z.record(z.string(), NodeV2Schema),
-    topologyReferences: z
-      .record(IdSchema, TopologyReferenceEntryV2Schema)
-      .refine(
-        (references) => Object.keys(references).length > 0,
-        "Topology reference registry cannot be empty; omit it instead",
-      )
-      .optional(),
+    ...DesignDocumentBodyShapeV2,
   })
   .strict() as unknown as z.ZodType<DesignDocumentV2>;
 
@@ -815,14 +885,7 @@ export const DesignDocumentV3Schema: z.ZodType<DesignDocumentV3> = z
   .object({
     schema: z.literal(DOCUMENT_SCHEMA_V3),
     version: z.literal(DOCUMENT_VERSION_V3),
-    ...DesignDocumentBodyShape,
-    topologyReferences: z
-      .record(IdSchema, TopologyReferenceEntryV3Schema)
-      .refine(
-        (references) => Object.keys(references).length > 0,
-        "Topology reference registry cannot be empty; omit it instead",
-      )
-      .optional(),
+    ...DesignDocumentBodyShapeV3,
   })
   .strict() as unknown as z.ZodType<DesignDocumentV3>;
 

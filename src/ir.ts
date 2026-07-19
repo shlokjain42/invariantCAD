@@ -35,6 +35,84 @@ export const DOCUMENT_SCHEMA = DOCUMENT_SCHEMA_V3;
 /** Version emitted by the current authoring API. */
 export const DOCUMENT_VERSION = DOCUMENT_VERSION_V3;
 
+/** Node discriminants accepted by the original document-v1 grammar. */
+export const NODE_KINDS_V1 = Object.freeze([
+  "box",
+  "cylinder",
+  "sphere",
+  "sketch",
+  "polylinePath",
+  "circularArcPath",
+  "compositePath",
+  "extrude",
+  "revolve",
+  "loft",
+  "sweep",
+  "boolean",
+  "transform",
+  "fillet",
+  "chamfer",
+  "shell",
+  "offset",
+  "draft",
+  "part",
+  "assembly",
+] as const);
+/** Node discriminants accepted by the frozen document-v2 grammar. */
+export const NODE_KINDS_V2 = Object.freeze([
+  "box",
+  "cylinder",
+  "sphere",
+  "sketch",
+  "polylinePath",
+  "circularArcPath",
+  "compositePath",
+  "extrude",
+  "revolve",
+  "loft",
+  "sweep",
+  "boolean",
+  "transform",
+  "fillet",
+  "chamfer",
+  "shell",
+  "offset",
+  "draft",
+  "part",
+  "assembly",
+] as const);
+/** Node discriminants accepted by the current document-v3 grammar. */
+export const NODE_KINDS_V3 = Object.freeze([
+  "box",
+  "cylinder",
+  "sphere",
+  "sketch",
+  "polylinePath",
+  "circularArcPath",
+  "compositePath",
+  "extrude",
+  "revolve",
+  "loft",
+  "sweep",
+  "boolean",
+  "transform",
+  "fillet",
+  "chamfer",
+  "shell",
+  "offset",
+  "draft",
+  "part",
+  "assembly",
+] as const);
+/** Node discriminants accepted by the current authoring grammar. */
+export const NODE_KINDS = NODE_KINDS_V3;
+
+export type NodeKindV1 = (typeof NODE_KINDS_V1)[number];
+export type NodeKindV2 = (typeof NODE_KINDS_V2)[number];
+export type NodeKindV3 = (typeof NODE_KINDS_V3)[number];
+/** Current node discriminant vocabulary. */
+export type NodeKind = NodeKindV3;
+
 export type OutputKind = "profile" | "path" | "solid" | "part" | "assembly";
 export type DesignOutputKind = Exclude<OutputKind, "profile" | "path">;
 
@@ -538,7 +616,8 @@ export interface AssemblyNodeIR {
   readonly instances: readonly AssemblyInstanceIR[];
 }
 
-export type NodeIR =
+/** Nodes accepted by the current document-v3 grammar. */
+export type NodeIRV3 =
   | BoxNodeIR
   | CylinderNodeIR
   | SphereNodeIR
@@ -559,6 +638,9 @@ export type NodeIR =
   | DraftNodeIR
   | PartNodeIR
   | AssemblyNodeIR;
+
+/** Current node grammar. */
+export type NodeIR = NodeIRV3;
 
 export type FilletNodeIRV1 = Omit<FilletNodeIR, "edges"> & {
   readonly edges: TopologySelectionIRV1<"edge">;
@@ -588,28 +670,67 @@ export type DraftNodeIRV2 = Omit<DraftNodeIR, "faces"> & {
 
 /** Nodes accepted by the original document-v1 grammar. */
 export type NodeIRV1 =
-  | Exclude<
-      NodeIR,
-      FilletNodeIR | ChamferNodeIR | ShellNodeIR | DraftNodeIR
-    >
+  | BoxNodeIR
+  | CylinderNodeIR
+  | SphereNodeIR
+  | SketchNodeIR
+  | PolylinePathNodeIR
+  | CircularArcPathNodeIR
+  | CompositePathNodeIR
+  | ExtrudeNodeIR
+  | RevolveNodeIR
+  | LoftNodeIR
+  | SweepNodeIR
+  | BooleanNodeIR
+  | TransformNodeIR
   | FilletNodeIRV1
   | ChamferNodeIRV1
   | ShellNodeIRV1
-  | DraftNodeIRV1;
+  | OffsetNodeIR
+  | DraftNodeIRV1
+  | PartNodeIR
+  | AssemblyNodeIR;
 /** Nodes accepted by the frozen document-v2 grammar. */
 export type NodeIRV2 =
-  | Exclude<
-      NodeIR,
-      FilletNodeIR | ChamferNodeIR | ShellNodeIR | DraftNodeIR
-    >
+  | BoxNodeIR
+  | CylinderNodeIR
+  | SphereNodeIR
+  | SketchNodeIR
+  | PolylinePathNodeIR
+  | CircularArcPathNodeIR
+  | CompositePathNodeIR
+  | ExtrudeNodeIR
+  | RevolveNodeIR
+  | LoftNodeIR
+  | SweepNodeIR
+  | BooleanNodeIR
+  | TransformNodeIR
   | FilletNodeIRV2
   | ChamferNodeIRV2
   | ShellNodeIRV2
-  | DraftNodeIRV2;
-/** Nodes accepted by the current document-v3 grammar. */
-export type NodeIRV3 = NodeIR;
+  | OffsetNodeIR
+  | DraftNodeIRV2
+  | PartNodeIR
+  | AssemblyNodeIR;
 
-interface DesignDocumentBody<N extends NodeIR = NodeIR> {
+type ExactType<A, B> = [A] extends [B]
+  ? [B] extends [A]
+    ? true
+    : false
+  : false;
+type AssertExact<T extends true> = T;
+/** Compile-time tripwires: tuple and union membership must evolve together. */
+type NodeKindsV1AreExact = AssertExact<
+  ExactType<NodeKindV1, NodeIRV1["kind"]>
+>;
+type NodeKindsV2AreExact = AssertExact<
+  ExactType<NodeKindV2, NodeIRV2["kind"]>
+>;
+type NodeKindsV3AreExact = AssertExact<
+  ExactType<NodeKindV3, NodeIRV3["kind"]>
+>;
+
+interface DesignDocumentBodyV1 {
   readonly name: string;
   readonly units: {
     readonly length: "mm";
@@ -623,20 +744,58 @@ interface DesignDocumentBody<N extends NodeIR = NodeIR> {
   readonly configurations?: Readonly<
     Record<ConfigurationId, DesignConfigurationIR>
   >;
-  readonly nodes: Readonly<Record<NodeId, N>>;
+  readonly nodes: Readonly<Record<NodeId, NodeIRV1>>;
+  readonly outputs: Readonly<Record<string, RefIR<DesignOutputKind>>>;
+  readonly metadata?: Readonly<Record<string, JsonValue>>;
+}
+
+interface DesignDocumentBodyV2 {
+  readonly name: string;
+  readonly units: {
+    readonly length: "mm";
+    readonly angle: "rad";
+    readonly mass?: "kg";
+  };
+  readonly parameters: Readonly<Record<ParameterId, ParameterIR>>;
+  /** Omitted for legacy documents that do not define a material catalogue. */
+  readonly materials?: Readonly<Record<MaterialId, MaterialDefinitionIR>>;
+  /** Omitted when the design has no named configurations. */
+  readonly configurations?: Readonly<
+    Record<ConfigurationId, DesignConfigurationIR>
+  >;
+  readonly nodes: Readonly<Record<NodeId, NodeIRV2>>;
+  readonly outputs: Readonly<Record<string, RefIR<DesignOutputKind>>>;
+  readonly metadata?: Readonly<Record<string, JsonValue>>;
+}
+
+interface DesignDocumentBodyV3 {
+  readonly name: string;
+  readonly units: {
+    readonly length: "mm";
+    readonly angle: "rad";
+    readonly mass?: "kg";
+  };
+  readonly parameters: Readonly<Record<ParameterId, ParameterIR>>;
+  /** Omitted for legacy documents that do not define a material catalogue. */
+  readonly materials?: Readonly<Record<MaterialId, MaterialDefinitionIR>>;
+  /** Omitted when the design has no named configurations. */
+  readonly configurations?: Readonly<
+    Record<ConfigurationId, DesignConfigurationIR>
+  >;
+  readonly nodes: Readonly<Record<NodeId, NodeIRV3>>;
   readonly outputs: Readonly<Record<string, RefIR<DesignOutputKind>>>;
   readonly metadata?: Readonly<Record<string, JsonValue>>;
 }
 
 /** Original document grammar, retained for parsing and direct evaluation. */
-export interface DesignDocumentV1 extends DesignDocumentBody<NodeIRV1> {
+export interface DesignDocumentV1 extends DesignDocumentBodyV1 {
   readonly schema: typeof DOCUMENT_SCHEMA_V1;
   readonly version: typeof DOCUMENT_VERSION_V1;
   readonly topologyReferences?: never;
 }
 
 /** Frozen document-v2 grammar with document-owned persistent topology evidence. */
-export interface DesignDocumentV2 extends DesignDocumentBody<NodeIRV2> {
+export interface DesignDocumentV2 extends DesignDocumentBodyV2 {
   readonly schema: typeof DOCUMENT_SCHEMA_V2;
   readonly version: typeof DOCUMENT_VERSION_V2;
   readonly topologyReferences?: Readonly<
@@ -645,7 +804,7 @@ export interface DesignDocumentV2 extends DesignDocumentBody<NodeIRV2> {
 }
 
 /** Current document grammar with the v3 semantic topology-role vocabulary. */
-export interface DesignDocumentV3 extends DesignDocumentBody<NodeIRV3> {
+export interface DesignDocumentV3 extends DesignDocumentBodyV3 {
   readonly schema: typeof DOCUMENT_SCHEMA_V3;
   readonly version: typeof DOCUMENT_VERSION_V3;
   readonly topologyReferences?: Readonly<

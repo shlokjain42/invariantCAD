@@ -97,7 +97,7 @@ try {
     [
       'import { writeFile } from "node:fs/promises";',
       'import { CIRCULAR_ARC_PATH_MIN_POINT_SINE, COMPOSITE_PATH_MAX_JUNCTION_SINE, DEFAULT_TOPOLOGY_SIGNATURE_LIMITS, OFFSET_DIRECTIONS, OFFSET_JOIN_SEMANTICS, SHELL_DIRECTIONS, SHELL_JOIN_SEMANTICS, SWEEP_FRAMES, SWEEP_TRANSITIONS, TOPOLOGY_ROLE_RULES, TOPOLOGY_SIGNATURE_PROTOCOL_VERSION, angleVec3, captureTopologyReference, createEvaluator, deg, design, kernelSupports, kgPerCubicMeter, mm, momentOfInertiaAboutAxis, plane, principalInertia, principalRadiiOfGyration, resolveTopologyReference, scalarVec3, stringifyDocument, tf, topology, vec3, worldRadiiOfGyration } from "invariantcad";',
-      'import { DEFAULT_DESIGN_DOCUMENT_LIMITS, DOCUMENT_SCHEMA_V1, DOCUMENT_SCHEMA_V3, DOCUMENT_VERSION, DOCUMENT_VERSION_V1, DOCUMENT_VERSION_V3, DesignDocumentV1Schema, TopologyQueryV1Schema, TopologyQueryV2Schema, TopologyQueryV3Schema, migrateDocument, parseDocument } from "invariantcad";',
+      'import { DEFAULT_DESIGN_DOCUMENT_LIMITS, DOCUMENT_SCHEMA_V1, DOCUMENT_SCHEMA_V3, DOCUMENT_VERSION, DOCUMENT_VERSION_V1, DOCUMENT_VERSION_V3, DesignDocumentV1Schema, NodeV1Schema, NodeV2Schema, NodeV3Schema, TopologyQueryV1Schema, TopologyQueryV2Schema, TopologyQueryV3Schema, migrateDocument, parseDocument } from "invariantcad";',
       'import { createOcctKernel } from "invariantcad/kernels/occt";',
       "",
       "function assertNear(actual, expected, label, tolerance) {",
@@ -131,6 +131,7 @@ try {
       'if (!resolvedTopologyReference.ok) throw new Error(JSON.stringify(resolvedTopologyReference.diagnostics));',
       'if (resolvedTopologyReference.value.key !== "current-face" || resolvedTopologyReference.value.evidence !== "semantic-lineage") throw new Error("Persistent topology reference did not resolve through semantic lineage");',
       'if (DOCUMENT_VERSION !== DOCUMENT_VERSION_V3 || DOCUMENT_SCHEMA_V3 !== "https://invariantcad.dev/schema/document/v3" || !Object.isFrozen(DEFAULT_DESIGN_DOCUMENT_LIMITS)) throw new Error("Document-v3 public constants were not packaged");',
+      'for (const schema of [NodeV1Schema, NodeV2Schema, NodeV3Schema]) if (schema.safeParse({ kind: "futureFeature" }).success) throw new Error("Packed versioned node schema accepted an unknown future kind");',
       'const persistentCad = design("package-persistent-selector");',
       'const persistentTarget = persistentCad.box("synthetic-box", { size: vec3(mm(10), mm(10), mm(10)) });',
       'const persistentFace = persistentCad.topologyReference("stored-face", persistentTarget, { topology: "face", variants: [capturedTopologyReference.value] });',

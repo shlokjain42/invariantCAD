@@ -61,7 +61,7 @@ Facade ABI/bundle numbers version the native adapter boundary and are independen
 - Expand role and source mapping beyond the landed primitive, extrusion, revolution-face, and bounded ruled-loft families
 - Landed: topology-signature protocol v1 for detached face/edge references, with key-free structured geometry and one-hop adjacency evidence, optional semantic compatibility fingerprints, exact fingerprint gating including OCCT descriptor v3, partial-history fallback, and fail-closed missing/ambiguous resolution
 - Landed: Document v2 topology-reference registries and typed persistent selector atoms, retained by Document v3 with v1/v2 preservation, explicit migration, canonical normalized variants, exact direct-target and fingerprint binding, bounded shared resolution, and fillet/chamfer/shell/draft consumption
-- Freeze node-kind membership and document-body fields in explicit per-version type/schema lists before the next document grammar expansion
+- Landed: frozen node-kind membership and top-level document-body fields through explicit v1/v2/v3 TypeScript and Zod lists, compile-time tuple/union tripwires, strict runtime inventory tests, and allow-listed migration copying before the next document grammar expansion
 - Expand persistent intent into broader topology kinds and feature-family naming without assigning arbitrary identities to symmetric topology
 - Expanded selection diagnostics and provenance explanations
 - Incremental feature hashes and cross-run cache

@@ -296,12 +296,29 @@ export function migrateDocument(
   if (parsed.value.version === DOCUMENT_VERSION_V3) {
     return success(parsed.value, parsed.diagnostics);
   }
-  const { schema: _schema, version: _version, ...body } = parsed.value;
+  const source = parsed.value;
   const migrated = parseDocumentValue(
     {
-      ...body,
       schema: DOCUMENT_SCHEMA_V3,
       version: DOCUMENT_VERSION_V3,
+      name: source.name,
+      units: source.units,
+      parameters: source.parameters,
+      ...(Object.hasOwn(source, "materials")
+        ? { materials: source.materials }
+        : {}),
+      ...(Object.hasOwn(source, "configurations")
+        ? { configurations: source.configurations }
+        : {}),
+      nodes: source.nodes,
+      outputs: source.outputs,
+      ...(Object.hasOwn(source, "metadata")
+        ? { metadata: source.metadata }
+        : {}),
+      ...(source.version === DOCUMENT_VERSION_V2 &&
+      Object.hasOwn(source, "topologyReferences")
+        ? { topologyReferences: source.topologyReferences }
+        : {}),
     },
     options,
   );
