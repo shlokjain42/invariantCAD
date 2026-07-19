@@ -413,6 +413,14 @@ export function adoptOcctControlledPipeShell<T>(
           "PipeShell report.takeResultId() returned reserved result ID 0",
         );
       }
+      if (
+        resultId === options.profileWireId ||
+        resultId === options.spineWireId
+      ) {
+        protocolError(
+          "PipeShell report.takeResultId() returned an operand-aliasing result ID",
+        );
+      }
       resultToRelease = resultId;
       transferred = Object.freeze({ resultId, report: reportSnapshot });
     } finally {

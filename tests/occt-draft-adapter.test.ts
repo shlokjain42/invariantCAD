@@ -587,6 +587,21 @@ describe("raw OCCT atomic draft ownership", () => {
     expect(request.kernel.release).not.toHaveBeenCalled();
   });
 
+  it("rejects transferred IDs that alias the draft input or face seeds", () => {
+    for (const resultId of [7, 11, 12]) {
+      const fixture = exactModule();
+      fixture.report.takeResultId.mockReturnValue(resultId);
+      const request = options(fixture.module, vi.fn());
+
+      expect(() => adoptOcctDraft(request)).toThrow(
+        "operand-aliasing result ID",
+      );
+      expect(request.adopt).not.toHaveBeenCalled();
+      expect(fixture.report.delete).toHaveBeenCalledTimes(1);
+      expect(request.kernel.release).not.toHaveBeenCalled();
+    }
+  });
+
   it("releases the transferred root exactly once when adoption throws", () => {
     const fixture = exactModule();
     const request = options(fixture.module, vi.fn(() => {

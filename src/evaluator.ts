@@ -1520,7 +1520,13 @@ export class Evaluator {
         );
       }
 
-      if (capability === "draft" || capability === "boolean") {
+      if (
+        capability === "draft" ||
+        capability === "boolean" ||
+        capability === "fillet" ||
+        capability === "chamfer"
+      ) {
+        const requiresEdges = capability !== "draft";
         const topology: unknown = this.kernel.capabilities.topology;
         const topologyProvenance = (
           topology as { readonly provenance?: unknown } | undefined
@@ -1532,7 +1538,7 @@ export class Evaluator {
           !(topology as { readonly kinds: readonly unknown[] }).kinds.includes(
             "face",
           ) ||
-          (capability === "boolean" &&
+          (requiresEdges &&
             !(topology as { readonly kinds: readonly unknown[] }).kinds.includes(
               "edge",
             )) ||
@@ -1541,10 +1547,10 @@ export class Evaluator {
           typeof this.kernel.topology !== "function"
         ) {
           protocolViolation(
-            `${capability} evolution requires ${capability === "boolean" ? "face and edge" : "face"} topology with feature provenance`,
+            `${capability} evolution requires ${requiresEdges ? "face and edge" : "face"} topology with feature-or-history provenance`,
             {
               requiredTopologyKinds:
-                capability === "boolean" ? ["face", "edge"] : ["face"],
+                requiresEdges ? ["face", "edge"] : ["face"],
               requiredTopologyProvenance: "feature-or-history",
             },
           );
@@ -2201,6 +2207,7 @@ export class Evaluator {
             break;
           case "fillet": {
             requireKernelCapability("feature", "fillet", id);
+            requireExactIndexedTopologyEvolution("fillet", id, true);
             const selected = resolveSelectedTopology(
               id,
               "edges",
@@ -2220,6 +2227,7 @@ export class Evaluator {
           }
           case "chamfer": {
             requireKernelCapability("feature", "chamfer", id);
+            requireExactIndexedTopologyEvolution("chamfer", id, true);
             const selected = resolveSelectedTopology(
               id,
               "edges",

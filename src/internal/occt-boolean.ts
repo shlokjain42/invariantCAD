@@ -665,6 +665,9 @@ export function adoptOcctBoolean<T>(options: AdoptOcctBooleanOptions<T>): T {
       if (resultId === 0) {
         protocolError("report.takeResultId() returned reserved result ID 0");
       }
+      if (resultId === options.targetId || toolIds.includes(resultId)) {
+        protocolError("report.takeResultId() returned an operand-aliasing result ID");
+      }
       resultToRelease = resultId;
       transferred = Object.freeze({ resultId, report: snapshot });
     } finally {

@@ -67,8 +67,8 @@ export interface ReduceCompleteIndexedTopologyEvolutionOptions
   extends ReduceIndexedTopologyEvolutionOptions {
   /**
    * Whether source-less CREATED records are valid for this feature profile.
-   * Exact Boolean history permits them only for higher-order result topology
-   * that no individual operand's native history can attribute.
+   * Exact topology-changing features permit them only for residual result
+   * topology that native source history cannot causally attribute.
    */
   readonly allowCreated?: boolean;
 }

@@ -593,6 +593,11 @@ export function adoptOcctDraft<T>(options: AdoptOcctDraftOptions<T>): T {
       if (resultId === 0) {
         facadeProtocolError("report.takeResultId() returned reserved result ID 0");
       }
+      if (resultId === options.shapeId || faceIds.includes(resultId)) {
+        facadeProtocolError(
+          "report.takeResultId() returned an operand-aliasing result ID",
+        );
+      }
       resultToRelease = resultId;
       transferred = Object.freeze({
         resultId,

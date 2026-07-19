@@ -3,6 +3,7 @@ import {
   OCCT_BOOLEAN_FACADE_VERSION,
   OCCT_CONTROLLED_PIPE_SHELL_FACADE_VERSION,
   OCCT_DRAFT_FACADE_VERSION,
+  OCCT_EDGE_TREATMENT_FACADE_VERSION,
   OcctFacadeProtocolError,
   probeOcctDraftFacade,
   probeOcctFacade,
@@ -57,6 +58,21 @@ function booleanModule() {
   };
 }
 
+function edgeTreatmentModule() {
+  return {
+    ...booleanModule(),
+    InvariantCadEdgeTreatmentOperation: {
+      FILLET: 0,
+      CHAMFER: 1,
+    },
+    InvariantCadEdgeTreatmentReport: class {},
+    invariantcadFacadeVersion: vi.fn(
+      () => OCCT_EDGE_TREATMENT_FACADE_VERSION,
+    ),
+    invariantcadEdgeTreatmentAtomic: vi.fn(),
+  };
+}
+
 describe("owned OCCT facade capability probe", () => {
   it("classifies marker-free stock without trusting unrelated constructors", () => {
     expect(
@@ -78,6 +94,7 @@ describe("owned OCCT facade capability probe", () => {
       draft: module,
       pipeShell: undefined,
       boolean: undefined,
+      edgeTreatment: undefined,
     });
     expect(Object.isFrozen(facade)).toBe(true);
     expect(probeOcctDraftFacade(module)).toBe(module);
@@ -94,6 +111,7 @@ describe("owned OCCT facade capability probe", () => {
       draft: module,
       pipeShell: module,
       boolean: undefined,
+      edgeTreatment: undefined,
     });
     expect(Object.isFrozen(facade)).toBe(true);
     expect(probeOcctDraftFacade(module)).toBe(module);
@@ -110,6 +128,24 @@ describe("owned OCCT facade capability probe", () => {
       draft: module,
       pipeShell: module,
       boolean: module,
+      edgeTreatment: undefined,
+    });
+    expect(Object.isFrozen(facade)).toBe(true);
+    expect(probeOcctDraftFacade(module)).toBe(module);
+  });
+
+  it("recognizes exact 0.5 as the complete edge-treatment facade", () => {
+    const module = edgeTreatmentModule();
+    const facade = probeOcctFacade(module);
+
+    expect(facade).toEqual({
+      abi: "0.5",
+      version: OCCT_EDGE_TREATMENT_FACADE_VERSION,
+      module,
+      draft: module,
+      pipeShell: module,
+      boolean: module,
+      edgeTreatment: module,
     });
     expect(Object.isFrozen(facade)).toBe(true);
     expect(probeOcctDraftFacade(module)).toBe(module);
@@ -132,12 +168,21 @@ describe("owned OCCT facade capability probe", () => {
       OcctFacadeProtocolError,
     );
 
+    const partialEdgeTreatment = {
+      ...booleanModule(),
+      InvariantCadEdgeTreatmentReport: class {},
+      invariantcadEdgeTreatmentAtomic: vi.fn(),
+    };
+    expect(() => probeOcctFacade(partialEdgeTreatment)).toThrow(
+      OcctFacadeProtocolError,
+    );
+
     const extra = {
       ...booleanModule(),
       invariantcadFutureCapability: vi.fn(),
     };
     expect(() => probeOcctFacade(extra)).toThrow(
-      "expected exact ABI 0.2, 0.3, or 0.4",
+      "expected exact ABI 0.2, 0.3, 0.4, or 0.5",
     );
 
     const differentlyCasedUnknown = {
@@ -182,6 +227,22 @@ describe("owned OCCT facade capability probe", () => {
       `expected '${OCCT_BOOLEAN_FACADE_VERSION}'`,
     );
 
+    const booleanMarkersEdgeTreatmentVersion = booleanModule();
+    booleanMarkersEdgeTreatmentVersion.invariantcadFacadeVersion.mockReturnValue(
+      OCCT_EDGE_TREATMENT_FACADE_VERSION,
+    );
+    expect(() => probeOcctFacade(booleanMarkersEdgeTreatmentVersion)).toThrow(
+      `expected '${OCCT_BOOLEAN_FACADE_VERSION}'`,
+    );
+
+    const edgeTreatmentMarkersBooleanVersion = edgeTreatmentModule();
+    edgeTreatmentMarkersBooleanVersion.invariantcadFacadeVersion.mockReturnValue(
+      OCCT_BOOLEAN_FACADE_VERSION,
+    );
+    expect(() => probeOcctFacade(edgeTreatmentMarkersBooleanVersion)).toThrow(
+      `expected '${OCCT_EDGE_TREATMENT_FACADE_VERSION}'`,
+    );
+
     const wrongGlobal = controlledPipeShellModule();
     wrongGlobal.invariantcadPipeShellSolid = 7 as unknown as typeof wrongGlobal.invariantcadPipeShellSolid;
     expect(() => probeOcctFacade(wrongGlobal)).toThrow(
@@ -206,6 +267,20 @@ describe("owned OCCT facade capability probe", () => {
       {} as typeof wrongBooleanClass.InvariantCadBooleanReport;
     expect(() => probeOcctFacade(wrongBooleanClass)).toThrow(
       "InvariantCadBooleanReport must be an Embind class marker",
+    );
+
+    const wrongEdgeTreatmentGlobal = edgeTreatmentModule();
+    wrongEdgeTreatmentGlobal.invariantcadEdgeTreatmentAtomic =
+      7 as unknown as typeof wrongEdgeTreatmentGlobal.invariantcadEdgeTreatmentAtomic;
+    expect(() => probeOcctFacade(wrongEdgeTreatmentGlobal)).toThrow(
+      "invariantcadEdgeTreatmentAtomic must be a function",
+    );
+
+    const wrongEdgeTreatmentClass = edgeTreatmentModule();
+    wrongEdgeTreatmentClass.InvariantCadEdgeTreatmentReport =
+      {} as typeof wrongEdgeTreatmentClass.InvariantCadEdgeTreatmentReport;
+    expect(() => probeOcctFacade(wrongEdgeTreatmentClass)).toThrow(
+      "InvariantCadEdgeTreatmentReport must be an Embind class marker",
     );
   });
 
@@ -264,6 +339,38 @@ describe("owned OCCT facade capability probe", () => {
     } as unknown as number;
     expect(() => probeOcctFacade(wrappedValue)).toThrow(
       "InvariantCadBooleanOperation.UNION must be the number 0",
+    );
+  });
+
+  it("keeps the edge-treatment operation enum exact", () => {
+    const extraMember = edgeTreatmentModule();
+    Object.assign(extraMember.InvariantCadEdgeTreatmentOperation, { DRAFT: 2 });
+    expect(() => probeOcctFacade(extraMember)).toThrow(
+      "InvariantCadEdgeTreatmentOperation members",
+    );
+
+    const missingMember = edgeTreatmentModule();
+    delete (
+      missingMember.InvariantCadEdgeTreatmentOperation as Partial<
+        typeof missingMember.InvariantCadEdgeTreatmentOperation
+      >
+    ).CHAMFER;
+    expect(() => probeOcctFacade(missingMember)).toThrow(
+      "InvariantCadEdgeTreatmentOperation members",
+    );
+
+    const wrongValue = edgeTreatmentModule();
+    wrongValue.InvariantCadEdgeTreatmentOperation.CHAMFER = 7;
+    expect(() => probeOcctFacade(wrongValue)).toThrow(
+      "InvariantCadEdgeTreatmentOperation.CHAMFER must be the number 1",
+    );
+
+    const wrappedValue = edgeTreatmentModule();
+    wrappedValue.InvariantCadEdgeTreatmentOperation.FILLET = {
+      value: 0,
+    } as unknown as number;
+    expect(() => probeOcctFacade(wrappedValue)).toThrow(
+      "InvariantCadEdgeTreatmentOperation.FILLET must be the number 0",
     );
   });
 });

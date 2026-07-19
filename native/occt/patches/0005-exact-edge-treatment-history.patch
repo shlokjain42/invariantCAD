@@ -1,0 +1,1292 @@
+diff --git a/facade/include/occt_kernel.h b/facade/include/occt_kernel.h
+index b57d67c..ec5d0a7 100644
+--- a/facade/include/occt_kernel.h
++++ b/facade/include/occt_kernel.h
+@@ -18,10 +18,11 @@
+ class OcctKernel;
+ struct InvariantCadDraftTransferState;
+ struct InvariantCadBooleanTransferState;
++struct InvariantCadEdgeTreatmentTransferState;
+ struct InvariantCadPipeShellTransferState;
+ 
+ /// Evaluation-scoped topology kinds used by the indexed evolution ABI.
+-/// These numeric values are stable across facade ABI 0.4.x.
++/// These numeric values are stable across facade ABI 0.5.x.
+ enum InvariantCadTopologyKind : int {
+     InvariantCadTopologyKindNone = -1,
+     InvariantCadTopologyKindFace = 0,
+@@ -30,9 +31,9 @@ enum InvariantCadTopologyKind : int {
+ };
+ 
+ /// Source-to-result relations used by the generic indexed evolution envelope.
+-/// Atomic draft emits only Preserved and Modified records. Exact Boolean emits
+-/// Preserved, Modified, Generated, Deleted, and source-less Created for result
+-/// topology that emerges only from higher-order interactions among operands.
++/// Atomic draft emits only Preserved and Modified records. Exact Boolean,
++/// fillet, and chamfer may emit the complete relation vocabulary, including
++/// source-less Created for result topology that native history cannot attribute.
+ enum InvariantCadTopologyRelation : int {
+     InvariantCadTopologyRelationPreserved = 0,
+     InvariantCadTopologyRelationModified = 1,
+@@ -48,6 +49,12 @@ enum InvariantCadBooleanOperation : int {
+     InvariantCadBooleanOperationIntersect = 2,
+ };
+ 
++/// Constant-radius edge-treatment operation codes used by facade ABI 0.5.
++enum InvariantCadEdgeTreatmentOperation : int {
++    InvariantCadEdgeTreatmentOperationFillet = 0,
++    InvariantCadEdgeTreatmentOperationChamfer = 1,
++};
++
+ /// Number of unique located subshapes indexed by TopExp::MapShapes for each
+ /// topology kind. Orientation occurrences are deliberately not separate IDs;
+ /// however, the canonical input/result occurrences' orientations participate
+@@ -221,6 +228,73 @@ struct InvariantCadBooleanReport {
+         std::vector<uint32_t> toolIds, int maxHistoryRecords);
+ };
+ 
++/// Transactional result of one exact constant-radius fillet or equal-distance
++/// chamfer. Selected edge indices remain evaluation-scoped diagnostics; the
++/// complete history covers the entire single input shape and aggregate result.
++struct InvariantCadEdgeTreatmentReport {
++    bool ok = false;
++    std::string stage = "validation";
++    std::string code = "INTERNAL_ERROR";
++    std::string message;
++    int operation = -1;
++    double amount = 0.0;
++    int requestedSeedCount = 0;
++    int addCount = 0;
++    int skippedSeedCount = 0;
++    int contourCount = 0;
++    int buildCount = 0;
++    int failedSeedIndex = -1;
++    std::string historyProblemDomain = "none";
++    int historyProblemSourceShapeIndex = -1;
++    int historyProblemKind = InvariantCadTopologyKindNone;
++    int historyProblemIndex = -1;
++
++    InvariantCadEdgeTreatmentReport() = default;
++    InvariantCadEdgeTreatmentReport(const InvariantCadEdgeTreatmentReport&) = default;
++    InvariantCadEdgeTreatmentReport& operator=(const InvariantCadEdgeTreatmentReport&) = default;
++    InvariantCadEdgeTreatmentReport(InvariantCadEdgeTreatmentReport&&) noexcept = default;
++    InvariantCadEdgeTreatmentReport& operator=(InvariantCadEdgeTreatmentReport&&) noexcept = default;
++
++    bool getOk() const { return ok; }
++    std::string getStage() const { return stage; }
++    std::string getCode() const { return code; }
++    std::string getMessage() const { return message; }
++    int getOperation() const { return operation; }
++    double getAmount() const { return amount; }
++    int getRequestedSeedCount() const { return requestedSeedCount; }
++    int getAddCount() const { return addCount; }
++    int getSkippedSeedCount() const { return skippedSeedCount; }
++    int getContourCount() const { return contourCount; }
++    int getBuildCount() const { return buildCount; }
++    int getFailedSeedIndex() const { return failedSeedIndex; }
++    std::string getHistoryProblemDomain() const { return historyProblemDomain; }
++    int getHistoryProblemSourceShapeIndex() const { return historyProblemSourceShapeIndex; }
++    int getHistoryProblemKind() const { return historyProblemKind; }
++    int getHistoryProblemIndex() const { return historyProblemIndex; }
++
++    int selectedEdgeCount() const;
++    int selectedEdgeIndex(int selectedIndex) const;
++    uint32_t takeResultId(OcctKernel& kernel);
++    bool hasResult() const;
++    std::string transferCode(const OcctKernel& kernel) const;
++
++    int topologyHistoryVersion() const;
++    bool topologyHistoryComplete() const;
++    int topologyInputShapeCount() const;
++    InvariantCadTopologyCounts topologyInputCounts(int sourceShapeIndex) const;
++    InvariantCadTopologyCounts topologyResultCounts() const;
++    int topologyRecordCount() const;
++    InvariantCadTopologyEvolutionRecord topologyRecord(int recordIndex) const;
++
++  private:
++    std::vector<int> selectedEdgeIndices_;
++    std::shared_ptr<InvariantCadEdgeTreatmentTransferState> transfer_;
++
++    friend InvariantCadEdgeTreatmentReport invariantcadEdgeTreatmentAtomic(
++        OcctKernel& kernel, int operation, uint32_t inputId,
++        std::vector<uint32_t> edgeIds, double amount, int maxHistoryRecords);
++};
++
+ /// Transactional result of the controlled InvariantCAD PipeShell facade.
+ /// A successful untaken report owns its result outside the kernel arena.
+ struct InvariantCadPipeShellReport {
+@@ -276,6 +350,12 @@ InvariantCadBooleanReport invariantcadBooleanAtomic(
+     OcctKernel& kernel, int operation, uint32_t targetId,
+     std::vector<uint32_t> toolIds, int maxHistoryRecords);
+ 
++/// Builds one constant-radius fillet or equal-distance chamfer on the authored
++/// edge seeds and proves complete single-input face/edge/vertex evolution.
++InvariantCadEdgeTreatmentReport invariantcadEdgeTreatmentAtomic(
++    OcctKernel& kernel, int operation, uint32_t inputId,
++    std::vector<uint32_t> edgeIds, double amount, int maxHistoryRecords);
++
+ /// Builds one corrected-Frenet, right-corner solid PipeShell with explicit
+ /// native tolerances. The report exposes OCCT's measured surface error and
+ /// retains the result outside the arena until a checked one-shot transfer.
+@@ -718,6 +798,7 @@ class OcctKernel {
+   private:
+     friend struct InvariantCadDraftReport;
+     friend struct InvariantCadBooleanReport;
++    friend struct InvariantCadEdgeTreatmentReport;
+     friend struct InvariantCadPipeShellReport;
+     friend InvariantCadDraftReport invariantcadDraftFacesAtomic(
+         OcctKernel& kernel, uint32_t shapeId, std::vector<uint32_t> faceIds, double angleRad,
+@@ -730,6 +811,9 @@ class OcctKernel {
+     friend InvariantCadBooleanReport invariantcadBooleanAtomic(
+         OcctKernel& kernel, int operation, uint32_t targetId,
+         std::vector<uint32_t> toolIds, int maxHistoryRecords);
++    friend InvariantCadEdgeTreatmentReport invariantcadEdgeTreatmentAtomic(
++        OcctKernel& kernel, int operation, uint32_t inputId,
++        std::vector<uint32_t> edgeIds, double amount, int maxHistoryRecords);
+     uint32_t store(const TopoDS_Shape& shape);
+     uint32_t invariantcadStoreTransferredShape(const TopoDS_Shape& shape);
+     const TopoDS_Shape& get(uint32_t id) const;
+diff --git a/facade/src/invariantcad_bindings.cpp b/facade/src/invariantcad_bindings.cpp
+index 83e44ee..0f33625 100644
+--- a/facade/src/invariantcad_bindings.cpp
++++ b/facade/src/invariantcad_bindings.cpp
+@@ -30,6 +30,11 @@ EMSCRIPTEN_BINDINGS(invariantcad_facade) {
+         .value("SUBTRACT", InvariantCadBooleanOperationSubtract)
+         .value("INTERSECT", InvariantCadBooleanOperationIntersect);
+ 
++    enum_<InvariantCadEdgeTreatmentOperation>("InvariantCadEdgeTreatmentOperation",
++                                              enum_value_type::number)
++        .value("FILLET", InvariantCadEdgeTreatmentOperationFillet)
++        .value("CHAMFER", InvariantCadEdgeTreatmentOperationChamfer);
++
+     value_object<InvariantCadTopologyCounts>("InvariantCadTopologyCounts")
+         .field("faces", &InvariantCadTopologyCounts::faces)
+         .field("edges", &InvariantCadTopologyCounts::edges)
+@@ -97,6 +102,46 @@ EMSCRIPTEN_BINDINGS(invariantcad_facade) {
+         .function("topologyRecord", &InvariantCadBooleanReport::topologyRecord)
+         .function("takeResultId", &InvariantCadBooleanReport::takeResultId);
+ 
++    class_<InvariantCadEdgeTreatmentReport>("InvariantCadEdgeTreatmentReport")
++        .property("ok", &InvariantCadEdgeTreatmentReport::getOk)
++        .property("stage", &InvariantCadEdgeTreatmentReport::getStage)
++        .property("code", &InvariantCadEdgeTreatmentReport::getCode)
++        .property("message", &InvariantCadEdgeTreatmentReport::getMessage)
++        .property("operation", &InvariantCadEdgeTreatmentReport::getOperation)
++        .property("amount", &InvariantCadEdgeTreatmentReport::getAmount)
++        .property("requestedSeedCount", &InvariantCadEdgeTreatmentReport::getRequestedSeedCount)
++        .property("addCount", &InvariantCadEdgeTreatmentReport::getAddCount)
++        .property("skippedSeedCount", &InvariantCadEdgeTreatmentReport::getSkippedSeedCount)
++        .property("contourCount", &InvariantCadEdgeTreatmentReport::getContourCount)
++        .property("buildCount", &InvariantCadEdgeTreatmentReport::getBuildCount)
++        .property("failedSeedIndex", &InvariantCadEdgeTreatmentReport::getFailedSeedIndex)
++        .property("historyProblemDomain",
++                  &InvariantCadEdgeTreatmentReport::getHistoryProblemDomain)
++        .property("historyProblemSourceShapeIndex",
++                  &InvariantCadEdgeTreatmentReport::getHistoryProblemSourceShapeIndex)
++        .property("historyProblemKind",
++                  &InvariantCadEdgeTreatmentReport::getHistoryProblemKind)
++        .property("historyProblemIndex",
++                  &InvariantCadEdgeTreatmentReport::getHistoryProblemIndex)
++        .function("selectedEdgeCount", &InvariantCadEdgeTreatmentReport::selectedEdgeCount)
++        .function("selectedEdgeIndex", &InvariantCadEdgeTreatmentReport::selectedEdgeIndex)
++        .function("hasResult", &InvariantCadEdgeTreatmentReport::hasResult)
++        .function("transferCode", &InvariantCadEdgeTreatmentReport::transferCode)
++        .function("topologyHistoryVersion",
++                  &InvariantCadEdgeTreatmentReport::topologyHistoryVersion)
++        .function("topologyHistoryComplete",
++                  &InvariantCadEdgeTreatmentReport::topologyHistoryComplete)
++        .function("topologyInputShapeCount",
++                  &InvariantCadEdgeTreatmentReport::topologyInputShapeCount)
++        .function("topologyInputCounts",
++                  &InvariantCadEdgeTreatmentReport::topologyInputCounts)
++        .function("topologyResultCounts",
++                  &InvariantCadEdgeTreatmentReport::topologyResultCounts)
++        .function("topologyRecordCount",
++                  &InvariantCadEdgeTreatmentReport::topologyRecordCount)
++        .function("topologyRecord", &InvariantCadEdgeTreatmentReport::topologyRecord)
++        .function("takeResultId", &InvariantCadEdgeTreatmentReport::takeResultId);
++
+     class_<InvariantCadPipeShellReport>("InvariantCadPipeShellReport")
+         .property("ok", &InvariantCadPipeShellReport::getOk)
+         .property("stage", &InvariantCadPipeShellReport::getStage)
+@@ -116,5 +161,6 @@ EMSCRIPTEN_BINDINGS(invariantcad_facade) {
+     function("invariantcadFacadeVersion", &invariantcadFacadeVersion);
+     function("invariantcadDraftFacesAtomic", &invariantcadDraftFacesAtomic);
+     function("invariantcadBooleanAtomic", &invariantcadBooleanAtomic);
++    function("invariantcadEdgeTreatmentAtomic", &invariantcadEdgeTreatmentAtomic);
+     function("invariantcadPipeShellSolid", &invariantcadPipeShellSolid);
+ }
+diff --git a/facade/src/invariantcad_facade.cpp b/facade/src/invariantcad_facade.cpp
+index 9b369da..2a89923 100644
+--- a/facade/src/invariantcad_facade.cpp
++++ b/facade/src/invariantcad_facade.cpp
+@@ -13,6 +13,8 @@
+ #include <BRepAlgoAPI_Fuse.hxx>
+ #include <BRepBuilderAPI_Copy.hxx>
+ #include <BRepBuilderAPI_TransitionMode.hxx>
++#include <BRepFilletAPI_MakeChamfer.hxx>
++#include <BRepFilletAPI_MakeFillet.hxx>
+ #include <BRepOffsetAPI_DraftAngle.hxx>
+ #include <BRepOffsetAPI_MakePipeShell.hxx>
+ #include <BRepTools_History.hxx>
+@@ -23,6 +25,7 @@
+ #include <TopExp.hxx>
+ #include <TopTools_ShapeMapHasher.hxx>
+ #include <TopoDS.hxx>
++#include <TopoDS_Iterator.hxx>
+ #include <algorithm>
+ #include <cmath>
+ #include <gp.hxx>
+@@ -58,6 +61,13 @@ struct InvariantCadBooleanTransferState {
+     InvariantCadIndexedTopologyEvolution topologyHistory;
+ };
+ 
++struct InvariantCadEdgeTreatmentTransferState {
++    TopoDS_Shape result;
++    uint64_t kernelInstanceToken = 0;
++    bool transferred = false;
++    InvariantCadIndexedTopologyEvolution topologyHistory;
++};
++
+ struct InvariantCadPipeShellTransferState {
+     TopoDS_Shape result;
+     uint64_t kernelInstanceToken = 0;
+@@ -304,7 +314,7 @@ struct IndexedOperandTopology {
+     IndexedShapeMap vertices;
+ };
+ 
+-struct BooleanOperandCopy {
++struct TopologyOperandCopy {
+     std::unique_ptr<BRepBuilderAPI_Copy> copier;
+     TopoDS_Shape shape;
+ };
+@@ -315,7 +325,7 @@ struct ClaimedResultTopology {
+     std::vector<bool> vertices;
+ };
+ 
+-IndexedOperandTopology indexBooleanOperand(const TopoDS_Shape& shape,
++IndexedOperandTopology indexOperandTopology(const TopoDS_Shape& shape,
+                                             int sourceShapeIndex,
+                                             const char* problemDomain) {
+     IndexedOperandTopology topology;
+@@ -341,13 +351,13 @@ const IndexedShapeMap& mapForKind(const IndexedOperandTopology& topology, int ki
+ 
+ int kindForShape(const TopoDS_Shape& shape);
+ 
+-TopoDS_Shape copiedBooleanSource(
+-    const BooleanOperandCopy& operandCopy, const TopoDS_Shape& originalSource,
++TopoDS_Shape copiedTopologySource(
++    const TopologyOperandCopy& operandCopy, const TopoDS_Shape& originalSource,
+     int sourceShapeIndex, int sourceKind, int sourceIndex) {
+     if (operandCopy.copier == nullptr) {
+         throw HistoryContractError(
+             "HISTORY_COPY_UNAVAILABLE",
+-            "Boolean operand copy mapping is unavailable", sourceKind,
++            "Topology operand copy mapping is unavailable", sourceKind,
+             sourceIndex, "source", sourceShapeIndex);
+     }
+ 
+@@ -357,36 +367,36 @@ TopoDS_Shape copiedBooleanSource(
+     } catch (const Standard_Failure&) {
+         throw HistoryContractError(
+             "HISTORY_COPY_SUCCESSOR_OCCT_EXCEPTION",
+-            "OCCT raised while resolving a copied Boolean source", sourceKind,
++            "OCCT raised while resolving a copied topology source", sourceKind,
+             sourceIndex, "source", sourceShapeIndex);
+     } catch (const std::exception&) {
+         throw HistoryContractError(
+             "HISTORY_COPY_SUCCESSOR_NATIVE_EXCEPTION",
+-            "Native code raised while resolving a copied Boolean source",
++            "Native code raised while resolving a copied topology source",
+             sourceKind, sourceIndex, "source", sourceShapeIndex);
+     } catch (...) {
+         throw HistoryContractError(
+             "HISTORY_COPY_SUCCESSOR_NATIVE_EXCEPTION",
+-            "Unknown native failure while resolving a copied Boolean source",
++            "Unknown native failure while resolving a copied topology source",
+             sourceKind, sourceIndex, "source", sourceShapeIndex);
+     }
+ 
+     if (copiedSource.IsNull()) {
+         throw HistoryContractError(
+             "HISTORY_COPY_NULL_SUCCESSOR",
+-            "Boolean operand copy returned a null topology successor",
++            "Operand copy returned a null topology successor",
+             sourceKind, sourceIndex, "source", sourceShapeIndex);
+     }
+     if (copiedSource.IsSame(originalSource)) {
+         throw HistoryContractError(
+             "HISTORY_COPY_NOT_ISOLATED",
+-            "Boolean operand copy shares topology with its source", sourceKind,
++            "Operand copy shares topology with its source", sourceKind,
+             sourceIndex, "source", sourceShapeIndex);
+     }
+     if (kindForShape(copiedSource) != sourceKind) {
+         throw HistoryContractError(
+             "HISTORY_COPY_KIND_CHANGED",
+-            "Boolean operand copy changed topology kind", sourceKind,
++            "Operand copy changed topology kind", sourceKind,
+             sourceIndex, "source", sourceShapeIndex);
+     }
+     return copiedSource;
+@@ -401,45 +411,45 @@ int kindForShape(const TopoDS_Shape& shape) {
+     }
+ }
+ 
+-using BooleanEvolutionRecordKey = std::tuple<int, int, int, int, int, int>;
++using EvolutionRecordKey = std::tuple<int, int, int, int, int, int>;
+ 
+-BooleanEvolutionRecordKey booleanEvolutionRecordKey(
++EvolutionRecordKey evolutionRecordKey(
+     const InvariantCadTopologyEvolutionRecord& record) {
+     return std::make_tuple(record.sourceShapeIndex, record.sourceKind,
+                            record.sourceIndex, record.relation,
+                            record.resultKind, record.resultIndex);
+ }
+ 
+-void appendBooleanRecord(
++void appendEvolutionRecord(
+     const InvariantCadTopologyEvolutionRecord& record, int maxHistoryRecords,
+-    std::set<BooleanEvolutionRecordKey>& uniqueRecords,
++    std::set<EvolutionRecordKey>& uniqueRecords,
+     std::vector<InvariantCadTopologyEvolutionRecord>& records) {
+-    const BooleanEvolutionRecordKey key = booleanEvolutionRecordKey(record);
++    const EvolutionRecordKey key = evolutionRecordKey(record);
+     if (uniqueRecords.find(key) != uniqueRecords.end()) {
+         return;
+     }
+     if (records.size() >= static_cast<size_t>(maxHistoryRecords)) {
+         throw HistoryContractError(
+             "HISTORY_RECORD_LIMIT_EXCEEDED",
+-            "Boolean indexed topology history exceeds the configured record limit");
++            "Indexed topology history exceeds the configured record limit");
+     }
+     uniqueRecords.insert(key);
+     records.push_back(record);
+ }
+ 
+-void claimBooleanResult(const IndexedOperandTopology& result, int resultKind,
++void claimEvolutionResult(const IndexedOperandTopology& result, int resultKind,
+                         const TopoDS_Shape& successor, int sourceShapeIndex,
+                         int sourceKind, int sourceIndex, int relation,
+                         ClaimedResultTopology& claimed,
+                         int maxHistoryRecords,
+-                        std::set<BooleanEvolutionRecordKey>& uniqueRecords,
++                        std::set<EvolutionRecordKey>& uniqueRecords,
+                         std::vector<InvariantCadTopologyEvolutionRecord>& records) {
+     const IndexedShapeMap& resultMap = mapForKind(result, resultKind);
+     const int oneBasedResultIndex = resultMap.FindIndex(successor);
+     if (oneBasedResultIndex <= 0) {
+         throw HistoryContractError(
+             "HISTORY_SUCCESSOR_NOT_IN_RESULT",
+-            "Boolean history successor is absent from the final result", sourceKind,
++            "Topology history successor is absent from the final result", sourceKind,
+             sourceIndex, "source", sourceShapeIndex);
+     }
+     const int resultIndex = oneBasedResultIndex - 1;
+@@ -453,22 +463,22 @@ void claimBooleanResult(const IndexedOperandTopology& result, int resultKind,
+     if (claimedKind == nullptr || static_cast<size_t>(resultIndex) >= claimedKind->size()) {
+         throw HistoryContractError(
+             "HISTORY_RESULT_INDEX_INVALID",
+-            "Boolean history resolved an invalid result topology index", resultKind,
++            "Topology history resolved an invalid result topology index", resultKind,
+             resultIndex, "result", -1);
+     }
+     (*claimedKind)[static_cast<size_t>(resultIndex)] = true;
+-    appendBooleanRecord(
++    appendEvolutionRecord(
+         {sourceShapeIndex, sourceKind, sourceIndex, relation, resultKind,
+          resultIndex},
+         maxHistoryRecords, uniqueRecords, records);
+ }
+ 
+-void appendBooleanSourceRecords(
++void appendNativeHistorySourceRecords(
+     const BRepTools_History& nativeHistory, const IndexedOperandTopology& result,
+     int sourceShapeIndex, int sourceKind, int sourceIndex,
+     const TopoDS_Shape& source, ClaimedResultTopology& claimed,
+     int maxHistoryRecords,
+-    std::set<BooleanEvolutionRecordKey>& uniqueRecords,
++    std::set<EvolutionRecordKey>& uniqueRecords,
+     std::vector<InvariantCadTopologyEvolutionRecord>& records) {
+     const IndexedShapeMap& sameKindResult = mapForKind(result, sourceKind);
+     const int oneBasedDirectResultIndex = sameKindResult.FindIndex(source);
+@@ -493,7 +503,7 @@ void appendBooleanSourceRecords(
+                 break;
+             }
+         }
+-        claimBooleanResult(
++        claimEvolutionResult(
+             result, sourceKind, canonicalResult, sourceShapeIndex, sourceKind,
+             sourceIndex,
+             source.IsEqual(canonicalResult) && !directReportedModified
+@@ -509,10 +519,10 @@ void appendBooleanSourceRecords(
+         if (resultKind == InvariantCadTopologyKindNone || resultKind != sourceKind) {
+             throw HistoryContractError(
+                 "HISTORY_MODIFIED_KIND_CHANGED",
+-                "Boolean modified successor changed topology kind", sourceKind,
++                "Native modified successor changed topology kind", sourceKind,
+                 sourceIndex, "source", sourceShapeIndex);
+         }
+-        claimBooleanResult(result, resultKind, successor, sourceShapeIndex,
++        claimEvolutionResult(result, resultKind, successor, sourceShapeIndex,
+                            sourceKind, sourceIndex,
+                            InvariantCadTopologyRelationModified, claimed,
+                            maxHistoryRecords, uniqueRecords, records);
+@@ -525,17 +535,17 @@ void appendBooleanSourceRecords(
+         if (resultKind == InvariantCadTopologyKindNone) {
+             throw HistoryContractError(
+                 "HISTORY_GENERATED_KIND_UNSUPPORTED",
+-                "Boolean generated successor has an unsupported topology kind",
++                "Native generated successor has an unsupported topology kind",
+                 sourceKind, sourceIndex, "source", sourceShapeIndex);
+         }
+-        claimBooleanResult(result, resultKind, successor, sourceShapeIndex,
++        claimEvolutionResult(result, resultKind, successor, sourceShapeIndex,
+                            sourceKind, sourceIndex,
+                            InvariantCadTopologyRelationGenerated, claimed,
+                            maxHistoryRecords, uniqueRecords, records);
+     }
+ 
+     if (removed && !hasIdentitySuccessor) {
+-        appendBooleanRecord(
++        appendEvolutionRecord(
+             {sourceShapeIndex, sourceKind, sourceIndex,
+              InvariantCadTopologyRelationDeleted,
+              InvariantCadTopologyKindNone, -1},
+@@ -543,20 +553,20 @@ void appendBooleanSourceRecords(
+     } else if (!hasIdentitySuccessor) {
+         throw HistoryContractError(
+             "HISTORY_SOURCE_UNCLAIMED",
+-            "Boolean source has no identity successor or deleted record", sourceKind,
++            "Source has no identity successor or deleted record", sourceKind,
+             sourceIndex, "source", sourceShapeIndex);
+     }
+ }
+ 
+-void appendUnclaimedBooleanCreatedRecords(
++void appendUnclaimedCreatedRecords(
+     int resultKind, std::vector<bool>& claimed, int maxHistoryRecords,
+-    std::set<BooleanEvolutionRecordKey>& uniqueRecords,
++    std::set<EvolutionRecordKey>& uniqueRecords,
+     std::vector<InvariantCadTopologyEvolutionRecord>& records) {
+     for (size_t resultIndex = 0; resultIndex < claimed.size(); ++resultIndex) {
+         if (claimed[resultIndex]) {
+             continue;
+         }
+-        appendBooleanRecord(
++        appendEvolutionRecord(
+             {-1, InvariantCadTopologyKindNone, -1,
+              InvariantCadTopologyRelationCreated, resultKind,
+              static_cast<int>(resultIndex)},
+@@ -573,15 +583,15 @@ bool topologyEvolutionRecordLess(const InvariantCadTopologyEvolutionRecord& firs
+                     second.relation, second.resultKind, second.resultIndex);
+ }
+ 
+-InvariantCadIndexedTopologyEvolution buildBooleanTopologyHistory(
++InvariantCadIndexedTopologyEvolution buildCompleteTopologyHistory(
+     const BRepTools_History& nativeHistory,
+     const std::vector<TopoDS_Shape>& inputShapes,
+-    const std::vector<BooleanOperandCopy>& operandCopies,
++    const std::vector<TopologyOperandCopy>& operandCopies,
+     const TopoDS_Shape& resultShape, int maxHistoryRecords) {
+     if (inputShapes.size() != operandCopies.size()) {
+         throw HistoryContractError(
+             "HISTORY_COPY_COUNT_MISMATCH",
+-            "Boolean operand copy count does not match the source count");
++            "Operand copy count does not match the source count");
+     }
+     std::vector<IndexedOperandTopology> inputs;
+     inputs.reserve(inputShapes.size());
+@@ -594,12 +604,12 @@ InvariantCadIndexedTopologyEvolution buildBooleanTopologyHistory(
+         if (sourceShapeIndex > static_cast<size_t>(std::numeric_limits<int>::max())) {
+             throw HistoryContractError(
+                 "HISTORY_INPUT_COUNT_OVERFLOW",
+-                "Boolean input shape count exceeds the ABI range");
++                "Input shape count exceeds the ABI range");
+         }
+-        inputs.push_back(indexBooleanOperand(
++        inputs.push_back(indexOperandTopology(
+             inputShapes[sourceShapeIndex], static_cast<int>(sourceShapeIndex),
+             "source"));
+-        copiedInputs.push_back(indexBooleanOperand(
++        copiedInputs.push_back(indexOperandTopology(
+             operandCopies[sourceShapeIndex].shape,
+             static_cast<int>(sourceShapeIndex), "source"));
+         const IndexedOperandTopology& input = inputs.back();
+@@ -607,7 +617,7 @@ InvariantCadIndexedTopologyEvolution buildBooleanTopologyHistory(
+             {input.faces.Extent(), input.edges.Extent(), input.vertices.Extent()});
+     }
+     const IndexedOperandTopology result =
+-        indexBooleanOperand(resultShape, -1, "result");
++        indexOperandTopology(resultShape, -1, "result");
+     history.resultCounts =
+         {result.faces.Extent(), result.edges.Extent(), result.vertices.Extent()};
+     ClaimedResultTopology claimed{
+@@ -615,7 +625,7 @@ InvariantCadIndexedTopologyEvolution buildBooleanTopologyHistory(
+         std::vector<bool>(static_cast<size_t>(result.edges.Extent()), false),
+         std::vector<bool>(static_cast<size_t>(result.vertices.Extent()), false),
+     };
+-    std::set<BooleanEvolutionRecordKey> uniqueRecords;
++    std::set<EvolutionRecordKey> uniqueRecords;
+ 
+     for (size_t sourceShapeIndex = 0; sourceShapeIndex < inputs.size();
+          ++sourceShapeIndex) {
+@@ -630,7 +640,7 @@ InvariantCadIndexedTopologyEvolution buildBooleanTopologyHistory(
+             if (sourceMap.Extent() != copiedSourceMap.Extent()) {
+                 throw HistoryContractError(
+                     "HISTORY_COPY_COUNT_CHANGED",
+-                    std::string("Boolean operand copy changed the indexed ") +
++                    std::string("Operand copy changed the indexed ") +
+                         topologyKindName(sourceKind) + " count",
+                     sourceKind, -1, "source", sourceShape);
+             }
+@@ -639,7 +649,7 @@ InvariantCadIndexedTopologyEvolution buildBooleanTopologyHistory(
+             for (int oneBasedSourceIndex = 1;
+                  oneBasedSourceIndex <= sourceMap.Extent(); ++oneBasedSourceIndex) {
+                 const int sourceIndex = oneBasedSourceIndex - 1;
+-                const TopoDS_Shape copiedSource = copiedBooleanSource(
++                const TopoDS_Shape copiedSource = copiedTopologySource(
+                     operandCopies[sourceShapeIndex],
+                     sourceMap.FindKey(oneBasedSourceIndex), sourceShape,
+                     sourceKind, sourceIndex);
+@@ -648,7 +658,7 @@ InvariantCadIndexedTopologyEvolution buildBooleanTopologyHistory(
+                 if (oneBasedCopiedSourceIndex <= 0) {
+                     throw HistoryContractError(
+                         "HISTORY_COPY_SUCCESSOR_NOT_IN_COPY",
+-                        "Copied Boolean source is absent from the copied operand",
++                        "Copied source is absent from the operand copy",
+                         sourceKind, sourceIndex, "source", sourceShape);
+                 }
+                 const size_t copiedSourceIndex =
+@@ -656,11 +666,11 @@ InvariantCadIndexedTopologyEvolution buildBooleanTopologyHistory(
+                 if (claimedCopiedSources[copiedSourceIndex]) {
+                     throw HistoryContractError(
+                         "HISTORY_COPY_SUCCESSOR_NOT_UNIQUE",
+-                        "Multiple Boolean sources resolve to one copied topology item",
++                        "Multiple sources resolve to one copied topology item",
+                         sourceKind, sourceIndex, "source", sourceShape);
+                 }
+                 claimedCopiedSources[copiedSourceIndex] = true;
+-                appendBooleanSourceRecords(
++                appendNativeHistorySourceRecords(
+                     nativeHistory, result, sourceShape, sourceKind,
+                     sourceIndex, copiedSource,
+                     claimed, maxHistoryRecords, uniqueRecords, history.records);
+@@ -668,17 +678,17 @@ InvariantCadIndexedTopologyEvolution buildBooleanTopologyHistory(
+         }
+     }
+ 
+-    // OCCT can produce higher-order topology from the interaction of multiple
+-    // tools without attributing it to any one operand. Preserve every available
+-    // native P/M/G claim first, then mark only the residual result items as
+-    // source-less CREATED by the Boolean operation.
+-    appendUnclaimedBooleanCreatedRecords(
++    // OCCT can produce higher-order topology without attributing it to any one
++    // input subshape. Preserve every available native P/M/G claim first, then
++    // mark only the residual result items as source-less CREATED by the current
++    // topology-changing operation.
++    appendUnclaimedCreatedRecords(
+         InvariantCadTopologyKindFace, claimed.faces, maxHistoryRecords,
+         uniqueRecords, history.records);
+-    appendUnclaimedBooleanCreatedRecords(
++    appendUnclaimedCreatedRecords(
+         InvariantCadTopologyKindEdge, claimed.edges, maxHistoryRecords,
+         uniqueRecords, history.records);
+-    appendUnclaimedBooleanCreatedRecords(
++    appendUnclaimedCreatedRecords(
+         InvariantCadTopologyKindVertex, claimed.vertices, maxHistoryRecords,
+         uniqueRecords, history.records);
+ 
+@@ -696,7 +706,7 @@ InvariantCadIndexedTopologyEvolution buildBooleanTopologyHistory(
+         if (!insertion.second && insertion.first->second != record.relation) {
+             throw HistoryContractError(
+                 "HISTORY_LINK_CONTRADICTION",
+-                "Boolean source/result link has conflicting relations",
++                "Source/result link has conflicting relations",
+                 record.sourceKind, record.sourceIndex, "source",
+                 record.sourceShapeIndex);
+         }
+@@ -705,7 +715,127 @@ InvariantCadIndexedTopologyEvolution buildBooleanTopologyHistory(
+         static_cast<size_t>(std::numeric_limits<int>::max())) {
+         throw HistoryContractError(
+             "HISTORY_RECORD_COUNT_OVERFLOW",
+-            "Boolean indexed topology history exceeds the ABI record range");
++            "Indexed topology history exceeds the ABI record range");
++    }
++    history.complete = true;
++    return history;
++}
++
++void appendEdgeTreatmentSourceRecords(
++    const BRepTools_History& nativeHistory,
++    const IndexedOperandTopology& result, int sourceKind, int sourceIndex,
++    const TopoDS_Shape& source, ClaimedResultTopology& claimed,
++    int maxHistoryRecords, std::set<EvolutionRecordKey>& uniqueRecords,
++    std::vector<InvariantCadTopologyEvolutionRecord>& records) {
++    appendNativeHistorySourceRecords(
++        nativeHistory, result, 0, sourceKind, sourceIndex, source, claimed,
++        maxHistoryRecords, uniqueRecords, records);
++}
++InvariantCadIndexedTopologyEvolution buildEdgeTreatmentTopologyHistory(
++    const BRepTools_History& nativeHistory, const TopoDS_Shape& inputShape,
++    const TopologyOperandCopy& operandCopy, const TopoDS_Shape& resultShape,
++    int maxHistoryRecords) {
++    const IndexedOperandTopology input =
++        indexOperandTopology(inputShape, 0, "source");
++    const IndexedOperandTopology copiedInput =
++        indexOperandTopology(operandCopy.shape, 0, "source");
++    const IndexedOperandTopology result =
++        indexOperandTopology(resultShape, -1, "result");
++
++    InvariantCadIndexedTopologyEvolution history;
++    history.version = kTopologyHistoryVersion;
++    history.inputCounts.push_back(
++        {input.faces.Extent(), input.edges.Extent(), input.vertices.Extent()});
++    history.resultCounts =
++        {result.faces.Extent(), result.edges.Extent(), result.vertices.Extent()};
++    ClaimedResultTopology claimed{
++        std::vector<bool>(static_cast<size_t>(result.faces.Extent()), false),
++        std::vector<bool>(static_cast<size_t>(result.edges.Extent()), false),
++        std::vector<bool>(static_cast<size_t>(result.vertices.Extent()), false),
++    };
++    std::set<EvolutionRecordKey> uniqueRecords;
++
++    for (const int sourceKind : {InvariantCadTopologyKindFace,
++                                 InvariantCadTopologyKindEdge,
++                                 InvariantCadTopologyKindVertex}) {
++        const IndexedShapeMap& sourceMap = mapForKind(input, sourceKind);
++        const IndexedShapeMap& copiedSourceMap = mapForKind(copiedInput, sourceKind);
++        if (sourceMap.Extent() != copiedSourceMap.Extent()) {
++            throw HistoryContractError(
++                "HISTORY_COPY_COUNT_CHANGED",
++                std::string("Edge-treatment operand copy changed the indexed ") +
++                    topologyKindName(sourceKind) + " count",
++                sourceKind, -1, "source", 0);
++        }
++        std::vector<bool> claimedCopiedSources(
++            static_cast<size_t>(copiedSourceMap.Extent()), false);
++        for (int oneBasedSourceIndex = 1;
++             oneBasedSourceIndex <= sourceMap.Extent(); ++oneBasedSourceIndex) {
++            const int sourceIndex = oneBasedSourceIndex - 1;
++            const TopoDS_Shape copiedSource = copiedTopologySource(
++                operandCopy, sourceMap.FindKey(oneBasedSourceIndex), 0,
++                sourceKind, sourceIndex);
++            const int oneBasedCopiedSourceIndex =
++                copiedSourceMap.FindIndex(copiedSource);
++            if (oneBasedCopiedSourceIndex <= 0) {
++                throw HistoryContractError(
++                    "HISTORY_COPY_SUCCESSOR_NOT_IN_COPY",
++                    "Copied edge-treatment source is absent from the operand copy",
++                    sourceKind, sourceIndex, "source", 0);
++            }
++            const size_t copiedSourceIndex =
++                static_cast<size_t>(oneBasedCopiedSourceIndex - 1);
++            if (claimedCopiedSources[copiedSourceIndex]) {
++                throw HistoryContractError(
++                    "HISTORY_COPY_SUCCESSOR_NOT_UNIQUE",
++                    "Multiple edge-treatment sources resolve to one copied topology item",
++                    sourceKind, sourceIndex, "source", 0);
++            }
++            claimedCopiedSources[copiedSourceIndex] = true;
++            appendEdgeTreatmentSourceRecords(
++                nativeHistory, result, sourceKind, sourceIndex, copiedSource,
++                claimed, maxHistoryRecords, uniqueRecords, history.records);
++        }
++    }
++
++    // Local-operation history intentionally does not infer ancestry for every
++    // boundary edge and vertex of a generated or split face. Preserve all
++    // native claims, then classify only the residual final topology as created
++    // by the current edge treatment.
++    appendUnclaimedCreatedRecords(
++        InvariantCadTopologyKindFace, claimed.faces, maxHistoryRecords,
++        uniqueRecords, history.records);
++    appendUnclaimedCreatedRecords(
++        InvariantCadTopologyKindEdge, claimed.edges, maxHistoryRecords,
++        uniqueRecords, history.records);
++    appendUnclaimedCreatedRecords(
++        InvariantCadTopologyKindVertex, claimed.vertices, maxHistoryRecords,
++        uniqueRecords, history.records);
++
++    std::sort(history.records.begin(), history.records.end(),
++              topologyEvolutionRecordLess);
++    std::map<std::tuple<int, int, int, int, int>, int> linkedRelations;
++    for (const InvariantCadTopologyEvolutionRecord& record : history.records) {
++        if (record.relation == InvariantCadTopologyRelationDeleted ||
++            record.relation == InvariantCadTopologyRelationCreated) {
++            continue;
++        }
++        const auto key = std::make_tuple(
++            record.sourceShapeIndex, record.sourceKind, record.sourceIndex,
++            record.resultKind, record.resultIndex);
++        const auto insertion = linkedRelations.emplace(key, record.relation);
++        if (!insertion.second && insertion.first->second != record.relation) {
++            throw HistoryContractError(
++                "HISTORY_LINK_CONTRADICTION",
++                "Edge-treatment source/result link has conflicting relations",
++                record.sourceKind, record.sourceIndex, "source", 0);
++        }
++    }
++    if (history.records.size() >
++        static_cast<size_t>(std::numeric_limits<int>::max())) {
++        throw HistoryContractError(
++            "HISTORY_RECORD_COUNT_OVERFLOW",
++            "Edge-treatment indexed topology history exceeds the ABI record range");
+     }
+     history.complete = true;
+     return history;
+@@ -741,6 +871,27 @@ TopologyCounts topologyCounts(const TopoDS_Shape& shape) {
+     };
+ }
+ 
++bool extractPureSingleSolid(const TopoDS_Shape& shape, TopoDS_Shape& solid) {
++    if (shape.IsNull()) {
++        return false;
++    }
++    if (shape.ShapeType() == TopAbs_SOLID) {
++        solid = shape;
++        return true;
++    }
++    if (shape.ShapeType() != TopAbs_COMPOUND &&
++        shape.ShapeType() != TopAbs_COMPSOLID) {
++        return false;
++    }
++    TopoDS_Iterator iterator(shape);
++    if (!iterator.More()) {
++        return false;
++    }
++    const TopoDS_Shape child = iterator.Value();
++    iterator.Next();
++    return !iterator.More() && extractPureSingleSolid(child, solid);
++}
++
+ bool hasPositiveVolume(const TopoDS_Shape& shape) {
+     GProp_GProps properties;
+     BRepGProp::VolumeProperties(shape, properties);
+@@ -880,6 +1031,63 @@ std::string InvariantCadBooleanReport::transferCode(const OcctKernel& kernel) co
+     return "READY";
+ }
+ 
++int InvariantCadEdgeTreatmentReport::selectedEdgeCount() const {
++    if (selectedEdgeIndices_.size() >
++        static_cast<size_t>(std::numeric_limits<int>::max())) {
++        throw std::overflow_error(
++            "InvariantCAD edge-treatment selection exceeds the ABI range");
++    }
++    return static_cast<int>(selectedEdgeIndices_.size());
++}
++
++int InvariantCadEdgeTreatmentReport::selectedEdgeIndex(int selectedIndex) const {
++    if (selectedIndex < 0 ||
++        static_cast<size_t>(selectedIndex) >= selectedEdgeIndices_.size()) {
++        throw std::out_of_range(
++            "InvariantCAD edge-treatment selection index is out of range");
++    }
++    return selectedEdgeIndices_[static_cast<size_t>(selectedIndex)];
++}
++
++uint32_t InvariantCadEdgeTreatmentReport::takeResultId(OcctKernel& kernel) {
++    const std::string state = transferCode(kernel);
++    if (state == "NO_RESULT") {
++        throw std::runtime_error(
++            "InvariantCAD edge-treatment report has no transferable result");
++    }
++    if (state == "ALREADY_TRANSFERRED") {
++        throw std::runtime_error(
++            "InvariantCAD edge-treatment result was already transferred");
++    }
++    if (state == "WRONG_KERNEL") {
++        throw std::runtime_error(
++            "InvariantCAD edge-treatment result belongs to another kernel instance");
++    }
++    const uint32_t resultId =
++        kernel.invariantcadStoreTransferredShape(transfer_->result);
++    transfer_->transferred = true;
++    transfer_->result.Nullify();
++    return resultId;
++}
++
++bool InvariantCadEdgeTreatmentReport::hasResult() const {
++    return transfer_ && !transfer_->transferred && !transfer_->result.IsNull();
++}
++
++std::string InvariantCadEdgeTreatmentReport::transferCode(
++    const OcctKernel& kernel) const {
++    if (!transfer_) {
++        return "NO_RESULT";
++    }
++    if (transfer_->transferred || transfer_->result.IsNull()) {
++        return "ALREADY_TRANSFERRED";
++    }
++    if (transfer_->kernelInstanceToken != kernel.invariantcadInstanceToken_) {
++        return "WRONG_KERNEL";
++    }
++    return "READY";
++}
++
+ uint32_t InvariantCadPipeShellReport::takeResultId(OcctKernel& kernel) {
+     const std::string state = transferCode(kernel);
+     if (state == "NO_RESULT") {
+@@ -1042,8 +1250,78 @@ InvariantCadTopologyEvolutionRecord InvariantCadBooleanReport::topologyRecord(
+     return transfer_->topologyHistory.records[static_cast<size_t>(recordIndex)];
+ }
+ 
++int InvariantCadEdgeTreatmentReport::topologyHistoryVersion() const {
++    return topologyHistoryComplete() ? transfer_->topologyHistory.version : 0;
++}
++
++bool InvariantCadEdgeTreatmentReport::topologyHistoryComplete() const {
++    return transfer_ && transfer_->topologyHistory.complete;
++}
++
++int InvariantCadEdgeTreatmentReport::topologyInputShapeCount() const {
++    if (!topologyHistoryComplete()) {
++        return 0;
++    }
++    if (transfer_->topologyHistory.inputCounts.size() >
++        static_cast<size_t>(std::numeric_limits<int>::max())) {
++        throw std::overflow_error(
++            "InvariantCAD edge-treatment topology input count exceeds the ABI range");
++    }
++    return static_cast<int>(transfer_->topologyHistory.inputCounts.size());
++}
++
++InvariantCadTopologyCounts InvariantCadEdgeTreatmentReport::topologyInputCounts(
++    int sourceShapeIndex) const {
++    if (!topologyHistoryComplete()) {
++        throw std::logic_error(
++            "InvariantCAD edge-treatment topology history is unavailable");
++    }
++    if (sourceShapeIndex < 0 ||
++        static_cast<size_t>(sourceShapeIndex) >=
++            transfer_->topologyHistory.inputCounts.size()) {
++        throw std::out_of_range(
++            "InvariantCAD edge-treatment topology input shape index is out of range");
++    }
++    return transfer_->topologyHistory.inputCounts[
++        static_cast<size_t>(sourceShapeIndex)];
++}
++
++InvariantCadTopologyCounts InvariantCadEdgeTreatmentReport::topologyResultCounts() const {
++    if (!topologyHistoryComplete()) {
++        throw std::logic_error(
++            "InvariantCAD edge-treatment topology history is unavailable");
++    }
++    return transfer_->topologyHistory.resultCounts;
++}
++
++int InvariantCadEdgeTreatmentReport::topologyRecordCount() const {
++    if (!topologyHistoryComplete()) {
++        return 0;
++    }
++    if (transfer_->topologyHistory.records.size() >
++        static_cast<size_t>(std::numeric_limits<int>::max())) {
++        throw std::overflow_error(
++            "InvariantCAD edge-treatment topology record count exceeds the ABI range");
++    }
++    return static_cast<int>(transfer_->topologyHistory.records.size());
++}
++
++InvariantCadTopologyEvolutionRecord InvariantCadEdgeTreatmentReport::topologyRecord(
++    int recordIndex) const {
++    if (!topologyHistoryComplete()) {
++        throw std::logic_error(
++            "InvariantCAD edge-treatment topology history is unavailable");
++    }
++    if (recordIndex < 0 ||
++        static_cast<size_t>(recordIndex) >= transfer_->topologyHistory.records.size()) {
++        throw std::out_of_range(
++            "InvariantCAD edge-treatment topology record index is out of range");
++    }
++    return transfer_->topologyHistory.records[static_cast<size_t>(recordIndex)];
++}
++
+ std::string invariantcadFacadeVersion() {
+-    return "invariantcad-facade@0.4.0+occt-wasm.3.7.0";
++    return "invariantcad-facade@0.5.0+occt-wasm.3.7.0";
+ }
+ 
+ InvariantCadBooleanReport invariantcadBooleanAtomic(
+@@ -1121,7 +1399,7 @@ InvariantCadBooleanReport invariantcadBooleanAtomic(
+     // stable. Geometry and triangulations are shared: non-destructive Boolean
+     // construction does not mutate them, while the copied TShapes isolate the
+     // status flags that TopoDS_Builder::Add changes.
+-    std::vector<BooleanOperandCopy> operandCopies;
++    std::vector<TopologyOperandCopy> operandCopies;
+     operandCopies.reserve(inputShapes.size());
+     try {
+         for (size_t sourceShapeIndex = 0; sourceShapeIndex < inputShapes.size();
+@@ -1233,8 +1511,8 @@ InvariantCadBooleanReport invariantcadBooleanAtomic(
+     InvariantCadIndexedTopologyEvolution topologyHistory;
+     try {
+         topologyHistory =
+-            buildBooleanTopologyHistory(*nativeHistory, inputShapes,
+-                                        operandCopies, result, maxHistoryRecords);
++            buildCompleteTopologyHistory(*nativeHistory, inputShapes,
++                                         operandCopies, result, maxHistoryRecords);
+     } catch (const HistoryContractError& error) {
+         InvariantCadBooleanReport report = failure("history", error.code().c_str(),
+                                                    error.what());
+@@ -1269,6 +1547,361 @@ InvariantCadBooleanReport invariantcadBooleanAtomic(
+     return report;
+ }
+ 
++InvariantCadEdgeTreatmentReport invariantcadEdgeTreatmentAtomic(
++    OcctKernel& kernel, int operation, uint32_t inputId,
++    std::vector<uint32_t> edgeIds, double amount, int maxHistoryRecords) {
++    const int requestedSeedCount =
++        edgeIds.size() < static_cast<size_t>(std::numeric_limits<int>::max())
++            ? static_cast<int>(edgeIds.size())
++            : -1;
++    int addCount = 0;
++    int skippedSeedCount = 0;
++    int contourCount = 0;
++    int buildCount = 0;
++    int failedSeedIndex = -1;
++    std::vector<int> selectedEdgeIndices;
++    auto failure = [&](const char* stage, const char* code,
++                       const std::string& message) {
++        InvariantCadEdgeTreatmentReport report;
++        report.stage = stage;
++        report.code = code;
++        report.message = message;
++        report.operation = operation;
++        report.amount = amount;
++        report.requestedSeedCount = requestedSeedCount;
++        report.addCount = addCount;
++        report.skippedSeedCount = skippedSeedCount;
++        report.contourCount = contourCount;
++        report.buildCount = buildCount;
++        report.failedSeedIndex = failedSeedIndex;
++        report.selectedEdgeIndices_ = selectedEdgeIndices;
++        return report;
++    };
++
++    if (operation != InvariantCadEdgeTreatmentOperationFillet &&
++        operation != InvariantCadEdgeTreatmentOperationChamfer) {
++        return failure("validation", "INVALID_OPERATION",
++                       "Edge-treatment operation code is not supported");
++    }
++    if (!std::isfinite(amount) || !(amount > 0.0)) {
++        return failure("validation", "INVALID_AMOUNT",
++                       "Edge-treatment amount must be finite and positive");
++    }
++    if (maxHistoryRecords < 0) {
++        return failure("validation", "INVALID_HISTORY_RECORD_LIMIT",
++                       "Edge-treatment history record limit must be non-negative");
++    }
++    if (edgeIds.empty()) {
++        return failure("validation", "EMPTY_SEED_LIST",
++                       "Edge treatment requires at least one edge seed");
++    }
++    if (requestedSeedCount < 0) {
++        return failure("validation", "SEED_COUNT_OVERFLOW",
++                       "Edge-treatment seed count exceeds the ABI range");
++    }
++
++    TopoDS_Shape inputShape;
++    try {
++        const auto input = kernel.arena_.find(inputId);
++        if (input == kernel.arena_.end()) {
++            return failure("input-validation", "SHAPE_ID_NOT_FOUND",
++                           "Edge-treatment input ID is absent from this kernel");
++        }
++        inputShape = input->second;
++    } catch (const std::exception& error) {
++        return failure("input-validation", "SHAPE_LOOKUP_FAILED", error.what());
++    } catch (...) {
++        return failure("input-validation", "SHAPE_LOOKUP_FAILED",
++                       "Unknown failure while resolving the edge-treatment input");
++    }
++    if (inputShape.IsNull()) {
++        return failure("input-validation", "NULL_INPUT_SHAPE",
++                       "Edge-treatment input is null");
++    }
++    TopoDS_Shape inputSolid;
++    if (!extractPureSingleSolid(inputShape, inputSolid)) {
++        return failure("input-validation", "INPUT_NOT_TOP_LEVEL_SOLID",
++                       "Edge-treatment input must be a pure single-solid shape");
++    }
++    try {
++        if (!BRepCheck_Analyzer(inputShape).IsValid()) {
++            return failure("input-validation", "INVALID_INPUT_SOLID",
++                           "Edge-treatment input solid is topologically invalid");
++        }
++        if (!hasPositiveVolume(inputSolid)) {
++            return failure("input-validation", "INPUT_NOT_POSITIVE_VOLUME",
++                           "Edge-treatment input must have finite positive volume");
++        }
++        if (topologyCounts(inputShape).solids != 1) {
++            return failure("input-validation", "INPUT_NOT_SINGLE_SOLID",
++                           "Edge-treatment input must contain exactly one solid");
++        }
++    } catch (const Standard_Failure& error) {
++        return failure("input-validation", "INPUT_VALIDATION_OCCT_EXCEPTION",
++                       error.GetMessageString());
++    } catch (const std::exception& error) {
++        return failure("input-validation", "INPUT_VALIDATION_NATIVE_EXCEPTION",
++                       error.what());
++    } catch (...) {
++        return failure("input-validation", "INPUT_VALIDATION_NATIVE_EXCEPTION",
++                       "Unknown failure while validating the input solid");
++    }
++
++    IndexedShapeMap inputEdges;
++    try {
++        indexTopology(inputShape, TopAbs_EDGE, InvariantCadTopologyKindEdge,
++                      "source", 0, inputEdges);
++        selectedEdgeIndices.reserve(edgeIds.size());
++        for (size_t seedIndex = 0; seedIndex < edgeIds.size(); ++seedIndex) {
++            failedSeedIndex = static_cast<int>(seedIndex);
++            const auto edge = kernel.arena_.find(edgeIds[seedIndex]);
++            if (edge == kernel.arena_.end()) {
++                return failure("seed-validation", "EDGE_ID_NOT_FOUND",
++                               "Edge-treatment seed ID is absent from this kernel");
++            }
++            if (edge->second.IsNull()) {
++                return failure("seed-validation", "NULL_EDGE_SEED",
++                               "Edge-treatment seed is null");
++            }
++            if (edge->second.ShapeType() != TopAbs_EDGE) {
++                return failure("seed-validation", "SEED_NOT_EDGE",
++                               "Edge-treatment seed is not an edge");
++            }
++            const int oneBasedEdgeIndex = inputEdges.FindIndex(edge->second);
++            if (oneBasedEdgeIndex <= 0) {
++                return failure("seed-validation", "EDGE_NOT_IN_INPUT",
++                               "Edge-treatment seed is not a member of the input solid");
++            }
++            selectedEdgeIndices.push_back(oneBasedEdgeIndex - 1);
++        }
++        std::sort(selectedEdgeIndices.begin(), selectedEdgeIndices.end());
++        selectedEdgeIndices.erase(
++            std::unique(selectedEdgeIndices.begin(), selectedEdgeIndices.end()),
++            selectedEdgeIndices.end());
++        failedSeedIndex = -1;
++    } catch (const HistoryContractError& error) {
++        return failure("seed-validation", error.code().c_str(), error.what());
++    } catch (const Standard_Failure& error) {
++        return failure("seed-validation", "SEED_VALIDATION_OCCT_EXCEPTION",
++                       error.GetMessageString());
++    } catch (const std::exception& error) {
++        return failure("seed-validation", "SEED_VALIDATION_NATIVE_EXCEPTION",
++                       error.what());
++    } catch (...) {
++        return failure("seed-validation", "SEED_VALIDATION_NATIVE_EXCEPTION",
++                       "Unknown failure while validating edge seeds");
++    }
++
++    std::vector<TopologyOperandCopy> operandCopies;
++    operandCopies.reserve(1);
++    try {
++        // Fillet/chamfer has no OCCT non-destructive mode. Copy geometry and
++        // topology so the maker cannot mutate any arena-owned support object;
++        // triangulations remain unnecessary for exact B-Rep construction.
++        auto copier = std::make_unique<BRepBuilderAPI_Copy>(inputSolid, true, false);
++        if (!copier->IsDone()) {
++            return failure("copy", "OPERAND_COPY_FAILED",
++                           "OCCT did not complete the edge-treatment operand copy");
++        }
++        const TopoDS_Shape copiedShape = copier->Shape();
++        if (copiedShape.IsNull() || copiedShape.IsSame(inputSolid)) {
++            return failure("copy", "OPERAND_COPY_NOT_ISOLATED",
++                           "OCCT did not isolate the edge-treatment operand");
++        }
++        operandCopies.push_back({std::move(copier), copiedShape});
++    } catch (const Standard_Failure& error) {
++        return failure("copy", "OPERAND_COPY_OCCT_EXCEPTION",
++                       error.GetMessageString());
++    } catch (const std::exception& error) {
++        return failure("copy", "OPERAND_COPY_NATIVE_EXCEPTION", error.what());
++    } catch (...) {
++        return failure("copy", "OPERAND_COPY_NATIVE_EXCEPTION",
++                       "Unknown failure while copying the edge-treatment operand");
++    }
++
++    std::vector<TopoDS_Edge> copiedEdges;
++    copiedEdges.reserve(selectedEdgeIndices.size());
++    try {
++        for (const int edgeIndex : selectedEdgeIndices) {
++            const TopoDS_Shape copiedEdge = copiedTopologySource(
++                operandCopies.front(), inputEdges.FindKey(edgeIndex + 1), 0,
++                InvariantCadTopologyKindEdge, edgeIndex);
++            copiedEdges.push_back(TopoDS::Edge(copiedEdge));
++        }
++    } catch (const HistoryContractError& error) {
++        return failure("copy", error.code().c_str(), error.what());
++    } catch (const Standard_Failure& error) {
++        return failure("copy", "EDGE_COPY_OCCT_EXCEPTION",
++                       error.GetMessageString());
++    } catch (const std::exception& error) {
++        return failure("copy", "EDGE_COPY_NATIVE_EXCEPTION", error.what());
++    } catch (...) {
++        return failure("copy", "EDGE_COPY_NATIVE_EXCEPTION",
++                       "Unknown failure while mapping copied edge seeds");
++    }
++
++    auto execute = [&](auto& maker) -> InvariantCadEdgeTreatmentReport {
++        try {
++            for (size_t selectedIndex = 0; selectedIndex < copiedEdges.size();
++                 ++selectedIndex) {
++                failedSeedIndex = static_cast<int>(selectedIndex);
++                if (maker.Contour(copiedEdges[selectedIndex]) > 0) {
++                    ++skippedSeedCount;
++                    continue;
++                }
++                maker.Add(amount, copiedEdges[selectedIndex]);
++                ++addCount;
++                if (maker.Contour(copiedEdges[selectedIndex]) <= 0) {
++                    return failure("seed-add", "SEED_NOT_ACCEPTED",
++                                   "OCCT did not accept an edge-treatment seed");
++                }
++            }
++            failedSeedIndex = -1;
++            contourCount = maker.NbContours();
++        } catch (const Standard_Failure& error) {
++            return failure("seed-add", "SEED_ADD_OCCT_EXCEPTION",
++                           error.GetMessageString());
++        } catch (const std::exception& error) {
++            return failure("seed-add", "SEED_ADD_NATIVE_EXCEPTION", error.what());
++        } catch (...) {
++            return failure("seed-add", "SEED_ADD_NATIVE_EXCEPTION",
++                           "Unknown failure while adding edge-treatment seeds");
++        }
++        if (contourCount <= 0 || addCount <= 0) {
++            return failure("seed-add", "NO_CONTOURS",
++                           "Edge-treatment seeds did not define any contour");
++        }
++
++        try {
++            ++buildCount;
++            maker.Build();
++        } catch (const Standard_Failure& error) {
++            return failure("build", "BUILD_OCCT_EXCEPTION",
++                           error.GetMessageString());
++        } catch (const std::exception& error) {
++            return failure("build", "BUILD_NATIVE_EXCEPTION", error.what());
++        } catch (...) {
++            return failure("build", "BUILD_NATIVE_EXCEPTION",
++                           "Unknown failure while building the edge treatment");
++        }
++        if (!maker.IsDone()) {
++            return failure("build", "BUILD_FAILED",
++                           "OCCT did not complete the edge treatment");
++        }
++
++        TopoDS_Shape makerResult;
++        try {
++            makerResult = maker.Shape();
++        } catch (const Standard_Failure& error) {
++            return failure("result-validation", "RESULT_OCCT_EXCEPTION",
++                           error.GetMessageString());
++        } catch (const std::exception& error) {
++            return failure("result-validation", "RESULT_NATIVE_EXCEPTION",
++                           error.what());
++        } catch (...) {
++            return failure("result-validation", "RESULT_NATIVE_EXCEPTION",
++                           "Unknown failure while retrieving the result");
++        }
++        if (makerResult.IsNull()) {
++            return failure("result-validation", "NULL_RESULT",
++                           "OCCT completed without an edge-treatment result");
++        }
++        TopoDS_Shape result;
++        if (!extractPureSingleSolid(makerResult, result)) {
++            return failure("result-validation", "RESULT_NOT_TOP_LEVEL_SOLID",
++                           "Edge-treatment result is not a pure single solid");
++        }
++        try {
++            if (!BRepCheck_Analyzer(result).IsValid()) {
++                return failure("result-validation", "INVALID_RESULT_SOLID",
++                               "OCCT produced a topologically invalid solid");
++            }
++            if (!hasPositiveVolume(result)) {
++                return failure("result-validation", "RESULT_NOT_POSITIVE_VOLUME",
++                               "Edge-treatment result must have finite positive volume");
++            }
++            if (topologyCounts(result).solids != 1) {
++                return failure("result-validation", "RESULT_NOT_SINGLE_SOLID",
++                               "Edge-treatment result must contain exactly one solid");
++            }
++        } catch (const Standard_Failure& error) {
++            return failure("result-validation", "RESULT_VALIDATION_OCCT_EXCEPTION",
++                           error.GetMessageString());
++        } catch (const std::exception& error) {
++            return failure("result-validation", "RESULT_VALIDATION_NATIVE_EXCEPTION",
++                           error.what());
++        } catch (...) {
++            return failure("result-validation", "RESULT_VALIDATION_NATIVE_EXCEPTION",
++                           "Unknown failure while validating the result solid");
++        }
++
++        InvariantCadIndexedTopologyEvolution topologyHistory;
++        try {
++            NCollection_List<TopoDS_Shape> arguments;
++            arguments.Append(operandCopies.front().shape);
++            const BRepTools_History nativeHistory(arguments, maker);
++            topologyHistory = buildEdgeTreatmentTopologyHistory(
++                nativeHistory, inputShape, operandCopies.front(), result,
++                maxHistoryRecords);
++        } catch (const HistoryContractError& error) {
++            InvariantCadEdgeTreatmentReport report =
++                failure("history", error.code().c_str(), error.what());
++            report.historyProblemDomain = error.problemDomain();
++            report.historyProblemSourceShapeIndex = error.sourceShapeIndex();
++            report.historyProblemKind = error.problematicKind();
++            report.historyProblemIndex = error.problematicIndex();
++            return report;
++        } catch (const Standard_Failure& error) {
++            return failure("history", "HISTORY_OCCT_EXCEPTION",
++                           error.GetMessageString());
++        } catch (const std::exception& error) {
++            return failure("history", "HISTORY_NATIVE_EXCEPTION", error.what());
++        } catch (...) {
++            return failure("history", "HISTORY_NATIVE_EXCEPTION",
++                           "Unknown failure while proving edge-treatment history");
++        }
++
++        InvariantCadEdgeTreatmentReport report;
++        report.ok = true;
++        report.stage = "complete";
++        report.code = "OK";
++        report.message =
++            "Edge-treatment result and exact indexed history are ready";
++        report.operation = operation;
++        report.amount = amount;
++        report.requestedSeedCount = requestedSeedCount;
++        report.addCount = addCount;
++        report.skippedSeedCount = skippedSeedCount;
++        report.contourCount = contourCount;
++        report.buildCount = buildCount;
++        report.failedSeedIndex = -1;
++        report.selectedEdgeIndices_ = selectedEdgeIndices;
++        report.transfer_ =
++            std::make_shared<InvariantCadEdgeTreatmentTransferState>();
++        report.transfer_->result = result;
++        report.transfer_->kernelInstanceToken = kernel.invariantcadInstanceToken_;
++        report.transfer_->topologyHistory = std::move(topologyHistory);
++        return report;
++    };
++
++    try {
++        if (operation == InvariantCadEdgeTreatmentOperationFillet) {
++            BRepFilletAPI_MakeFillet maker(operandCopies.front().shape);
++            return execute(maker);
++        }
++        BRepFilletAPI_MakeChamfer maker(operandCopies.front().shape);
++        return execute(maker);
++    } catch (const Standard_Failure& error) {
++        return failure("construction", "MAKER_OCCT_EXCEPTION",
++                       error.GetMessageString());
++    } catch (const std::exception& error) {
++        return failure("construction", "MAKER_NATIVE_EXCEPTION", error.what());
++    } catch (...) {
++        return failure("construction", "MAKER_NATIVE_EXCEPTION",
++                       "Unknown failure while constructing the edge-treatment maker");
++    }
++}
++
+ InvariantCadPipeShellReport invariantcadPipeShellSolid(
+     OcctKernel& kernel, uint32_t profileWireId, uint32_t spineWireId,
+     double tolerance3d, double boundaryTolerance, double angularTolerance) {

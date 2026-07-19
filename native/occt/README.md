@@ -54,9 +54,10 @@ the mounted cache.
 
 Patches belong in `native/occt/patches/` and should use Git's `a/` and `b/`
 path prefixes. Prefix filenames with an ordering number because lexical order is
-part of the build. Facade ABI 0.4 is the exact four-patch series
+part of the build. Facade ABI 0.5 is the exact five-patch series
 `0001-atomic-multi-face-draft.patch`, `0002-indexed-draft-history.patch`,
-`0003-controlled-pipe-shell.patch`, and `0004-exact-boolean-history.patch`.
+`0003-controlled-pipe-shell.patch`, `0004-exact-boolean-history.patch`, and
+`0005-exact-edge-treatment-history.patch`.
 
 ## Native smoke test
 
@@ -70,14 +71,15 @@ pnpm test:occt-draft-public
 ```
 
 The native fixture exercises the raw ABI, including all three exact Boolean
-operations, complete face/edge/vertex history, generated, deleted, and residual
-source-less-created topology, stale intermediate-removal cases, isolated
-working copies with byte-stable arena operands, record budgets, empty results, report cloning,
-foreign-kernel rejection, and one-shot transfer.
+operations plus fillet and chamfer, complete face/edge/vertex history,
+generated, deleted, and residual source-less-created topology, stale
+intermediate-removal cases, canonical tangent-contour seeds, isolated working
+copies with byte-stable arena operands, separate record budgets, empty Boolean
+results, report cloning, foreign-kernel rejection, and one-shot transfer.
 The public smoke loads the same generated pair through `createOcctKernel` and
-exercises direct and evaluated draft, exact Boolean lineage, plus controlled
-major multi-arc, eccentric-profile, and conditioned near-full PipeShell
-transfers. These heavyweight tests are intentionally separate from normal
+exercises direct and evaluated draft, exact Boolean and fillet/chamfer lineage,
+plus controlled major multi-arc, eccentric-profile, and conditioned near-full
+PipeShell transfers. These heavyweight tests are intentionally separate from normal
 `pnpm verify`. Generated artifacts stay under the ignored
 `.artifacts/occt-facade/` directory and are not committed or included in the
 `invariantcad` npm package.
@@ -99,11 +101,11 @@ The packager reads `.artifacts/occt-facade/` and writes both of these ignored
 outputs:
 
 ```text
-.artifacts/occt-facade-bundle/invariantcad-occt-facade-0.4.0/
-.artifacts/occt-facade-bundle/invariantcad-occt-facade-0.4.0.tar.gz
+.artifacts/occt-facade-bundle/invariantcad-occt-facade-0.5.0/
+.artifacts/occt-facade-bundle/invariantcad-occt-facade-0.5.0.tar.gz
 ```
 
-`0.4.0` is the owned facade ABI and bundle version; it is independent of the
+`0.5.0` is the owned facade ABI and bundle version; it is independent of the
 InvariantCAD npm package version and document schema version.
 
 The directory and archive have the same single-root layout. The matched pair is
@@ -121,8 +123,8 @@ publication. The verifier then checks the directory or archive without
 executing native code.
 `pnpm test:occt-facade-bundle` packages the pair, verifies both representations,
 packs the `invariantcad` npm tarball, installs it in a fresh temporary consumer,
-and explicitly points compact draft, exact Boolean, and owned
-composite-refinement checks at the bundled `runtime/` directory. The normal
+and explicitly points compact draft, exact Boolean, exact fillet/chamfer, and
+owned composite-refinement checks at the bundled `runtime/` directory. The normal
 `pnpm test:package` remains independent
 of owned-facade build artifacts. To check byte-for-byte packager determinism as
 well, run:
@@ -171,8 +173,8 @@ The version-1 evolution envelope is report-owned and immutable. It records
 `sourceShapeIndex`, `sourceKind`, `sourceIndex`, `relation`, `resultKind`, and
 `resultIndex`, so N source shapes can evolve into one aggregate result without
 changing the record shape. Draft has one source operand and emits only
-one-to-one `PRESERVED` or `MODIFIED` records. ABI 0.4 Boolean reports use the
-complete non-bijective relation set below:
+one-to-one `PRESERVED` or `MODIFIED` records. ABI 0.4 Boolean reports and ABI
+0.5 fillet/chamfer reports use the complete non-bijective relation set below:
 
 - `PRESERVED` and `MODIFIED` require a real source and result, and both endpoints
   have the same face, edge, or vertex kind.
@@ -216,7 +218,8 @@ loads a module whose exact facade probe succeeds. That factory may locate its
 matched sibling WASM itself; callers can provide `wasm` as an explicit binary
 override when their runtime or bundler requires it. ABI 0.2 and later advertise
 ordinary `draft` support and feature-scoped `exactIndexedTopologyEvolution` v1
-for draft. ABI 0.4 advertises the same protocol for both `draft` and `boolean`.
+for draft. ABI 0.4 adds `boolean`; ABI 0.5 advertises the protocol for `draft`,
+`boolean`, `fillet`, and `chamfer`.
 The global topology provenance remains `feature`; a feature-scoped proof does
 not promote unrelated operations. Default `createOcctKernel()` loads stock OCCT
 and remains usable for its other exact features, but it does not advertise or
@@ -299,12 +302,72 @@ modified. Native indices and public topology keys remain evaluation-scoped and
 are never document IDs.
 
 Exact indexed Boolean evolution is optional at the evaluator boundary. ABI 0.4
-uses it; stock OCCT, owned ABI 0.2/0.3, and Manifold continue to execute their
-base Boolean operations with partial history. Malformed advertised capability
-metadata or a malformed ABI 0.4 report is authoritative and fails closed. Empty
+and later use it; stock OCCT, owned ABI 0.2/0.3, and Manifold continue to execute
+their base Boolean operations with partial history. Malformed advertised capability
+metadata or a malformed exact report is authoritative and fails closed. Empty
 Boolean geometry follows the evaluator's ordinary `EMPTY_RESULT` / `allowEmpty`
-contract. Fillet, chamfer, shell, and offset history remains partial on every
-current backend.
+contract.
+
+Facade ABI 0.5 is additive: it retains the complete ABI 0.4 surface and adds
+`invariantcadEdgeTreatmentAtomic(kernel, operation, inputId, seedEdgeIds,
+amount, maxHistoryRecords)`. Operation codes are stable as fillet `0` and
+chamfer `1`. TypeScript deduplicates requested edge keys, maps them to the input
+topology snapshot, and sorts the resulting indices before calling native code.
+The report must echo that exact canonical seed list. Native processing admits
+the first seed on each not-yet-covered maximal tangent contour, records later
+seeds already covered by an admitted contour as skipped, and calls the selected
+fillet or chamfer builder exactly once after every contour has been staged.
+Selector cardinality is therefore seed cardinality, while duplicate and
+overlapping contour seeds are geometrically idempotent.
+
+Before any edge-treatment builder sees the operand, native code makes a deep
+independent B-Rep copy, including its curve and surface geometry. The facade
+proves a one-to-one original/copy mapping for every indexed face, edge, and
+vertex, maps canonical seeds onto the copy, and never gives the arena-owned
+operand to the builder. Successful or failed treatment therefore leaves the
+authored input BREP byte-stable.
+
+The operand may be a direct solid or a recursively nested one-child
+compound/compsolid wrapper around exactly one solid. Loose or multiple topology
+is rejected, while successful maker output is normalized to the contained
+solid. This keeps ABI 0.4 Boolean output directly composable with ABI 0.5 edge
+treatments.
+
+A successful edge-treatment report owns its result and a complete version-1
+face/edge/vertex graph from source shape `0` to that result. It retains every
+available preserved, modified, and generated relation, emits `DELETED` only
+when a source has no final same-kind identity successor, and emits source-less
+`CREATED` only for otherwise-unclaimed result topology such as new boundary
+edges, vertices, or corner interactions that OCCT does not attribute to one
+source subshape. The same exclusivity, canonicalization, sentinel, and complete
+source/result coverage rules used by the ABI 0.4 Boolean graph apply.
+
+The TypeScript edge-treatment adapter treats the report as a fail-closed
+transaction. It validates the operation and amount echoes, requested and
+selected seeds, add/skip/contour/build counters, topology counts, full graph,
+and `READY` same-kernel transfer state before taking the result. After transfer,
+it validates result counts and reduces public lineage. Only preserved/modified
+identity successors inherit prior lineage, roles, and sketch sources;
+generated-only and source-less-created topology is created by the current
+fillet or chamfer. Untaken reports release their result, and an adoption,
+cancellation, validation, or reduction failure releases a transferred root
+exactly once.
+
+`createOcctKernel` accepts a separate
+`maxExactEdgeTreatmentHistoryRecords` non-negative signed 32-bit budget, which
+defaults to `1_000_000`. Native code enforces it before materializing report
+records, and TypeScript checks the count before making any indexed JavaScript
+record call. It is independent of `maxExactBooleanHistoryRecords` and does not
+bound the mandatory copied operand or OCCT fillet/chamfer workspace.
+
+Exact indexed fillet/chamfer evolution is optional at the evaluator boundary.
+ABI 0.5 advertises it and the evaluator validates the declaration before edge
+selector resolution. Missing metadata or a well-formed declaration omitting
+the requested feature preserves the legacy partial-history route. Stock OCCT
+and owned ABI 0.2–0.4 therefore keep exact fillet/chamfer geometry with partial
+history. Malformed advertised metadata or an exact ABI 0.5 report is
+authoritative and fails closed. Shell and offset history remains partial on
+every current backend.
 
 The generated pair and its local package-neutral bundle remain ignored build
 artifacts and are not included in the `invariantcad` npm tarball. Until an

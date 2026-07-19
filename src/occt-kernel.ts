@@ -80,6 +80,14 @@ import {
   type OcctBooleanReportSnapshot,
 } from "./internal/occt-boolean.js";
 import {
+  DEFAULT_OCCT_EXACT_EDGE_TREATMENT_HISTORY_RECORD_LIMIT,
+  OcctEdgeTreatmentFacadeProtocolError,
+  adoptOcctEdgeTreatment,
+  type OcctEdgeTreatmentFacadeModule,
+  type OcctEdgeTreatmentOperation,
+  type OcctEdgeTreatmentReportSnapshot,
+} from "./internal/occt-edge-treatment.js";
+import {
   OcctDraftFacadeProtocolError,
   adoptOcctDraft,
   type OcctDraftFacadeModule,
@@ -112,7 +120,10 @@ import {
   type IndexedTopologyCounts,
 } from "./internal/topology-evolution.js";
 
-export { DEFAULT_OCCT_EXACT_BOOLEAN_HISTORY_RECORD_LIMIT };
+export {
+  DEFAULT_OCCT_EXACT_BOOLEAN_HISTORY_RECORD_LIMIT,
+  DEFAULT_OCCT_EXACT_EDGE_TREATMENT_HISTORY_RECORD_LIMIT,
+};
 
 const OCCT_SHAPE = Symbol("InvariantCAD.OcctShape");
 const TOPOLOGY_HASH_UPPER_BOUND = 2_147_483_647;
@@ -127,6 +138,23 @@ function exactBooleanHistoryRecordLimit(value: number | undefined): number {
   ) {
     throw new RangeError(
       "maxExactBooleanHistoryRecords must be a signed 32-bit non-negative integer",
+    );
+  }
+  return limit;
+}
+
+function exactEdgeTreatmentHistoryRecordLimit(
+  value: number | undefined,
+): number {
+  const limit =
+    value ?? DEFAULT_OCCT_EXACT_EDGE_TREATMENT_HISTORY_RECORD_LIMIT;
+  if (
+    !Number.isSafeInteger(limit) ||
+    limit < 0 ||
+    limit > TOPOLOGY_HASH_UPPER_BOUND
+  ) {
+    throw new RangeError(
+      "maxExactEdgeTreatmentHistoryRecords must be a signed 32-bit non-negative integer",
     );
   }
   return limit;
@@ -564,6 +592,13 @@ export interface OcctKernelOptions {
    * @default 1_000_000
    */
   readonly maxExactBooleanHistoryRecords?: number;
+  /**
+   * Maximum exact fillet/chamfer history records materialized across Wasm and
+   * JavaScript. Raise this explicit resource budget for exceptionally large
+   * models; the facade ABI ceiling is 2,147,483,647.
+   * @default 1_000_000
+   */
+  readonly maxExactEdgeTreatmentHistoryRecords?: number;
   readonly onOutput?: (message: string) => void;
   readonly onError?: (message: string) => void;
 }
@@ -607,6 +642,7 @@ class OcctKernel implements GeometryKernel {
   private readonly tessellation: MeshOptions;
   private readonly modelingTolerance: number;
   private readonly maxExactBooleanHistoryRecords: number;
+  private readonly maxExactEdgeTreatmentHistoryRecords: number;
   private readonly ownedShapes = new WeakSet<OcctShape>();
   private readonly liveShapes = new Set<OcctShape>();
   private readonly topologyNamespace = nextTopologyNamespace++;
@@ -620,12 +656,17 @@ class OcctKernel implements GeometryKernel {
     maxExactBooleanHistoryRecords = exactBooleanHistoryRecordLimit(
       options.maxExactBooleanHistoryRecords,
     ),
+    maxExactEdgeTreatmentHistoryRecords = exactEdgeTreatmentHistoryRecordLimit(
+      options.maxExactEdgeTreatmentHistoryRecords,
+    ),
   ) {
     this.raw = raw;
     this.facade = facade;
     this.tessellation = options.tessellation ?? {};
     this.modelingTolerance = options.modelingTolerance ?? 1e-7;
     this.maxExactBooleanHistoryRecords = maxExactBooleanHistoryRecords;
+    this.maxExactEdgeTreatmentHistoryRecords =
+      maxExactEdgeTreatmentHistoryRecords;
     this.capabilities = {
       ...OcctKernel.BASE_CAPABILITIES,
       ...(facade?.draft === undefined
@@ -635,7 +676,9 @@ class OcctKernel implements GeometryKernel {
             exactIndexedTopologyEvolution: {
               protocolVersion: 1 as const,
               features:
-                facade.boolean === undefined
+                facade.edgeTreatment !== undefined
+                  ? (["draft", "boolean", "fillet", "chamfer"] as const)
+                  : facade.boolean === undefined
                   ? (["draft"] as const)
                   : (["draft", "boolean"] as const),
             },
@@ -3032,6 +3075,111 @@ class OcctKernel implements GeometryKernel {
     }
   }
 
+  private selectedEdgeTreatmentTopology(
+    input: OcctShape,
+    edges: readonly KernelTopologyKey[],
+  ): {
+    readonly snapshot: KernelTopologySnapshot;
+    readonly indices: readonly number[];
+    readonly handles: readonly ShapeHandle[];
+  } {
+    const snapshot = this.topology(input);
+    const edgeIndexByKey = new Map(
+      snapshot.edges.map((descriptor, index) => [descriptor.key, index]),
+    );
+    const selected = new Set<number>();
+    for (const key of edges) {
+      const index = edgeIndexByKey.get(key);
+      const retained = input.topologyHandles.get(key);
+      if (index === undefined || retained?.topology !== "edge") {
+        throw new TypeError(
+          `Topology key '${String(key)}' is not an edge of the input shape`,
+        );
+      }
+      selected.add(index);
+    }
+    const indices = [...selected].sort((first, second) => first - second);
+    const handles = indices.map((index) => {
+      const descriptor = snapshot.edges[index]!;
+      const retained = input.topologyHandles.get(descriptor.key);
+      if (retained?.topology !== "edge") {
+        throw new Error("OCCT topology snapshot lost a retained edge handle");
+      }
+      return retained.handle;
+    });
+    return { snapshot, indices, handles };
+  }
+
+  private edgeTreatmentWithExactEvolution(
+    module: OcctEdgeTreatmentFacadeModule,
+    operation: OcctEdgeTreatmentOperation,
+    input: OcctShape,
+    inputSnapshot: KernelTopologySnapshot,
+    selectedEdgeIndices: readonly number[],
+    edgeIds: readonly ShapeHandle[],
+    amount: number,
+    context?: KernelFeatureContext,
+  ): KernelShape {
+    checkContext(context);
+    const inputHandle = input[OCCT_SHAPE];
+    const rawKernel = this.raw.getRawKernel();
+    try {
+      return adoptOcctEdgeTreatment({
+        module,
+        kernel: rawKernel,
+        operation,
+        inputId: inputHandle,
+        edgeIds,
+        selectedEdgeIndices,
+        amount,
+        maxHistoryRecords: this.maxExactEdgeTreatmentHistoryRecords,
+        validate: (report: OcctEdgeTreatmentReportSnapshot) => {
+          checkContext(context);
+          this.assertTopologyCounts(
+            report.evolution.inputCounts[0]!,
+            this.rawTopologyCounts(inputHandle),
+            `${operation} inputCounts[0]`,
+          );
+        },
+        adopt: ({ resultId, report }) => {
+          checkContext(context);
+          const provisional = this.own(resultId as ShapeHandle, context, {
+            inherited: input.lineage,
+            relation: "modified",
+            history: inputSnapshot.history,
+          });
+          try {
+            const outputSnapshot = this.topology(provisional);
+            this.assertTopologyCounts(
+              report.evolution.resultCounts,
+              this.rawTopologyCounts(provisional[OCCT_SHAPE]),
+              `${operation} resultCounts`,
+            );
+            provisional.topologySnapshot =
+              reduceCompleteIndexedTopologyEvolution({
+                evolution: report.evolution,
+                inputs: [inputSnapshot],
+                output: outputSnapshot,
+                allowCreated: true,
+                ...(context?.feature === undefined
+                  ? {}
+                  : { feature: context.feature }),
+              });
+            return provisional;
+          } catch (error) {
+            this.abandonTransferredShape(provisional);
+            throw error;
+          }
+        },
+      });
+    } catch (error) {
+      if (error instanceof OcctEdgeTreatmentFacadeProtocolError) {
+        throw new TopologyEvolutionProtocolError(error.message);
+      }
+      throw error;
+    }
+  }
+
   fillet(
     shape: KernelShape,
     edges: readonly KernelTopologyKey[],
@@ -3039,17 +3187,24 @@ class OcctKernel implements GeometryKernel {
     context?: KernelFeatureContext,
   ): KernelShape {
     checkContext(context);
-    if (!(options.radius > 0)) throw new RangeError("Fillet radius must be positive");
+    if (!Number.isFinite(options.radius) || !(options.radius > 0)) {
+      throw new RangeError("Fillet radius must be finite and positive");
+    }
     if (edges.length === 0) throw new RangeError("Fillet requires at least one edge");
     const input = this.shape(shape);
-    this.topology(input);
-    const handles = edges.map((key) => {
-      const retained = input.topologyHandles.get(key);
-      if (retained?.topology !== "edge") {
-        throw new TypeError(`Topology key '${key}' is not an edge of the input shape`);
-      }
-      return retained.handle;
-    });
+    const selected = this.selectedEdgeTreatmentTopology(input, edges);
+    if (this.facade?.edgeTreatment !== undefined) {
+      return this.edgeTreatmentWithExactEvolution(
+        this.facade.edgeTreatment,
+        "fillet",
+        input,
+        selected.snapshot,
+        selected.indices,
+        selected.handles,
+        options.radius,
+        context,
+      );
+    }
     const faceHashes = this.raw.subShapeHashes(
       input[OCCT_SHAPE],
       "face",
@@ -3060,7 +3215,7 @@ class OcctKernel implements GeometryKernel {
     return adoptOcctEdgeEvolution({
       module,
       kernel: rawKernel,
-      edgeIds: handles,
+      edgeIds: selected.handles,
       inputFaceHashes: faceHashes,
       invoke: (edgeIds, inputHashes) =>
         rawKernel.filletWithHistory(
@@ -3093,14 +3248,19 @@ class OcctKernel implements GeometryKernel {
       throw new RangeError("Chamfer requires at least one edge");
     }
     const input = this.shape(shape);
-    this.topology(input);
-    const handles = [...new Set(edges)].map((key) => {
-      const retained = input.topologyHandles.get(key);
-      if (retained?.topology !== "edge") {
-        throw new TypeError(`Topology key '${key}' is not an edge of the input shape`);
-      }
-      return retained.handle;
-    });
+    const selected = this.selectedEdgeTreatmentTopology(input, edges);
+    if (this.facade?.edgeTreatment !== undefined) {
+      return this.edgeTreatmentWithExactEvolution(
+        this.facade.edgeTreatment,
+        "chamfer",
+        input,
+        selected.snapshot,
+        selected.indices,
+        selected.handles,
+        options.distance,
+        context,
+      );
+    }
     const faceHashes = this.raw.subShapeHashes(
       input[OCCT_SHAPE],
       "face",
@@ -3111,7 +3271,7 @@ class OcctKernel implements GeometryKernel {
     return adoptOcctEdgeEvolution({
       module,
       kernel: rawKernel,
-      edgeIds: handles,
+      edgeIds: selected.handles,
       inputFaceHashes: faceHashes,
       invoke: (edgeIds, inputHashes) =>
         rawKernel.chamferWithHistory(
@@ -3594,6 +3754,10 @@ export async function createOcctKernel(
   const maxExactBooleanHistoryRecords = exactBooleanHistoryRecordLimit(
     options.maxExactBooleanHistoryRecords,
   );
+  const maxExactEdgeTreatmentHistoryRecords =
+    exactEdgeTreatmentHistoryRecordLimit(
+      options.maxExactEdgeTreatmentHistoryRecords,
+    );
   const [{ OcctKernel: RawKernel }, createModule] = await Promise.all([
     import("occt-wasm"),
     options.moduleFactory === undefined
@@ -3633,6 +3797,7 @@ export async function createOcctKernel(
       facade,
       options,
       maxExactBooleanHistoryRecords,
+      maxExactEdgeTreatmentHistoryRecords,
     );
   } catch (error) {
     raw[Symbol.dispose]();

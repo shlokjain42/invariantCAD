@@ -2,18 +2,18 @@
   "schemaVersion": 1,
   "bundle": {
     "name": "invariantcad-occt-facade",
-    "version": "0.4.0",
+    "version": "0.5.0",
     "layoutVersion": 1,
     "sourceDateEpoch": 0
   },
   "archive": {
     "format": "ustar+gzip",
-    "size": 7115659,
-    "sha256": "04b59044004ef74bb8e7ee1497967c0090c373955f03a8ab55500ce045c7ca64"
+    "size": 7133387,
+    "sha256": "ed943a1497439bae3db0a70df868283f42b672b3cb3ad50007dc2cf011a668b6"
   },
   "facade": {
-    "marker": "invariantcad-facade@0.4.0+occt-wasm.3.7.0",
-    "abiVersion": "0.4.0",
+    "marker": "invariantcad-facade@0.5.0+occt-wasm.3.7.0",
+    "abiVersion": "0.5.0",
     "upstreamOcctWasmVersion": "3.7.0"
   },
   "runtime": [
@@ -22,14 +22,14 @@
       "target": "runtime/occt-wasm.js",
       "mediaType": "text/javascript",
       "size": 129219,
-      "sha256": "569f90c939299add9ce66485652be0e4d6201c1c7903c41b7773486e3ee5de79"
+      "sha256": "bbf7df8c810c765feef042d553cc629193115e7984eb4cae3a5689face5db01a"
     },
     {
       "source": "occt-wasm.wasm",
       "target": "runtime/occt-wasm.wasm",
       "mediaType": "application/wasm",
-      "size": 22181299,
-      "sha256": "b019127ee7e47b7ddea1c6d51c0fe3c8fb588f3a89a49107922585ab3ba3a0f5"
+      "size": 22215405,
+      "sha256": "06885fcb9aa618305ae8e2f69e6e4ea1925d41be10611241502a59af39538fab"
     }
   ],
   "inputs": [
@@ -74,6 +74,14 @@
       "sha256": "04948e51032c7668bbfe0608afc9e6ce02880b90a69e743d3e5bd7aceb9f8f29"
     },
     {
+      "source": "native/occt/patches/0005-exact-edge-treatment-history.patch",
+      "target": "source/native/occt/patches/0005-exact-edge-treatment-history.patch",
+      "role": "source-patch",
+      "mode": "0644",
+      "size": 63115,
+      "sha256": "ac71881bc484da50d6dd88d3f14cd7420863cf1101827a7ffac26cb3c68d2a4a"
+    },
+    {
       "source": "scripts/build-occt-facade.sh",
       "target": "source/scripts/build-occt-facade.sh",
       "role": "build-script",
@@ -86,8 +94,8 @@
       "target": "SOURCE_AND_RELINK.md",
       "role": "source-relink-guide",
       "mode": "0644",
-      "size": 7703,
-      "sha256": "b1871be7755de7433c684ee141c173b26f0f66db9f2d7a2c5da6abf1ec3090c4"
+      "size": 9749,
+      "sha256": "df2b71ee3312575d31d48b5b4a69d4c6183fc28b9bf2b603296ca9208902968a"
     },
     {
       "source": "LICENSE",

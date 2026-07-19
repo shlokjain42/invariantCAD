@@ -445,6 +445,18 @@ describe("controlled OCCT PipeShell facade adapter", () => {
     );
     expect(zero.delete).toHaveBeenCalledTimes(1);
     expect(zeroRequest.kernel.release).not.toHaveBeenCalled();
+
+    for (const resultId of [11, 12]) {
+      const alias = fakeReport();
+      alias.takeResultId.mockReturnValue(resultId);
+      const aliasRequest = options(facadeModule(alias), vi.fn());
+      expect(() => adoptOcctControlledPipeShell(aliasRequest)).toThrow(
+        "operand-aliasing result ID",
+      );
+      expect(aliasRequest.adopt).not.toHaveBeenCalled();
+      expect(alias.delete).toHaveBeenCalledTimes(1);
+      expect(aliasRequest.kernel.release).not.toHaveBeenCalled();
+    }
   });
 
   it("releases a transferred result exactly once when adoption or deletion fails", () => {

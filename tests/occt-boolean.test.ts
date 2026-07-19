@@ -898,6 +898,18 @@ describe("owned exact OCCT Boolean transaction", () => {
       expect(request.kernel.release).not.toHaveBeenCalled();
       expect(invalid.report.delete).toHaveBeenCalledTimes(1);
     }
+
+    for (const resultId of [7, 11, 12]) {
+      const alias = exactModule();
+      alias.report.takeResultId.mockReturnValue(resultId);
+      const request = options(alias.module, vi.fn());
+      expect(() => adoptOcctBoolean(request)).toThrow(
+        "operand-aliasing result ID",
+      );
+      expect(request.adopt).not.toHaveBeenCalled();
+      expect(request.kernel.release).not.toHaveBeenCalled();
+      expect(alias.report.delete).toHaveBeenCalledTimes(1);
+    }
   });
 
   it("releases a transferred result exactly once when adoption or report cleanup throws", () => {

@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-const EXPECTED_FACADE_VERSION = "invariantcad-facade@0.4.0+occt-wasm.3.7.0";
+const EXPECTED_FACADE_VERSION = "invariantcad-facade@0.5.0+occt-wasm.3.7.0";
 const EXPECTED_TOPOLOGY_HISTORY_VERSION = 1;
 const EXACT_BOOLEAN_HISTORY_RECORD_LIMIT = 1_000_000;
+const EXACT_EDGE_TREATMENT_HISTORY_RECORD_LIMIT = 1_000_000;
 const LINEAR_TOLERANCE = 1e-10;
 const VOLUME_TOLERANCE = 1e-8;
 const SELECTION_TOLERANCE = 1e-8;
@@ -60,6 +61,8 @@ const Module = await createOcctWasm({
 assert.equal(Module.invariantcadFacadeVersion(), EXPECTED_FACADE_VERSION);
 assert.equal(typeof Module.InvariantCadBooleanReport, "function");
 assert.equal(typeof Module.invariantcadBooleanAtomic, "function");
+assert.equal(typeof Module.InvariantCadEdgeTreatmentReport, "function");
+assert.equal(typeof Module.invariantcadEdgeTreatmentAtomic, "function");
 assert.equal(typeof Module.InvariantCadPipeShellReport, "function");
 assert.equal(typeof Module.invariantcadPipeShellSolid, "function");
 
@@ -67,6 +70,10 @@ const booleanOperations = Object.freeze({
   union: Module.InvariantCadBooleanOperation.UNION,
   subtract: Module.InvariantCadBooleanOperation.SUBTRACT,
   intersect: Module.InvariantCadBooleanOperation.INTERSECT,
+});
+const edgeTreatmentOperations = Object.freeze({
+  fillet: Module.InvariantCadEdgeTreatmentOperation.FILLET,
+  chamfer: Module.InvariantCadEdgeTreatmentOperation.CHAMFER,
 });
 const topologyKinds = Object.freeze({
   none: Module.InvariantCadTopologyKind.NONE,
@@ -83,6 +90,7 @@ const topologyRelations = Object.freeze({
 });
 
 assert.deepEqual(booleanOperations, { union: 0, subtract: 1, intersect: 2 });
+assert.deepEqual(edgeTreatmentOperations, { fillet: 0, chamfer: 1 });
 assert.deepEqual(topologyKinds, { none: -1, face: 0, edge: 1, vertex: 2 });
 assert.deepEqual(topologyRelations, {
   preserved: 0,
@@ -272,6 +280,10 @@ function facesOf(shape) {
   return drainVector(kernel.getSubShapes(shape, "face"));
 }
 
+function edgesOf(shape) {
+  return drainVector(kernel.getSubShapes(shape, "edge"));
+}
+
 function boundsOf(shape) {
   const bounds = kernel.getBoundingBox(shape);
   return {
@@ -354,6 +366,29 @@ function exactBoolean(
       operation,
       target,
       ids,
+      maxHistoryRecords,
+    );
+  } finally {
+    ids.delete();
+  }
+}
+
+function exactEdgeTreatment(
+  operation,
+  input,
+  edges,
+  amount,
+  selectedKernel = kernel,
+  maxHistoryRecords = EXACT_EDGE_TREATMENT_HISTORY_RECORD_LIMIT,
+) {
+  const ids = vector(edges);
+  try {
+    return Module.invariantcadEdgeTreatmentAtomic(
+      selectedKernel,
+      operation,
+      input,
+      ids,
+      amount,
       maxHistoryRecords,
     );
   } finally {
@@ -483,8 +518,14 @@ function topologyCountForKind(counts, kind) {
 }
 
 const observedBooleanRelations = new Set();
+const observedEdgeTreatmentRelations = new Set();
 
-function assertBooleanHistory(report, inputShapes, label) {
+function assertBooleanHistory(
+  report,
+  inputShapes,
+  label,
+  observedRelations = observedBooleanRelations,
+) {
   const history = readBooleanTopologyHistory(report);
   assert.equal(history.version, EXPECTED_TOPOLOGY_HISTORY_VERSION, `${label}.version`);
   assert.equal(history.complete, true, `${label}.complete`);
@@ -566,7 +607,7 @@ function assertBooleanHistory(report, inputShapes, label) {
         `${label}.records[${recordIndex}].sourceIndex`,
       );
     }
-    observedBooleanRelations.add(record.relation);
+    observedRelations.add(record.relation);
 
     if (!isCreated) {
       const sourceKindOffset = record.sourceKind - topologyKinds.face;
@@ -772,6 +813,76 @@ function assertBooleanReportSuccess(report, operation, toolCount, arenaBefore, l
 function assertBooleanResult(result, history, expected, label) {
   assert.equal(kernel.isValid(result), true, `${label}.valid`);
   assertClose(kernel.getVolume(result), expected.volume, VOLUME_TOLERANCE, `${label}.volume`);
+  assert.deepEqual(shapeTopologyCounts(result), expected.topology, `${label}.topology`);
+  assert.deepEqual(
+    shapeTopologyCounts(result),
+    history.resultCounts,
+    `${label}: report/result topology counts disagree`,
+  );
+}
+
+function selectedEdgeIndices(report) {
+  return Array.from(
+    { length: report.selectedEdgeCount() },
+    (_, index) => report.selectedEdgeIndex(index),
+  );
+}
+
+function assertEdgeTreatmentReportSuccess(
+  report,
+  operation,
+  amount,
+  requestedSeedCount,
+  expectedSelectedIndices,
+  arenaBefore,
+  label,
+) {
+  assert.equal(report.ok, true, `${report.code}: ${report.message}`);
+  assert.equal(report.stage, "complete", `${label}.stage`);
+  assert.equal(report.code, "OK", `${label}.code`);
+  assert.equal(report.operation, operation, `${label}.operation`);
+  assert.equal(report.amount, amount, `${label}.amount`);
+  assert.equal(
+    report.requestedSeedCount,
+    requestedSeedCount,
+    `${label}.requestedSeedCount`,
+  );
+  assert.deepEqual(
+    selectedEdgeIndices(report),
+    expectedSelectedIndices,
+    `${label}.selectedEdgeIndices`,
+  );
+  assert.equal(
+    report.addCount + report.skippedSeedCount,
+    expectedSelectedIndices.length,
+    `${label}.seedProgress`,
+  );
+  assert.ok(report.addCount > 0, `${label}.addCount`);
+  assert.equal(report.contourCount, report.addCount, `${label}.contourCount`);
+  assert.equal(report.buildCount, 1, `${label}.buildCount`);
+  assert.equal(report.failedSeedIndex, -1, `${label}.failedSeedIndex`);
+  assert.equal(report.historyProblemDomain, "none", `${label}.historyProblemDomain`);
+  assert.equal(report.historyProblemSourceShapeIndex, -1);
+  assert.equal(report.historyProblemKind, topologyKinds.none);
+  assert.equal(report.historyProblemIndex, -1);
+  assert.equal(report.hasResult(), true, `${label}.hasResult`);
+  assert.equal(report.transferCode(kernel), "READY", `${label}.transferCode`);
+  assert.equal(
+    kernel.getShapeCount(),
+    arenaBefore,
+    `${label}: report-owned result entered the arena before transfer`,
+  );
+}
+
+function assertEdgeTreatmentResult(result, history, expected, label) {
+  assert.equal(kernel.getShapeType(result), "solid", `${label}.shapeType`);
+  assert.equal(kernel.isValid(result), true, `${label}.valid`);
+  assertClose(
+    kernel.getVolume(result),
+    expected.volume,
+    VOLUME_TOLERANCE,
+    `${label}.volume`,
+  );
   assert.deepEqual(shapeTopologyCounts(result), expected.topology, `${label}.topology`);
   assert.deepEqual(
     shapeTopologyCounts(result),
@@ -1620,6 +1731,519 @@ try {
     true,
     "exact Boolean smoke must exercise DELETED records",
   );
+
+  runFixture("exact edge-treatment validation", () => {
+    const input = kernel.makeBox(10, 20, 30);
+    const inputEdges = edgesOf(input);
+    const other = kernel.makeBox(4, 4, 4);
+    const otherEdge = edgesOf(other)[0];
+    const inputFace = facesOf(input)[0];
+    const inputBefore = snapshotShape(input);
+    const otherBefore = snapshotShape(other);
+    const arenaBefore = kernel.getShapeCount();
+
+    const failures = [
+      {
+        label: "invalidEdgeTreatmentOperation",
+        report: exactEdgeTreatment(999, input, [inputEdges[0]], 1),
+        stage: "validation",
+        code: "INVALID_OPERATION",
+      },
+      {
+        label: "invalidEdgeTreatmentAmount",
+        report: exactEdgeTreatment(
+          edgeTreatmentOperations.fillet,
+          input,
+          [inputEdges[0]],
+          Number.NaN,
+        ),
+        stage: "validation",
+        code: "INVALID_AMOUNT",
+      },
+      {
+        label: "emptyEdgeTreatmentSeeds",
+        report: exactEdgeTreatment(
+          edgeTreatmentOperations.chamfer,
+          input,
+          [],
+          1,
+        ),
+        stage: "validation",
+        code: "EMPTY_SEED_LIST",
+      },
+      {
+        label: "negativeEdgeTreatmentHistoryLimit",
+        report: exactEdgeTreatment(
+          edgeTreatmentOperations.fillet,
+          input,
+          [inputEdges[0]],
+          1,
+          kernel,
+          -1,
+        ),
+        stage: "validation",
+        code: "INVALID_HISTORY_RECORD_LIMIT",
+      },
+      {
+        label: "edgeTreatmentSeedNotEdge",
+        report: exactEdgeTreatment(
+          edgeTreatmentOperations.fillet,
+          input,
+          [inputFace],
+          1,
+        ),
+        stage: "seed-validation",
+        code: "SEED_NOT_EDGE",
+      },
+      {
+        label: "edgeTreatmentEdgeNotInInput",
+        report: exactEdgeTreatment(
+          edgeTreatmentOperations.chamfer,
+          input,
+          [otherEdge],
+          1,
+        ),
+        stage: "seed-validation",
+        code: "EDGE_NOT_IN_INPUT",
+      },
+      {
+        label: "zeroEdgeTreatmentHistoryLimit",
+        report: exactEdgeTreatment(
+          edgeTreatmentOperations.chamfer,
+          input,
+          [inputEdges[0]],
+          1,
+          kernel,
+          0,
+        ),
+        stage: "history",
+        code: "HISTORY_RECORD_LIMIT_EXCEEDED",
+      },
+    ];
+
+    for (const testCase of failures) {
+      withReport(testCase.report, (report) => {
+        assert.equal(report.ok, false, testCase.label);
+        assert.equal(report.stage, testCase.stage, `${testCase.label}.stage`);
+        assert.equal(report.code, testCase.code, `${testCase.label}.code`);
+        assert.equal(report.hasResult(), false, `${testCase.label}.hasResult`);
+        assert.equal(
+          report.transferCode(kernel),
+          "NO_RESULT",
+          `${testCase.label}.transferCode`,
+        );
+        assertNoBooleanHistory(report, testCase.label);
+        assert.throws(() => report.takeResultId(kernel), testCase.label);
+      });
+      assert.equal(kernel.getShapeCount(), arenaBefore, `${testCase.label}.arena`);
+    }
+
+    assertShapeSnapshot(input, inputBefore, "edgeTreatmentValidation.input");
+    assertShapeSnapshot(other, otherBefore, "edgeTreatmentValidation.other");
+  });
+
+  for (const fixture of [
+    {
+      label: "single-edge exact fillet",
+      operation: edgeTreatmentOperations.fillet,
+      amount: 2,
+      expected: {
+        volume: 5974.247779607694,
+        topology: { faces: 7, edges: 15, vertices: 10 },
+      },
+    },
+    {
+      label: "single-edge exact chamfer",
+      operation: edgeTreatmentOperations.chamfer,
+      amount: 2,
+      expected: {
+        volume: 5940,
+        topology: { faces: 7, edges: 15, vertices: 10 },
+      },
+    },
+  ]) {
+    runFixture(fixture.label, () => {
+      const input = kernel.makeBox(10, 20, 30);
+      const inputEdges = edgesOf(input);
+      const verticalEdges = inputEdges.filter((edge) => {
+        const bounds = boundsOf(edge);
+        return (
+          extent(bounds, "z") > 29.99 &&
+          extent(bounds, "x") < SELECTION_TOLERANCE &&
+          extent(bounds, "y") < SELECTION_TOLERANCE
+        );
+      });
+      assert.equal(verticalEdges.length, 4, `${fixture.label}.verticalEdges`);
+      const selected = verticalEdges[0];
+      const canonicalIndex = inputEdges.indexOf(selected);
+      const inputBefore = snapshotShape(input);
+      const arenaBefore = kernel.getShapeCount();
+      const report = exactEdgeTreatment(
+        fixture.operation,
+        input,
+        [selected, selected],
+        fixture.amount,
+      );
+      withReport(report, (ownedReport) => {
+        assertEdgeTreatmentReportSuccess(
+          ownedReport,
+          fixture.operation,
+          fixture.amount,
+          2,
+          [canonicalIndex],
+          arenaBefore,
+          fixture.label,
+        );
+        assert.equal(ownedReport.addCount, 1, `${fixture.label}.addCount`);
+        assert.equal(ownedReport.skippedSeedCount, 0, `${fixture.label}.skipped`);
+        const history = assertBooleanHistory(
+          ownedReport,
+          [input],
+          fixture.label,
+          observedEdgeTreatmentRelations,
+        );
+        const clone = ownedReport.clone();
+        try {
+          const otherKernel = new Module.OcctKernel();
+          try {
+            assert.equal(clone.transferCode(otherKernel), "WRONG_KERNEL");
+            assert.throws(() => clone.takeResultId(otherKernel));
+            assert.equal(otherKernel.getShapeCount(), 0);
+          } finally {
+            otherKernel.delete();
+          }
+          const result = clone.takeResultId(kernel);
+          try {
+            assertEdgeTreatmentResult(result, history, fixture.expected, fixture.label);
+            assert.equal(ownedReport.hasResult(), false);
+            assert.equal(ownedReport.transferCode(kernel), "ALREADY_TRANSFERRED");
+            assert.throws(() => ownedReport.takeResultId(kernel));
+          } finally {
+            kernel.release(result);
+          }
+        } finally {
+          clone.delete();
+        }
+      });
+      assert.equal(kernel.getShapeCount(), arenaBefore, `${fixture.label}.arena`);
+      assertShapeSnapshot(input, inputBefore, `${fixture.label}.input`);
+    });
+  }
+
+  for (const fixture of [
+    {
+      label: "four-edge exact fillet",
+      operation: edgeTreatmentOperations.fillet,
+      amount: 2,
+      expected: {
+        volume: 5896.991118430776,
+        topology: { faces: 10, edges: 24, vertices: 16 },
+      },
+    },
+    {
+      label: "four-edge exact chamfer",
+      operation: edgeTreatmentOperations.chamfer,
+      amount: 2,
+      expected: {
+        volume: 5760,
+        topology: { faces: 10, edges: 24, vertices: 16 },
+      },
+    },
+  ]) {
+    runFixture(fixture.label, () => {
+      const input = kernel.makeBox(10, 20, 30);
+      const inputEdges = edgesOf(input);
+      const verticalEdges = inputEdges.filter(
+        (edge) => extent(boundsOf(edge), "z") > 29.99,
+      );
+      assert.equal(verticalEdges.length, 4, `${fixture.label}.verticalEdges`);
+      const expectedIndices = verticalEdges
+        .map((edge) => inputEdges.indexOf(edge))
+        .sort((first, second) => first - second);
+      const inputBefore = snapshotShape(input);
+      const arenaBefore = kernel.getShapeCount();
+      withReport(
+        exactEdgeTreatment(
+          fixture.operation,
+          input,
+          [...verticalEdges].reverse(),
+          fixture.amount,
+        ),
+        (report) => {
+          assertEdgeTreatmentReportSuccess(
+            report,
+            fixture.operation,
+            fixture.amount,
+            4,
+            expectedIndices,
+            arenaBefore,
+            fixture.label,
+          );
+          assert.equal(report.addCount, 4, `${fixture.label}.addCount`);
+          assert.equal(report.skippedSeedCount, 0, `${fixture.label}.skipped`);
+          const history = assertBooleanHistory(
+            report,
+            [input],
+            fixture.label,
+            observedEdgeTreatmentRelations,
+          );
+          const result = report.takeResultId(kernel);
+          try {
+            assertEdgeTreatmentResult(result, history, fixture.expected, fixture.label);
+          } finally {
+            kernel.release(result);
+          }
+        },
+      );
+      assert.equal(kernel.getShapeCount(), arenaBefore, `${fixture.label}.arena`);
+      assertShapeSnapshot(input, inputBefore, `${fixture.label}.input`);
+    });
+  }
+
+  for (const fixture of [
+    {
+      label: "tangent-overlap exact fillet",
+      operation: edgeTreatmentOperations.fillet,
+      amount: 1,
+      expected: {
+        volume: 1997.8539816339744,
+        topology: { faces: 9, edges: 20, vertices: 13 },
+      },
+    },
+    {
+      label: "tangent-overlap exact chamfer",
+      operation: edgeTreatmentOperations.chamfer,
+      amount: 1,
+      expected: {
+        volume: 1995,
+        topology: { faces: 9, edges: 20, vertices: 13 },
+      },
+    },
+  ]) {
+    runFixture(fixture.label, () => {
+      const profilePoints = [
+        [0, 0, 0],
+        [5, 0, 0],
+        [10, 0, 0],
+        [10, 10, 0],
+        [0, 10, 0],
+      ];
+      const profileEdges = profilePoints.map((start, index) =>
+        lineEdge(start, profilePoints[(index + 1) % profilePoints.length]),
+      );
+      let profileWire;
+      let profileFace;
+      let input;
+      try {
+        profileWire = wireFromEdges(profileEdges);
+        profileFace = kernel.makeFace(profileWire);
+        input = kernel.extrude(profileFace, 0, 0, 20);
+      } finally {
+        if (profileFace !== undefined) kernel.release(profileFace);
+        if (profileWire !== undefined) kernel.release(profileWire);
+        for (const edge of profileEdges) kernel.release(edge);
+      }
+
+      const inputEdges = edgesOf(input);
+      const tangentEdges = inputEdges.filter((edge) => {
+        const bounds = boundsOf(edge);
+        return (
+          near(bounds.ymin, 0) &&
+          near(bounds.ymax, 0) &&
+          near(bounds.zmin, 0) &&
+          near(bounds.zmax, 0) &&
+          near(extent(bounds, "x"), 5)
+        );
+      });
+      assert.equal(tangentEdges.length, 2, `${fixture.label}.tangentEdges`);
+      const expectedIndices = tangentEdges
+        .map((edge) => inputEdges.indexOf(edge))
+        .sort((first, second) => first - second);
+      const canonicalSeed = inputEdges[expectedIndices[0]];
+      const reversedTangentSeeds = expectedIndices
+        .map((index) => inputEdges[index])
+        .reverse();
+      const inputBefore = snapshotShape(input);
+      const arenaBefore = kernel.getShapeCount();
+
+      const baseline = withReport(
+        exactEdgeTreatment(
+          fixture.operation,
+          input,
+          [canonicalSeed],
+          fixture.amount,
+        ),
+        (report) => {
+          assertEdgeTreatmentReportSuccess(
+            report,
+            fixture.operation,
+            fixture.amount,
+            1,
+            [expectedIndices[0]],
+            arenaBefore,
+            `${fixture.label}.baseline`,
+          );
+          assert.equal(report.addCount, 1, `${fixture.label}.baseline.addCount`);
+          assert.equal(
+            report.skippedSeedCount,
+            0,
+            `${fixture.label}.baseline.skipped`,
+          );
+          const history = assertBooleanHistory(
+            report,
+            [input],
+            `${fixture.label}.baseline`,
+            observedEdgeTreatmentRelations,
+          );
+          const result = report.takeResultId(kernel);
+          try {
+            assertEdgeTreatmentResult(
+              result,
+              history,
+              fixture.expected,
+              `${fixture.label}.baseline`,
+            );
+            return { history, brep: kernel.toBREP(result) };
+          } finally {
+            kernel.release(result);
+          }
+        },
+      );
+      assert.equal(kernel.getShapeCount(), arenaBefore, `${fixture.label}.baseline.arena`);
+
+      withReport(
+        exactEdgeTreatment(
+          fixture.operation,
+          input,
+          reversedTangentSeeds,
+          fixture.amount,
+        ),
+        (report) => {
+          assertEdgeTreatmentReportSuccess(
+            report,
+            fixture.operation,
+            fixture.amount,
+            2,
+            expectedIndices,
+            arenaBefore,
+            `${fixture.label}.overlap`,
+          );
+          assert.equal(report.addCount, 1, `${fixture.label}.overlap.addCount`);
+          assert.equal(
+            report.skippedSeedCount,
+            1,
+            `${fixture.label}.overlap.skipped`,
+          );
+          const history = assertBooleanHistory(
+            report,
+            [input],
+            `${fixture.label}.overlap`,
+            observedEdgeTreatmentRelations,
+          );
+          assert.deepEqual(
+            history,
+            baseline.history,
+            `${fixture.label}: tangent-overlap history must be idempotent`,
+          );
+          const result = report.takeResultId(kernel);
+          try {
+            assertEdgeTreatmentResult(
+              result,
+              history,
+              fixture.expected,
+              `${fixture.label}.overlap`,
+            );
+            assert.equal(
+              kernel.toBREP(result),
+              baseline.brep,
+              `${fixture.label}: tangent-overlap result must be idempotent`,
+            );
+          } finally {
+            kernel.release(result);
+          }
+        },
+      );
+      assert.equal(kernel.getShapeCount(), arenaBefore, `${fixture.label}.overlap.arena`);
+      assertShapeSnapshot(input, inputBefore, `${fixture.label}.input`);
+    });
+  }
+
+  runFixture("cylindrical edge-treatment corpus", () => {
+    for (const operation of Object.values(edgeTreatmentOperations)) {
+      const input = kernel.makeCylinder(10, 20);
+      const inputEdges = edgesOf(input);
+      const rims = inputEdges.filter((edge) => {
+        const bounds = boundsOf(edge);
+        return extent(bounds, "z") < SELECTION_TOLERANCE;
+      });
+      const seams = inputEdges.filter(
+        (edge) => extent(boundsOf(edge), "z") > 19.99,
+      );
+      assert.equal(rims.length, 2);
+      assert.equal(seams.length, 1);
+      const inputBefore = snapshotShape(input);
+      const arenaBefore = kernel.getShapeCount();
+
+      for (const [label, seeds, topology] of [
+        ["one-rim", [rims[0]], { faces: 4, edges: 5, vertices: 3 }],
+        ["both-rims", rims, { faces: 5, edges: 7, vertices: 4 }],
+      ]) {
+        withReport(
+          exactEdgeTreatment(operation, input, seeds, 2),
+          (report) => {
+            const expectedIndices = seeds
+              .map((edge) => inputEdges.indexOf(edge))
+              .sort((first, second) => first - second);
+            assertEdgeTreatmentReportSuccess(
+              report,
+              operation,
+              2,
+              seeds.length,
+              expectedIndices,
+              arenaBefore,
+              `cylinder.${operation}.${label}`,
+            );
+            const history = assertBooleanHistory(
+              report,
+              [input],
+              `cylinder.${operation}.${label}`,
+              observedEdgeTreatmentRelations,
+            );
+            const result = report.takeResultId(kernel);
+            try {
+              assert.equal(kernel.isValid(result), true);
+              assert.ok(kernel.getVolume(result) > 0);
+              assert.deepEqual(shapeTopologyCounts(result), topology);
+              assert.deepEqual(history.resultCounts, topology);
+            } finally {
+              kernel.release(result);
+            }
+          },
+        );
+        assert.equal(kernel.getShapeCount(), arenaBefore);
+      }
+
+      withReport(
+        exactEdgeTreatment(operation, input, seams, 2),
+        (report) => {
+          assert.equal(report.ok, false, `cylinder.${operation}.seam`);
+          assert.equal(report.hasResult(), false);
+          assert.equal(report.transferCode(kernel), "NO_RESULT");
+          assertNoBooleanHistory(report, `cylinder.${operation}.seam`);
+        },
+      );
+      assert.equal(kernel.getShapeCount(), arenaBefore);
+      assertShapeSnapshot(input, inputBefore, `cylinder.${operation}.input`);
+    }
+  });
+
+  for (const [relationName, relation] of Object.entries(topologyRelations)) {
+    assert.equal(
+      observedEdgeTreatmentRelations.has(relation),
+      true,
+      `exact edge-treatment smoke must exercise ${relationName.toUpperCase()} records`,
+    );
+  }
 
   runFixture("controlled PipeShell validation", () => {
     const invalidTolerance = controlledPipeShell(0, 0, 0, 1e-7, 1e-9);

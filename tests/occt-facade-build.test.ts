@@ -21,6 +21,10 @@ const booleanPatchUrl = new URL(
   "../native/occt/patches/0004-exact-boolean-history.patch",
   import.meta.url,
 );
+const edgeTreatmentPatchUrl = new URL(
+  "../native/occt/patches/0005-exact-edge-treatment-history.patch",
+  import.meta.url,
+);
 const smokeUrl = new URL("../scripts/test-occt-facade.mjs", import.meta.url);
 const packagerUrl = new URL(
   "../scripts/package-occt-facade-bundle.mjs",
@@ -124,6 +128,22 @@ describe("owned OCCT facade build boundary", () => {
     expect(booleanPatch).toContain("maxHistoryRecords");
     expect(booleanPatch).toContain(
       "invariantcad-facade@0.4.0+occt-wasm.3.7.0",
+    );
+
+    const edgeTreatmentPatch = await readFile(edgeTreatmentPatchUrl, "utf8");
+    expect(edgeTreatmentPatch).toContain("InvariantCadEdgeTreatmentReport");
+    expect(edgeTreatmentPatch).toContain("invariantcadEdgeTreatmentAtomic");
+    expect(edgeTreatmentPatch).toContain("BRepFilletAPI_MakeFillet");
+    expect(edgeTreatmentPatch).toContain("BRepFilletAPI_MakeChamfer");
+    expect(edgeTreatmentPatch).toContain("BRepTools_History");
+    expect(edgeTreatmentPatch).toContain(
+      "BRepBuilderAPI_Copy>(inputSolid, true, false)",
+    );
+    expect(edgeTreatmentPatch).toContain("maker.Contour");
+    expect(edgeTreatmentPatch).toContain("skippedSeedCount");
+    expect(edgeTreatmentPatch).toContain("HISTORY_RECORD_LIMIT_EXCEEDED");
+    expect(edgeTreatmentPatch).toContain(
+      "invariantcad-facade@0.5.0+occt-wasm.3.7.0",
     );
 
     const releaseInput = JSON.parse(await readFile(releaseInputUrl, "utf8")) as {

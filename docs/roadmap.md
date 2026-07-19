@@ -38,22 +38,25 @@ InvariantCAD's goal is one coherent TypeScript CAD system, not one monolithic ge
 - Owned OCCT facade ABI 0.4 multi-input union, subtraction, and intersection with target/tool authored order, isolated working copies and byte-stable arena operands, transactional fail-closed transfer, and complete face/edge/vertex `PRESERVED`/`MODIFIED`/`GENERATED`/`DELETED` plus residual source-less `CREATED` evolution
 - Identity-only public Boolean lineage: preserved/modified successors inherit proven roles and sources, while generated-only and higher-order source-less `CREATED` topology is created by the current Boolean without source-role inheritance
 - Caller-configurable exact Boolean history-record budgeting, passed into the native facade and enforced before native report materialization or indexed JavaScript copying, with a `1_000_000` default
-- Leak-free native evolution ownership for exact fillet and chamfer operations
+- Owned OCCT facade ABI 0.5 exact constant-radius fillet and equal-distance chamfer with complete face/edge/vertex `PRESERVED`/`MODIFIED`/`GENERATED`/`DELETED` plus residual source-less `CREATED` evolution and identity-only public lineage
+- Canonical input-index-ordered tangent-contour seeds with duplicate/overlapping seed idempotence, one native build, and an exact selected-edge/progress echo
+- A deep topology-independent edge-treatment operand copy with proved original/copy correspondence and byte-stable arena input, plus report-owned same-kernel one-shot transfer and exactly-once rollback
+- Optional exact fillet/chamfer evaluator capability with stock and owned ABI 0.2–0.4 partial-history fallback, and an independent `maxExactEdgeTreatmentHistoryRecords` budget enforced before native materialization or indexed JavaScript copying
 - Reproducible, digest-pinned OCCT facade build foundation
-- Local package-neutral distribution-bundle generation and strict verification for the owned OCCT facade ABI/bundle 0.4 JS/WASM pair, with checksums, provenance, SBOM, source/relinking information, notices, licenses, and the ordered `0001` through `0004` patch series
+- Local package-neutral distribution-bundle generation and strict verification for the owned OCCT facade ABI/bundle 0.5 JS/WASM pair, with checksums, provenance, SBOM, source/relinking information, notices, licenses, and the ordered five-patch series ending in `0005-exact-edge-treatment-history.patch`
 - External legal, release, and security review followed by publication through an explicit durable channel; the bundle remains separate from the `invariantcad` npm package and is never an implicit runtime download
 
 ## 0.3 — persistent design intent
 
-- Complete per-subshape provenance through fillets, chamfers, shells, offsets, revolutions, and other generated/modified topology beyond the owned exact draft/Boolean slices
-- Extend complete Boolean provenance beyond the owned OCCT ABI 0.4 path while retaining stock OCCT, legacy owned facades, and Manifold as supported partial-history implementations
+- Complete per-subshape provenance through shells, offsets, revolutions, and other generated/modified topology beyond the owned exact draft/Boolean/fillet/chamfer slices
+- Extend complete Boolean and edge-treatment provenance beyond the owned OCCT ABI 0.5 path while retaining stock OCCT, legacy owned facades, and Manifold as supported partial-history implementations where they provide the base operation
 - Expanded role and source mapping for additional feature families
 - Geometry and adjacency signatures
 - Expanded selection diagnostics and provenance explanations
 - Incremental feature hashes and cross-run cache
 - Change-impact and geometric diff APIs
 
-Current topology keys and ABI indices remain evaluation-scoped. The 0.3 work is the durable cross-evaluation naming layer; exact ABI 0.4 Boolean history proves one evaluation's evolution graph but does not itself make a native index persistent.
+Current topology keys and ABI indices remain evaluation-scoped. The 0.3 work is the durable cross-evaluation naming layer; exact ABI 0.5 Boolean and fillet/chamfer history proves one evaluation's evolution graph but does not itself make a native index persistent.
 
 ## 0.4 — advanced mechanical features
 

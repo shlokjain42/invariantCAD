@@ -181,7 +181,7 @@ function assertDirectDraft(kernel: GeometryKernel): void {
   assert.ok(kernel.capabilities.features.includes("draft"));
   assert.deepEqual(kernel.capabilities.exactIndexedTopologyEvolution, {
     protocolVersion: 1,
-    features: ["draft", "boolean"],
+    features: ["draft", "boolean", "fillet", "chamfer"],
   });
   const draft = kernel.draft;
   if (draft === undefined) {
@@ -295,7 +295,7 @@ function assertDirectBoolean(kernel: GeometryKernel): void {
   assert.ok(kernel.capabilities.features.includes("boolean"));
   assert.deepEqual(kernel.capabilities.exactIndexedTopologyEvolution, {
     protocolVersion: 1,
-    features: ["draft", "boolean"],
+    features: ["draft", "boolean", "fillet", "chamfer"],
   });
   if (
     kernel.boolean === undefined ||
@@ -581,6 +581,97 @@ function assertDirectBoolean(kernel: GeometryKernel): void {
     );
   } finally {
     for (const shape of owned.reverse()) kernel.disposeShape(shape);
+  }
+}
+
+function assertDirectEdgeTreatments(kernel: GeometryKernel): void {
+  assert.deepEqual(kernel.capabilities.exactIndexedTopologyEvolution, {
+    protocolVersion: 1,
+    features: ["draft", "boolean", "fillet", "chamfer"],
+  });
+  if (kernel.fillet === undefined || kernel.chamfer === undefined) {
+    throw new Error("Owned OCCT exact fillet/chamfer support was not advertised");
+  }
+
+  for (const fixture of [
+    {
+      operation: "fillet" as const,
+      amount: 2,
+      feature: "direct-fillet",
+      volume: 5974.247779607694,
+    },
+    {
+      operation: "chamfer" as const,
+      amount: 2,
+      feature: "direct-chamfer",
+      volume: 5940,
+    },
+  ]) {
+    let input: KernelShape | undefined;
+    let result: KernelShape | undefined;
+    try {
+      input = kernel.box!([10, 20, 30], false, {
+        feature: `direct-${fixture.operation}-box`,
+      });
+      const inputTopology = snapshot(kernel, input);
+      const verticalEdges = inputTopology.edges.filter(
+        (edge) =>
+          edge.curve.kind === "line" &&
+          edge.curve.direction !== undefined &&
+          Math.abs(edge.curve.direction[2]) > 1 - 1e-10,
+      );
+      assert.equal(verticalEdges.length, 4, `${fixture.operation}.verticalEdges`);
+      const selectedKey = verticalEdges[0]!.key;
+      result =
+        fixture.operation === "fillet"
+          ? kernel.fillet(
+              input,
+              [selectedKey, selectedKey],
+              { radius: fixture.amount },
+              { feature: fixture.feature },
+            )
+          : kernel.chamfer(
+              input,
+              [selectedKey, selectedKey],
+              { distance: fixture.amount },
+              { feature: fixture.feature },
+            );
+      assert.deepEqual(kernel.status(result), { ok: true, code: "VALID" });
+      closeTo(
+        kernel.measure(result).volume,
+        fixture.volume,
+        1e-8,
+        `${fixture.operation}.volume`,
+      );
+      const output = snapshot(kernel, result);
+      assert.equal(output.history, "complete", `${fixture.operation}.history`);
+      assert.equal(output.faces.length, 7, `${fixture.operation}.faces`);
+      assert.equal(output.edges.length, 15, `${fixture.operation}.edges`);
+      assert.ok(
+        [...output.faces, ...output.edges].some((descriptor) =>
+          descriptor.lineage.some(
+            (lineage) =>
+              lineage.feature === fixture.feature &&
+              lineage.relation === "created",
+          ),
+        ),
+        `${fixture.operation} must mark generated/residual topology created`,
+      );
+      assert.ok(
+        [...output.faces, ...output.edges].some((descriptor) =>
+          descriptor.lineage.some(
+            (lineage) =>
+              lineage.feature === fixture.feature &&
+              lineage.relation === "modified",
+          ),
+        ),
+        `${fixture.operation} must mark support topology modified`,
+      );
+      assert.equal(snapshot(kernel, input).history, "complete");
+    } finally {
+      if (result !== undefined) kernel.disposeShape(result);
+      if (input !== undefined) kernel.disposeShape(input);
+    }
   }
 }
 
@@ -1074,6 +1165,7 @@ const kernel = await createOcctKernel({
 try {
   assertDirectDraft(kernel);
   assertDirectBoolean(kernel);
+  assertDirectEdgeTreatments(kernel);
   assertControlledPipeShell(kernel);
   const evaluator = await createEvaluator({ kernel });
   try {

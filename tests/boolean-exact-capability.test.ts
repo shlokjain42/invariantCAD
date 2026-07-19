@@ -286,7 +286,7 @@ describe("optional exact Boolean capability", () => {
       },
       implementTopology: true,
       reason:
-        "boolean evolution requires face and edge topology with feature provenance",
+        "boolean evolution requires face and edge topology with feature-or-history provenance",
     },
     {
       name: "edge topology",
@@ -297,7 +297,7 @@ describe("optional exact Boolean capability", () => {
       },
       implementTopology: true,
       reason:
-        "boolean evolution requires face and edge topology with feature provenance",
+        "boolean evolution requires face and edge topology with feature-or-history provenance",
     },
     {
       name: "feature provenance",
@@ -308,7 +308,7 @@ describe("optional exact Boolean capability", () => {
       },
       implementTopology: true,
       reason:
-        "boolean evolution requires face and edge topology with feature provenance",
+        "boolean evolution requires face and edge topology with feature-or-history provenance",
     },
     {
       name: "topology()",
@@ -316,7 +316,7 @@ describe("optional exact Boolean capability", () => {
       topologyCapabilities: exactBooleanTopology,
       implementTopology: false,
       reason:
-        "boolean evolution requires face and edge topology with feature provenance",
+        "boolean evolution requires face and edge topology with feature-or-history provenance",
     },
   ])(
     "requires $name when exact Boolean evolution is advertised",
