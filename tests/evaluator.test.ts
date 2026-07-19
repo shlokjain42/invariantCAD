@@ -1,7 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   EvaluatedAssembly,
+  EvaluatedSolid,
   createEvaluator,
+  createManifoldKernel,
   design,
   mm,
   plane,
@@ -13,6 +15,8 @@ import {
   type DesignDocument,
   type EvaluatedDesign,
   type Evaluator,
+  type GeometryKernel,
+  type KernelTopologySnapshot,
 } from "../src/index.js";
 
 let evaluator: Evaluator;
@@ -44,13 +48,165 @@ describe("geometry evaluation", () => {
     const result = await evaluate(cad.build());
     try {
       const output = result.output("box");
+      expect(output).toBeInstanceOf(EvaluatedSolid);
+      if (!(output instanceof EvaluatedSolid)) return;
       const measured = output.measure();
       expect(measured.volume).toBeCloseTo(6_000, 8);
       expect(measured.surfaceArea).toBeCloseTo(2_200, 8);
       expect(measured.boundingBox).toEqual({ min: [-5, -10, -15], max: [5, 10, 15] });
       expect(output.mesh().indices.length / 3).toBe(12);
+      expect(output.topology()).toEqual({
+        ok: false,
+        diagnostics: [
+          expect.objectContaining({
+            code: "KERNEL_CAPABILITY_MISSING",
+          }),
+        ],
+      });
     } finally {
       result.dispose();
+    }
+  });
+
+  it("returns detached, deeply immutable topology snapshots", async () => {
+    const cachedSnapshot = {
+      history: "complete",
+      faces: [
+        {
+          topology: "face",
+          key: "cached-face",
+          center: [1, 2, 3],
+          bounds: { min: [0, 0, 0], max: [2, 4, 6] },
+          lineage: [
+            {
+              feature: "extrude",
+              relation: "created",
+              role: "extrude.face.side",
+              source: {
+                kind: "sketch-entity",
+                sketch: "profile",
+                entity: "segment",
+              },
+            },
+          ],
+          area: 12,
+          surface: { kind: "plane", normal: [0, 0, 1] },
+          edges: ["cached-edge"],
+        },
+      ],
+      edges: [
+        {
+          topology: "edge",
+          key: "cached-edge",
+          center: [1, 0, 0],
+          bounds: { min: [0, 0, 0], max: [2, 0, 0] },
+          lineage: [{ feature: "extrude", relation: "created" }],
+          length: 2,
+          curve: { kind: "line", direction: [1, 0, 0] },
+          faces: ["cached-face"],
+        },
+      ],
+    } as unknown as KernelTopologySnapshot;
+    const delegate = await createManifoldKernel();
+    let topologyCalls = 0;
+    let topologyFailure: unknown;
+    const kernel = new Proxy(delegate, {
+      get(target, property) {
+        if (property === "id") return "mutable-cached-topology-test";
+        if (property === "capabilities") {
+          return {
+            ...target.capabilities,
+            topology: {
+              kinds: ["face", "edge"] as const,
+              provenance: "history" as const,
+              semanticRoles: true,
+              sketchSources: true,
+              geometry: true,
+              adjacency: true,
+            },
+          };
+        }
+        if (property === "topology") {
+          return () => {
+            if (topologyFailure !== undefined) throw topologyFailure;
+            topologyCalls += 1;
+            return cachedSnapshot;
+          };
+        }
+        const value: unknown = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as GeometryKernel;
+    const topologyEvaluator = await createEvaluator({ kernel });
+    try {
+      const cad = design("detached-topology");
+      cad.output(
+        "box",
+        cad.box("box", { size: vec3(mm(2), mm(4), mm(6)) }),
+      );
+      const result = await topologyEvaluator.evaluate(cad.build());
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      try {
+        const output = result.value.output("box");
+        expect(output).toBeInstanceOf(EvaluatedSolid);
+        if (!(output instanceof EvaluatedSolid)) return;
+
+        const first = output.topology();
+        expect(first.ok).toBe(true);
+        if (!first.ok) return;
+        const firstFace = first.value.faces[0]!;
+        const firstEdge = first.value.edges[0]!;
+        const firstSource = firstFace.lineage[0]!.source!;
+        expect(first.value).not.toBe(cachedSnapshot);
+        expect(firstFace).not.toBe(cachedSnapshot.faces[0]);
+        expect(firstFace.center).not.toBe(cachedSnapshot.faces[0]!.center);
+        expect(firstSource).not.toBe(cachedSnapshot.faces[0]!.lineage[0]!.source);
+        expect(Object.isFrozen(first.value)).toBe(true);
+        expect(Object.isFrozen(firstFace)).toBe(true);
+        expect(Object.isFrozen(firstFace.center)).toBe(true);
+        expect(Object.isFrozen(firstSource)).toBe(true);
+        expect(Object.isFrozen(firstEdge.curve.direction!)).toBe(true);
+        expect(Object.isFrozen(cachedSnapshot)).toBe(false);
+        expect(Object.isFrozen(cachedSnapshot.faces[0]!.center)).toBe(false);
+
+        expect(Reflect.set(firstFace.center, "0", 999)).toBe(false);
+        expect(Reflect.set(firstSource, "entity", "changed")).toBe(false);
+        expect(Reflect.set(firstEdge.curve.direction!, "0", -1)).toBe(false);
+        expect(cachedSnapshot.faces[0]!.center).toEqual([1, 2, 3]);
+        expect(cachedSnapshot.faces[0]!.lineage[0]!.source?.entity).toBe(
+          "segment",
+        );
+        expect(cachedSnapshot.edges[0]!.curve.direction).toEqual([1, 0, 0]);
+
+        const second = output.topology();
+        expect(second.ok).toBe(true);
+        if (!second.ok) return;
+        expect(second.value).toEqual(first.value);
+        expect(second.value).not.toBe(first.value);
+        expect(second.value.faces[0]).not.toBe(firstFace);
+        expect(second.value.faces[0]!.center).not.toBe(firstFace.center);
+        expect(topologyCalls).toBe(2);
+
+        const revoked = Proxy.revocable({}, {});
+        revoked.revoke();
+        topologyFailure = revoked.proxy;
+        expect(output.topology()).toEqual({
+          ok: false,
+          diagnostics: [
+            {
+              code: "KERNEL_ERROR",
+              message: "Geometry kernel topology access failed",
+              severity: "error",
+              details: { kernel: "mutable-cached-topology-test" },
+            },
+          ],
+        });
+      } finally {
+        result.value.dispose();
+      }
+    } finally {
+      topologyEvaluator.dispose();
     }
   });
 

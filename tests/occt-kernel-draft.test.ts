@@ -266,6 +266,7 @@ describe("OCCT module-factory and facade probing", () => {
       expect(passed.print).toBe(output);
       expect(kernel.draft).toBeUndefined();
       expect("draft" in kernel).toBe(false);
+      expect(kernel.capabilities.topology?.signatures).toBeUndefined();
       expect(kernelSupports(kernel.capabilities, "feature", "draft")).toBe(false);
       expect(
         kernelSupports(

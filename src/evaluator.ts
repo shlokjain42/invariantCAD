@@ -19,6 +19,7 @@ import {
   diagnostic,
   failure,
   hasErrors,
+  safeErrorMessage,
   success,
   type CadResult,
   type Diagnostic,
@@ -101,6 +102,7 @@ import {
 } from "./topology-resolution.js";
 import type {
   KernelTopologyKey,
+  KernelTopologySnapshot,
   TopologyKind,
 } from "./protocol/topology.js";
 import {
@@ -108,6 +110,7 @@ import {
   type ResolvedDraftOptions,
 } from "./protocol/draft.js";
 import { TopologyEvolutionProtocolError } from "./internal/topology-evolution.js";
+import { normalizeKernelTopologySnapshot } from "./internal/topology-snapshot.js";
 
 export type ParameterOverride = number | Expression<Dimension>;
 export type ShapeExportFormat = MeshExportFormat | KernelExchangeFormat;
@@ -552,6 +555,46 @@ export class EvaluatedSolid {
   measure(): ShapeMeasurements {
     this.owner.assertLive();
     return this.owner.kernel.measure(this.shape);
+  }
+
+  /**
+   * Returns the evaluation-scoped face/edge snapshot for signature capture,
+   * selection explanation, and other topology-aware analysis.
+   */
+  topology(): CadResult<KernelTopologySnapshot> {
+    this.owner.assertLive();
+    if (!kernelSupportsTopology(this.owner.kernel)) {
+      return failure(
+        diagnostic(
+          "KERNEL_CAPABILITY_MISSING",
+          `Kernel '${this.owner.kernel.id}' does not expose topology snapshots`,
+          {
+            severity: "error",
+            details: {
+              kernel: this.owner.kernel.id,
+              kind: "topology",
+              capability: "snapshot",
+            },
+          },
+        ),
+      );
+    }
+    try {
+      return normalizeKernelTopologySnapshot(
+        this.owner.kernel.topology(this.shape),
+      );
+    } catch (error) {
+      return failure(
+        diagnostic(
+          "KERNEL_ERROR",
+          safeErrorMessage(error, "Geometry kernel topology access failed"),
+          {
+            severity: "error",
+            details: { kernel: this.owner.kernel.id },
+          },
+        ),
+      );
+    }
   }
 
   export(format: ShapeExportFormat): Uint8Array | string {

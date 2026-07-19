@@ -301,6 +301,78 @@ The serialized role vocabulary is closed and exported through `TOPOLOGY_ROLES` a
 
 Selectors also support curve/surface kind, edge direction, face normal, radius, adjacency, `and`/`or`/`not`, and explicit cardinality. Zero matches produce `TOPOLOGY_SELECTION_MISSING`; excess matches produce `TOPOLOGY_SELECTION_AMBIGUOUS`. The exact backend currently provides complete broad feature provenance for primitives, extrusions, revolutions, lofts, sweeps, and topology-preserving transforms, plus the semantic roles and sketch sources above. Loft and sweep topology have broad `createdBy(feature)` lineage but deliberately have no cap/side roles or sketch-source mapping. The matched owned ABI 0.6 facade provides exact indexed evolution for draft, Boolean, fillet, chamfer, shell, and offset. Boolean history remains partial on stock/default OCCT, older owned ABIs, and Manifold; fillet/chamfer history remains partial on stock/default OCCT and owned ABIs 0.2–0.4; shell/offset history remains partial on stock/default OCCT and owned ABIs 0.2–0.5. Origin queries against any partial-history result fail with `TOPOLOGY_HISTORY_UNAVAILABLE` rather than choosing unstable topology, while geometry-only selectors can still inspect it. Manifold and stock/default OCCT report an explicit capability error for draft.
 
+### Detached topology references across evaluations
+
+Topology-signature protocol v1 provides a bounded first persistent-topology slice for faces and edges. A topology-capable evaluated solid exposes a validated, detached, deeply frozen copy of its current snapshot through `EvaluatedSolid.topology()`, returning a `CadResult<KernelTopologySnapshot>` rather than exposing the underlying kernel shape or a mutable kernel cache. A kernel opts into persistent-reference compatibility with the optional `KernelTopologyCapabilities.signatures` declaration:
+
+```ts
+{
+  protocolVersion: 1,
+  fingerprint: "kernel-specific descriptor compatibility declaration",
+}
+```
+
+The fingerprint is a semantic compatibility declaration for that kernel's topology descriptors, including any runtime or modeling-tolerance choices the kernel considers material. It is not a hash or cryptographic attestation of the native runtime bytes. Capture and resolution validate protocol v1 and require the fingerprint string to match exactly before considering a candidate. Applications should pass the capability advertised by the kernel that produced each snapshot; a missing declaration means that kernel has not promised compatibility with this protocol. `createOcctKernel()` advertises the declaration for its known default stock runtime and for a recognized owned facade. Supplying an explicit `wasm` or an unknown custom `moduleFactory` suppresses it unless facade probing recognizes the matched owned runtime.
+
+`captureTopologyReference(...)` receives one snapshot, a face or edge key from that snapshot, the advertised signature capability, and explicit linear, angular, and relative match tolerances. Linear tolerance is an absolute error threshold for world-space centers and bounds: it does not grow merely because two compared coordinates are numerically far from the origin, though an actual translation still changes those coordinates and can prevent a match. Relative tolerance applies to measures and radii; face area also receives a linear-tolerance term scaled by the face's characteristic length. It returns a deeply frozen `PersistentTopologyReference` containing canonical semantic lineage, structured geometry, and structured one-hop adjacency evidence. The returned reference is detached: it contains no kernel key, native index, array ordinal, or enumeration-derived tiebreaker, so it can be stored by application code after the evaluation result is disposed. Call `EvaluatedSolid.topology()` before disposing its evaluation; calling it afterward throws through the normal evaluated-shape lifetime guard. A snapshot saved before disposal remains readable, but its keys are still scoped to that evaluation. The key-free captured reference is the durable evidence. It is not part of `DesignDocument` v1 and does not change document serialization, hashing, or schema.
+
+Capture and resolution also accept `limits?: Partial<TopologySignatureLimits>`. Omitted fields come from the frozen exported `DEFAULT_TOPOLOGY_SIGNATURE_LIMITS` object:
+
+| Limit | Default | Input or work bounded during capture or resolution |
+|---|---:|---|
+| `maxTopologyItems` | `100_000` | Total faces plus edges in the current snapshot |
+| `maxAdjacencyLinks` | `1_000_000` | Snapshot descriptor-array entries, or adjacency entries in a detached reference; one reciprocal face-edge incidence occupies two snapshot entries |
+| `maxEvidenceRecords` | `1_000_000` | Lineage records in the snapshot or detached reference |
+| `maxCandidatePairs` | `1_000_000` | Topology and neighbor compatibility pairs considered while matching |
+| `maxMatchingSteps` | `10_000_000` | Lineage comparisons plus iterative one-to-one adjacency search and update steps |
+
+Each override must be a non-negative safe integer; unknown limit fields and malformed values produce `TOPOLOGY_SIGNATURE_INVALID`. Crossing a ceiling stops that call with `TOPOLOGY_SIGNATURE_LIMIT_EXCEEDED` and reports the `resource`, configured `limit`, and observed `actual` count. Resolution applies the adjacency-link and evidence-record size ceilings independently to the detached reference and to the current snapshot; candidate-pair and matching-step counters are cumulative across that invocation. Snapshot and reference arrays are read with fixed captured lengths and metered while they are detached, without invoking caller iteration hooks. These budgets constrain TypeScript signature normalization and matching after a snapshot exists. They do not bound kernel topology extraction, native modeling/history memory, or the separate owned-OCCT history-record budgets.
+
+```ts
+const signatures = kernel.capabilities.topology?.signatures;
+const signatureLimits = { maxTopologyItems: 50_000 };
+const firstTopology = firstOutput.topology();
+if (signatures === undefined || !firstTopology.ok) {
+  throw new Error("This evaluation cannot capture persistent topology");
+}
+
+const face = firstTopology.value.faces.find((item) =>
+  item.lineage.some((entry) => entry.role === "box.face.x-min"),
+);
+if (face === undefined) throw new Error("Expected box face was not present");
+
+const reference = captureTopologyReference(
+  firstTopology.value,
+  "face",
+  face.key,
+  {
+    capabilities: signatures,
+    tolerance: { linear: 1e-6, angular: 1e-9, relative: 1e-9 },
+    limits: signatureLimits,
+  },
+);
+if (!reference.ok) throw new Error(reference.diagnostics[0]?.message);
+
+// In a later evaluation using a compatible descriptor implementation:
+const nextTopology = nextOutput.topology();
+// If nextOutput came from another kernel instance, read that instance instead.
+const nextSignatures = kernel.capabilities.topology?.signatures;
+if (!nextTopology.ok || nextSignatures === undefined) {
+  throw new Error("The later evaluation cannot resolve persistent topology");
+}
+const resolved = resolveTopologyReference(reference.value, nextTopology.value, {
+  // Always use the declaration from the kernel that produced nextTopology.
+  capabilities: nextSignatures,
+  limits: signatureLimits,
+});
+```
+
+With complete history on both snapshots, a unique stable role or sketch-source anchor resolves as `evidence: "semantic-lineage"`; that design evidence is authoritative rather than being overridden by a coincidental geometric match. When no such anchor is available, or either snapshot declares partial history, resolution falls back to toleranced `"geometry-adjacency"` evidence and does not treat partial lineage as authoritative. The fallback compares the captured face or edge geometry together with the unordered one-hop signatures of its incident edges or faces. Adjacency matching is iterative and non-recursive: neighbor evidence never contains another adjacency layer, and the matcher uses bounded one-to-one bipartite matching rather than recursively traversing the topology graph.
+
+Capture first proves that the detached evidence uniquely identifies the requested item in its own snapshot. Resolution likewise returns a current evaluation-scoped key only for exactly one compatible candidate. No match fails with `TOPOLOGY_MATCH_MISSING`; multiple matches fail with `TOPOLOGY_MATCH_AMBIGUOUS`; malformed references, options, tolerances, limits, and signature capabilities fail with `TOPOLOGY_SIGNATURE_INVALID`; malformed kernel snapshots fail as `KERNEL_ERROR`; and an exact fingerprint mismatch fails with `TOPOLOGY_FINGERPRINT_MISMATCH`. Resource normalization can return `TOPOLOGY_SIGNATURE_LIMIT_EXCEEDED` before deeper validation of an oversized input. Symmetric topology therefore remains explicitly ambiguous—the protocol never invents identity from enumeration order.
+
+This slice supports faces and edges only, not vertices. It is a public capture/resolve API over evaluated snapshots, not a persistent `TopologySelection` node: references cannot yet be embedded in document IR or consumed directly by modeling features. It also does not provide geometric diffing, incremental feature hashes, or cross-run shape caching.
+
 ## What works today
 
 ### Modeling
@@ -340,6 +412,7 @@ The solver API is replaceable. The built-in solver is intentionally a v0.1 refer
 - Reliable manifold-mesh CSG through `manifold-3d` WebAssembly
 - Exact B-Rep primitives, analytic profile extrusion/revolution, CSG, and transforms through OpenCascade WebAssembly
 - Exact topology enumeration, geometry/adjacency descriptors, selected-edge fillets/chamfers, face-selected shells, whole-solid offsets, owned-facade atomic draft, and owned-facade exact multi-input Boolean, edge-treatment, and solid-offset evolution through OpenCascade WebAssembly
+- Protocol-v1 detached face/edge reference capture and fail-closed resolution across compatible topology snapshots, using semantic lineage or toleranced geometry with one-hop adjacency
 - Native STEP, text BREP, and binary BREP import/export in the exact-kernel protocol
 - Volume, surface area, axis-aligned bounds, genus, kernel tolerance, center of mass, centroidal inertia, principal axes/moments, arbitrary-axis inertia, radii of gyration, and density-aware physical mass properties
 - Typed-array mesh extraction
@@ -375,9 +448,10 @@ The solver API is replaceable. The built-in solver is intentionally a v0.1 refer
 | Boolean topology evolution | Complete face/edge/vertex graph with explicitly supplied owned OCCT facade ABI 0.4 and later; partial on stock/legacy OCCT and Manifold | Persistent cross-evaluation naming |
 | Fillet/chamfer topology evolution | Complete face/edge/vertex graph with explicitly supplied owned OCCT facade ABI 0.5 and later; partial on stock and owned ABI 0.2–0.4 | Persistent cross-evaluation naming |
 | Shell/whole-solid offset topology evolution | Complete face/edge/vertex graph with explicitly supplied owned OCCT facade ABI 0.6 and later; partial on stock and owned ABI 0.2–0.5 | Persistent cross-evaluation naming |
+| Detached face/edge references | Protocol-v1 capture/resolution over compatible evaluated snapshots, with exact fingerprint gating and no invented identity for symmetric topology | Broader naming across feature families and topology kinds |
 | Loft | OCCT ordered ruled-solid mode with matched hole-free sections | Smooth, guided, and open modes |
 | Sweep | OCCT open-polyline, one-edge circular-arc, and certified ordered line/arc composite solid modes with corrected-Frenet transport; owned facade ABI 0.6 retains the certified major multi-arc and eccentric-profile refinements introduced by ABI 0.3 | Bézier, B-spline, helix, guided, and variable-section modes |
-| Persistent face/edge selectors | Primitive/extrusion roles and sources; origin/geometry/adjacency queries | Yes |
+| Semantic face/edge selectors | Primitive/extrusion roles and sources; origin/geometry/adjacency queries within evaluation | Persistent-reference integration in document selectors |
 | Drawings, GD&T, PMI | No | Yes |
 | Sheet metal | No | Yes |
 | CAM and CAE adapters | No | Yes |
@@ -640,7 +714,7 @@ import { createOcctKernel } from "invariantcad/kernels/occt";
 const kernel = await createOcctKernel({ wasm: occtWasmUrl });
 ```
 
-That form still pairs the supplied binary with the stock `occt-wasm` JavaScript glue and therefore does not enable draft or exact Boolean, fillet/chamfer, or shell/offset topology evolution. Load those guarantees with the generated JavaScript factory from the owned-facade build. A factory may locate its matched sibling WASM itself; pass `wasm` when the application or bundler needs an explicit binary URL:
+That form still pairs the supplied binary with the stock `occt-wasm` JavaScript glue and therefore does not enable draft or exact Boolean, fillet/chamfer, or shell/offset topology evolution. Because InvariantCAD cannot recognize that overridden binary as the known default stock runtime, it also omits `topology.signatures`; topology inspection still works, but the kernel makes no protocol-v1 persistent-reference compatibility promise. Load the stronger guarantees with the generated JavaScript factory from the owned-facade build. A factory may locate its matched sibling WASM itself; pass `wasm` when the application or bundler needs an explicit binary URL:
 
 ```ts
 import ownedOcctModuleFactory from "./occt-facade/occt-wasm.js";

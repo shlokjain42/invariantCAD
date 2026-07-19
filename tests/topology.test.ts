@@ -444,6 +444,64 @@ describe("semantic topology selections", () => {
     expect(reverse.value).toEqual(forward.value);
   });
 
+  it("copies accessor-backed snapshots once before resolving selectors", () => {
+    let directionReads = 0;
+    const curve = { kind: "line" } as {
+      readonly kind: "line";
+      readonly direction: readonly [number, number, number];
+    };
+    Object.defineProperty(curve, "direction", {
+      enumerable: true,
+      get() {
+        directionReads += 1;
+        return directionReads === 1 ? [0, 0, 1] : [1, 0, 0];
+      },
+    });
+    const stateful = {
+      ...verticalEdges[0]!,
+      curve,
+    } as KernelEdgeDescriptor;
+
+    const resolved = resolveTopologySelection(
+      topology.edges.direction(scalarVec3(0, 0, 1)).exactly(1).ir,
+      snapshot([stateful]),
+      {
+        evaluate: (expression) =>
+          expression.op === "literal" ? expression.value : Number.NaN,
+      },
+    );
+
+    expect(resolved.ok).toBe(true);
+    if (resolved.ok) expect(resolved.value).toEqual([key("e00")]);
+    expect(directionReads).toBe(1);
+  });
+
+  it("contains revoked-proxy selector exceptions inside CadResult", () => {
+    const revoked = Proxy.revocable({}, {});
+    revoked.revoke();
+
+    const resolved = resolveTopologySelection(
+      topology.edges.direction(scalarVec3(0, 0, 1)).exactly(1).ir,
+      snapshot(),
+      {
+        evaluate() {
+          throw revoked.proxy;
+        },
+      },
+    );
+
+    expect(resolved).toEqual({
+      ok: false,
+      diagnostics: [
+        {
+          code: "TOPOLOGY_SELECTOR_INVALID",
+          message: "Topology selector input could not be read",
+          severity: "error",
+        },
+      ],
+    });
+  });
+
   it("distinguishes ambiguous, missing, incomplete-history, and invalid snapshots", () => {
     const context = {
       evaluate: (expression: any): number => expression.value,

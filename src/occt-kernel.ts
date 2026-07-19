@@ -703,8 +703,35 @@ class OcctKernel implements GeometryKernel {
     this.maxExactEdgeTreatmentHistoryRecords =
       maxExactEdgeTreatmentHistoryRecords;
     this.maxExactSolidOffsetHistoryRecords = maxExactSolidOffsetHistoryRecords;
+    const topologySignatureRuntime =
+      facade?.version ??
+      (options.moduleFactory === undefined && options.wasm === undefined
+        ? "stock"
+        : undefined);
+    const topologySignatureFingerprint =
+      topologySignatureRuntime === undefined ||
+      !Number.isFinite(this.modelingTolerance) ||
+      !(this.modelingTolerance > 0)
+        ? undefined
+        : [
+            "invariantcad-topology-descriptor@1",
+            "occt-wasm@3.7.0",
+            `runtime=${topologySignatureRuntime}`,
+            `modelingTolerance=${this.modelingTolerance}`,
+          ].join(";");
     this.capabilities = {
       ...OcctKernel.BASE_CAPABILITIES,
+      topology: {
+        ...OcctKernel.BASE_CAPABILITIES.topology!,
+        ...(topologySignatureFingerprint === undefined
+          ? {}
+          : {
+              signatures: {
+                protocolVersion: 1 as const,
+                fingerprint: topologySignatureFingerprint,
+              },
+            }),
+      },
       ...(facade?.draft === undefined
         ? {}
         : {

@@ -56,12 +56,13 @@ Facade ABI/bundle numbers version the native adapter boundary and are independen
 - Extend complete shell/offset provenance beyond the owned OCCT ABI 0.6 path while retaining stock OCCT and legacy owned facades as supported partial-history implementations
 - Extend complete Boolean and edge-treatment provenance beyond the owned OCCT ABI 0.4/0.5 paths while retaining stock OCCT, legacy owned facades, and Manifold as supported partial-history implementations where they provide the base operation
 - Expanded role and source mapping for additional feature families
-- Geometry and adjacency signatures
+- Landed: topology-signature protocol v1 for detached face/edge references, with key-free structured geometry and one-hop adjacency evidence, optional semantic compatibility fingerprints, exact fingerprint gating, partial-history fallback, and fail-closed missing/ambiguous resolution
+- Expand the bounded v1 reference layer into persistent document selectors and broader topology-kind/feature-family naming without assigning arbitrary identities to symmetric topology
 - Expanded selection diagnostics and provenance explanations
 - Incremental feature hashes and cross-run cache
 - Change-impact and geometric diff APIs
 
-Current topology keys and ABI indices remain evaluation-scoped. The 0.3 work is the durable cross-evaluation naming layer; exact ABI 0.4 Boolean, ABI 0.5 fillet/chamfer, and ABI 0.6 shell/offset history prove one evaluation's evolution graph but do not themselves make a native index persistent.
+Current topology keys and ABI indices remain evaluation-scoped. Protocol-v1 references persist detached evidence rather than those keys and resolve to a fresh key only for one compatible current candidate. They are not yet serialized selectors, a document-schema addition, a geometric-diff system, or a cross-run shape cache. Exact ABI 0.4 Boolean, ABI 0.5 fillet/chamfer, and ABI 0.6 shell/offset history prove one evaluation's evolution graph and strengthen semantic-lineage evidence, but do not themselves make a native index persistent.
 
 ## 0.4 — advanced mechanical features
 

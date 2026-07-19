@@ -345,6 +345,23 @@ export {
   resolveTopologySelection,
   type TopologyResolutionContext,
 } from "./topology-resolution.js";
+export {
+  DEFAULT_TOPOLOGY_SIGNATURE_LIMITS,
+  TOPOLOGY_SIGNATURE_PROTOCOL_VERSION,
+  captureTopologyReference,
+  resolveTopologyReference,
+  type CaptureTopologyReferenceOptions,
+  type PersistentTopologyReference,
+  type ResolveTopologyReferenceOptions,
+  type ResolvedTopologyReference,
+  type TopologyEdgeGeometrySignature,
+  type TopologyFaceGeometrySignature,
+  type TopologyGeometrySignature,
+  type TopologyMatchEvidence,
+  type TopologyMatchTolerance,
+  type TopologyNeighborSignature,
+  type TopologySignatureLimits,
+} from "./topology-signatures.js";
 export type {
   EdgeTopologyRole,
   FaceTopologyRole,
@@ -356,6 +373,7 @@ export type {
   KernelTopologyCapabilities,
   KernelTopologyKey,
   KernelTopologyLineage,
+  KernelTopologySignatureCapabilities,
   KernelTopologySnapshot,
   KernelTopologySource,
   TopologyKind,

@@ -1373,6 +1373,11 @@ const kernel = await createOcctKernel({
   wasm: wasmPath,
 });
 try {
+  assert.deepEqual(kernel.capabilities.topology?.signatures, {
+    protocolVersion: 1,
+    fingerprint:
+      "invariantcad-topology-descriptor@1;occt-wasm@3.7.0;runtime=invariantcad-facade@0.6.0+occt-wasm.3.7.0;modelingTolerance=1e-7",
+  });
   assertDirectDraft(kernel);
   assertDirectBoolean(kernel);
   assertDirectEdgeTreatments(kernel);

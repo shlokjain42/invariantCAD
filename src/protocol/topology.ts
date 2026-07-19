@@ -114,6 +114,20 @@ export interface KernelTopologyCapabilities {
   readonly sketchSources: boolean;
   readonly geometry: boolean;
   readonly adjacency: boolean;
+  /**
+   * Optional declaration that this kernel can produce topology descriptors
+   * compatible with the versioned persistent-reference protocol.
+   */
+  readonly signatures?: KernelTopologySignatureCapabilities;
+}
+
+export interface KernelTopologySignatureCapabilities {
+  readonly protocolVersion: 1;
+  /**
+   * Semantic compatibility fingerprint for the descriptor implementation.
+   * This is not a cryptographic attestation of native runtime bytes.
+   */
+  readonly fingerprint: string;
 }
 
 export interface KernelTopologySource {

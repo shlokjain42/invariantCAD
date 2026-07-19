@@ -32,6 +32,11 @@ export type DiagnosticCode =
   | "TOPOLOGY_SELECTION_MISSING"
   | "TOPOLOGY_SELECTION_AMBIGUOUS"
   | "TOPOLOGY_HISTORY_UNAVAILABLE"
+  | "TOPOLOGY_SIGNATURE_INVALID"
+  | "TOPOLOGY_SIGNATURE_LIMIT_EXCEEDED"
+  | "TOPOLOGY_FINGERPRINT_MISMATCH"
+  | "TOPOLOGY_MATCH_MISSING"
+  | "TOPOLOGY_MATCH_AMBIGUOUS"
   | "OUTPUT_MISSING"
   | "EVALUATION_ABORTED"
   | "EXPORT_UNSUPPORTED";
@@ -87,6 +92,26 @@ export function diagnostic(
 
 export function hasErrors(diagnostics: readonly Diagnostic[]): boolean {
   return diagnostics.some((item) => item.severity === "error");
+}
+
+/** Renders an arbitrary thrown value without allowing error inspection to throw. */
+export function safeErrorMessage(
+  value: unknown,
+  fallback = "Unknown error",
+): string {
+  try {
+    if (value instanceof Error) {
+      const message: unknown = value.message;
+      if (typeof message === "string") return message;
+    }
+  } catch {
+    // A revoked or hostile Proxy can throw during instanceof or property access.
+  }
+  try {
+    return String(value);
+  } catch {
+    return fallback;
+  }
 }
 
 export class CadError extends Error {

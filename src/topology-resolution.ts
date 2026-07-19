@@ -1,15 +1,19 @@
-import { diagnostic, type CadResult, type Diagnostic } from "./core/result.js";
+import {
+  diagnostic,
+  safeErrorMessage,
+  type CadResult,
+  type Diagnostic,
+} from "./core/result.js";
 import type { Vec3 } from "./core/math.js";
 import type { ExpressionIR } from "./expressions.js";
 import type { TopologyQueryIR, TopologySelectionIR } from "./ir.js";
-import {
-  TOPOLOGY_ROLE_RULES,
-  type TopologyRole,
-  type KernelEdgeDescriptor,
-  type KernelFaceDescriptor,
-  type KernelTopologyKey,
-  type KernelTopologySnapshot,
-  type TopologyKind,
+import { normalizeKernelTopologySnapshot } from "./internal/topology-snapshot.js";
+import type {
+  KernelEdgeDescriptor,
+  KernelFaceDescriptor,
+  KernelTopologyKey,
+  KernelTopologySnapshot,
+  TopologyKind,
 } from "./protocol/topology.js";
 
 type KernelTopologyDescriptor = KernelFaceDescriptor | KernelEdgeDescriptor;
@@ -82,6 +86,8 @@ export function topologySelectionRequirements(
   };
 }
 
+const topologyResolutionFailures = new WeakSet<object>();
+
 class TopologyResolutionFailure extends Error {
   readonly diagnostic: Diagnostic;
 
@@ -89,7 +95,18 @@ class TopologyResolutionFailure extends Error {
     super(value.message);
     this.name = "TopologyResolutionFailure";
     this.diagnostic = value;
+    topologyResolutionFailures.add(this);
   }
+}
+
+function isTopologyResolutionFailure(
+  value: unknown,
+): value is TopologyResolutionFailure {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    topologyResolutionFailures.has(value)
+  );
 }
 
 function location(
@@ -148,235 +165,6 @@ function canonicalSummaries(
     .map(descriptorSummary)
     .sort((first, second) => JSON.stringify(first).localeCompare(JSON.stringify(second)))
     .slice(0, 20);
-}
-
-function recordValue(value: unknown): value is Readonly<Record<string, unknown>> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function validateSnapshot(
-  snapshot: KernelTopologySnapshot,
-  context: TopologyResolutionContext,
-): void {
-  function fail(
-    message: string,
-    details: Readonly<Record<string, unknown>>,
-  ): never {
-    throw new TopologyResolutionFailure(
-      diagnostic("KERNEL_ERROR", message, {
-        ...location(context),
-        details: { ...details, protocolViolation: true },
-      }),
-    );
-  }
-
-  const rawSnapshot: unknown = snapshot;
-  if (!recordValue(rawSnapshot)) {
-    fail("Geometry kernel returned an invalid topology snapshot", {});
-  }
-  if (rawSnapshot.history !== "complete" && rawSnapshot.history !== "partial") {
-    fail("Geometry kernel returned an invalid topology history status", {
-      history: rawSnapshot.history,
-    });
-  }
-  if (!Array.isArray(rawSnapshot.faces) || !Array.isArray(rawSnapshot.edges)) {
-    fail("Geometry kernel returned invalid topology collections", {});
-  }
-
-  const vector = (value: unknown): value is Vec3 =>
-    Array.isArray(value) &&
-    value.length === 3 &&
-    value.every((component) =>
-      typeof component === "number" && Number.isFinite(component),
-    );
-  const topologyKeys = (
-    value: unknown,
-    topology: TopologyKind,
-    adjacency: "faces" | "edges",
-  ): value is readonly KernelTopologyKey[] => {
-    if (
-      !Array.isArray(value) ||
-      value.some((key) => typeof key !== "string" || key.length === 0) ||
-      new Set(value).size !== value.length
-    ) {
-      fail("Geometry kernel returned invalid topology adjacency", {
-        topology,
-        adjacency,
-      });
-    }
-    return true;
-  };
-  const lineage = (value: unknown, topology: TopologyKind): void => {
-    if (!Array.isArray(value)) {
-      fail("Geometry kernel returned invalid topology lineage", { topology });
-    }
-    for (const rawLineage of value) {
-      if (!recordValue(rawLineage)) {
-        fail("Geometry kernel returned invalid topology lineage", { topology });
-      }
-      if (
-        typeof rawLineage.feature !== "string" ||
-        rawLineage.feature.length === 0 ||
-        (rawLineage.relation !== "created" &&
-          rawLineage.relation !== "modified")
-      ) {
-        fail("Geometry kernel returned invalid topology lineage", { topology });
-      }
-      if (rawLineage.role !== undefined) {
-        if (typeof rawLineage.role !== "string") {
-          fail("Geometry kernel returned invalid semantic topology lineage", {
-            topology,
-          });
-        }
-        const rule = TOPOLOGY_ROLE_RULES[rawLineage.role as TopologyRole] as
-          | (typeof TOPOLOGY_ROLE_RULES)[TopologyRole]
-          | undefined;
-        if (
-          rule === undefined ||
-          rule.topology !== topology ||
-          rule.relation !== rawLineage.relation ||
-          (rawLineage.source !== undefined && rule.source !== "sketch-curve")
-        ) {
-          fail("Geometry kernel returned invalid semantic topology lineage", {
-            topology,
-            role: rawLineage.role,
-          });
-        }
-      }
-      if (rawLineage.source !== undefined) {
-        if (
-          !recordValue(rawLineage.source) ||
-          rawLineage.relation !== "created" ||
-          rawLineage.source.kind !== "sketch-entity" ||
-          typeof rawLineage.source.sketch !== "string" ||
-          rawLineage.source.sketch.length === 0 ||
-          typeof rawLineage.source.entity !== "string" ||
-          rawLineage.source.entity.length === 0
-        ) {
-          fail("Geometry kernel returned invalid topology source lineage", {
-            topology,
-          });
-        }
-      }
-    }
-  };
-  const geometry = (value: unknown, topology: TopologyKind): void => {
-    if (
-      !recordValue(value) ||
-      typeof value.kind !== "string" ||
-      value.kind.length === 0
-    ) {
-      fail("Geometry kernel returned invalid topology geometry", { topology });
-    }
-    for (const direction of [value.normal, value.direction, value.axis]) {
-      if (
-        direction !== undefined &&
-        (!vector(direction) || !(Math.hypot(...direction) > Number.EPSILON))
-      ) {
-        fail("Geometry kernel returned an invalid topology direction", {
-          topology,
-        });
-      }
-    }
-    if (
-      value.radius !== undefined &&
-      (typeof value.radius !== "number" ||
-        !Number.isFinite(value.radius) ||
-        value.radius < 0)
-    ) {
-      fail("Geometry kernel returned an invalid topology radius", { topology });
-    }
-  };
-
-  const keys = new Set<KernelTopologyKey>();
-  const validateDescriptor = (
-    rawDescriptor: unknown,
-    topology: TopologyKind,
-  ): void => {
-    if (
-      !recordValue(rawDescriptor) ||
-      rawDescriptor.topology !== topology ||
-      typeof rawDescriptor.key !== "string" ||
-      rawDescriptor.key.length === 0 ||
-      !vector(rawDescriptor.center) ||
-      !recordValue(rawDescriptor.bounds) ||
-      !vector(rawDescriptor.bounds.min) ||
-      !vector(rawDescriptor.bounds.max)
-    ) {
-      fail("Geometry kernel returned an invalid topology descriptor", {
-        topology,
-      });
-    }
-    const bounds = rawDescriptor.bounds as {
-      readonly min: Vec3;
-      readonly max: Vec3;
-    };
-    if (bounds.min.some((minimum, index) => minimum > bounds.max[index]!)) {
-      fail("Geometry kernel returned invalid topology bounds", { topology });
-    }
-    const key = rawDescriptor.key as KernelTopologyKey;
-    if (keys.has(key)) {
-      fail("Geometry kernel returned a duplicate topology key", {
-        topology,
-      });
-    }
-    keys.add(key);
-    lineage(rawDescriptor.lineage, topology);
-    if (topology === "face") {
-      if (
-        typeof rawDescriptor.area !== "number" ||
-        !Number.isFinite(rawDescriptor.area) ||
-        rawDescriptor.area < 0
-      ) {
-        fail("Geometry kernel returned invalid topology measure", { topology });
-      }
-      geometry(rawDescriptor.surface, topology);
-      topologyKeys(rawDescriptor.edges, topology, "edges");
-    } else {
-      if (
-        typeof rawDescriptor.length !== "number" ||
-        !Number.isFinite(rawDescriptor.length) ||
-        rawDescriptor.length < 0
-      ) {
-        fail("Geometry kernel returned invalid topology measure", { topology });
-      }
-      geometry(rawDescriptor.curve, topology);
-      topologyKeys(rawDescriptor.faces, topology, "faces");
-    }
-  };
-
-  rawSnapshot.faces.forEach((face) => validateDescriptor(face, "face"));
-  rawSnapshot.edges.forEach((edge) => validateDescriptor(edge, "edge"));
-  const faces = rawSnapshot.faces as unknown as readonly KernelFaceDescriptor[];
-  const edges = rawSnapshot.edges as unknown as readonly KernelEdgeDescriptor[];
-  const faceKeys = new Set(faces.map((face) => face.key));
-  const edgeKeys = new Set(edges.map((edge) => edge.key));
-  const faceByKey = new Map(faces.map((face) => [face.key, face]));
-  const edgeByKey = new Map(edges.map((edge) => [edge.key, edge]));
-  for (const face of faces) {
-    for (const edgeKey of face.edges) {
-      const edge = edgeByKey.get(edgeKey);
-      if (edge === undefined || !edge.faces.includes(face.key)) {
-        fail("Geometry kernel returned invalid face-to-edge adjacency", {
-          topology: "face",
-          dangling: !edgeKeys.has(edgeKey),
-          reciprocal: edge !== undefined,
-        });
-      }
-    }
-  }
-  for (const edge of edges) {
-    for (const faceKey of edge.faces) {
-      const face = faceByKey.get(faceKey);
-      if (face === undefined || !face.edges.includes(edge.key)) {
-        fail("Geometry kernel returned invalid edge-to-face adjacency", {
-          topology: "edge",
-          dangling: !faceKeys.has(faceKey),
-          reciprocal: face !== undefined,
-        });
-      }
-    }
-  }
 }
 
 function normalized(value: Vec3, context: TopologyResolutionContext): Vec3 {
@@ -662,20 +450,30 @@ export function resolveTopologySelection(
 ): CadResult<readonly KernelTopologyKey[]> {
   let snapshotValidated = false;
   try {
-    validateSnapshot(snapshot, context);
+    const normalizedSnapshot = normalizeKernelTopologySnapshot(snapshot);
+    if (!normalizedSnapshot.ok) {
+      return {
+        ok: false,
+        diagnostics: normalizedSnapshot.diagnostics.map((item) => ({
+          ...item,
+          ...location(context),
+        })),
+      };
+    }
+    const detachedSnapshot = normalizedSnapshot.value;
     snapshotValidated = true;
     return {
       ok: true,
-      value: resolveSelectionOrThrow(selection, snapshot, context),
+      value: resolveSelectionOrThrow(selection, detachedSnapshot, context),
       diagnostics: [],
     };
   } catch (error) {
     const value =
-      error instanceof TopologyResolutionFailure
+      isTopologyResolutionFailure(error)
         ? error.diagnostic
         : diagnostic(
             snapshotValidated ? "TOPOLOGY_SELECTOR_INVALID" : "KERNEL_ERROR",
-            error instanceof Error ? error.message : String(error),
+            safeErrorMessage(error, "Topology selector input could not be read"),
             {
               ...location(context),
               ...(snapshotValidated
