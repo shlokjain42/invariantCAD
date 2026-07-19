@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-const EXPECTED_FACADE_VERSION = "invariantcad-facade@0.5.0+occt-wasm.3.7.0";
+const EXPECTED_FACADE_VERSION = "invariantcad-facade@0.6.0+occt-wasm.3.7.0";
 const EXPECTED_TOPOLOGY_HISTORY_VERSION = 1;
 const EXACT_BOOLEAN_HISTORY_RECORD_LIMIT = 1_000_000;
 const EXACT_EDGE_TREATMENT_HISTORY_RECORD_LIMIT = 1_000_000;
+const EXACT_SOLID_OFFSET_HISTORY_RECORD_LIMIT = 1_000_000;
 const LINEAR_TOLERANCE = 1e-10;
 const VOLUME_TOLERANCE = 1e-8;
 const SELECTION_TOLERANCE = 1e-8;
@@ -50,7 +51,23 @@ const fixtures = {
 };
 
 const projectRoot = fileURLToPath(new URL("..", import.meta.url));
-const facadeDirectory = join(projectRoot, ".artifacts", "occt-facade");
+function runtimeDirectory(arguments_) {
+  if (arguments_.length === 0) {
+    return join(projectRoot, ".artifacts", "occt-facade");
+  }
+  if (
+    arguments_.length === 2 &&
+    arguments_[0] === "--runtime-dir" &&
+    arguments_[1] !== undefined
+  ) {
+    return resolve(arguments_[1]);
+  }
+  throw new Error(
+    "Usage: node scripts/test-occt-facade.mjs [--runtime-dir DIRECTORY]",
+  );
+}
+
+const facadeDirectory = runtimeDirectory(process.argv.slice(2));
 const gluePath = join(facadeDirectory, "occt-wasm.js");
 const wasmPath = join(facadeDirectory, "occt-wasm.wasm");
 const createOcctWasm = (await import(pathToFileURL(gluePath).href)).default;
@@ -63,6 +80,8 @@ assert.equal(typeof Module.InvariantCadBooleanReport, "function");
 assert.equal(typeof Module.invariantcadBooleanAtomic, "function");
 assert.equal(typeof Module.InvariantCadEdgeTreatmentReport, "function");
 assert.equal(typeof Module.invariantcadEdgeTreatmentAtomic, "function");
+assert.equal(typeof Module.InvariantCadSolidOffsetReport, "function");
+assert.equal(typeof Module.invariantcadSolidOffsetAtomic, "function");
 assert.equal(typeof Module.InvariantCadPipeShellReport, "function");
 assert.equal(typeof Module.invariantcadPipeShellSolid, "function");
 
@@ -74,6 +93,14 @@ const booleanOperations = Object.freeze({
 const edgeTreatmentOperations = Object.freeze({
   fillet: Module.InvariantCadEdgeTreatmentOperation.FILLET,
   chamfer: Module.InvariantCadEdgeTreatmentOperation.CHAMFER,
+});
+const solidOffsetOperations = Object.freeze({
+  shell: Module.InvariantCadSolidOffsetOperation.SHELL,
+  offset: Module.InvariantCadSolidOffsetOperation.OFFSET,
+});
+const solidOffsetDirections = Object.freeze({
+  inward: Module.InvariantCadSolidOffsetDirection.INWARD,
+  outward: Module.InvariantCadSolidOffsetDirection.OUTWARD,
 });
 const topologyKinds = Object.freeze({
   none: Module.InvariantCadTopologyKind.NONE,
@@ -91,6 +118,8 @@ const topologyRelations = Object.freeze({
 
 assert.deepEqual(booleanOperations, { union: 0, subtract: 1, intersect: 2 });
 assert.deepEqual(edgeTreatmentOperations, { fillet: 0, chamfer: 1 });
+assert.deepEqual(solidOffsetOperations, { shell: 0, offset: 1 });
+assert.deepEqual(solidOffsetDirections, { inward: 0, outward: 1 });
 assert.deepEqual(topologyKinds, { none: -1, face: 0, edge: 1, vertex: 2 });
 assert.deepEqual(topologyRelations, {
   preserved: 0,
@@ -313,6 +342,19 @@ function faceOnPlane(shape, axis, coordinate) {
   );
 }
 
+function indexedFaceOnPlane(faces, axis, coordinate, label) {
+  const indices = faces.flatMap((face, index) => {
+    const bounds = boundsOf(face);
+    return near(bounds[`${axis}min`], coordinate) &&
+      near(bounds[`${axis}max`], coordinate)
+      ? [index]
+      : [];
+  });
+  assert.equal(indices.length, 1, `${label}: expected exactly one face`);
+  const index = indices[0];
+  return { face: faces[index], index };
+}
+
 function facesSpanning(shape, axis, length) {
   const matches = facesOf(shape).filter(
     (face) => extent(boundsOf(face), axis) > length * 0.99,
@@ -389,6 +431,33 @@ function exactEdgeTreatment(
       input,
       ids,
       amount,
+      maxHistoryRecords,
+    );
+  } finally {
+    ids.delete();
+  }
+}
+
+function exactSolidOffset(
+  operation,
+  input,
+  openingFaces,
+  amount,
+  direction,
+  tolerance = 1e-6,
+  selectedKernel = kernel,
+  maxHistoryRecords = EXACT_SOLID_OFFSET_HISTORY_RECORD_LIMIT,
+) {
+  const ids = vector(openingFaces);
+  try {
+    return Module.invariantcadSolidOffsetAtomic(
+      selectedKernel,
+      operation,
+      input,
+      ids,
+      amount,
+      direction,
+      tolerance,
       maxHistoryRecords,
     );
   } finally {
@@ -519,6 +588,7 @@ function topologyCountForKind(counts, kind) {
 
 const observedBooleanRelations = new Set();
 const observedEdgeTreatmentRelations = new Set();
+const observedSolidOffsetRelations = new Set();
 
 function assertBooleanHistory(
   report,
@@ -889,6 +959,87 @@ function assertEdgeTreatmentResult(result, history, expected, label) {
     history.resultCounts,
     `${label}: report/result topology counts disagree`,
   );
+}
+
+function selectedOpeningFaceIndices(report) {
+  return Array.from(
+    { length: report.selectedOpeningFaceCount() },
+    (_, index) => report.selectedOpeningFaceIndex(index),
+  );
+}
+
+function assertSolidOffsetReportSuccess(
+  report,
+  operation,
+  direction,
+  amount,
+  tolerance,
+  requestedOpeningFaceCount,
+  expectedSelectedIndices,
+  arenaBefore,
+  label,
+) {
+  assert.equal(report.ok, true, `${report.code}: ${report.message}`);
+  assert.equal(report.stage, "complete", `${label}.stage`);
+  assert.equal(report.code, "OK", `${label}.code`);
+  assert.equal(report.operation, operation, `${label}.operation`);
+  assert.equal(report.direction, direction, `${label}.direction`);
+  assert.equal(report.amount, amount, `${label}.amount`);
+  assert.equal(report.tolerance, tolerance, `${label}.tolerance`);
+  assert.equal(
+    report.requestedOpeningFaceCount,
+    requestedOpeningFaceCount,
+    `${label}.requestedOpeningFaceCount`,
+  );
+  assert.deepEqual(
+    selectedOpeningFaceIndices(report),
+    expectedSelectedIndices,
+    `${label}.selectedOpeningFaceIndices`,
+  );
+  assert.equal(report.buildCount, 1, `${label}.buildCount`);
+  assert.equal(report.occtStatus, 0, `${label}.occtStatus`);
+  assert.equal(
+    report.failedOpeningFaceIndex,
+    -1,
+    `${label}.failedOpeningFaceIndex`,
+  );
+  assert.equal(report.historyProblemDomain, "none", `${label}.historyProblemDomain`);
+  assert.equal(report.historyProblemSourceShapeIndex, -1);
+  assert.equal(report.historyProblemKind, topologyKinds.none);
+  assert.equal(report.historyProblemIndex, -1);
+  assert.equal(report.hasResult(), true, `${label}.hasResult`);
+  assert.equal(report.transferCode(kernel), "READY", `${label}.transferCode`);
+  assert.equal(
+    kernel.getShapeCount(),
+    arenaBefore,
+    `${label}: report-owned result entered the arena before transfer`,
+  );
+  assert.throws(
+    () => report.selectedOpeningFaceIndex(-1),
+    `${label}: negative selected-opening index must fail`,
+  );
+  assert.throws(
+    () => report.selectedOpeningFaceIndex(expectedSelectedIndices.length),
+    `${label}: out-of-range selected-opening index must fail`,
+  );
+}
+
+function assertSolidOffsetResult(result, history, expected, label) {
+  assert.equal(kernel.getShapeType(result), "solid", `${label}.shapeType`);
+  assert.equal(kernel.isValid(result), true, `${label}.valid`);
+  assertClose(
+    kernel.getVolume(result),
+    expected.volume,
+    VOLUME_TOLERANCE,
+    `${label}.volume`,
+  );
+  assert.deepEqual(shapeTopologyCounts(result), expected.topology, `${label}.topology`);
+  assert.deepEqual(
+    shapeTopologyCounts(result),
+    history.resultCounts,
+    `${label}: report/result topology counts disagree`,
+  );
+  assertBounds(boundsOf(result), expected.bounds, `${label}.bounds`);
 }
 
 function assertBooleanDegeneracyCase({
@@ -2242,6 +2393,561 @@ try {
       observedEdgeTreatmentRelations.has(relation),
       true,
       `exact edge-treatment smoke must exercise ${relationName.toUpperCase()} records`,
+    );
+  }
+
+  runFixture("exact solid-offset validation", () => {
+    const input = kernel.makeBox(10, 20, 30);
+    const inputFaces = facesOf(input);
+    const top = indexedFaceOnPlane(inputFaces, "z", 30, "validation.top");
+    const inputEdge = edgesOf(input)[0];
+    const other = kernel.makeBox(4, 4, 4);
+    const otherFace = facesOf(other)[0];
+    const inputBefore = snapshotShape(input);
+    const otherBefore = snapshotShape(other);
+    const arenaBefore = kernel.getShapeCount();
+
+    const failures = [
+      {
+        label: "invalidSolidOffsetOperation",
+        report: exactSolidOffset(
+          999,
+          input,
+          [top.face],
+          1,
+          solidOffsetDirections.inward,
+        ),
+        stage: "validation",
+        code: "INVALID_OPERATION",
+        operation: 999,
+        direction: solidOffsetDirections.inward,
+        amount: 1,
+        tolerance: 1e-6,
+        requested: 1,
+        selected: [],
+        buildCount: 0,
+        occtStatus: -1,
+        failedOpeningFaceIndex: -1,
+      },
+      {
+        label: "invalidSolidOffsetDirection",
+        report: exactSolidOffset(
+          solidOffsetOperations.shell,
+          input,
+          [top.face],
+          1,
+          999,
+        ),
+        stage: "validation",
+        code: "INVALID_DIRECTION",
+        operation: solidOffsetOperations.shell,
+        direction: 999,
+        amount: 1,
+        tolerance: 1e-6,
+        requested: 1,
+        selected: [],
+        buildCount: 0,
+        occtStatus: -1,
+        failedOpeningFaceIndex: -1,
+      },
+      {
+        label: "invalidSolidOffsetAmount",
+        report: exactSolidOffset(
+          solidOffsetOperations.offset,
+          input,
+          [],
+          Number.NaN,
+          solidOffsetDirections.outward,
+        ),
+        stage: "validation",
+        code: "INVALID_AMOUNT",
+        operation: solidOffsetOperations.offset,
+        direction: solidOffsetDirections.outward,
+        amount: Number.NaN,
+        tolerance: 1e-6,
+        requested: 0,
+        selected: [],
+        buildCount: 0,
+        occtStatus: -1,
+        failedOpeningFaceIndex: -1,
+      },
+      {
+        label: "invalidSolidOffsetTolerance",
+        report: exactSolidOffset(
+          solidOffsetOperations.offset,
+          input,
+          [],
+          1,
+          solidOffsetDirections.outward,
+          0,
+        ),
+        stage: "validation",
+        code: "INVALID_TOLERANCE",
+        operation: solidOffsetOperations.offset,
+        direction: solidOffsetDirections.outward,
+        amount: 1,
+        tolerance: 0,
+        requested: 0,
+        selected: [],
+        buildCount: 0,
+        occtStatus: -1,
+        failedOpeningFaceIndex: -1,
+      },
+      {
+        label: "solidOffsetToleranceNotLessThanAmount",
+        report: exactSolidOffset(
+          solidOffsetOperations.offset,
+          input,
+          [],
+          1,
+          solidOffsetDirections.outward,
+          1,
+        ),
+        stage: "validation",
+        code: "TOLERANCE_NOT_LESS_THAN_AMOUNT",
+        operation: solidOffsetOperations.offset,
+        direction: solidOffsetDirections.outward,
+        amount: 1,
+        tolerance: 1,
+        requested: 0,
+        selected: [],
+        buildCount: 0,
+        occtStatus: -1,
+        failedOpeningFaceIndex: -1,
+      },
+      {
+        label: "negativeSolidOffsetHistoryLimit",
+        report: exactSolidOffset(
+          solidOffsetOperations.offset,
+          input,
+          [],
+          1,
+          solidOffsetDirections.outward,
+          1e-6,
+          kernel,
+          -1,
+        ),
+        stage: "validation",
+        code: "INVALID_HISTORY_RECORD_LIMIT",
+        operation: solidOffsetOperations.offset,
+        direction: solidOffsetDirections.outward,
+        amount: 1,
+        tolerance: 1e-6,
+        requested: 0,
+        selected: [],
+        buildCount: 0,
+        occtStatus: -1,
+        failedOpeningFaceIndex: -1,
+      },
+      {
+        label: "emptyShellOpenings",
+        report: exactSolidOffset(
+          solidOffsetOperations.shell,
+          input,
+          [],
+          1,
+          solidOffsetDirections.inward,
+        ),
+        stage: "validation",
+        code: "EMPTY_OPENING_LIST",
+        operation: solidOffsetOperations.shell,
+        direction: solidOffsetDirections.inward,
+        amount: 1,
+        tolerance: 1e-6,
+        requested: 0,
+        selected: [],
+        buildCount: 0,
+        occtStatus: -1,
+        failedOpeningFaceIndex: -1,
+      },
+      {
+        label: "offsetWithOpenings",
+        report: exactSolidOffset(
+          solidOffsetOperations.offset,
+          input,
+          [top.face],
+          1,
+          solidOffsetDirections.outward,
+        ),
+        stage: "validation",
+        code: "OFFSET_HAS_OPENINGS",
+        operation: solidOffsetOperations.offset,
+        direction: solidOffsetDirections.outward,
+        amount: 1,
+        tolerance: 1e-6,
+        requested: 1,
+        selected: [],
+        buildCount: 0,
+        occtStatus: -1,
+        failedOpeningFaceIndex: -1,
+      },
+      {
+        label: "shellOpeningNotFace",
+        report: exactSolidOffset(
+          solidOffsetOperations.shell,
+          input,
+          [inputEdge],
+          1,
+          solidOffsetDirections.inward,
+        ),
+        stage: "opening-validation",
+        code: "OPENING_NOT_FACE",
+        operation: solidOffsetOperations.shell,
+        direction: solidOffsetDirections.inward,
+        amount: 1,
+        tolerance: 1e-6,
+        requested: 1,
+        selected: [],
+        buildCount: 0,
+        occtStatus: -1,
+        failedOpeningFaceIndex: 0,
+      },
+      {
+        label: "shellOpeningNotInInput",
+        report: exactSolidOffset(
+          solidOffsetOperations.shell,
+          input,
+          [otherFace],
+          1,
+          solidOffsetDirections.inward,
+        ),
+        stage: "opening-validation",
+        code: "FACE_NOT_IN_INPUT",
+        operation: solidOffsetOperations.shell,
+        direction: solidOffsetDirections.inward,
+        amount: 1,
+        tolerance: 1e-6,
+        requested: 1,
+        selected: [],
+        buildCount: 0,
+        occtStatus: -1,
+        failedOpeningFaceIndex: 0,
+      },
+      {
+        label: "zeroSolidOffsetHistoryLimit",
+        report: exactSolidOffset(
+          solidOffsetOperations.shell,
+          input,
+          [top.face],
+          2,
+          solidOffsetDirections.inward,
+          1e-6,
+          kernel,
+          0,
+        ),
+        stage: "history",
+        code: "HISTORY_RECORD_LIMIT_EXCEEDED",
+        operation: solidOffsetOperations.shell,
+        direction: solidOffsetDirections.inward,
+        amount: 2,
+        tolerance: 1e-6,
+        requested: 1,
+        selected: [top.index],
+        buildCount: 1,
+        occtStatus: 0,
+        failedOpeningFaceIndex: -1,
+      },
+    ];
+
+    for (const testCase of failures) {
+      withReport(testCase.report, (report) => {
+        assert.equal(report.ok, false, testCase.label);
+        assert.equal(report.stage, testCase.stage, `${testCase.label}.stage`);
+        assert.equal(report.code, testCase.code, `${testCase.label}.code`);
+        assert.equal(report.operation, testCase.operation, `${testCase.label}.operation`);
+        assert.equal(report.direction, testCase.direction, `${testCase.label}.direction`);
+        if (Number.isNaN(testCase.amount)) {
+          assert.equal(Number.isNaN(report.amount), true, `${testCase.label}.amount`);
+        } else {
+          assert.equal(report.amount, testCase.amount, `${testCase.label}.amount`);
+        }
+        assert.equal(report.tolerance, testCase.tolerance, `${testCase.label}.tolerance`);
+        assert.equal(
+          report.requestedOpeningFaceCount,
+          testCase.requested,
+          `${testCase.label}.requestedOpeningFaceCount`,
+        );
+        assert.deepEqual(
+          selectedOpeningFaceIndices(report),
+          testCase.selected,
+          `${testCase.label}.selectedOpeningFaceIndices`,
+        );
+        assert.equal(report.buildCount, testCase.buildCount, `${testCase.label}.buildCount`);
+        assert.equal(report.occtStatus, testCase.occtStatus, `${testCase.label}.occtStatus`);
+        assert.equal(
+          report.failedOpeningFaceIndex,
+          testCase.failedOpeningFaceIndex,
+          `${testCase.label}.failedOpeningFaceIndex`,
+        );
+        assert.equal(report.hasResult(), false, `${testCase.label}.hasResult`);
+        assert.equal(report.transferCode(kernel), "NO_RESULT", `${testCase.label}.transferCode`);
+        assertNoBooleanHistory(report, testCase.label);
+        assert.throws(() => report.takeResultId(kernel), testCase.label);
+      });
+      assert.equal(kernel.getShapeCount(), arenaBefore, `${testCase.label}.arena`);
+    }
+
+    assertShapeSnapshot(input, inputBefore, "solidOffsetValidation.input");
+    assertShapeSnapshot(other, otherBefore, "solidOffsetValidation.other");
+  });
+
+  for (const fixture of [
+    {
+      label: "one-opening inward exact shell",
+      operation: solidOffsetOperations.shell,
+      direction: solidOffsetDirections.inward,
+      amount: 2,
+      opening: "top",
+      cloneTransfer: true,
+      expected: {
+        volume: 3312,
+        topology: { faces: 11, edges: 24, vertices: 16 },
+        bounds: { xmin: 0, ymin: 0, zmin: 0, xmax: 10, ymax: 20, zmax: 30 },
+      },
+    },
+    {
+      label: "one-opening outward exact shell",
+      operation: solidOffsetOperations.shell,
+      direction: solidOffsetDirections.outward,
+      amount: 1,
+      opening: "top",
+      cloneTransfer: false,
+      expected: {
+        volume: 2143.466064545511,
+        topology: { faces: 23, edges: 48, vertices: 28 },
+        bounds: { xmin: -1, ymin: -1, zmin: -1, xmax: 11, ymax: 21, zmax: 30 },
+      },
+    },
+    {
+      label: "outward exact whole-solid offset",
+      operation: solidOffsetOperations.offset,
+      direction: solidOffsetDirections.outward,
+      amount: 1,
+      opening: undefined,
+      cloneTransfer: false,
+      expected: {
+        volume: 8392.684349493147,
+        topology: { faces: 26, edges: 48, vertices: 24 },
+        bounds: { xmin: -1, ymin: -1, zmin: -1, xmax: 11, ymax: 21, zmax: 31 },
+      },
+    },
+    {
+      label: "inward exact whole-solid offset",
+      operation: solidOffsetOperations.offset,
+      direction: solidOffsetDirections.inward,
+      amount: 1,
+      opening: undefined,
+      cloneTransfer: false,
+      expected: {
+        volume: 4032,
+        topology: { faces: 6, edges: 12, vertices: 8 },
+        bounds: { xmin: 1, ymin: 1, zmin: 1, xmax: 9, ymax: 19, zmax: 29 },
+      },
+    },
+  ]) {
+    runFixture(fixture.label, () => {
+      const input = kernel.makeBox(10, 20, 30);
+      const inputFaces = facesOf(input);
+      const top = indexedFaceOnPlane(inputFaces, "z", 30, `${fixture.label}.top`);
+      const openings = fixture.opening === "top" ? [top.face] : [];
+      const selectedIndices = fixture.opening === "top" ? [top.index] : [];
+      const inputBefore = snapshotShape(input);
+      const arenaBefore = kernel.getShapeCount();
+
+      withReport(
+        exactSolidOffset(
+          fixture.operation,
+          input,
+          openings,
+          fixture.amount,
+          fixture.direction,
+        ),
+        (report) => {
+          assertSolidOffsetReportSuccess(
+            report,
+            fixture.operation,
+            fixture.direction,
+            fixture.amount,
+            1e-6,
+            openings.length,
+            selectedIndices,
+            arenaBefore,
+            fixture.label,
+          );
+          const history = assertBooleanHistory(
+            report,
+            [input],
+            fixture.label,
+            observedSolidOffsetRelations,
+          );
+          for (const openingIndex of selectedIndices) {
+            assert.equal(
+              history.records.some(
+                (record) =>
+                  record.sourceShapeIndex === 0 &&
+                  record.sourceKind === topologyKinds.face &&
+                  record.sourceIndex === openingIndex &&
+                  record.relation === topologyRelations.modified,
+              ),
+              true,
+              `${fixture.label}: opening face ${openingIndex} must be MODIFIED into its planar rim`,
+            );
+          }
+
+          const transferAndCheck = (owner) => {
+            const result = owner.takeResultId(kernel);
+            try {
+              assertSolidOffsetResult(result, history, fixture.expected, fixture.label);
+              assert.equal(report.hasResult(), false, `${fixture.label}.hasResultAfterTransfer`);
+              assert.equal(report.transferCode(kernel), "ALREADY_TRANSFERRED");
+              assert.throws(() => report.takeResultId(kernel));
+            } finally {
+              kernel.release(result);
+            }
+          };
+
+          if (fixture.cloneTransfer) {
+            const clone = report.clone();
+            try {
+              const otherKernel = new Module.OcctKernel();
+              try {
+                assert.equal(clone.transferCode(otherKernel), "WRONG_KERNEL");
+                assert.throws(() => clone.takeResultId(otherKernel));
+                assert.equal(otherKernel.getShapeCount(), 0);
+              } finally {
+                otherKernel.delete();
+              }
+              transferAndCheck(clone);
+            } finally {
+              clone.delete();
+            }
+          } else {
+            transferAndCheck(report);
+          }
+        },
+      );
+      assert.equal(kernel.getShapeCount(), arenaBefore, `${fixture.label}.arena`);
+      assertShapeSnapshot(input, inputBefore, `${fixture.label}.input`);
+    });
+  }
+
+  runFixture("canonical two-opening exact shell", () => {
+    const input = kernel.makeBox(10, 20, 30);
+    const inputFaces = facesOf(input);
+    const top = indexedFaceOnPlane(inputFaces, "z", 30, "twoOpening.top");
+    const bottom = indexedFaceOnPlane(inputFaces, "z", 0, "twoOpening.bottom");
+    const expectedIndices = [top.index, bottom.index].sort((first, second) => first - second);
+    const expected = {
+      volume: 3120,
+      topology: { faces: 10, edges: 24, vertices: 16 },
+      bounds: { xmin: 0, ymin: 0, zmin: 0, xmax: 10, ymax: 20, zmax: 30 },
+    };
+    const inputBefore = snapshotShape(input);
+    const arenaBefore = kernel.getShapeCount();
+
+    const baseline = withReport(
+      exactSolidOffset(
+        solidOffsetOperations.shell,
+        input,
+        [top.face, bottom.face],
+        2,
+        solidOffsetDirections.inward,
+      ),
+      (report) => {
+        assertSolidOffsetReportSuccess(
+          report,
+          solidOffsetOperations.shell,
+          solidOffsetDirections.inward,
+          2,
+          1e-6,
+          2,
+          expectedIndices,
+          arenaBefore,
+          "twoOpening.baseline",
+        );
+        const history = assertBooleanHistory(
+          report,
+          [input],
+          "twoOpening.baseline",
+          observedSolidOffsetRelations,
+        );
+        const result = report.takeResultId(kernel);
+        try {
+          assertSolidOffsetResult(result, history, expected, "twoOpening.baseline");
+          return { history, brep: kernel.toBREP(result) };
+        } finally {
+          kernel.release(result);
+        }
+      },
+    );
+    assert.equal(kernel.getShapeCount(), arenaBefore, "twoOpening.baseline.arena");
+
+    withReport(
+      exactSolidOffset(
+        solidOffsetOperations.shell,
+        input,
+        [bottom.face, top.face, bottom.face, top.face],
+        2,
+        solidOffsetDirections.inward,
+      ),
+      (report) => {
+        assertSolidOffsetReportSuccess(
+          report,
+          solidOffsetOperations.shell,
+          solidOffsetDirections.inward,
+          2,
+          1e-6,
+          4,
+          expectedIndices,
+          arenaBefore,
+          "twoOpening.canonical",
+        );
+        const history = assertBooleanHistory(
+          report,
+          [input],
+          "twoOpening.canonical",
+          observedSolidOffsetRelations,
+        );
+        assert.deepEqual(
+          history,
+          baseline.history,
+          "duplicate/reordered openings must produce identical exact history",
+        );
+        for (const openingIndex of expectedIndices) {
+          assert.equal(
+            history.records.some(
+              (record) =>
+                record.sourceShapeIndex === 0 &&
+                record.sourceKind === topologyKinds.face &&
+                record.sourceIndex === openingIndex &&
+                record.relation === topologyRelations.modified,
+            ),
+            true,
+            `twoOpening: opening face ${openingIndex} must be MODIFIED into its planar rim`,
+          );
+        }
+        const result = report.takeResultId(kernel);
+        try {
+          assertSolidOffsetResult(result, history, expected, "twoOpening.canonical");
+          assert.equal(
+            kernel.toBREP(result),
+            baseline.brep,
+            "duplicate/reordered openings must produce identical BREP",
+          );
+        } finally {
+          kernel.release(result);
+        }
+      },
+    );
+    assert.equal(kernel.getShapeCount(), arenaBefore, "twoOpening.canonical.arena");
+    assertShapeSnapshot(input, inputBefore, "twoOpening.input");
+  });
+
+  for (const [relationName, relation] of Object.entries(topologyRelations)) {
+    assert.equal(
+      observedSolidOffsetRelations.has(relation),
+      true,
+      `exact solid-offset smoke must exercise ${relationName.toUpperCase()} records`,
     );
   }
 

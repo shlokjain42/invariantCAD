@@ -1524,7 +1524,9 @@ export class Evaluator {
         capability === "draft" ||
         capability === "boolean" ||
         capability === "fillet" ||
-        capability === "chamfer"
+        capability === "chamfer" ||
+        capability === "shell" ||
+        capability === "offset"
       ) {
         const requiresEdges = capability !== "draft";
         const topology: unknown = this.kernel.capabilities.topology;
@@ -2253,6 +2255,7 @@ export class Evaluator {
           }
           case "shell": {
             requireKernelCapability("feature", "shell", id);
+            requireExactIndexedTopologyEvolution("shell", id, true);
             const thickness = positive(
               expression(node.thickness),
               id,
@@ -2300,6 +2303,7 @@ export class Evaluator {
           }
           case "offset": {
             requireKernelCapability("feature", "offset", id);
+            requireExactIndexedTopologyEvolution("offset", id, true);
             const distance = positive(
               expression(node.distance),
               id,

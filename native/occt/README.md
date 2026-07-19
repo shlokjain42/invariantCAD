@@ -54,10 +54,11 @@ the mounted cache.
 
 Patches belong in `native/occt/patches/` and should use Git's `a/` and `b/`
 path prefixes. Prefix filenames with an ordering number because lexical order is
-part of the build. Facade ABI 0.5 is the exact five-patch series
+part of the build. Facade ABI 0.6 is the exact six-patch series
 `0001-atomic-multi-face-draft.patch`, `0002-indexed-draft-history.patch`,
-`0003-controlled-pipe-shell.patch`, `0004-exact-boolean-history.patch`, and
-`0005-exact-edge-treatment-history.patch`.
+`0003-controlled-pipe-shell.patch`, `0004-exact-boolean-history.patch`,
+`0005-exact-edge-treatment-history.patch`, and
+`0006-exact-solid-offset-history.patch`.
 
 ## Native smoke test
 
@@ -71,16 +72,19 @@ pnpm test:occt-draft-public
 ```
 
 The native fixture exercises the raw ABI, including all three exact Boolean
-operations plus fillet and chamfer, complete face/edge/vertex history,
-generated, deleted, and residual source-less-created topology, stale
-intermediate-removal cases, canonical tangent-contour seeds, isolated working
-copies with byte-stable arena operands, separate record budgets, empty Boolean
-results, report cloning, foreign-kernel rejection, and one-shot transfer.
+operations, fillet/chamfer, and inward/outward shell/whole-solid offset;
+complete face/edge/vertex history; generated, deleted, and residual
+source-less-created topology; stale intermediate-removal and
+generated-only-replacement cases; canonical tangent-contour seeds and shell
+openings; isolated working copies with byte-stable arena operands; separate
+record budgets; empty Boolean results; report cloning; foreign-kernel
+rejection; and one-shot transfer.
 The public smoke loads the same generated pair through `createOcctKernel` and
-exercises direct and evaluated draft, exact Boolean and fillet/chamfer lineage,
-plus controlled major multi-arc, eccentric-profile, and conditioned near-full
-PipeShell transfers. These heavyweight tests are intentionally separate from normal
-`pnpm verify`. Generated artifacts stay under the ignored
+exercises direct and evaluated draft, exact Boolean, fillet/chamfer, and
+shell/offset lineage, plus controlled major multi-arc, eccentric-profile, and
+conditioned near-full PipeShell transfers. These heavyweight tests are
+intentionally separate from normal `pnpm verify`. Generated artifacts stay
+under the ignored
 `.artifacts/occt-facade/` directory and are not committed or included in the
 `invariantcad` npm package.
 
@@ -101,12 +105,13 @@ The packager reads `.artifacts/occt-facade/` and writes both of these ignored
 outputs:
 
 ```text
-.artifacts/occt-facade-bundle/invariantcad-occt-facade-0.5.0/
-.artifacts/occt-facade-bundle/invariantcad-occt-facade-0.5.0.tar.gz
+.artifacts/occt-facade-bundle/invariantcad-occt-facade-0.6.0/
+.artifacts/occt-facade-bundle/invariantcad-occt-facade-0.6.0.tar.gz
 ```
 
-`0.5.0` is the owned facade ABI and bundle version; it is independent of the
-InvariantCAD npm package version and document schema version.
+`0.6.0` is the owned facade ABI and bundle version; it is independent of the
+InvariantCAD npm package version, document schema version, and product-roadmap
+milestone numbered 0.6.
 
 The directory and archive have the same single-root layout. The matched pair is
 under `runtime/`; the root `SHA256SUMS` covers the bundled files; and
@@ -123,10 +128,10 @@ publication. The verifier then checks the directory or archive without
 executing native code.
 `pnpm test:occt-facade-bundle` packages the pair, verifies both representations,
 packs the `invariantcad` npm tarball, installs it in a fresh temporary consumer,
-and explicitly points compact draft, exact Boolean, exact fillet/chamfer, and
-owned composite-refinement checks at the bundled `runtime/` directory. The normal
-`pnpm test:package` remains independent
-of owned-facade build artifacts. To check byte-for-byte packager determinism as
+and explicitly points compact draft, exact Boolean, exact fillet/chamfer, exact
+shell/offset, and owned composite-refinement checks at the bundled `runtime/`
+directory. The normal `pnpm test:package` remains independent of owned-facade
+build artifacts. To check byte-for-byte packager determinism as
 well, run:
 
 ```sh
@@ -173,8 +178,9 @@ The version-1 evolution envelope is report-owned and immutable. It records
 `sourceShapeIndex`, `sourceKind`, `sourceIndex`, `relation`, `resultKind`, and
 `resultIndex`, so N source shapes can evolve into one aggregate result without
 changing the record shape. Draft has one source operand and emits only
-one-to-one `PRESERVED` or `MODIFIED` records. ABI 0.4 Boolean reports and ABI
-0.5 fillet/chamfer reports use the complete non-bijective relation set below:
+one-to-one `PRESERVED` or `MODIFIED` records. ABI 0.4 Boolean reports, ABI 0.5
+fillet/chamfer reports, and ABI 0.6 shell/offset reports use the complete
+non-bijective relation set below:
 
 - `PRESERVED` and `MODIFIED` require a real source and result, and both endpoints
   have the same face, edge, or vertex kind.
@@ -189,9 +195,8 @@ one-to-one `PRESERVED` or `MODIFIED` records. ABI 0.4 Boolean reports and ABI
   `sourceShapeIndex = -1`, `sourceKind = NONE`, and `sourceIndex = -1`, followed
   by a real result. The facade first retains every available native
   `PRESERVED`, `MODIFIED`, and `GENERATED` relation, then emits `CREATED` only
-  for residual higher-order result topology that a multi-tool interaction did
-  not attribute to an individual operand. A result with `CREATED` cannot also
-  have an operand claim.
+  for residual result topology that native history did not attribute to a
+  source. A result with `CREATED` cannot also have an operand claim.
 
 The history remains readable through cloned reports and after result transfer;
 failed reports advertise version zero and no complete history. Unknown relation
@@ -218,8 +223,9 @@ loads a module whose exact facade probe succeeds. That factory may locate its
 matched sibling WASM itself; callers can provide `wasm` as an explicit binary
 override when their runtime or bundler requires it. ABI 0.2 and later advertise
 ordinary `draft` support and feature-scoped `exactIndexedTopologyEvolution` v1
-for draft. ABI 0.4 adds `boolean`; ABI 0.5 advertises the protocol for `draft`,
-`boolean`, `fillet`, and `chamfer`.
+for draft. ABI 0.4 adds `boolean`; ABI 0.5 adds `fillet` and `chamfer`; ABI 0.6
+advertises the protocol for `draft`, `boolean`, `fillet`, `chamfer`, `shell`,
+and `offset`.
 The global topology provenance remains `feature`; a feature-scoped proof does
 not promote unrelated operations. Default `createOcctKernel()` loads stock OCCT
 and remains usable for its other exact features, but it does not advertise or
@@ -366,8 +372,58 @@ selector resolution. Missing metadata or a well-formed declaration omitting
 the requested feature preserves the legacy partial-history route. Stock OCCT
 and owned ABI 0.2–0.4 therefore keep exact fillet/chamfer geometry with partial
 history. Malformed advertised metadata or an exact ABI 0.5 report is
-authoritative and fails closed. Shell and offset history remains partial on
-every current backend.
+authoritative and fails closed.
+
+Facade ABI 0.6 is additive: it retains the complete ABI 0.5 surface and adds
+`invariantcadSolidOffsetAtomic(kernel, operation, inputId, openingFaceIds,
+amount, direction, tolerance, maxHistoryRecords)`. Operation codes are stable
+as shell `0` and whole-solid offset `1`; direction codes are inward `0` and
+outward `1`. TypeScript deduplicates shell opening faces and sorts their input
+snapshot indices before native execution. The report echoes that canonical
+selection. Whole-solid offset requires an empty opening list, while shell
+requires at least one selected opening and one retained input face.
+
+Both modes accept one valid positive-volume top-level solid with no loose or
+multiple topology. Native code creates a deep independent BREP copy, including
+its curve and surface geometry, proves original/copy face-edge-vertex
+correspondence, maps canonical openings onto that copy, and passes only the
+copy to one fixed-round-join builder. The result must be one valid
+positive-volume solid with no loose topology and must satisfy the public
+direction/volume postconditions. The arena input BREP remains byte-stable on
+success or failure.
+
+A successful solid-offset report owns its result and a complete version-1
+single-input graph under the same identity/deletion, generated, residual-created,
+canonicalization, sentinel, and source/result coverage rules as ABI 0.4/0.5.
+The pinned offset engine can expose a replacement only through `Generated`
+while `IsDeleted` remains false even though the source identity is absent from
+the final shape. ABI 0.6 reconciles that case from exact final membership: if
+the identity is absent and there is no native `Modified` successor, it marks
+the source deleted without discarding its generated links. A shell opening is
+only a maker input; the selected source face may instead have a real
+`MODIFIED` successor representing the planar opening rim, so selection never
+forces a deletion record.
+
+The TypeScript adapter validates operation, direction, amount, tolerance,
+requested and canonical opening counts, build/status fields, topology counts,
+complete graph, and `READY` same-kernel transfer state before taking the
+result. After transfer it validates result counts and reduces identity-only
+public lineage. Untaken reports release their result; adoption, cancellation,
+validation, or reduction failures release a transferred root exactly once.
+
+`createOcctKernel` accepts an independent
+`maxExactSolidOffsetHistoryRecords` non-negative signed 32-bit budget with a
+`1_000_000` default. Native code enforces it before materializing report
+records, and TypeScript checks the count before any indexed JavaScript record
+call. It shares neither the Boolean nor edge-treatment budget and does not
+bound the mandatory copied operand or OCCT shell/offset workspace.
+
+Exact indexed shell/offset evolution is optional at the evaluator boundary.
+ABI 0.6 advertises it; missing metadata or a well-formed declaration omitting
+the requested feature preserves the supported partial-history route. Stock
+OCCT and owned ABI 0.2–0.5 therefore keep exact shell/offset geometry with
+partial history. Malformed advertised metadata or an exact ABI 0.6 report is
+authoritative and fails closed before result exposure.
 
 The generated pair and its local package-neutral bundle remain ignored build
 artifacts and are not included in the `invariantcad` npm tarball. Until an

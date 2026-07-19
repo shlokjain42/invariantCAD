@@ -25,7 +25,7 @@ const verifierPath = join(repoRoot, "scripts/verify-occt-facade-bundle.mjs");
 const packagerPath = join(repoRoot, "scripts/package-occt-facade-bundle.mjs");
 const descriptorPath = join(repoRoot, "native/occt/bundle/release-input.json");
 const lockPath = join(repoRoot, "native/occt/upstream.lock.json");
-const bundleVersion = "0.5.0";
+const bundleVersion = "0.6.0";
 const bundleName = `invariantcad-occt-facade-${bundleVersion}`;
 const facadeMarker = `invariantcad-facade@${bundleVersion}+occt-wasm.3.7.0`;
 const pipeShellPatchSource =
@@ -160,11 +160,15 @@ function syntheticWasm(): Buffer {
         "InvariantCadBooleanReport",
         "InvariantCadEdgeTreatmentOperation",
         "InvariantCadEdgeTreatmentReport",
+        "InvariantCadSolidOffsetOperation",
+        "InvariantCadSolidOffsetDirection",
+        "InvariantCadSolidOffsetReport",
         "InvariantCadTopologyKind",
         "InvariantCadTopologyRelation",
         "invariantcadPipeShellSolid",
         "invariantcadBooleanAtomic",
         "invariantcadEdgeTreatmentAtomic",
+        "invariantcadSolidOffsetAtomic",
       ].join("\0"),
     ),
   ]);
@@ -1050,7 +1054,7 @@ describe("OCCT facade compliance bundle verification", () => {
         descriptor.inputs?.some(
           (entry: LockedEntry) =>
             entry.target ===
-            "source/native/occt/patches/0005-exact-edge-treatment-history.patch",
+            "source/native/occt/patches/0006-exact-solid-offset-history.patch",
         ) &&
         descriptor.runtime.every((entry) => {
           const path = join(runtimeDirectory, entry.source);

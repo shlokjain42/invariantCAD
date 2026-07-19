@@ -181,7 +181,14 @@ function assertDirectDraft(kernel: GeometryKernel): void {
   assert.ok(kernel.capabilities.features.includes("draft"));
   assert.deepEqual(kernel.capabilities.exactIndexedTopologyEvolution, {
     protocolVersion: 1,
-    features: ["draft", "boolean", "fillet", "chamfer"],
+    features: [
+      "draft",
+      "boolean",
+      "fillet",
+      "chamfer",
+      "shell",
+      "offset",
+    ],
   });
   const draft = kernel.draft;
   if (draft === undefined) {
@@ -295,7 +302,14 @@ function assertDirectBoolean(kernel: GeometryKernel): void {
   assert.ok(kernel.capabilities.features.includes("boolean"));
   assert.deepEqual(kernel.capabilities.exactIndexedTopologyEvolution, {
     protocolVersion: 1,
-    features: ["draft", "boolean", "fillet", "chamfer"],
+    features: [
+      "draft",
+      "boolean",
+      "fillet",
+      "chamfer",
+      "shell",
+      "offset",
+    ],
   });
   if (
     kernel.boolean === undefined ||
@@ -587,7 +601,14 @@ function assertDirectBoolean(kernel: GeometryKernel): void {
 function assertDirectEdgeTreatments(kernel: GeometryKernel): void {
   assert.deepEqual(kernel.capabilities.exactIndexedTopologyEvolution, {
     protocolVersion: 1,
-    features: ["draft", "boolean", "fillet", "chamfer"],
+    features: [
+      "draft",
+      "boolean",
+      "fillet",
+      "chamfer",
+      "shell",
+      "offset",
+    ],
   });
   if (kernel.fillet === undefined || kernel.chamfer === undefined) {
     throw new Error("Owned OCCT exact fillet/chamfer support was not advertised");
@@ -672,6 +693,91 @@ function assertDirectEdgeTreatments(kernel: GeometryKernel): void {
       if (result !== undefined) kernel.disposeShape(result);
       if (input !== undefined) kernel.disposeShape(input);
     }
+  }
+}
+
+function assertDirectSolidOffsetChain(kernel: GeometryKernel): void {
+  assert.deepEqual(kernel.capabilities.exactIndexedTopologyEvolution, {
+    protocolVersion: 1,
+    features: [
+      "draft",
+      "boolean",
+      "fillet",
+      "chamfer",
+      "shell",
+      "offset",
+    ],
+  });
+  if (
+    kernel.offset === undefined ||
+    kernel.shell === undefined ||
+    kernel.topology === undefined
+  ) {
+    throw new Error("Owned OCCT exact shell/offset support was not advertised");
+  }
+
+  const owned: KernelShape[] = [];
+  const keep = (shape: KernelShape): KernelShape => {
+    owned.push(shape);
+    return shape;
+  };
+  try {
+    const box = keep(
+      kernel.box!([20, 20, 10], false, {
+        feature: "direct-solid-offset-box",
+      }),
+    );
+    const inset = keep(
+      kernel.offset(
+        box,
+        { distance: 1, direction: "inward", tolerance: 1e-6 },
+        { feature: "direct-offset" },
+      ),
+    );
+    closeTo(kernel.measure(inset).volume, 2_592, 1e-8, "direct offset volume");
+    const insetTopology = snapshot(kernel, inset);
+    assert.equal(insetTopology.history, "complete", "direct offset history");
+    assert.equal(insetTopology.faces.length, 6, "direct offset faces");
+    assert.equal(insetTopology.edges.length, 12, "direct offset edges");
+
+    const top = insetTopology.faces.filter(
+      (face) =>
+        face.surface.kind === "plane" &&
+        face.surface.normal[2] > 1 - 1e-10 &&
+        face.lineage.some(
+          (lineage) =>
+            lineage.feature === "direct-offset" &&
+            lineage.relation === "created",
+        ),
+    );
+    assert.equal(top.length, 1, "direct offset top face");
+    const hollow = keep(
+      kernel.shell(
+        inset,
+        [top[0]!.key, top[0]!.key],
+        { thickness: 0.5, direction: "inward", tolerance: 1e-6 },
+        { feature: "direct-shell" },
+      ),
+    );
+    closeTo(kernel.measure(hollow).volume, 424.5, 1e-8, "direct shell volume");
+    const hollowTopology = snapshot(kernel, hollow);
+    assert.equal(hollowTopology.history, "complete", "direct shell history");
+    assert.equal(hollowTopology.faces.length, 11, "direct shell faces");
+    assert.equal(hollowTopology.edges.length, 24, "direct shell edges");
+    assert.ok(
+      [...hollowTopology.faces, ...hollowTopology.edges].some(
+        (descriptor) =>
+          descriptor.lineage.some(
+            (lineage) => lineage.feature === "direct-offset",
+          ) &&
+          descriptor.lineage.some(
+            (lineage) => lineage.feature === "direct-shell",
+          ),
+      ),
+      "direct offset -> shell lineage chain was not preserved",
+    );
+  } finally {
+    for (const shape of owned.reverse()) kernel.disposeShape(shape);
   }
 }
 
@@ -988,6 +1094,79 @@ async function assertDocumentBoolean(evaluator: Evaluator): Promise<void> {
   );
 }
 
+function offsetShellDraftDocument(): DesignDocument {
+  const cad = design("public exact offset shell draft chain");
+  const box = cad.box("solid-offset-box", {
+    size: vec3(mm(20), mm(20), mm(10)),
+  });
+  const inset = cad.offset("inset", box, {
+    distance: mm(1),
+    direction: "inward",
+    tolerance: mm(1e-6),
+  });
+  const opening = topology.faces
+    .createdBy(inset)
+    .and(
+      topology.faces.surface("plane"),
+      topology.faces.normal(scalarVec3(0, 0, 1)),
+    )
+    .exactly(1);
+  const hollow = cad.shell("hollow", inset, {
+    openings: opening,
+    thickness: mm(0.5),
+    direction: "inward",
+    tolerance: mm(1e-6),
+  });
+  const drafted = cad.draft("drafted-hollow", hollow, {
+    faces: topology.faces
+      .modifiedBy(hollow)
+      .and(
+        topology.faces.surface("plane"),
+        topology.faces.normal(scalarVec3(-1, 0, 0)),
+      )
+      .exactly(1),
+    angle: deg(1),
+    pullDirection: scalarVec3(0, 0, 1),
+    neutralPlane: {
+      origin: vec3(mm(0), mm(0), mm(0)),
+      normal: scalarVec3(0, 0, 1),
+    },
+  });
+  cad
+    .output("inset", inset)
+    .output("hollow", hollow)
+    .output("drafted-hollow", drafted);
+  return cad.build();
+}
+
+async function assertDocumentSolidOffset(evaluator: Evaluator): Promise<void> {
+  await assertRepeatedEvaluation(
+    evaluator,
+    offsetShellDraftDocument(),
+    "offset-shell-draft",
+    (value) => {
+      closeTo(
+        value.output("inset").measure().volume,
+        2_592,
+        1e-8,
+        "inset volume",
+      );
+      closeTo(
+        value.output("hollow").measure().volume,
+        424.5,
+        1e-8,
+        "hollow volume",
+      );
+      closeTo(
+        value.output("drafted-hollow").measure().volume,
+        411.9323532516833,
+        1e-8,
+        "drafted hollow volume",
+      );
+    },
+  );
+}
+
 function rectangleProfile(
   offset: number,
   size: number,
@@ -1158,19 +1337,52 @@ await Promise.all([access(gluePath), access(wasmPath)]).catch((error) => {
 const loaded = (await import(pathToFileURL(gluePath).href)) as {
   readonly default: OcctModuleFactory;
 };
+const ownedModuleFactory: OcctModuleFactory = async (options) => {
+  const module = await loaded.default(options);
+  if (typeof module !== "object" || module === null) {
+    throw new TypeError("Owned OCCT facade factory returned a non-object module");
+  }
+  const candidate = module as Record<string, unknown>;
+  assert.equal(typeof candidate.invariantcadFacadeVersion, "function");
+  assert.equal(
+    (candidate.invariantcadFacadeVersion as () => unknown)(),
+    "invariantcad-facade@0.6.0+occt-wasm.3.7.0",
+  );
+  assert.equal(typeof candidate.InvariantCadSolidOffsetReport, "function");
+  assert.equal(typeof candidate.invariantcadSolidOffsetAtomic, "function");
+  const operation = candidate.InvariantCadSolidOffsetOperation as Record<
+    string,
+    unknown
+  >;
+  const direction = candidate.InvariantCadSolidOffsetDirection as Record<
+    string,
+    unknown
+  >;
+  assert.deepEqual(
+    { shell: operation.SHELL, offset: operation.OFFSET },
+    { shell: 0, offset: 1 },
+  );
+  assert.deepEqual(
+    { inward: direction.INWARD, outward: direction.OUTWARD },
+    { inward: 0, outward: 1 },
+  );
+  return module;
+};
 const kernel = await createOcctKernel({
-  moduleFactory: loaded.default,
+  moduleFactory: ownedModuleFactory,
   wasm: wasmPath,
 });
 try {
   assertDirectDraft(kernel);
   assertDirectBoolean(kernel);
   assertDirectEdgeTreatments(kernel);
+  assertDirectSolidOffsetChain(kernel);
   assertControlledPipeShell(kernel);
   const evaluator = await createEvaluator({ kernel });
   try {
     await assertDocumentDraft(evaluator);
     await assertDocumentBoolean(evaluator);
+    await assertDocumentSolidOffset(evaluator);
   } finally {
     evaluator.dispose();
   }

@@ -42,21 +42,26 @@ InvariantCAD's goal is one coherent TypeScript CAD system, not one monolithic ge
 - Canonical input-index-ordered tangent-contour seeds with duplicate/overlapping seed idempotence, one native build, and an exact selected-edge/progress echo
 - A deep topology-independent edge-treatment operand copy with proved original/copy correspondence and byte-stable arena input, plus report-owned same-kernel one-shot transfer and exactly-once rollback
 - Optional exact fillet/chamfer evaluator capability with stock and owned ABI 0.2–0.4 partial-history fallback, and an independent `maxExactEdgeTreatmentHistoryRecords` budget enforced before native materialization or indexed JavaScript copying
+- Owned OCCT facade ABI 0.6 exact face-selected shell and whole-solid offset with complete face/edge/vertex `PRESERVED`/`MODIFIED`/`GENERATED`/`DELETED` plus residual source-less `CREATED` evolution and identity-only public lineage
+- Canonical input-index-ordered shell openings, deep topology-independent solid copies with byte-stable arena inputs, and final-membership reconciliation for pinned OCCT generated-only replacements; a selected opening may correctly remain a `MODIFIED` planar rim rather than becoming `DELETED`
+- Optional exact shell/offset evaluator capability with stock and owned ABI 0.2–0.5 partial-history fallback, plus the independent `maxExactSolidOffsetHistoryRecords` budget enforced before native materialization or indexed JavaScript copying
 - Reproducible, digest-pinned OCCT facade build foundation
-- Local package-neutral distribution-bundle generation and strict verification for the owned OCCT facade ABI/bundle 0.5 JS/WASM pair, with checksums, provenance, SBOM, source/relinking information, notices, licenses, and the ordered five-patch series ending in `0005-exact-edge-treatment-history.patch`
+- Local package-neutral distribution-bundle generation and strict verification for the owned OCCT facade ABI/bundle 0.6 JS/WASM pair, with checksums, provenance, SBOM, source/relinking information, notices, licenses, and the ordered six-patch series ending in `0006-exact-solid-offset-history.patch`
 - External legal, release, and security review followed by publication through an explicit durable channel; the bundle remains separate from the `invariantcad` npm package and is never an implicit runtime download
+
+Facade ABI/bundle numbers version the native adapter boundary and are independent of the product roadmap headings below; facade ABI 0.6 does not mean the product roadmap's 0.6 milestone is complete.
 
 ## 0.3 — persistent design intent
 
-- Complete per-subshape provenance through shells, offsets, revolutions, and other generated/modified topology beyond the owned exact draft/Boolean/fillet/chamfer slices
-- Extend complete Boolean and edge-treatment provenance beyond the owned OCCT ABI 0.5 path while retaining stock OCCT, legacy owned facades, and Manifold as supported partial-history implementations where they provide the base operation
+- Extend complete shell/offset provenance beyond the owned OCCT ABI 0.6 path while retaining stock OCCT and legacy owned facades as supported partial-history implementations
+- Extend complete Boolean and edge-treatment provenance beyond the owned OCCT ABI 0.4/0.5 paths while retaining stock OCCT, legacy owned facades, and Manifold as supported partial-history implementations where they provide the base operation
 - Expanded role and source mapping for additional feature families
 - Geometry and adjacency signatures
 - Expanded selection diagnostics and provenance explanations
 - Incremental feature hashes and cross-run cache
 - Change-impact and geometric diff APIs
 
-Current topology keys and ABI indices remain evaluation-scoped. The 0.3 work is the durable cross-evaluation naming layer; exact ABI 0.5 Boolean and fillet/chamfer history proves one evaluation's evolution graph but does not itself make a native index persistent.
+Current topology keys and ABI indices remain evaluation-scoped. The 0.3 work is the durable cross-evaluation naming layer; exact ABI 0.4 Boolean, ABI 0.5 fillet/chamfer, and ABI 0.6 shell/offset history prove one evaluation's evolution graph but do not themselves make a native index persistent.
 
 ## 0.4 — advanced mechanical features
 

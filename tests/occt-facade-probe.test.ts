@@ -4,6 +4,7 @@ import {
   OCCT_CONTROLLED_PIPE_SHELL_FACADE_VERSION,
   OCCT_DRAFT_FACADE_VERSION,
   OCCT_EDGE_TREATMENT_FACADE_VERSION,
+  OCCT_SOLID_OFFSET_FACADE_VERSION,
   OcctFacadeProtocolError,
   probeOcctDraftFacade,
   probeOcctFacade,
@@ -73,6 +74,25 @@ function edgeTreatmentModule() {
   };
 }
 
+function solidOffsetModule() {
+  return {
+    ...edgeTreatmentModule(),
+    InvariantCadSolidOffsetOperation: {
+      SHELL: 0,
+      OFFSET: 1,
+    },
+    InvariantCadSolidOffsetDirection: {
+      INWARD: 0,
+      OUTWARD: 1,
+    },
+    InvariantCadSolidOffsetReport: class {},
+    invariantcadFacadeVersion: vi.fn(
+      () => OCCT_SOLID_OFFSET_FACADE_VERSION,
+    ),
+    invariantcadSolidOffsetAtomic: vi.fn(),
+  };
+}
+
 describe("owned OCCT facade capability probe", () => {
   it("classifies marker-free stock without trusting unrelated constructors", () => {
     expect(
@@ -95,6 +115,7 @@ describe("owned OCCT facade capability probe", () => {
       pipeShell: undefined,
       boolean: undefined,
       edgeTreatment: undefined,
+      solidOffset: undefined,
     });
     expect(Object.isFrozen(facade)).toBe(true);
     expect(probeOcctDraftFacade(module)).toBe(module);
@@ -112,6 +133,7 @@ describe("owned OCCT facade capability probe", () => {
       pipeShell: module,
       boolean: undefined,
       edgeTreatment: undefined,
+      solidOffset: undefined,
     });
     expect(Object.isFrozen(facade)).toBe(true);
     expect(probeOcctDraftFacade(module)).toBe(module);
@@ -129,6 +151,7 @@ describe("owned OCCT facade capability probe", () => {
       pipeShell: module,
       boolean: module,
       edgeTreatment: undefined,
+      solidOffset: undefined,
     });
     expect(Object.isFrozen(facade)).toBe(true);
     expect(probeOcctDraftFacade(module)).toBe(module);
@@ -146,6 +169,25 @@ describe("owned OCCT facade capability probe", () => {
       pipeShell: module,
       boolean: module,
       edgeTreatment: module,
+      solidOffset: undefined,
+    });
+    expect(Object.isFrozen(facade)).toBe(true);
+    expect(probeOcctDraftFacade(module)).toBe(module);
+  });
+
+  it("recognizes exact 0.6 as the complete solid-offset facade", () => {
+    const module = solidOffsetModule();
+    const facade = probeOcctFacade(module);
+
+    expect(facade).toEqual({
+      abi: "0.6",
+      version: OCCT_SOLID_OFFSET_FACADE_VERSION,
+      module,
+      draft: module,
+      pipeShell: module,
+      boolean: module,
+      edgeTreatment: module,
+      solidOffset: module,
     });
     expect(Object.isFrozen(facade)).toBe(true);
     expect(probeOcctDraftFacade(module)).toBe(module);
@@ -177,12 +219,22 @@ describe("owned OCCT facade capability probe", () => {
       OcctFacadeProtocolError,
     );
 
+    const partialSolidOffset = {
+      ...edgeTreatmentModule(),
+      InvariantCadSolidOffsetOperation: { SHELL: 0, OFFSET: 1 },
+      InvariantCadSolidOffsetDirection: { INWARD: 0, OUTWARD: 1 },
+      InvariantCadSolidOffsetReport: class {},
+    };
+    expect(() => probeOcctFacade(partialSolidOffset)).toThrow(
+      OcctFacadeProtocolError,
+    );
+
     const extra = {
       ...booleanModule(),
       invariantcadFutureCapability: vi.fn(),
     };
     expect(() => probeOcctFacade(extra)).toThrow(
-      "expected exact ABI 0.2, 0.3, 0.4, or 0.5",
+      "expected exact ABI 0.2, 0.3, 0.4, 0.5, or 0.6",
     );
 
     const differentlyCasedUnknown = {
@@ -243,6 +295,22 @@ describe("owned OCCT facade capability probe", () => {
       `expected '${OCCT_EDGE_TREATMENT_FACADE_VERSION}'`,
     );
 
+    const edgeTreatmentMarkersSolidOffsetVersion = edgeTreatmentModule();
+    edgeTreatmentMarkersSolidOffsetVersion.invariantcadFacadeVersion.mockReturnValue(
+      OCCT_SOLID_OFFSET_FACADE_VERSION,
+    );
+    expect(() => probeOcctFacade(edgeTreatmentMarkersSolidOffsetVersion)).toThrow(
+      `expected '${OCCT_EDGE_TREATMENT_FACADE_VERSION}'`,
+    );
+
+    const solidOffsetMarkersEdgeTreatmentVersion = solidOffsetModule();
+    solidOffsetMarkersEdgeTreatmentVersion.invariantcadFacadeVersion.mockReturnValue(
+      OCCT_EDGE_TREATMENT_FACADE_VERSION,
+    );
+    expect(() => probeOcctFacade(solidOffsetMarkersEdgeTreatmentVersion)).toThrow(
+      `expected '${OCCT_SOLID_OFFSET_FACADE_VERSION}'`,
+    );
+
     const wrongGlobal = controlledPipeShellModule();
     wrongGlobal.invariantcadPipeShellSolid = 7 as unknown as typeof wrongGlobal.invariantcadPipeShellSolid;
     expect(() => probeOcctFacade(wrongGlobal)).toThrow(
@@ -281,6 +349,20 @@ describe("owned OCCT facade capability probe", () => {
       {} as typeof wrongEdgeTreatmentClass.InvariantCadEdgeTreatmentReport;
     expect(() => probeOcctFacade(wrongEdgeTreatmentClass)).toThrow(
       "InvariantCadEdgeTreatmentReport must be an Embind class marker",
+    );
+
+    const wrongSolidOffsetGlobal = solidOffsetModule();
+    wrongSolidOffsetGlobal.invariantcadSolidOffsetAtomic =
+      7 as unknown as typeof wrongSolidOffsetGlobal.invariantcadSolidOffsetAtomic;
+    expect(() => probeOcctFacade(wrongSolidOffsetGlobal)).toThrow(
+      "invariantcadSolidOffsetAtomic must be a function",
+    );
+
+    const wrongSolidOffsetClass = solidOffsetModule();
+    wrongSolidOffsetClass.InvariantCadSolidOffsetReport =
+      {} as typeof wrongSolidOffsetClass.InvariantCadSolidOffsetReport;
+    expect(() => probeOcctFacade(wrongSolidOffsetClass)).toThrow(
+      "InvariantCadSolidOffsetReport must be an Embind class marker",
     );
   });
 
@@ -371,6 +453,54 @@ describe("owned OCCT facade capability probe", () => {
     } as unknown as number;
     expect(() => probeOcctFacade(wrappedValue)).toThrow(
       "InvariantCadEdgeTreatmentOperation.FILLET must be the number 0",
+    );
+  });
+
+  it("keeps the solid-offset operation and direction enums exact", () => {
+    const extraOperation = solidOffsetModule();
+    Object.assign(extraOperation.InvariantCadSolidOffsetOperation, { THICKEN: 2 });
+    expect(() => probeOcctFacade(extraOperation)).toThrow(
+      "InvariantCadSolidOffsetOperation members",
+    );
+
+    const missingOperation = solidOffsetModule();
+    delete (
+      missingOperation.InvariantCadSolidOffsetOperation as Partial<
+        typeof missingOperation.InvariantCadSolidOffsetOperation
+      >
+    ).OFFSET;
+    expect(() => probeOcctFacade(missingOperation)).toThrow(
+      "InvariantCadSolidOffsetOperation members",
+    );
+
+    const wrongOperation = solidOffsetModule();
+    wrongOperation.InvariantCadSolidOffsetOperation.OFFSET = 7;
+    expect(() => probeOcctFacade(wrongOperation)).toThrow(
+      "InvariantCadSolidOffsetOperation.OFFSET must be the number 1",
+    );
+
+    const extraDirection = solidOffsetModule();
+    Object.assign(extraDirection.InvariantCadSolidOffsetDirection, { BOTH: 2 });
+    expect(() => probeOcctFacade(extraDirection)).toThrow(
+      "InvariantCadSolidOffsetDirection members",
+    );
+
+    const missingDirection = solidOffsetModule();
+    delete (
+      missingDirection.InvariantCadSolidOffsetDirection as Partial<
+        typeof missingDirection.InvariantCadSolidOffsetDirection
+      >
+    ).OUTWARD;
+    expect(() => probeOcctFacade(missingDirection)).toThrow(
+      "InvariantCadSolidOffsetDirection members",
+    );
+
+    const wrappedDirection = solidOffsetModule();
+    wrappedDirection.InvariantCadSolidOffsetDirection.INWARD = {
+      value: 0,
+    } as unknown as number;
+    expect(() => probeOcctFacade(wrappedDirection)).toThrow(
+      "InvariantCadSolidOffsetDirection.INWARD must be the number 0",
     );
   });
 });

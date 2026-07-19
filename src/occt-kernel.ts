@@ -88,6 +88,13 @@ import {
   type OcctEdgeTreatmentReportSnapshot,
 } from "./internal/occt-edge-treatment.js";
 import {
+  DEFAULT_OCCT_EXACT_SOLID_OFFSET_HISTORY_RECORD_LIMIT,
+  OcctSolidOffsetFacadeProtocolError,
+  adoptOcctSolidOffset,
+  type OcctSolidOffsetFacadeModule,
+  type OcctSolidOffsetReportSnapshot,
+} from "./internal/occt-solid-offset.js";
+import {
   OcctDraftFacadeProtocolError,
   adoptOcctDraft,
   type OcctDraftFacadeModule,
@@ -123,6 +130,7 @@ import {
 export {
   DEFAULT_OCCT_EXACT_BOOLEAN_HISTORY_RECORD_LIMIT,
   DEFAULT_OCCT_EXACT_EDGE_TREATMENT_HISTORY_RECORD_LIMIT,
+  DEFAULT_OCCT_EXACT_SOLID_OFFSET_HISTORY_RECORD_LIMIT,
 };
 
 const OCCT_SHAPE = Symbol("InvariantCAD.OcctShape");
@@ -155,6 +163,22 @@ function exactEdgeTreatmentHistoryRecordLimit(
   ) {
     throw new RangeError(
       "maxExactEdgeTreatmentHistoryRecords must be a signed 32-bit non-negative integer",
+    );
+  }
+  return limit;
+}
+
+function exactSolidOffsetHistoryRecordLimit(
+  value: number | undefined,
+): number {
+  const limit = value ?? DEFAULT_OCCT_EXACT_SOLID_OFFSET_HISTORY_RECORD_LIMIT;
+  if (
+    !Number.isSafeInteger(limit) ||
+    limit < 0 ||
+    limit > TOPOLOGY_HASH_UPPER_BOUND
+  ) {
+    throw new RangeError(
+      "maxExactSolidOffsetHistoryRecords must be a signed 32-bit non-negative integer",
     );
   }
   return limit;
@@ -599,6 +623,13 @@ export interface OcctKernelOptions {
    * @default 1_000_000
    */
   readonly maxExactEdgeTreatmentHistoryRecords?: number;
+  /**
+   * Maximum exact shell/offset history records materialized across Wasm and
+   * JavaScript. Raise this explicit resource budget for exceptionally large
+   * models; the facade ABI ceiling is 2,147,483,647.
+   * @default 1_000_000
+   */
+  readonly maxExactSolidOffsetHistoryRecords?: number;
   readonly onOutput?: (message: string) => void;
   readonly onError?: (message: string) => void;
 }
@@ -643,6 +674,7 @@ class OcctKernel implements GeometryKernel {
   private readonly modelingTolerance: number;
   private readonly maxExactBooleanHistoryRecords: number;
   private readonly maxExactEdgeTreatmentHistoryRecords: number;
+  private readonly maxExactSolidOffsetHistoryRecords: number;
   private readonly ownedShapes = new WeakSet<OcctShape>();
   private readonly liveShapes = new Set<OcctShape>();
   private readonly topologyNamespace = nextTopologyNamespace++;
@@ -659,6 +691,9 @@ class OcctKernel implements GeometryKernel {
     maxExactEdgeTreatmentHistoryRecords = exactEdgeTreatmentHistoryRecordLimit(
       options.maxExactEdgeTreatmentHistoryRecords,
     ),
+    maxExactSolidOffsetHistoryRecords = exactSolidOffsetHistoryRecordLimit(
+      options.maxExactSolidOffsetHistoryRecords,
+    ),
   ) {
     this.raw = raw;
     this.facade = facade;
@@ -667,6 +702,7 @@ class OcctKernel implements GeometryKernel {
     this.maxExactBooleanHistoryRecords = maxExactBooleanHistoryRecords;
     this.maxExactEdgeTreatmentHistoryRecords =
       maxExactEdgeTreatmentHistoryRecords;
+    this.maxExactSolidOffsetHistoryRecords = maxExactSolidOffsetHistoryRecords;
     this.capabilities = {
       ...OcctKernel.BASE_CAPABILITIES,
       ...(facade?.draft === undefined
@@ -676,7 +712,16 @@ class OcctKernel implements GeometryKernel {
             exactIndexedTopologyEvolution: {
               protocolVersion: 1 as const,
               features:
-                facade.edgeTreatment !== undefined
+                facade.solidOffset !== undefined
+                  ? ([
+                      "draft",
+                      "boolean",
+                      "fillet",
+                      "chamfer",
+                      "shell",
+                      "offset",
+                    ] as const)
+                  : facade.edgeTreatment !== undefined
                   ? (["draft", "boolean", "fillet", "chamfer"] as const)
                   : facade.boolean === undefined
                   ? (["draft"] as const)
@@ -2956,7 +3001,8 @@ class OcctKernel implements GeometryKernel {
   /**
    * Removes a transferred wrapper after post-transfer validation fails.
    * Its retained subshape handles belong to this wrapper and are released
-   * here; the root stays live so adoptOcctDraft can release it exactly once.
+   * here; the root stays live so the owning exact-operation adapter can
+   * release it exactly once.
    */
   private abandonTransferredShape(shape: OcctShape): void {
     let cleanupError: unknown;
@@ -3290,6 +3336,196 @@ class OcctKernel implements GeometryKernel {
     });
   }
 
+  private selectedShellOpeningTopology(
+    input: OcctShape,
+    openings: readonly KernelTopologyKey[],
+  ): {
+    readonly snapshot: KernelTopologySnapshot;
+    readonly indices: readonly number[];
+    readonly handles: readonly ShapeHandle[];
+  } {
+    const snapshot = this.topology(input);
+    const faceIndexByKey = new Map(
+      snapshot.faces.map((descriptor, index) => [descriptor.key, index]),
+    );
+    const selected = new Set<number>();
+    for (const key of openings) {
+      const index = faceIndexByKey.get(key);
+      const retained = input.topologyHandles.get(key);
+      if (index === undefined || retained?.topology !== "face") {
+        throw new TypeError(
+          `Topology key '${String(key)}' is not a face of the input shape`,
+        );
+      }
+      selected.add(index);
+    }
+    const indices = [...selected].sort((first, second) => first - second);
+    const handles = indices.map((index) => {
+      const descriptor = snapshot.faces[index]!;
+      const retained = input.topologyHandles.get(descriptor.key);
+      if (retained?.topology !== "face") {
+        throw new Error("OCCT topology snapshot lost a retained face handle");
+      }
+      return retained.handle;
+    });
+    return { snapshot, indices, handles };
+  }
+
+  private assertExactSolidOffsetResult(
+    result: ShapeHandle,
+    operation: "shell" | "offset",
+    direction: "inward" | "outward",
+    inputVolume: number,
+    tolerance: number,
+  ): void {
+    const label = operation === "shell" ? "Shell" : "Offset";
+    const volumeTolerance = Math.max(
+      tolerance ** 3,
+      inputVolume * 1e-12,
+      Number.EPSILON,
+    );
+    if (this.raw.isNull(result) || !this.raw.isValid(result)) {
+      throw new RangeError(`${label} produced an invalid solid`);
+    }
+    const resultVolume = this.raw.getVolume(result);
+    const resultSolids = this.raw.getSubShapes(result, "solid");
+    try {
+      if (resultSolids.length !== 1) {
+        throw new RangeError(`${label} did not produce exactly one solid`);
+      }
+      if (!this.isPureSingleSolidShape(result, resultSolids[0]!)) {
+        throw new RangeError(
+          `${label} produced loose topology outside its result solid`,
+        );
+      }
+      for (const topology of ["face", "edge", "vertex"] as const) {
+        if (
+          this.raw.subShapeCount(result, topology) !==
+          this.raw.subShapeCount(resultSolids[0]!, topology)
+        ) {
+          throw new RangeError(
+            `${label} produced loose topology outside its result solid`,
+          );
+        }
+      }
+    } finally {
+      this.releaseHandles(resultSolids);
+    }
+    if (
+      !Number.isFinite(resultVolume) ||
+      !(resultVolume > volumeTolerance)
+    ) {
+      throw new RangeError(
+        operation === "shell"
+          ? "Shell did not produce a positive-volume solid"
+          : "Offset did not produce a positive-volume solid",
+      );
+    }
+    if (
+      operation === "shell" &&
+      direction === "inward" &&
+      !(resultVolume < inputVolume - volumeTolerance)
+    ) {
+      throw new RangeError("Shell thickness did not produce a hollowed solid");
+    }
+    if (
+      operation === "offset" &&
+      direction === "outward" &&
+      !(resultVolume > inputVolume + volumeTolerance)
+    ) {
+      throw new RangeError("Outward offset did not increase solid volume");
+    }
+    if (
+      operation === "offset" &&
+      direction === "inward" &&
+      !(resultVolume < inputVolume - volumeTolerance)
+    ) {
+      throw new RangeError("Inward offset did not decrease solid volume");
+    }
+  }
+
+  private solidOffsetWithExactEvolution(
+    module: OcctSolidOffsetFacadeModule,
+    operation: "shell" | "offset",
+    input: OcctShape,
+    inputSnapshot: KernelTopologySnapshot,
+    selectedOpeningFaceIndices: readonly number[],
+    openingFaceIds: readonly ShapeHandle[],
+    amount: number,
+    direction: "inward" | "outward",
+    tolerance: number,
+    inputVolume: number,
+    context?: KernelFeatureContext,
+  ): KernelShape {
+    checkContext(context);
+    const inputHandle = input[OCCT_SHAPE];
+    const rawKernel = this.raw.getRawKernel();
+    try {
+      return adoptOcctSolidOffset({
+        module,
+        kernel: rawKernel,
+        operation,
+        inputId: inputHandle,
+        openingFaceIds,
+        selectedOpeningFaceIndices,
+        amount,
+        direction,
+        tolerance,
+        maxHistoryRecords: this.maxExactSolidOffsetHistoryRecords,
+        validate: (report: OcctSolidOffsetReportSnapshot) => {
+          checkContext(context);
+          this.assertTopologyCounts(
+            report.evolution.inputCounts[0]!,
+            this.rawTopologyCounts(inputHandle),
+            `${operation} inputCounts[0]`,
+          );
+        },
+        adopt: ({ resultId, report }) => {
+          checkContext(context);
+          const provisional = this.own(resultId as ShapeHandle, context, {
+            inherited: input.lineage,
+            relation: "modified",
+            history: inputSnapshot.history,
+          });
+          try {
+            this.assertExactSolidOffsetResult(
+              provisional[OCCT_SHAPE],
+              operation,
+              direction,
+              inputVolume,
+              tolerance,
+            );
+            const outputSnapshot = this.topology(provisional);
+            this.assertTopologyCounts(
+              report.evolution.resultCounts,
+              this.rawTopologyCounts(provisional[OCCT_SHAPE]),
+              `${operation} resultCounts`,
+            );
+            provisional.topologySnapshot =
+              reduceCompleteIndexedTopologyEvolution({
+                evolution: report.evolution,
+                inputs: [inputSnapshot],
+                output: outputSnapshot,
+                allowCreated: true,
+                ...(context?.feature === undefined
+                  ? {}
+                  : { feature: context.feature }),
+              });
+            return provisional;
+          } catch (error) {
+            this.abandonTransferredShape(provisional);
+            throw error;
+          }
+        },
+      });
+    } catch (error) {
+      if (error instanceof OcctSolidOffsetFacadeProtocolError) {
+        throw new TopologyEvolutionProtocolError(error.message);
+      }
+      throw error;
+    }
+  }
+
   shell(
     shape: KernelShape,
     openings: readonly KernelTopologyKey[],
@@ -3348,6 +3584,25 @@ class OcctKernel implements GeometryKernel {
         !(inputVolume > Math.max(options.tolerance ** 3, Number.EPSILON))
       ) {
         throw new TypeError("Shell input must have positive finite volume");
+      }
+      if (this.facade?.solidOffset !== undefined) {
+        const selected = this.selectedShellOpeningTopology(input, openings);
+        if (selected.indices.length >= selected.snapshot.faces.length) {
+          throw new RangeError("Shell requires at least one retained face");
+        }
+        return this.solidOffsetWithExactEvolution(
+          this.facade.solidOffset,
+          "shell",
+          input,
+          selected.snapshot,
+          selected.indices,
+          selected.handles,
+          options.thickness,
+          options.direction,
+          options.tolerance,
+          inputVolume,
+          context,
+        );
       }
       const snapshot = this.topology(input);
       const uniqueOpenings = [...new Set(openings)];
@@ -3509,6 +3764,22 @@ class OcctKernel implements GeometryKernel {
       );
       if (!Number.isFinite(inputVolume) || !(inputVolume > volumeTolerance)) {
         throw new TypeError("Offset input must have positive finite volume");
+      }
+
+      if (this.facade?.solidOffset !== undefined) {
+        return this.solidOffsetWithExactEvolution(
+          this.facade.solidOffset,
+          "offset",
+          input,
+          this.topology(input),
+          [],
+          [],
+          options.distance,
+          options.direction,
+          options.tolerance,
+          inputVolume,
+          context,
+        );
       }
 
       const signedDistance =
@@ -3758,6 +4029,10 @@ export async function createOcctKernel(
     exactEdgeTreatmentHistoryRecordLimit(
       options.maxExactEdgeTreatmentHistoryRecords,
     );
+  const maxExactSolidOffsetHistoryRecords =
+    exactSolidOffsetHistoryRecordLimit(
+      options.maxExactSolidOffsetHistoryRecords,
+    );
   const [{ OcctKernel: RawKernel }, createModule] = await Promise.all([
     import("occt-wasm"),
     options.moduleFactory === undefined
@@ -3798,6 +4073,7 @@ export async function createOcctKernel(
       options,
       maxExactBooleanHistoryRecords,
       maxExactEdgeTreatmentHistoryRecords,
+      maxExactSolidOffsetHistoryRecords,
     );
   } catch (error) {
     raw[Symbol.dispose]();

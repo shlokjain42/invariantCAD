@@ -8,16 +8,18 @@ import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
 const BUNDLE_NAME = "invariantcad-occt-facade";
-const BUNDLE_VERSION = "0.5.0";
+const BUNDLE_VERSION = "0.6.0";
 const BUNDLE_DIRECTORY = `${BUNDLE_NAME}-${BUNDLE_VERSION}`;
 const FACADE_MARKER =
-  "invariantcad-facade@0.5.0+occt-wasm.3.7.0";
+  "invariantcad-facade@0.6.0+occt-wasm.3.7.0";
 const DRAFT_FACADE_MARKER =
   "invariantcad-facade@0.2.0+occt-wasm.3.7.0";
 const CONTROLLED_PIPE_SHELL_FACADE_MARKER =
   "invariantcad-facade@0.3.0+occt-wasm.3.7.0";
 const BOOLEAN_FACADE_MARKER =
   "invariantcad-facade@0.4.0+occt-wasm.3.7.0";
+const EDGE_TREATMENT_FACADE_MARKER =
+  "invariantcad-facade@0.5.0+occt-wasm.3.7.0";
 const UPSTREAM_OCCT_WASM_VERSION = "3.7.0";
 const RELEASE_INPUT_URL = new URL(
   "../native/occt/bundle/release-input.json",
@@ -37,6 +39,7 @@ const PATCH_PATHS = Object.freeze([
   "source/native/occt/patches/0003-controlled-pipe-shell.patch",
   "source/native/occt/patches/0004-exact-boolean-history.patch",
   "source/native/occt/patches/0005-exact-edge-treatment-history.patch",
+  "source/native/occt/patches/0006-exact-solid-offset-history.patch",
 ]);
 const LICENSE_PATHS = Object.freeze([
   "LICENSE",
@@ -737,11 +740,15 @@ function verifyRuntime(files, manifest, release, runtimePins) {
     "InvariantCadBooleanReport",
     "InvariantCadEdgeTreatmentOperation",
     "InvariantCadEdgeTreatmentReport",
+    "InvariantCadSolidOffsetOperation",
+    "InvariantCadSolidOffsetDirection",
+    "InvariantCadSolidOffsetReport",
     "InvariantCadTopologyKind",
     "InvariantCadTopologyRelation",
     "invariantcadPipeShellSolid",
     "invariantcadBooleanAtomic",
     "invariantcadEdgeTreatmentAtomic",
+    "invariantcadSolidOffsetAtomic",
   ]) {
     if (!wasm.includes(Buffer.from(marker))) {
       fail(`runtime WASM does not contain the required facade ABI marker: ${marker}`);
@@ -876,6 +883,15 @@ function verifySourceInputs(files) {
       [
         "InvariantCadEdgeTreatmentReport",
         "invariantcadEdgeTreatmentAtomic",
+        EDGE_TREATMENT_FACADE_MARKER,
+      ],
+    ],
+    [
+      PATCH_PATHS[5],
+      [
+        "InvariantCadSolidOffsetReport",
+        "invariantcadSolidOffsetAtomic",
+        "reconcileGeneratedOnlyReplacements",
         FACADE_MARKER,
       ],
     ],
@@ -1502,7 +1518,7 @@ export async function verifyOcctFacadeBundleWithTestRuntime(
 function usage() {
   return `Usage: node scripts/verify-occt-facade-bundle.mjs [--json] PATH
 
-Verify the complete InvariantCAD OCCT facade 0.5.0 compliance bundle at PATH.
+Verify the complete InvariantCAD OCCT facade 0.6.0 compliance bundle at PATH.
 PATH must be the versioned bundle directory or its deterministic .tar.gz archive.
 
 Options:

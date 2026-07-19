@@ -40,10 +40,10 @@
     "example:bracket": "tsx examples/bracket.ts",
     "build:occt-facade": "./scripts/build-occt-facade.sh",
     "bundle:occt-facade": "node scripts/package-occt-facade-bundle.mjs",
-    "verify:occt-facade-bundle": "node scripts/verify-occt-facade-bundle.mjs .artifacts/occt-facade-bundle/invariantcad-occt-facade-0.5.0 && node scripts/verify-occt-facade-bundle.mjs .artifacts/occt-facade-bundle/invariantcad-occt-facade-0.5.0.tar.gz",
+    "verify:occt-facade-bundle": "node scripts/verify-occt-facade-bundle.mjs .artifacts/occt-facade-bundle/invariantcad-occt-facade-0.6.0 && node scripts/verify-occt-facade-bundle.mjs .artifacts/occt-facade-bundle/invariantcad-occt-facade-0.6.0.tar.gz",
     "test:occt-facade": "node scripts/test-occt-facade.mjs",
     "test:occt-draft-public": "tsx scripts/test-public-occt-draft.ts",
-    "test:occt-facade-bundle": "pnpm bundle:occt-facade && pnpm verify:occt-facade-bundle && pnpm pack --pack-destination .artifacts && node scripts/package-smoke.mjs --owned-facade-runtime-dir .artifacts/occt-facade-bundle/invariantcad-occt-facade-0.5.0/runtime",
+    "test:occt-facade-bundle": "pnpm bundle:occt-facade && pnpm verify:occt-facade-bundle && pnpm pack --pack-destination .artifacts && node scripts/package-smoke.mjs --owned-facade-runtime-dir .artifacts/occt-facade-bundle/invariantcad-occt-facade-0.6.0/runtime",
     "prepack": "pnpm build",
     "verify": "pnpm check && pnpm test && pnpm lint:package && pnpm test:package"
   },

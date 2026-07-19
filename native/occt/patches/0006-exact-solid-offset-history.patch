@@ -1,0 +1,896 @@
+diff --git a/facade/include/occt_kernel.h b/facade/include/occt_kernel.h
+index ec5d0a7c50e1341da274724fd20c0950da56705c..4656d106bf3f45d03829a31fa7ed769923e1f959 100644
+--- a/facade/include/occt_kernel.h
++++ b/facade/include/occt_kernel.h
+@@ -19,10 +19,11 @@ class OcctKernel;
+ struct InvariantCadDraftTransferState;
+ struct InvariantCadBooleanTransferState;
+ struct InvariantCadEdgeTreatmentTransferState;
++struct InvariantCadSolidOffsetTransferState;
+ struct InvariantCadPipeShellTransferState;
+ 
+ /// Evaluation-scoped topology kinds used by the indexed evolution ABI.
+-/// These numeric values are stable across facade ABI 0.5.x.
++/// These numeric values are stable across facade ABI 0.2 and later.
+ enum InvariantCadTopologyKind : int {
+     InvariantCadTopologyKindNone = -1,
+     InvariantCadTopologyKindFace = 0,
+@@ -32,8 +33,9 @@ enum InvariantCadTopologyKind : int {
+ 
+ /// Source-to-result relations used by the generic indexed evolution envelope.
+ /// Atomic draft emits only Preserved and Modified records. Exact Boolean,
+-/// fillet, and chamfer may emit the complete relation vocabulary, including
+-/// source-less Created for result topology that native history cannot attribute.
++/// fillet, chamfer, shell, and offset may emit the complete relation vocabulary,
++/// including source-less Created for result topology that native history cannot
++/// attribute.
+ enum InvariantCadTopologyRelation : int {
+     InvariantCadTopologyRelationPreserved = 0,
+     InvariantCadTopologyRelationModified = 1,
+@@ -55,6 +57,18 @@ enum InvariantCadEdgeTreatmentOperation : int {
+     InvariantCadEdgeTreatmentOperationChamfer = 1,
+ };
+ 
++/// Whole-solid offset-family operation codes used by facade ABI 0.6.
++enum InvariantCadSolidOffsetOperation : int {
++    InvariantCadSolidOffsetOperationShell = 0,
++    InvariantCadSolidOffsetOperationOffset = 1,
++};
++
++/// Public positive-magnitude direction codes used by facade ABI 0.6.
++enum InvariantCadSolidOffsetDirection : int {
++    InvariantCadSolidOffsetDirectionInward = 0,
++    InvariantCadSolidOffsetDirectionOutward = 1,
++};
++
+ /// Number of unique located subshapes indexed by TopExp::MapShapes for each
+ /// topology kind. Orientation occurrences are deliberately not separate IDs;
+ /// however, the canonical input/result occurrences' orientations participate
+@@ -295,6 +309,74 @@ struct InvariantCadEdgeTreatmentReport {
+         std::vector<uint32_t> edgeIds, double amount, int maxHistoryRecords);
+ };
+ 
++/// Transactional result of one round-join whole-solid shell or offset.
++/// Shell opening indices are canonicalized by input face index. The complete
++/// history covers the entire single input and aggregate solid result.
++struct InvariantCadSolidOffsetReport {
++    bool ok = false;
++    std::string stage = "validation";
++    std::string code = "INTERNAL_ERROR";
++    std::string message;
++    int operation = -1;
++    int direction = -1;
++    double amount = 0.0;
++    double tolerance = 0.0;
++    int requestedOpeningFaceCount = 0;
++    int buildCount = 0;
++    int occtStatus = -1;
++    int failedOpeningFaceIndex = -1;
++    std::string historyProblemDomain = "none";
++    int historyProblemSourceShapeIndex = -1;
++    int historyProblemKind = InvariantCadTopologyKindNone;
++    int historyProblemIndex = -1;
++
++    InvariantCadSolidOffsetReport() = default;
++    InvariantCadSolidOffsetReport(const InvariantCadSolidOffsetReport&) = default;
++    InvariantCadSolidOffsetReport& operator=(const InvariantCadSolidOffsetReport&) = default;
++    InvariantCadSolidOffsetReport(InvariantCadSolidOffsetReport&&) noexcept = default;
++    InvariantCadSolidOffsetReport& operator=(InvariantCadSolidOffsetReport&&) noexcept = default;
++
++    bool getOk() const { return ok; }
++    std::string getStage() const { return stage; }
++    std::string getCode() const { return code; }
++    std::string getMessage() const { return message; }
++    int getOperation() const { return operation; }
++    int getDirection() const { return direction; }
++    double getAmount() const { return amount; }
++    double getTolerance() const { return tolerance; }
++    int getRequestedOpeningFaceCount() const { return requestedOpeningFaceCount; }
++    int getBuildCount() const { return buildCount; }
++    int getOcctStatus() const { return occtStatus; }
++    int getFailedOpeningFaceIndex() const { return failedOpeningFaceIndex; }
++    std::string getHistoryProblemDomain() const { return historyProblemDomain; }
++    int getHistoryProblemSourceShapeIndex() const { return historyProblemSourceShapeIndex; }
++    int getHistoryProblemKind() const { return historyProblemKind; }
++    int getHistoryProblemIndex() const { return historyProblemIndex; }
++
++    int selectedOpeningFaceCount() const;
++    int selectedOpeningFaceIndex(int selectedIndex) const;
++    uint32_t takeResultId(OcctKernel& kernel);
++    bool hasResult() const;
++    std::string transferCode(const OcctKernel& kernel) const;
++
++    int topologyHistoryVersion() const;
++    bool topologyHistoryComplete() const;
++    int topologyInputShapeCount() const;
++    InvariantCadTopologyCounts topologyInputCounts(int sourceShapeIndex) const;
++    InvariantCadTopologyCounts topologyResultCounts() const;
++    int topologyRecordCount() const;
++    InvariantCadTopologyEvolutionRecord topologyRecord(int recordIndex) const;
++
++  private:
++    std::vector<int> selectedOpeningFaceIndices_;
++    std::shared_ptr<InvariantCadSolidOffsetTransferState> transfer_;
++
++    friend InvariantCadSolidOffsetReport invariantcadSolidOffsetAtomic(
++        OcctKernel& kernel, int operation, uint32_t inputId,
++        std::vector<uint32_t> openingFaceIds, double amount, int direction,
++        double tolerance, int maxHistoryRecords);
++};
++
+ /// Transactional result of the controlled InvariantCAD PipeShell facade.
+ /// A successful untaken report owns its result outside the kernel arena.
+ struct InvariantCadPipeShellReport {
+@@ -356,6 +438,13 @@ InvariantCadEdgeTreatmentReport invariantcadEdgeTreatmentAtomic(
+     OcctKernel& kernel, int operation, uint32_t inputId,
+     std::vector<uint32_t> edgeIds, double amount, int maxHistoryRecords);
+ 
++/// Builds one round-join shell or whole-solid offset on an isolated operand
++/// copy and proves complete single-input face/edge/vertex evolution.
++InvariantCadSolidOffsetReport invariantcadSolidOffsetAtomic(
++    OcctKernel& kernel, int operation, uint32_t inputId,
++    std::vector<uint32_t> openingFaceIds, double amount, int direction,
++    double tolerance, int maxHistoryRecords);
++
+ /// Builds one corrected-Frenet, right-corner solid PipeShell with explicit
+ /// native tolerances. The report exposes OCCT's measured surface error and
+ /// retains the result outside the arena until a checked one-shot transfer.
+@@ -799,6 +888,7 @@ class OcctKernel {
+     friend struct InvariantCadDraftReport;
+     friend struct InvariantCadBooleanReport;
+     friend struct InvariantCadEdgeTreatmentReport;
++    friend struct InvariantCadSolidOffsetReport;
+     friend struct InvariantCadPipeShellReport;
+     friend InvariantCadDraftReport invariantcadDraftFacesAtomic(
+         OcctKernel& kernel, uint32_t shapeId, std::vector<uint32_t> faceIds, double angleRad,
+@@ -814,6 +904,10 @@ class OcctKernel {
+     friend InvariantCadEdgeTreatmentReport invariantcadEdgeTreatmentAtomic(
+         OcctKernel& kernel, int operation, uint32_t inputId,
+         std::vector<uint32_t> edgeIds, double amount, int maxHistoryRecords);
++    friend InvariantCadSolidOffsetReport invariantcadSolidOffsetAtomic(
++        OcctKernel& kernel, int operation, uint32_t inputId,
++        std::vector<uint32_t> openingFaceIds, double amount, int direction,
++        double tolerance, int maxHistoryRecords);
+     uint32_t store(const TopoDS_Shape& shape);
+     uint32_t invariantcadStoreTransferredShape(const TopoDS_Shape& shape);
+     const TopoDS_Shape& get(uint32_t id) const;
+diff --git a/facade/src/invariantcad_bindings.cpp b/facade/src/invariantcad_bindings.cpp
+index 0f33625a1fec6a48eae273a109e4b19ab8c205ef..5f2fc256e682ba1ebd00d3f6558651d2df4487fb 100644
+--- a/facade/src/invariantcad_bindings.cpp
++++ b/facade/src/invariantcad_bindings.cpp
+@@ -35,6 +35,16 @@ EMSCRIPTEN_BINDINGS(invariantcad_facade) {
+         .value("FILLET", InvariantCadEdgeTreatmentOperationFillet)
+         .value("CHAMFER", InvariantCadEdgeTreatmentOperationChamfer);
+ 
++    enum_<InvariantCadSolidOffsetOperation>("InvariantCadSolidOffsetOperation",
++                                            enum_value_type::number)
++        .value("SHELL", InvariantCadSolidOffsetOperationShell)
++        .value("OFFSET", InvariantCadSolidOffsetOperationOffset);
++
++    enum_<InvariantCadSolidOffsetDirection>("InvariantCadSolidOffsetDirection",
++                                            enum_value_type::number)
++        .value("INWARD", InvariantCadSolidOffsetDirectionInward)
++        .value("OUTWARD", InvariantCadSolidOffsetDirectionOutward);
++
+     value_object<InvariantCadTopologyCounts>("InvariantCadTopologyCounts")
+         .field("faces", &InvariantCadTopologyCounts::faces)
+         .field("edges", &InvariantCadTopologyCounts::edges)
+@@ -142,6 +152,50 @@ EMSCRIPTEN_BINDINGS(invariantcad_facade) {
+         .function("topologyRecord", &InvariantCadEdgeTreatmentReport::topologyRecord)
+         .function("takeResultId", &InvariantCadEdgeTreatmentReport::takeResultId);
+ 
++    class_<InvariantCadSolidOffsetReport>("InvariantCadSolidOffsetReport")
++        .property("ok", &InvariantCadSolidOffsetReport::getOk)
++        .property("stage", &InvariantCadSolidOffsetReport::getStage)
++        .property("code", &InvariantCadSolidOffsetReport::getCode)
++        .property("message", &InvariantCadSolidOffsetReport::getMessage)
++        .property("operation", &InvariantCadSolidOffsetReport::getOperation)
++        .property("direction", &InvariantCadSolidOffsetReport::getDirection)
++        .property("amount", &InvariantCadSolidOffsetReport::getAmount)
++        .property("tolerance", &InvariantCadSolidOffsetReport::getTolerance)
++        .property("requestedOpeningFaceCount",
++                  &InvariantCadSolidOffsetReport::getRequestedOpeningFaceCount)
++        .property("buildCount", &InvariantCadSolidOffsetReport::getBuildCount)
++        .property("occtStatus", &InvariantCadSolidOffsetReport::getOcctStatus)
++        .property("failedOpeningFaceIndex",
++                  &InvariantCadSolidOffsetReport::getFailedOpeningFaceIndex)
++        .property("historyProblemDomain",
++                  &InvariantCadSolidOffsetReport::getHistoryProblemDomain)
++        .property("historyProblemSourceShapeIndex",
++                  &InvariantCadSolidOffsetReport::getHistoryProblemSourceShapeIndex)
++        .property("historyProblemKind",
++                  &InvariantCadSolidOffsetReport::getHistoryProblemKind)
++        .property("historyProblemIndex",
++                  &InvariantCadSolidOffsetReport::getHistoryProblemIndex)
++        .function("selectedOpeningFaceCount",
++                  &InvariantCadSolidOffsetReport::selectedOpeningFaceCount)
++        .function("selectedOpeningFaceIndex",
++                  &InvariantCadSolidOffsetReport::selectedOpeningFaceIndex)
++        .function("hasResult", &InvariantCadSolidOffsetReport::hasResult)
++        .function("transferCode", &InvariantCadSolidOffsetReport::transferCode)
++        .function("topologyHistoryVersion",
++                  &InvariantCadSolidOffsetReport::topologyHistoryVersion)
++        .function("topologyHistoryComplete",
++                  &InvariantCadSolidOffsetReport::topologyHistoryComplete)
++        .function("topologyInputShapeCount",
++                  &InvariantCadSolidOffsetReport::topologyInputShapeCount)
++        .function("topologyInputCounts",
++                  &InvariantCadSolidOffsetReport::topologyInputCounts)
++        .function("topologyResultCounts",
++                  &InvariantCadSolidOffsetReport::topologyResultCounts)
++        .function("topologyRecordCount",
++                  &InvariantCadSolidOffsetReport::topologyRecordCount)
++        .function("topologyRecord", &InvariantCadSolidOffsetReport::topologyRecord)
++        .function("takeResultId", &InvariantCadSolidOffsetReport::takeResultId);
++
+     class_<InvariantCadPipeShellReport>("InvariantCadPipeShellReport")
+         .property("ok", &InvariantCadPipeShellReport::getOk)
+         .property("stage", &InvariantCadPipeShellReport::getStage)
+@@ -162,5 +216,6 @@ EMSCRIPTEN_BINDINGS(invariantcad_facade) {
+     function("invariantcadDraftFacesAtomic", &invariantcadDraftFacesAtomic);
+     function("invariantcadBooleanAtomic", &invariantcadBooleanAtomic);
+     function("invariantcadEdgeTreatmentAtomic", &invariantcadEdgeTreatmentAtomic);
++    function("invariantcadSolidOffsetAtomic", &invariantcadSolidOffsetAtomic);
+     function("invariantcadPipeShellSolid", &invariantcadPipeShellSolid);
+ }
+diff --git a/facade/src/invariantcad_facade.cpp b/facade/src/invariantcad_facade.cpp
+index 2a89923e0ed6af81a3ec01e5559e0c049693cb07..da798889e40f1a02362a3ea2c50f80ed92f6b609 100644
+--- a/facade/src/invariantcad_facade.cpp
++++ b/facade/src/invariantcad_facade.cpp
+@@ -15,9 +15,13 @@
+ #include <BRepBuilderAPI_TransitionMode.hxx>
+ #include <BRepFilletAPI_MakeChamfer.hxx>
+ #include <BRepFilletAPI_MakeFillet.hxx>
++#include <BRepOffsetAPI_MakeOffsetShape.hxx>
++#include <BRepOffsetAPI_MakeThickSolid.hxx>
+ #include <BRepOffsetAPI_DraftAngle.hxx>
+ #include <BRepOffsetAPI_MakePipeShell.hxx>
++#include <BRepOffset_Mode.hxx>
+ #include <BRepTools_History.hxx>
++#include <GeomAbs_JoinType.hxx>
+ #include <GProp_GProps.hxx>
+ #include <NCollection_IndexedMap.hxx>
+ #include <Standard_Failure.hxx>
+@@ -68,6 +72,13 @@ struct InvariantCadEdgeTreatmentTransferState {
+     InvariantCadIndexedTopologyEvolution topologyHistory;
+ };
+ 
++struct InvariantCadSolidOffsetTransferState {
++    TopoDS_Shape result;
++    uint64_t kernelInstanceToken = 0;
++    bool transferred = false;
++    InvariantCadIndexedTopologyEvolution topologyHistory;
++};
++
+ struct InvariantCadPipeShellTransferState {
+     TopoDS_Shape result;
+     uint64_t kernelInstanceToken = 0;
+@@ -558,6 +569,36 @@ void appendNativeHistorySourceRecords(
+     }
+ }
+ 
++void reconcileGeneratedOnlyReplacements(
++    BRepTools_History& nativeHistory, const TopoDS_Shape& copiedInputShape,
++    const TopoDS_Shape& resultShape) {
++    const IndexedOperandTopology copiedInput =
++        indexOperandTopology(copiedInputShape, 0, "source");
++    const IndexedOperandTopology result =
++        indexOperandTopology(resultShape, -1, "result");
++    for (const int sourceKind : {InvariantCadTopologyKindFace,
++                                 InvariantCadTopologyKindEdge,
++                                 InvariantCadTopologyKindVertex}) {
++        const IndexedShapeMap& sourceMap = mapForKind(copiedInput, sourceKind);
++        const IndexedShapeMap& resultMap = mapForKind(result, sourceKind);
++        for (int oneBasedSourceIndex = 1;
++             oneBasedSourceIndex <= sourceMap.Extent(); ++oneBasedSourceIndex) {
++            const TopoDS_Shape& source = sourceMap.FindKey(oneBasedSourceIndex);
++            if (resultMap.FindIndex(source) > 0 ||
++                !nativeHistory.Modified(source).IsEmpty() ||
++                nativeHistory.IsRemoved(source)) {
++                continue;
++            }
++            // BRepOffset_MakeOffset::IsDeleted returns false when a source has
++            // Generated successors, even though the source identity is absent
++            // from the final shape. BRepTools_History explicitly permits a
++            // removed source to retain Generated links. Final membership makes
++            // this terminal identity relation exact rather than heuristic.
++            nativeHistory.Remove(source);
++        }
++    }
++}
++
+ void appendUnclaimedCreatedRecords(
+     int resultKind, std::vector<bool>& claimed, int maxHistoryRecords,
+     std::set<EvolutionRecordKey>& uniqueRecords,
+@@ -892,10 +933,14 @@ bool extractPureSingleSolid(const TopoDS_Shape& shape, TopoDS_Shape& solid) {
+     return !iterator.More() && extractPureSingleSolid(child, solid);
+ }
+ 
+-bool hasPositiveVolume(const TopoDS_Shape& shape) {
++double signedVolume(const TopoDS_Shape& shape) {
+     GProp_GProps properties;
+     BRepGProp::VolumeProperties(shape, properties);
+-    const double volume = properties.Mass();
++    return properties.Mass();
++}
++
++bool hasPositiveVolume(const TopoDS_Shape& shape) {
++    const double volume = signedVolume(shape);
+     return std::isfinite(volume) && volume > 0.0;
+ }
+ 
+@@ -1088,6 +1133,64 @@ std::string InvariantCadEdgeTreatmentReport::transferCode(
+     return "READY";
+ }
+ 
++int InvariantCadSolidOffsetReport::selectedOpeningFaceCount() const {
++    if (selectedOpeningFaceIndices_.size() >
++        static_cast<size_t>(std::numeric_limits<int>::max())) {
++        throw std::overflow_error(
++            "InvariantCAD solid-offset opening selection exceeds the ABI range");
++    }
++    return static_cast<int>(selectedOpeningFaceIndices_.size());
++}
++
++int InvariantCadSolidOffsetReport::selectedOpeningFaceIndex(
++    int selectedIndex) const {
++    if (selectedIndex < 0 || static_cast<size_t>(selectedIndex) >=
++                                 selectedOpeningFaceIndices_.size()) {
++        throw std::out_of_range(
++            "InvariantCAD solid-offset opening selection index is out of range");
++    }
++    return selectedOpeningFaceIndices_[static_cast<size_t>(selectedIndex)];
++}
++
++uint32_t InvariantCadSolidOffsetReport::takeResultId(OcctKernel& kernel) {
++    const std::string state = transferCode(kernel);
++    if (state == "NO_RESULT") {
++        throw std::runtime_error(
++            "InvariantCAD solid-offset report has no transferable result");
++    }
++    if (state == "ALREADY_TRANSFERRED") {
++        throw std::runtime_error(
++            "InvariantCAD solid-offset result was already transferred");
++    }
++    if (state == "WRONG_KERNEL") {
++        throw std::runtime_error(
++            "InvariantCAD solid-offset result belongs to another kernel instance");
++    }
++    const uint32_t resultId =
++        kernel.invariantcadStoreTransferredShape(transfer_->result);
++    transfer_->transferred = true;
++    transfer_->result.Nullify();
++    return resultId;
++}
++
++bool InvariantCadSolidOffsetReport::hasResult() const {
++    return transfer_ && !transfer_->transferred && !transfer_->result.IsNull();
++}
++
++std::string InvariantCadSolidOffsetReport::transferCode(
++    const OcctKernel& kernel) const {
++    if (!transfer_) {
++        return "NO_RESULT";
++    }
++    if (transfer_->transferred || transfer_->result.IsNull()) {
++        return "ALREADY_TRANSFERRED";
++    }
++    if (transfer_->kernelInstanceToken != kernel.invariantcadInstanceToken_) {
++        return "WRONG_KERNEL";
++    }
++    return "READY";
++}
++
+ uint32_t InvariantCadPipeShellReport::takeResultId(OcctKernel& kernel) {
+     const std::string state = transferCode(kernel);
+     if (state == "NO_RESULT") {
+@@ -1320,8 +1423,77 @@ InvariantCadTopologyEvolutionRecord InvariantCadEdgeTreatmentReport::topologyRec
+     return transfer_->topologyHistory.records[static_cast<size_t>(recordIndex)];
+ }
+ 
++int InvariantCadSolidOffsetReport::topologyHistoryVersion() const {
++    return topologyHistoryComplete() ? transfer_->topologyHistory.version : 0;
++}
++
++bool InvariantCadSolidOffsetReport::topologyHistoryComplete() const {
++    return transfer_ && transfer_->topologyHistory.complete;
++}
++
++int InvariantCadSolidOffsetReport::topologyInputShapeCount() const {
++    if (!topologyHistoryComplete()) {
++        return 0;
++    }
++    if (transfer_->topologyHistory.inputCounts.size() >
++        static_cast<size_t>(std::numeric_limits<int>::max())) {
++        throw std::overflow_error(
++            "InvariantCAD solid-offset topology input count exceeds the ABI range");
++    }
++    return static_cast<int>(transfer_->topologyHistory.inputCounts.size());
++}
++
++InvariantCadTopologyCounts InvariantCadSolidOffsetReport::topologyInputCounts(
++    int sourceShapeIndex) const {
++    if (!topologyHistoryComplete()) {
++        throw std::logic_error(
++            "InvariantCAD solid-offset topology history is unavailable");
++    }
++    if (sourceShapeIndex < 0 || static_cast<size_t>(sourceShapeIndex) >=
++                                    transfer_->topologyHistory.inputCounts.size()) {
++        throw std::out_of_range(
++            "InvariantCAD solid-offset topology input shape index is out of range");
++    }
++    return transfer_->topologyHistory.inputCounts[
++        static_cast<size_t>(sourceShapeIndex)];
++}
++
++InvariantCadTopologyCounts InvariantCadSolidOffsetReport::topologyResultCounts() const {
++    if (!topologyHistoryComplete()) {
++        throw std::logic_error(
++            "InvariantCAD solid-offset topology history is unavailable");
++    }
++    return transfer_->topologyHistory.resultCounts;
++}
++
++int InvariantCadSolidOffsetReport::topologyRecordCount() const {
++    if (!topologyHistoryComplete()) {
++        return 0;
++    }
++    if (transfer_->topologyHistory.records.size() >
++        static_cast<size_t>(std::numeric_limits<int>::max())) {
++        throw std::overflow_error(
++            "InvariantCAD solid-offset topology record count exceeds the ABI range");
++    }
++    return static_cast<int>(transfer_->topologyHistory.records.size());
++}
++
++InvariantCadTopologyEvolutionRecord InvariantCadSolidOffsetReport::topologyRecord(
++    int recordIndex) const {
++    if (!topologyHistoryComplete()) {
++        throw std::logic_error(
++            "InvariantCAD solid-offset topology history is unavailable");
++    }
++    if (recordIndex < 0 || static_cast<size_t>(recordIndex) >=
++                               transfer_->topologyHistory.records.size()) {
++        throw std::out_of_range(
++            "InvariantCAD solid-offset topology record index is out of range");
++    }
++    return transfer_->topologyHistory.records[static_cast<size_t>(recordIndex)];
++}
++
+ std::string invariantcadFacadeVersion() {
+-    return "invariantcad-facade@0.5.0+occt-wasm.3.7.0";
++    return "invariantcad-facade@0.6.0+occt-wasm.3.7.0";
+ }
+ 
+ InvariantCadBooleanReport invariantcadBooleanAtomic(
+@@ -1902,6 +2074,430 @@ InvariantCadEdgeTreatmentReport invariantcadEdgeTreatmentAtomic(
+     }
+ }
+ 
++InvariantCadSolidOffsetReport invariantcadSolidOffsetAtomic(
++    OcctKernel& kernel, int operation, uint32_t inputId,
++    std::vector<uint32_t> openingFaceIds, double amount, int direction,
++    double tolerance, int maxHistoryRecords) {
++    const int requestedOpeningFaceCount =
++        openingFaceIds.size() <
++                static_cast<size_t>(std::numeric_limits<int>::max())
++            ? static_cast<int>(openingFaceIds.size())
++            : -1;
++    int buildCount = 0;
++    int occtStatus = -1;
++    int failedOpeningFaceIndex = -1;
++    std::vector<int> selectedOpeningFaceIndices;
++    auto failure = [&](const char* stage, const char* code,
++                       const std::string& message) {
++        InvariantCadSolidOffsetReport report;
++        report.stage = stage;
++        report.code = code;
++        report.message = message;
++        report.operation = operation;
++        report.direction = direction;
++        report.amount = amount;
++        report.tolerance = tolerance;
++        report.requestedOpeningFaceCount = requestedOpeningFaceCount;
++        report.buildCount = buildCount;
++        report.occtStatus = occtStatus;
++        report.failedOpeningFaceIndex = failedOpeningFaceIndex;
++        report.selectedOpeningFaceIndices_ = selectedOpeningFaceIndices;
++        return report;
++    };
++
++    if (operation != InvariantCadSolidOffsetOperationShell &&
++        operation != InvariantCadSolidOffsetOperationOffset) {
++        return failure("validation", "INVALID_OPERATION",
++                       "Solid-offset operation code is not supported");
++    }
++    if (direction != InvariantCadSolidOffsetDirectionInward &&
++        direction != InvariantCadSolidOffsetDirectionOutward) {
++        return failure("validation", "INVALID_DIRECTION",
++                       "Solid-offset direction code is not supported");
++    }
++    if (!std::isfinite(amount) || !(amount > 0.0)) {
++        return failure("validation", "INVALID_AMOUNT",
++                       "Solid-offset amount must be finite and positive");
++    }
++    if (!std::isfinite(tolerance) || !(tolerance > 0.0)) {
++        return failure("validation", "INVALID_TOLERANCE",
++                       "Solid-offset tolerance must be finite and positive");
++    }
++    if (!(tolerance < amount)) {
++        return failure("validation", "TOLERANCE_NOT_LESS_THAN_AMOUNT",
++                       "Solid-offset tolerance must be less than its amount");
++    }
++    if (maxHistoryRecords < 0) {
++        return failure("validation", "INVALID_HISTORY_RECORD_LIMIT",
++                       "Solid-offset history record limit must be non-negative");
++    }
++    if (requestedOpeningFaceCount < 0) {
++        return failure("validation", "OPENING_COUNT_OVERFLOW",
++                       "Opening-face count exceeds the ABI range");
++    }
++    if (operation == InvariantCadSolidOffsetOperationShell &&
++        openingFaceIds.empty()) {
++        return failure("validation", "EMPTY_OPENING_LIST",
++                       "Shell requires at least one opening face");
++    }
++    if (operation == InvariantCadSolidOffsetOperationOffset &&
++        !openingFaceIds.empty()) {
++        return failure("validation", "OFFSET_HAS_OPENINGS",
++                       "Whole-solid offset does not accept opening faces");
++    }
++
++    TopoDS_Shape inputShape;
++    try {
++        const auto input = kernel.arena_.find(inputId);
++        if (input == kernel.arena_.end()) {
++            return failure("input-validation", "SHAPE_ID_NOT_FOUND",
++                           "Solid-offset input ID is absent from this kernel");
++        }
++        inputShape = input->second;
++    } catch (const std::exception& error) {
++        return failure("input-validation", "SHAPE_LOOKUP_FAILED", error.what());
++    } catch (...) {
++        return failure("input-validation", "SHAPE_LOOKUP_FAILED",
++                       "Unknown failure while resolving the solid-offset input");
++    }
++    if (inputShape.IsNull()) {
++        return failure("input-validation", "NULL_INPUT_SHAPE",
++                       "Solid-offset input is null");
++    }
++    TopoDS_Shape inputSolid;
++    if (!extractPureSingleSolid(inputShape, inputSolid)) {
++        return failure("input-validation", "INPUT_NOT_TOP_LEVEL_SOLID",
++                       "Solid-offset input must be a pure single-solid shape");
++    }
++
++    double inputSignedVolume = 0.0;
++    double inputVolume = 0.0;
++    double volumeTolerance = 0.0;
++    try {
++        if (!BRepCheck_Analyzer(inputShape).IsValid() ||
++            !BRepCheck_Analyzer(inputSolid).IsValid()) {
++            return failure("input-validation", "INVALID_INPUT_SOLID",
++                           "Solid-offset input solid is topologically invalid");
++        }
++        if (topologyCounts(inputShape).solids != 1) {
++            return failure("input-validation", "INPUT_NOT_SINGLE_SOLID",
++                           "Solid-offset input must contain exactly one solid");
++        }
++        inputSignedVolume = signedVolume(inputSolid);
++        inputVolume = std::abs(inputSignedVolume);
++        volumeTolerance = std::max(
++            std::max(tolerance * tolerance * tolerance,
++                     inputVolume * 1.0e-12),
++            std::numeric_limits<double>::epsilon());
++        if (!std::isfinite(inputSignedVolume) ||
++            !(inputVolume > volumeTolerance)) {
++            return failure("input-validation", "INPUT_NOT_FINITE_VOLUME",
++                           "Solid-offset input must have finite nonzero volume");
++        }
++    } catch (const Standard_Failure& error) {
++        return failure("input-validation", "INPUT_VALIDATION_OCCT_EXCEPTION",
++                       error.GetMessageString());
++    } catch (const std::exception& error) {
++        return failure("input-validation", "INPUT_VALIDATION_NATIVE_EXCEPTION",
++                       error.what());
++    } catch (...) {
++        return failure("input-validation", "INPUT_VALIDATION_NATIVE_EXCEPTION",
++                       "Unknown failure while validating the input solid");
++    }
++
++    IndexedShapeMap inputFaces;
++    std::vector<int> resolvedOpeningFaceIndices;
++    try {
++        indexTopology(inputShape, TopAbs_FACE, InvariantCadTopologyKindFace,
++                      "source", 0, inputFaces);
++        resolvedOpeningFaceIndices.reserve(openingFaceIds.size());
++        for (size_t openingIndex = 0; openingIndex < openingFaceIds.size();
++             ++openingIndex) {
++            failedOpeningFaceIndex = static_cast<int>(openingIndex);
++            const auto opening = kernel.arena_.find(openingFaceIds[openingIndex]);
++            if (opening == kernel.arena_.end()) {
++                return failure("opening-validation", "FACE_ID_NOT_FOUND",
++                               "Opening face ID is absent from this kernel");
++            }
++            if (opening->second.IsNull()) {
++                return failure("opening-validation", "NULL_OPENING_FACE",
++                               "Opening face is null");
++            }
++            if (opening->second.ShapeType() != TopAbs_FACE) {
++                return failure("opening-validation", "OPENING_NOT_FACE",
++                               "Opening selection contains a non-face shape");
++            }
++            const int oneBasedFaceIndex = inputFaces.FindIndex(opening->second);
++            if (oneBasedFaceIndex <= 0) {
++                return failure("opening-validation", "FACE_NOT_IN_INPUT",
++                               "Opening face is not a member of the input solid");
++            }
++            resolvedOpeningFaceIndices.push_back(oneBasedFaceIndex - 1);
++        }
++        std::sort(resolvedOpeningFaceIndices.begin(),
++                  resolvedOpeningFaceIndices.end());
++        resolvedOpeningFaceIndices.erase(
++            std::unique(resolvedOpeningFaceIndices.begin(),
++                        resolvedOpeningFaceIndices.end()),
++            resolvedOpeningFaceIndices.end());
++        selectedOpeningFaceIndices = resolvedOpeningFaceIndices;
++        failedOpeningFaceIndex = -1;
++        if (operation == InvariantCadSolidOffsetOperationShell &&
++            selectedOpeningFaceIndices.size() >=
++                static_cast<size_t>(inputFaces.Extent())) {
++            return failure("opening-validation", "NO_RETAINED_FACE",
++                           "Shell requires at least one retained input face");
++        }
++    } catch (const HistoryContractError& error) {
++        return failure("opening-validation", error.code().c_str(), error.what());
++    } catch (const Standard_Failure& error) {
++        return failure("opening-validation", "OPENING_VALIDATION_OCCT_EXCEPTION",
++                       error.GetMessageString());
++    } catch (const std::exception& error) {
++        return failure("opening-validation", "OPENING_VALIDATION_NATIVE_EXCEPTION",
++                       error.what());
++    } catch (...) {
++        return failure("opening-validation", "OPENING_VALIDATION_NATIVE_EXCEPTION",
++                       "Unknown failure while validating opening faces");
++    }
++
++    std::vector<TopologyOperandCopy> operandCopies;
++    operandCopies.reserve(1);
++    try {
++        auto copier =
++            std::make_unique<BRepBuilderAPI_Copy>(inputSolid, true, false);
++        if (!copier->IsDone()) {
++            return failure("copy", "OPERAND_COPY_FAILED",
++                           "OCCT did not complete the solid-offset operand copy");
++        }
++        TopoDS_Shape copiedShape = copier->Shape();
++        if (copiedShape.IsNull() || copiedShape.IsSame(inputSolid)) {
++            return failure("copy", "OPERAND_COPY_NOT_ISOLATED",
++                           "OCCT did not isolate the solid-offset operand");
++        }
++        if (inputSignedVolume < 0.0) {
++            copiedShape.Reverse();
++        }
++        operandCopies.push_back({std::move(copier), copiedShape});
++    } catch (const Standard_Failure& error) {
++        return failure("copy", "OPERAND_COPY_OCCT_EXCEPTION",
++                       error.GetMessageString());
++    } catch (const std::exception& error) {
++        return failure("copy", "OPERAND_COPY_NATIVE_EXCEPTION", error.what());
++    } catch (...) {
++        return failure("copy", "OPERAND_COPY_NATIVE_EXCEPTION",
++                       "Unknown failure while copying the solid-offset operand");
++    }
++
++    NCollection_List<TopoDS_Shape> copiedOpeningFaces;
++    try {
++        const IndexedOperandTopology copiedInput =
++            indexOperandTopology(operandCopies.front().shape, 0, "source");
++        for (size_t selectedIndex = 0;
++             selectedIndex < selectedOpeningFaceIndices.size(); ++selectedIndex) {
++            failedOpeningFaceIndex = static_cast<int>(selectedIndex);
++            const int faceIndex = selectedOpeningFaceIndices[selectedIndex];
++            const TopoDS_Shape mappedFace = copiedTopologySource(
++                operandCopies.front(), inputFaces.FindKey(faceIndex + 1), 0,
++                InvariantCadTopologyKindFace, faceIndex);
++            const int oneBasedCopiedFaceIndex =
++                copiedInput.faces.FindIndex(mappedFace);
++            if (oneBasedCopiedFaceIndex <= 0) {
++                return failure("copy", "OPENING_COPY_NOT_IN_OPERAND",
++                               "Copied opening face is absent from the operand copy");
++            }
++            copiedOpeningFaces.Append(
++                copiedInput.faces.FindKey(oneBasedCopiedFaceIndex));
++        }
++        failedOpeningFaceIndex = -1;
++    } catch (const HistoryContractError& error) {
++        return failure("copy", error.code().c_str(), error.what());
++    } catch (const Standard_Failure& error) {
++        return failure("copy", "OPENING_COPY_OCCT_EXCEPTION",
++                       error.GetMessageString());
++    } catch (const std::exception& error) {
++        return failure("copy", "OPENING_COPY_NATIVE_EXCEPTION", error.what());
++    } catch (...) {
++        return failure("copy", "OPENING_COPY_NATIVE_EXCEPTION",
++                       "Unknown failure while mapping copied opening faces");
++    }
++
++    auto execute = [&](auto& maker, auto&& perform)
++        -> InvariantCadSolidOffsetReport {
++        try {
++            ++buildCount;
++            perform();
++            occtStatus = static_cast<int>(maker.MakeOffset().Error());
++        } catch (const Standard_Failure& error) {
++            return failure("build", "BUILD_OCCT_EXCEPTION",
++                           error.GetMessageString());
++        } catch (const std::exception& error) {
++            return failure("build", "BUILD_NATIVE_EXCEPTION", error.what());
++        } catch (...) {
++            return failure("build", "BUILD_NATIVE_EXCEPTION",
++                           "Unknown failure while building the solid offset");
++        }
++        if (!maker.IsDone()) {
++            return failure("build", "BUILD_FAILED",
++                           "OCCT did not complete the solid offset");
++        }
++        if (occtStatus != 0) {
++            return failure("build", "OFFSET_STATUS_FAILED",
++                           "OCCT reported a solid-offset construction error");
++        }
++
++        TopoDS_Shape makerResult;
++        try {
++            makerResult = maker.Shape();
++        } catch (const Standard_Failure& error) {
++            return failure("result-validation", "RESULT_OCCT_EXCEPTION",
++                           error.GetMessageString());
++        } catch (const std::exception& error) {
++            return failure("result-validation", "RESULT_NATIVE_EXCEPTION",
++                           error.what());
++        } catch (...) {
++            return failure("result-validation", "RESULT_NATIVE_EXCEPTION",
++                           "Unknown failure while retrieving the solid-offset result");
++        }
++        if (makerResult.IsNull()) {
++            return failure("result-validation", "NULL_RESULT",
++                           "OCCT completed without a solid-offset result");
++        }
++        TopoDS_Shape result;
++        if (!extractPureSingleSolid(makerResult, result)) {
++            return failure("result-validation", "RESULT_NOT_TOP_LEVEL_SOLID",
++                           "Solid-offset result is not a pure single solid");
++        }
++
++        double resultVolume = 0.0;
++        try {
++            resultVolume = signedVolume(result);
++            if (std::isfinite(resultVolume) && resultVolume < -volumeTolerance) {
++                result.Reverse();
++                resultVolume = signedVolume(result);
++            }
++            if (!BRepCheck_Analyzer(result).IsValid()) {
++                return failure("result-validation", "INVALID_RESULT_SOLID",
++                               "OCCT produced a topologically invalid solid");
++            }
++            if (topologyCounts(result).solids != 1) {
++                return failure("result-validation", "RESULT_NOT_SINGLE_SOLID",
++                               "Solid-offset result must contain exactly one solid");
++            }
++            if (!std::isfinite(resultVolume) ||
++                !(resultVolume > volumeTolerance)) {
++                return failure("result-validation", "RESULT_NOT_POSITIVE_VOLUME",
++                               "Solid-offset result must have positive finite volume");
++            }
++            if (operation == InvariantCadSolidOffsetOperationShell &&
++                direction == InvariantCadSolidOffsetDirectionInward &&
++                !(resultVolume < inputVolume - volumeTolerance)) {
++                return failure("result-validation", "SHELL_NOT_HOLLOWED",
++                               "Inward shell did not reduce the solid volume");
++            }
++            if (operation == InvariantCadSolidOffsetOperationOffset &&
++                direction == InvariantCadSolidOffsetDirectionOutward &&
++                !(resultVolume > inputVolume + volumeTolerance)) {
++                return failure("result-validation", "OUTWARD_OFFSET_NOT_LARGER",
++                               "Outward offset did not increase the solid volume");
++            }
++            if (operation == InvariantCadSolidOffsetOperationOffset &&
++                direction == InvariantCadSolidOffsetDirectionInward &&
++                !(resultVolume < inputVolume - volumeTolerance)) {
++                return failure("result-validation", "INWARD_OFFSET_NOT_SMALLER",
++                               "Inward offset did not decrease the solid volume");
++            }
++        } catch (const Standard_Failure& error) {
++            return failure("result-validation", "RESULT_VALIDATION_OCCT_EXCEPTION",
++                           error.GetMessageString());
++        } catch (const std::exception& error) {
++            return failure("result-validation", "RESULT_VALIDATION_NATIVE_EXCEPTION",
++                           error.what());
++        } catch (...) {
++            return failure("result-validation", "RESULT_VALIDATION_NATIVE_EXCEPTION",
++                           "Unknown failure while validating the solid-offset result");
++        }
++
++        InvariantCadIndexedTopologyEvolution topologyHistory;
++        try {
++            NCollection_List<TopoDS_Shape> arguments;
++            arguments.Append(operandCopies.front().shape);
++            BRepTools_History nativeHistory(arguments, maker);
++            reconcileGeneratedOnlyReplacements(
++                nativeHistory, operandCopies.front().shape, result);
++            topologyHistory = buildCompleteTopologyHistory(
++                nativeHistory, std::vector<TopoDS_Shape>{inputShape},
++                operandCopies, result, maxHistoryRecords);
++        } catch (const HistoryContractError& error) {
++            InvariantCadSolidOffsetReport report =
++                failure("history", error.code().c_str(), error.what());
++            report.historyProblemDomain = error.problemDomain();
++            report.historyProblemSourceShapeIndex = error.sourceShapeIndex();
++            report.historyProblemKind = error.problematicKind();
++            report.historyProblemIndex = error.problematicIndex();
++            return report;
++        } catch (const Standard_Failure& error) {
++            return failure("history", "HISTORY_OCCT_EXCEPTION",
++                           error.GetMessageString());
++        } catch (const std::exception& error) {
++            return failure("history", "HISTORY_NATIVE_EXCEPTION", error.what());
++        } catch (...) {
++            return failure("history", "HISTORY_NATIVE_EXCEPTION",
++                           "Unknown failure while proving solid-offset history");
++        }
++
++        InvariantCadSolidOffsetReport report;
++        report.ok = true;
++        report.stage = "complete";
++        report.code = "OK";
++        report.message =
++            "Solid-offset result and exact indexed history are ready";
++        report.operation = operation;
++        report.direction = direction;
++        report.amount = amount;
++        report.tolerance = tolerance;
++        report.requestedOpeningFaceCount = requestedOpeningFaceCount;
++        report.buildCount = buildCount;
++        report.occtStatus = occtStatus;
++        report.failedOpeningFaceIndex = -1;
++        report.selectedOpeningFaceIndices_ = selectedOpeningFaceIndices;
++        report.transfer_ =
++            std::make_shared<InvariantCadSolidOffsetTransferState>();
++        report.transfer_->result = result;
++        report.transfer_->kernelInstanceToken = kernel.invariantcadInstanceToken_;
++        report.transfer_->topologyHistory = std::move(topologyHistory);
++        return report;
++    };
++
++    const double signedAmount =
++        direction == InvariantCadSolidOffsetDirectionInward ? -amount : amount;
++    try {
++        if (operation == InvariantCadSolidOffsetOperationShell) {
++            BRepOffsetAPI_MakeThickSolid maker;
++            return execute(maker, [&]() {
++                maker.MakeThickSolidByJoin(
++                    operandCopies.front().shape, copiedOpeningFaces,
++                    signedAmount, tolerance, BRepOffset_Skin, false, false,
++                    GeomAbs_Arc, false);
++            });
++        }
++        BRepOffsetAPI_MakeOffsetShape maker;
++        return execute(maker, [&]() {
++            maker.PerformByJoin(operandCopies.front().shape, signedAmount,
++                                tolerance, BRepOffset_Skin, false, false,
++                                GeomAbs_Arc, false);
++        });
++    } catch (const Standard_Failure& error) {
++        return failure("construction", "MAKER_OCCT_EXCEPTION",
++                       error.GetMessageString());
++    } catch (const std::exception& error) {
++        return failure("construction", "MAKER_NATIVE_EXCEPTION", error.what());
++    } catch (...) {
++        return failure("construction", "MAKER_NATIVE_EXCEPTION",
++                       "Unknown failure while constructing the solid-offset maker");
++    }
++}
++
+ InvariantCadPipeShellReport invariantcadPipeShellSolid(
+     OcctKernel& kernel, uint32_t profileWireId, uint32_t spineWireId,
+     double tolerance3d, double boundaryTolerance, double angularTolerance) {

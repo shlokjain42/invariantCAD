@@ -25,6 +25,10 @@ const edgeTreatmentPatchUrl = new URL(
   "../native/occt/patches/0005-exact-edge-treatment-history.patch",
   import.meta.url,
 );
+const solidOffsetPatchUrl = new URL(
+  "../native/occt/patches/0006-exact-solid-offset-history.patch",
+  import.meta.url,
+);
 const smokeUrl = new URL("../scripts/test-occt-facade.mjs", import.meta.url);
 const packagerUrl = new URL(
   "../scripts/package-occt-facade-bundle.mjs",
@@ -144,6 +148,18 @@ describe("owned OCCT facade build boundary", () => {
     expect(edgeTreatmentPatch).toContain("HISTORY_RECORD_LIMIT_EXCEEDED");
     expect(edgeTreatmentPatch).toContain(
       "invariantcad-facade@0.5.0+occt-wasm.3.7.0",
+    );
+
+    const solidOffsetPatch = await readFile(solidOffsetPatchUrl, "utf8");
+    expect(solidOffsetPatch).toContain("InvariantCadSolidOffsetReport");
+    expect(solidOffsetPatch).toContain("invariantcadSolidOffsetAtomic");
+    expect(solidOffsetPatch).toContain("BRepOffsetAPI_MakeThickSolid");
+    expect(solidOffsetPatch).toContain("BRepOffsetAPI_MakeOffsetShape");
+    expect(solidOffsetPatch).toContain("BRepTools_History");
+    expect(solidOffsetPatch).toContain("reconcileGeneratedOnlyReplacements");
+    expect(solidOffsetPatch).toContain("maxHistoryRecords");
+    expect(solidOffsetPatch).toContain(
+      "invariantcad-facade@0.6.0+occt-wasm.3.7.0",
     );
 
     const releaseInput = JSON.parse(await readFile(releaseInputUrl, "utf8")) as {
