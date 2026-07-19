@@ -5,13 +5,16 @@ import {
   materialId,
   nodeId,
   parameterId,
+  topologyReferenceId,
   type ConfigurationId,
   type EntityId,
   type MaterialId,
   type NodeId,
   type ParameterId,
+  type TopologyReferenceId,
 } from "./core/ids.js";
 import { deepFreeze, type JsonValue } from "./core/json.js";
+import { DEFAULT_DESIGN_DOCUMENT_LIMITS } from "./document-limits.js";
 import {
   deg,
   mm,
@@ -35,7 +38,7 @@ import {
   type AssemblyInstanceIR,
   type AssemblyNodeIR,
   type DesignConfigurationIR,
-  type DesignDocument,
+  type DesignDocumentV2,
   type DesignOutputKind,
   type MaterialDefinitionIR,
   type NodeIR,
@@ -44,6 +47,7 @@ import {
   type PlaneIR,
   type PrincipalPlane,
   type RefIR,
+  type TopologyReferenceEntryIR,
   type TransformOperationIR,
 } from "./ir.js";
 import { ProfileDefinition, SketchBuilder } from "./sketch.js";
@@ -56,6 +60,11 @@ import {
   OFFSET_DIRECTIONS,
   type OffsetDirection,
 } from "./protocol/offset.js";
+import type { TopologyKind } from "./protocol/topology.js";
+import {
+  normalizePersistentTopologyReference,
+  type PersistentTopologyReference,
+} from "./topology-signatures.js";
 
 const DESIGN_OWNER = Symbol("InvariantCAD.DesignOwner");
 
@@ -115,6 +124,97 @@ export class MaterialRef {
     this[DESIGN_OWNER] = owner;
     this.id = id;
     Object.freeze(this);
+  }
+}
+
+/** Immutable authoring handle for one document-owned persistent topology entry. */
+export class TopologyReferenceRef<K extends TopologyKind = TopologyKind> {
+  readonly id: TopologyReferenceId;
+  readonly topology: K;
+  readonly target: SolidRef;
+  readonly [DESIGN_OWNER]: DesignBuilder;
+
+  constructor(
+    owner: DesignBuilder,
+    id: TopologyReferenceId,
+    topology: K,
+    target: SolidRef,
+  ) {
+    this[DESIGN_OWNER] = owner;
+    this.id = id;
+    this.topology = topology;
+    this.target = target;
+    Object.freeze(this);
+  }
+}
+
+export interface TopologyReferenceOptions<K extends TopologyKind> {
+  readonly topology: K;
+  /** The topology discriminant is authoritative for generic inference. */
+  readonly variants: readonly PersistentTopologyReference<NoInfer<K>>[];
+}
+
+function copyTopologyReferenceVariants(value: unknown): readonly unknown[] {
+  let array: readonly unknown[];
+  try {
+    if (!Array.isArray(value)) {
+      throw new TypeError();
+    }
+    array = value;
+  } catch {
+    throw new TypeError("Topology reference variants must be an array");
+  }
+
+  let length: number;
+  try {
+    length = array.length;
+  } catch {
+    throw new TypeError("Topology reference variant length could not be read");
+  }
+  if (!Number.isSafeInteger(length) || length < 0) {
+    throw new TypeError("Topology reference variant length is invalid");
+  }
+  if (length === 0) {
+    throw new TypeError("A topology reference requires at least one variant");
+  }
+  if (length > DEFAULT_DESIGN_DOCUMENT_LIMITS.maxTopologyReferenceVariants) {
+    throw new RangeError(
+      `Topology reference variant count exceeds the authoring limit of ${DEFAULT_DESIGN_DOCUMENT_LIMITS.maxTopologyReferenceVariants}`,
+    );
+  }
+
+  const copied = new Array<unknown>(length);
+  for (let index = 0; index < length; index += 1) {
+    let present: boolean;
+    try {
+      present = Object.hasOwn(array, index);
+    } catch {
+      throw new TypeError("Topology reference variants could not be read safely");
+    }
+    if (!present) {
+      throw new TypeError("Topology reference variants must be a dense array");
+    }
+    try {
+      copied[index] = array[index];
+    } catch {
+      throw new TypeError("Topology reference variants could not be read safely");
+    }
+  }
+  return copied;
+}
+
+function readTopologyReferenceOptions(value: unknown): {
+  readonly topology: unknown;
+  readonly variants: unknown;
+} {
+  try {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new TypeError();
+    }
+    const options = value as Readonly<Record<string, unknown>>;
+    return { topology: options.topology, variants: options.variants };
+  } catch {
+    throw new TypeError("Topology reference options could not be read safely");
   }
 }
 
@@ -377,6 +477,15 @@ export class DesignBuilder {
     MaterialId,
     MaterialDefinitionIR
   >;
+  private readonly topologyReferenceRecords = Object.create(null) as Record<
+    TopologyReferenceId,
+    TopologyReferenceEntryIR
+  >;
+  private readonly topologyReferenceHandles = new WeakSet<object>();
+  private topologyReferenceCount = 0;
+  private topologyReferenceVariantCount = 0;
+  private topologyReferenceAdjacencyCount = 0;
+  private topologyReferenceEvidenceCount = 0;
   private readonly nodeRecords = Object.create(null) as Record<NodeId, NodeIR>;
   private readonly configurationRecords = Object.create(null) as Record<
     ConfigurationId,
@@ -403,6 +512,37 @@ export class DesignBuilder {
   assertParameterOwned(parameter: Parameter<Dimension>): void {
     if (!this.parameterReferences.has(parameter)) {
       throw new TypeError("Parameter references cannot cross design boundaries");
+    }
+  }
+
+  private assertPersistentTopologyReferences(
+    selection: TopologySelection,
+    input: SolidRef,
+  ): void {
+    for (const reference of selection.persistentReferences) {
+      if (
+        !this.topologyReferenceHandles.has(reference) ||
+        reference[DESIGN_OWNER] !== this
+      ) {
+        throw new TypeError(
+          "Persistent topology references cannot cross design boundaries",
+        );
+      }
+      const entry = this.topologyReferenceRecords[reference.id];
+      if (
+        entry === undefined ||
+        entry.topology !== reference.topology ||
+        entry.target.node !== reference.target.node
+      ) {
+        throw new TypeError(
+          `Persistent topology reference '${reference.id}' is not owned by this design`,
+        );
+      }
+      if (reference.target.node !== input.node) {
+        throw new TypeError(
+          `Persistent topology reference '${reference.id}' targets solid '${reference.target.node}', not selector input '${input.node}'`,
+        );
+      }
     }
   }
 
@@ -500,6 +640,121 @@ export class DesignBuilder {
     });
     this.usesMassDensity = true;
     return new MaterialRef(this, key);
+  }
+
+  topologyReference<K extends TopologyKind>(
+    id: string,
+    target: SolidRef,
+    options: TopologyReferenceOptions<K>,
+  ): TopologyReferenceRef<K> {
+    this.assertOwned(target);
+    const key = topologyReferenceId(id);
+    if (Object.hasOwn(this.topologyReferenceRecords, key)) {
+      throw new TypeError(`Duplicate topology reference '${id}'`);
+    }
+    if (
+      this.topologyReferenceCount >=
+      DEFAULT_DESIGN_DOCUMENT_LIMITS.maxTopologyReferences
+    ) {
+      throw new RangeError(
+        `Topology reference count exceeds the authoring limit of ${DEFAULT_DESIGN_DOCUMENT_LIMITS.maxTopologyReferences}`,
+      );
+    }
+
+    const rawOptions = readTopologyReferenceOptions(options);
+    if (rawOptions.topology !== "face" && rawOptions.topology !== "edge") {
+      throw new TypeError("Topology reference kind must be 'face' or 'edge'");
+    }
+    const copiedVariants = copyTopologyReferenceVariants(rawOptions.variants);
+    const aggregateVariantCount =
+      this.topologyReferenceVariantCount + copiedVariants.length;
+    if (
+      aggregateVariantCount >
+      DEFAULT_DESIGN_DOCUMENT_LIMITS.maxTopologyReferenceVariants
+    ) {
+      throw new RangeError(
+        `Topology reference variants exceed the aggregate authoring limit of ${DEFAULT_DESIGN_DOCUMENT_LIMITS.maxTopologyReferenceVariants}`,
+      );
+    }
+
+    const variants: PersistentTopologyReference<K>[] = [];
+    const fingerprints = new Set<string>();
+    let addedAdjacencyCount = 0;
+    let addedEvidenceCount = 0;
+    for (const candidate of copiedVariants) {
+      const normalized = normalizePersistentTopologyReference(candidate);
+      if (!normalized.ok) {
+        throw new TypeError(
+          normalized.diagnostics[0]?.message ??
+            "Persistent topology reference is malformed or unsupported",
+        );
+      }
+      const variant = normalized.value;
+      if (variant.topology !== rawOptions.topology) {
+        throw new TypeError(
+          `Topology reference '${id}' declares ${rawOptions.topology} topology but contains a ${variant.topology} variant`,
+        );
+      }
+      const fingerprint = `${variant.protocolVersion}\u0000${variant.kernelFingerprint}`;
+      if (fingerprints.has(fingerprint)) {
+        throw new TypeError(
+          `Topology reference '${id}' contains duplicate kernel fingerprint '${variant.kernelFingerprint}'`,
+        );
+      }
+      fingerprints.add(fingerprint);
+      addedAdjacencyCount += variant.adjacency.length;
+      addedEvidenceCount +=
+        variant.lineage.length +
+        variant.adjacency.reduce(
+          (count, neighbor) => count + neighbor.lineage.length,
+          0,
+        );
+      const aggregateAdjacencyCount =
+        this.topologyReferenceAdjacencyCount + addedAdjacencyCount;
+      if (
+        aggregateAdjacencyCount >
+        DEFAULT_DESIGN_DOCUMENT_LIMITS.maxStoredAdjacencyLinks
+      ) {
+        throw new RangeError(
+          `Stored topology adjacency exceeds the aggregate authoring limit of ${DEFAULT_DESIGN_DOCUMENT_LIMITS.maxStoredAdjacencyLinks}`,
+        );
+      }
+      const aggregateEvidenceCount =
+        this.topologyReferenceEvidenceCount + addedEvidenceCount;
+      if (
+        aggregateEvidenceCount >
+        DEFAULT_DESIGN_DOCUMENT_LIMITS.maxStoredEvidenceRecords
+      ) {
+        throw new RangeError(
+          `Stored topology evidence exceeds the aggregate authoring limit of ${DEFAULT_DESIGN_DOCUMENT_LIMITS.maxStoredEvidenceRecords}`,
+        );
+      }
+      variants.push(variant as PersistentTopologyReference<K>);
+    }
+    variants.sort((first, second) =>
+      first.protocolVersion !== second.protocolVersion
+        ? first.protocolVersion - second.protocolVersion
+        : first.kernelFingerprint < second.kernelFingerprint
+          ? -1
+          : first.kernelFingerprint > second.kernelFingerprint
+            ? 1
+            : 0,
+    );
+
+    const topology = rawOptions.topology as K;
+    const entry = deepFreeze({
+      target: target.toIR(),
+      topology,
+      variants,
+    }) as TopologyReferenceEntryIR<K>;
+    this.topologyReferenceRecords[key] = entry;
+    this.topologyReferenceCount += 1;
+    this.topologyReferenceVariantCount = aggregateVariantCount;
+    this.topologyReferenceAdjacencyCount += addedAdjacencyCount;
+    this.topologyReferenceEvidenceCount += addedEvidenceCount;
+    const reference = new TopologyReferenceRef(this, key, topology, target);
+    this.topologyReferenceHandles.add(reference);
+    return reference;
   }
 
   private addNode(id: string, node: NodeIR): NodeId {
@@ -722,7 +977,7 @@ export class DesignBuilder {
     id: string,
     profiles: readonly ProfileRef[],
     options: {
-      /** Document v1 supports ruled interpolation only. */
+      /** The current document grammar supports ruled interpolation only. */
       readonly ruled?: true;
     } = {},
   ): SolidRef {
@@ -736,7 +991,7 @@ export class DesignBuilder {
       throw new TypeError("Loft requires distinct ordered profiles");
     }
     if (options.ruled !== undefined && options.ruled !== true) {
-      throw new TypeError("Document v1 lofts must be ruled");
+      throw new TypeError("Document lofts must be ruled");
     }
     const key = this.addNode(id, {
       kind: "loft",
@@ -761,10 +1016,10 @@ export class DesignBuilder {
       options.transition !== undefined &&
       options.transition !== "right-corner"
     ) {
-      throw new TypeError("Document v1 sweeps require right-corner transitions");
+      throw new TypeError("Document sweeps require right-corner transitions");
     }
     if (options.frame !== undefined && options.frame !== "corrected-frenet") {
-      throw new TypeError("Document v1 sweeps require a corrected-Frenet frame");
+      throw new TypeError("Document sweeps require a corrected-Frenet frame");
     }
     const key = this.addNode(id, {
       kind: "sweep",
@@ -860,6 +1115,7 @@ export class DesignBuilder {
     for (const reference of options.edges.references) {
       this.assertOwned(reference);
     }
+    this.assertPersistentTopologyReferences(options.edges, input);
     const key = this.addNode(id, {
       kind: "fillet",
       input: input.toIR(),
@@ -888,6 +1144,7 @@ export class DesignBuilder {
     for (const reference of options.edges.references) {
       this.assertOwned(reference);
     }
+    this.assertPersistentTopologyReferences(options.edges, input);
     const key = this.addNode(id, {
       kind: "chamfer",
       input: input.toIR(),
@@ -918,6 +1175,7 @@ export class DesignBuilder {
     for (const reference of options.openings.references) {
       this.assertOwned(reference);
     }
+    this.assertPersistentTopologyReferences(options.openings, input);
     const direction = options.direction ?? "inward";
     if (!SHELL_DIRECTIONS.includes(direction)) {
       throw new TypeError("Shell direction must be 'inward' or 'outward'");
@@ -985,6 +1243,7 @@ export class DesignBuilder {
     for (const reference of options.faces.references) {
       this.assertOwned(reference);
     }
+    this.assertPersistentTopologyReferences(options.faces, input);
     const key = this.addNode(id, {
       kind: "draft",
       input: input.toIR(),
@@ -1078,7 +1337,7 @@ export class DesignBuilder {
     return this;
   }
 
-  build(): DesignDocument {
+  build(): DesignDocumentV2 {
     return deepFreeze({
       schema: DOCUMENT_SCHEMA,
       version: DOCUMENT_VERSION,
@@ -1095,6 +1354,9 @@ export class DesignBuilder {
       ...(Object.keys(this.configurationRecords).length === 0
         ? {}
         : { configurations: { ...this.configurationRecords } }),
+      ...(this.topologyReferenceCount === 0
+        ? {}
+        : { topologyReferences: { ...this.topologyReferenceRecords } }),
       nodes: { ...this.nodeRecords },
       outputs: { ...this.outputRecords },
       ...(this.metadata === undefined ? {} : { metadata: this.metadata }),

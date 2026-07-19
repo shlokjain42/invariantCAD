@@ -113,7 +113,7 @@ export type CompositeSweepRefinementClassification =
   | CompositeSweepRefinementClassificationFailure;
 
 export interface ResolvedSweepOptions {
-  /** Document v1 uses intersected right-corner transitions at spine vertices. */
+  /** The current document grammar uses intersected right-corner transitions. */
   readonly transition: SweepTransition;
   /** Minimal-torsion section transport along each spine segment. */
   readonly frame: SweepFrame;
@@ -296,7 +296,7 @@ export function classifyResolvedCompositeSweepRefinements(
   };
 }
 
-/** Checks the bounded document-v1 solid-sweep admission contract. */
+/** Checks the bounded current solid-sweep admission contract. */
 export function validateResolvedSweep(
   profile: ResolvedProfile,
   path: ResolvedPath,
@@ -309,7 +309,7 @@ export function validateResolvedSweep(
   if (profile.holes.length !== 0) {
     return {
       reason: "holes-unsupported",
-      message: "Document v1 sweep profiles cannot contain holes",
+      message: "Document sweep profiles cannot contain holes",
       input: "profile",
     };
   }

@@ -19,7 +19,7 @@ import {
 } from "../src/index.js";
 
 describe("whole-solid offsets", () => {
-  it("materializes the complete v1 contract in canonical IR", async () => {
+  it("materializes the complete current contract in canonical IR", async () => {
     expect(Object.isFrozen(OFFSET_DIRECTIONS)).toBe(true);
     expect(OFFSET_DIRECTIONS).toEqual(["inward", "outward"]);
     expect(OFFSET_JOIN_SEMANTICS).toBe("round");
@@ -48,7 +48,7 @@ describe("whole-solid offsets", () => {
     ]);
     expect(outputKindForNode(document.nodes[expanded.node]!)).toBe("solid");
     expect(await hashDocument(document)).toBe(
-      "388d2e01edda0517d805b14092d6753a4a5d66c1ed0acd9c6271f2c97491f752",
+      "8be37282b78d0577b5db76b0e1ef8c3631b6f9243383fc701c37a888692c0812",
     );
     expect(cloneDocument(document)).toEqual(document);
     expect(parseDocumentValue(JSON.parse(stringifyDocument(document))).ok).toBe(

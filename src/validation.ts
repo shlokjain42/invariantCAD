@@ -4,6 +4,7 @@ import type {
   MaterialId,
   NodeId,
   ParameterId,
+  TopologyReferenceId,
 } from "./core/ids.js";
 import {
   diagnostic,
@@ -14,6 +15,10 @@ import {
 } from "./core/result.js";
 import type { Dimension, ExpressionIR } from "./expressions.js";
 import {
+  DOCUMENT_SCHEMA_V1,
+  DOCUMENT_SCHEMA_V2,
+  DOCUMENT_VERSION_V1,
+  DOCUMENT_VERSION_V2,
   nodeDependencies,
   outputKindForNode,
   type DesignDocument,
@@ -24,6 +29,7 @@ import {
   type SketchLoopIR,
   type SketchNodeIR,
   type TopologyQueryIR,
+  type TopologyReferenceEntryIR,
   type TopologySelectionIR,
   type TransformOperationIR,
 } from "./ir.js";
@@ -34,6 +40,7 @@ import {
 } from "./protocol/topology.js";
 import { SHELL_DIRECTIONS } from "./protocol/shell.js";
 import { OFFSET_DIRECTIONS } from "./protocol/offset.js";
+import { normalizePersistentTopologyReference } from "./topology-signatures.js";
 
 function validateExpression(
   expression: ExpressionIR,
@@ -311,7 +318,9 @@ function validateRef(
   path: string,
   diagnostics: Diagnostic[],
 ): void {
-  const target = document.nodes[reference.node];
+  const target = Object.hasOwn(document.nodes, reference.node)
+    ? document.nodes[reference.node]
+    : undefined;
   if (target === undefined) {
     diagnostics.push(
       diagnostic(
@@ -596,7 +605,9 @@ function nodeIsAncestor(
     if (id === possibleAncestor) return true;
     if (visited.has(id)) return false;
     visited.add(id);
-    const node = document.nodes[id];
+    const node = Object.hasOwn(document.nodes, id)
+      ? document.nodes[id]
+      : undefined;
     return node !== undefined && nodeDependencies(node).some((dependency) => visit(dependency.node));
   };
   return visit(descendant);
@@ -653,8 +664,95 @@ function validateTopologySelection(
     switch (query.op) {
       case "all":
         break;
+      case "persistentReference": {
+        if (
+          document.schema !== DOCUMENT_SCHEMA_V2 ||
+          document.version !== DOCUMENT_VERSION_V2
+        ) {
+          diagnostics.push(
+            diagnostic(
+              "TOPOLOGY_SELECTOR_INVALID",
+              "Persistent topology references require document version 2",
+              {
+                severity: "error",
+                path: `${queryPath}/reference`,
+                details: { reference: query.reference },
+              },
+            ),
+          );
+          break;
+        }
+        const registry = document.topologyReferences;
+        const reference =
+          registry !== undefined && Object.hasOwn(registry, query.reference)
+            ? registry[query.reference]
+            : undefined;
+        if (reference === undefined) {
+          diagnostics.push(
+            diagnostic(
+              "REFERENCE_MISSING",
+              `Topology query references missing persistent reference '${query.reference}'`,
+              {
+                severity: "error",
+                path: `${queryPath}/reference`,
+                details: { reference: query.reference },
+              },
+            ),
+          );
+          break;
+        }
+        if (reference.topology !== topology) {
+          diagnostics.push(
+            diagnostic(
+              "TOPOLOGY_SELECTOR_INVALID",
+              `Persistent topology reference '${query.reference}' selects ${reference.topology}s, not ${topology}s`,
+              {
+                severity: "error",
+                path: `${queryPath}/reference`,
+                related: [
+                  {
+                    message: "Persistent topology reference is declared here",
+                    path: `/topologyReferences/${query.reference}/topology`,
+                  },
+                ],
+                details: {
+                  reference: query.reference,
+                  expectedTopology: topology,
+                  actualTopology: reference.topology,
+                },
+              },
+            ),
+          );
+        }
+        if (reference.target.node !== input) {
+          diagnostics.push(
+            diagnostic(
+              "TOPOLOGY_SELECTOR_INVALID",
+              `Persistent topology reference '${query.reference}' targets '${reference.target.node}', not this feature's direct input '${input}'`,
+              {
+                severity: "error",
+                path: `${queryPath}/reference`,
+                related: [
+                  {
+                    message: "Persistent topology reference target is declared here",
+                    path: `/topologyReferences/${query.reference}/target`,
+                  },
+                ],
+                details: {
+                  reference: query.reference,
+                  expectedTarget: input,
+                  actualTarget: reference.target.node,
+                },
+              },
+            ),
+          );
+        }
+        break;
+      }
       case "origin": {
-        const feature = document.nodes[query.feature];
+        const feature = Object.hasOwn(document.nodes, query.feature)
+          ? document.nodes[query.feature]
+          : undefined;
         if (feature === undefined) {
           diagnostics.push(
             diagnostic(
@@ -747,7 +845,9 @@ function validateTopologySelection(
               ),
             );
           }
-          const sketch = document.nodes[query.source.sketch];
+          const sketch = Object.hasOwn(document.nodes, query.source.sketch)
+            ? document.nodes[query.source.sketch]
+            : undefined;
           if (sketch === undefined) {
             diagnostics.push(
               diagnostic(
@@ -765,7 +865,12 @@ function validateTopologySelection(
               ),
             );
           } else {
-            const sourceEntity = sketch.entities[query.source.entity];
+            const sourceEntity = Object.hasOwn(
+              sketch.entities,
+              query.source.entity,
+            )
+              ? sketch.entities[query.source.entity]
+              : undefined;
             if (sourceEntity === undefined) {
               diagnostics.push(
                 diagnostic(
@@ -938,7 +1043,7 @@ function validateNode(
         diagnostics.push(
           diagnostic(
             "FEATURE_INVALID",
-            "Document v1 polyline paths must be open",
+            "Document polyline paths must be open",
             { severity: "error", node: id, path: `${path}/closed` },
           ),
         );
@@ -976,7 +1081,7 @@ function validateNode(
         diagnostics.push(
           diagnostic(
             "FEATURE_INVALID",
-            "Document v1 circular-arc paths must be open",
+            "Document circular-arc paths must be open",
             { severity: "error", node: id, path: `${path}/closed` },
           ),
         );
@@ -1035,7 +1140,7 @@ function validateNode(
         diagnostics.push(
           diagnostic(
             "FEATURE_INVALID",
-            "Document v1 composite paths must be open",
+            "Document composite paths must be open",
             { severity: "error", node: id, path: `${path}/closed` },
           ),
         );
@@ -1104,7 +1209,7 @@ function validateNode(
         diagnostics.push(
           diagnostic(
             "FEATURE_INVALID",
-            "Document v1 lofts must be ruled",
+            "Document lofts must be ruled",
             { severity: "error", node: id, path: `${path}/ruled` },
           ),
         );
@@ -1118,7 +1223,7 @@ function validateNode(
         diagnostics.push(
           diagnostic(
             "FEATURE_INVALID",
-            "Document v1 sweeps require right-corner transitions",
+            "Document sweeps require right-corner transitions",
             { severity: "error", node: id, path: `${path}/transition` },
           ),
         );
@@ -1127,7 +1232,7 @@ function validateNode(
         diagnostics.push(
           diagnostic(
             "FEATURE_INVALID",
-            "Document v1 sweeps require a corrected-Frenet frame",
+            "Document sweeps require a corrected-Frenet frame",
             { severity: "error", node: id, path: `${path}/frame` },
           ),
         );
@@ -1296,6 +1401,165 @@ function validateNode(
   }
 }
 
+function validateTopologyReferences(
+  document: DesignDocument,
+  diagnostics: Diagnostic[],
+): void {
+  const documentIdentity = document as {
+    readonly schema: unknown;
+    readonly version: unknown;
+  };
+  const schema = documentIdentity.schema;
+  const version = documentIdentity.version;
+  const isVersion1 =
+    schema === DOCUMENT_SCHEMA_V1 && version === DOCUMENT_VERSION_V1;
+  const isVersion2 =
+    schema === DOCUMENT_SCHEMA_V2 && version === DOCUMENT_VERSION_V2;
+  if (!isVersion1 && !isVersion2) {
+    diagnostics.push(
+      diagnostic(
+        "IR_INVALID",
+        "Document schema and version must identify the same supported document grammar",
+        {
+          severity: "error",
+          path: "/",
+          details: {
+            schema,
+            version,
+            supported: [
+              { schema: DOCUMENT_SCHEMA_V1, version: DOCUMENT_VERSION_V1 },
+              { schema: DOCUMENT_SCHEMA_V2, version: DOCUMENT_VERSION_V2 },
+            ],
+          },
+        },
+      ),
+    );
+  }
+
+  const topologyReferences = (
+    document as DesignDocument & {
+      readonly topologyReferences?: Readonly<
+        Record<TopologyReferenceId, TopologyReferenceEntryIR>
+      >;
+    }
+  ).topologyReferences;
+  if (topologyReferences === undefined) return;
+  if (!isVersion2) {
+    diagnostics.push(
+      diagnostic(
+        "IR_INVALID",
+        "Persistent topology reference registries require document version 2",
+        { severity: "error", path: "/topologyReferences" },
+      ),
+    );
+    return;
+  }
+
+  const entries = Object.entries(topologyReferences) as [
+    TopologyReferenceId,
+    TopologyReferenceEntryIR,
+  ][];
+  if (entries.length === 0) {
+    diagnostics.push(
+      diagnostic(
+        "IR_INVALID",
+        "A persistent topology reference registry cannot be empty",
+        { severity: "error", path: "/topologyReferences" },
+      ),
+    );
+  }
+  for (const [id, entry] of entries) {
+    const path = `/topologyReferences/${id}`;
+    validateRef(entry.target, "solid", document, `${path}/target`, diagnostics);
+    if (entry.topology !== "face" && entry.topology !== "edge") {
+      diagnostics.push(
+        diagnostic(
+          "TOPOLOGY_SELECTOR_INVALID",
+          `Persistent topology reference '${id}' has an unsupported topology kind`,
+          {
+            severity: "error",
+            path: `${path}/topology`,
+            details: { topology: entry.topology },
+          },
+        ),
+      );
+    }
+    if (!Array.isArray(entry.variants) || entry.variants.length === 0) {
+      diagnostics.push(
+        diagnostic(
+          "TOPOLOGY_SIGNATURE_INVALID",
+          `Persistent topology reference '${id}' requires at least one fingerprint variant`,
+          { severity: "error", path: `${path}/variants` },
+        ),
+      );
+      continue;
+    }
+    const fingerprints = new Set<string>();
+    for (let index = 0; index < entry.variants.length; index += 1) {
+      const variantPath = `${path}/variants/${index}`;
+      if (!Object.hasOwn(entry.variants, index)) {
+        diagnostics.push(
+          diagnostic(
+            "TOPOLOGY_SIGNATURE_INVALID",
+            `Persistent topology reference '${id}' variants cannot be sparse`,
+            { severity: "error", path: variantPath },
+          ),
+        );
+        continue;
+      }
+      const variant = entry.variants[index]!;
+      const normalized = normalizePersistentTopologyReference(variant);
+      if (!normalized.ok) {
+        diagnostics.push(
+          ...normalized.diagnostics.map((item) => ({
+            ...item,
+            severity: "error" as const,
+            path:
+              item.path === undefined
+                ? variantPath
+                : `${variantPath}${item.path}`,
+          })),
+        );
+        continue;
+      }
+      if (normalized.value.topology !== entry.topology) {
+        diagnostics.push(
+          diagnostic(
+            "TOPOLOGY_SIGNATURE_INVALID",
+            `Persistent topology variant selects ${normalized.value.topology}s, not ${entry.topology}s`,
+            {
+              severity: "error",
+              path: `${variantPath}/topology`,
+              details: {
+                expectedTopology: entry.topology,
+                actualTopology: normalized.value.topology,
+              },
+            },
+          ),
+        );
+      }
+      const fingerprint = `${normalized.value.protocolVersion}:${normalized.value.kernelFingerprint}`;
+      if (fingerprints.has(fingerprint)) {
+        diagnostics.push(
+          diagnostic(
+            "TOPOLOGY_SIGNATURE_INVALID",
+            `Persistent topology reference '${id}' has duplicate variants for the same kernel fingerprint`,
+            {
+              severity: "error",
+              path: variantPath,
+              details: {
+                protocolVersion: normalized.value.protocolVersion,
+                kernelFingerprint: normalized.value.kernelFingerprint,
+              },
+            },
+          ),
+        );
+      }
+      fingerprints.add(fingerprint);
+    }
+  }
+}
+
 function detectGraphCycles(
   document: DesignDocument,
   diagnostics: Diagnostic[],
@@ -1317,7 +1581,9 @@ function detectGraphCycles(
       );
       return;
     }
-    const node = document.nodes[id];
+    const node = Object.hasOwn(document.nodes, id)
+      ? document.nodes[id]
+      : undefined;
     if (node === undefined) return;
     states.set(id, "visiting");
     stack.push(id);
@@ -1332,6 +1598,7 @@ export function validateDocument(
   document: DesignDocument,
 ): CadResult<DesignDocument> {
   const diagnostics: Diagnostic[] = [];
+  validateTopologyReferences(document, diagnostics);
   const usesMassDensity =
     Object.values(document.parameters).some(
       (parameter) => parameter.dimension === "massDensity",

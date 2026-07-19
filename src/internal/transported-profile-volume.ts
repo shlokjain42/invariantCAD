@@ -359,7 +359,7 @@ function isFailure(
 }
 
 /**
- * Evaluates the exact ideal volume of a document-v1 corrected-Frenet,
+ * Evaluates the exact ideal volume of a current-document corrected-Frenet,
  * RightCorner composite sweep from its starting section's area moments.
  *
  * This is a kernel-neutral postcondition oracle, not a replacement for sweep

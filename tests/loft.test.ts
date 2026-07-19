@@ -337,7 +337,7 @@ describe("ruled solid loft document contract", () => {
     expect(parsed.value).toEqual(document);
     expect(cloneDocument(document)).toEqual(document);
     expect(await hashDocument(document)).toBe(
-      "bede5bea72c9caded4ff96e1722438a4abb16135049bed6913841aab654a2aba",
+      "ff03d48bc92e3bb1b0958a6a5b96b53c310ef9d9c56101f2c5bf134d6eacf27e",
     );
 
     const reversed = JSON.parse(serialized) as any;
@@ -386,7 +386,7 @@ describe("ruled solid loft document contract", () => {
 
     if (false) {
       cad.loft("compile-smooth", [first, second], {
-        // @ts-expect-error Document v1 supports ruled lofts only.
+        // @ts-expect-error The current document grammar supports ruled lofts only.
         ruled: false,
       });
     }

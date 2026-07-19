@@ -7,11 +7,11 @@ import {
 } from "./profile.js";
 import { resolvedLoopSignedArea } from "./profile-moments.js";
 
-/** Document v1 lofts connect corresponding section curves with ruled faces. */
+/** Current document lofts connect corresponding section curves with ruled faces. */
 export const LOFT_RULED_SEMANTICS = true as const;
 
 export interface ResolvedLoftOptions {
-  /** Document v1 supports ruled interpolation only. */
+  /** The current document grammar supports ruled interpolation only. */
   readonly ruled: typeof LOFT_RULED_SEMANTICS;
 }
 
@@ -59,7 +59,7 @@ function directedCurveKind(curve: ResolvedCurve): string {
 }
 
 /**
- * Checks the deliberately bounded document-v1 ruled-solid loft contract.
+ * Checks the deliberately bounded current ruled-solid loft contract.
  * The returned path is suitable for a node-scoped structured diagnostic.
  */
 export function validateRuledSolidLoftProfiles(
@@ -113,7 +113,7 @@ export function validateRuledSolidLoftProfiles(
     }
     if (profile.holes.length !== 0) {
       return {
-        message: "Document v1 loft profiles cannot contain holes",
+        message: "Document loft profiles cannot contain holes",
         path: profilePath,
         reason: "holes-unsupported",
         profileIndex: index,

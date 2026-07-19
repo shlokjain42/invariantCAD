@@ -10,5 +10,5 @@ export interface ResolvedOffsetOptions {
   readonly tolerance: number;
 }
 
-/** Document v1 solid offsets use round/arc joins at face transitions. */
+/** Current document solid offsets use round/arc joins at face transitions. */
 export const OFFSET_JOIN_SEMANTICS = "round" as const;

@@ -5,16 +5,29 @@ import {
   type Diagnostic,
 } from "./core/result.js";
 import type { Vec3 } from "./core/math.js";
+import type { NodeId, TopologyReferenceId } from "./core/ids.js";
 import type { ExpressionIR } from "./expressions.js";
-import type { TopologyQueryIR, TopologySelectionIR } from "./ir.js";
+import type {
+  TopologyQueryIR,
+  TopologyReferenceEntryIR,
+  TopologySelectionIR,
+} from "./ir.js";
 import { normalizeKernelTopologySnapshot } from "./internal/topology-snapshot.js";
 import type {
   KernelEdgeDescriptor,
   KernelFaceDescriptor,
   KernelTopologyKey,
+  KernelTopologySignatureCapabilities,
   KernelTopologySnapshot,
   TopologyKind,
 } from "./protocol/topology.js";
+import {
+  TOPOLOGY_SIGNATURE_PROTOCOL_VERSION,
+  createTopologyReferenceResolutionSession,
+  type ResolvedTopologyReference,
+  type TopologyReferenceResolutionSession,
+  type TopologySignatureLimits,
+} from "./topology-signatures.js";
 
 type KernelTopologyDescriptor = KernelFaceDescriptor | KernelEdgeDescriptor;
 
@@ -22,6 +35,14 @@ export interface TopologyResolutionContext {
   readonly evaluate: (expression: ExpressionIR) => number;
   readonly node?: string;
   readonly path?: string;
+  readonly persistent?: {
+    readonly registry: Readonly<
+      Record<TopologyReferenceId, TopologyReferenceEntryIR>
+    >;
+    readonly input: NodeId;
+    readonly capabilities: KernelTopologySignatureCapabilities;
+    readonly limits?: Partial<TopologySignatureLimits>;
+  };
 }
 
 export interface TopologySelectionRequirements {
@@ -31,6 +52,7 @@ export interface TopologySelectionRequirements {
   readonly sketchSources: boolean;
   readonly geometry: boolean;
   readonly adjacency: boolean;
+  readonly persistentReferences: readonly TopologyReferenceId[];
 }
 
 export function topologySelectionRequirements(
@@ -42,6 +64,7 @@ export function topologySelectionRequirements(
   let sketchSources = false;
   let geometry = false;
   let adjacency = false;
+  const persistentReferences = new Set<TopologyReferenceId>();
   const visitSelection = (value: TopologySelectionIR): void => {
     kinds.add(value.topology);
     visitQuery(value.query);
@@ -49,6 +72,14 @@ export function topologySelectionRequirements(
   const visitQuery = (query: TopologyQueryIR): void => {
     switch (query.op) {
       case "all":
+        break;
+      case "persistentReference":
+        persistentReferences.add(query.reference);
+        // Matching stored evidence includes one-hop opposite-kind adjacency.
+        kinds.add("face");
+        kinds.add("edge");
+        geometry = true;
+        adjacency = true;
         break;
       case "origin":
         provenance = true;
@@ -83,6 +114,7 @@ export function topologySelectionRequirements(
     sketchSources,
     geometry,
     adjacency,
+    persistentReferences: [...persistentReferences].sort(),
   };
 }
 
@@ -190,10 +222,50 @@ function selectionPath(context: TopologyResolutionContext, suffix: string): stri
   return context.path === undefined ? undefined : `${context.path}/${suffix}`;
 }
 
+interface CachedPersistentReferenceResolution {
+  readonly topology: TopologyKind;
+  readonly result: CadResult<ResolvedTopologyReference>;
+}
+
+interface PersistentReferenceResolutionState {
+  readonly session: TopologyReferenceResolutionSession;
+  readonly registry: Readonly<
+    Record<TopologyReferenceId, TopologyReferenceEntryIR>
+  >;
+  readonly input: NodeId;
+  readonly capabilities: KernelTopologySignatureCapabilities;
+  readonly cache: Map<
+    TopologyReferenceId,
+    CachedPersistentReferenceResolution
+  >;
+}
+
+function persistentFailure(
+  result: CadResult<unknown>,
+  reference: TopologyReferenceId,
+  context: TopologyResolutionContext,
+): never {
+  const source = result.diagnostics[0] ??
+    diagnostic(
+      "TOPOLOGY_SIGNATURE_INVALID",
+      "Persistent topology reference resolution failed without a diagnostic",
+      { severity: "error" },
+    );
+  throw new TopologyResolutionFailure({
+    ...source,
+    ...location(context),
+    details: {
+      ...source.details,
+      reference,
+    },
+  });
+}
+
 function resolveSelectionOrThrow(
   selection: TopologySelectionIR,
   snapshot: KernelTopologySnapshot,
   context: TopologyResolutionContext,
+  persistent: PersistentReferenceResolutionState | undefined,
 ): readonly KernelTopologyKey[] {
   if (
     !Number.isInteger(selection.cardinality.min) ||
@@ -224,6 +296,153 @@ function resolveSelectionOrThrow(
     switch (query.op) {
       case "all":
         return new Set(byKey.keys());
+      case "persistentReference": {
+        const referenceContext: TopologyResolutionContext = {
+          ...queryContext,
+          ...(queryPath === undefined
+            ? {}
+            : { path: `${queryPath}/reference` }),
+        };
+        if (persistent === undefined) {
+          invalid(
+            "Persistent topology reference resolution context is unavailable",
+            referenceContext,
+            { reference: query.reference },
+          );
+        }
+        const cached = persistent.cache.get(query.reference);
+        if (cached !== undefined) {
+          if (cached.topology !== selection.topology) {
+            invalid(
+              `Persistent topology reference '${query.reference}' selects ${cached.topology}s, not ${selection.topology}s`,
+              referenceContext,
+              {
+                reference: query.reference,
+                expected: selection.topology,
+                actual: cached.topology,
+              },
+            );
+          }
+          if (!cached.result.ok) {
+            persistentFailure(cached.result, query.reference, referenceContext);
+          }
+          return new Set([cached.result.value.key]);
+        }
+        if (!Object.hasOwn(persistent.registry, query.reference)) {
+          invalid(
+            `Persistent topology reference '${query.reference}' is missing`,
+            referenceContext,
+            { reference: query.reference },
+          );
+        }
+        const entry = persistent.registry[query.reference];
+        if (entry === undefined) {
+          invalid(
+            `Persistent topology reference '${query.reference}' is missing`,
+            referenceContext,
+            { reference: query.reference },
+          );
+        }
+        if (entry.topology !== selection.topology) {
+          invalid(
+            `Persistent topology reference '${query.reference}' selects ${entry.topology}s, not ${selection.topology}s`,
+            referenceContext,
+            {
+              reference: query.reference,
+              expected: selection.topology,
+              actual: entry.topology,
+            },
+          );
+        }
+        if (
+          entry.target?.kind !== "solid" ||
+          entry.target.node !== persistent.input
+        ) {
+          invalid(
+            `Persistent topology reference '${query.reference}' targets a different solid`,
+            referenceContext,
+            {
+              reference: query.reference,
+              expected: persistent.input,
+              actual: entry.target?.node,
+            },
+          );
+        }
+        if (!Array.isArray(entry.variants)) {
+          invalid(
+            `Persistent topology reference '${query.reference}' has invalid variants`,
+            referenceContext,
+            { reference: query.reference },
+          );
+        }
+        const variants = entry.variants.filter(
+          (variant) =>
+            variant.protocolVersion ===
+              TOPOLOGY_SIGNATURE_PROTOCOL_VERSION &&
+            variant.protocolVersion === persistent.capabilities.protocolVersion &&
+            variant.kernelFingerprint === persistent.capabilities.fingerprint,
+        );
+        if (variants.length === 0) {
+          throw new TopologyResolutionFailure(
+            diagnostic(
+              "TOPOLOGY_FINGERPRINT_MISMATCH",
+              `Persistent topology reference '${query.reference}' has no variant compatible with the current kernel descriptors`,
+              {
+                ...location(referenceContext),
+                details: {
+                  reference: query.reference,
+                  actual: {
+                    protocolVersion: persistent.capabilities.protocolVersion,
+                    fingerprint: persistent.capabilities.fingerprint,
+                  },
+                  available: entry.variants
+                    .map((variant) => ({
+                      protocolVersion: variant.protocolVersion,
+                      kernelFingerprint: variant.kernelFingerprint,
+                    }))
+                    .sort((first, second) =>
+                      first.kernelFingerprint.localeCompare(
+                        second.kernelFingerprint,
+                      ),
+                    ),
+                },
+              },
+            ),
+          );
+        }
+        if (variants.length !== 1) {
+          invalid(
+            `Persistent topology reference '${query.reference}' has duplicate variants for the current kernel fingerprint`,
+            referenceContext,
+            {
+              reference: query.reference,
+              fingerprint: persistent.capabilities.fingerprint,
+              variants: variants.length,
+            },
+          );
+        }
+        const variant = variants[0]!;
+        if (variant.topology !== entry.topology) {
+          invalid(
+            `Persistent topology reference '${query.reference}' contains a variant for the wrong topology kind`,
+            referenceContext,
+            {
+              reference: query.reference,
+              expected: entry.topology,
+              actual: variant.topology,
+            },
+          );
+        }
+        const result = persistent.session.resolve(variant);
+        persistent.cache.set(query.reference, {
+          topology: entry.topology,
+          result,
+        });
+        if (!result.ok) {
+          persistentFailure(result, query.reference, referenceContext);
+        }
+        return new Set([result.value.key]);
+      }
       case "origin": {
         if (snapshot.history !== "complete") {
           throw new TopologyResolutionFailure(
@@ -349,10 +568,17 @@ function resolveSelectionOrThrow(
           });
         }
         const adjacentKeys = new Set(
-          resolveSelectionOrThrow(query.selection, snapshot, {
-            ...context,
-            ...(queryPath === undefined ? {} : { path: `${queryPath}/selection` }),
-          }),
+          resolveSelectionOrThrow(
+            query.selection,
+            snapshot,
+            {
+              ...context,
+              ...(queryPath === undefined
+                ? {}
+                : { path: `${queryPath}/selection` }),
+            },
+            persistent,
+          ),
         );
         return new Set(
           universe
@@ -450,21 +676,58 @@ export function resolveTopologySelection(
 ): CadResult<readonly KernelTopologyKey[]> {
   let snapshotValidated = false;
   try {
-    const normalizedSnapshot = normalizeKernelTopologySnapshot(snapshot);
-    if (!normalizedSnapshot.ok) {
-      return {
-        ok: false,
-        diagnostics: normalizedSnapshot.diagnostics.map((item) => ({
-          ...item,
-          ...location(context),
-        })),
+    const requirements = topologySelectionRequirements(selection);
+    let detachedSnapshot: KernelTopologySnapshot;
+    let persistent: PersistentReferenceResolutionState | undefined;
+    if (
+      requirements.persistentReferences.length > 0 &&
+      context.persistent !== undefined
+    ) {
+      const created = createTopologyReferenceResolutionSession(snapshot, {
+        capabilities: context.persistent.capabilities,
+        ...(context.persistent.limits === undefined
+          ? {}
+          : { limits: context.persistent.limits }),
+      });
+      if (!created.ok) {
+        return {
+          ok: false,
+          diagnostics: created.diagnostics.map((item) => ({
+            ...item,
+            ...location(context),
+          })),
+        };
+      }
+      detachedSnapshot = created.value.snapshot;
+      persistent = {
+        session: created.value,
+        registry: context.persistent.registry,
+        input: context.persistent.input,
+        capabilities: context.persistent.capabilities,
+        cache: new Map(),
       };
+    } else {
+      const normalizedSnapshot = normalizeKernelTopologySnapshot(snapshot);
+      if (!normalizedSnapshot.ok) {
+        return {
+          ok: false,
+          diagnostics: normalizedSnapshot.diagnostics.map((item) => ({
+            ...item,
+            ...location(context),
+          })),
+        };
+      }
+      detachedSnapshot = normalizedSnapshot.value;
     }
-    const detachedSnapshot = normalizedSnapshot.value;
     snapshotValidated = true;
     return {
       ok: true,
-      value: resolveSelectionOrThrow(selection, detachedSnapshot, context),
+      value: resolveSelectionOrThrow(
+        selection,
+        detachedSnapshot,
+        context,
+        persistent,
+      ),
       diagnostics: [],
     };
   } catch (error) {

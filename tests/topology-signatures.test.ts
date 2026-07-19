@@ -11,6 +11,10 @@ import {
   type KernelTopologyLineage,
   type KernelTopologySnapshot,
 } from "../src/index.js";
+import {
+  createTopologyReferenceResolutionSession,
+  normalizePersistentTopologyReference,
+} from "../src/topology-signatures.js";
 
 function key(value: string): KernelTopologyKey {
   return value as KernelTopologyKey;
@@ -131,6 +135,16 @@ function expectDeeplyFrozen(value: unknown, seen = new Set<object>()): void {
   for (const nested of Object.values(value)) expectDeeplyFrozen(nested, seen);
 }
 
+function expectNoNegativeZero(value: unknown, seen = new Set<object>()): void {
+  if (typeof value === "number") {
+    expect(Object.is(value, -0)).toBe(false);
+    return;
+  }
+  if (typeof value !== "object" || value === null || seen.has(value)) return;
+  seen.add(value);
+  for (const nested of Object.values(value)) expectNoNegativeZero(nested, seen);
+}
+
 function semanticSnapshots(): {
   readonly before: KernelTopologySnapshot;
   readonly after: KernelTopologySnapshot;
@@ -225,6 +239,220 @@ describe("persistent topology signatures", () => {
     expect(captured.value).toEqual(
       expect.objectContaining({ protocolVersion: 1 }),
     );
+  });
+
+  it("normalizes persistent evidence into one canonical deeply frozen value", () => {
+    const firstNeighbor = {
+      topology: "edge" as const,
+      lineage: [
+        { feature: "neighbor-b", relation: "created" as const },
+        { feature: "neighbor-a", relation: "created" as const },
+        { feature: "neighbor-b", relation: "created" as const },
+      ],
+      geometry: {
+        topology: "edge" as const,
+        kind: "line",
+        measure: 2,
+        center: [2, -0, 0] as const,
+        bounds: { min: [2, -0, 0] as const, max: [2, 0, 0] as const },
+        direction: [1, -0, 0] as const,
+      },
+    };
+    const secondNeighbor = {
+      topology: "edge" as const,
+      lineage: [{ feature: "neighbor-a", relation: "created" as const }],
+      geometry: {
+        topology: "edge" as const,
+        kind: "line",
+        measure: 1,
+        center: [1, -0, 0] as const,
+        bounds: { min: [1, -0, 0] as const, max: [1, 0, 0] as const },
+        direction: [1, -0, 0] as const,
+      },
+    };
+    const normalized = normalizePersistentTopologyReference({
+      protocolVersion: 1,
+      kernelFingerprint: capabilities.fingerprint,
+      topology: "face",
+      capturedHistory: "complete",
+      tolerance: { linear: -0, angular: -0, relative: -0 },
+      lineage: [
+        { feature: "producer-b", relation: "created" },
+        { feature: "producer-a", relation: "created" },
+        { feature: "producer-b", relation: "created" },
+      ],
+      geometry: {
+        topology: "face",
+        kind: "plane",
+        measure: -0,
+        center: [-0, 0, 0],
+        bounds: { min: [-0, 0, 0], max: [0, 0, 0] },
+        normal: [-0, 0, 1],
+      },
+      adjacency: [firstNeighbor, secondNeighbor, firstNeighbor],
+    });
+
+    expect(normalized.ok).toBe(true);
+    if (!normalized.ok) return;
+    expect(normalized.value.lineage.map((item) => item.feature)).toEqual([
+      "producer-a",
+      "producer-b",
+    ]);
+    expect(
+      normalized.value.adjacency.map((item) => item.geometry.center[0]),
+    ).toEqual([1, 2, 2]);
+    expect(normalized.value.adjacency[1]?.lineage.map((item) => item.feature)).toEqual([
+      "neighbor-a",
+      "neighbor-b",
+    ]);
+    expectDeeplyFrozen(normalized.value);
+    expectNoNegativeZero(normalized.value);
+  });
+
+  it("normalizes one snapshot and reuses cached results within a session", () => {
+    const { before } = semanticSnapshots();
+    const minimum = capture(before, "face", key("old-min"));
+    const maximum = capture(before, "face", key("old-max"));
+    expect(minimum.ok).toBe(true);
+    expect(maximum.ok).toBe(true);
+    if (!minimum.ok || !maximum.ok) return;
+
+    let normalReads = 0;
+    const surface = { kind: "plane" } as {
+      readonly kind: "plane";
+      readonly normal: readonly [number, number, number];
+    };
+    Object.defineProperty(surface, "normal", {
+      enumerable: true,
+      get() {
+        normalReads += 1;
+        return normalReads === 1 ? [-1, 0, 0] : [0, 1, 0];
+      },
+    });
+    const stateful = snapshot([
+      { ...before.faces[0]!, surface },
+      before.faces[1]!,
+    ]);
+    const session = createTopologyReferenceResolutionSession(stateful, {
+      capabilities,
+    });
+    expect(session.ok).toBe(true);
+    expect(normalReads).toBe(1);
+    if (!session.ok) return;
+
+    const first = session.value.resolve(minimum.value);
+    const repeated = session.value.resolve(minimum.value);
+    const second = session.value.resolve(maximum.value);
+    expect(first.ok).toBe(true);
+    expect(repeated).toBe(first);
+    expect(second.ok).toBe(true);
+    expect(normalReads).toBe(1);
+    expect(session.value.snapshot).not.toBe(stateful);
+    expectDeeplyFrozen(session.value.snapshot);
+  });
+
+  it("shares candidate-pair and matching-step budgets across unique session references", () => {
+    const { before } = semanticSnapshots();
+    const minimum = capture(before, "face", key("old-min"));
+    const maximum = capture(before, "face", key("old-max"));
+    expect(minimum.ok).toBe(true);
+    expect(maximum.ok).toBe(true);
+    if (!minimum.ok || !maximum.ok) return;
+
+    for (const resource of ["maxCandidatePairs", "maxMatchingSteps"] as const) {
+      const session = createTopologyReferenceResolutionSession(before, {
+        capabilities,
+        limits: { [resource]: 3 },
+      });
+      expect(session.ok).toBe(true);
+      if (!session.ok) continue;
+      expect(session.value.resolve(minimum.value).ok).toBe(true);
+      expect(failureDiagnostic(session.value.resolve(maximum.value))).toMatchObject({
+        code: "TOPOLOGY_SIGNATURE_LIMIT_EXCEEDED",
+        details: { resource, limit: 3, actual: 4 },
+      });
+    }
+  });
+
+  it("does not recharge a shared work budget for the same reference object", () => {
+    const { before } = semanticSnapshots();
+    const minimum = capture(before, "face", key("old-min"));
+    const maximum = capture(before, "face", key("old-max"));
+    expect(minimum.ok).toBe(true);
+    expect(maximum.ok).toBe(true);
+    if (!minimum.ok || !maximum.ok) return;
+    const session = createTopologyReferenceResolutionSession(before, {
+      capabilities,
+      limits: { maxCandidatePairs: 2 },
+    });
+    expect(session.ok).toBe(true);
+    if (!session.ok) return;
+
+    const first = session.value.resolve(minimum.value);
+    expect(first.ok).toBe(true);
+    expect(session.value.resolve(minimum.value)).toBe(first);
+    expect(failureDiagnostic(session.value.resolve(maximum.value))).toMatchObject({
+      code: "TOPOLOGY_SIGNATURE_LIMIT_EXCEEDED",
+      details: { resource: "maxCandidatePairs", limit: 2, actual: 3 },
+    });
+  });
+
+  it("applies each stored tolerance while sharing candidate evidence regardless of order", () => {
+    const original = snapshot(
+      [
+        face("original", {
+          center: [0, 0, 0],
+          bounds: { min: [0, 0, 0], max: [0, 0, 0] },
+          lineage: [],
+        }),
+      ],
+      [],
+      "partial",
+    );
+    const captured = capture(original, "face", key("original"));
+    expect(captured.ok).toBe(true);
+    if (!captured.ok) return;
+    const tight = {
+      ...captured.value,
+      tolerance: { linear: 0.1, angular: 0, relative: 0 },
+    };
+    const loose = {
+      ...captured.value,
+      tolerance: { linear: 1, angular: 0, relative: 0 },
+    };
+    const moved = snapshot(
+      [
+        face("moved", {
+          center: [0.5, 0, 0],
+          bounds: { min: [0.5, 0, 0], max: [0.5, 0, 0] },
+          lineage: [],
+        }),
+      ],
+      [],
+      "partial",
+    );
+
+    for (const references of [
+      [tight, loose],
+      [loose, tight],
+    ] as const) {
+      const session = createTopologyReferenceResolutionSession(moved, {
+        capabilities,
+      });
+      expect(session.ok).toBe(true);
+      if (!session.ok) continue;
+      const results = references.map((reference) =>
+        session.value.resolve(reference),
+      );
+      const tightResult = references[0] === tight ? results[0] : results[1];
+      const looseResult = references[0] === loose ? results[0] : results[1];
+      expect(failureCode(tightResult!)).toBe("TOPOLOGY_MATCH_MISSING");
+      expect(looseResult).toEqual({
+        ok: true,
+        value: { key: key("moved"), evidence: "geometry-adjacency" },
+        diagnostics: [],
+      });
+    }
   });
 
   it("resolves a unique semantic lineage through arbitrary geometry and key permutation", () => {

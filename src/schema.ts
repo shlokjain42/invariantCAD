@@ -1,15 +1,32 @@
 import { z } from "zod";
 import {
-  DOCUMENT_SCHEMA,
-  DOCUMENT_VERSION,
+  DOCUMENT_SCHEMA_V1,
+  DOCUMENT_SCHEMA_V2,
+  DOCUMENT_VERSION_V1,
+  DOCUMENT_VERSION_V2,
   type DesignDocument,
+  type DesignDocumentV1,
+  type DesignDocumentV2,
+  type NodeIR,
+  type NodeIRV1,
+  type TopologyReferenceEntryIR,
   type TopologyQueryIR,
+  type TopologyQueryIRFor,
+  type TopologyQueryIRV1,
+  type TopologyQueryIRV2,
   type TopologySelectionIR,
+  type TopologySelectionIRFor,
+  type TopologySelectionIRV1,
+  type TopologySelectionIRV2,
 } from "./ir.js";
 import type { ExpressionIR } from "./expressions.js";
 import { TOPOLOGY_ROLES } from "./protocol/topology.js";
 import { SHELL_DIRECTIONS } from "./protocol/shell.js";
 import { OFFSET_DIRECTIONS } from "./protocol/offset.js";
+import {
+  normalizePersistentTopologyReference,
+  type PersistentTopologyReference,
+} from "./topology-signatures.js";
 
 const DimensionSchema = z.enum(["scalar", "length", "angle", "massDensity"]);
 const IdSchema = z
@@ -202,262 +219,372 @@ const TopologySourceSchema = z
   })
   .strict();
 
-export const TopologyQuerySchema: z.ZodType<TopologyQueryIR> = z.lazy(() =>
-  z.discriminatedUnion("op", [
-    z.object({ op: z.literal("all") }).strict(),
-    z
-      .object({
-        op: z.literal("origin"),
-        feature: z.string(),
-        relation: z.enum(["created", "modified"]),
-        role: z.enum(TOPOLOGY_ROLES).optional(),
-        source: TopologySourceSchema.optional(),
-      })
-      .strict(),
-    z
-      .object({
-        op: z.literal("surface"),
-        kind: z.string().min(1),
-      })
-      .strict(),
-    z
-      .object({
-        op: z.literal("curve"),
-        kind: z.string().min(1),
-      })
-      .strict(),
-    z
-      .object({
-        op: z.enum(["normal", "direction"]),
-        value: Vec3ExpressionSchema,
-        tolerance: ExpressionSchema,
-      })
-      .strict(),
-    z
-      .object({
-        op: z.literal("radius"),
-        value: ExpressionSchema,
-        tolerance: ExpressionSchema,
-      })
-      .strict(),
-    z
-      .object({
-        op: z.literal("adjacentTo"),
-        selection: z.lazy(() => TopologySelectionSchema),
-      })
-      .strict(),
-    z
-      .object({
-        op: z.enum(["and", "or"]),
-        queries: z.array(TopologyQuerySchema).min(1),
-      })
-      .strict(),
-    z
-      .object({
-        op: z.literal("not"),
-        query: TopologyQuerySchema,
-      })
-      .strict(),
-  ]),
-) as z.ZodType<TopologyQueryIR>;
+type DiscriminatedUnionVariants = Parameters<
+  typeof z.discriminatedUnion
+>[1];
 
-export const TopologySelectionSchema: z.ZodType<TopologySelectionIR> = z.lazy(
-  () =>
+function createTopologySchemas<AllowPersistent extends boolean>(
+  allowPersistent: AllowPersistent,
+): {
+  readonly query: z.ZodType<TopologyQueryIRFor<AllowPersistent>>;
+  readonly selection: z.ZodType<
+    TopologySelectionIRFor<"face" | "edge", AllowPersistent>
+  >;
+} {
+  let selectionSchema!: z.ZodType<
+    TopologySelectionIRFor<"face" | "edge", AllowPersistent>
+  >;
+  const querySchema = z.lazy(() => {
+    const persistent = z
+      .object({
+        op: z.literal("persistentReference"),
+        reference: IdSchema,
+      })
+      .strict();
+    const variants = [
+      z.object({ op: z.literal("all") }).strict(),
+      ...(allowPersistent ? [persistent] : []),
+      z
+        .object({
+          op: z.literal("origin"),
+          feature: z.string(),
+          relation: z.enum(["created", "modified"]),
+          role: z.enum(TOPOLOGY_ROLES).optional(),
+          source: TopologySourceSchema.optional(),
+        })
+        .strict(),
+      z
+        .object({
+          op: z.literal("surface"),
+          kind: z.string().min(1),
+        })
+        .strict(),
+      z
+        .object({
+          op: z.literal("curve"),
+          kind: z.string().min(1),
+        })
+        .strict(),
+      z
+        .object({
+          op: z.enum(["normal", "direction"]),
+          value: Vec3ExpressionSchema,
+          tolerance: ExpressionSchema,
+        })
+        .strict(),
+      z
+        .object({
+          op: z.literal("radius"),
+          value: ExpressionSchema,
+          tolerance: ExpressionSchema,
+        })
+        .strict(),
+      z
+        .object({
+          op: z.literal("adjacentTo"),
+          selection: z.lazy(() => selectionSchema),
+        })
+        .strict(),
+      z
+        .object({
+          op: z.enum(["and", "or"]),
+          queries: z.array(z.lazy(() => querySchema)).min(1),
+        })
+        .strict(),
+      z
+        .object({
+          op: z.literal("not"),
+          query: z.lazy(() => querySchema),
+        })
+        .strict(),
+    ];
+    return z.discriminatedUnion(
+      "op",
+      variants as unknown as DiscriminatedUnionVariants,
+    );
+  }) as z.ZodType<TopologyQueryIRFor<AllowPersistent>>;
+
+  selectionSchema = z.lazy(() =>
     z
       .object({
         topology: z.enum(["face", "edge"]),
-        query: TopologyQuerySchema,
+        query: querySchema,
         cardinality: TopologyCardinalitySchema,
       })
       .strict(),
-) as z.ZodType<TopologySelectionIR>;
+  ) as z.ZodType<
+    TopologySelectionIRFor<"face" | "edge", AllowPersistent>
+  >;
+  return { query: querySchema, selection: selectionSchema };
+}
 
-const NodeSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("box"),
-    size: Vec3ExpressionSchema,
-    center: z.boolean(),
-  }),
-  z.object({
-    kind: z.literal("cylinder"),
-    height: ExpressionSchema,
-    radiusBottom: ExpressionSchema,
-    radiusTop: ExpressionSchema,
-    center: z.boolean(),
-    segments: z.number().int().min(3).optional(),
-  }),
-  z.object({
-    kind: z.literal("sphere"),
-    radius: ExpressionSchema,
-    segments: z.number().int().min(4).optional(),
-  }),
-  z.object({
-    kind: z.literal("sketch"),
-    plane: PlaneSchema,
-    entities: z.record(z.string(), EntitySchema),
-    constraints: z.record(z.string(), ConstraintSchema),
-    profile: z.object({ outer: LoopSchema, holes: z.array(LoopSchema) }),
-    tolerance: z.number().positive(),
-  }),
-  z
-    .object({
-      kind: z.literal("polylinePath"),
-      points: z.array(Vec3ExpressionSchema).min(2),
-      closed: z.literal(false),
-      tolerance: z.number().positive(),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("circularArcPath"),
-      start: Vec3ExpressionSchema,
-      through: Vec3ExpressionSchema,
-      end: Vec3ExpressionSchema,
-      closed: z.literal(false),
-      tolerance: z.number().positive(),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("compositePath"),
-      start: Vec3ExpressionSchema,
-      segments: z
-        .array(
-          z.discriminatedUnion("kind", [
-            z
-              .object({
-                kind: z.literal("line"),
-                end: Vec3ExpressionSchema,
-              })
-              .strict(),
-            z
-              .object({
-                kind: z.literal("circularArc"),
-                through: Vec3ExpressionSchema,
-                end: Vec3ExpressionSchema,
-              })
-              .strict(),
-          ]),
-        )
-        .min(2),
-      closed: z.literal(false),
-      tolerance: z.number().positive(),
-    })
-    .strict(),
-  z.object({
-    kind: z.literal("extrude"),
-    profile: RefSchema,
-    distance: ExpressionSchema,
-    symmetric: z.boolean(),
-    twist: ExpressionSchema,
-    scaleTop: Vec2ExpressionSchema,
-    divisions: z.number().int().nonnegative(),
-  }),
-  z.object({
-    kind: z.literal("revolve"),
-    profile: RefSchema,
-    angle: ExpressionSchema,
-    segments: z.number().int().min(3).optional(),
-  }),
-  z
-    .object({
-      kind: z.literal("loft"),
-      profiles: z.array(RefSchema).min(2),
-      ruled: z.literal(true),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("sweep"),
-      profile: RefSchema,
-      path: RefSchema,
-      transition: z.literal("right-corner"),
-      frame: z.literal("corrected-frenet"),
-    })
-    .strict(),
-  z.object({
-    kind: z.literal("boolean"),
-    operation: z.enum(["union", "subtract", "intersect"]),
-    target: RefSchema,
-    tools: z.array(RefSchema).min(1),
-  }),
-  z.object({
-    kind: z.literal("transform"),
-    input: RefSchema,
-    operations: z.array(TransformOperationSchema).min(1),
-  }),
-  z
-    .object({
-      kind: z.literal("fillet"),
-      input: RefSchema,
-      edges: TopologySelectionSchema,
+const topologySchemasV1 = createTopologySchemas(false);
+const topologySchemasV2 = createTopologySchemas<boolean>(true);
+
+export const TopologyQueryV1Schema: z.ZodType<TopologyQueryIRV1> =
+  topologySchemasV1.query;
+export const TopologyQueryV2Schema: z.ZodType<TopologyQueryIRV2> =
+  topologySchemasV2.query;
+export const TopologySelectionV1Schema: z.ZodType<TopologySelectionIRV1> =
+  topologySchemasV1.selection;
+export const TopologySelectionV2Schema: z.ZodType<TopologySelectionIRV2> =
+  topologySchemasV2.selection;
+
+/** Current document-v2 topology query schema. */
+export const TopologyQuerySchema: z.ZodType<TopologyQueryIR> =
+  TopologyQueryV2Schema;
+/** Current document-v2 topology selection schema. */
+export const TopologySelectionSchema: z.ZodType<TopologySelectionIR> =
+  TopologySelectionV2Schema;
+
+/**
+ * The transform is intentionally the topology-signature implementation's
+ * defensive copier rather than a second, drifting structural grammar here.
+ */
+export const PersistentTopologyReferenceSchema: z.ZodType<PersistentTopologyReference> =
+  z.unknown().transform((value, context) => {
+    const normalized = normalizePersistentTopologyReference(value);
+    if (normalized.ok) return normalized.value;
+    for (const item of normalized.diagnostics) {
+      context.addIssue({
+        code: "custom",
+        message: item.message,
+      });
+    }
+    return z.NEVER;
+  }) as z.ZodType<PersistentTopologyReference>;
+
+const SolidRefSchema = z
+  .object({
+    node: z.string(),
+    kind: z.literal("solid"),
+  })
+  .strict();
+
+const TopologyReferenceEntrySchema: z.ZodType<TopologyReferenceEntryIR> = z
+  .object({
+    target: SolidRefSchema,
+    topology: z.enum(["face", "edge"]),
+    variants: z.array(PersistentTopologyReferenceSchema).min(1),
+  })
+  .strict()
+  .superRefine((entry, context) => {
+    const fingerprints = new Set<string>();
+    entry.variants.forEach((variant, index) => {
+      if (variant.topology !== entry.topology) {
+        context.addIssue({
+          code: "custom",
+          message: `Topology reference variant selects ${variant.topology}s, not ${entry.topology}s`,
+          path: ["variants", index, "topology"],
+        });
+      }
+      const fingerprint = `${variant.protocolVersion}\u0000${variant.kernelFingerprint}`;
+      if (fingerprints.has(fingerprint)) {
+        context.addIssue({
+          code: "custom",
+          message: `Topology reference variants must have unique protocol-version and kernel-fingerprint pairs; duplicate '${variant.kernelFingerprint}'`,
+          path: ["variants", index, "kernelFingerprint"],
+        });
+      }
+      fingerprints.add(fingerprint);
+    });
+  }) as unknown as z.ZodType<TopologyReferenceEntryIR>;
+
+function createNodeSchema(topologySelectionSchema: z.ZodType) {
+  return z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("box"),
+      size: Vec3ExpressionSchema,
+      center: z.boolean(),
+    }),
+    z.object({
+      kind: z.literal("cylinder"),
+      height: ExpressionSchema,
+      radiusBottom: ExpressionSchema,
+      radiusTop: ExpressionSchema,
+      center: z.boolean(),
+      segments: z.number().int().min(3).optional(),
+    }),
+    z.object({
+      kind: z.literal("sphere"),
       radius: ExpressionSchema,
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("chamfer"),
-      input: RefSchema,
-      edges: TopologySelectionSchema,
+      segments: z.number().int().min(4).optional(),
+    }),
+    z.object({
+      kind: z.literal("sketch"),
+      plane: PlaneSchema,
+      entities: z.record(z.string(), EntitySchema),
+      constraints: z.record(z.string(), ConstraintSchema),
+      profile: z.object({ outer: LoopSchema, holes: z.array(LoopSchema) }),
+      tolerance: z.number().positive(),
+    }),
+    z
+      .object({
+        kind: z.literal("polylinePath"),
+        points: z.array(Vec3ExpressionSchema).min(2),
+        closed: z.literal(false),
+        tolerance: z.number().positive(),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("circularArcPath"),
+        start: Vec3ExpressionSchema,
+        through: Vec3ExpressionSchema,
+        end: Vec3ExpressionSchema,
+        closed: z.literal(false),
+        tolerance: z.number().positive(),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("compositePath"),
+        start: Vec3ExpressionSchema,
+        segments: z
+          .array(
+            z.discriminatedUnion("kind", [
+              z
+                .object({
+                  kind: z.literal("line"),
+                  end: Vec3ExpressionSchema,
+                })
+                .strict(),
+              z
+                .object({
+                  kind: z.literal("circularArc"),
+                  through: Vec3ExpressionSchema,
+                  end: Vec3ExpressionSchema,
+                })
+                .strict(),
+            ]),
+          )
+          .min(2),
+        closed: z.literal(false),
+        tolerance: z.number().positive(),
+      })
+      .strict(),
+    z.object({
+      kind: z.literal("extrude"),
+      profile: RefSchema,
       distance: ExpressionSchema,
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("shell"),
-      input: RefSchema,
-      openings: TopologySelectionSchema,
-      thickness: ExpressionSchema,
-      direction: z.enum(SHELL_DIRECTIONS),
-      tolerance: ExpressionSchema,
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("offset"),
-      input: RefSchema,
-      distance: ExpressionSchema,
-      direction: z.enum(OFFSET_DIRECTIONS),
-      tolerance: ExpressionSchema,
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("draft"),
-      input: RefSchema,
-      faces: TopologySelectionSchema,
+      symmetric: z.boolean(),
+      twist: ExpressionSchema,
+      scaleTop: Vec2ExpressionSchema,
+      divisions: z.number().int().nonnegative(),
+    }),
+    z.object({
+      kind: z.literal("revolve"),
+      profile: RefSchema,
       angle: ExpressionSchema,
-      pullDirection: Vec3ExpressionSchema,
-      neutralPlane: z
-        .object({
-          origin: Vec3ExpressionSchema,
-          normal: Vec3ExpressionSchema,
-        })
-        .strict(),
-    })
-    .strict(),
-  z.object({
-    kind: z.literal("part"),
-    solid: RefSchema,
-    partNumber: z.string().optional(),
-    description: z.string().optional(),
-    material: z.string().optional(),
-    materialId: IdSchema.optional(),
-    massDensity: ExpressionSchema.optional(),
-    metadata: z.record(z.string(), z.json()).optional(),
-  }),
-  z.object({
-    kind: z.literal("assembly"),
-    instances: z.array(
-      z.object({
-        id: z.string(),
-        component: RefSchema,
-        placement: z.array(TransformOperationSchema),
-        suppressed: z.boolean(),
-      }),
-    ),
-  }),
-]);
+      segments: z.number().int().min(3).optional(),
+    }),
+    z
+      .object({
+        kind: z.literal("loft"),
+        profiles: z.array(RefSchema).min(2),
+        ruled: z.literal(true),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("sweep"),
+        profile: RefSchema,
+        path: RefSchema,
+        transition: z.literal("right-corner"),
+        frame: z.literal("corrected-frenet"),
+      })
+      .strict(),
+    z.object({
+      kind: z.literal("boolean"),
+      operation: z.enum(["union", "subtract", "intersect"]),
+      target: RefSchema,
+      tools: z.array(RefSchema).min(1),
+    }),
+    z.object({
+      kind: z.literal("transform"),
+      input: RefSchema,
+      operations: z.array(TransformOperationSchema).min(1),
+    }),
+    z
+      .object({
+        kind: z.literal("fillet"),
+        input: RefSchema,
+        edges: topologySelectionSchema,
+        radius: ExpressionSchema,
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("chamfer"),
+        input: RefSchema,
+        edges: topologySelectionSchema,
+        distance: ExpressionSchema,
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("shell"),
+        input: RefSchema,
+        openings: topologySelectionSchema,
+        thickness: ExpressionSchema,
+        direction: z.enum(SHELL_DIRECTIONS),
+        tolerance: ExpressionSchema,
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("offset"),
+        input: RefSchema,
+        distance: ExpressionSchema,
+        direction: z.enum(OFFSET_DIRECTIONS),
+        tolerance: ExpressionSchema,
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("draft"),
+        input: RefSchema,
+        faces: topologySelectionSchema,
+        angle: ExpressionSchema,
+        pullDirection: Vec3ExpressionSchema,
+        neutralPlane: z
+          .object({
+            origin: Vec3ExpressionSchema,
+            normal: Vec3ExpressionSchema,
+          })
+          .strict(),
+      })
+      .strict(),
+    z.object({
+      kind: z.literal("part"),
+      solid: RefSchema,
+      partNumber: z.string().optional(),
+      description: z.string().optional(),
+      material: z.string().optional(),
+      materialId: IdSchema.optional(),
+      massDensity: ExpressionSchema.optional(),
+      metadata: z.record(z.string(), z.json()).optional(),
+    }),
+    z.object({
+      kind: z.literal("assembly"),
+      instances: z.array(
+        z.object({
+          id: z.string(),
+          component: RefSchema,
+          placement: z.array(TransformOperationSchema),
+          suppressed: z.boolean(),
+        }),
+      ),
+    }),
+  ]);
+}
+
+const NodeSchema = createNodeSchema(
+  TopologySelectionV2Schema,
+) as unknown as z.ZodType<NodeIR>;
+const NodeV1Schema = createNodeSchema(
+  TopologySelectionV1Schema,
+) as unknown as z.ZodType<NodeIRV1>;
 
 const ConfigurationSchema = z
   .object({
@@ -505,9 +632,7 @@ const ConfigurationSchema = z
     "A configuration requires at least one override",
   );
 
-export const DesignDocumentSchema: z.ZodType<DesignDocument> = z.object({
-  schema: z.literal(DOCUMENT_SCHEMA),
-  version: z.literal(DOCUMENT_VERSION),
+const DesignDocumentBodyShape = {
   name: z.string().min(1),
   units: z.object({
     length: z.literal("mm"),
@@ -553,4 +678,33 @@ export const DesignDocumentSchema: z.ZodType<DesignDocument> = z.object({
   nodes: z.record(z.string(), NodeSchema),
   outputs: z.record(z.string(), DesignOutputRefSchema),
   metadata: z.record(z.string(), z.json()).optional(),
-}) as unknown as z.ZodType<DesignDocument>;
+} as const;
+
+export const DesignDocumentV1Schema: z.ZodType<DesignDocumentV1> = z
+  .object({
+    schema: z.literal(DOCUMENT_SCHEMA_V1),
+    version: z.literal(DOCUMENT_VERSION_V1),
+    ...DesignDocumentBodyShape,
+    nodes: z.record(z.string(), NodeV1Schema),
+  })
+  .strict() as unknown as z.ZodType<DesignDocumentV1>;
+
+export const DesignDocumentV2Schema: z.ZodType<DesignDocumentV2> = z
+  .object({
+    schema: z.literal(DOCUMENT_SCHEMA_V2),
+    version: z.literal(DOCUMENT_VERSION_V2),
+    ...DesignDocumentBodyShape,
+    topologyReferences: z
+      .record(IdSchema, TopologyReferenceEntrySchema)
+      .refine(
+        (references) => Object.keys(references).length > 0,
+        "Topology reference registry cannot be empty; omit it instead",
+      )
+      .optional(),
+  })
+  .strict() as unknown as z.ZodType<DesignDocumentV2>;
+
+export const DesignDocumentSchema: z.ZodType<DesignDocument> = z.union([
+  DesignDocumentV1Schema,
+  DesignDocumentV2Schema,
+]) as z.ZodType<DesignDocument>;

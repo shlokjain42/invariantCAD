@@ -292,7 +292,7 @@ describe("bounded solid sweep document contract", () => {
     expect(cloneDocument(document)).toEqual(document);
     expect(await hashDocument(parsed.value)).toBe(await hashDocument(document));
     expect(await hashDocument(document)).toBe(
-      "daf3ee522bee58133d8511bcce57c2323a7a842bda71e52da8b16f19844325e6",
+      "46c97ae6241e476c8fec9c9c8276ce2dd9a93e9b8fdf66dbcc79328f40e73974",
     );
   });
 
@@ -437,9 +437,9 @@ describe("bounded solid sweep document contract", () => {
     );
 
     if (false) {
-      // @ts-expect-error Document v1 supports right-corner transitions only.
+      // @ts-expect-error The current document grammar supports right-corner transitions only.
       cad.sweep("compile-transition", profile, path, { transition: "round-corner" });
-      // @ts-expect-error Document v1 supports corrected-Frenet transport only.
+      // @ts-expect-error The current document grammar supports corrected-Frenet transport only.
       cad.sweep("compile-frame", profile, path, { frame: "frenet" });
       // @ts-expect-error Paths are construction geometry, not final outputs.
       cad.output("path", path);

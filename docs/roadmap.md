@@ -58,12 +58,13 @@ Facade ABI/bundle numbers version the native adapter boundary and are independen
 - Extend complete Boolean and edge-treatment provenance beyond the owned OCCT ABI 0.4/0.5 paths while retaining stock OCCT and legacy owned facades as supported partial-history implementations; Manifold retains its declared geometry operations without topology snapshots
 - Expand role and source mapping beyond the landed primitive, extrusion, and revolution-face families
 - Landed: topology-signature protocol v1 for detached face/edge references, with key-free structured geometry and one-hop adjacency evidence, optional semantic compatibility fingerprints, exact fingerprint gating including OCCT descriptor v2, partial-history fallback, and fail-closed missing/ambiguous resolution
-- Expand the bounded v1 reference layer into persistent document selectors and broader topology-kind/feature-family naming without assigning arbitrary identities to symmetric topology
+- Landed: Document v2 topology-reference registries and typed persistent selector atoms, with v1 preservation/migration, canonical normalized variants, exact direct-target and fingerprint binding, bounded shared resolution, and fillet/chamfer/shell/draft consumption
+- Expand persistent intent into broader topology kinds and feature-family naming without assigning arbitrary identities to symmetric topology
 - Expanded selection diagnostics and provenance explanations
 - Incremental feature hashes and cross-run cache
 - Change-impact and geometric diff APIs
 
-Current topology keys and ABI indices remain evaluation-scoped. Protocol-v1 references persist detached evidence rather than those keys and resolve to a fresh key only for one compatible current candidate. They are not yet serialized selectors, a document-schema addition, a geometric-diff system, or a cross-run shape cache. Exact ABI 0.4 Boolean, ABI 0.5 fillet/chamfer, and ABI 0.6 shell/offset history prove one evaluation's evolution graph and strengthen semantic-lineage evidence, but do not themselves make a native index persistent.
+Current topology keys and ABI indices remain evaluation-scoped. Protocol-v1 references persist detached evidence rather than those keys and resolve to a fresh key only for one compatible current candidate. Document v2 serializes that evidence and selector intent, never the resolved key or native shape. This is not a geometric-diff system or cross-run shape cache. Exact ABI 0.4 Boolean, ABI 0.5 fillet/chamfer, and ABI 0.6 shell/offset history prove one evaluation's evolution graph and strengthen semantic-lineage evidence, but do not themselves make a native index persistent.
 
 ## 0.4 — advanced mechanical features
 

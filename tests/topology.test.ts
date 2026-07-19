@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   SHELL_DIRECTIONS,
   SHELL_JOIN_SEMANTICS,
+  captureTopologyReference,
   createEvaluator,
   createManifoldKernel,
   design,
@@ -22,6 +23,12 @@ import {
   type KernelTopologyKey,
   type KernelTopologySnapshot,
 } from "../src/index.js";
+import type { NodeId, TopologyReferenceId } from "../src/core/ids.js";
+import type {
+  TopologyReferenceEntryIR,
+  TopologySelectionIR,
+} from "../src/ir.js";
+import { topologySelectionRequirements } from "../src/topology-resolution.js";
 
 function key(value: string): KernelTopologyKey {
   return value as KernelTopologyKey;
@@ -98,6 +105,40 @@ function adjacencySnapshot(): KernelTopologySnapshot {
     history: "complete",
     faces: [xMinimumFace, yMinimumFace],
     edges: adjacentEdges,
+  };
+}
+
+const signatureCapabilities = {
+  protocolVersion: 1 as const,
+  fingerprint: "topology-resolution-test/signatures@1",
+};
+
+function persistentEdgeFixture(): {
+  readonly id: TopologyReferenceId;
+  readonly input: NodeId;
+  readonly entry: TopologyReferenceEntryIR<"edge">;
+  readonly selection: TopologySelectionIR<"edge">;
+} {
+  const captured = captureTopologyReference(snapshot(), "edge", key("e00"), {
+    capabilities: signatureCapabilities,
+    tolerance: { linear: 1e-9, angular: 1e-9, relative: 1e-9 },
+  });
+  if (!captured.ok) throw new Error("Persistent edge fixture did not capture");
+  const id = "stored-edge" as TopologyReferenceId;
+  const input = "box" as NodeId;
+  return {
+    id,
+    input,
+    entry: {
+      target: { node: input, kind: "solid" },
+      topology: "edge",
+      variants: [captured.value],
+    },
+    selection: {
+      topology: "edge",
+      query: { op: "persistentReference", reference: id },
+      cardinality: { min: 1, max: 1 },
+    },
   };
 }
 
@@ -237,7 +278,7 @@ describe("semantic topology selections", () => {
     cad.output("hollow", hollow);
     const document = cad.build();
     expect(await hashDocument(document)).toBe(
-      "6177e48e1f48bf48f81978e34edd770681404eada48e07c66680e97a6ad9e2f7",
+      "8058e723effe684d54d2f08c3964d35130920f9ef3f3586445522e2a2a1de8d7",
     );
 
     expect(document.nodes[hollow.node]).toEqual({
@@ -442,6 +483,153 @@ describe("semantic topology selections", () => {
     if (!forward.ok || !reverse.ok) return;
     expect(forward.value).toEqual([key("e00"), key("e01"), key("e10"), key("e11")]);
     expect(reverse.value).toEqual(forward.value);
+  });
+
+  it("resolves persistent atoms from one normalized snapshot and caches each ID once", () => {
+    const fixture = persistentEdgeFixture();
+    const selection: TopologySelectionIR<"edge"> = {
+      topology: "edge",
+      query: {
+        op: "and",
+        queries: [
+          fixture.selection.query,
+          { op: "curve", kind: "line" },
+          fixture.selection.query,
+        ],
+      },
+      cardinality: { min: 1, max: 1 },
+    };
+    expect(topologySelectionRequirements(selection)).toMatchObject({
+      kinds: ["edge", "face"],
+      geometry: true,
+      adjacency: true,
+      persistentReferences: [fixture.id],
+    });
+
+    let directionReads = 0;
+    const curve = { kind: "line" } as {
+      readonly kind: "line";
+      readonly direction: readonly [number, number, number];
+    };
+    Object.defineProperty(curve, "direction", {
+      enumerable: true,
+      get() {
+        directionReads += 1;
+        return directionReads === 1 ? [0, 0, 1] : [1, 0, 0];
+      },
+    });
+    const current = snapshot([
+      { ...verticalEdges[0]!, curve },
+      ...verticalEdges.slice(1),
+    ]);
+    const registry = {
+      [fixture.id]: fixture.entry,
+    } as Readonly<Record<TopologyReferenceId, TopologyReferenceEntryIR>>;
+    const resolved = resolveTopologySelection(selection, current, {
+      evaluate: (expression) =>
+        expression.op === "literal" ? expression.value : Number.NaN,
+      node: "rounded",
+      path: "/nodes/rounded/edges",
+      persistent: {
+        registry,
+        input: fixture.input,
+        capabilities: signatureCapabilities,
+        limits: { maxCandidatePairs: 4 },
+      },
+    });
+
+    expect(resolved.ok).toBe(true);
+    if (resolved.ok) expect(resolved.value).toEqual([key("e00")]);
+    expect(directionReads).toBe(1);
+  });
+
+  it("fails a nested persistent atom at its exact query path", () => {
+    const fixture = persistentEdgeFixture();
+    const selection: TopologySelectionIR<"face"> = {
+      topology: "face",
+      query: {
+        op: "adjacentTo",
+        selection: fixture.selection,
+      },
+      cardinality: { min: 1, max: 1 },
+    };
+    const resolved = resolveTopologySelection(selection, adjacencySnapshot(), {
+      evaluate: (expression) =>
+        expression.op === "literal" ? expression.value : Number.NaN,
+      node: "shell",
+      path: "/nodes/shell/openings",
+      persistent: {
+        registry: {} as Readonly<
+          Record<TopologyReferenceId, TopologyReferenceEntryIR>
+        >,
+        input: fixture.input,
+        capabilities: signatureCapabilities,
+      },
+    });
+
+    expect(resolved.ok).toBe(false);
+    expect(resolved.diagnostics[0]).toMatchObject({
+      code: "TOPOLOGY_SELECTOR_INVALID",
+      node: "shell",
+      path: "/nodes/shell/openings/query/selection/query/reference",
+      details: { reference: fixture.id },
+    });
+  });
+
+  it("rejects incompatible variants, topology kinds, and solid targets at the atom", () => {
+    const fixture = persistentEdgeFixture();
+    const baseContext = {
+      evaluate: (expression: any): number => expression.value,
+      node: "rounded",
+      path: "/nodes/rounded/edges",
+    };
+    const resolveWith = (
+      entry: TopologyReferenceEntryIR,
+      capabilities = signatureCapabilities,
+    ) =>
+      resolveTopologySelection(fixture.selection, snapshot(), {
+        ...baseContext,
+        persistent: {
+          registry: { [fixture.id]: entry } as Readonly<
+            Record<TopologyReferenceId, TopologyReferenceEntryIR>
+          >,
+          input: fixture.input,
+          capabilities,
+        },
+      });
+
+    const incompatible = resolveWith(fixture.entry, {
+      protocolVersion: 1,
+      fingerprint: "different-kernel/signatures@1",
+    });
+    expect(incompatible.ok).toBe(false);
+    expect(incompatible.diagnostics[0]).toMatchObject({
+      code: "TOPOLOGY_FINGERPRINT_MISMATCH",
+      path: "/nodes/rounded/edges/query/reference",
+      details: { reference: fixture.id },
+    });
+
+    const wrongTopology = resolveWith({
+      ...fixture.entry,
+      topology: "face",
+    } as unknown as TopologyReferenceEntryIR);
+    expect(wrongTopology.ok).toBe(false);
+    expect(wrongTopology.diagnostics[0]).toMatchObject({
+      code: "TOPOLOGY_SELECTOR_INVALID",
+      path: "/nodes/rounded/edges/query/reference",
+      details: { expected: "edge", actual: "face" },
+    });
+
+    const wrongTarget = resolveWith({
+      ...fixture.entry,
+      target: { node: "other" as NodeId, kind: "solid" },
+    });
+    expect(wrongTarget.ok).toBe(false);
+    expect(wrongTarget.diagnostics[0]).toMatchObject({
+      code: "TOPOLOGY_SELECTOR_INVALID",
+      path: "/nodes/rounded/edges/query/reference",
+      details: { expected: fixture.input, actual: "other" },
+    });
   });
 
   it("copies accessor-backed snapshots once before resolving selectors", () => {

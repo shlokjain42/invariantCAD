@@ -128,6 +128,22 @@ export interface ResolveTopologyReferenceOptions {
   readonly limits?: Partial<TopologySignatureLimits>;
 }
 
+export interface NormalizePersistentTopologyReferenceOptions {
+  readonly limits?: Partial<TopologySignatureLimits>;
+}
+
+/**
+ * Operation-local resolver for one immutable topology snapshot. The snapshot,
+ * candidate signatures, matching compiler, and work budget are shared by
+ * every call to `resolve`.
+ */
+export interface TopologyReferenceResolutionSession {
+  readonly snapshot: KernelTopologySnapshot;
+  resolve<K extends TopologyKind>(
+    reference: PersistentTopologyReference<K>,
+  ): CadResult<ResolvedTopologyReference>;
+}
+
 type TopologyDescriptor = KernelFaceDescriptor | KernelEdgeDescriptor;
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
@@ -260,6 +276,74 @@ function geometrySignature(
   return descriptor.topology === "face"
     ? faceGeometry(descriptor)
     : edgeGeometry(descriptor);
+}
+
+function canonicalGeometrySignature<K extends TopologyKind>(
+  geometry: TopologyGeometrySignature<K>,
+): TopologyGeometrySignature<K> {
+  const directional =
+    geometry.topology === "face"
+      ? geometry.normal
+      : (geometry as TopologyEdgeGeometrySignature).direction;
+  return Object.freeze({
+    topology: geometry.topology,
+    kind: geometry.kind,
+    measure: Object.is(geometry.measure, -0) ? 0 : geometry.measure,
+    center: immutableVector(geometry.center),
+    bounds: immutableBounds(geometry.bounds),
+    ...(directional === undefined
+      ? {}
+      : geometry.topology === "face"
+        ? { normal: immutableVector(directional) }
+        : { direction: immutableVector(directional) }),
+    ...(geometry.axis === undefined
+      ? {}
+      : { axis: immutableVector(geometry.axis) }),
+    ...(geometry.radius === undefined
+      ? {}
+      : {
+          radius: Object.is(geometry.radius, -0) ? 0 : geometry.radius,
+        }),
+  }) as TopologyGeometrySignature<K>;
+}
+
+function canonicalPersistentTopologyReference<K extends TopologyKind>(
+  reference: PersistentTopologyReference<K>,
+): PersistentTopologyReference<K> {
+  const adjacency = reference.adjacency
+    .map((neighbor) => {
+      const signature = Object.freeze({
+        topology: neighbor.topology,
+        lineage: canonicalLineage(neighbor.lineage),
+        geometry: canonicalGeometrySignature(neighbor.geometry),
+      });
+      return Object.freeze({
+        signature,
+        sortKey: canonicalStringify(signature),
+      });
+    })
+    .sort((first, second) => lexicalCompare(first.sortKey, second.sortKey))
+    .map((entry) => entry.signature);
+  return deepFreeze({
+    protocolVersion: reference.protocolVersion,
+    kernelFingerprint: reference.kernelFingerprint,
+    topology: reference.topology,
+    capturedHistory: reference.capturedHistory,
+    tolerance: {
+      linear: Object.is(reference.tolerance.linear, -0)
+        ? 0
+        : reference.tolerance.linear,
+      angular: Object.is(reference.tolerance.angular, -0)
+        ? 0
+        : reference.tolerance.angular,
+      relative: Object.is(reference.tolerance.relative, -0)
+        ? 0
+        : reference.tolerance.relative,
+    },
+    lineage: canonicalLineage(reference.lineage),
+    geometry: canonicalGeometrySignature(reference.geometry),
+    adjacency,
+  }) as unknown as PersistentTopologyReference<K>;
 }
 
 interface DescriptorSignatureContext {
@@ -483,6 +567,17 @@ function normalizeResolveOptions(
   return capabilities === undefined || limits === undefined
     ? undefined
     : Object.freeze({ capabilities, limits });
+}
+
+function normalizePersistentReferenceOptions(
+  value: unknown,
+): TopologySignatureLimits | undefined {
+  if (!isRecord(value)) return undefined;
+  const hasLimits = Object.hasOwn(value, "limits");
+  if (!exactKeys(value, hasLimits ? ["limits"] : [])) return undefined;
+  const rawLimits = hasLimits ? value.limits : undefined;
+  if (hasLimits && rawLimits === undefined) return undefined;
+  return normalizeLimits(rawLimits);
 }
 
 const topologySignatureLimitErrors = new WeakSet<object>();
@@ -961,6 +1056,40 @@ function caughtSignatureFailure<T>(error: unknown): CadResult<T> {
   );
 }
 
+/**
+ * Copies, validates, canonicalizes, and freezes untrusted persistent evidence.
+ * Adjacency multiplicity is significant and is therefore sorted, not deduped.
+ */
+export function normalizePersistentTopologyReference<K extends TopologyKind>(
+  value: PersistentTopologyReference<K>,
+  options?: NormalizePersistentTopologyReferenceOptions,
+): CadResult<PersistentTopologyReference<K>>;
+export function normalizePersistentTopologyReference(
+  value: unknown,
+  options?: NormalizePersistentTopologyReferenceOptions,
+): CadResult<PersistentTopologyReference>;
+export function normalizePersistentTopologyReference(
+  value: unknown,
+  options: NormalizePersistentTopologyReferenceOptions = {},
+): CadResult<PersistentTopologyReference> {
+  try {
+    const limits = normalizePersistentReferenceOptions(options);
+    if (limits === undefined) {
+      return signatureFailure(
+        "TOPOLOGY_SIGNATURE_INVALID",
+        "Topology reference normalization options are malformed or unsupported",
+      );
+    }
+    return success(
+      canonicalPersistentTopologyReference(
+        detachPersistentTopologyReference(value, limits),
+      ),
+    );
+  } catch (error) {
+    return caughtSignatureFailure(error);
+  }
+}
+
 function scalarClose(
   first: number,
   second: number,
@@ -1342,6 +1471,172 @@ function matchEvidence(
   return "geometry-adjacency";
 }
 
+interface InternalTopologyReferenceResolutionSession
+  extends TopologyReferenceResolutionSession {
+  resolveNormalized(
+    reference: PersistentTopologyReference,
+  ): CadResult<ResolvedTopologyReference>;
+}
+
+class TopologyReferenceResolutionSessionImpl
+  implements InternalTopologyReferenceResolutionSession
+{
+  readonly snapshot: KernelTopologySnapshot;
+  private readonly capabilities: KernelTopologySignatureCapabilities;
+  private readonly limits: TopologySignatureLimits;
+  private readonly budget: MatchingWorkBudget;
+  private readonly compiler = new MatchingSignatureCompiler();
+  private candidateContext: DescriptorSignatureContext | undefined;
+  private readonly results = new WeakMap<
+    object,
+    CadResult<ResolvedTopologyReference>
+  >();
+
+  constructor(
+    snapshot: KernelTopologySnapshot,
+    options: NormalizedResolveOptions,
+  ) {
+    this.snapshot = snapshot;
+    this.capabilities = options.capabilities;
+    this.limits = options.limits;
+    this.budget = new MatchingWorkBudget(options.limits);
+  }
+
+  resolve<K extends TopologyKind>(
+    reference: PersistentTopologyReference<K>,
+  ): CadResult<ResolvedTopologyReference> {
+    const cacheKey =
+      typeof reference === "object" && reference !== null
+        ? (reference as object)
+        : undefined;
+    if (cacheKey !== undefined) {
+      const cached = this.results.get(cacheKey);
+      if (cached !== undefined) return cached;
+      this.results.set(
+        cacheKey,
+        signatureFailure(
+          "TOPOLOGY_SIGNATURE_INVALID",
+          "Persistent topology reference resolution is reentrant",
+        ),
+      );
+    }
+    const normalized = normalizePersistentTopologyReference(reference, {
+      limits: this.limits,
+    });
+    const result = normalized.ok
+      ? this.resolveNormalized(normalized.value)
+      : normalized;
+    if (cacheKey !== undefined) this.results.set(cacheKey, result);
+    return result;
+  }
+
+  resolveNormalized(
+    reference: PersistentTopologyReference,
+  ): CadResult<ResolvedTopologyReference> {
+    try {
+      if (reference.kernelFingerprint !== this.capabilities.fingerprint) {
+        return signatureFailure(
+          "TOPOLOGY_FINGERPRINT_MISMATCH",
+          "Persistent topology reference and current kernel descriptors are incompatible",
+          {
+            expected: reference.kernelFingerprint,
+            actual: this.capabilities.fingerprint,
+          },
+        );
+      }
+      const universe =
+        reference.topology === "face"
+          ? this.snapshot.faces
+          : this.snapshot.edges;
+      // Candidate evidence is tolerance-independent: matchEvidence applies the
+      // stored reference's tolerance to both base and adjacency comparisons.
+      // Reusing one context therefore avoids rebuilding full snapshot maps and
+      // candidate signatures for every distinct stored tolerance.
+      let context = this.candidateContext;
+      if (context === undefined) {
+        context = descriptorSignatureContext(
+          this.snapshot,
+          this.capabilities,
+          reference.tolerance,
+        );
+        this.candidateContext = context;
+      }
+      const compiledReference = this.compiler.reference(reference);
+      const matches: {
+        readonly descriptor: TopologyDescriptor;
+        readonly evidence: TopologyMatchEvidence;
+      }[] = [];
+      for (const descriptor of universe) {
+        const candidate: PersistentTopologyReference =
+          descriptor.topology === "face"
+            ? referenceForDescriptor(descriptor, context)
+            : referenceForDescriptor(descriptor, context);
+        const evidence = matchEvidence(
+          compiledReference,
+          this.compiler.reference(candidate),
+          this.budget,
+        );
+        if (evidence !== undefined) matches.push({ descriptor, evidence });
+      }
+      if (matches.length === 0) {
+        return signatureFailure(
+          "TOPOLOGY_MATCH_MISSING",
+          `Persistent topology reference matched no current ${reference.topology}`,
+          { topology: reference.topology },
+        );
+      }
+      if (matches.length > 1) {
+        return signatureFailure(
+          "TOPOLOGY_MATCH_AMBIGUOUS",
+          `Persistent topology reference matched ${matches.length} current ${reference.topology}s`,
+          { topology: reference.topology, candidates: matches.length },
+        );
+      }
+      return success(
+        Object.freeze({
+          key: matches[0]!.descriptor.key,
+          evidence: matches[0]!.evidence,
+        }),
+      );
+    } catch (error) {
+      return caughtSignatureFailure(error);
+    }
+  }
+}
+
+/**
+ * Creates one operation-local resolver. Kernel snapshot access is detached and
+ * validated exactly once; all subsequent reference resolutions share matching
+ * work limits and derived candidate evidence.
+ */
+export function createTopologyReferenceResolutionSession(
+  snapshot: KernelTopologySnapshot,
+  options: ResolveTopologyReferenceOptions,
+): CadResult<TopologyReferenceResolutionSession> {
+  try {
+    const normalized = normalizeResolveOptions(options);
+    if (normalized === undefined) {
+      return signatureFailure(
+        "TOPOLOGY_SIGNATURE_INVALID",
+        "Topology resolution options are malformed or unsupported",
+      );
+    }
+    const normalizedSnapshot = normalizeKernelTopologySnapshot(
+      snapshot,
+      normalized.limits,
+    );
+    if (!normalizedSnapshot.ok) return normalizedSnapshot;
+    return success(
+      new TopologyReferenceResolutionSessionImpl(
+        normalizedSnapshot.value,
+        normalized,
+      ),
+    );
+  } catch (error) {
+    return caughtSignatureFailure(error);
+  }
+}
+
 export function captureTopologyReference<K extends TopologyKind>(
   snapshot: KernelTopologySnapshot,
   topology: K,
@@ -1442,84 +1737,20 @@ export function resolveTopologyReference<K extends TopologyKind>(
         "Topology resolution options are malformed or unsupported",
       );
     }
-    const detachedReference = detachPersistentTopologyReference(
+    const normalizedReference = normalizePersistentTopologyReference<K>(
       reference,
-      normalized.limits,
+      { limits: normalized.limits },
     );
-    if (!referenceIsValid(detachedReference)) {
-      return signatureFailure(
-        "TOPOLOGY_SIGNATURE_INVALID",
-        "Persistent topology reference is malformed or unsupported",
-      );
-    }
+    if (!normalizedReference.ok) return normalizedReference;
     const normalizedSnapshot = normalizeKernelTopologySnapshot(
       snapshot,
       normalized.limits,
     );
     if (!normalizedSnapshot.ok) return normalizedSnapshot;
-    const currentSnapshot = normalizedSnapshot.value;
-    if (
-      detachedReference.kernelFingerprint !== normalized.capabilities.fingerprint
-    ) {
-      return signatureFailure(
-        "TOPOLOGY_FINGERPRINT_MISMATCH",
-        "Persistent topology reference and current kernel descriptors are incompatible",
-        {
-          expected: detachedReference.kernelFingerprint,
-          actual: normalized.capabilities.fingerprint,
-        },
-      );
-    }
-    const universe =
-      detachedReference.topology === "face"
-        ? currentSnapshot.faces
-        : currentSnapshot.edges;
-    const budget = new MatchingWorkBudget(normalized.limits);
-    const context = descriptorSignatureContext(
-      currentSnapshot,
-      normalized.capabilities,
-      detachedReference.tolerance,
-    );
-    const compiler = new MatchingSignatureCompiler();
-    const compiledReference = compiler.reference(detachedReference);
-    const matches: {
-      readonly descriptor: TopologyDescriptor;
-      readonly evidence: TopologyMatchEvidence;
-    }[] = [];
-    for (const descriptor of universe) {
-      const candidate = referenceForDescriptor(
-        descriptor as K extends "face"
-          ? KernelFaceDescriptor
-          : KernelEdgeDescriptor,
-        context,
-      );
-      const evidence = matchEvidence(
-        compiledReference,
-        compiler.reference(candidate),
-        budget,
-      );
-      if (evidence !== undefined) matches.push({ descriptor, evidence });
-    }
-    if (matches.length === 0) {
-      return signatureFailure(
-        "TOPOLOGY_MATCH_MISSING",
-        `Persistent topology reference matched no current ${detachedReference.topology}`,
-        { topology: detachedReference.topology },
-      );
-    }
-    if (matches.length > 1) {
-      return signatureFailure(
-        "TOPOLOGY_MATCH_AMBIGUOUS",
-        `Persistent topology reference matched ${matches.length} current ${detachedReference.topology}s`,
-        { topology: detachedReference.topology, candidates: matches.length },
-      );
-    }
-    return success(
-      Object.freeze({
-        key: matches[0]!.descriptor.key,
-        evidence: matches[0]!.evidence,
-      }),
-    );
+    return new TopologyReferenceResolutionSessionImpl(
+      normalizedSnapshot.value,
+      normalized,
+    ).resolveNormalized(normalizedReference.value);
   } catch (error) {
     return caughtSignatureFailure(error);
   }

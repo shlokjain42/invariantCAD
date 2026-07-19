@@ -1547,7 +1547,7 @@ class OcctKernel implements GeometryKernel {
   ): KernelShape {
     checkContext(context);
     if (typeof options !== "object" || options === null || options.ruled !== true) {
-      throw new TypeError("Document v1 lofts must use ruled interpolation");
+      throw new TypeError("Document lofts must use ruled interpolation");
     }
     const tolerance = context?.tolerance ?? this.modelingTolerance;
     const issue = validateRuledSolidLoftProfiles(profiles, tolerance);
@@ -1723,7 +1723,7 @@ class OcctKernel implements GeometryKernel {
       options.frame !== "corrected-frenet"
     ) {
       throw new TypeError(
-        "Document v1 sweeps require corrected-Frenet transport and right-corner transitions",
+        "Document sweeps require corrected-Frenet transport and right-corner transitions",
       );
     }
     const requestedTolerance = context?.tolerance ?? this.modelingTolerance;

@@ -1,7 +1,11 @@
 import { entityId } from "./core/ids.js";
 import { canonicalStringify, deepFreeze } from "./core/json.js";
 import { deg, mm, type AngleExpression, type LengthExpression, type ScalarVec3Expression } from "./expressions.js";
-import type { ModelRef, ProfileRef } from "./design.js";
+import type {
+  ModelRef,
+  ProfileRef,
+  TopologyReferenceRef,
+} from "./design.js";
 import type {
   TopologyCardinalityIR,
   TopologyOriginRelation,
@@ -108,12 +112,15 @@ export class TopologySelection<K extends TopologyKind = TopologyKind> {
   readonly ir: TopologySelectionIR<K>;
   /** @internal Model references retained only for design-boundary checks. */
   readonly references: readonly AnyModelRef[];
+  /** @internal Persistent handles retained for ownership and exact-target checks. */
+  readonly persistentReferences: readonly TopologyReferenceRef[];
 
   constructor(
     topology: K,
     query: TopologyQueryIR,
     selectionCardinality: TopologyCardinalityIR,
     references: readonly AnyModelRef[] = [],
+    persistentReferences: readonly TopologyReferenceRef[] = [],
   ) {
     this.topology = topology;
     this.ir = deepFreeze({
@@ -122,6 +129,7 @@ export class TopologySelection<K extends TopologyKind = TopologyKind> {
       cardinality: selectionCardinality,
     }) as TopologySelectionIR<K>;
     this.references = Object.freeze([...references]);
+    this.persistentReferences = Object.freeze([...persistentReferences]);
     Object.freeze(this);
   }
 
@@ -135,15 +143,19 @@ export class TopologyQuery<K extends TopologyKind = TopologyKind> {
   readonly ir: TopologyQueryIR;
   /** @internal Model references retained only for design-boundary checks. */
   readonly references: readonly AnyModelRef[];
+  /** @internal Persistent handles retained for ownership and exact-target checks. */
+  readonly persistentReferences: readonly TopologyReferenceRef[];
 
   constructor(
     topology: K,
     ir: TopologyQueryIR,
     references: readonly AnyModelRef[] = [],
+    persistentReferences: readonly TopologyReferenceRef[] = [],
   ) {
     this.topology = topology;
     this.ir = deepFreeze(ir);
     this.references = Object.freeze([...references]);
+    this.persistentReferences = Object.freeze([...persistentReferences]);
     Object.freeze(this);
   }
 
@@ -156,6 +168,10 @@ export class TopologyQuery<K extends TopologyKind = TopologyKind> {
         ...queries.map((query) => query.ir),
       ]),
       [...this.references, ...queries.flatMap((query) => query.references)],
+      [
+        ...this.persistentReferences,
+        ...queries.flatMap((query) => query.persistentReferences),
+      ],
     );
   }
 
@@ -168,6 +184,10 @@ export class TopologyQuery<K extends TopologyKind = TopologyKind> {
         ...queries.map((query) => query.ir),
       ]),
       [...this.references, ...queries.flatMap((query) => query.references)],
+      [
+        ...this.persistentReferences,
+        ...queries.flatMap((query) => query.persistentReferences),
+      ],
     );
   }
 
@@ -176,6 +196,7 @@ export class TopologyQuery<K extends TopologyKind = TopologyKind> {
       this.topology,
       { op: "not", query: this.ir },
       this.references,
+      this.persistentReferences,
     );
   }
 
@@ -185,6 +206,7 @@ export class TopologyQuery<K extends TopologyKind = TopologyKind> {
       this.ir,
       cardinality(1, 1),
       this.references,
+      this.persistentReferences,
     );
   }
 
@@ -194,6 +216,7 @@ export class TopologyQuery<K extends TopologyKind = TopologyKind> {
       this.ir,
       cardinality(count, count),
       this.references,
+      this.persistentReferences,
     );
   }
 
@@ -203,6 +226,7 @@ export class TopologyQuery<K extends TopologyKind = TopologyKind> {
       this.ir,
       cardinality(count),
       this.references,
+      this.persistentReferences,
     );
   }
 
@@ -212,6 +236,7 @@ export class TopologyQuery<K extends TopologyKind = TopologyKind> {
       this.ir,
       cardinality(min, max),
       this.references,
+      this.persistentReferences,
     );
   }
 }
@@ -240,6 +265,27 @@ class TopologyQueries<K extends TopologyKind> {
 
   all(): TopologyQuery<K> {
     return new TopologyQuery(this.kind, { op: "all" });
+  }
+
+  persistentReference(
+    reference: TopologyReferenceRef<K>,
+  ): TopologyQuery<K> {
+    if (
+      typeof reference !== "object" ||
+      reference === null ||
+      reference.topology !== this.kind
+    ) {
+      const article = this.kind === "edge" ? "an" : "a";
+      throw new TypeError(
+        `A persistent ${this.kind} topology query requires ${article} ${this.kind} topology reference`,
+      );
+    }
+    return new TopologyQuery(
+      this.kind,
+      { op: "persistentReference", reference: reference.id },
+      [],
+      [reference],
+    );
   }
 
   private origin(
@@ -312,6 +358,7 @@ class EdgeTopologyQueries extends TopologyQueries<"edge"> {
       "edge",
       { op: "adjacentTo", selection: selection.ir },
       selection.references,
+      selection.persistentReferences,
     );
   }
 }
@@ -353,6 +400,7 @@ class FaceTopologyQueries extends TopologyQueries<"face"> {
       "face",
       { op: "adjacentTo", selection: selection.ir },
       selection.references,
+      selection.persistentReferences,
     );
   }
 }

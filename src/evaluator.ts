@@ -99,12 +99,18 @@ import { validateDocument } from "./validation.js";
 import {
   resolveTopologySelection,
   topologySelectionRequirements,
+  type TopologyResolutionContext,
 } from "./topology-resolution.js";
 import type {
   KernelTopologyKey,
+  KernelTopologySignatureCapabilities,
   KernelTopologySnapshot,
   TopologyKind,
 } from "./protocol/topology.js";
+import {
+  TOPOLOGY_SIGNATURE_PROTOCOL_VERSION,
+  type TopologySignatureLimits,
+} from "./topology-signatures.js";
 import {
   DRAFT_MIN_ANGLE_RADIANS,
   type ResolvedDraftOptions,
@@ -122,12 +128,57 @@ export interface EvaluationOptions {
   readonly outputs?: readonly string[];
   readonly signal?: AbortSignal;
   readonly allowEmpty?: boolean;
+  /** Operational work limits for resolving stored topology evidence. */
+  readonly topologySignatureLimits?: Partial<TopologySignatureLimits>;
 }
 
 export interface CreateEvaluatorOptions {
   readonly kernel?: GeometryKernel;
   readonly manifold?: ManifoldKernelOptions;
   readonly sketchSolver?: SketchSolverBackend;
+}
+
+type SignatureCapabilityInspection =
+  | { readonly status: "missing" }
+  | { readonly status: "invalid" }
+  | {
+      readonly status: "valid";
+      readonly value: KernelTopologySignatureCapabilities;
+    };
+
+function inspectTopologySignatureCapabilities(
+  value: unknown,
+): SignatureCapabilityInspection {
+  if (value === undefined) return { status: "missing" };
+  try {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      return { status: "invalid" };
+    }
+    const record = value as Readonly<Record<string, unknown>>;
+    const keys = Object.keys(record).sort();
+    if (
+      keys.length !== 2 ||
+      keys[0] !== "fingerprint" ||
+      keys[1] !== "protocolVersion"
+    ) {
+      return { status: "invalid" };
+    }
+    const protocolVersion = record.protocolVersion;
+    const fingerprint = record.fingerprint;
+    if (
+      protocolVersion !== TOPOLOGY_SIGNATURE_PROTOCOL_VERSION ||
+      typeof fingerprint !== "string" ||
+      fingerprint.length === 0
+    ) {
+      return { status: "invalid" };
+    }
+    return {
+      status: "valid",
+      value: { protocolVersion, fingerprint },
+    };
+  } catch {
+    return { status: "invalid" };
+  }
 }
 
 export type MassDensitySource = "part" | "material";
@@ -1750,6 +1801,7 @@ export class Evaluator {
       id: NodeId,
       field: string,
       selection: TopologySelectionIR<K>,
+      inputNode: NodeId,
       resolveInput: () => KernelShape,
     ): {
       readonly input: KernelShape;
@@ -1815,7 +1867,150 @@ export class Evaluator {
           ),
         );
       }
+      let persistent: TopologyResolutionContext["persistent"];
+      if (requirements.persistentReferences.length > 0) {
+        const signatureCapabilities = inspectTopologySignatureCapabilities(
+          topologyCapabilities.signatures,
+        );
+        if (signatureCapabilities.status === "missing") {
+          throw new EvaluationFailure(
+            diagnostic(
+              "KERNEL_CAPABILITY_MISSING",
+              `Kernel '${this.kernel.id}' does not declare persistent topology signature compatibility`,
+              {
+                severity: "error",
+                node: id,
+                path,
+                hints: [
+                  "Use a kernel that declares an exact topology signature protocol and fingerprint",
+                ],
+                details: {
+                  kernel: this.kernel.id,
+                  kind: "topology",
+                  capability: "persistent-topology-signatures",
+                },
+              },
+            ),
+          );
+        }
+        if (signatureCapabilities.status === "invalid") {
+          throw new EvaluationFailure(
+            diagnostic(
+              "KERNEL_ERROR",
+              `Kernel '${this.kernel.id}' declares malformed persistent topology signature capabilities`,
+              {
+                severity: "error",
+                node: id,
+                path,
+                details: {
+                  kernel: this.kernel.id,
+                  kind: "topology",
+                  protocolViolation: true,
+                  expectedProtocolVersion:
+                    TOPOLOGY_SIGNATURE_PROTOCOL_VERSION,
+                },
+              },
+            ),
+          );
+        }
+        const registry =
+          document.version === 2 ? document.topologyReferences : undefined;
+        if (registry === undefined) {
+          throw new EvaluationFailure(
+            diagnostic(
+              "REFERENCE_MISSING",
+              "Persistent topology selector has no document-owned reference registry",
+              { severity: "error", node: id, path },
+            ),
+          );
+        }
+        for (const referenceId of requirements.persistentReferences) {
+          const entry = Object.hasOwn(registry, referenceId)
+            ? registry[referenceId]
+            : undefined;
+          if (entry === undefined) {
+            throw new EvaluationFailure(
+              diagnostic(
+                "REFERENCE_MISSING",
+                `Persistent topology reference '${referenceId}' is missing`,
+                {
+                  severity: "error",
+                  node: id,
+                  path,
+                  details: { reference: referenceId },
+                },
+              ),
+            );
+          }
+          if (entry.target.node !== inputNode) {
+            throw new EvaluationFailure(
+              diagnostic(
+                "TOPOLOGY_SELECTOR_INVALID",
+                `Persistent topology reference '${referenceId}' targets '${entry.target.node}', not this feature's direct input '${inputNode}'`,
+                {
+                  severity: "error",
+                  node: id,
+                  path,
+                  details: {
+                    reference: referenceId,
+                    expectedTarget: inputNode,
+                    actualTarget: entry.target.node,
+                  },
+                },
+              ),
+            );
+          }
+          const compatible = entry.variants.some(
+            (variant) =>
+              variant.protocolVersion ===
+                signatureCapabilities.value.protocolVersion &&
+              variant.kernelFingerprint ===
+                signatureCapabilities.value.fingerprint,
+          );
+          if (!compatible) {
+            throw new EvaluationFailure(
+              diagnostic(
+                "TOPOLOGY_FINGERPRINT_MISMATCH",
+                `Persistent topology reference '${referenceId}' has no variant for kernel '${this.kernel.id}'`,
+                {
+                  severity: "error",
+                  node: id,
+                  path,
+                  details: {
+                    reference: referenceId,
+                    kernel: this.kernel.id,
+                    protocolVersion:
+                      signatureCapabilities.value.protocolVersion,
+                    kernelFingerprint:
+                      signatureCapabilities.value.fingerprint,
+                    available: entry.variants
+                      .map((variant) => ({
+                        protocolVersion: variant.protocolVersion,
+                        kernelFingerprint: variant.kernelFingerprint,
+                      }))
+                      .sort((first, second) =>
+                        first.kernelFingerprint.localeCompare(
+                          second.kernelFingerprint,
+                        ),
+                      ),
+                  },
+                },
+              ),
+            );
+          }
+        }
+        persistent = {
+          registry,
+          input: inputNode,
+          capabilities: signatureCapabilities.value,
+          ...(options.topologySignatureLimits === undefined
+            ? {}
+            : { limits: options.topologySignatureLimits }),
+        };
+      }
+      ensureLive();
       const input = resolveInput();
+      ensureLive();
       const selected = resolveTopologySelection(
         selection,
         this.kernel.topology(input),
@@ -1823,6 +2018,7 @@ export class Evaluator {
           evaluate: expression,
           node: id,
           path,
+          ...(persistent === undefined ? {} : { persistent }),
         },
       );
       if (!selected.ok) {
@@ -1834,7 +2030,9 @@ export class Evaluator {
       ensureLive();
       const cached = cache.get(id);
       if (cached !== undefined) return cached;
-      const node = document.nodes[id];
+      const node = Object.hasOwn(document.nodes, id)
+        ? document.nodes[id]
+        : undefined;
       if (node === undefined) {
         throw new EvaluationFailure(
           diagnostic("REFERENCE_MISSING", `Missing node '${id}'`, {
@@ -2105,7 +2303,12 @@ export class Evaluator {
             });
             const tolerance = node.profiles.reduce(
               (maximum, reference) => {
-                const profileNode = document.nodes[reference.node];
+                const profileNode = Object.hasOwn(
+                  document.nodes,
+                  reference.node,
+                )
+                  ? document.nodes[reference.node]
+                  : undefined;
                 return Math.max(
                   maximum,
                   profileNode?.kind === "sketch" ? profileNode.tolerance : 1e-7,
@@ -2136,7 +2339,9 @@ export class Evaluator {
             break;
           }
           case "sweep": {
-            const pathNode = document.nodes[node.path.node];
+            const pathNode = Object.hasOwn(document.nodes, node.path.node)
+              ? document.nodes[node.path.node]
+              : undefined;
             const capability =
               pathNode?.kind === "circularArcPath"
                 ? "circularArcSweep"
@@ -2152,7 +2357,12 @@ export class Evaluator {
             if (pathValue.kind !== "path") {
               throw new Error("Sweep path mismatch");
             }
-            const profileNode = document.nodes[node.profile.node];
+            const profileNode = Object.hasOwn(
+              document.nodes,
+              node.profile.node,
+            )
+              ? document.nodes[node.profile.node]
+              : undefined;
             const tolerance = Math.max(
               profileNode?.kind === "sketch" ? profileNode.tolerance : 1e-7,
               pathValue.tolerance,
@@ -2258,6 +2468,7 @@ export class Evaluator {
               id,
               "edges",
               node.edges,
+              node.input.node,
               () => solidRef(node.input),
             );
             result = ownShape(
@@ -2278,6 +2489,7 @@ export class Evaluator {
               id,
               "edges",
               node.edges,
+              node.input.node,
               () => solidRef(node.input),
             );
             result = ownShape(
@@ -2328,6 +2540,7 @@ export class Evaluator {
               id,
               "openings",
               node.openings,
+              node.input.node,
               () => solidRef(node.input),
             );
             result = ownShape(
@@ -2447,6 +2660,7 @@ export class Evaluator {
               id,
               "faces",
               node.faces,
+              node.input.node,
               () => solidRef(node.input),
             );
             result = ownShape(

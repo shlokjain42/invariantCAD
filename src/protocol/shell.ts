@@ -11,7 +11,7 @@ export interface ResolvedShellOptions {
 }
 
 /**
- * Document v1 shells use round/arc joins at offset-face transitions.
+ * Current document shells use round/arc joins at offset-face transitions.
  * Intersection/miter and other join modes require a future serialized contract.
  */
 export const SHELL_JOIN_SEMANTICS = "round" as const;

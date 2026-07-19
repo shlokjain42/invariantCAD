@@ -4,7 +4,7 @@ Comprehensive, type-safe CAD-as-code for TypeScript.
 
 InvariantCAD represents a design as immutable, versioned JSON and evaluates it through replaceable geometry and sketch-solver backends. The public API never exposes WASM pointers or kernel-specific objects.
 
-> **Project status:** `0.1.0` is the released-foundation target. Current main adds named definition-scoped configurations and variant-aware BOMs, an exact OpenCascade B-Rep backend, analytic sketch-profile transfer, STEP/BREP exchange, bounded ruled solid lofts, explicit 3D polyline, circular-arc, and ordered line/arc composite paths with bounded exact solid sweeps, closed semantic topology roles, sketch-boundary provenance, exact selector-driven fillets and equal-distance chamfers, exact face-selected inward/outward shells, exact whole-solid inward/outward offsets, atomic semantic-face draft, and owned exact multi-input Boolean, fillet/chamfer, and shell/offset evolution when the matched InvariantCAD-owned OCCT facade is loaded. Complete topology history outside those owned feature slices is still under active development; see the [support matrix](#support-matrix) and [roadmap](docs/roadmap.md).
+> **Project status:** `0.1.0` is the released-foundation target. Current main adds named definition-scoped configurations and variant-aware BOMs, an exact OpenCascade B-Rep backend, analytic sketch-profile transfer, STEP/BREP exchange, bounded ruled solid lofts, explicit 3D polyline, circular-arc, and ordered line/arc composite paths with bounded exact solid sweeps, closed semantic topology roles, sketch-boundary provenance, document-owned persistent face/edge selectors, exact selector-driven fillets and equal-distance chamfers, exact face-selected inward/outward shells, exact whole-solid inward/outward offsets, atomic semantic-face draft, and owned exact multi-input Boolean, fillet/chamfer, and shell/offset evolution when the matched InvariantCAD-owned OCCT facade is loaded. Complete topology history outside those owned feature slices is still under active development; see the [support matrix](#support-matrix) and [roadmap](docs/roadmap.md).
 
 ## Install
 
@@ -78,7 +78,7 @@ if (!result.ok) {
 evaluator.dispose();
 ```
 
-Every feature, entity, constraint, parameter, instance, and output has an explicit stable ID. Those IDs are the basis for reproducible diffs, caching, diagnostics, and future persistent-topology naming.
+Every feature, entity, constraint, parameter, instance, output, and stored topology reference has an explicit stable ID. Those IDs are the basis for reproducible diffs, diagnostics, and durable design intent.
 
 ### Exact B-Rep evaluation
 
@@ -157,7 +157,7 @@ const route = cad.compositePath("route", {
 const routed = cad.sweep("routed", section, route);
 ```
 
-Document-v1 sweeps require an open, simple path; a closed, hole-free profile seated at its start; an initial tangent parallel to the profile-plane normal in either direction; corrected-Frenet transport; and conservative profile clearance. Polyline paths reject repeated or redundant collinear vertices and use right-corner intersections. Circular-arc paths are one exact three-point arc below a full turn and require their circumradius to exceed the complete profile envelope. Composite paths contain at least two structurally connected segments and at least one arc. Junctions touching an arc must be forward G1 tangent, while line-line junctions retain right-corner semantics. Minor, major, and certified near-full composite arcs are supported without an artificial endpoint-chord rule. Adjacent segments exclude only their curvature-bounded intrinsic neighborhood, then recursively certify every remote line/arc parameter domain against path tolerance and the full profile diameter; redundant adjacent segments, actual remote returns, and numerical ambiguity fail explicitly. The OCCT adapter realizes the one-edge circular case as an exact revolution about the resolved circle axis. Ordered composites use one exact PipeShell wire. Every composite arc must exceed the profile-envelope radius and pass the `3e-8` three-point conditioning floor. Every PipeShell profile/path edge and all three authored point-pair separations of a composite arc must exceed the native `1e-4 mm` transfer floor.
+The current v1/v2 document grammar requires an open, simple sweep path; a closed, hole-free profile seated at its start; an initial tangent parallel to the profile-plane normal in either direction; corrected-Frenet transport; and conservative profile clearance. Polyline paths reject repeated or redundant collinear vertices and use right-corner intersections. Circular-arc paths are one exact three-point arc below a full turn and require their circumradius to exceed the complete profile envelope. Composite paths contain at least two structurally connected segments and at least one arc. Junctions touching an arc must be forward G1 tangent, while line-line junctions retain right-corner semantics. Minor, major, and certified near-full composite arcs are supported without an artificial endpoint-chord rule. Adjacent segments exclude only their curvature-bounded intrinsic neighborhood, then recursively certify every remote line/arc parameter domain against path tolerance and the full profile diameter; redundant adjacent segments, actual remote returns, and numerical ambiguity fail explicitly. The OCCT adapter realizes the one-edge circular case as an exact revolution about the resolved circle axis. Ordered composites use one exact PipeShell wire. Every composite arc must exceed the profile-envelope radius and pass the `3e-8` three-point conditioning floor. Every PipeShell profile/path edge and all three authored point-pair separations of a composite arc must exceed the native `1e-4 mm` transfer floor.
 
 Stock PipeShell does not expose its angular tolerance, so stock OCCT admits a major-arc composite only when it contains one circular-arc segment and the seated profile area centroid is centered within the selected tolerance. InvariantCAD derives that requirement before backend invocation with exact, kernel-neutral line/arc/circle area moments, compensated error bounds, and a strict major threshold of `π + 1e-12`; an admitted authored profile-origin mismatch is not mistaken for section eccentricity. Those analytic local moments—not OCCT's world-coordinate integration—also define circular and composite sweep volume. OCCT independently remeasures the constructed profile face and must agree within bounds derived from analytic roundoff, profile perimeter/radius, modeling tolerance, and per-axis coordinate ULPs; disagreement fails before path or result allocation with structured diagnostics. Circular transfer also derives a native-face volume around the actual rounded revolution axis before constructing the solid and requires it to remain inside the same certified representability envelope. Relative profile-centroid and arc-center offsets avoid add-large/subtract-large cancellation at representable world translations. Owned facade ABI 0.3 introduced a corrected-Frenet/right-corner PipeShell with explicit linear, boundary, and `1e-9` angular tolerances, bounded OCCT surface error, and transactional transfer; the current ABI 0.6 retains that contract. It certifies major multi-arc and eccentric-profile composites and advertises those guarantees as versioned refinements. Every composite result is also checked against an exact transported-centroid volume oracle covering lines, arcs, and supported RightCorner miters; ill-conditioned cancellation fails closed. Guided, variable-section, full-circle, Bézier, B-spline, and helix paths remain explicit future contracts.
 
@@ -260,11 +260,11 @@ For both fillets and chamfers, `edges` selects contour seeds rather than hard st
 
 Shell openings deliberately use different semantics: `openings` is the exact set of input faces passed to the shell maker's removal list. Selected faces are not tangent-contour seeds, and the operation never propagates the selection to an adjacent tangent or coplanar face. Selector cardinality therefore describes the actual opening-face set passed to the kernel. Selection does not force a `DELETED` topology record: the pinned maker may report a selected source face as `MODIFIED` into the planar opening rim.
 
-Shell `thickness` is always a positive wall-thickness magnitude. `direction: "inward"` keeps the unselected input boundary as the exterior skin and offsets the second wall into the solid; `direction: "outward"` keeps it as the interior skin and builds the second wall outside it. Document v1 fixes offset-face transitions to round/arc joins; intersection/miter joins are not supported yet. The builder defaults direction to `"inward"` and reconstruction tolerance to `mm(1e-6)`, then materializes both values in the immutable document so serialization and semantic hashes include them. Thickness and tolerance must be positive, and tolerance must be less than thickness.
+Shell `thickness` is always a positive wall-thickness magnitude. `direction: "inward"` keeps the unselected input boundary as the exterior skin and offsets the second wall into the solid; `direction: "outward"` keeps it as the interior skin and builds the second wall outside it. The current v1/v2 document grammar fixes offset-face transitions to round/arc joins; intersection/miter joins are not supported yet. The builder defaults direction to `"inward"` and reconstruction tolerance to `mm(1e-6)`, then materializes both values in the immutable document so serialization and semantic hashes include them. Thickness and tolerance must be positive, and tolerance must be less than thickness.
 
 The current shell mode accepts exactly one solid with no loose faces, edges, or vertices, at least one selected opening face, and at least one retained face. It produces one valid positive-volume solid or a structured kernel diagnostic; it does not apply independently to disconnected bodies. Closed hollowing without an opening and variable-thickness shells are not supported yet.
 
-Whole-solid `offset` uses a positive `distance` magnitude plus an explicit `direction`. `"outward"` adds material outside the oriented boundary; `"inward"` removes material inside it. The builder defaults to `"outward"` and `mm(1e-6)` tolerance and materializes both in the document. Document v1 fixes round/arc joins: an outward box offset therefore contains cylindrical edge transitions and spherical corner transitions rather than an intersection/mitered box. Distance and tolerance must be positive, and tolerance must be less than distance.
+Whole-solid `offset` uses a positive `distance` magnitude plus an explicit `direction`. `"outward"` adds material outside the oriented boundary; `"inward"` removes material inside it. The builder defaults to `"outward"` and `mm(1e-6)` tolerance and materializes both in the document. The current v1/v2 document grammar fixes round/arc joins: an outward box offset therefore contains cylindrical edge transitions and spherical corner transitions rather than an intersection/mitered box. Distance and tolerance must be positive, and tolerance must be less than distance.
 
 Offset accepts exactly one valid positive-volume solid with no loose lower-dimensional topology and must return the same. Invalid, collapsed, disconnected, and direction-inconsistent results fail explicitly. It is a 3D body operation; 2D wire/profile offsets will use a separate future contract.
 
@@ -302,7 +302,7 @@ The serialized role vocabulary is closed and exported through `TOPOLOGY_ROLES` a
 
 Selectors also support curve/surface kind, edge direction, face normal, radius, adjacency, `and`/`or`/`not`, and explicit cardinality. Zero matches produce `TOPOLOGY_SELECTION_MISSING`; excess matches produce `TOPOLOGY_SELECTION_AMBIGUOUS`. The exact backend currently provides complete broad feature provenance for primitives, extrusions, revolutions, lofts, sweeps, and topology-preserving transforms, plus the semantic roles and sketch sources above. Loft and sweep topology have broad `createdBy(feature)` lineage but deliberately have no cap/side roles or sketch-source mapping. The matched owned ABI 0.6 facade provides exact indexed evolution for draft, Boolean, fillet, chamfer, shell, and offset. Boolean history remains partial on stock/default OCCT and older owned ABIs; fillet/chamfer history remains partial on stock/default OCCT and owned ABIs 0.2–0.4; shell/offset history remains partial on stock/default OCCT and owned ABIs 0.2–0.5. Origin queries against any partial-history result fail with `TOPOLOGY_HISTORY_UNAVAILABLE` rather than choosing unstable topology, while geometry-only selectors can still inspect it. Manifold exposes none of these topology snapshots or selectors; Manifold and stock/default OCCT both report an explicit capability error for draft.
 
-### Detached topology references across evaluations
+### Persistent topology references across evaluations
 
 Topology-signature protocol v1 provides a bounded first persistent-topology slice for faces and edges. A topology-capable evaluated solid exposes a validated, detached, deeply frozen copy of its current snapshot through `EvaluatedSolid.topology()`, returning a `CadResult<KernelTopologySnapshot>` rather than exposing the underlying kernel shape or a mutable kernel cache. A kernel opts into persistent-reference compatibility with the optional `KernelTopologyCapabilities.signatures` declaration:
 
@@ -315,7 +315,9 @@ Topology-signature protocol v1 provides a bounded first persistent-topology slic
 
 The fingerprint is a semantic compatibility declaration for that kernel's topology descriptors, including any runtime or modeling-tolerance choices the kernel considers material. It is not a hash or cryptographic attestation of the native runtime bytes. Capture and resolution validate protocol v1 and require the fingerprint string to match exactly before considering a candidate. Applications should pass the capability advertised by the kernel that produced each snapshot; a missing declaration means that kernel has not promised compatibility with this protocol. Current recognized OCCT fingerprints begin with `invariantcad-topology-descriptor@2`; descriptor v2 includes the revolution role/source semantics above. It deliberately does not match descriptor v1, while the enclosing persistent-reference protocol remains version 1. `createOcctKernel()` advertises the declaration for its known default stock runtime and for a recognized owned facade. Supplying an explicit `wasm` or an unknown custom `moduleFactory` suppresses it unless facade probing recognizes the matched owned runtime.
 
-`captureTopologyReference(...)` receives one snapshot, a face or edge key from that snapshot, the advertised signature capability, and explicit linear, angular, and relative match tolerances. Linear tolerance is an absolute error threshold for world-space centers and bounds: it does not grow merely because two compared coordinates are numerically far from the origin, though an actual translation still changes those coordinates and can prevent a match. Relative tolerance applies to measures and radii; face area also receives a linear-tolerance term scaled by the face's characteristic length. It returns a deeply frozen `PersistentTopologyReference` containing canonical semantic lineage, structured geometry, and structured one-hop adjacency evidence. The returned reference is detached: it contains no kernel key, native index, array ordinal, or enumeration-derived tiebreaker, so it can be stored by application code after the evaluation result is disposed. Call `EvaluatedSolid.topology()` before disposing its evaluation; calling it afterward throws through the normal evaluated-shape lifetime guard. A snapshot saved before disposal remains readable, but its keys are still scoped to that evaluation. The key-free captured reference is the durable evidence. It is not part of `DesignDocument` v1 and does not change document serialization, hashing, or schema.
+`captureTopologyReference(...)` receives one snapshot, a face or edge key from that snapshot, the advertised signature capability, and explicit linear, angular, and relative match tolerances. Linear tolerance is an absolute error threshold for world-space centers and bounds: it does not grow merely because two compared coordinates are numerically far from the origin, though an actual translation still changes those coordinates and can prevent a match. Relative tolerance applies to measures and radii; face area also receives a linear-tolerance term scaled by the face's characteristic length. It returns a deeply frozen `PersistentTopologyReference` containing canonical semantic lineage, structured geometry, and structured one-hop adjacency evidence. The returned reference is detached: it contains no kernel key, native index, array ordinal, or enumeration-derived tiebreaker, so it can be stored by application code after the evaluation result is disposed. Call `EvaluatedSolid.topology()` before disposing its evaluation; calling it afterward throws through the normal evaluated-shape lifetime guard. A snapshot saved before disposal remains readable, but its keys are still scoped to that evaluation. The key-free captured reference is the durable evidence.
+
+Legacy `DesignDocumentV1` remains parseable, cloneable, and hash-stable, but cannot contain persistent selectors. `DesignDocumentV2` adds an optional document-owned `topologyReferences` registry, and the current builder emits v2. Registry entries bind one topology kind and one exact solid-node target to one or more protocol/fingerprint variants. Registry data is semantic: normalized evidence and canonical variant order participate in serialization and hashing.
 
 Capture and resolution also accept `limits?: Partial<TopologySignatureLimits>`. Omitted fields come from the frozen exported `DEFAULT_TOPOLOGY_SIGNATURE_LIMITS` object:
 
@@ -354,7 +356,22 @@ const reference = captureTopologyReference(
 );
 if (!reference.ok) throw new Error(reference.diagnostics[0]?.message);
 
-// In a later evaluation using a compatible descriptor implementation:
+// Re-author the stable target node and store the captured design intent.
+const nextCad = design("persistent-shell");
+const nextBox = nextCad.box("box", {
+  size: vec3(mm(12), mm(20), mm(30)),
+});
+const openingFace = nextCad.topologyReference("opening-face", nextBox, {
+  topology: "face",
+  variants: [reference.value],
+});
+const hollow = nextCad.shell("hollow", nextBox, {
+  openings: topology.faces.persistentReference(openingFace).select(),
+  thickness: mm(1),
+});
+nextCad.output("hollow", hollow);
+
+// Or resolve the detached evidence directly against a later snapshot:
 const nextTopology = nextOutput.topology();
 // If nextOutput came from another kernel instance, read that instance instead.
 const nextSignatures = kernel.capabilities.topology?.signatures;
@@ -368,11 +385,15 @@ const resolved = resolveTopologyReference(reference.value, nextTopology.value, {
 });
 ```
 
+`persistentReference(...)` composes with `and`, `or`, `not`, and `adjacentTo` like every other topology atom. A stored reference is bound to the consuming feature's direct solid input; an ancestor, descendant, unrelated node, or reference from another builder is rejected. Fillet, chamfer, shell, and draft consume these selectors today. Before evaluating the input solid, the evaluator requires face and edge topology, geometry, adjacency, and an exact signature protocol/fingerprint declaration, then verifies that every referenced entry has exactly one compatible variant. Missing capability, malformed capability metadata, and an unavailable fingerprint fail without invoking input geometry, topology extraction, or the feature.
+
+All persistent atoms in one feature resolution share one normalized snapshot, compiled evidence, cumulative candidate/matching budget, and per-reference cache. Pass `topologySignatureLimits` through `EvaluationOptions` to override those operational limits. A failed reference remains fatal inside every logical operator; `or` and `not` never hide an invalid, ambiguous, missing, or incompatible reference.
+
 With complete history on both snapshots, a unique stable role or sketch-source anchor resolves as `evidence: "semantic-lineage"`; that design evidence is authoritative rather than being overridden by a coincidental geometric match. When no such anchor is available, or either snapshot declares partial history, resolution falls back to toleranced `"geometry-adjacency"` evidence and does not treat partial lineage as authoritative. The fallback compares the captured face or edge geometry together with the unordered one-hop signatures of its incident edges or faces. Adjacency matching is iterative and non-recursive: neighbor evidence never contains another adjacency layer, and the matcher uses bounded one-to-one bipartite matching rather than recursively traversing the topology graph.
 
 Capture first proves that the detached evidence uniquely identifies the requested item in its own snapshot. Resolution likewise returns a current evaluation-scoped key only for exactly one compatible candidate. No match fails with `TOPOLOGY_MATCH_MISSING`; multiple matches fail with `TOPOLOGY_MATCH_AMBIGUOUS`; malformed references, options, tolerances, limits, and signature capabilities fail with `TOPOLOGY_SIGNATURE_INVALID`; malformed kernel snapshots fail as `KERNEL_ERROR`; and an exact fingerprint mismatch fails with `TOPOLOGY_FINGERPRINT_MISMATCH`. Resource normalization can return `TOPOLOGY_SIGNATURE_LIMIT_EXCEEDED` before deeper validation of an oversized input. Symmetric topology therefore remains explicitly ambiguous—the protocol never invents identity from enumeration order.
 
-This slice supports faces and edges only, not vertices. It is a public capture/resolve API over evaluated snapshots, not a persistent `TopologySelection` node: references cannot yet be embedded in document IR or consumed directly by modeling features. It also does not provide geometric diffing, incremental feature hashes, or cross-run shape caching.
+Persistent document selectors currently support faces and edges only, not vertices. They store evidence, never kernel keys or shapes, and therefore do not provide geometric diffing, incremental feature hashes, or cross-run shape caching.
 
 ## What works today
 
@@ -413,7 +434,7 @@ The solver API is replaceable. The built-in solver is intentionally a v0.1 refer
 - Reliable manifold-mesh CSG through `manifold-3d` WebAssembly
 - Exact B-Rep primitives, analytic profile extrusion/revolution, CSG, and transforms through OpenCascade WebAssembly
 - Exact topology enumeration, geometry/adjacency descriptors, selected-edge fillets/chamfers, face-selected shells, whole-solid offsets, owned-facade atomic draft, and owned-facade exact multi-input Boolean, edge-treatment, and solid-offset evolution through OpenCascade WebAssembly
-- Protocol-v1 detached face/edge reference capture and fail-closed resolution across compatible topology snapshots, using semantic lineage or toleranced geometry with one-hop adjacency
+- Protocol-v1 detached face/edge capture and fail-closed resolution, plus Document-v2 persistent selector atoms with exact target and fingerprint binding
 - Native STEP, text BREP, and binary BREP import/export in the exact-kernel protocol
 - Volume, surface area, axis-aligned bounds, genus, kernel tolerance, center of mass, centroidal inertia, principal axes/moments, arbitrary-axis inertia, radii of gyration, and density-aware physical mass properties
 - Typed-array mesh extraction
@@ -449,10 +470,10 @@ The solver API is replaceable. The built-in solver is intentionally a v0.1 refer
 | Boolean topology evolution | Complete face/edge/vertex graph with explicitly supplied owned OCCT facade ABI 0.4 and later; partial on stock/legacy OCCT; unavailable on Manifold | Persistent cross-evaluation naming |
 | Fillet/chamfer topology evolution | Complete face/edge/vertex graph with explicitly supplied owned OCCT facade ABI 0.5 and later; partial on stock and owned ABI 0.2–0.4 | Persistent cross-evaluation naming |
 | Shell/whole-solid offset topology evolution | Complete face/edge/vertex graph with explicitly supplied owned OCCT facade ABI 0.6 and later; partial on stock and owned ABI 0.2–0.5 | Persistent cross-evaluation naming |
-| Detached face/edge references | Protocol-v1 capture/resolution over compatible evaluated snapshots, with exact fingerprint gating and no invented identity for symmetric topology | Broader naming across feature families and topology kinds |
+| Persistent face/edge references | Protocol-v1 capture/resolution plus Document-v2 registries and selector atoms, with exact target/fingerprint binding and no invented identity for symmetric topology | Broader naming across feature families and topology kinds |
 | Loft | OCCT ordered ruled-solid mode with matched hole-free sections | Smooth, guided, and open modes |
 | Sweep | OCCT open-polyline, one-edge circular-arc, and certified ordered line/arc composite solid modes with corrected-Frenet transport; owned facade ABI 0.6 retains the certified major multi-arc and eccentric-profile refinements introduced by ABI 0.3 | Bézier, B-spline, helix, guided, and variable-section modes |
-| Semantic face/edge selectors | Primitive and extrusion roles plus source-aware revolution face roles; origin/geometry/adjacency queries within an OCCT evaluation | Persistent-reference integration in document selectors |
+| Semantic face/edge selectors | Origin/geometry/adjacency and Document-v2 persistent-reference queries; primitive/extrusion roles plus source-aware revolution face roles | Broader feature-family roles and torture corpus |
 | Drawings, GD&T, PMI | No | Yes |
 | Sheet metal | No | Yes |
 | CAM and CAE adapters | No | Yes |
@@ -652,9 +673,11 @@ const parsed = parseDocument(json);
 const semanticHash = await hashDocument(document);
 ```
 
-Canonical serialization sorts record keys, normalizes negative zero, rejects non-finite numbers, and produces identical bytes regardless of feature construction order. Top-level document metadata is excluded from semantic hashes unless requested; metadata attached to parameters, materials, nodes, and configurations remains part of their authored document semantics.
+Canonical serialization sorts record keys, normalizes negative zero, rejects non-finite numbers, and produces identical bytes regardless of feature construction order. Top-level document metadata is excluded from semantic hashes unless requested; metadata attached to parameters, materials, nodes, and configurations remains part of their authored document semantics. Persistent topology registry data is always semantic.
 
-The document schema version is independent of the npm package version.
+The current authoring API emits `DesignDocumentV2`. `parseDocument`, `parseDocumentValue`, `stringifyDocument`, `cloneDocument`, and `hashDocument` preserve a supplied v1 or v2 document; `migrateDocument` validates and upgrades v1 to v2 and is idempotent for v2. V1 cannot contain a topology-reference registry or persistent selector atom. The document schema version is independent of the npm package version.
+
+Parsing first captures a bounded, detached snapshot before recursive schema validation and freezing, so accessors and proxies cannot change the value after its limits were checked. `ParseDocumentOptions.limits` can override the exported frozen `DEFAULT_DESIGN_DOCUMENT_LIMITS` ceilings for UTF-8 bytes, structural occurrences (including shared aliases), nesting depth, actual selector-query nodes, registry entries, variants, stored adjacency links, and lineage evidence. Sparse arrays, cycles, non-JSON object instances, unknown v2 persistent fields, and malformed or oversized stored evidence fail as structured `IR_INVALID` diagnostics.
 
 ## Diagnostics
 
@@ -773,7 +796,8 @@ or obtain an equivalently reviewed matching pair through an explicit channel.
 TypeScript builders
         │
         ▼
-immutable DesignDocument v1 ──► validation / canonical JSON / hashing
+immutable DesignDocument v2 ──► validation / canonical JSON / hashing
+      (v1 remains readable and migratable)
         │
         ├──► sketch-solver protocol ──► reference solver (v0.1)
         │

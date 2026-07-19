@@ -313,7 +313,7 @@ export function resolvedPolylineSegmentDistance(
   return Number.isFinite(resolvedDistance) ? resolvedDistance : 0;
 }
 
-/** Checks the document-v1 open, explicitly segmented polyline-path contract. */
+/** Checks the current open, explicitly segmented polyline-path contract. */
 export function validateResolvedPolylinePath(
   path: ResolvedPolylinePath,
   tolerance: number,
@@ -333,7 +333,7 @@ export function validateResolvedPolylinePath(
   if (path.closed !== false) {
     return {
       reason: "closed-path",
-      message: "Document v1 polyline paths must be open",
+      message: "Document polyline paths must be open",
     };
   }
   for (const [index, point] of path.points.entries()) {
@@ -369,7 +369,7 @@ export function validateResolvedPolylinePath(
         return {
           reason: closed ? "closed-path" : "duplicate-point",
           message: closed
-            ? "Document v1 polyline paths must be open"
+            ? "Document polyline paths must be open"
             : `Path point ${index} duplicates point ${prior}`,
           pointIndex: index,
         };
@@ -418,7 +418,7 @@ export function validateResolvedPolylinePath(
   return undefined;
 }
 
-/** Checks the document-v1 exact open three-point circular-arc contract. */
+/** Checks the current exact open three-point circular-arc contract. */
 export function validateResolvedCircularArcPath(
   path: ResolvedCircularArcPath,
   tolerance: number,
@@ -432,7 +432,7 @@ export function validateResolvedCircularArcPath(
   if (path.closed !== false) {
     return {
       reason: "closed-path",
-      message: "Document v1 circular-arc paths must be open",
+      message: "Document circular-arc paths must be open",
     };
   }
   const points = [path.start, path.through, path.end] as const;
@@ -965,7 +965,7 @@ export function validateResolvedCompositePath(
   if (path.closed !== false) {
     return {
       reason: "closed-path",
-      message: "Document v1 composite paths must be open",
+      message: "Document composite paths must be open",
     };
   }
   if (!path.segments.some((segment) => segment.kind === "circularArc")) {
@@ -1031,7 +1031,7 @@ export function validateResolvedCompositePath(
   if (distance(path.start, segments.at(-1)!.end) <= tolerance) {
     return {
       reason: "closed-path",
-      message: "Document v1 composite paths must have distinct open endpoints",
+      message: "Document composite paths must have distinct open endpoints",
       segmentIndex: segments.length - 1,
       pointRole: "end",
     };
@@ -1136,7 +1136,7 @@ export function validateResolvedCompositePath(
   return undefined;
 }
 
-/** Checks the concrete contract for any document-v1 path representation. */
+/** Checks the concrete contract for any current path representation. */
 export function validateResolvedPath(
   path: ResolvedPath,
   tolerance: number,

@@ -19,6 +19,7 @@ export {
   PartRef,
   AssemblyRef,
   MaterialRef,
+  TopologyReferenceRef,
   AssemblyBuilder,
   ConfigurationBuilder,
   design,
@@ -31,6 +32,7 @@ export {
   type ConfigurationOptions,
   type ParameterOptions,
   type Plane,
+  type TopologyReferenceOptions,
 } from "./design.js";
 export {
   Expression,
@@ -99,7 +101,11 @@ export {
 } from "./sketch.js";
 export {
   DOCUMENT_SCHEMA,
+  DOCUMENT_SCHEMA_V1,
+  DOCUMENT_SCHEMA_V2,
   DOCUMENT_VERSION,
+  DOCUMENT_VERSION_V1,
+  DOCUMENT_VERSION_V2,
   nodeDependencies,
   outputKindForNode,
   type AssemblyInstanceIR,
@@ -107,17 +113,24 @@ export {
   type BooleanNodeIR,
   type BoxNodeIR,
   type ChamferNodeIR,
+  type ChamferNodeIRV1,
   type CircleEntityIR,
   type CylinderNodeIR,
   type DesignDocument,
+  type DesignDocumentV1,
+  type DesignDocumentV2,
   type DesignConfigurationIR,
   type DesignOutputKind,
   type DraftNeutralPlaneIR,
   type DraftNodeIR,
+  type DraftNodeIRV1,
   type EdgeUseIR,
   type ExtrudeNodeIR,
   type FilletNodeIR,
+  type FilletNodeIRV1,
   type NodeIR,
+  type NodeIRV1,
+  type NodeIRV2,
   type OutputKind,
   type ParameterIR,
   type PartNodeIR,
@@ -139,6 +152,7 @@ export {
   type SketchNodeIR,
   type SketchProfileIR,
   type ShellNodeIR,
+  type ShellNodeIRV1,
   type OffsetNodeIR,
   type SphereNodeIR,
   type SweepNodeIR,
@@ -147,7 +161,14 @@ export {
   type TopologyCardinalityIR,
   type TopologyOriginRelation,
   type TopologyQueryIR,
+  type TopologyQueryIRFor,
+  type TopologyQueryIRV1,
+  type TopologyQueryIRV2,
+  type TopologyReferenceEntryIR,
   type TopologySelectionIR,
+  type TopologySelectionIRFor,
+  type TopologySelectionIRV1,
+  type TopologySelectionIRV2,
   type TopologySourceIR,
 } from "./ir.js";
 export {
@@ -168,7 +189,11 @@ export {
   type MassDensitySource,
   type ShapeExportFormat,
 } from "./evaluator.js";
-export type { ConfigurationId, MaterialId } from "./core/ids.js";
+export type {
+  ConfigurationId,
+  MaterialId,
+  TopologyReferenceId,
+} from "./core/ids.js";
 export {
   createManifoldKernel,
   ManifoldKernel,
@@ -343,15 +368,20 @@ export {
 } from "./topology.js";
 export {
   resolveTopologySelection,
+  topologySelectionRequirements,
   type TopologyResolutionContext,
+  type TopologySelectionRequirements,
 } from "./topology-resolution.js";
 export {
   DEFAULT_TOPOLOGY_SIGNATURE_LIMITS,
   TOPOLOGY_SIGNATURE_PROTOCOL_VERSION,
   captureTopologyReference,
+  createTopologyReferenceResolutionSession,
+  normalizePersistentTopologyReference,
   resolveTopologyReference,
   type CaptureTopologyReferenceOptions,
   type PersistentTopologyReference,
+  type NormalizePersistentTopologyReferenceOptions,
   type ResolveTopologyReferenceOptions,
   type ResolvedTopologyReference,
   type TopologyEdgeGeometrySignature,
@@ -361,6 +391,7 @@ export {
   type TopologyMatchTolerance,
   type TopologyNeighborSignature,
   type TopologySignatureLimits,
+  type TopologyReferenceResolutionSession,
 } from "./topology-signatures.js";
 export type {
   EdgeTopologyRole,
@@ -405,13 +436,25 @@ export {
   parseDocumentValue,
   stringifyDocument,
   type StringifyOptions,
+  type ParseDocumentOptions,
 } from "./serialization.js";
 export {
   DesignDocumentSchema,
+  DesignDocumentV1Schema,
+  DesignDocumentV2Schema,
   ExpressionSchema,
+  PersistentTopologyReferenceSchema,
   TopologyQuerySchema,
+  TopologyQueryV1Schema,
+  TopologyQueryV2Schema,
   TopologySelectionSchema,
+  TopologySelectionV1Schema,
+  TopologySelectionV2Schema,
 } from "./schema.js";
+export {
+  DEFAULT_DESIGN_DOCUMENT_LIMITS,
+  type DesignDocumentLimits,
+} from "./document-limits.js";
 export { validateDocument } from "./validation.js";
 export {
   exportAsciiStl,
