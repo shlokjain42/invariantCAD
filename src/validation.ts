@@ -18,9 +18,11 @@ import {
   DOCUMENT_SCHEMA_V1,
   DOCUMENT_SCHEMA_V2,
   DOCUMENT_SCHEMA_V3,
+  DOCUMENT_SCHEMA_V4,
   DOCUMENT_VERSION_V1,
   DOCUMENT_VERSION_V2,
   DOCUMENT_VERSION_V3,
+  DOCUMENT_VERSION_V4,
   nodeDependencies,
   outputKindForNode,
   type DesignDocument,
@@ -36,7 +38,10 @@ import {
   type TransformOperationIR,
 } from "./ir.js";
 import {
+  TOPOLOGY_ROLES_V1,
   TOPOLOGY_ROLES_V2,
+  TOPOLOGY_ROLES_V3,
+  TOPOLOGY_ROLES_V4,
   TOPOLOGY_ROLE_RULES,
   type TopologyKind,
   type TopologyRole,
@@ -44,6 +49,21 @@ import {
 import { SHELL_DIRECTIONS } from "./protocol/shell.js";
 import { OFFSET_DIRECTIONS } from "./protocol/offset.js";
 import { normalizePersistentTopologyReference } from "./topology-signatures.js";
+
+function topologyRolesForDocumentVersion(
+  version: DesignDocument["version"],
+): readonly string[] {
+  switch (version) {
+    case DOCUMENT_VERSION_V1:
+      return TOPOLOGY_ROLES_V1;
+    case DOCUMENT_VERSION_V2:
+      return TOPOLOGY_ROLES_V2;
+    case DOCUMENT_VERSION_V3:
+      return TOPOLOGY_ROLES_V3;
+    case DOCUMENT_VERSION_V4:
+      return TOPOLOGY_ROLES_V4;
+  }
+}
 
 function validateExpression(
   expression: ExpressionIR,
@@ -673,13 +693,15 @@ function validateTopologySelection(
             (document.schema === DOCUMENT_SCHEMA_V2 &&
               document.version === DOCUMENT_VERSION_V2) ||
             (document.schema === DOCUMENT_SCHEMA_V3 &&
-              document.version === DOCUMENT_VERSION_V3)
+              document.version === DOCUMENT_VERSION_V3) ||
+            (document.schema === DOCUMENT_SCHEMA_V4 &&
+              document.version === DOCUMENT_VERSION_V4)
           )
         ) {
           diagnostics.push(
             diagnostic(
               "TOPOLOGY_SELECTOR_INVALID",
-              "Persistent topology references require document version 2 or 3",
+              "Persistent topology references require document version 2, 3, or 4",
               {
                 severity: "error",
                 path: `${queryPath}/reference`,
@@ -786,19 +808,18 @@ function validateTopologySelection(
           );
         }
         if (query.role !== undefined) {
-          const roleSupportedByDocument =
-            document.version === DOCUMENT_VERSION_V3 ||
-            (TOPOLOGY_ROLES_V2 as readonly string[]).includes(query.role);
-          const rule = roleSupportedByDocument
-            ? (TOPOLOGY_ROLE_RULES[query.role as TopologyRole] as
-                | (typeof TOPOLOGY_ROLE_RULES)[TopologyRole]
-                | undefined)
-            : undefined;
+          const roleSupportedByDocument = topologyRolesForDocumentVersion(
+            document.version,
+          ).includes(query.role);
+          const knownRule = TOPOLOGY_ROLE_RULES[query.role as TopologyRole] as
+            | (typeof TOPOLOGY_ROLE_RULES)[TopologyRole]
+            | undefined;
+          const rule = roleSupportedByDocument ? knownRule : undefined;
           if (rule === undefined) {
             diagnostics.push(
               diagnostic(
                 "TOPOLOGY_SELECTOR_INVALID",
-                roleSupportedByDocument
+                knownRule === undefined
                   ? `Unknown semantic topology role '${String(query.role)}'`
                   : `Semantic topology role '${String(query.role)}' is not supported by document version ${document.version}`,
                 { severity: "error", path: `${queryPath}/role` },
@@ -833,20 +854,27 @@ function validateTopologySelection(
           }
         }
         if (query.source !== undefined) {
+          const supportsLoftSources =
+            document.version === DOCUMENT_VERSION_V3 ||
+            document.version === DOCUMENT_VERSION_V4;
+          const supportsSweepSources =
+            document.version === DOCUMENT_VERSION_V4;
           const profileProducer =
             feature?.kind === "extrude" ||
             feature?.kind === "revolve" ||
-            (document.version === DOCUMENT_VERSION_V3 &&
-              feature?.kind === "loft")
+            (supportsLoftSources && feature?.kind === "loft") ||
+            (supportsSweepSources && feature?.kind === "sweep")
               ? feature
               : undefined;
           if (query.relation !== "created" || profileProducer === undefined) {
             diagnostics.push(
               diagnostic(
                 "TOPOLOGY_SELECTOR_INVALID",
-                document.version === DOCUMENT_VERSION_V3
-                  ? "Sketch-entity topology sources require topology created by an extrusion, revolution, or loft"
-                  : "Sketch-entity topology sources require topology created by an extrusion or revolution",
+                document.version === DOCUMENT_VERSION_V4
+                  ? "Sketch-entity topology sources require topology created by an extrusion, revolution, loft, or sweep"
+                  : document.version === DOCUMENT_VERSION_V3
+                    ? "Sketch-entity topology sources require topology created by an extrusion, revolution, or loft"
+                    : "Sketch-entity topology sources require topology created by an extrusion or revolution",
                 { severity: "error", path: `${queryPath}/source` },
               ),
             );
@@ -933,7 +961,9 @@ function validateTopologySelection(
                   : `Sketch '${query.source.sketch}' is not the direct profile of ${
                       profileProducer.kind === "extrude"
                         ? "extrusion"
-                        : "revolution"
+                        : profileProducer.kind === "revolve"
+                          ? "revolution"
+                          : "sweep"
                     } '${query.feature}'`;
               diagnostics.push(
                 diagnostic(
@@ -1444,7 +1474,9 @@ function validateTopologyReferences(
     schema === DOCUMENT_SCHEMA_V2 && version === DOCUMENT_VERSION_V2;
   const isVersion3 =
     schema === DOCUMENT_SCHEMA_V3 && version === DOCUMENT_VERSION_V3;
-  if (!isVersion1 && !isVersion2 && !isVersion3) {
+  const isVersion4 =
+    schema === DOCUMENT_SCHEMA_V4 && version === DOCUMENT_VERSION_V4;
+  if (!isVersion1 && !isVersion2 && !isVersion3 && !isVersion4) {
     diagnostics.push(
       diagnostic(
         "IR_INVALID",
@@ -1459,6 +1491,7 @@ function validateTopologyReferences(
               { schema: DOCUMENT_SCHEMA_V1, version: DOCUMENT_VERSION_V1 },
               { schema: DOCUMENT_SCHEMA_V2, version: DOCUMENT_VERSION_V2 },
               { schema: DOCUMENT_SCHEMA_V3, version: DOCUMENT_VERSION_V3 },
+              { schema: DOCUMENT_SCHEMA_V4, version: DOCUMENT_VERSION_V4 },
             ],
           },
         },
@@ -1474,16 +1507,19 @@ function validateTopologyReferences(
     }
   ).topologyReferences;
   if (topologyReferences === undefined) return;
-  if (!isVersion2 && !isVersion3) {
+  if (!isVersion2 && !isVersion3 && !isVersion4) {
     diagnostics.push(
       diagnostic(
         "IR_INVALID",
-        "Persistent topology reference registries require document version 2 or 3",
+        "Persistent topology reference registries require document version 2, 3, or 4",
         { severity: "error", path: "/topologyReferences" },
       ),
     );
     return;
   }
+  const allowedTopologyRoles = topologyRolesForDocumentVersion(
+    document.version,
+  );
 
   const entries = Object.entries(topologyReferences) as [
     TopologyReferenceId,
@@ -1552,44 +1588,42 @@ function validateTopologyReferences(
         );
         continue;
       }
-      if (isVersion2) {
-        normalized.value.lineage.forEach((lineage, lineageIndex) => {
+      normalized.value.lineage.forEach((lineage, lineageIndex) => {
+        if (
+          lineage.role !== undefined &&
+          !allowedTopologyRoles.includes(lineage.role)
+        ) {
+          diagnostics.push(
+            diagnostic(
+              "TOPOLOGY_SIGNATURE_INVALID",
+              `Semantic topology role '${lineage.role}' is not supported by document version ${document.version}`,
+              {
+                severity: "error",
+                path: `${variantPath}/lineage/${lineageIndex}/role`,
+              },
+            ),
+          );
+        }
+      });
+      normalized.value.adjacency.forEach((neighbor, neighborIndex) => {
+        neighbor.lineage.forEach((lineage, lineageIndex) => {
           if (
             lineage.role !== undefined &&
-            !(TOPOLOGY_ROLES_V2 as readonly string[]).includes(lineage.role)
+            !allowedTopologyRoles.includes(lineage.role)
           ) {
             diagnostics.push(
               diagnostic(
                 "TOPOLOGY_SIGNATURE_INVALID",
-                `Semantic topology role '${lineage.role}' is not supported by document version 2`,
+                `Semantic topology role '${lineage.role}' is not supported by document version ${document.version}`,
                 {
                   severity: "error",
-                  path: `${variantPath}/lineage/${lineageIndex}/role`,
+                  path: `${variantPath}/adjacency/${neighborIndex}/lineage/${lineageIndex}/role`,
                 },
               ),
             );
           }
         });
-        normalized.value.adjacency.forEach((neighbor, neighborIndex) => {
-          neighbor.lineage.forEach((lineage, lineageIndex) => {
-            if (
-              lineage.role !== undefined &&
-              !(TOPOLOGY_ROLES_V2 as readonly string[]).includes(lineage.role)
-            ) {
-              diagnostics.push(
-                diagnostic(
-                  "TOPOLOGY_SIGNATURE_INVALID",
-                  `Semantic topology role '${lineage.role}' is not supported by document version 2`,
-                  {
-                    severity: "error",
-                    path: `${variantPath}/adjacency/${neighborIndex}/lineage/${lineageIndex}/role`,
-                  },
-                ),
-              );
-            }
-          });
-        });
-      }
+      });
       if (normalized.value.topology !== entry.topology) {
         diagnostics.push(
           diagnostic(

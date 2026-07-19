@@ -3,10 +3,12 @@ import {
   DOCUMENT_SCHEMA_V1,
   DOCUMENT_SCHEMA_V2,
   DOCUMENT_SCHEMA_V3,
+  DOCUMENT_SCHEMA_V4,
   DOCUMENT_VERSION,
   DOCUMENT_VERSION_V1,
   DOCUMENT_VERSION_V2,
   DOCUMENT_VERSION_V3,
+  DOCUMENT_VERSION_V4,
   DesignDocumentV1Schema,
   DesignDocumentV2Schema,
   DesignDocumentV3Schema,
@@ -54,18 +56,22 @@ const expectedV1 =
 const expectedV2 =
   '{"name":"document-version-fixture","nodes":{"box":{"center":false,"kind":"box","size":[{"dimension":"length","op":"literal","value":10},{"dimension":"length","op":"literal","value":20},{"dimension":"length","op":"literal","value":30}]}},"outputs":{"box":{"kind":"solid","node":"box"}},"parameters":{},"schema":"https://invariantcad.dev/schema/document/v2","units":{"angle":"rad","length":"mm"},"version":2}';
 
-function currentBox(): DesignDocumentV3 {
+function legacyV3Box(): DesignDocumentV3 {
   const cad = design("document-version-fixture");
   const box = cad.box("box", { size: vec3(mm(10), mm(20), mm(30)) });
   cad.output("box", box);
-  return cad.build();
+  return DesignDocumentV3Schema.parse({
+    ...cad.build(),
+    schema: DOCUMENT_SCHEMA_V3,
+    version: DOCUMENT_VERSION_V3,
+  });
 }
 
 function legacyDocuments(): {
   readonly v1: DesignDocumentV1;
   readonly v2: DesignDocumentV2;
 } {
-  const current = currentBox();
+  const current = legacyV3Box();
   const { topologyReferences: _topologyReferences, ...body } = current;
   const v1 = DesignDocumentV1Schema.parse({
     ...body,
@@ -159,8 +165,8 @@ function withReference(
 }
 
 describe("DesignDocument v3 compatibility boundary", () => {
-  it("exports frozen versioned role vocabularies and makes v3 current", () => {
-    expect(DOCUMENT_VERSION).toBe(DOCUMENT_VERSION_V3);
+  it("keeps the v3 role vocabulary frozen after v4 becomes current", () => {
+    expect(DOCUMENT_VERSION).toBe(DOCUMENT_VERSION_V4);
     expect(Object.isFrozen(TOPOLOGY_ROLES_V1)).toBe(true);
     expect(Object.isFrozen(TOPOLOGY_ROLES_V2)).toBe(true);
     expect(Object.isFrozen(TOPOLOGY_ROLES_V3)).toBe(true);
@@ -171,7 +177,7 @@ describe("DesignDocument v3 compatibility boundary", () => {
       expect(TOPOLOGY_ROLES_V3).toContain(role);
     }
 
-    const document: DesignDocumentV3 = currentBox();
+    const document: DesignDocumentV3 = legacyV3Box();
     expect(document).toMatchObject({
       schema: DOCUMENT_SCHEMA_V3,
       version: DOCUMENT_VERSION_V3,
@@ -217,7 +223,7 @@ describe("DesignDocument v3 compatibility boundary", () => {
     expect(DesignDocumentV2Schema.safeParse(withReference(v2, variant)).success).toBe(
       false,
     );
-    const current = currentBox();
+    const current = legacyV3Box();
     expect(DesignDocumentV3Schema.safeParse(withReference(current, variant)).success).toBe(
       true,
     );
@@ -250,7 +256,13 @@ describe("DesignDocument v3 compatibility boundary", () => {
       cad.shell("shell", loft, { openings: side, thickness: mm(0.5) }),
     );
 
-    const result = parseDocumentValue(cad.build());
+    const result = parseDocumentValue(
+      DesignDocumentV3Schema.parse({
+        ...cad.build(),
+        schema: DOCUMENT_SCHEMA_V3,
+        version: DOCUMENT_VERSION_V3,
+      }),
+    );
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.value.version).toBe(DOCUMENT_VERSION_V3);
   });
@@ -267,7 +279,7 @@ describe("DesignDocument v3 compatibility boundary", () => {
     );
   });
 
-  it("migrates v1/v2 to v3, preserves @2 evidence, and is idempotent for v3", () => {
+  it("migrates v1/v2/v3 to v4 and preserves @2 evidence", () => {
     const { v1, v2 } = legacyDocuments();
     const legacyVariant = PersistentTopologyReferenceV2Schema.parse({
       ...referenceWithLoftRole(
@@ -287,13 +299,13 @@ describe("DesignDocument v3 compatibility boundary", () => {
       withReference(v2, legacyVariant),
     );
 
-    for (const source of [v1, v2WithEvidence]) {
+    for (const source of [v1, v2WithEvidence, legacyV3Box()]) {
       const migrated = migrateDocument(source);
       expect(migrated.ok).toBe(true);
       if (!migrated.ok) continue;
       expect(migrated.value).toMatchObject({
-        schema: DOCUMENT_SCHEMA_V3,
-        version: DOCUMENT_VERSION_V3,
+        schema: DOCUMENT_SCHEMA_V4,
+        version: DOCUMENT_VERSION_V4,
       });
       expect(Object.isFrozen(migrated.value)).toBe(true);
       if (source.version === DOCUMENT_VERSION_V2) {
@@ -303,17 +315,13 @@ describe("DesignDocument v3 compatibility boundary", () => {
       }
     }
 
-    const current = currentBox();
-    const repeated = migrateDocument(current);
-    expect(repeated).toEqual({ ok: true, value: current, diagnostics: [] });
-
     const invalid = JSON.parse(stringifyDocument(v2));
     invalid.outputs.box.node = "missing";
     expect(migrateDocument(invalid).ok).toBe(false);
   });
 
   it("keeps v3-only queries, selections, nodes, evidence, and documents out of v2 types", () => {
-    const currentDocument: DesignDocumentV3 = currentBox();
+    const currentDocument: DesignDocumentV3 = legacyV3Box();
     const currentQuery: TopologyQueryIRV3 = {
       op: "origin",
       feature: currentDocument.outputs.box!.node,

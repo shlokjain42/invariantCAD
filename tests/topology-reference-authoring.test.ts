@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_DESIGN_DOCUMENT_LIMITS,
+  DOCUMENT_SCHEMA_V4,
+  DOCUMENT_VERSION_V4,
   TopologyReferenceRef,
   captureTopologyReference,
   deg,
@@ -186,7 +188,7 @@ function consume(
 }
 
 describe("persistent topology reference authoring", () => {
-  it("emits a canonical, deeply frozen v3 registry without freezing caller data", () => {
+  it("emits a canonical, deeply frozen v4 registry without freezing caller data", () => {
     const cad = design("persistent-registry");
     const body = box(cad, "body");
     const high = faceReference("z-kernel/topology@1");
@@ -202,10 +204,12 @@ describe("persistent topology reference authoring", () => {
     const reference = cad.topologyReference("mounting-face", body, options);
     const document = cad.build();
     expect(document).toMatchObject({
-      schema: "https://invariantcad.dev/schema/document/v3",
-      version: 3,
+      schema: DOCUMENT_SCHEMA_V4,
+      version: DOCUMENT_VERSION_V4,
     });
-    if (document.version !== 3) throw new Error("Expected a v3 document");
+    if (document.version !== DOCUMENT_VERSION_V4) {
+      throw new Error("Expected a v4 document");
+    }
     const entry = document.topologyReferences?.[reference.id];
     expect(entry).toMatchObject({
       target: { node: body.node, kind: "solid" },
@@ -283,7 +287,9 @@ describe("persistent topology reference authoring", () => {
     ).toThrow("Duplicate topology reference");
 
     const document = cad.build();
-    if (document.version !== 3) throw new Error("Expected a v3 document");
+    if (document.version !== DOCUMENT_VERSION_V4) {
+      throw new Error("Expected a v4 document");
+    }
     expect(Object.keys(document.topologyReferences ?? {})).toEqual([
       "registered",
     ]);

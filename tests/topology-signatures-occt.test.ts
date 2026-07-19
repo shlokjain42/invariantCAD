@@ -14,13 +14,13 @@ import {
 import { createOcctKernel } from "../src/occt-kernel.js";
 
 describe("OCCT persistent topology reference integration", () => {
-  it("rejects a descriptor-@2 reference against current descriptor-@3 OCCT", async () => {
+  it("rejects a stored descriptor-@3 reference against current descriptor-@4 OCCT", async () => {
     const kernel = await createOcctKernel();
     const shape = kernel.box!([10, 20, 30], false, { feature: "box" });
     try {
       const currentCapabilities = kernel.capabilities.topology?.signatures;
       expect(currentCapabilities?.fingerprint).toContain(
-        "invariantcad-topology-descriptor@3",
+        "invariantcad-topology-descriptor@4",
       );
       if (currentCapabilities === undefined) return;
 
@@ -32,11 +32,11 @@ describe("OCCT persistent topology reference integration", () => {
       );
       expect(face).toBeDefined();
       if (face === undefined) return;
-      const descriptorV2Capabilities = {
+      const storedDescriptorV3Capabilities = {
         ...currentCapabilities,
         fingerprint: currentCapabilities.fingerprint.replace(
+          "topology-descriptor@4",
           "topology-descriptor@3",
-          "topology-descriptor@2",
         ),
       };
       const captured = captureTopologyReference(
@@ -44,7 +44,7 @@ describe("OCCT persistent topology reference integration", () => {
         "face",
         face.key,
         {
-          capabilities: descriptorV2Capabilities,
+          capabilities: storedDescriptorV3Capabilities,
           tolerance: { linear: 1e-6, angular: 1e-9, relative: 1e-9 },
         },
       );
@@ -79,7 +79,7 @@ describe("OCCT persistent topology reference integration", () => {
       expect(signatureCapabilities).toEqual({
         protocolVersion: 1,
         fingerprint:
-          "invariantcad-topology-descriptor@3;occt-wasm@3.7.0;runtime=stock;modelingTolerance=1e-7",
+          "invariantcad-topology-descriptor@4;occt-wasm@3.7.0;runtime=stock;modelingTolerance=1e-7",
       });
       if (signatureCapabilities === undefined) return;
 
@@ -170,7 +170,7 @@ describe("OCCT persistent topology reference integration", () => {
     try {
       const signatureCapabilities = kernel.capabilities.topology?.signatures;
       expect(signatureCapabilities?.fingerprint).toContain(
-        "invariantcad-topology-descriptor@3",
+        "invariantcad-topology-descriptor@4",
       );
       if (signatureCapabilities === undefined) return;
 
@@ -273,13 +273,130 @@ describe("OCCT persistent topology reference integration", () => {
     }
   });
 
+  it("resolves a source-aware sweep side after profile and path parameters change", async () => {
+    const kernel = await createOcctKernel();
+    const evaluator = await createEvaluator({ kernel });
+    try {
+      const signatureCapabilities = kernel.capabilities.topology?.signatures;
+      expect(signatureCapabilities?.fingerprint).toContain(
+        "invariantcad-topology-descriptor@4",
+      );
+      if (signatureCapabilities === undefined) return;
+
+      const cad = design("persistent-sweep-side");
+      const profileWidth = cad.parameter.length("profileWidth", mm(10));
+      const pathLength = cad.parameter.length("pathLength", mm(20));
+      const profile = cad.sketch("profile", plane.xy(), (sketch) =>
+        sketch.profile(
+          sketch.rectangle("section", {
+            width: profileWidth,
+            height: mm(6),
+          }),
+        ),
+      );
+      const path = cad.polylinePath("path", [
+        vec3(mm(0), mm(0), mm(0)),
+        vec3(mm(0), mm(0), pathLength),
+      ]);
+      const sweep = cad.sweep("sweep", profile, path);
+      cad.output("sweep", sweep);
+      const document = cad.build();
+
+      const first = await evaluator.evaluate(document);
+      expect(first.ok).toBe(true);
+      if (!first.ok) return;
+      const firstOutput = first.value.output("sweep");
+      expect(firstOutput).toBeInstanceOf(EvaluatedSolid);
+      if (!(firstOutput instanceof EvaluatedSolid)) {
+        first.value.dispose();
+        return;
+      }
+      const firstTopology = firstOutput.topology();
+      expect(firstTopology.ok).toBe(true);
+      if (!firstTopology.ok) {
+        first.value.dispose();
+        return;
+      }
+      const firstFaces = firstTopology.value.faces.filter((face) =>
+        face.lineage.some(
+          (lineage) =>
+            lineage.role === "sweep.face.side" &&
+            lineage.source?.kind === "sketch-entity" &&
+            lineage.source.sketch === "profile" &&
+            lineage.source.entity === "section.e0",
+        ),
+      );
+      expect(firstFaces).toHaveLength(1);
+      const firstFace = firstFaces[0];
+      if (firstFace === undefined) {
+        first.value.dispose();
+        return;
+      }
+      const captured = captureTopologyReference(
+        firstTopology.value,
+        "face",
+        firstFace.key,
+        {
+          capabilities: signatureCapabilities,
+          tolerance: { linear: 1e-6, angular: 1e-9, relative: 1e-9 },
+        },
+      );
+      expect(captured.ok).toBe(true);
+      first.value.dispose();
+      if (!captured.ok) return;
+
+      const second = await evaluator.evaluate(document, {
+        parameters: { profileWidth: 16, pathLength: 32 },
+      });
+      expect(
+        second.ok,
+        second.ok ? undefined : JSON.stringify(second.diagnostics),
+      ).toBe(true);
+      if (!second.ok) return;
+      try {
+        const secondOutput = second.value.output("sweep");
+        expect(secondOutput).toBeInstanceOf(EvaluatedSolid);
+        if (!(secondOutput instanceof EvaluatedSolid)) return;
+        const secondTopology = secondOutput.topology();
+        expect(secondTopology.ok).toBe(true);
+        if (!secondTopology.ok) return;
+        const resolved = resolveTopologyReference(
+          captured.value,
+          secondTopology.value,
+          { capabilities: signatureCapabilities },
+        );
+        expect(resolved.ok).toBe(true);
+        if (!resolved.ok) return;
+        expect(resolved.value.evidence).toBe("semantic-lineage");
+        expect(resolved.value.key).not.toBe(firstFace.key);
+        const current = secondTopology.value.faces.find(
+          (face) => face.key === resolved.value.key,
+        );
+        expect(current?.lineage).toContainEqual({
+          feature: "sweep",
+          relation: "created",
+          role: "sweep.face.side",
+          source: {
+            kind: "sketch-entity",
+            sketch: "profile",
+            entity: "section.e0",
+          },
+        });
+      } finally {
+        second.value.dispose();
+      }
+    } finally {
+      evaluator.dispose();
+    }
+  });
+
   it("resolves a source-anchored loft side after its station and profile size change", async () => {
     const kernel = await createOcctKernel();
     const evaluator = await createEvaluator({ kernel });
     try {
       const signatureCapabilities = kernel.capabilities.topology?.signatures;
       expect(signatureCapabilities?.fingerprint).toContain(
-        "invariantcad-topology-descriptor@3",
+        "invariantcad-topology-descriptor@4",
       );
       if (signatureCapabilities === undefined) return;
 

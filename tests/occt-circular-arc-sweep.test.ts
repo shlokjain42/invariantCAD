@@ -20,6 +20,16 @@ const SWEEP_OPTIONS = {
   frame: "corrected-frenet",
 } as const;
 
+const RECTANGLE_ENTITIES = ["bottom", "right", "top", "left"] as const;
+const SWEEP_ROLES = [
+  "sweep.face.start-cap",
+  "sweep.face.end-cap",
+  "sweep.face.side",
+  "sweep.edge.start-rim",
+  "sweep.edge.end-rim",
+  "sweep.edge.lateral",
+] as const;
+
 type Vec3 = ResolvedCircularArcPath["start"];
 
 function source(sketch: string, entity: string): ProfileCurveSource {
@@ -176,19 +186,104 @@ function expectVectorClose(actual: Vec3, expected: Vec3): void {
   }
 }
 
-function expectBroadSweepCreation(
+function expectExactSweepCreation(
   snapshot: KernelTopologySnapshot,
-  feature: string,
-): void {
+  options: {
+    readonly feature: string;
+    readonly sketch: string;
+    readonly entities: readonly string[];
+    readonly circle?: boolean;
+  },
+): readonly KernelTopologySnapshot["edges"][number][] {
+  const { feature, sketch, entities, circle = false } = options;
+  const descriptors = [...snapshot.faces, ...snapshot.edges];
+  const roleEntries = (
+    descriptor: (typeof descriptors)[number],
+  ) =>
+    descriptor.lineage.filter(
+      (lineage) => lineage.feature === feature && lineage.role !== undefined,
+    );
+  const semanticEntries = descriptors.flatMap(roleEntries);
+
   expect(snapshot.history).toBe("complete");
-  for (const descriptor of [...snapshot.faces, ...snapshot.edges]) {
-    expect(descriptor.lineage).toEqual([{ feature, relation: "created" }]);
+  for (const descriptor of descriptors) {
+    expect(descriptor.lineage).toContainEqual({
+      feature,
+      relation: "created",
+    });
     expect(
-      descriptor.lineage.some(
-        (lineage) => lineage.role !== undefined || lineage.source !== undefined,
+      descriptor.lineage.every(
+        (lineage) => lineage.feature === feature && lineage.relation === "created",
       ),
-    ).toBe(false);
+    ).toBe(true);
+    expect(roleEntries(descriptor).length).toBeLessThanOrEqual(1);
   }
+
+  const expectedCounts = {
+    "sweep.face.start-cap": 1,
+    "sweep.face.end-cap": 1,
+    "sweep.face.side": entities.length,
+    "sweep.edge.start-rim": entities.length,
+    "sweep.edge.end-rim": entities.length,
+    "sweep.edge.lateral": circle ? 0 : entities.length,
+  } as const;
+  expect(
+    Object.fromEntries(
+      SWEEP_ROLES.map((role) => [
+        role,
+        descriptors.filter((descriptor) =>
+          roleEntries(descriptor).some((lineage) => lineage.role === role),
+        ).length,
+      ]),
+    ),
+  ).toEqual(expectedCounts);
+  expect(
+    snapshot.faces.every((face) =>
+      roleEntries(face).every((lineage) => lineage.role?.startsWith("sweep.face.")),
+    ),
+  ).toBe(true);
+  expect(
+    snapshot.edges.every((edge) =>
+      roleEntries(edge).every((lineage) => lineage.role?.startsWith("sweep.edge.")),
+    ),
+  ).toBe(true);
+
+  const sourceRoles = new Set([
+    "sweep.face.side",
+    "sweep.edge.start-rim",
+    "sweep.edge.end-rim",
+  ]);
+  for (const lineage of semanticEntries) {
+    expect(SWEEP_ROLES).toContain(lineage.role);
+    if (sourceRoles.has(lineage.role!)) {
+      expect(lineage.source).toBeDefined();
+      expect(lineage.source?.kind).toBe("sketch-entity");
+      expect(lineage.source?.sketch).toBe(sketch);
+      expect(entities).toContain(lineage.source?.entity);
+    } else {
+      expect(lineage.source).toBeUndefined();
+    }
+  }
+  for (const entity of entities) {
+    const count = (role: (typeof SWEEP_ROLES)[number]): number =>
+      semanticEntries.filter(
+        (lineage) =>
+          lineage.role === role &&
+          lineage.source?.sketch === sketch &&
+          lineage.source.entity === entity,
+      ).length;
+    expect(count("sweep.face.side")).toBe(1);
+    expect(count("sweep.edge.start-rim")).toBe(1);
+    expect(count("sweep.edge.end-rim")).toBe(1);
+  }
+
+  const unnamedEdges = snapshot.edges.filter(
+    (edge) => roleEntries(edge).length === 0,
+  );
+  for (const edge of unnamedEdges) {
+    expect(edge.lineage).toEqual([{ feature, relation: "created" }]);
+  }
+  return unnamedEdges;
 }
 
 function expectClosedSolidTopology(
@@ -247,7 +342,11 @@ describe("OCCT exact circular-arc solid sweep", () => {
 
         const snapshot = topology(kernel, shape);
         expectClosedSolidTopology(snapshot, 6, 12);
-        expectBroadSweepCreation(snapshot, "quarter-arc-sweep");
+        expectExactSweepCreation(snapshot, {
+          feature: "quarter-arc-sweep",
+          sketch: "quarter-profile",
+          entities: RECTANGLE_ENTITIES,
+        });
         const longitudinal = snapshot.edges
           .filter((edge) => edge.curve.kind === "circle")
           .map((edge) => edge.length)
@@ -541,7 +640,11 @@ describe("OCCT exact circular-arc solid sweep", () => {
         expect(measured.genus).toBe(0);
         const snapshot = topology(kernel, shape);
         expectClosedSolidTopology(snapshot, 6, 12);
-        expectBroadSweepCreation(snapshot, "spatial-arc-sweep");
+        expectExactSweepCreation(snapshot, {
+          feature: "spatial-arc-sweep",
+          sketch: "spatial-arc-profile",
+          entities: RECTANGLE_ENTITIES,
+        });
       } finally {
         kernel.disposeShape(shape);
       }
@@ -600,8 +703,13 @@ describe("OCCT exact circular-arc solid sweep", () => {
         const measured = kernel.measure(shape);
         expect(measured.volume).toBeCloseTo(4.5 * Math.PI, 8);
         expect(Math.abs(measured.boundingBox.min[2])).toBeLessThan(1e-10);
-        expectClosedSolidTopology(topology(kernel, shape), 6, 12);
-        expectBroadSweepCreation(topology(kernel, shape), "off-center-arc-sweep");
+        const snapshot = topology(kernel, shape);
+        expectClosedSolidTopology(snapshot, 6, 12);
+        expectExactSweepCreation(snapshot, {
+          feature: "off-center-arc-sweep",
+          sketch: "off-center-profile",
+          entities: RECTANGLE_ENTITIES,
+        });
       } finally {
         kernel.disposeShape(shape);
       }
@@ -637,8 +745,13 @@ describe("OCCT exact circular-arc solid sweep", () => {
         const measured = kernel.measure(shape);
         expect(measured.volume).toBeCloseTo(0.0004, 12);
         expect(measured.surfaceArea).toBeCloseTo(0.800008, 9);
-        expectClosedSolidTopology(topology(kernel, shape), 6, 12);
-        expectBroadSweepCreation(topology(kernel, shape), "near-axis-arc-sweep");
+        const snapshot = topology(kernel, shape);
+        expectClosedSolidTopology(snapshot, 6, 12);
+        expectExactSweepCreation(snapshot, {
+          feature: "near-axis-arc-sweep",
+          sketch: "near-axis-profile",
+          entities: RECTANGLE_ENTITIES,
+        });
       } finally {
         kernel.disposeShape(shape);
       }
@@ -764,7 +877,16 @@ describe("OCCT exact circular-arc solid sweep", () => {
         const expectedVolume =
           Math.PI * 0.1 ** 2 * Math.cos(skew) * sweep;
         expect(kernel.measure(shape).volume).toBeCloseTo(expectedVolume, 12);
-        expectClosedSolidTopology(topology(kernel, shape), 3, 3, false);
+        const snapshot = topology(kernel, shape);
+        expectClosedSolidTopology(snapshot, 3, 3, false);
+        const unnamed = expectExactSweepCreation(snapshot, {
+          feature: "skewed-profile-sweep",
+          sketch: "skewed-profile",
+          entities: ["circle"],
+          circle: true,
+        });
+        expect(unnamed).toHaveLength(1);
+        expect(unnamed[0]!.faces).toHaveLength(1);
       } finally {
         kernel.disposeShape(shape);
       }
@@ -793,8 +915,13 @@ describe("OCCT exact circular-arc solid sweep", () => {
         const measured = kernel.measure(shape);
         expect(measured.volume).toBeCloseTo(60 * Math.PI, 8);
         expect(measured.surfaceArea).toBeCloseTo(90 * Math.PI + 16, 8);
-        expectClosedSolidTopology(topology(kernel, shape), 6, 12);
-        expectBroadSweepCreation(topology(kernel, shape), "major-arc-sweep");
+        const snapshot = topology(kernel, shape);
+        expectClosedSolidTopology(snapshot, 6, 12);
+        expectExactSweepCreation(snapshot, {
+          feature: "major-arc-sweep",
+          sketch: "major-arc-profile",
+          entities: RECTANGLE_ENTITIES,
+        });
       } finally {
         kernel.disposeShape(shape);
       }
@@ -829,8 +956,16 @@ describe("OCCT exact circular-arc solid sweep", () => {
           2 * Math.PI * radius * sweep + 2 * Math.PI,
           8,
         );
-        expectClosedSolidTopology(topology(kernel, shape), 3, 3, false);
-        expectBroadSweepCreation(topology(kernel, shape), "near-full-arc-sweep");
+        const snapshot = topology(kernel, shape);
+        expectClosedSolidTopology(snapshot, 3, 3, false);
+        const unnamed = expectExactSweepCreation(snapshot, {
+          feature: "near-full-arc-sweep",
+          sketch: "near-full-arc-profile",
+          entities: ["circle"],
+          circle: true,
+        });
+        expect(unnamed).toHaveLength(1);
+        expect(unnamed[0]!.faces).toHaveLength(1);
       } finally {
         kernel.disposeShape(shape);
       }
@@ -860,7 +995,14 @@ describe("OCCT exact circular-arc solid sweep", () => {
         expectVectorClose(measured.boundingBox.max, [5, 1, 6]);
         const snapshot = topology(kernel, shape);
         expectClosedSolidTopology(snapshot, 3, 3, false);
-        expectBroadSweepCreation(snapshot, "circular-arc-profile-sweep");
+        const unnamed = expectExactSweepCreation(snapshot, {
+          feature: "circular-arc-profile-sweep",
+          sketch: "circular-arc-profile",
+          entities: ["circle"],
+          circle: true,
+        });
+        expect(unnamed).toHaveLength(1);
+        expect(unnamed[0]!.faces).toHaveLength(1);
       } finally {
         kernel.disposeShape(shape);
       }
@@ -888,11 +1030,13 @@ describe("OCCT exact circular-arc solid sweep", () => {
         expect(measured.volume).toBeCloseTo(20 * Math.PI, 8);
         expectVectorClose(measured.boundingBox.min, [-1, -2, -6]);
         expectVectorClose(measured.boundingBox.max, [5, 2, 0]);
-        expectClosedSolidTopology(topology(kernel, shape), 6, 12);
-        expectBroadSweepCreation(
-          topology(kernel, shape),
-          "negative-normal-arc-sweep",
-        );
+        const snapshot = topology(kernel, shape);
+        expectClosedSolidTopology(snapshot, 6, 12);
+        expectExactSweepCreation(snapshot, {
+          feature: "negative-normal-arc-sweep",
+          sketch: "negative-normal-arc-profile",
+          entities: RECTANGLE_ENTITIES,
+        });
       } finally {
         kernel.disposeShape(shape);
       }

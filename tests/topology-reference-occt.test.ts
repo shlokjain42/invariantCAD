@@ -83,9 +83,9 @@ describe("OCCT document-owned persistent topology reference", () => {
       const persisted = parseDocument(serialized);
       expect(persisted.ok).toBe(true);
       if (!persisted.ok) return;
-      expect(persisted.value.version).toBe(3);
+      expect(persisted.value.version).toBe(4);
       const storedReferences =
-        persisted.value.version === 3
+        persisted.value.version === 4
           ? persisted.value.topologyReferences
           : undefined;
       expect(Object.keys(storedReferences ?? {})).toEqual(["xMinOpening"]);
@@ -126,7 +126,7 @@ describe("OCCT document-owned persistent topology reference", () => {
       evaluator = await createEvaluator({ kernel });
       const signatureCapabilities = kernel.capabilities.topology?.signatures;
       expect(signatureCapabilities?.fingerprint).toContain(
-        "invariantcad-topology-descriptor@3",
+        "invariantcad-topology-descriptor@4",
       );
       if (signatureCapabilities === undefined) return;
 
@@ -211,9 +211,9 @@ describe("OCCT document-owned persistent topology reference", () => {
       const persisted = parseDocument(serialized);
       expect(persisted.ok).toBe(true);
       if (!persisted.ok) return;
-      expect(persisted.value.version).toBe(3);
+      expect(persisted.value.version).toBe(4);
       const storedReferences =
-        persisted.value.version === 3
+        persisted.value.version === 4
           ? persisted.value.topologyReferences
           : undefined;
       expect(Object.keys(storedReferences ?? {})).toEqual(["endCapOpening"]);
@@ -234,6 +234,130 @@ describe("OCCT document-owned persistent topology reference", () => {
       if (!changed.ok) return;
       changedDesign = changed.value;
       const changedOutput = changedDesign.output("shelled");
+      expect(changedOutput).toBeInstanceOf(EvaluatedSolid);
+      if (!(changedOutput instanceof EvaluatedSolid)) return;
+
+      const measurement = changedOutput.measure();
+      expect(measurement.volume).toBeGreaterThan(0);
+      expect(measurement.surfaceArea).toBeGreaterThan(0);
+      expect(changedOutput.mesh().indices.length).toBeGreaterThan(0);
+    } finally {
+      changedDesign?.dispose();
+      firstDesign?.dispose();
+      if (evaluator === undefined) kernel.dispose();
+      else evaluator.dispose();
+    }
+  });
+
+  it("persists a source-aware sweep rim and consumes it after profile and path changes", async () => {
+    const kernel = await createOcctKernel();
+    let evaluator: Evaluator | undefined;
+    let firstDesign: EvaluatedDesign | undefined;
+    let changedDesign: EvaluatedDesign | undefined;
+    try {
+      evaluator = await createEvaluator({ kernel });
+      const signatureCapabilities = kernel.capabilities.topology?.signatures;
+      expect(signatureCapabilities?.fingerprint).toContain(
+        "invariantcad-topology-descriptor@4",
+      );
+      if (signatureCapabilities === undefined) return;
+
+      const cad = design("persistent-sweep-rim");
+      const profileWidth = cad.parameter.length("profileWidth", mm(10));
+      const pathLength = cad.parameter.length("pathLength", mm(20));
+      const profile = cad.sketch("profile", plane.xy(), (sketch) =>
+        sketch.profile(
+          sketch.rectangle("section", {
+            width: profileWidth,
+            height: mm(6),
+          }),
+        ),
+      );
+      const path = cad.polylinePath("path", [
+        vec3(mm(0), mm(0), mm(0)),
+        vec3(mm(0), mm(0), pathLength),
+      ]);
+      const target = cad.sweep("sweep", profile, path);
+      cad.output("sweep", target);
+
+      const first = await evaluator.evaluate(cad.build());
+      expect(first.ok).toBe(true);
+      if (!first.ok) return;
+      firstDesign = first.value;
+      const firstOutput = firstDesign.output("sweep");
+      expect(firstOutput).toBeInstanceOf(EvaluatedSolid);
+      if (!(firstOutput instanceof EvaluatedSolid)) return;
+
+      const snapshot = firstOutput.topology();
+      expect(snapshot.ok).toBe(true);
+      if (!snapshot.ok) return;
+      const rimEdges = snapshot.value.edges.filter((edge) =>
+        edge.lineage.some(
+          (lineage) =>
+            lineage.feature === "sweep" &&
+            lineage.relation === "created" &&
+            lineage.role === "sweep.edge.end-rim" &&
+            lineage.source?.kind === "sketch-entity" &&
+            lineage.source.sketch === "profile" &&
+            lineage.source.entity === "section.e0",
+        ),
+      );
+      expect(rimEdges).toHaveLength(1);
+      const rimEdge = rimEdges[0];
+      if (rimEdge === undefined) return;
+
+      const captured = captureTopologyReference(
+        snapshot.value,
+        "edge",
+        rimEdge.key,
+        {
+          capabilities: signatureCapabilities,
+          tolerance: { linear: 1e-6, angular: 1e-9, relative: 1e-9 },
+        },
+      );
+      expect(captured.ok).toBe(true);
+      if (!captured.ok) return;
+
+      firstDesign.dispose();
+      firstDesign = undefined;
+
+      const persistedRim = cad.topologyReference("endRim", target, {
+        topology: "edge",
+        variants: [captured.value],
+      });
+      const treated = cad.fillet("treated", target, {
+        edges: topology.edges.persistentReference(persistedRim).select(),
+        radius: mm(0.5),
+      });
+      cad.output("treated", treated);
+
+      const serialized = stringifyDocument(cad.build());
+      const persisted = parseDocument(serialized);
+      expect(persisted.ok).toBe(true);
+      if (!persisted.ok) return;
+      expect(persisted.value.version).toBe(4);
+      const storedReferences =
+        persisted.value.version === 4
+          ? persisted.value.topologyReferences
+          : undefined;
+      expect(Object.keys(storedReferences ?? {})).toEqual(["endRim"]);
+      const storedReference = Object.values(storedReferences ?? {})[0];
+      expect(storedReference?.variants).toHaveLength(1);
+      expect(storedReference?.variants[0]?.kernelFingerprint).toBe(
+        signatureCapabilities.fingerprint,
+      );
+
+      const changed = await evaluator.evaluate(persisted.value, {
+        parameters: { profileWidth: 16, pathLength: 30 },
+        outputs: ["treated"],
+      });
+      expect(
+        changed.ok,
+        changed.ok ? undefined : JSON.stringify(changed.diagnostics),
+      ).toBe(true);
+      if (!changed.ok) return;
+      changedDesign = changed.value;
+      const changedOutput = changedDesign.output("treated");
       expect(changedOutput).toBeInstanceOf(EvaluatedSolid);
       if (!(changedOutput instanceof EvaluatedSolid)) return;
 

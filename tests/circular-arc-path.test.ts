@@ -332,7 +332,7 @@ describe("exact circular-arc path document contract", () => {
     expect(cloneDocument(document)).toEqual(document);
     expect(await hashDocument(parsed.value)).toBe(await hashDocument(document));
     expect(await hashDocument(document)).toBe(
-      "bf440d369c15ba98da1fcfbcdd3d98bc27c0621c37f7fbe22e30ed1422ff477d",
+      "20b082153590fa2071a0c3532d07eae7b2388f74139fb682860e6dce05cb81d8",
     );
   });
 

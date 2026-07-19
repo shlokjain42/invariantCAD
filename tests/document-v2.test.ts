@@ -5,10 +5,10 @@ import { mm } from "../src/expressions.js";
 import {
   DOCUMENT_SCHEMA_V1,
   DOCUMENT_SCHEMA_V2,
-  DOCUMENT_SCHEMA_V3,
+  DOCUMENT_SCHEMA_V4,
   DOCUMENT_VERSION_V1,
   DOCUMENT_VERSION_V2,
-  DOCUMENT_VERSION_V3,
+  DOCUMENT_VERSION_V4,
   type DesignDocumentV1,
   type DesignDocumentV2,
   type TopologyQueryIRV1,
@@ -123,8 +123,8 @@ function baseV2(name = "document-v2"): DesignDocumentV2 {
   });
   cad.output("box", box);
   const current = cad.build();
-  if (current.version !== DOCUMENT_VERSION_V3) {
-    throw new TypeError("The current authoring API did not emit document v3");
+  if (current.version !== DOCUMENT_VERSION_V4) {
+    throw new TypeError("The current authoring API did not emit document v4");
   }
   const document = DesignDocumentV2Schema.safeParse({
     ...current,
@@ -146,8 +146,8 @@ function legacyV1(): DesignDocumentV1 {
   const result = cad.subtract("result", box, [sphere]);
   cad.output("result", result);
   const document = cad.build();
-  if (document.version !== DOCUMENT_VERSION_V3) {
-    throw new TypeError("The current authoring API did not emit document v3");
+  if (document.version !== DOCUMENT_VERSION_V4) {
+    throw new TypeError("The current authoring API did not emit document v4");
   }
   const { topologyReferences: _topologyReferences, ...body } = document;
   const legacy = DesignDocumentV1Schema.safeParse({
@@ -219,15 +219,15 @@ describe("DesignDocument v2 serialization", () => {
     );
   });
 
-  it("validates before migrating v1 to the current v3 grammar", () => {
+  it("validates before migrating v1 to the current v4 grammar", () => {
     const source = legacyV1();
     const migrated = migrateDocument(source);
     expect(migrated.ok).toBe(true);
     if (!migrated.ok) return;
     expect(migrated.value).toEqual({
       ...source,
-      schema: DOCUMENT_SCHEMA_V3,
-      version: DOCUMENT_VERSION_V3,
+      schema: DOCUMENT_SCHEMA_V4,
+      version: DOCUMENT_VERSION_V4,
     });
     expect(Object.isFrozen(migrated.value)).toBe(true);
 

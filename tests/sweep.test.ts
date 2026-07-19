@@ -292,7 +292,7 @@ describe("bounded solid sweep document contract", () => {
     expect(cloneDocument(document)).toEqual(document);
     expect(await hashDocument(parsed.value)).toBe(await hashDocument(document));
     expect(await hashDocument(document)).toBe(
-      "4db0fe813b1739b94aefff873ab1857b9faa84fa71adcdd53cdeb0d2ae71db66",
+      "1dfbc878a036ea3f99545a1749e481358a415f4b3e177389d56d66a39a133343",
     );
   });
 

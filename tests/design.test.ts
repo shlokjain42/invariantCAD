@@ -53,7 +53,7 @@ describe("document IR", () => {
     const firstHash = await hashDocument(first);
     expect(firstHash).toBe(await hashDocument(second));
     expect(firstHash).toBe(
-      "45d0533b49552c84b29e0be2526e91f194d74183639d5f497c51663388f4166f",
+      "2f7a65abba6197aa39f9a44ab57c2798e00ef71008796a1b081726365bd19be9",
     );
     expect(await hashDocument(first, { includeMetadata: true })).not.toBe(
       await hashDocument(second, { includeMetadata: true }),

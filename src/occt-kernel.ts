@@ -717,7 +717,7 @@ class OcctKernel implements GeometryKernel {
       !(this.modelingTolerance > 0)
         ? undefined
         : [
-            "invariantcad-topology-descriptor@3",
+            "invariantcad-topology-descriptor@4",
             "occt-wasm@3.7.0",
             `runtime=${topologySignatureRuntime}`,
             `modelingTolerance=${this.modelingTolerance}`,
@@ -1595,6 +1595,436 @@ class OcctKernel implements GeometryKernel {
                 "loft.edge.section-rim": profiles.length * curveCount,
                 "loft.edge.lateral":
                   (profiles.length - 1) * authoredVertexCurveCount,
+              },
+            },
+      }),
+    };
+  }
+
+  private sweepTopologyAnnotation(
+    curves: readonly ProfileCurveHandle[],
+    profileFace: ShapeHandle,
+    path: ResolvedPath,
+    sweepShape: ShapeHandle,
+    context?: KernelFeatureContext,
+  ): TopologyAnnotation {
+    const sourceOf = (
+      curve: ResolvedCurve,
+    ): KernelTopologySource | undefined =>
+      curve.source === undefined
+        ? undefined
+        : {
+            kind: "sketch-entity",
+            sketch: curve.source.sketch,
+            entity: curve.source.entity,
+          };
+    const segmentCount = resolvedPathEdgeCount(path);
+    const curveCount = curves.length;
+    const authoredVertexCount = curves.filter(
+      (item) => item.curve.kind !== "circle",
+    ).length;
+    const seeds: TopologyLineageSeed[] = [];
+    const faceHandles: ShapeHandle[] = [];
+    const edgeHandles: ShapeHandle[] = [];
+    let forcePartial = false;
+
+    try {
+      checkContext(context);
+      faceHandles.push(...this.raw.getSubShapes(sweepShape, "face"));
+      edgeHandles.push(...this.raw.getSubShapes(sweepShape, "edge"));
+      const faceGeometry: TopologyLineageSeed[] = [];
+      for (let index = 0; index < faceHandles.length; index += 1) {
+        if ((index & 255) === 0) checkContext(context);
+        faceGeometry.push(
+          this.topologySeedFromHandle(faceHandles[index]!, "face", []),
+        );
+      }
+      const edgeGeometry: TopologyLineageSeed[] = [];
+      for (let index = 0; index < edgeHandles.length; index += 1) {
+        if ((index & 255) === 0) checkContext(context);
+        edgeGeometry.push(
+          this.topologySeedFromHandle(edgeHandles[index]!, "edge", []),
+        );
+      }
+
+      const edgeHashBuckets = new Map<number, number[]>();
+      edgeHandles.forEach((edge, index) => {
+        const hash = this.raw.hashCode(edge, TOPOLOGY_HASH_UPPER_BOUND);
+        const bucket = edgeHashBuckets.get(hash);
+        if (bucket === undefined) edgeHashBuckets.set(hash, [index]);
+        else bucket.push(index);
+      });
+      const faceEdges = faceHandles.map(() => new Set<number>());
+      const edgeFaces = edgeHandles.map(() => new Set<number>());
+      for (let faceIndex = 0; faceIndex < faceHandles.length; faceIndex += 1) {
+        checkContext(context);
+        const nestedEdges = this.raw.getSubShapes(
+          faceHandles[faceIndex]!,
+          "edge",
+        );
+        try {
+          for (let nestedIndex = 0; nestedIndex < nestedEdges.length; nestedIndex += 1) {
+            if ((nestedIndex & 255) === 0) checkContext(context);
+            const nestedEdge = nestedEdges[nestedIndex]!;
+            const hash = this.raw.hashCode(
+              nestedEdge,
+              TOPOLOGY_HASH_UPPER_BOUND,
+            );
+            const edgeIndex = (edgeHashBuckets.get(hash) ?? []).find(
+              (candidate) =>
+                this.raw.isSame(nestedEdge, edgeHandles[candidate]!),
+            );
+            if (edgeIndex === undefined) {
+              throw new Error(
+                "OCCT returned a sweep-face edge absent from the result",
+              );
+            }
+            faceEdges[faceIndex]!.add(edgeIndex);
+            edgeFaces[edgeIndex]!.add(faceIndex);
+          }
+        } finally {
+          this.releaseHandles(nestedEdges);
+        }
+      }
+
+      const uniqueGeometryMatch = (
+        seed: TopologyLineageSeed,
+        candidates: readonly TopologyLineageSeed[],
+        allowed?: ReadonlySet<number>,
+      ): number | undefined => {
+        const matches: number[] = [];
+        const candidateIndices: Iterable<number> =
+          allowed ?? candidates.keys();
+        let visited = 0;
+        for (const index of candidateIndices) {
+          if ((visited & 255) === 0) checkContext(context);
+          visited += 1;
+          if (this.topologySeedGeometryMatches(seed, candidates[index]!)) {
+            matches.push(index);
+          }
+        }
+        if (matches.length !== 1) {
+          forcePartial = true;
+          return undefined;
+        }
+        return matches[0];
+      };
+      const withLineage = (
+        seed: TopologyLineageSeed,
+        lineage: readonly KernelTopologyLineage[],
+      ): TopologyLineageSeed => ({ ...seed, lineage });
+
+      const startCapSeed = this.topologySeedFromHandle(
+        profileFace,
+        "face",
+        semanticLineage(context, "sweep.face.start-cap"),
+      );
+      const startCap = uniqueGeometryMatch(startCapSeed, faceGeometry);
+      if (startCap === undefined) throw new Error("Sweep start cap is ambiguous");
+
+      const startCapEdges = faceEdges[startCap]!;
+      if (startCapEdges.size !== curveCount) forcePartial = true;
+      const startRimByCurve = new Map<number, number>();
+      const firstLayer = new Map<number, number>();
+      const usedStartRims = new Set<number>();
+      const usedFirstFaces = new Set<number>();
+      for (let curveIndex = 0; curveIndex < curves.length; curveIndex += 1) {
+        const curve = curves[curveIndex]!;
+        const authoredRim = this.topologySeedFromHandle(
+          curve.handle,
+          "edge",
+          [],
+        );
+        const rim = uniqueGeometryMatch(
+          authoredRim,
+          edgeGeometry,
+          startCapEdges,
+        );
+        if (rim === undefined || usedStartRims.has(rim)) {
+          forcePartial = true;
+          continue;
+        }
+        usedStartRims.add(rim);
+        startRimByCurve.set(curveIndex, rim);
+        const sideCandidates = [...edgeFaces[rim]!].filter(
+          (face) => face !== startCap,
+        );
+        if (
+          sideCandidates.length !== 1 ||
+          usedFirstFaces.has(sideCandidates[0]!)
+        ) {
+          forcePartial = true;
+          continue;
+        }
+        usedFirstFaces.add(sideCandidates[0]!);
+        firstLayer.set(curveIndex, sideCandidates[0]!);
+      }
+      if (
+        startRimByCurve.size !== curveCount ||
+        firstLayer.size !== curveCount
+      ) {
+        throw new Error("Sweep start section correspondence is incomplete");
+      }
+
+      const layers: Map<number, number>[] = [firstLayer];
+      const assignedSideFaces = new Set<number>(firstLayer.values());
+      for (
+        let segmentIndex = 0;
+        segmentIndex < segmentCount - 1;
+        segmentIndex += 1
+      ) {
+        checkContext(context);
+        const current = layers[segmentIndex]!;
+        const previous = layers[segmentIndex - 1];
+        const currentFaces = new Set(current.values());
+        const previousFaces = new Set(previous?.values() ?? []);
+        const next = new Map<number, number>();
+        const usedNextFaces = new Set<number>();
+        for (let curveIndex = 0; curveIndex < curveCount; curveIndex += 1) {
+          const currentFace = current.get(curveIndex);
+          if (currentFace === undefined) {
+            forcePartial = true;
+            continue;
+          }
+          const candidates = new Set<number>();
+          for (const edgeIndex of faceEdges[currentFace]!) {
+            for (const neighbor of edgeFaces[edgeIndex]!) {
+              if (
+                neighbor !== currentFace &&
+                neighbor !== startCap &&
+                !currentFaces.has(neighbor) &&
+                !previousFaces.has(neighbor) &&
+                !assignedSideFaces.has(neighbor)
+              ) {
+                candidates.add(neighbor);
+              }
+            }
+          }
+          if (candidates.size !== 1) {
+            forcePartial = true;
+            continue;
+          }
+          const [nextFace] = candidates;
+          if (nextFace === undefined || usedNextFaces.has(nextFace)) {
+            forcePartial = true;
+            continue;
+          }
+          usedNextFaces.add(nextFace);
+          next.set(curveIndex, nextFace);
+        }
+        if (next.size !== curveCount) {
+          throw new Error("Sweep side correspondence branches or disappears");
+        }
+        layers.push(next);
+        for (const face of next.values()) assignedSideFaces.add(face);
+      }
+
+      if (
+        layers.length !== segmentCount ||
+        assignedSideFaces.size !== segmentCount * curveCount
+      ) {
+        throw new Error("Sweep side-layer coverage is incomplete");
+      }
+      const terminalCaps = faceHandles
+        .map((_, index) => index)
+        .filter(
+          (index) => index !== startCap && !assignedSideFaces.has(index),
+        );
+      if (terminalCaps.length !== 1) {
+        throw new Error("Sweep end cap is missing or ambiguous");
+      }
+      const endCap = terminalCaps[0]!;
+      const lastLayer = layers.at(-1)!;
+      const endCapEdges = faceEdges[endCap]!;
+      if (endCapEdges.size !== curveCount) forcePartial = true;
+      const endRimByCurve = new Map<number, number>();
+      const usedEndRims = new Set<number>();
+      for (const [curveIndex, terminalFace] of lastLayer) {
+        const candidates = [...endCapEdges].filter(
+          (edgeIndex) =>
+            edgeFaces[edgeIndex]!.has(terminalFace) &&
+            edgeFaces[edgeIndex]!.has(endCap),
+        );
+        if (
+          candidates.length !== 1 ||
+          usedEndRims.has(candidates[0]!)
+        ) {
+          forcePartial = true;
+          continue;
+        }
+        usedEndRims.add(candidates[0]!);
+        endRimByCurve.set(curveIndex, candidates[0]!);
+      }
+      if (endRimByCurve.size !== curveCount) {
+        throw new Error("Sweep end-rim correspondence is incomplete");
+      }
+
+      seeds.push(
+        withLineage(
+          faceGeometry[startCap]!,
+          semanticLineage(context, "sweep.face.start-cap"),
+        ),
+        withLineage(
+          faceGeometry[endCap]!,
+          semanticLineage(context, "sweep.face.end-cap"),
+        ),
+      );
+      const sideSlotByFace = new Map<
+        number,
+        { readonly curve: number; readonly segment: number }
+      >();
+      for (let segmentIndex = 0; segmentIndex < layers.length; segmentIndex += 1) {
+        for (const [curveIndex, faceIndex] of layers[segmentIndex]!) {
+          sideSlotByFace.set(faceIndex, {
+            curve: curveIndex,
+            segment: segmentIndex,
+          });
+          seeds.push(
+            withLineage(
+              faceGeometry[faceIndex]!,
+              semanticLineage(
+                context,
+                "sweep.face.side",
+                sourceOf(curves[curveIndex]!.curve),
+              ),
+            ),
+          );
+        }
+      }
+      for (let curveIndex = 0; curveIndex < curveCount; curveIndex += 1) {
+        const source = sourceOf(curves[curveIndex]!.curve);
+        seeds.push(
+          withLineage(
+            edgeGeometry[startRimByCurve.get(curveIndex)!]!,
+            semanticLineage(context, "sweep.edge.start-rim", source),
+          ),
+          withLineage(
+            edgeGeometry[endRimByCurve.get(curveIndex)!]!,
+            semanticLineage(context, "sweep.edge.end-rim", source),
+          ),
+        );
+      }
+
+      const lateralCounts = new Map<string, number>();
+      const lateralKey = (
+        segment: number,
+        firstCurve: number,
+        secondCurve: number,
+      ): string =>
+        `${segment}:${Math.min(firstCurve, secondCurve)}:${Math.max(firstCurve, secondCurve)}`;
+      for (let edgeIndex = 0; edgeIndex < edgeFaces.length; edgeIndex += 1) {
+        if ((edgeIndex & 255) === 0) checkContext(context);
+        const adjacent = [...edgeFaces[edgeIndex]!];
+        if (adjacent.length > 2) {
+          forcePartial = true;
+          continue;
+        }
+        if (adjacent.length !== 2) continue;
+        const firstFace = adjacent[0]!;
+        const secondFace = adjacent[1]!;
+        const firstIsStart = firstFace === startCap;
+        const secondIsStart = secondFace === startCap;
+        const firstIsEnd = firstFace === endCap;
+        const secondIsEnd = secondFace === endCap;
+        const first = sideSlotByFace.get(adjacent[0]!);
+        const second = sideSlotByFace.get(adjacent[1]!);
+
+        if (firstIsStart || secondIsStart) {
+          const side = firstIsStart ? second : first;
+          if (
+            side === undefined ||
+            side.segment !== 0 ||
+            startRimByCurve.get(side.curve) !== edgeIndex
+          ) {
+            forcePartial = true;
+          }
+          continue;
+        }
+        if (firstIsEnd || secondIsEnd) {
+          const side = firstIsEnd ? second : first;
+          if (
+            side === undefined ||
+            side.segment !== segmentCount - 1 ||
+            endRimByCurve.get(side.curve) !== edgeIndex
+          ) {
+            forcePartial = true;
+          }
+          continue;
+        }
+        if (first === undefined || second === undefined) {
+          forcePartial = true;
+          continue;
+        }
+        if (
+          first.curve === second.curve &&
+          Math.abs(first.segment - second.segment) === 1
+        ) {
+          continue;
+        }
+        const neighboringCurves =
+          first.segment === second.segment &&
+          curveCount > 1 &&
+          ((first.curve + 1) % curveCount === second.curve ||
+            (second.curve + 1) % curveCount === first.curve);
+        if (!neighboringCurves) {
+          forcePartial = true;
+          continue;
+        }
+        const key = lateralKey(first.segment, first.curve, second.curve);
+        lateralCounts.set(key, (lateralCounts.get(key) ?? 0) + 1);
+        seeds.push(
+          withLineage(
+            edgeGeometry[edgeIndex]!,
+            semanticLineage(context, "sweep.edge.lateral"),
+          ),
+        );
+      }
+      const expectedLateralCounts = new Map<string, number>();
+      if (authoredVertexCount > 0) {
+        for (let segment = 0; segment < segmentCount; segment += 1) {
+          for (let curve = 0; curve < curveCount; curve += 1) {
+            const previous = (curve + curveCount - 1) % curveCount;
+            const key = lateralKey(segment, previous, curve);
+            expectedLateralCounts.set(
+              key,
+              (expectedLateralCounts.get(key) ?? 0) + 1,
+            );
+          }
+        }
+      }
+      if (
+        lateralCounts.size !== expectedLateralCounts.size ||
+        [...expectedLateralCounts].some(
+          ([key, count]) => lateralCounts.get(key) !== count,
+        )
+      ) {
+        forcePartial = true;
+      }
+      checkContext(context);
+    } catch {
+      checkContext(context);
+      forcePartial = true;
+    } finally {
+      this.releaseHandles(edgeHandles);
+      this.releaseHandles(faceHandles);
+    }
+
+    return {
+      seeds,
+      requireSeedCoverage: ["face"],
+      ...(forcePartial ? { forcePartial: true } : {}),
+      ...(context?.feature === undefined
+        ? {}
+        : {
+            expectedRoles: {
+              feature: context.feature,
+              counts: {
+                "sweep.face.start-cap": 1,
+                "sweep.face.end-cap": 1,
+                "sweep.face.side": segmentCount * curveCount,
+                "sweep.edge.start-rim": curveCount,
+                "sweep.edge.end-rim": curveCount,
+                "sweep.edge.lateral": segmentCount * authoredVertexCount,
               },
             },
           }),
@@ -2660,6 +3090,13 @@ class OcctKernel implements GeometryKernel {
         throw new RangeError(nativeVolumePostcondition.message);
       }
       return this.own(result, context, {
+        annotation: this.sweepTopologyAnnotation(
+          built.curves,
+          built.face,
+          path,
+          result,
+          context,
+        ),
         ...(exactVolume === undefined ? {} : { volumeOverride: exactVolume }),
       });
     } catch (error) {
@@ -3076,6 +3513,43 @@ class OcctKernel implements GeometryKernel {
         };
   }
 
+  private topologySeedGeometryMatches(
+    first: TopologyLineageSeed,
+    second: TopologyLineageSeed,
+  ): boolean {
+    if (
+      first.topology !== second.topology ||
+      first.geometryKind !== second.geometryKind
+    ) {
+      return false;
+    }
+    const measureClose = (left: number, right: number): boolean =>
+      Math.abs(left - right) <=
+      Math.max(
+        this.modelingTolerance * 20,
+        Math.max(1, Math.abs(left), Math.abs(right)) * 1e-8,
+      );
+    const coordinateClose = (left: number, right: number): boolean =>
+      Math.abs(left - right) <=
+      Math.max(
+        this.modelingTolerance * 20,
+        binary64Ulp(left) * 64,
+        binary64Ulp(right) * 64,
+      );
+    return (
+      measureClose(first.measure, second.measure) &&
+      first.center.every((value, index) =>
+        coordinateClose(value, second.center[index]!),
+      ) &&
+      first.bounds.min.every((value, index) =>
+        coordinateClose(value, second.bounds.min[index]!),
+      ) &&
+      first.bounds.max.every((value, index) =>
+        coordinateClose(value, second.bounds.max[index]!),
+      )
+    );
+  }
+
   private topologyFaceSeedsFromShape(
     handle: ShapeHandle,
     lineage: readonly KernelTopologyLineage[],
@@ -3098,39 +3572,20 @@ class OcctKernel implements GeometryKernel {
     seed: TopologyLineageSeed,
     descriptor: TopologyDescriptor,
   ): boolean {
-    if (seed.topology !== descriptor.topology) return false;
     const geometryKind =
       descriptor.topology === "face"
         ? descriptor.surface.kind
         : descriptor.curve.kind;
-    if (seed.geometryKind !== geometryKind) return false;
-    const measureClose = (first: number, second: number): boolean =>
-      Math.abs(first - second) <=
-      Math.max(
-        this.modelingTolerance * 20,
-        Math.max(1, Math.abs(first), Math.abs(second)) * 1e-8,
-      );
-    const coordinateClose = (first: number, second: number): boolean =>
-      Math.abs(first - second) <=
-      Math.max(
-        this.modelingTolerance * 20,
-        binary64Ulp(first) * 64,
-        binary64Ulp(second) * 64,
-      );
     const descriptorMeasure =
       descriptor.topology === "face" ? descriptor.area : descriptor.length;
-    return (
-      measureClose(seed.measure, descriptorMeasure) &&
-      seed.center.every((value, index) =>
-        coordinateClose(value, descriptor.center[index]!),
-      ) &&
-      seed.bounds.min.every((value, index) =>
-        coordinateClose(value, descriptor.bounds.min[index]!),
-      ) &&
-      seed.bounds.max.every((value, index) =>
-        coordinateClose(value, descriptor.bounds.max[index]!),
-      )
-    );
+    return this.topologySeedGeometryMatches(seed, {
+      topology: descriptor.topology,
+      geometryKind,
+      center: descriptor.center,
+      bounds: descriptor.bounds,
+      measure: descriptorMeasure,
+      lineage: [],
+    });
   }
 
   private surfaceDescriptor(face: ShapeHandle): KernelSurfaceDescriptor {

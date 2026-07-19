@@ -38,7 +38,7 @@ import {
   type AssemblyInstanceIR,
   type AssemblyNodeIR,
   type DesignConfigurationIR,
-  type DesignDocumentV3,
+  type DesignDocumentV4,
   type DesignOutputKind,
   type MaterialDefinitionIR,
   type NodeIR,
@@ -1337,7 +1337,7 @@ export class DesignBuilder {
     return this;
   }
 
-  build(): DesignDocumentV3 {
+  build(): DesignDocumentV4 {
     return deepFreeze({
       schema: DOCUMENT_SCHEMA,
       version: DOCUMENT_VERSION,

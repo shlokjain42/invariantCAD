@@ -19,6 +19,16 @@ const SWEEP_OPTIONS = {
   frame: "corrected-frenet",
 } as const;
 
+const RECTANGLE_ENTITIES = ["bottom", "right", "top", "left"] as const;
+const SWEEP_ROLES = [
+  "sweep.face.start-cap",
+  "sweep.face.end-cap",
+  "sweep.face.side",
+  "sweep.edge.start-rim",
+  "sweep.edge.end-rim",
+  "sweep.edge.lateral",
+] as const;
+
 type Vec3 = ResolvedCompositePath["start"];
 
 interface InjectableOcctRaw {
@@ -428,19 +438,105 @@ function expectVectorClose(actual: Vec3, expected: Vec3): void {
   }
 }
 
-function expectBroadSweepCreation(
+function expectExactSweepCreation(
   snapshot: KernelTopologySnapshot,
-  feature: string,
-): void {
+  options: {
+    readonly feature: string;
+    readonly sketch: string;
+    readonly entities: readonly string[];
+    readonly segments: number;
+    readonly circle?: boolean;
+  },
+): readonly KernelTopologySnapshot["edges"][number][] {
+  const { feature, sketch, entities, segments, circle = false } = options;
+  const descriptors = [...snapshot.faces, ...snapshot.edges];
+  const roleEntries = (
+    descriptor: (typeof descriptors)[number],
+  ) =>
+    descriptor.lineage.filter(
+      (lineage) => lineage.feature === feature && lineage.role !== undefined,
+    );
+  const semanticEntries = descriptors.flatMap(roleEntries);
+
   expect(snapshot.history).toBe("complete");
-  for (const descriptor of [...snapshot.faces, ...snapshot.edges]) {
-    expect(descriptor.lineage).toEqual([{ feature, relation: "created" }]);
+  for (const descriptor of descriptors) {
+    expect(descriptor.lineage).toContainEqual({
+      feature,
+      relation: "created",
+    });
     expect(
-      descriptor.lineage.some(
-        (lineage) => lineage.role !== undefined || lineage.source !== undefined,
+      descriptor.lineage.every(
+        (lineage) => lineage.feature === feature && lineage.relation === "created",
       ),
-    ).toBe(false);
+    ).toBe(true);
+    expect(roleEntries(descriptor).length).toBeLessThanOrEqual(1);
   }
+
+  const expectedCounts = {
+    "sweep.face.start-cap": 1,
+    "sweep.face.end-cap": 1,
+    "sweep.face.side": entities.length * segments,
+    "sweep.edge.start-rim": entities.length,
+    "sweep.edge.end-rim": entities.length,
+    "sweep.edge.lateral": circle ? 0 : entities.length * segments,
+  } as const;
+  expect(
+    Object.fromEntries(
+      SWEEP_ROLES.map((role) => [
+        role,
+        descriptors.filter((descriptor) =>
+          roleEntries(descriptor).some((lineage) => lineage.role === role),
+        ).length,
+      ]),
+    ),
+  ).toEqual(expectedCounts);
+  expect(
+    snapshot.faces.every((face) =>
+      roleEntries(face).every((lineage) => lineage.role?.startsWith("sweep.face.")),
+    ),
+  ).toBe(true);
+  expect(
+    snapshot.edges.every((edge) =>
+      roleEntries(edge).every((lineage) => lineage.role?.startsWith("sweep.edge.")),
+    ),
+  ).toBe(true);
+
+  const sourceRoles = new Set([
+    "sweep.face.side",
+    "sweep.edge.start-rim",
+    "sweep.edge.end-rim",
+  ]);
+  for (const lineage of semanticEntries) {
+    expect(SWEEP_ROLES).toContain(lineage.role);
+    if (sourceRoles.has(lineage.role!)) {
+      expect(lineage.source).toBeDefined();
+      expect(lineage.source?.kind).toBe("sketch-entity");
+      expect(lineage.source?.sketch).toBe(sketch);
+      expect(entities).toContain(lineage.source?.entity);
+    } else {
+      expect(lineage.source).toBeUndefined();
+    }
+  }
+  for (const entity of entities) {
+    const count = (role: (typeof SWEEP_ROLES)[number]): number =>
+      semanticEntries.filter(
+        (lineage) =>
+          lineage.role === role &&
+          lineage.source?.sketch === sketch &&
+          lineage.source.entity === entity,
+      ).length;
+    expect(count("sweep.face.side")).toBe(segments);
+    expect(count("sweep.edge.start-rim")).toBe(1);
+    expect(count("sweep.edge.end-rim")).toBe(1);
+  }
+
+  const unnamedEdges = snapshot.edges.filter(
+    (edge) => roleEntries(edge).length === 0,
+  );
+  for (const edge of unnamedEdges) {
+    expect(edge.lineage).toEqual([{ feature, relation: "created" }]);
+  }
+  return unnamedEdges;
 }
 
 function expectClosedSolidTopology(
@@ -494,7 +590,14 @@ describe("OCCT exact composite solid sweep", () => {
 
         const snapshot = topology(kernel, shape);
         expectClosedSolidTopology(snapshot, 14, 28);
-        expectBroadSweepCreation(snapshot, "planar-composite-sweep");
+        const unnamed = expectExactSweepCreation(snapshot, {
+          feature: "planar-composite-sweep",
+          sketch: "planar-composite-profile",
+          entities: RECTANGLE_ENTITIES,
+          segments: 3,
+        });
+        expect(unnamed).toHaveLength(8);
+        expect(unnamed.every((edge) => edge.faces.length === 2)).toBe(true);
       } finally {
         kernel.disposeShape(shape);
       }
@@ -511,6 +614,16 @@ describe("OCCT exact composite solid sweep", () => {
           120 + 20 * Math.PI,
           8,
         );
+        const snapshot = topology(kernel, cornerShape);
+        expectClosedSolidTopology(snapshot, 18, 36);
+        const unnamed = expectExactSweepCreation(snapshot, {
+          feature: "line-corner-composite-sweep",
+          sketch: "line-corner-composite-profile",
+          entities: RECTANGLE_ENTITIES,
+          segments: 4,
+        });
+        expect(unnamed).toHaveLength(12);
+        expect(unnamed.every((edge) => edge.faces.length === 2)).toBe(true);
       } finally {
         kernel.disposeShape(cornerShape);
       }
@@ -560,7 +673,13 @@ describe("OCCT exact composite solid sweep", () => {
 
         const snapshot = topology(kernel, shape);
         expectClosedSolidTopology(snapshot, 10, 20);
-        expectBroadSweepCreation(snapshot, "spatial-composite-sweep");
+        const unnamed = expectExactSweepCreation(snapshot, {
+          feature: "spatial-composite-sweep",
+          sketch: "spatial-composite-profile",
+          entities: RECTANGLE_ENTITIES,
+          segments: 2,
+        });
+        expect(unnamed).toHaveLength(4);
       } finally {
         kernel.disposeShape(shape);
       }
@@ -585,7 +704,13 @@ describe("OCCT exact composite solid sweep", () => {
         expect(measured.surfaceArea).toBeCloseTo(26 + 60 * Math.PI, 8);
         const snapshot = topology(kernel, majorShape);
         expectClosedSolidTopology(snapshot, 14, 28);
-        expectBroadSweepCreation(snapshot, "major-composite-sweep");
+        const unnamed = expectExactSweepCreation(snapshot, {
+          feature: "major-composite-sweep",
+          sketch: "major-composite-profile",
+          entities: RECTANGLE_ENTITIES,
+          segments: 3,
+        });
+        expect(unnamed).toHaveLength(8);
       } finally {
         kernel.disposeShape(majorShape);
       }
@@ -610,7 +735,13 @@ describe("OCCT exact composite solid sweep", () => {
         );
         const snapshot = topology(kernel, nearFullShape);
         expectClosedSolidTopology(snapshot, 14, 28);
-        expectBroadSweepCreation(snapshot, "near-full-composite-sweep");
+        const unnamed = expectExactSweepCreation(snapshot, {
+          feature: "near-full-composite-sweep",
+          sketch: "near-full-composite-profile",
+          entities: RECTANGLE_ENTITIES,
+          segments: 3,
+        });
+        expect(unnamed).toHaveLength(8);
       } finally {
         kernel.disposeShape(nearFullShape);
       }
@@ -624,9 +755,12 @@ describe("OCCT exact composite solid sweep", () => {
     const raw = (kernel as any).raw as InjectableOcctRaw;
     const originalArea = raw.getSurfaceArea.bind(raw);
     const originalCentroid = raw.getSurfaceCenterOfMass.bind(raw);
+    const originalSweep = raw.sweep.bind(raw);
     const baselineShapeCount = raw.shapeCount;
     let areaCalls = 0;
     let centroidCalls = 0;
+    let areaCallsBeforeConstruction = -1;
+    let centroidCallsBeforeConstruction = -1;
     let shape: KernelShape | undefined;
     try {
       raw.getSurfaceArea = (...args) => {
@@ -637,6 +771,11 @@ describe("OCCT exact composite solid sweep", () => {
         centroidCalls += 1;
         const centroid = originalCentroid(...args);
         return { ...centroid, x: centroid.x + 5e-7 };
+      };
+      raw.sweep = (...args) => {
+        areaCallsBeforeConstruction = areaCalls;
+        centroidCallsBeforeConstruction = centroidCalls;
+        return originalSweep(...args);
       };
 
       try {
@@ -649,10 +788,15 @@ describe("OCCT exact composite solid sweep", () => {
       } finally {
         raw.getSurfaceArea = originalArea;
         raw.getSurfaceCenterOfMass = originalCentroid;
+        raw.sweep = originalSweep;
       }
 
-      expect(areaCalls).toBe(1);
-      expect(centroidCalls).toBe(1);
+      expect(areaCallsBeforeConstruction).toBe(1);
+      expect(centroidCallsBeforeConstruction).toBe(1);
+      expect(areaCalls).toBeGreaterThanOrEqual(areaCallsBeforeConstruction);
+      expect(centroidCalls).toBeGreaterThanOrEqual(
+        centroidCallsBeforeConstruction,
+      );
       expect(kernel.measure(shape).volume).toBeCloseTo(
         80 + 20 * Math.PI,
         10,
@@ -661,6 +805,7 @@ describe("OCCT exact composite solid sweep", () => {
       try {
         raw.getSurfaceArea = originalArea;
         raw.getSurfaceCenterOfMass = originalCentroid;
+        raw.sweep = originalSweep;
         if (shape !== undefined) kernel.disposeShape(shape);
         expect(raw.shapeCount).toBe(baselineShapeCount);
       } finally {

@@ -180,6 +180,100 @@ function mutableLoftRoleDocument(
   return JSON.parse(stringifyDocument(loftRoleDocument(selection)));
 }
 
+type SweepRoleSelection =
+  | "start-cap"
+  | "end-cap"
+  | "side"
+  | "start-rim"
+  | "end-rim"
+  | "lateral";
+
+function sweepRoleDocument(
+  selection: SweepRoleSelection = "side",
+): ReturnType<ReturnType<typeof design>["build"]> {
+  const cad = design("sweep-topology-role-validation");
+  const profile = cad.sketch("sweep-profile", plane.xy(), (sketch) =>
+    sketch.profile(
+      sketch.rectangle("section", { width: mm(10), height: mm(6) }),
+    ),
+  );
+  cad.sketch("other-sweep-profile", plane.xy(), (sketch) =>
+    sketch.profile(
+      sketch.rectangle("other-section", { width: mm(4), height: mm(4) }),
+    ),
+  );
+  const path = cad.polylinePath("sweep-path", [
+    vec3(mm(0), mm(0), mm(0)),
+    vec3(mm(0), mm(0), mm(20)),
+  ]);
+  const sweep = cad.sweep("sweep", profile, path);
+  switch (selection) {
+    case "start-cap":
+    case "end-cap": {
+      const opening = topology.faces
+        .createdBy(sweep, {
+          role:
+            selection === "start-cap"
+              ? "sweep.face.start-cap"
+              : "sweep.face.end-cap",
+        })
+        .select();
+      cad.output(
+        "treated",
+        cad.shell("treated", sweep, { openings: opening, thickness: mm(1) }),
+      );
+      break;
+    }
+    case "side": {
+      const opening = topology.faces
+        .createdBy(sweep, {
+          role: "sweep.face.side",
+          source: { sketch: profile, entity: "section.e0" },
+        })
+        .select();
+      cad.output(
+        "treated",
+        cad.shell("treated", sweep, { openings: opening, thickness: mm(1) }),
+      );
+      break;
+    }
+    case "start-rim":
+    case "end-rim": {
+      const edge = topology.edges
+        .createdBy(sweep, {
+          role:
+            selection === "start-rim"
+              ? "sweep.edge.start-rim"
+              : "sweep.edge.end-rim",
+          source: { sketch: profile, entity: "section.e0" },
+        })
+        .select();
+      cad.output(
+        "treated",
+        cad.fillet("treated", sweep, { edges: edge, radius: mm(0.5) }),
+      );
+      break;
+    }
+    case "lateral": {
+      const edge = topology.edges
+        .createdBy(sweep, { role: "sweep.edge.lateral" })
+        .atLeast(1);
+      cad.output(
+        "treated",
+        cad.fillet("treated", sweep, { edges: edge, radius: mm(0.5) }),
+      );
+      break;
+    }
+  }
+  return cad.build();
+}
+
+function mutableSweepRoleDocument(
+  selection: SweepRoleSelection = "side",
+): any {
+  return JSON.parse(stringifyDocument(sweepRoleDocument(selection)));
+}
+
 function expectSemanticFailure(
   value: unknown,
   message: string,
@@ -237,6 +331,42 @@ describe("closed topology role validation", () => {
     });
     expect(TOPOLOGY_ROLE_RULES["loft.edge.lateral"]).toEqual({
       producer: "loft",
+      topology: "edge",
+      relation: "created",
+      source: "none",
+    });
+    expect(TOPOLOGY_ROLE_RULES["sweep.face.start-cap"]).toEqual({
+      producer: "sweep",
+      topology: "face",
+      relation: "created",
+      source: "none",
+    });
+    expect(TOPOLOGY_ROLE_RULES["sweep.face.end-cap"]).toEqual({
+      producer: "sweep",
+      topology: "face",
+      relation: "created",
+      source: "none",
+    });
+    expect(TOPOLOGY_ROLE_RULES["sweep.face.side"]).toEqual({
+      producer: "sweep",
+      topology: "face",
+      relation: "created",
+      source: "sketch-curve",
+    });
+    expect(TOPOLOGY_ROLE_RULES["sweep.edge.start-rim"]).toEqual({
+      producer: "sweep",
+      topology: "edge",
+      relation: "created",
+      source: "sketch-curve",
+    });
+    expect(TOPOLOGY_ROLE_RULES["sweep.edge.end-rim"]).toEqual({
+      producer: "sweep",
+      topology: "edge",
+      relation: "created",
+      source: "sketch-curve",
+    });
+    expect(TOPOLOGY_ROLE_RULES["sweep.edge.lateral"]).toEqual({
+      producer: "sweep",
       topology: "edge",
       relation: "created",
       source: "none",
@@ -591,6 +721,86 @@ describe("closed topology role validation", () => {
       );
     },
   );
+
+  it.each([
+    ["start cap", "start-cap"],
+    ["end cap", "end-cap"],
+    ["source-aware side", "side"],
+    ["source-aware start rim", "start-rim"],
+    ["source-aware end rim", "end-rim"],
+    ["lateral edge", "lateral"],
+  ] as const)("accepts the V4 sweep %s role contract", (_label, selection) => {
+    const result = parseDocumentValue(mutableSweepRoleDocument(selection));
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.version).toBe(4);
+  });
+
+  it.each([
+    ["side", "openings", "sweep.face.side"],
+    ["start-rim", "edges", "sweep.edge.start-rim"],
+    ["end-rim", "edges", "sweep.edge.end-rim"],
+  ] as const)(
+    "rejects a foreign direct-profile source on the sweep %s role",
+    (selection, selectionField, role) => {
+      const invalid = mutableSweepRoleDocument(selection);
+      invalid.nodes.treated[selectionField].query.source.sketch =
+        "other-sweep-profile";
+      invalid.nodes.treated[selectionField].query.source.entity =
+        "other-section.e0";
+
+      expectSemanticFailure(
+        invalid,
+        "is not the direct profile of sweep 'sweep'",
+        `/nodes/treated/${selectionField}/query/source/sketch`,
+      );
+      expect(invalid.nodes.treated[selectionField].query.role).toBe(role);
+    },
+  );
+
+  it.each([
+    ["start-cap", "openings", "sweep.face.start-cap"],
+    ["end-cap", "openings", "sweep.face.end-cap"],
+    ["lateral", "edges", "sweep.edge.lateral"],
+  ] as const)(
+    "rejects a sketch source on the source-free sweep %s role",
+    (selection, selectionField, role) => {
+      const invalid = mutableSweepRoleDocument(selection);
+      invalid.nodes.treated[selectionField].query.source = {
+        kind: "sketch-entity",
+        sketch: "sweep-profile",
+        entity: "section.e0",
+      };
+
+      expectSemanticFailure(
+        invalid,
+        `Topology role '${role}' cannot originate from one sketch boundary entity`,
+        `/nodes/treated/${selectionField}/query/source`,
+      );
+    },
+  );
+
+  it("consumes a source-aware sweep rim through a real OCCT fillet", async () => {
+    const evaluator = await createEvaluator({ kernel: await createOcctKernel() });
+    try {
+      const result = await evaluator.evaluate(sweepRoleDocument("end-rim"));
+      expect(
+        result.ok,
+        result.ok ? undefined : JSON.stringify(result.diagnostics),
+      ).toBe(true);
+      if (!result.ok) return;
+      try {
+        const measured = result.value.output("treated").measure();
+        expect(measured.volume).toBeGreaterThan(0);
+        expect(measured.surfaceArea).toBeGreaterThan(0);
+      } finally {
+        result.value.dispose();
+      }
+    } finally {
+      evaluator.dispose();
+    }
+  });
 
   it.each([
     {

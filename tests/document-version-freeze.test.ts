@@ -4,19 +4,24 @@ import {
   DOCUMENT_SCHEMA_V1,
   DOCUMENT_SCHEMA_V2,
   DOCUMENT_SCHEMA_V3,
+  DOCUMENT_SCHEMA_V4,
   DOCUMENT_VERSION,
   DOCUMENT_VERSION_V1,
   DOCUMENT_VERSION_V2,
   DOCUMENT_VERSION_V3,
+  DOCUMENT_VERSION_V4,
   DesignDocumentV1Schema,
   DesignDocumentV2Schema,
   DesignDocumentV3Schema,
+  DesignDocumentV4Schema,
   NodeSchema,
   NodeV1Schema,
   NodeV2Schema,
   NodeV3Schema,
+  NodeV4Schema,
   PersistentTopologyReferenceV2Schema,
   design,
+  hashDocument,
   migrateDocument,
   mm,
   parseDocumentValue,
@@ -25,10 +30,12 @@ import {
   type DesignDocumentV1,
   type DesignDocumentV2,
   type DesignDocumentV3,
+  type DesignDocumentV4,
   type NodeIR,
   type NodeIRV1,
   type NodeIRV2,
   type NodeIRV3,
+  type NodeIRV4,
   type PersistentTopologyReferenceV2,
 } from "../src/index.js";
 
@@ -68,7 +75,7 @@ const frozenV1DocumentFields = [
   "version",
 ] as const;
 
-const frozenV2V3DocumentFields = [
+const frozenV2V3V4DocumentFields = [
   ...frozenV1DocumentFields,
   "topologyReferences",
 ].sort();
@@ -82,6 +89,8 @@ const expectedV1Bytes =
   '{"name":"document-version-freeze","nodes":{"box":{"center":false,"kind":"box","size":[{"dimension":"length","op":"literal","value":10},{"dimension":"length","op":"literal","value":20},{"dimension":"length","op":"literal","value":30}]}},"outputs":{"box":{"kind":"solid","node":"box"}},"parameters":{},"schema":"https://invariantcad.dev/schema/document/v1","units":{"angle":"rad","length":"mm"},"version":1}';
 const expectedV2Bytes =
   '{"name":"document-version-freeze","nodes":{"box":{"center":false,"kind":"box","size":[{"dimension":"length","op":"literal","value":10},{"dimension":"length","op":"literal","value":20},{"dimension":"length","op":"literal","value":30}]}},"outputs":{"box":{"kind":"solid","node":"box"}},"parameters":{},"schema":"https://invariantcad.dev/schema/document/v2","units":{"angle":"rad","length":"mm"},"version":2}';
+const expectedV3Bytes =
+  '{"name":"document-version-freeze","nodes":{"box":{"center":false,"kind":"box","size":[{"dimension":"length","op":"literal","value":10},{"dimension":"length","op":"literal","value":20},{"dimension":"length","op":"literal","value":30}]}},"outputs":{"box":{"kind":"solid","node":"box"}},"parameters":{},"schema":"https://invariantcad.dev/schema/document/v3","units":{"angle":"rad","length":"mm"},"version":3}';
 
 type RuntimeSchema = {
   readonly safeParse: (value: unknown) => { readonly success: boolean };
@@ -122,7 +131,7 @@ function documentFields(schema: unknown): readonly string[] {
   return Object.keys(shape).sort();
 }
 
-function currentBox(): DesignDocumentV3 {
+function currentBox(): DesignDocumentV4 {
   const cad = design("document-version-freeze");
   const box = cad.box("box", { size: vec3(mm(10), mm(20), mm(30)) });
   cad.output("box", box);
@@ -133,9 +142,10 @@ function versionedDocuments(): {
   readonly v1: DesignDocumentV1;
   readonly v2: DesignDocumentV2;
   readonly v3: DesignDocumentV3;
+  readonly v4: DesignDocumentV4;
 } {
-  const v3 = currentBox();
-  const { topologyReferences: _topologyReferences, ...body } = v3;
+  const v4 = currentBox();
+  const { topologyReferences: _topologyReferences, ...body } = v4;
   return {
     v1: DesignDocumentV1Schema.parse({
       ...body,
@@ -147,20 +157,30 @@ function versionedDocuments(): {
       schema: DOCUMENT_SCHEMA_V2,
       version: DOCUMENT_VERSION_V2,
     }),
-    v3,
+    v3: DesignDocumentV3Schema.parse({
+      ...body,
+      schema: DOCUMENT_SCHEMA_V3,
+      version: DOCUMENT_VERSION_V3,
+    }),
+    v4,
   };
 }
 
 function versionCases(): readonly {
   readonly label: string;
   readonly schema: RuntimeSchema;
-  readonly document: DesignDocumentV1 | DesignDocumentV2 | DesignDocumentV3;
+  readonly document:
+    | DesignDocumentV1
+    | DesignDocumentV2
+    | DesignDocumentV3
+    | DesignDocumentV4;
 }[] {
   const documents = versionedDocuments();
   return [
     { label: "v1", schema: DesignDocumentV1Schema, document: documents.v1 },
     { label: "v2", schema: DesignDocumentV2Schema, document: documents.v2 },
     { label: "v3", schema: DesignDocumentV3Schema, document: documents.v3 },
+    { label: "v4", schema: DesignDocumentV4Schema, document: documents.v4 },
   ];
 }
 
@@ -202,10 +222,11 @@ function withoutEnvelope(serialized: string): Readonly<Record<string, unknown>> 
 }
 
 describe("frozen document-version grammar", () => {
-  it("pins exact node-kind membership independently for v1, v2, and v3", () => {
+  it("pins exact node-kind membership independently for v1 through v4", () => {
     expect(nodeKinds(NodeV1Schema)).toEqual(frozenNodeKinds);
     expect(nodeKinds(NodeV2Schema)).toEqual(frozenNodeKinds);
     expect(nodeKinds(NodeV3Schema)).toEqual(frozenNodeKinds);
+    expect(nodeKinds(NodeV4Schema)).toEqual(frozenNodeKinds);
   });
 
   it("pins exact top-level document fields independently for every version", () => {
@@ -213,10 +234,13 @@ describe("frozen document-version grammar", () => {
       frozenV1DocumentFields,
     );
     expect(documentFields(DesignDocumentV2Schema)).toEqual(
-      frozenV2V3DocumentFields,
+      frozenV2V3V4DocumentFields,
     );
     expect(documentFields(DesignDocumentV3Schema)).toEqual(
-      frozenV2V3DocumentFields,
+      frozenV2V3V4DocumentFields,
+    );
+    expect(documentFields(DesignDocumentV4Schema)).toEqual(
+      frozenV2V3V4DocumentFields,
     );
   });
 
@@ -245,35 +269,47 @@ describe("frozen document-version grammar", () => {
     },
   );
 
-  it("keeps all current runtime and authoring aliases on document v3", () => {
-    expect(DOCUMENT_SCHEMA).toBe(DOCUMENT_SCHEMA_V3);
-    expect(DOCUMENT_VERSION).toBe(DOCUMENT_VERSION_V3);
-    expect(NodeSchema).toBe(NodeV3Schema);
+  it("keeps all current runtime and authoring aliases on document v4", () => {
+    expect(DOCUMENT_SCHEMA).toBe(DOCUMENT_SCHEMA_V4);
+    expect(DOCUMENT_VERSION).toBe(DOCUMENT_VERSION_V4);
+    expect(NodeSchema).toBe(NodeV4Schema);
 
     const cad = design("current-version-type-probe");
     const box = cad.box("box", { size: vec3(mm(1), mm(1), mm(1)) });
     cad.output("box", box);
     const built = cad.build();
-    expectTypeOf<NodeIR>().toEqualTypeOf<NodeIRV3>();
+    expectTypeOf<NodeIR>().toEqualTypeOf<NodeIRV4>();
     expectTypeOf<NodeIRV1["kind"]>().toEqualTypeOf<FrozenNodeKind>();
     expectTypeOf<NodeIRV2["kind"]>().toEqualTypeOf<FrozenNodeKind>();
     expectTypeOf<NodeIRV3["kind"]>().toEqualTypeOf<FrozenNodeKind>();
+    expectTypeOf<NodeIRV4["kind"]>().toEqualTypeOf<FrozenNodeKind>();
     expectTypeOf<keyof DesignDocumentV1>().toEqualTypeOf<FrozenDocumentField>();
     expectTypeOf<keyof DesignDocumentV2>().toEqualTypeOf<FrozenDocumentField>();
     expectTypeOf<keyof DesignDocumentV3>().toEqualTypeOf<FrozenDocumentField>();
-    expectTypeOf(built).toEqualTypeOf<DesignDocumentV3>();
+    expectTypeOf<keyof DesignDocumentV4>().toEqualTypeOf<FrozenDocumentField>();
+    expectTypeOf(built).toEqualTypeOf<DesignDocumentV4>();
     expect(built).toMatchObject({
-      schema: DOCUMENT_SCHEMA_V3,
-      version: DOCUMENT_VERSION_V3,
+      schema: DOCUMENT_SCHEMA_V4,
+      version: DOCUMENT_VERSION_V4,
     });
   });
 
-  it("keeps legacy canonical bytes stable and migration body data unchanged", () => {
-    const { v1, v2 } = versionedDocuments();
+  it("keeps legacy canonical bytes and hashes stable and migration body data unchanged", async () => {
+    const { v1, v2, v3 } = versionedDocuments();
     expect(stringifyDocument(v1)).toBe(expectedV1Bytes);
     expect(stringifyDocument(v2)).toBe(expectedV2Bytes);
+    expect(stringifyDocument(v3)).toBe(expectedV3Bytes);
+    expect(await hashDocument(v1)).toBe(
+      "048722e890a8a632e4fe2f11d5b236ee00501f51af9518434d1b28d5fa227dfc",
+    );
+    expect(await hashDocument(v2)).toBe(
+      "e8cc6f61dbc370790c911ec7d6cbf9801db6fc2db7e4802ba23d6f9cb75249cf",
+    );
+    expect(await hashDocument(v3)).toBe(
+      "cd5cb96c9e1e7156c52c927fb27fc960125dc28fb3efc90dff552090912847e1",
+    );
 
-    for (const source of [v1, v2]) {
+    for (const source of [v1, v2, v3]) {
       const sourceBytes = stringifyDocument(source);
       const migrated = migrateDocument(source);
       expect(migrated.ok).toBe(true);
@@ -286,7 +322,7 @@ describe("frozen document-version grammar", () => {
   });
 
   it("preserves explicitly present undefined optional fields during migration", () => {
-    const { v1, v2 } = versionedDocuments();
+    const { v1, v2, v3 } = versionedDocuments();
     const sources = [
       DesignDocumentV1Schema.parse({
         ...v1,
@@ -301,6 +337,13 @@ describe("frozen document-version grammar", () => {
         metadata: undefined,
         topologyReferences: undefined,
       }),
+      DesignDocumentV3Schema.parse({
+        ...v3,
+        materials: undefined,
+        configurations: undefined,
+        metadata: undefined,
+        topologyReferences: undefined,
+      }),
     ] as const;
 
     for (const source of sources) {
@@ -308,7 +351,8 @@ describe("frozen document-version grammar", () => {
         "materials",
         "configurations",
         "metadata",
-        ...(source.version === DOCUMENT_VERSION_V2
+        ...(source.version === DOCUMENT_VERSION_V2 ||
+        source.version === DOCUMENT_VERSION_V3
           ? (["topologyReferences"] as const)
           : []),
       ] as const;
@@ -346,8 +390,8 @@ describe("frozen document-version grammar", () => {
     if (!migrated.ok) return;
 
     expect(migrated.value).toMatchObject({
-      schema: DOCUMENT_SCHEMA_V3,
-      version: DOCUMENT_VERSION_V3,
+      schema: DOCUMENT_SCHEMA_V4,
+      version: DOCUMENT_VERSION_V4,
     });
     expect(
       JSON.parse(stringifyDocument(migrated.value)).topologyReferences,
@@ -358,7 +402,7 @@ describe("frozen document-version grammar", () => {
   });
 
   it("keeps future node kinds and body fields outside the public versioned types", () => {
-    const { v1, v2, v3 } = versionedDocuments();
+    const { v1, v2, v3, v4 } = versionedDocuments();
     const futureNode = { kind: "futureFeature" } as const;
 
     if (false) {
@@ -368,6 +412,8 @@ describe("frozen document-version grammar", () => {
       const invalidV2Node: NodeIRV2 = futureNode;
       // @ts-expect-error Document-v3 node membership is closed.
       const invalidV3Node: NodeIRV3 = futureNode;
+      // @ts-expect-error Document-v4 node membership is closed.
+      const invalidV4Node: NodeIRV4 = futureNode;
 
       const invalidV1Document: DesignDocumentV1 = {
         ...v1,
@@ -384,6 +430,11 @@ describe("frozen document-version grammar", () => {
         // @ts-expect-error Document-v3 has no future body field.
         futureDocumentField: true,
       };
+      const invalidV4Document: DesignDocumentV4 = {
+        ...v4,
+        // @ts-expect-error Document-v4 has no future body field.
+        futureDocumentField: true,
+      };
       void [
         invalidV1Document,
         invalidV1Node,
@@ -391,9 +442,11 @@ describe("frozen document-version grammar", () => {
         invalidV2Node,
         invalidV3Document,
         invalidV3Node,
+        invalidV4Document,
+        invalidV4Node,
       ];
     }
 
-    expect(v3.version).toBe(DOCUMENT_VERSION_V3);
+    expect(v4.version).toBe(DOCUMENT_VERSION_V4);
   });
 });

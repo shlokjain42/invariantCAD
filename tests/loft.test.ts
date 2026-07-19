@@ -337,7 +337,7 @@ describe("ruled solid loft document contract", () => {
     expect(parsed.value).toEqual(document);
     expect(cloneDocument(document)).toEqual(document);
     expect(await hashDocument(document)).toBe(
-      "c84e4ed163f06be070a81bbba877d02aa674297ac01a3d681ed9b62847ce9dca",
+      "88b691dba5067a042d8832da9bafba54c61c0fda3f8a25ac6fa15e066fe9f300",
     );
 
     const reversed = JSON.parse(serialized) as any;
