@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   captureTopologyReference,
   createEvaluator,
+  deg,
   design,
   mm,
+  scalarVec3,
   topology,
   vec3,
   type CadResult,
@@ -64,6 +66,22 @@ const snapshot: KernelTopologySnapshot = {
   edges,
 };
 
+function ambiguousSnapshot(): KernelTopologySnapshot {
+  return {
+    history: "complete",
+    faces: faces.map((descriptor, index) => ({
+      ...faces[0]!,
+      key: descriptor.key,
+      edges: [edges[index]!.key],
+    })),
+    edges: edges.map((descriptor, index) => ({
+      ...edges[0]!,
+      key: descriptor.key,
+      faces: [faces[index]!.key],
+    })),
+  };
+}
+
 function capture<K extends "face" | "edge">(
   kind: K,
   topologyKey: KernelTopologyKey,
@@ -84,14 +102,20 @@ const OMIT_SIGNATURES = Symbol("omit-signatures");
 interface HarnessOptions {
   readonly signatures?: unknown | typeof OMIT_SIGNATURES;
   readonly topology?: Partial<KernelTopologyCapabilities>;
+  readonly topologySnapshot?: KernelTopologySnapshot;
+  readonly topologyHook?: () => void;
 }
 
 interface Harness {
   readonly kernel: GeometryKernel;
   readonly boxCalls: () => number;
   readonly topologyCalls: () => number;
+  readonly disposeShapeCalls: () => number;
+  readonly disposedShapeSerials: () => readonly number[];
   readonly filletKeys: readonly (readonly KernelTopologyKey[])[];
+  readonly chamferKeys: readonly (readonly KernelTopologyKey[])[];
   readonly shellKeys: readonly (readonly KernelTopologyKey[])[];
+  readonly draftKeys: readonly (readonly KernelTopologyKey[])[];
 }
 
 function createHarness(options: HarnessOptions = {}): Harness {
@@ -99,8 +123,12 @@ function createHarness(options: HarnessOptions = {}): Harness {
   let serial = 0;
   let boxCallCount = 0;
   let topologyCallCount = 0;
+  let disposeShapeCallCount = 0;
+  const disposedShapeSerials: number[] = [];
   const filletKeys: (readonly KernelTopologyKey[])[] = [];
+  const chamferKeys: (readonly KernelTopologyKey[])[] = [];
   const shellKeys: (readonly KernelTopologyKey[])[] = [];
+  const draftKeys: (readonly KernelTopologyKey[])[] = [];
   const shape = (): KernelShape =>
     ({ kernel: id, serial: serial++ }) as KernelShape;
   const signatures = Object.hasOwn(options, "signatures")
@@ -121,10 +149,14 @@ function createHarness(options: HarnessOptions = {}): Harness {
     representation: "brep",
     exact: true,
     primitives: ["box"],
-    features: ["fillet", "shell"],
+    features: ["fillet", "chamfer", "shell", "draft"],
     nativeImports: [],
     nativeExports: [],
     topology: topologyCapabilities,
+    exactIndexedTopologyEvolution: {
+      protocolVersion: 1,
+      features: ["draft"],
+    },
   } as unknown as KernelCapabilities;
   const kernel: GeometryKernel = {
     id,
@@ -137,13 +169,22 @@ function createHarness(options: HarnessOptions = {}): Harness {
       filletKeys.push(Object.freeze([...selected]));
       return shape();
     },
+    chamfer(_input, selected): KernelShape {
+      chamferKeys.push(Object.freeze([...selected]));
+      return shape();
+    },
     shell(_input, selected): KernelShape {
       shellKeys.push(Object.freeze([...selected]));
       return shape();
     },
+    draft(_input, selected): KernelShape {
+      draftKeys.push(Object.freeze([...selected]));
+      return shape();
+    },
     topology(): KernelTopologySnapshot {
       topologyCallCount += 1;
-      return snapshot;
+      options.topologyHook?.();
+      return options.topologySnapshot ?? snapshot;
     },
     mesh: () => ({
       positions: new Float32Array(),
@@ -163,15 +204,24 @@ function createHarness(options: HarnessOptions = {}): Harness {
       tolerance: 1e-7,
     }),
     status: () => ({ ok: true, code: "OK" }),
-    disposeShape: () => {},
+    disposeShape: (disposed) => {
+      disposeShapeCallCount += 1;
+      disposedShapeSerials.push(
+        (disposed as unknown as { readonly serial: number }).serial,
+      );
+    },
     dispose: () => {},
   };
   return {
     kernel,
     boxCalls: () => boxCallCount,
     topologyCalls: () => topologyCallCount,
+    disposeShapeCalls: () => disposeShapeCallCount,
+    disposedShapeSerials: () => Object.freeze([...disposedShapeSerials]),
     filletKeys,
+    chamferKeys,
     shellKeys,
+    draftKeys,
   };
 }
 
@@ -242,6 +292,49 @@ function shellDocument() {
   return cad.build();
 }
 
+type PersistentConsumer = "fillet" | "chamfer" | "shell" | "draft";
+
+function persistentConsumerDocument(consumer: PersistentConsumer) {
+  const cad = design(`persistent ${consumer} cancellation`);
+  const box = cad.box("box", { size: vec3(mm(10), mm(10), mm(10)) });
+  if (consumer === "fillet" || consumer === "chamfer") {
+    const stored = cad.topologyReference("stored-edge", box, {
+      topology: "edge",
+      variants: [edgeReferences[0]],
+    });
+    const selected = topology.edges.persistentReference(stored).select();
+    const treated =
+      consumer === "fillet"
+        ? cad.fillet("treated", box, { edges: selected, radius: mm(1) })
+        : cad.chamfer("treated", box, { edges: selected, distance: mm(1) });
+    cad.output("result", treated);
+    return cad.build();
+  }
+
+  const stored = cad.topologyReference("stored-face", box, {
+    topology: "face",
+    variants: [faceReference],
+  });
+  const selected = topology.faces.persistentReference(stored).select();
+  const treated =
+    consumer === "shell"
+      ? cad.shell("treated", box, {
+          openings: selected,
+          thickness: mm(1),
+        })
+      : cad.draft("treated", box, {
+          faces: selected,
+          angle: deg(1),
+          pullDirection: scalarVec3(0, 0, 1),
+          neutralPlane: {
+            origin: vec3(mm(0), mm(0), mm(0)),
+            normal: scalarVec3(0, 0, 1),
+          },
+        });
+  cad.output("result", treated);
+  return cad.build();
+}
+
 async function evaluate(
   harness: Harness,
   document = filletDocument(),
@@ -260,8 +353,20 @@ async function evaluate(
 function expectNoGeometryCalls(harness: Harness): void {
   expect(harness.boxCalls()).toBe(0);
   expect(harness.topologyCalls()).toBe(0);
+  expect(harness.disposeShapeCalls()).toBe(0);
   expect(harness.filletKeys).toHaveLength(0);
+  expect(harness.chamferKeys).toHaveLength(0);
   expect(harness.shellKeys).toHaveLength(0);
+  expect(harness.draftKeys).toHaveLength(0);
+}
+
+function expectDisposedSerials(
+  harness: Harness,
+  expected: readonly number[],
+): void {
+  expect(
+    [...harness.disposedShapeSerials()].sort((first, second) => first - second),
+  ).toEqual([...expected].sort((first, second) => first - second));
 }
 
 describe("document-owned topology references in evaluator", () => {
@@ -332,6 +437,39 @@ describe("document-owned topology references in evaluator", () => {
     expectNoGeometryCalls(harness);
   });
 
+  it.each(["before", "after"] as const)(
+    "selects the current fingerprint when an unrelated variant is authored %s it",
+    async (position) => {
+      const foreign = {
+        ...edgeReferences[0],
+        kernelFingerprint: "other/signatures@1",
+        geometry: {
+          ...edgeReferences[0].geometry,
+          center: [1_000, 1_000, 1_000],
+        },
+      } as PersistentTopologyReference<"edge">;
+      const variants =
+        position === "before"
+          ? [foreign, edgeReferences[0]]
+          : [edgeReferences[0], foreign];
+      const document = JSON.parse(
+        JSON.stringify(filletDocument()),
+      ) as any;
+      document.topologyReferences["stored-edge"].variants = variants;
+      expect(
+        document.topologyReferences["stored-edge"].variants[0]
+          .kernelFingerprint,
+      ).toBe(position === "before" ? foreign.kernelFingerprint : fingerprint);
+      const harness = createHarness();
+      const result = await evaluate(harness, document);
+
+      expect(result.ok).toBe(true);
+      expect(harness.filletKeys).toEqual([[edges[0]!.key]]);
+      expect(harness.disposeShapeCalls()).toBe(2);
+      expectDisposedSerials(harness, [0, 1]);
+    },
+  );
+
   it("defensively rejects a prototype-named reference that ceases to be own", async () => {
     const document = JSON.parse(JSON.stringify(filletDocument())) as any;
     document.nodes.treated.edges.query.reference = "toString";
@@ -383,6 +521,8 @@ describe("document-owned topology references in evaluator", () => {
     expect(filletHarness.boxCalls()).toBe(1);
     expect(filletHarness.topologyCalls()).toBe(1);
     expect(filletHarness.filletKeys).toEqual([[edges[0]!.key]]);
+    expect(filletHarness.disposeShapeCalls()).toBe(2);
+    expectDisposedSerials(filletHarness, [0, 1]);
 
     const shellHarness = createHarness();
     const shellResult = await evaluate(shellHarness, shellDocument());
@@ -390,6 +530,104 @@ describe("document-owned topology references in evaluator", () => {
     expect(shellHarness.boxCalls()).toBe(1);
     expect(shellHarness.topologyCalls()).toBe(1);
     expect(shellHarness.shellKeys).toEqual([[faces[0]!.key]]);
+    expect(shellHarness.disposeShapeCalls()).toBe(2);
+    expectDisposedSerials(shellHarness, [0, 1]);
+  });
+
+  it.each([
+    "fillet",
+    "chamfer",
+    "shell",
+    "draft",
+  ] as const)(
+    "honors cancellation raised during persistent topology extraction before invoking %s",
+    async (consumer) => {
+      const abort = new AbortController();
+      const harness = createHarness({
+        topologyHook: () => abort.abort(),
+      });
+      const result = await evaluate(
+        harness,
+        persistentConsumerDocument(consumer),
+        { signal: abort.signal },
+      );
+
+      expect(result.ok).toBe(false);
+      expect(result.diagnostics[0]).toMatchObject({
+        code: "EVALUATION_ABORTED",
+      });
+      expect(harness.boxCalls()).toBe(1);
+      expect(harness.topologyCalls()).toBe(1);
+      expect(harness.filletKeys).toHaveLength(0);
+      expect(harness.chamferKeys).toHaveLength(0);
+      expect(harness.shellKeys).toHaveLength(0);
+      expect(harness.draftKeys).toHaveLength(0);
+      expect(harness.disposeShapeCalls()).toBe(1);
+      expectDisposedSerials(harness, [0]);
+    },
+  );
+
+  it("gives cancellation precedence over a simultaneous topology-match failure", async () => {
+    const abort = new AbortController();
+    const ambiguous = ambiguousSnapshot();
+    const harness = createHarness({
+      topologySnapshot: {
+        history: ambiguous.history,
+        get faces() {
+          abort.abort();
+          return ambiguous.faces;
+        },
+        edges: ambiguous.edges,
+      },
+    });
+    const result = await evaluate(harness, filletDocument(), {
+      signal: abort.signal,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({ code: "EVALUATION_ABORTED" }),
+    ]);
+    expect(harness.topologyCalls()).toBe(1);
+    expect(harness.filletKeys).toHaveLength(0);
+    expect(harness.disposeShapeCalls()).toBe(1);
+    expectDisposedSerials(harness, [0]);
+  });
+
+  it("gives cancellation precedence over an extraction exception from the same callback", async () => {
+    const abort = new AbortController();
+    const harness = createHarness({
+      topologyHook: () => {
+        abort.abort();
+        throw new Error("simultaneous extraction failure");
+      },
+    });
+    const result = await evaluate(harness, filletDocument(), {
+      signal: abort.signal,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({ code: "EVALUATION_ABORTED" }),
+    ]);
+    expect(harness.topologyCalls()).toBe(1);
+    expect(harness.filletKeys).toHaveLength(0);
+    expect(harness.disposeShapeCalls()).toBe(1);
+    expectDisposedSerials(harness, [0]);
+  });
+
+  it("disposes the input exactly once when persistent evidence becomes ambiguous", async () => {
+    const harness = createHarness({ topologySnapshot: ambiguousSnapshot() });
+    const result = await evaluate(harness);
+
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics[0]).toMatchObject({
+      code: "TOPOLOGY_MATCH_AMBIGUOUS",
+      node: "treated",
+    });
+    expect(harness.filletKeys).toHaveLength(0);
+    expect(harness.disposeShapeCalls()).toBe(1);
+    expectDisposedSerials(harness, [0]);
   });
 
   it("shares operational matching work limits across stored references", async () => {
@@ -412,6 +650,7 @@ describe("document-owned topology references in evaluator", () => {
     expect(harness.boxCalls()).toBe(1);
     expect(harness.topologyCalls()).toBe(1);
     expect(harness.filletKeys).toHaveLength(0);
+    expect(harness.disposeShapeCalls()).toBe(1);
   });
 
   it.each(["and", "or", "not"] as const)(
@@ -443,6 +682,7 @@ describe("document-owned topology references in evaluator", () => {
       expect(harness.boxCalls()).toBe(1);
       expect(harness.topologyCalls()).toBe(1);
       expect(harness.filletKeys).toHaveLength(0);
+      expect(harness.disposeShapeCalls()).toBe(1);
     },
   );
 

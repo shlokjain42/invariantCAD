@@ -2018,16 +2018,23 @@ export class Evaluator {
       ensureLive();
       const input = resolveInput();
       ensureLive();
-      const selected = resolveTopologySelection(
-        selection,
-        this.kernel.topology(input),
-        {
-          evaluate: expression,
-          node: id,
-          path,
-          ...(persistent === undefined ? {} : { persistent }),
-        },
-      );
+      let snapshot: KernelTopologySnapshot;
+      try {
+        snapshot = this.kernel.topology(input);
+      } catch (error) {
+        // Cancellation wins over an extraction error observed in the same
+        // synchronous kernel callback.
+        ensureLive();
+        throw error;
+      }
+      ensureLive();
+      const selected = resolveTopologySelection(selection, snapshot, {
+        evaluate: expression,
+        node: id,
+        path,
+        ...(persistent === undefined ? {} : { persistent }),
+      });
+      ensureLive();
       if (!selected.ok) {
         throw new EvaluationFailure(selected.diagnostics[0]!);
       }
@@ -2478,12 +2485,15 @@ export class Evaluator {
               node.input.node,
               () => solidRef(node.input),
             );
+            const radius = positive(expression(node.radius), id, "radius");
+            const context = featureContext(id);
+            ensureLive();
             result = ownShape(
               this.kernel.fillet!(
                 selected.input,
                 selected.keys,
-                { radius: positive(expression(node.radius), id, "radius") },
-                featureContext(id),
+                { radius },
+                context,
               ),
               id,
             );
@@ -2499,18 +2509,19 @@ export class Evaluator {
               node.input.node,
               () => solidRef(node.input),
             );
+            const distance = positive(
+              expression(node.distance),
+              id,
+              "distance",
+            );
+            const context = featureContext(id);
+            ensureLive();
             result = ownShape(
               this.kernel.chamfer!(
                 selected.input,
                 selected.keys,
-                {
-                  distance: positive(
-                    expression(node.distance),
-                    id,
-                    "distance",
-                  ),
-                },
-                featureContext(id),
+                { distance },
+                context,
               ),
               id,
             );
@@ -2550,16 +2561,19 @@ export class Evaluator {
               node.input.node,
               () => solidRef(node.input),
             );
+            const shellOptions = {
+              thickness,
+              direction: node.direction,
+              tolerance,
+            } as const;
+            const context = featureContext(id);
+            ensureLive();
             result = ownShape(
               this.kernel.shell!(
                 selected.input,
                 selected.keys,
-                {
-                  thickness,
-                  direction: node.direction,
-                  tolerance,
-                },
-                featureContext(id),
+                shellOptions,
+                context,
               ),
               id,
             );
@@ -2670,12 +2684,14 @@ export class Evaluator {
               node.input.node,
               () => solidRef(node.input),
             );
+            const context = featureContext(id);
+            ensureLive();
             result = ownShape(
               this.kernel.draft!(
                 selected.input,
                 selected.keys,
                 draftOptions,
-                featureContext(id),
+                context,
               ),
               id,
             );

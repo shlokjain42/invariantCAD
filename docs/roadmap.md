@@ -62,6 +62,7 @@ Facade ABI/bundle numbers version the native adapter boundary and are independen
 - Expand role and source mapping beyond the landed primitive, extrusion, revolution-face, bounded ruled-loft, and bounded-sweep families and beyond the current sweep modes; do not assign path-segment or arbitrary seam identity
 - Landed: topology-signature protocol v1 for detached face/edge references, with key-free structured geometry and one-hop adjacency evidence, optional semantic compatibility fingerprints, exact fingerprint gating including OCCT descriptor `@4`, partial-history fallback, and fail-closed missing/ambiguous resolution
 - Landed: Document v2 topology-reference registries and typed persistent selector atoms, retained by Document v3 and v4 with v1/v2/v3 preservation, explicit migration to v4, canonical normalized variants, exact direct-target and fingerprint binding, bounded shared resolution, and fillet/chamfer/shell/draft consumption
+- Landed: an initial published persistent-topology parameter-torture corpus covering transformed complete lineage, partial Boolean fallback, topology disappearance and recovery, deliberate sweep ambiguity, multi-fingerprint registries, cancellation, and native ownership cleanup
 - Landed: frozen node-kind membership and top-level document-body fields through explicit v1/v2/v3/v4 TypeScript and Zod lists, compile-time tuple/union tripwires, strict runtime inventory tests, and allow-listed migration copying before the next document grammar expansion
 - Expand persistent intent into broader topology kinds and feature-family naming without assigning arbitrary identities to symmetric topology
 - Expanded selection diagnostics and provenance explanations
@@ -77,7 +78,7 @@ Current topology keys and ABI indices remain evaluation-scoped. Protocol-v1 refe
 - Closed, variable-thickness, and intersection/miter-join shell modes
 - Composite Bézier/B-spline/helix and guided or variable-section sweep modes; smooth/guided/open or holed loft modes; pipe; and two-dimensional wire/profile offset
 - Feature-specific validity and healing diagnostics
-- Parameter-torture corpus for persistent selections
+- Expand the persistent-selection torture corpus across each newly named feature family and topology kind
 
 ## 0.5 — mechanical assemblies
 

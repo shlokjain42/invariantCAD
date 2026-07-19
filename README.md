@@ -405,7 +405,7 @@ With complete history on both snapshots, a unique stable role or sketch-source a
 
 Capture first proves that the detached evidence uniquely identifies the requested item in its own snapshot. Resolution likewise returns a current evaluation-scoped key only for exactly one compatible candidate. No match fails with `TOPOLOGY_MATCH_MISSING`; multiple matches fail with `TOPOLOGY_MATCH_AMBIGUOUS`; malformed references, options, tolerances, limits, and signature capabilities fail with `TOPOLOGY_SIGNATURE_INVALID`; malformed kernel snapshots fail as `KERNEL_ERROR`; and an exact fingerprint mismatch fails with `TOPOLOGY_FINGERPRINT_MISMATCH`. Resource normalization can return `TOPOLOGY_SIGNATURE_LIMIT_EXCEEDED` before deeper validation of an oversized input. Symmetric topology therefore remains explicitly ambiguous—the protocol never invents identity from enumeration order.
 
-Persistent document selectors currently support faces and edges only, not vertices. They store evidence, never kernel keys or shapes, and therefore do not provide geometric diffing, incremental feature hashes, or cross-run shape caching.
+Persistent document selectors currently support faces and edges only, not vertices. They store evidence, never kernel keys or shapes, and therefore do not provide geometric diffing, incremental feature hashes, or cross-run shape caching. The [published persistent-topology torture suite](docs/persistent-topology-torture.md) records the exact stable, missing, ambiguous, cancellation, and ownership boundaries that the current implementation must pass.
 
 ## What works today
 
@@ -482,10 +482,10 @@ The solver API is replaceable. The built-in solver is intentionally a v0.1 refer
 | Boolean topology evolution | Complete face/edge/vertex graph with explicitly supplied owned OCCT facade ABI 0.4 and later; partial on stock/legacy OCCT; unavailable on Manifold | Persistent cross-evaluation naming |
 | Fillet/chamfer topology evolution | Complete face/edge/vertex graph with explicitly supplied owned OCCT facade ABI 0.5 and later; partial on stock and owned ABI 0.2–0.4 | Persistent cross-evaluation naming |
 | Shell/whole-solid offset topology evolution | Complete face/edge/vertex graph with explicitly supplied owned OCCT facade ABI 0.6 and later; partial on stock and owned ABI 0.2–0.5 | Persistent cross-evaluation naming |
-| Persistent face/edge references | Protocol-v1 capture/resolution plus Document-v2/v3/v4 registries and selector atoms, with exact target/fingerprint binding and no invented identity for symmetric topology | Broader naming across feature families and topology kinds |
+| Persistent face/edge references | Protocol-v1 capture/resolution plus Document-v2/v3/v4 registries and selector atoms, with exact target/fingerprint binding, a published initial torture corpus, and no invented identity for symmetric topology | Broader naming across feature families and topology kinds |
 | Loft | OCCT ordered ruled-solid mode with matched hole-free sections and five fail-closed semantic face/edge roles | Smooth, guided, and open modes |
 | Sweep | OCCT open-polyline, one-edge circular-arc, and certified ordered line/arc composite solid modes with corrected-Frenet transport and six fail-closed semantic face/edge roles; owned facade ABI 0.6 retains the certified major multi-arc and eccentric-profile refinements introduced by ABI 0.3 | Bézier, B-spline, helix, guided, and variable-section modes |
-| Semantic face/edge selectors | Origin/geometry/adjacency and Document-v2/v3/v4 persistent-reference queries; v3 adds bounded ruled-loft roles and v4 adds bounded-sweep roles while every earlier grammar stays frozen | Remaining feature-family roles and torture corpus |
+| Semantic face/edge selectors | Origin/geometry/adjacency and Document-v2/v3/v4 persistent-reference queries; v3 adds bounded ruled-loft roles and v4 adds bounded-sweep roles while every earlier grammar stays frozen | Remaining feature-family roles and an expanded torture corpus |
 | Drawings, GD&T, PMI | No | Yes |
 | Sheet metal | No | Yes |
 | CAM and CAE adapters | No | Yes |
