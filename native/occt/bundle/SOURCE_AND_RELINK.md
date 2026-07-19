@@ -1,8 +1,8 @@
 # InvariantCAD OCCT facade source and relink guide
 
-This bundle pairs the InvariantCAD OCCT facade runtime with the exact public
-source locations, local patches, and build recipe used to reproduce a
-compatible JavaScript/WebAssembly pair. The inventory and instructions are
+This ABI/bundle 0.4 release pairs the InvariantCAD OCCT facade runtime with the
+exact public source locations, local patches, and build recipe used to reproduce
+a compatible JavaScript/WebAssembly pair. The inventory and instructions are
 engineering aids, not legal advice or a claim that this bundle alone satisfies
 every recipient's licensing obligations.
 
@@ -14,8 +14,14 @@ every recipient's licensing obligations.
 - `source/native/occt/upstream.lock.json` fixes the upstream `occt-wasm` and
   OCCT commits, compiler versions, builder platform, and builder image digest.
 - `source/native/occt/patches/` contains every InvariantCAD-owned change in the
-  bytewise filename order used by the build: atomic draft, exact indexed draft
-  history, and the controlled transactional PipeShell ABI.
+  bytewise filename order used by the build:
+  `0001-atomic-multi-face-draft.patch`,
+  `0002-indexed-draft-history.patch`,
+  `0003-controlled-pipe-shell.patch`, and
+  `0004-exact-boolean-history.patch`. The fourth patch adds the transactional
+  multi-input union/subtraction/intersection ABI and complete face/edge/vertex
+  topology graph, isolated operand copies, and native history-record
+  budget; it is part of the matching 0.4 source, not an optional patch.
 - `source/scripts/build-occt-facade.sh` is the exact rootless, digest-pinned
   build driver. Its compilation phase has networking disabled.
 - `metadata/provenance.json` records verified artifact digests and the locked
@@ -77,7 +83,18 @@ source/scripts/build-occt-facade.sh \
 The rebuilt files are written below `source/.artifacts/occt-facade/`. They are
 compatible replacement candidates, but a modified build is not expected to
 match this release's checksums. Test the generated pair together; never mix
-JavaScript glue from one build with WebAssembly from another.
+JavaScript glue from one build with WebAssembly from another. A matching 0.4
+pair must expose the retained draft and PipeShell surfaces plus
+`invariantcadBooleanAtomic`, the stable union/subtract/intersect operation enum,
+and complete version-1 `PRESERVED`/`MODIFIED`/`GENERATED`/`DELETED`/`CREATED`
+history. The exact Boolean call accepts the caller's maximum history-record
+count. It must retain all available native preserved, modified, and generated
+claims; emit deleted only without a final identity successor; and use
+source-less `CREATED` (`-1/NONE/-1`) only for residual higher-order result
+topology, mutually exclusively with operand claims. Boolean operations must run
+on topology-independent working copies that share immutable geometry, prove
+each indexed source-to-copy mapping, and leave every arena-owned input BREP
+byte-stable.
 
 ## Modify OCCT and relink
 
@@ -98,10 +115,20 @@ rebuilding and relinking the complete pair. To do that:
    and audit the replacement image digest rather than reusing the release
    digest as a claim about modified contents.
 4. Update the working lock to the replacement builder digest.
-5. Run the included build driver against that working recipe and test the new
-   JavaScript/WebAssembly pair through the InvariantCAD native and public
-   facade tests.
-6. Deploy both rebuilt runtime files together. InvariantCAD accepts an explicit
+5. Keep the owned patch series explicit and ordered. If the change replaces the
+   exact Boolean implementation, modify or supersede
+   `0004-exact-boolean-history.patch` in the working source recipe; do not omit
+   it and still label the result ABI 0.4. Add any later patch with a higher
+   lexical prefix, then update the working bundle input inventory and digests.
+6. Run the included build driver against that working recipe and test the new
+   JavaScript/WebAssembly pair through the InvariantCAD native and public facade
+   tests. The exact Boolean corpus must cover all three operations, authored
+   target/tool order, complete face/edge/vertex history including residual
+   source-less-created topology and stale intermediate removals, isolated
+   working copies with byte-stable arena inputs, configurable record-limit enforcement before native
+   report materialization and indexed JavaScript copying, empty results,
+   same-kernel one-shot transfer, and rollback on failed adoption.
+7. Deploy both rebuilt runtime files together. InvariantCAD accepts an explicit
    module factory and WebAssembly override and does not require release hashes
    when an application intentionally supplies its own trusted build.
 

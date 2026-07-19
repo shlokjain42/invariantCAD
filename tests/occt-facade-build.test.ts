@@ -17,6 +17,10 @@ const pipeShellPatchUrl = new URL(
   "../native/occt/patches/0003-controlled-pipe-shell.patch",
   import.meta.url,
 );
+const booleanPatchUrl = new URL(
+  "../native/occt/patches/0004-exact-boolean-history.patch",
+  import.meta.url,
+);
 const smokeUrl = new URL("../scripts/test-occt-facade.mjs", import.meta.url);
 const packagerUrl = new URL(
   "../scripts/package-occt-facade-bundle.mjs",
@@ -106,6 +110,20 @@ describe("owned OCCT facade build boundary", () => {
     expect(pipeShellPatch).toContain("invariantcadPipeShellSolid");
     expect(pipeShellPatch).toContain(
       "invariantcad-facade@0.3.0+occt-wasm.3.7.0",
+    );
+
+    const booleanPatch = await readFile(booleanPatchUrl, "utf8");
+    expect(booleanPatch).toContain("InvariantCadBooleanReport");
+    expect(booleanPatch).toContain("invariantcadBooleanAtomic");
+    expect(booleanPatch).toContain("BRepTools_History");
+    expect(booleanPatch).toContain("BRepBuilderAPI_Copy");
+    expect(booleanPatch).toContain("HISTORY_COPY_SUCCESSOR_NOT_UNIQUE");
+    expect(booleanPatch).toContain("InvariantCadTopologyRelationCreated");
+    expect(booleanPatch).toContain("SetNonDestructive(true)");
+    expect(booleanPatch).toContain("HISTORY_RECORD_LIMIT_EXCEEDED");
+    expect(booleanPatch).toContain("maxHistoryRecords");
+    expect(booleanPatch).toContain(
+      "invariantcad-facade@0.4.0+occt-wasm.3.7.0",
     );
 
     const releaseInput = JSON.parse(await readFile(releaseInputUrl, "utf8")) as {

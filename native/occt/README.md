@@ -53,8 +53,10 @@ previously hydrated Cargo cache. The script rejects Cargo credential files in
 the mounted cache.
 
 Patches belong in `native/occt/patches/` and should use Git's `a/` and `b/`
-path prefixes. Prefix filenames with an ordering number (for example,
-`0001-draft-history.patch`) because lexical order is part of the build.
+path prefixes. Prefix filenames with an ordering number because lexical order is
+part of the build. Facade ABI 0.4 is the exact four-patch series
+`0001-atomic-multi-face-draft.patch`, `0002-indexed-draft-history.patch`,
+`0003-controlled-pipe-shell.patch`, and `0004-exact-boolean-history.patch`.
 
 ## Native smoke test
 
@@ -67,11 +69,15 @@ pnpm test:occt-facade
 pnpm test:occt-draft-public
 ```
 
-The native fixture exercises the raw ABI; the public smoke loads the same
-generated pair through `createOcctKernel` and exercises direct and evaluated
-draft plus controlled major multi-arc, eccentric-profile, and conditioned
-near-full PipeShell transfers. These heavyweight tests are intentionally
-separate from normal
+The native fixture exercises the raw ABI, including all three exact Boolean
+operations, complete face/edge/vertex history, generated, deleted, and residual
+source-less-created topology, stale intermediate-removal cases, isolated
+working copies with byte-stable arena operands, record budgets, empty results, report cloning,
+foreign-kernel rejection, and one-shot transfer.
+The public smoke loads the same generated pair through `createOcctKernel` and
+exercises direct and evaluated draft, exact Boolean lineage, plus controlled
+major multi-arc, eccentric-profile, and conditioned near-full PipeShell
+transfers. These heavyweight tests are intentionally separate from normal
 `pnpm verify`. Generated artifacts stay under the ignored
 `.artifacts/occt-facade/` directory and are not committed or included in the
 `invariantcad` npm package.
@@ -93,11 +99,11 @@ The packager reads `.artifacts/occt-facade/` and writes both of these ignored
 outputs:
 
 ```text
-.artifacts/occt-facade-bundle/invariantcad-occt-facade-0.3.0/
-.artifacts/occt-facade-bundle/invariantcad-occt-facade-0.3.0.tar.gz
+.artifacts/occt-facade-bundle/invariantcad-occt-facade-0.4.0/
+.artifacts/occt-facade-bundle/invariantcad-occt-facade-0.4.0.tar.gz
 ```
 
-`0.3.0` is the owned facade ABI and bundle version; it is independent of the
+`0.4.0` is the owned facade ABI and bundle version; it is independent of the
 InvariantCAD npm package version and document schema version.
 
 The directory and archive have the same single-root layout. The matched pair is
@@ -115,8 +121,9 @@ publication. The verifier then checks the directory or archive without
 executing native code.
 `pnpm test:occt-facade-bundle` packages the pair, verifies both representations,
 packs the `invariantcad` npm tarball, installs it in a fresh temporary consumer,
-and explicitly points compact draft and owned composite-refinement checks at the
-bundled `runtime/` directory. The normal `pnpm test:package` remains independent
+and explicitly points compact draft, exact Boolean, and owned
+composite-refinement checks at the bundled `runtime/` directory. The normal
+`pnpm test:package` remains independent
 of owned-facade build artifacts. To check byte-for-byte packager determinism as
 well, run:
 
@@ -162,16 +169,32 @@ proof fails.
 
 The version-1 evolution envelope is report-owned and immutable. It records
 `sourceShapeIndex`, `sourceKind`, `sourceIndex`, `relation`, `resultKind`, and
-`resultIndex`, so later operations can describe multiple source operands and
-topology-changing relations without changing the record shape. Draft currently
-has one source operand and emits only one-to-one `PRESERVED` or `MODIFIED`
-records. The history remains readable through cloned reports and after result
-transfer; failed reports advertise version zero and no complete history.
-Schema version 1 describes N source shapes evolving into one aggregate result.
-`GENERATED` is reserved for additional topology derived from a source link; it
-does not inherit the naming or incomplete semantics of OCCT's `Generated()`
-method. `GENERATED`, `DELETED`, and source-less `CREATED` remain unadvertised
-until topology-changing emitters prove their respective completeness rules.
+`resultIndex`, so N source shapes can evolve into one aggregate result without
+changing the record shape. Draft has one source operand and emits only
+one-to-one `PRESERVED` or `MODIFIED` records. ABI 0.4 Boolean reports use the
+complete non-bijective relation set below:
+
+- `PRESERVED` and `MODIFIED` require a real source and result, and both endpoints
+  have the same face, edge, or vertex kind.
+- `GENERATED` requires a real source and result but may change topology kind. It
+  proves causal coverage; it does not by itself transfer the source's public
+  identity or naming.
+- `DELETED` requires a real source and the result sentinel
+  `resultKind = NONE`, `resultIndex = -1`. It is valid only when the source has
+  no final same-kind identity successor; a stale removal flag from an
+  intermediate Boolean step cannot override final-result membership.
+- Source-less `CREATED` uses
+  `sourceShapeIndex = -1`, `sourceKind = NONE`, and `sourceIndex = -1`, followed
+  by a real result. The facade first retains every available native
+  `PRESERVED`, `MODIFIED`, and `GENERATED` relation, then emits `CREATED` only
+  for residual higher-order result topology that a multi-tool interaction did
+  not attribute to an individual operand. A result with `CREATED` cannot also
+  have an operand claim.
+
+The history remains readable through cloned reports and after result transfer;
+failed reports advertise version zero and no complete history. Unknown relation
+values, malformed sentinels, contradictory source/result links, or incomplete
+coverage fail the protocol rather than becoming partial history.
 
 All indices are zero-based positions in evaluation-scoped
 `TopExp::MapShapes` maps of unique located faces, edges, or vertices. These are
@@ -191,14 +214,13 @@ counts, and adopts the transferred result transactionally.
 Draft is enabled only when the supplied InvariantCAD-owned `moduleFactory`
 loads a module whose exact facade probe succeeds. That factory may locate its
 matched sibling WASM itself; callers can provide `wasm` as an explicit binary
-override when their runtime or bundler requires it. The kernel then advertises
-both ordinary `draft` support and feature-scoped
-`exactIndexedTopologyEvolution` v1 for draft. Its global
-topology provenance remains `feature`; other topology-changing operations are
-not promoted to complete history by the draft-specific proof. Default
-`createOcctKernel()` loads stock OCCT and remains usable for its other exact
-features, but it does not advertise or execute draft. Partial, unknown, or
-mismatched facade markers fail closed.
+override when their runtime or bundler requires it. ABI 0.2 and later advertise
+ordinary `draft` support and feature-scoped `exactIndexedTopologyEvolution` v1
+for draft. ABI 0.4 advertises the same protocol for both `draft` and `boolean`.
+The global topology provenance remains `feature`; a feature-scoped proof does
+not promote unrelated operations. Default `createOcctKernel()` loads stock OCCT
+and remains usable for its other exact features, but it does not advertise or
+execute draft. Partial, unknown, or mismatched facade markers fail closed.
 
 Facade ABI 0.3 is additive: it retains the complete draft surface and adds a
 controlled transactional PipeShell operation. The operation accepts one
@@ -219,6 +241,70 @@ cancellation diagnostics. Only after the native and analytic corpus passed
 does the 0.3 kernel advertise the version-1 `major-multiple-arcs` and
 `major-eccentric-profile` composite refinements. Stock OCCT and legacy ABI 0.2
 remain supported but advertise neither stronger guarantee.
+
+Facade ABI 0.4 is additive: it retains ABI 0.2 draft and ABI 0.3 PipeShell and
+adds `invariantcadBooleanAtomic(kernel, operation, targetId, toolIds,
+maxHistoryRecords)`. Operation codes are stable as union `0`,
+subtract `1`, and intersect `2`. Source shape `0` is the target; source shapes
+`1..N` are the tools in authored order. Union and intersection apply ordered
+sequential Fuse/Common operations. Subtraction makes one Cut with the target as
+its argument and the complete authored tool sequence as its tool list. This
+preserves the public geometry contract instead of treating every Boolean as an
+unordered n-ary operation. Before any builder runs, the facade makes a
+topology-independent copy of every operand, shares its immutable geometry, and
+proves a one-to-one original-to-copy mapping for every indexed face, edge, and vertex.
+Each OCCT builder consumes only those copies with non-destructive mode enabled,
+so the arena-owned target and every tool retain byte-identical BREP
+serializations, including TShape status flags, across the operation.
+
+A successful Boolean report owns the aggregate result and a complete version-1
+face/edge/vertex graph. For each input face, edge, and vertex, the graph must
+contain one or more same-kind identity successors or one `DELETED` record,
+exclusively. Generated links may coexist but do not satisfy that
+identity-successor-or-deletion requirement. The native extractor retains all
+available preserved, modified, and generated links before filling gaps. Every
+result face, edge, and vertex must then have one or more operand claims or one
+source-less `CREATED` record, mutually exclusively. Duplicates are canonicalized
+in target/tool and subshape-index order; conflicting relations, unsupported
+kinds, and incomplete source or result coverage fail the history stage. An
+empty result is valid: its result counts are all zero and every input subshape
+is deleted.
+
+The TypeScript adapter treats the report as one fail-closed transaction.
+`createOcctKernel` accepts `maxExactBooleanHistoryRecords`, a non-negative
+signed 32-bit record budget that defaults to `1_000_000`. The adapter passes
+that budget into the native operation, which fails before materializing a
+record beyond it, then checks the returned record count before making any
+indexed JavaScript record call. It copies and freezes all diagnostics, counts,
+and records; validates operation, tool count, build count, sentinels, complete
+graph coverage, and raw input counts; and requires a `READY` transfer before
+taking the result. After transfer it checks raw result counts and reduces the
+graph. A thrown validation or reduction never exposes a shape, and a
+post-transfer adoption failure releases the transferred root exactly once.
+Untaken reports release their owned result, and transfer is restricted to the
+originating kernel and can succeed only once.
+
+The record budget does not bound the topology-independent operand copies or
+OCCT's internal Boolean workspace. Those allocations scale with operand
+topology and are the cost of keeping every arena-owned BREP byte-stable.
+
+Public Boolean lineage follows identity only. `PRESERVED` and `MODIFIED`
+successors inherit proven earlier lineage, including roles and sketch sources;
+`GENERATED` is causal coverage and never grants the new subshape a source role;
+source-less `CREATED` covers higher-order topology without inventing an operand
+cause. A generated-only or source-less-created public face or edge is recorded
+as created by the current Boolean feature. An identity successor is marked
+modified by that feature only when at least one identity predecessor is
+modified. Native indices and public topology keys remain evaluation-scoped and
+are never document IDs.
+
+Exact indexed Boolean evolution is optional at the evaluator boundary. ABI 0.4
+uses it; stock OCCT, owned ABI 0.2/0.3, and Manifold continue to execute their
+base Boolean operations with partial history. Malformed advertised capability
+metadata or a malformed ABI 0.4 report is authoritative and fails closed. Empty
+Boolean geometry follows the evaluator's ordinary `EMPTY_RESULT` / `allowEmpty`
+contract. Fillet, chamfer, shell, and offset history remains partial on every
+current backend.
 
 The generated pair and its local package-neutral bundle remain ignored build
 artifacts and are not included in the `invariantcad` npm tarball. Until an

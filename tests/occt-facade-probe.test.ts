@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  OCCT_BOOLEAN_FACADE_VERSION,
   OCCT_CONTROLLED_PIPE_SHELL_FACADE_VERSION,
   OCCT_DRAFT_FACADE_VERSION,
   OcctFacadeProtocolError,
@@ -42,6 +43,20 @@ function controlledPipeShellModule() {
   };
 }
 
+function booleanModule() {
+  return {
+    ...controlledPipeShellModule(),
+    InvariantCadBooleanOperation: {
+      UNION: 0,
+      SUBTRACT: 1,
+      INTERSECT: 2,
+    },
+    InvariantCadBooleanReport: class {},
+    invariantcadFacadeVersion: vi.fn(() => OCCT_BOOLEAN_FACADE_VERSION),
+    invariantcadBooleanAtomic: vi.fn(),
+  };
+}
+
 describe("owned OCCT facade capability probe", () => {
   it("classifies marker-free stock without trusting unrelated constructors", () => {
     expect(
@@ -62,6 +77,7 @@ describe("owned OCCT facade capability probe", () => {
       module,
       draft: module,
       pipeShell: undefined,
+      boolean: undefined,
     });
     expect(Object.isFrozen(facade)).toBe(true);
     expect(probeOcctDraftFacade(module)).toBe(module);
@@ -77,6 +93,23 @@ describe("owned OCCT facade capability probe", () => {
       module,
       draft: module,
       pipeShell: module,
+      boolean: undefined,
+    });
+    expect(Object.isFrozen(facade)).toBe(true);
+    expect(probeOcctDraftFacade(module)).toBe(module);
+  });
+
+  it("recognizes exact 0.4 as draft, controlled PipeShell, and Boolean", () => {
+    const module = booleanModule();
+    const facade = probeOcctFacade(module);
+
+    expect(facade).toEqual({
+      abi: "0.4",
+      version: OCCT_BOOLEAN_FACADE_VERSION,
+      module,
+      draft: module,
+      pipeShell: module,
+      boolean: module,
     });
     expect(Object.isFrozen(facade)).toBe(true);
     expect(probeOcctDraftFacade(module)).toBe(module);
@@ -90,11 +123,22 @@ describe("owned OCCT facade capability probe", () => {
     };
     expect(() => probeOcctFacade(partial)).toThrow(OcctFacadeProtocolError);
 
-    const extra = {
+    const partialBoolean = {
       ...controlledPipeShellModule(),
+      InvariantCadBooleanReport: class {},
+      invariantcadBooleanAtomic: vi.fn(),
+    };
+    expect(() => probeOcctFacade(partialBoolean)).toThrow(
+      OcctFacadeProtocolError,
+    );
+
+    const extra = {
+      ...booleanModule(),
       invariantcadFutureCapability: vi.fn(),
     };
-    expect(() => probeOcctFacade(extra)).toThrow("expected exact ABI 0.2 or 0.3");
+    expect(() => probeOcctFacade(extra)).toThrow(
+      "expected exact ABI 0.2, 0.3, or 0.4",
+    );
 
     const differentlyCasedUnknown = {
       ...draftModule(),
@@ -122,6 +166,22 @@ describe("owned OCCT facade capability probe", () => {
       `expected '${OCCT_CONTROLLED_PIPE_SHELL_FACADE_VERSION}'`,
     );
 
+    const pipeShellMarkersBooleanVersion = controlledPipeShellModule();
+    pipeShellMarkersBooleanVersion.invariantcadFacadeVersion.mockReturnValue(
+      OCCT_BOOLEAN_FACADE_VERSION,
+    );
+    expect(() => probeOcctFacade(pipeShellMarkersBooleanVersion)).toThrow(
+      `expected '${OCCT_CONTROLLED_PIPE_SHELL_FACADE_VERSION}'`,
+    );
+
+    const booleanMarkersPipeShellVersion = booleanModule();
+    booleanMarkersPipeShellVersion.invariantcadFacadeVersion.mockReturnValue(
+      OCCT_CONTROLLED_PIPE_SHELL_FACADE_VERSION,
+    );
+    expect(() => probeOcctFacade(booleanMarkersPipeShellVersion)).toThrow(
+      `expected '${OCCT_BOOLEAN_FACADE_VERSION}'`,
+    );
+
     const wrongGlobal = controlledPipeShellModule();
     wrongGlobal.invariantcadPipeShellSolid = 7 as unknown as typeof wrongGlobal.invariantcadPipeShellSolid;
     expect(() => probeOcctFacade(wrongGlobal)).toThrow(
@@ -133,9 +193,23 @@ describe("owned OCCT facade capability probe", () => {
     expect(() => probeOcctFacade(wrongClass)).toThrow(
       "InvariantCadPipeShellReport must be an Embind class marker",
     );
+
+    const wrongBooleanGlobal = booleanModule();
+    wrongBooleanGlobal.invariantcadBooleanAtomic =
+      7 as unknown as typeof wrongBooleanGlobal.invariantcadBooleanAtomic;
+    expect(() => probeOcctFacade(wrongBooleanGlobal)).toThrow(
+      "invariantcadBooleanAtomic must be a function",
+    );
+
+    const wrongBooleanClass = booleanModule();
+    wrongBooleanClass.InvariantCadBooleanReport =
+      {} as typeof wrongBooleanClass.InvariantCadBooleanReport;
+    expect(() => probeOcctFacade(wrongBooleanClass)).toThrow(
+      "InvariantCadBooleanReport must be an Embind class marker",
+    );
   });
 
-  it("keeps numeric topology enums exact for both known versions", () => {
+  it("keeps numeric topology enums exact across known versions", () => {
     const extraEnumMember = controlledPipeShellModule();
     Object.assign(extraEnumMember.InvariantCadTopologyKind, { FUTURE: 3 });
     expect(() => probeOcctFacade(extraEnumMember)).toThrow(
@@ -148,6 +222,48 @@ describe("owned OCCT facade capability probe", () => {
     } as unknown as number;
     expect(() => probeOcctFacade(wrappedEnumValue)).toThrow(
       "InvariantCadTopologyRelation.MODIFIED must be the number 1",
+    );
+
+    const booleanTopologyEnum = booleanModule();
+    delete (
+      booleanTopologyEnum.InvariantCadTopologyKind as Partial<
+        typeof booleanTopologyEnum.InvariantCadTopologyKind
+      >
+    ).VERTEX;
+    expect(() => probeOcctFacade(booleanTopologyEnum)).toThrow(
+      "InvariantCadTopologyKind members",
+    );
+  });
+
+  it("keeps the Boolean operation enum exact", () => {
+    const extraMember = booleanModule();
+    Object.assign(extraMember.InvariantCadBooleanOperation, { XOR: 3 });
+    expect(() => probeOcctFacade(extraMember)).toThrow(
+      "InvariantCadBooleanOperation members",
+    );
+
+    const missingMember = booleanModule();
+    delete (
+      missingMember.InvariantCadBooleanOperation as Partial<
+        typeof missingMember.InvariantCadBooleanOperation
+      >
+    ).INTERSECT;
+    expect(() => probeOcctFacade(missingMember)).toThrow(
+      "InvariantCadBooleanOperation members",
+    );
+
+    const wrongValue = booleanModule();
+    wrongValue.InvariantCadBooleanOperation.SUBTRACT = 7;
+    expect(() => probeOcctFacade(wrongValue)).toThrow(
+      "InvariantCadBooleanOperation.SUBTRACT must be the number 1",
+    );
+
+    const wrappedValue = booleanModule();
+    wrappedValue.InvariantCadBooleanOperation.UNION = {
+      value: 0,
+    } as unknown as number;
+    expect(() => probeOcctFacade(wrappedValue)).toThrow(
+      "InvariantCadBooleanOperation.UNION must be the number 0",
     );
   });
 });

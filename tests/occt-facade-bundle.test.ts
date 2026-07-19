@@ -25,7 +25,7 @@ const verifierPath = join(repoRoot, "scripts/verify-occt-facade-bundle.mjs");
 const packagerPath = join(repoRoot, "scripts/package-occt-facade-bundle.mjs");
 const descriptorPath = join(repoRoot, "native/occt/bundle/release-input.json");
 const lockPath = join(repoRoot, "native/occt/upstream.lock.json");
-const bundleVersion = "0.3.0";
+const bundleVersion = "0.4.0";
 const bundleName = `invariantcad-occt-facade-${bundleVersion}`;
 const facadeMarker = `invariantcad-facade@${bundleVersion}+occt-wasm.3.7.0`;
 const pipeShellPatchSource =
@@ -156,9 +156,12 @@ function syntheticWasm(): Buffer {
         "invariantcadDraftFacesAtomic",
         "InvariantCadDraftReport",
         "InvariantCadPipeShellReport",
+        "InvariantCadBooleanOperation",
+        "InvariantCadBooleanReport",
         "InvariantCadTopologyKind",
         "InvariantCadTopologyRelation",
         "invariantcadPipeShellSolid",
+        "invariantcadBooleanAtomic",
       ].join("\0"),
     ),
   ]);
@@ -180,13 +183,15 @@ async function makeFixtureReleaseInput(): Promise<ReleaseInput> {
   const inputs = current.inputs.filter(
     (entry) => entry.target !== pipeShellPatchTarget,
   );
-  const buildScriptIndex = inputs.findIndex(
-    (entry) => entry.target === "source/scripts/build-occt-facade.sh",
+  const nextPatchIndex = inputs.findIndex(
+    (entry) =>
+      entry.target ===
+      "source/native/occt/patches/0004-exact-boolean-history.patch",
   );
-  if (buildScriptIndex === -1) {
-    throw new Error("Fixture release input lacks the owned-facade build script");
+  if (nextPatchIndex === -1) {
+    throw new Error("Fixture release input lacks the exact Boolean patch");
   }
-  inputs.splice(buildScriptIndex, 0, pipeShellPatch);
+  inputs.splice(nextPatchIndex, 0, pipeShellPatch);
   return {
     ...current,
     bundle: { ...current.bundle, version: bundleVersion },

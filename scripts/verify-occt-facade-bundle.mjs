@@ -8,12 +8,14 @@ import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
 const BUNDLE_NAME = "invariantcad-occt-facade";
-const BUNDLE_VERSION = "0.3.0";
+const BUNDLE_VERSION = "0.4.0";
 const BUNDLE_DIRECTORY = `${BUNDLE_NAME}-${BUNDLE_VERSION}`;
 const FACADE_MARKER =
-  "invariantcad-facade@0.3.0+occt-wasm.3.7.0";
+  "invariantcad-facade@0.4.0+occt-wasm.3.7.0";
 const DRAFT_FACADE_MARKER =
   "invariantcad-facade@0.2.0+occt-wasm.3.7.0";
+const CONTROLLED_PIPE_SHELL_FACADE_MARKER =
+  "invariantcad-facade@0.3.0+occt-wasm.3.7.0";
 const UPSTREAM_OCCT_WASM_VERSION = "3.7.0";
 const RELEASE_INPUT_URL = new URL(
   "../native/occt/bundle/release-input.json",
@@ -31,6 +33,7 @@ const PATCH_PATHS = Object.freeze([
   "source/native/occt/patches/0001-atomic-multi-face-draft.patch",
   "source/native/occt/patches/0002-indexed-draft-history.patch",
   "source/native/occt/patches/0003-controlled-pipe-shell.patch",
+  "source/native/occt/patches/0004-exact-boolean-history.patch",
 ]);
 const LICENSE_PATHS = Object.freeze([
   "LICENSE",
@@ -727,9 +730,12 @@ function verifyRuntime(files, manifest, release, runtimePins) {
     "invariantcadDraftFacesAtomic",
     "InvariantCadDraftReport",
     "InvariantCadPipeShellReport",
+    "InvariantCadBooleanOperation",
+    "InvariantCadBooleanReport",
     "InvariantCadTopologyKind",
     "InvariantCadTopologyRelation",
     "invariantcadPipeShellSolid",
+    "invariantcadBooleanAtomic",
   ]) {
     if (!wasm.includes(Buffer.from(marker))) {
       fail(`runtime WASM does not contain the required facade ABI marker: ${marker}`);
@@ -845,7 +851,15 @@ function verifySourceInputs(files) {
     [PATCH_PATHS[1], ["InvariantCadIndexedTopologyEvolution", DRAFT_FACADE_MARKER]],
     [
       PATCH_PATHS[2],
-      ["InvariantCadPipeShellReport", "invariantcadPipeShellSolid", FACADE_MARKER],
+      [
+        "InvariantCadPipeShellReport",
+        "invariantcadPipeShellSolid",
+        CONTROLLED_PIPE_SHELL_FACADE_MARKER,
+      ],
+    ],
+    [
+      PATCH_PATHS[3],
+      ["InvariantCadBooleanReport", "invariantcadBooleanAtomic", FACADE_MARKER],
     ],
     ["source/scripts/build-occt-facade.sh", ["--network=none", "CARGO_NET_OFFLINE=true", "--fuzz=0"]],
     ["SOURCE_AND_RELINK.md", ["source", "relink", "replace"]],
@@ -1470,7 +1484,7 @@ export async function verifyOcctFacadeBundleWithTestRuntime(
 function usage() {
   return `Usage: node scripts/verify-occt-facade-bundle.mjs [--json] PATH
 
-Verify the complete InvariantCAD OCCT facade 0.3.0 compliance bundle at PATH.
+Verify the complete InvariantCAD OCCT facade 0.4.0 compliance bundle at PATH.
 PATH must be the versioned bundle directory or its deterministic .tar.gz archive.
 
 Options:

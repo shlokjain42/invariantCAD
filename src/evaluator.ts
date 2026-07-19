@@ -1398,7 +1398,8 @@ export class Evaluator {
     const requireExactIndexedTopologyEvolution = (
       capability: KernelFeature,
       id: NodeId,
-    ): void => {
+      optional = false,
+    ): boolean => {
       const kind = "exactIndexedTopologyEvolution" as const;
       const raw: unknown = this.kernel.capabilities.exactIndexedTopologyEvolution;
       const capabilityDetails = {
@@ -1407,6 +1408,7 @@ export class Evaluator {
         capability,
       } as const;
       if (raw === undefined) {
+        if (optional) return false;
         throw new EvaluationFailure(
           diagnostic(
             "KERNEL_CAPABILITY_MISSING",
@@ -1498,6 +1500,7 @@ export class Evaluator {
           capability,
         )
       ) {
+        if (optional) return false;
         throw new EvaluationFailure(
           diagnostic(
             "KERNEL_CAPABILITY_MISSING",
@@ -1517,7 +1520,7 @@ export class Evaluator {
         );
       }
 
-      if (capability === "draft") {
+      if (capability === "draft" || capability === "boolean") {
         const topology: unknown = this.kernel.capabilities.topology;
         const topologyProvenance = (
           topology as { readonly provenance?: unknown } | undefined
@@ -1529,19 +1532,25 @@ export class Evaluator {
           !(topology as { readonly kinds: readonly unknown[] }).kinds.includes(
             "face",
           ) ||
+          (capability === "boolean" &&
+            !(topology as { readonly kinds: readonly unknown[] }).kinds.includes(
+              "edge",
+            )) ||
           (topologyProvenance !== "feature" &&
             topologyProvenance !== "history") ||
           typeof this.kernel.topology !== "function"
         ) {
           protocolViolation(
-            "draft evolution requires face topology with feature provenance",
+            `${capability} evolution requires ${capability === "boolean" ? "face and edge" : "face"} topology with feature provenance`,
             {
-              requiredTopologyKind: "face",
+              requiredTopologyKinds:
+                capability === "boolean" ? ["face", "edge"] : ["face"],
               requiredTopologyProvenance: "feature-or-history",
             },
           );
         }
       }
+      return true;
     };
     const requireCompositeSweepRefinements = (
       classification: CompositeSweepRefinementClassificationSuccess,
@@ -2168,6 +2177,7 @@ export class Evaluator {
           }
           case "boolean":
             requireKernelCapability("feature", "boolean", id);
+            requireExactIndexedTopologyEvolution("boolean", id, true);
             result = ownShape(
               this.kernel.boolean!(
                 node.operation,

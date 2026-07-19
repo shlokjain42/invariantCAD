@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-const EXPECTED_FACADE_VERSION = "invariantcad-facade@0.3.0+occt-wasm.3.7.0";
+const EXPECTED_FACADE_VERSION = "invariantcad-facade@0.4.0+occt-wasm.3.7.0";
 const EXPECTED_TOPOLOGY_HISTORY_VERSION = 1;
+const EXACT_BOOLEAN_HISTORY_RECORD_LIMIT = 1_000_000;
 const LINEAR_TOLERANCE = 1e-10;
 const VOLUME_TOLERANCE = 1e-8;
 const SELECTION_TOLERANCE = 1e-8;
@@ -57,9 +58,16 @@ const Module = await createOcctWasm({
 });
 
 assert.equal(Module.invariantcadFacadeVersion(), EXPECTED_FACADE_VERSION);
+assert.equal(typeof Module.InvariantCadBooleanReport, "function");
+assert.equal(typeof Module.invariantcadBooleanAtomic, "function");
 assert.equal(typeof Module.InvariantCadPipeShellReport, "function");
 assert.equal(typeof Module.invariantcadPipeShellSolid, "function");
 
+const booleanOperations = Object.freeze({
+  union: Module.InvariantCadBooleanOperation.UNION,
+  subtract: Module.InvariantCadBooleanOperation.SUBTRACT,
+  intersect: Module.InvariantCadBooleanOperation.INTERSECT,
+});
 const topologyKinds = Object.freeze({
   none: Module.InvariantCadTopologyKind.NONE,
   face: Module.InvariantCadTopologyKind.FACE,
@@ -74,6 +82,7 @@ const topologyRelations = Object.freeze({
   created: Module.InvariantCadTopologyRelation.CREATED,
 });
 
+assert.deepEqual(booleanOperations, { union: 0, subtract: 1, intersect: 2 });
 assert.deepEqual(topologyKinds, { none: -1, face: 0, edge: 1, vertex: 2 });
 assert.deepEqual(topologyRelations, {
   preserved: 0,
@@ -250,6 +259,15 @@ function drainVector(value) {
 
 let kernel;
 
+function translatedBox(size, offset) {
+  const source = kernel.makeBox(size[0], size[1], size[2]);
+  try {
+    return kernel.translate(source, offset[0], offset[1], offset[2]);
+  } finally {
+    kernel.release(source);
+  }
+}
+
 function facesOf(shape) {
   return drainVector(kernel.getSubShapes(shape, "face"));
 }
@@ -322,6 +340,27 @@ function draft(shape, faceIds, angle, pull, neutralOrigin, neutralNormal) {
   }
 }
 
+function exactBoolean(
+  operation,
+  target,
+  tools,
+  selectedKernel = kernel,
+  maxHistoryRecords = EXACT_BOOLEAN_HISTORY_RECORD_LIMIT,
+) {
+  const ids = vector(tools);
+  try {
+    return Module.invariantcadBooleanAtomic(
+      selectedKernel,
+      operation,
+      target,
+      ids,
+      maxHistoryRecords,
+    );
+  } finally {
+    ids.delete();
+  }
+}
+
 function withReport(report, action) {
   try {
     return action(report);
@@ -379,6 +418,409 @@ function topologyRecord(value) {
     resultKind: value.resultKind,
     resultIndex: value.resultIndex,
   };
+}
+
+function shapeTopologyCounts(shape) {
+  return {
+    faces: kernel.subShapeCount(shape, "face"),
+    edges: kernel.subShapeCount(shape, "edge"),
+    vertices: kernel.subShapeCount(shape, "vertex"),
+  };
+}
+
+function readBooleanTopologyHistory(report) {
+  const inputCounts = [];
+  for (
+    let sourceShapeIndex = 0;
+    sourceShapeIndex < report.topologyInputShapeCount();
+    sourceShapeIndex += 1
+  ) {
+    inputCounts.push(
+      topologyCounts(report.topologyInputCounts(sourceShapeIndex)),
+    );
+  }
+  const records = [];
+  for (let recordIndex = 0; recordIndex < report.topologyRecordCount(); recordIndex += 1) {
+    records.push(topologyRecord(report.topologyRecord(recordIndex)));
+  }
+  return {
+    version: report.topologyHistoryVersion(),
+    complete: report.topologyHistoryComplete(),
+    inputShapeCount: report.topologyInputShapeCount(),
+    inputCounts,
+    resultCounts: topologyCounts(report.topologyResultCounts()),
+    records,
+  };
+}
+
+const topologyRecordSortKeys = Object.freeze([
+  "sourceShapeIndex",
+  "sourceKind",
+  "sourceIndex",
+  "relation",
+  "resultKind",
+  "resultIndex",
+]);
+
+function compareTopologyRecords(left, right) {
+  for (const key of topologyRecordSortKeys) {
+    if (left[key] !== right[key]) return left[key] - right[key];
+  }
+  return 0;
+}
+
+function topologyCountForKind(counts, kind) {
+  switch (kind) {
+    case topologyKinds.face:
+      return counts.faces;
+    case topologyKinds.edge:
+      return counts.edges;
+    case topologyKinds.vertex:
+      return counts.vertices;
+    default:
+      assert.fail(`unsupported topology kind ${kind}`);
+  }
+}
+
+const observedBooleanRelations = new Set();
+
+function assertBooleanHistory(report, inputShapes, label) {
+  const history = readBooleanTopologyHistory(report);
+  assert.equal(history.version, EXPECTED_TOPOLOGY_HISTORY_VERSION, `${label}.version`);
+  assert.equal(history.complete, true, `${label}.complete`);
+  assert.equal(history.inputShapeCount, inputShapes.length, `${label}.inputShapeCount`);
+  assert.deepEqual(
+    history.inputCounts,
+    inputShapes.map((shape) => shapeTopologyCounts(shape)),
+    `${label}.inputCounts`,
+  );
+
+  for (const [kindName, count] of Object.entries(history.resultCounts)) {
+    assert.ok(
+      Number.isSafeInteger(count) && count >= 0,
+      `${label}.resultCounts.${kindName} must be a non-negative integer`,
+    );
+  }
+
+  const sourceIdentityRelations = history.inputCounts.map((counts) =>
+    [topologyKinds.face, topologyKinds.edge, topologyKinds.vertex].map((kind) =>
+      Array.from({ length: topologyCountForKind(counts, kind) }, () => new Set()),
+    ),
+  );
+  const claimedResults = [
+    Array(history.resultCounts.faces).fill(false),
+    Array(history.resultCounts.edges).fill(false),
+    Array(history.resultCounts.vertices).fill(false),
+  ];
+  const createdResults = [
+    Array(history.resultCounts.faces).fill(false),
+    Array(history.resultCounts.edges).fill(false),
+    Array(history.resultCounts.vertices).fill(false),
+  ];
+  const exactRecords = new Set();
+  const linkRelations = new Map();
+
+  for (const [recordIndex, record] of history.records.entries()) {
+    if (recordIndex > 0) {
+      assert.ok(
+        compareTopologyRecords(history.records[recordIndex - 1], record) < 0,
+        `${label}.records must be strictly canonical at index ${recordIndex}`,
+      );
+    }
+    assert.ok(
+      [
+        topologyRelations.preserved,
+        topologyRelations.modified,
+        topologyRelations.generated,
+        topologyRelations.deleted,
+        topologyRelations.created,
+      ].includes(record.relation),
+      `${label}.records[${recordIndex}].relation`,
+    );
+    const isCreated = record.relation === topologyRelations.created;
+    if (isCreated) {
+      assert.equal(record.sourceShapeIndex, -1, `${label}.created.sourceShapeIndex`);
+      assert.equal(record.sourceKind, topologyKinds.none, `${label}.created.sourceKind`);
+      assert.equal(record.sourceIndex, -1, `${label}.created.sourceIndex`);
+    } else {
+      assert.ok(
+        Number.isSafeInteger(record.sourceShapeIndex) &&
+          record.sourceShapeIndex >= 0 &&
+          record.sourceShapeIndex < inputShapes.length,
+        `${label}.records[${recordIndex}].sourceShapeIndex`,
+      );
+      assert.ok(
+        [topologyKinds.face, topologyKinds.edge, topologyKinds.vertex].includes(
+          record.sourceKind,
+        ),
+        `${label}.records[${recordIndex}].sourceKind`,
+      );
+      const sourceCount = topologyCountForKind(
+        history.inputCounts[record.sourceShapeIndex],
+        record.sourceKind,
+      );
+      assert.ok(
+        Number.isSafeInteger(record.sourceIndex) &&
+          record.sourceIndex >= 0 &&
+          record.sourceIndex < sourceCount,
+        `${label}.records[${recordIndex}].sourceIndex`,
+      );
+    }
+    observedBooleanRelations.add(record.relation);
+
+    if (!isCreated) {
+      const sourceKindOffset = record.sourceKind - topologyKinds.face;
+      const sourceRelations =
+        sourceIdentityRelations[record.sourceShapeIndex][sourceKindOffset][
+          record.sourceIndex
+        ];
+      if (
+        record.relation === topologyRelations.preserved ||
+        record.relation === topologyRelations.modified ||
+        record.relation === topologyRelations.deleted
+      ) {
+        sourceRelations.add(record.relation);
+      }
+    }
+
+    if (record.relation === topologyRelations.deleted) {
+      assert.equal(
+        record.resultKind,
+        topologyKinds.none,
+        `${label}.records[${recordIndex}].deleted.resultKind`,
+      );
+      assert.equal(
+        record.resultIndex,
+        -1,
+        `${label}.records[${recordIndex}].deleted.resultIndex`,
+      );
+    } else {
+      assert.ok(
+        [topologyKinds.face, topologyKinds.edge, topologyKinds.vertex].includes(
+          record.resultKind,
+        ),
+        `${label}.records[${recordIndex}].resultKind`,
+      );
+      if (
+        record.relation === topologyRelations.preserved ||
+        record.relation === topologyRelations.modified
+      ) {
+        assert.equal(
+          record.resultKind,
+          record.sourceKind,
+          `${label}.records[${recordIndex}] identity successor changed kind`,
+        );
+      }
+      const resultCount = topologyCountForKind(
+        history.resultCounts,
+        record.resultKind,
+      );
+      assert.ok(
+        Number.isSafeInteger(record.resultIndex) &&
+          record.resultIndex >= 0 &&
+          record.resultIndex < resultCount,
+        `${label}.records[${recordIndex}].resultIndex`,
+      );
+      if (isCreated) {
+        assert.equal(
+          claimedResults[record.resultKind - topologyKinds.face][record.resultIndex],
+          false,
+          `${label}.records[${recordIndex}] marks an attributed result CREATED`,
+        );
+        createdResults[record.resultKind - topologyKinds.face][record.resultIndex] = true;
+      } else {
+        assert.equal(
+          createdResults[record.resultKind - topologyKinds.face][record.resultIndex],
+          false,
+          `${label}.records[${recordIndex}] attributes a CREATED result`,
+        );
+        claimedResults[record.resultKind - topologyKinds.face][record.resultIndex] = true;
+
+        const linkKey = [
+          record.sourceShapeIndex,
+          record.sourceKind,
+          record.sourceIndex,
+          record.resultKind,
+          record.resultIndex,
+        ].join(":");
+        const previousRelation = linkRelations.get(linkKey);
+        assert.ok(
+          previousRelation === undefined || previousRelation === record.relation,
+          `${label}.records[${recordIndex}] contradicts an existing source/result link`,
+        );
+        linkRelations.set(linkKey, record.relation);
+      }
+    }
+
+    const exactKey = topologyRecordSortKeys.map((key) => record[key]).join(":");
+    assert.equal(
+      exactRecords.has(exactKey),
+      false,
+      `${label}.records[${recordIndex}] duplicates an earlier record`,
+    );
+    exactRecords.add(exactKey);
+  }
+
+  for (const [sourceShapeIndex, byKind] of sourceIdentityRelations.entries()) {
+    for (const [kindOffset, byIndex] of byKind.entries()) {
+      for (const [sourceIndex, relations] of byIndex.entries()) {
+        const deleted = relations.has(topologyRelations.deleted);
+        const identity =
+          relations.has(topologyRelations.preserved) ||
+          relations.has(topologyRelations.modified);
+        assert.notEqual(
+          deleted,
+          identity,
+          `${label}: source ${sourceShapeIndex}/${kindOffset}/${sourceIndex} must have successors or DELETED, exclusively`,
+        );
+      }
+    }
+  }
+  for (const [kindOffset, byIndex] of claimedResults.entries()) {
+    for (const [resultIndex, claimed] of byIndex.entries()) {
+      const created = createdResults[kindOffset][resultIndex];
+      assert.equal(
+        claimed || created,
+        true,
+        `${label}: result ${kindOffset}/${resultIndex} has no evolution record`,
+      );
+      assert.equal(claimed && created, false, `${label}: result has mixed attribution`);
+    }
+  }
+
+  assert.throws(
+    () => report.topologyInputCounts(-1),
+    `${label}: negative input topology index must fail`,
+  );
+  assert.throws(
+    () => report.topologyInputCounts(inputShapes.length),
+    `${label}: out-of-range input topology index must fail`,
+  );
+  assert.throws(
+    () => report.topologyRecord(-1),
+    `${label}: negative topology record index must fail`,
+  );
+  assert.throws(
+    () => report.topologyRecord(history.records.length),
+    `${label}: out-of-range topology record index must fail`,
+  );
+  return history;
+}
+
+function assertNoBooleanHistory(report, label) {
+  assert.equal(report.topologyHistoryVersion(), 0, `${label}.historyVersion`);
+  assert.equal(report.topologyHistoryComplete(), false, `${label}.historyComplete`);
+  assert.equal(report.topologyInputShapeCount(), 0, `${label}.historyInputCount`);
+  assert.equal(report.topologyRecordCount(), 0, `${label}.historyRecordCount`);
+  assert.throws(
+    () => report.topologyInputCounts(0),
+    `${label}: a failed Boolean must not expose input topology counts`,
+  );
+  assert.throws(
+    () => report.topologyResultCounts(),
+    `${label}: a failed Boolean must not expose result topology counts`,
+  );
+  assert.throws(
+    () => report.topologyRecord(0),
+    `${label}: a failed Boolean must not expose topology records`,
+  );
+}
+
+function snapshotShape(shape) {
+  return {
+    shapeType: kernel.getShapeType(shape),
+    valid: kernel.isValid(shape),
+    volume: kernel.getVolume(shape),
+    topology: shapeTopologyCounts(shape),
+    brep: kernel.toBREP(shape),
+  };
+}
+
+function assertShapeSnapshot(shape, snapshot, label) {
+  assert.equal(kernel.getShapeType(shape), snapshot.shapeType, `${label}.shapeType`);
+  assert.equal(kernel.isValid(shape), snapshot.valid, `${label}.valid`);
+  assertClose(kernel.getVolume(shape), snapshot.volume, VOLUME_TOLERANCE, `${label}.volume`);
+  assert.deepEqual(shapeTopologyCounts(shape), snapshot.topology, `${label}.topology`);
+  assert.equal(kernel.toBREP(shape), snapshot.brep, `${label}.brep`);
+}
+
+function assertBooleanReportSuccess(report, operation, toolCount, arenaBefore, label) {
+  assert.equal(report.ok, true, `${report.code}: ${report.message}`);
+  assert.equal(report.stage, "complete", `${label}.stage`);
+  assert.equal(report.code, "OK", `${label}.code`);
+  assert.equal(report.operation, operation, `${label}.operation`);
+  assert.equal(report.requestedToolCount, toolCount, `${label}.requestedToolCount`);
+  assert.equal(
+    report.buildCount,
+    operation === booleanOperations.subtract ? 1 : toolCount,
+    `${label}.buildCount`,
+  );
+  assert.equal(report.failedToolIndex, -1, `${label}.failedToolIndex`);
+  assert.equal(report.historyProblemDomain, "none", `${label}.historyProblemDomain`);
+  assert.equal(report.historyProblemSourceShapeIndex, -1);
+  assert.equal(report.historyProblemKind, topologyKinds.none);
+  assert.equal(report.historyProblemIndex, -1);
+  assert.equal(report.hasResult(), true, `${label}.hasResult`);
+  assert.equal(report.transferCode(kernel), "READY", `${label}.transferCode`);
+  assert.equal(
+    kernel.getShapeCount(),
+    arenaBefore,
+    `${label}: report-owned result entered the arena before transfer`,
+  );
+}
+
+function assertBooleanResult(result, history, expected, label) {
+  assert.equal(kernel.isValid(result), true, `${label}.valid`);
+  assertClose(kernel.getVolume(result), expected.volume, VOLUME_TOLERANCE, `${label}.volume`);
+  assert.deepEqual(shapeTopologyCounts(result), expected.topology, `${label}.topology`);
+  assert.deepEqual(
+    shapeTopologyCounts(result),
+    history.resultCounts,
+    `${label}: report/result topology counts disagree`,
+  );
+}
+
+function assertBooleanDegeneracyCase({
+  label,
+  operation,
+  target,
+  tools,
+  expected,
+}) {
+  const inputs = [target, ...tools];
+  const inputSnapshots = inputs.map(snapshotShape);
+  const arenaBefore = kernel.getShapeCount();
+  withReport(exactBoolean(operation, target, tools), (report) => {
+    assertBooleanReportSuccess(
+      report,
+      operation,
+      tools.length,
+      arenaBefore,
+      label,
+    );
+    const history = assertBooleanHistory(report, inputs, label);
+    const result = report.takeResultId(kernel);
+    try {
+      assertBooleanResult(result, history, expected, `${label}.result`);
+      if (expected.bounds !== undefined) {
+        assertBounds(boundsOf(result), expected.bounds, `${label}.result.bounds`);
+      }
+    } finally {
+      kernel.release(result);
+    }
+    assert.equal(
+      kernel.getShapeCount(),
+      arenaBefore,
+      `${label}: result release must restore the input-only arena`,
+    );
+    inputs.forEach((shape, index) =>
+      assertShapeSnapshot(
+        shape,
+        inputSnapshots[index],
+        `${label}.input[${index}]`,
+      ),
+    );
+  });
 }
 
 function readTopologyHistory(report) {
@@ -491,6 +933,693 @@ function runFixture(label, action) {
 
 try {
   kernel = new Module.OcctKernel();
+
+  runFixture("exact Boolean validation", () => {
+    const target = kernel.makeBox(10, 10, 10);
+    const tool = translatedBox([10, 10, 10], [5, 0, 0]);
+    const targetBefore = snapshotShape(target);
+    const toolBefore = snapshotShape(tool);
+    const arenaBefore = kernel.getShapeCount();
+
+    withReport(exactBoolean(999, target, [tool]), (report) => {
+      assert.equal(report.ok, false);
+      assert.equal(report.stage, "validation");
+      assert.equal(report.code, "INVALID_OPERATION");
+      assert.equal(report.operation, 999);
+      assert.equal(report.requestedToolCount, 1);
+      assert.equal(report.buildCount, 0);
+      assert.equal(report.failedToolIndex, -1);
+      assert.equal(report.hasResult(), false);
+      assert.equal(report.transferCode(kernel), "NO_RESULT");
+      assertNoBooleanHistory(report, "invalidBooleanOperation");
+      assert.throws(
+        () => report.takeResultId(kernel),
+        "an invalid Boolean operation must not transfer a result",
+      );
+    });
+
+    withReport(
+      exactBoolean(booleanOperations.union, target, []),
+      (report) => {
+        assert.equal(report.ok, false);
+        assert.equal(report.stage, "validation");
+        assert.equal(report.code, "EMPTY_TOOL_LIST");
+        assert.equal(report.operation, booleanOperations.union);
+        assert.equal(report.requestedToolCount, 0);
+        assert.equal(report.buildCount, 0);
+        assert.equal(report.failedToolIndex, -1);
+        assert.equal(report.hasResult(), false);
+        assert.equal(report.transferCode(kernel), "NO_RESULT");
+        assertNoBooleanHistory(report, "emptyBooleanTools");
+        assert.throws(
+          () => report.takeResultId(kernel),
+          "an empty Boolean tool list must not transfer a result",
+        );
+      },
+    );
+
+    withReport(
+      exactBoolean(booleanOperations.union, target, [tool], kernel, -1),
+      (report) => {
+        assert.equal(report.ok, false);
+        assert.equal(report.stage, "validation");
+        assert.equal(report.code, "INVALID_HISTORY_RECORD_LIMIT");
+        assert.equal(report.buildCount, 0);
+        assert.equal(report.failedToolIndex, -1);
+        assertNoBooleanHistory(report, "negativeBooleanHistoryLimit");
+      },
+    );
+
+    withReport(
+      exactBoolean(booleanOperations.union, target, [tool], kernel, 0),
+      (report) => {
+        assert.equal(report.ok, false);
+        assert.equal(report.stage, "history");
+        assert.equal(report.code, "HISTORY_RECORD_LIMIT_EXCEEDED");
+        assert.equal(report.buildCount, 1);
+        assert.equal(report.failedToolIndex, -1);
+        assertNoBooleanHistory(report, "zeroBooleanHistoryLimit");
+      },
+    );
+
+    withReport(
+      exactBoolean(booleanOperations.union, 4_294_967_295, [tool]),
+      (report) => {
+        assert.equal(report.ok, false);
+        assert.equal(report.stage, "validation");
+        assert.equal(report.code, "SHAPE_ID_NOT_FOUND");
+        assert.equal(report.failedToolIndex, -1);
+        assertNoBooleanHistory(report, "missingBooleanTarget");
+      },
+    );
+
+    withReport(
+      exactBoolean(booleanOperations.union, target, [4_294_967_295]),
+      (report) => {
+        assert.equal(report.ok, false);
+        assert.equal(report.stage, "validation");
+        assert.equal(report.code, "SHAPE_ID_NOT_FOUND");
+        assert.equal(report.failedToolIndex, 0);
+        assertNoBooleanHistory(report, "missingBooleanTool");
+      },
+    );
+
+    assert.equal(kernel.getShapeCount(), arenaBefore);
+    assertShapeSnapshot(target, targetBefore, "invalidBooleanOperation.target");
+    assertShapeSnapshot(tool, toolBefore, "invalidBooleanOperation.tool");
+  });
+
+  runFixture("exact ordered multi-tool union and report ownership", () => {
+    const target = kernel.makeBox(10, 10, 10);
+    const firstTool = translatedBox([10, 10, 10], [5, 5, 5]);
+    const secondTool = translatedBox([10, 10, 10], [8, 8, 8]);
+    const inputs = [target, firstTool, secondTool];
+    const inputSnapshots = inputs.map(snapshotShape);
+    const arenaBefore = kernel.getShapeCount();
+    const report = exactBoolean(
+      booleanOperations.union,
+      target,
+      [firstTool, secondTool],
+    );
+
+    withReport(report, (ownedReport) => {
+      assertBooleanReportSuccess(
+        ownedReport,
+        booleanOperations.union,
+        2,
+        arenaBefore,
+        "multiToolUnion",
+      );
+      for (const property of [
+        "ok",
+        "stage",
+        "code",
+        "message",
+        "operation",
+        "requestedToolCount",
+        "buildCount",
+        "failedToolIndex",
+        "historyProblemDomain",
+        "historyProblemSourceShapeIndex",
+        "historyProblemKind",
+        "historyProblemIndex",
+      ]) {
+        const valueBeforeAssignment = ownedReport[property];
+        assert.throws(
+          () => {
+            ownedReport[property] = valueBeforeAssignment;
+          },
+          /read-only property/i,
+          `multiToolUnion.${property} must reject assignment`,
+        );
+        assert.deepEqual(ownedReport[property], valueBeforeAssignment);
+      }
+
+      const historyBeforeTransfer = assertBooleanHistory(
+        ownedReport,
+        inputs,
+        "multiToolUnion",
+      );
+      const detachedCounts = ownedReport.topologyInputCounts(0);
+      detachedCounts.faces = 999;
+      assert.deepEqual(
+        topologyCounts(ownedReport.topologyInputCounts(0)),
+        historyBeforeTransfer.inputCounts[0],
+        "mutating detached Boolean counts must not mutate report history",
+      );
+      const detachedRecord = ownedReport.topologyRecord(0);
+      detachedRecord.resultIndex = 999;
+      assert.deepEqual(
+        topologyRecord(ownedReport.topologyRecord(0)),
+        historyBeforeTransfer.records[0],
+        "mutating a detached Boolean record must not mutate report history",
+      );
+      inputs.forEach((shape, index) =>
+        assertShapeSnapshot(
+          shape,
+          inputSnapshots[index],
+          `multiToolUnion.inputBeforeTransfer[${index}]`,
+        ),
+      );
+
+      const sharedReport = ownedReport.clone();
+      try {
+        assert.equal(sharedReport.hasResult(), true);
+        assert.equal(sharedReport.transferCode(kernel), "READY");
+        assert.deepEqual(
+          readBooleanTopologyHistory(sharedReport),
+          historyBeforeTransfer,
+          "a Boolean report clone must share immutable topology history",
+        );
+
+        const otherKernel = new Module.OcctKernel();
+        try {
+          assert.equal(sharedReport.transferCode(otherKernel), "WRONG_KERNEL");
+          assert.throws(
+            () => sharedReport.takeResultId(otherKernel),
+            "a Boolean result must not transfer into a foreign kernel",
+          );
+          assert.equal(otherKernel.getShapeCount(), 0);
+        } finally {
+          otherKernel.delete();
+        }
+
+        const result = sharedReport.takeResultId(kernel);
+        try {
+          assert.equal(ownedReport.hasResult(), false);
+          assert.equal(sharedReport.hasResult(), false);
+          assert.equal(ownedReport.transferCode(kernel), "ALREADY_TRANSFERRED");
+          assert.equal(sharedReport.transferCode(kernel), "ALREADY_TRANSFERRED");
+          assert.equal(kernel.getShapeCount(), arenaBefore + 1);
+          assert.deepEqual(
+            readBooleanTopologyHistory(ownedReport),
+            historyBeforeTransfer,
+            "Boolean topology history must remain readable after transfer",
+          );
+          assert.deepEqual(
+            readBooleanTopologyHistory(sharedReport),
+            historyBeforeTransfer,
+            "a Boolean report clone must retain history after alias transfer",
+          );
+          assertBooleanResult(
+            result,
+            historyBeforeTransfer,
+            {
+              volume: 2_532,
+              topology: { faces: 18, edges: 48, vertices: 32 },
+            },
+            "multiToolUnion.result",
+          );
+          assert.throws(
+            () => ownedReport.takeResultId(kernel),
+            "all Boolean report aliases must share one-shot transfer state",
+          );
+
+          const postTransferKernel = new Module.OcctKernel();
+          try {
+            assert.equal(
+              sharedReport.transferCode(postTransferKernel),
+              "ALREADY_TRANSFERRED",
+              "consumed Boolean state must precede kernel identity",
+            );
+          } finally {
+            postTransferKernel.delete();
+          }
+        } finally {
+          kernel.release(result);
+        }
+      } finally {
+        sharedReport.delete();
+      }
+
+      assert.equal(kernel.getShapeCount(), arenaBefore);
+      inputs.forEach((shape, index) =>
+        assertShapeSnapshot(
+          shape,
+          inputSnapshots[index],
+          `multiToolUnion.inputAfterTransfer[${index}]`,
+        ),
+      );
+    });
+  });
+
+  runFixture("exact collinear overlapping union regression", () => {
+    const target = kernel.makeBox(10, 10, 10);
+    const firstTool = translatedBox([10, 10, 10], [5, 0, 0]);
+    const secondTool = translatedBox([10, 10, 10], [10, 0, 0]);
+    const inputs = [target, firstTool, secondTool];
+    const inputSnapshots = inputs.map(snapshotShape);
+    const arenaBefore = kernel.getShapeCount();
+
+    withReport(
+      exactBoolean(
+        booleanOperations.union,
+        target,
+        [firstTool, secondTool],
+      ),
+      (report) => {
+        assertBooleanReportSuccess(
+          report,
+          booleanOperations.union,
+          2,
+          arenaBefore,
+          "collinearUnion",
+        );
+        const history = assertBooleanHistory(
+          report,
+          inputs,
+          "collinearUnion",
+        );
+        const result = report.takeResultId(kernel);
+        try {
+          assertBooleanResult(
+            result,
+            history,
+            {
+              volume: 2_000,
+              topology: { faces: 18, edges: 36, vertices: 20 },
+            },
+            "collinearUnion.result",
+          );
+          assertBounds(
+            boundsOf(result),
+            {
+              xmin: 0,
+              ymin: 0,
+              zmin: 0,
+              xmax: 20,
+              ymax: 10,
+              zmax: 10,
+            },
+            "collinearUnion.result.bounds",
+          );
+        } finally {
+          kernel.release(result);
+        }
+        assert.equal(kernel.getShapeCount(), arenaBefore);
+        inputs.forEach((shape, index) =>
+          assertShapeSnapshot(
+            shape,
+            inputSnapshots[index],
+            `collinearUnion.input[${index}]`,
+          ),
+        );
+      },
+    );
+  });
+
+  runFixture("exact simultaneous multi-tool subtraction", () => {
+    const target = kernel.makeBox(20, 10, 10);
+    const firstTool = translatedBox([4, 12, 12], [2, -1, -1]);
+    const secondTool = translatedBox([4, 12, 12], [14, -1, -1]);
+    const inputs = [target, firstTool, secondTool];
+    const inputSnapshots = inputs.map(snapshotShape);
+    const arenaBefore = kernel.getShapeCount();
+
+    withReport(
+      exactBoolean(
+        booleanOperations.subtract,
+        target,
+        [firstTool, secondTool],
+      ),
+      (report) => {
+        assertBooleanReportSuccess(
+          report,
+          booleanOperations.subtract,
+          2,
+          arenaBefore,
+          "multiToolSubtract",
+        );
+        const history = assertBooleanHistory(
+          report,
+          inputs,
+          "multiToolSubtract",
+        );
+        const result = report.takeResultId(kernel);
+        try {
+          assertBooleanResult(
+            result,
+            history,
+            {
+              volume: 1_200,
+              topology: { faces: 18, edges: 36, vertices: 24 },
+            },
+            "multiToolSubtract.result",
+          );
+        } finally {
+          kernel.release(result);
+        }
+        assert.equal(kernel.getShapeCount(), arenaBefore);
+        inputs.forEach((shape, index) =>
+          assertShapeSnapshot(
+            shape,
+            inputSnapshots[index],
+            `multiToolSubtract.input[${index}]`,
+          ),
+        );
+      },
+    );
+  });
+
+  runFixture("exact emergent multi-tool subtraction topology", () => {
+    const target = translatedBox([6, 9, 6], [0, 12, 3]);
+    const firstTool = translatedBox([4, 7, 5], [1, 5.5, 2]);
+    const secondTool = translatedBox([5, 14, 12], [2, 1, 5]);
+    const inputs = [target, firstTool, secondTool];
+    const inputSnapshots = inputs.map(snapshotShape);
+    const arenaBefore = kernel.getShapeCount();
+
+    withReport(
+      exactBoolean(
+        booleanOperations.subtract,
+        target,
+        [firstTool, secondTool],
+      ),
+      (report) => {
+        assertBooleanReportSuccess(
+          report,
+          booleanOperations.subtract,
+          2,
+          arenaBefore,
+          "emergentMultiToolSubtract",
+        );
+        const history = assertBooleanHistory(
+          report,
+          inputs,
+          "emergentMultiToolSubtract",
+        );
+        assert.ok(
+          history.records.some(
+            (record) =>
+              record.relation === topologyRelations.created &&
+              record.resultKind === topologyKinds.vertex,
+          ),
+          "emergent multi-tool subtraction must encode its unattributed vertex as CREATED",
+        );
+        const result = report.takeResultId(kernel);
+        try {
+          assertBooleanResult(
+            result,
+            history,
+            {
+              volume: 271,
+              topology: { faces: 14, edges: 36, vertices: 24 },
+            },
+            "emergentMultiToolSubtract.result",
+          );
+          assertBounds(
+            boundsOf(result),
+            { xmin: 0, ymin: 12, zmin: 3, xmax: 6, ymax: 21, zmax: 9 },
+            "emergentMultiToolSubtract.result.bounds",
+          );
+        } finally {
+          kernel.release(result);
+        }
+        assert.equal(kernel.getShapeCount(), arenaBefore);
+        inputs.forEach((shape, index) =>
+          assertShapeSnapshot(
+            shape,
+            inputSnapshots[index],
+            `emergentMultiToolSubtract.input[${index}]`,
+          ),
+        );
+      },
+    );
+  });
+
+  runFixture("exact ordered multi-tool intersection", () => {
+    const target = kernel.makeBox(10, 10, 10);
+    const firstTool = translatedBox([10, 10, 10], [2, 2, 2]);
+    const secondTool = translatedBox([10, 10, 10], [5, 5, 5]);
+    const inputs = [target, firstTool, secondTool];
+    const inputSnapshots = inputs.map(snapshotShape);
+    const arenaBefore = kernel.getShapeCount();
+
+    withReport(
+      exactBoolean(
+        booleanOperations.intersect,
+        target,
+        [firstTool, secondTool],
+      ),
+      (report) => {
+        assertBooleanReportSuccess(
+          report,
+          booleanOperations.intersect,
+          2,
+          arenaBefore,
+          "multiToolIntersect",
+        );
+        const history = assertBooleanHistory(
+          report,
+          inputs,
+          "multiToolIntersect",
+        );
+        const result = report.takeResultId(kernel);
+        try {
+          assertBooleanResult(
+            result,
+            history,
+            {
+              volume: 125,
+              topology: { faces: 6, edges: 12, vertices: 8 },
+            },
+            "multiToolIntersect.result",
+          );
+          assert.notEqual(
+            kernel.getVolume(result),
+            512,
+            "multi-tool intersection must be ordered intersection, not target intersect union(tools)",
+          );
+        } finally {
+          kernel.release(result);
+        }
+        assert.equal(kernel.getShapeCount(), arenaBefore);
+        inputs.forEach((shape, index) =>
+          assertShapeSnapshot(
+            shape,
+            inputSnapshots[index],
+            `multiToolIntersect.input[${index}]`,
+          ),
+        );
+      },
+    );
+  });
+
+  runFixture("exact Boolean degeneracy matrix", () => {
+    const emptyResult = Object.freeze({
+      volume: 0,
+      topology: { faces: 0, edges: 0, vertices: 0 },
+    });
+    const cubeResult = Object.freeze({
+      volume: 1_000,
+      topology: { faces: 6, edges: 12, vertices: 8 },
+    });
+    const containedResult = Object.freeze({
+      volume: 8,
+      topology: { faces: 6, edges: 12, vertices: 8 },
+    });
+    const cavityResult = Object.freeze({
+      volume: 992,
+      topology: { faces: 12, edges: 24, vertices: 16 },
+    });
+    const cases = [
+      {
+        label: "degeneracy.disjointUnion",
+        operation: booleanOperations.union,
+        expected: {
+          volume: 2_000,
+          topology: { faces: 12, edges: 24, vertices: 16 },
+        },
+        build: () => ({
+          target: kernel.makeBox(10, 10, 10),
+          tools: [translatedBox([10, 10, 10], [20, 0, 0])],
+        }),
+      },
+      {
+        label: "degeneracy.disjointIntersection",
+        operation: booleanOperations.intersect,
+        expected: emptyResult,
+        build: () => ({
+          target: kernel.makeBox(10, 10, 10),
+          tools: [translatedBox([10, 10, 10], [20, 0, 0])],
+        }),
+      },
+      {
+        label: "degeneracy.containedSubtract",
+        operation: booleanOperations.subtract,
+        expected: cavityResult,
+        build: () => ({
+          target: kernel.makeBox(10, 10, 10),
+          tools: [translatedBox([2, 2, 2], [4, 4, 4])],
+        }),
+      },
+      {
+        label: "degeneracy.containedIntersection",
+        operation: booleanOperations.intersect,
+        expected: containedResult,
+        build: () => ({
+          target: kernel.makeBox(10, 10, 10),
+          tools: [translatedBox([2, 2, 2], [4, 4, 4])],
+        }),
+      },
+      ...[
+        ["Union", booleanOperations.union, cubeResult],
+        ["Intersection", booleanOperations.intersect, cubeResult],
+        ["Subtract", booleanOperations.subtract, emptyResult],
+      ].map(([suffix, operation, expected]) => ({
+        label: `degeneracy.coincident${suffix}`,
+        operation,
+        expected,
+        build: () => ({
+          target: kernel.makeBox(10, 10, 10),
+          tools: [kernel.makeBox(10, 10, 10)],
+        }),
+      })),
+      ...[
+        ["Union", booleanOperations.union, cubeResult],
+        ["Intersection", booleanOperations.intersect, cubeResult],
+        ["Subtract", booleanOperations.subtract, emptyResult],
+      ].map(([suffix, operation, expected]) => ({
+        label: `degeneracy.targetReusedAsTool${suffix}`,
+        operation,
+        expected,
+        build: () => {
+          const target = kernel.makeBox(10, 10, 10);
+          return { target, tools: [target] };
+        },
+      })),
+      ...[
+        ["Union", booleanOperations.union, cubeResult],
+        ["Intersection", booleanOperations.intersect, containedResult],
+        ["Subtract", booleanOperations.subtract, cavityResult],
+      ].map(([suffix, operation, expected]) => ({
+        label: `degeneracy.repeatedTool${suffix}`,
+        operation,
+        expected,
+        build: () => {
+          const tool = translatedBox([2, 2, 2], [4, 4, 4]);
+          return {
+            target: kernel.makeBox(10, 10, 10),
+            tools: [tool, tool],
+          };
+        },
+      })),
+      {
+        label: "degeneracy.faceTangentUnion",
+        operation: booleanOperations.union,
+        expected: {
+          volume: 2_000,
+          topology: { faces: 10, edges: 20, vertices: 12 },
+        },
+        build: () => ({
+          target: kernel.makeBox(10, 10, 10),
+          tools: [translatedBox([10, 10, 10], [10, 0, 0])],
+        }),
+      },
+      {
+        label: "regression.mergedHistoryRemovedWithUnionSuccessor",
+        operation: booleanOperations.union,
+        expected: {
+          volume: 2_514,
+          topology: { faces: 18, edges: 45, vertices: 29 },
+          bounds: {
+            xmin: -3,
+            ymin: -1,
+            zmin: 0,
+            xmax: 10,
+            ymax: 19,
+            zmax: 16,
+          },
+        },
+        build: () => ({
+          target: kernel.makeBox(10, 10, 10),
+          tools: [
+            translatedBox([9, 10, 12], [-3, -1, 4]),
+            translatedBox([10, 10, 8], [-3, 9, 4]),
+          ],
+        }),
+      },
+      {
+        label: "regression.mergedHistoryRemovedWithIntersectSuccessor",
+        operation: booleanOperations.intersect,
+        expected: {
+          volume: 112,
+          topology: { faces: 6, edges: 12, vertices: 8 },
+          bounds: {
+            xmin: 1,
+            ymin: 2,
+            zmin: 1,
+            xmax: 8,
+            ymax: 4,
+            zmax: 9,
+          },
+        },
+        build: () => ({
+          target: kernel.makeBox(10, 10, 10),
+          tools: [
+            translatedBox([12, 2, 10], [1, 2, 1]),
+            translatedBox([11, 5, 12], [-3, -1, -3]),
+          ],
+        }),
+      },
+    ];
+
+    for (const testCase of cases) {
+      assert.equal(
+        kernel.getShapeCount(),
+        0,
+        `${testCase.label}: dirty arena before matrix case`,
+      );
+      try {
+        const inputs = testCase.build();
+        assertBooleanDegeneracyCase({
+          label: testCase.label,
+          operation: testCase.operation,
+          expected: testCase.expected,
+          target: inputs.target,
+          tools: inputs.tools,
+        });
+      } finally {
+        kernel.releaseAll();
+      }
+    }
+  });
+
+  assert.equal(
+    observedBooleanRelations.has(topologyRelations.created),
+    true,
+    "exact Boolean smoke must exercise higher-order CREATED records",
+  );
+  assert.equal(
+    observedBooleanRelations.has(topologyRelations.generated),
+    true,
+    "exact Boolean smoke must exercise GENERATED records",
+  );
+  assert.equal(
+    observedBooleanRelations.has(topologyRelations.deleted),
+    true,
+    "exact Boolean smoke must exercise DELETED records",
+  );
 
   runFixture("controlled PipeShell validation", () => {
     const invalidTolerance = controlledPipeShell(0, 0, 0, 1e-7, 1e-9);

@@ -35,19 +35,25 @@ InvariantCAD's goal is one coherent TypeScript CAD system, not one monolithic ge
 - First exact constant-thickness inward/outward shell driven by semantic face openings
 - First exact whole-solid inward/outward offset with fixed round joins
 - Atomic signed multi-face neutral-plane draft through semantic face selectors, enabled by the matched owned OCCT facade with exact indexed face/edge/vertex evolution
+- Owned OCCT facade ABI 0.4 multi-input union, subtraction, and intersection with target/tool authored order, isolated working copies and byte-stable arena operands, transactional fail-closed transfer, and complete face/edge/vertex `PRESERVED`/`MODIFIED`/`GENERATED`/`DELETED` plus residual source-less `CREATED` evolution
+- Identity-only public Boolean lineage: preserved/modified successors inherit proven roles and sources, while generated-only and higher-order source-less `CREATED` topology is created by the current Boolean without source-role inheritance
+- Caller-configurable exact Boolean history-record budgeting, passed into the native facade and enforced before native report materialization or indexed JavaScript copying, with a `1_000_000` default
 - Leak-free native evolution ownership for exact fillet and chamfer operations
 - Reproducible, digest-pinned OCCT facade build foundation
-- Local package-neutral distribution-bundle generation and strict verification for the owned OCCT facade JS/WASM pair, with checksums, provenance, SBOM, source/relinking information, notices, and licenses
+- Local package-neutral distribution-bundle generation and strict verification for the owned OCCT facade ABI/bundle 0.4 JS/WASM pair, with checksums, provenance, SBOM, source/relinking information, notices, licenses, and the ordered `0001` through `0004` patch series
 - External legal, release, and security review followed by publication through an explicit durable channel; the bundle remains separate from the `invariantcad` npm package and is never an implicit runtime download
 
 ## 0.3 — persistent design intent
 
-- Complete per-subshape provenance through booleans, fillets, chamfers, shells, offsets, revolutions, and other generated/modified topology beyond the exact draft slice
+- Complete per-subshape provenance through fillets, chamfers, shells, offsets, revolutions, and other generated/modified topology beyond the owned exact draft/Boolean slices
+- Extend complete Boolean provenance beyond the owned OCCT ABI 0.4 path while retaining stock OCCT, legacy owned facades, and Manifold as supported partial-history implementations
 - Expanded role and source mapping for additional feature families
 - Geometry and adjacency signatures
 - Expanded selection diagnostics and provenance explanations
 - Incremental feature hashes and cross-run cache
 - Change-impact and geometric diff APIs
+
+Current topology keys and ABI indices remain evaluation-scoped. The 0.3 work is the durable cross-evaluation naming layer; exact ABI 0.4 Boolean history proves one evaluation's evolution graph but does not itself make a native index persistent.
 
 ## 0.4 — advanced mechanical features
 

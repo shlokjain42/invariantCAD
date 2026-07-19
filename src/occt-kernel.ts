@@ -73,6 +73,13 @@ import {
 } from "./protocol/draft.js";
 import { adoptOcctEdgeEvolution } from "./internal/occt-evolution.js";
 import {
+  DEFAULT_OCCT_EXACT_BOOLEAN_HISTORY_RECORD_LIMIT,
+  OcctBooleanFacadeProtocolError,
+  adoptOcctBoolean,
+  type OcctBooleanFacadeModule,
+  type OcctBooleanReportSnapshot,
+} from "./internal/occt-boolean.js";
+import {
   OcctDraftFacadeProtocolError,
   adoptOcctDraft,
   type OcctDraftFacadeModule,
@@ -100,13 +107,30 @@ import {
 } from "./internal/profile-mass-properties.js";
 import {
   TopologyEvolutionProtocolError,
+  reduceCompleteIndexedTopologyEvolution,
   reduceIndexedTopologyEvolution,
   type IndexedTopologyCounts,
 } from "./internal/topology-evolution.js";
 
+export { DEFAULT_OCCT_EXACT_BOOLEAN_HISTORY_RECORD_LIMIT };
+
 const OCCT_SHAPE = Symbol("InvariantCAD.OcctShape");
 const TOPOLOGY_HASH_UPPER_BOUND = 2_147_483_647;
 let nextTopologyNamespace = 1;
+
+function exactBooleanHistoryRecordLimit(value: number | undefined): number {
+  const limit = value ?? DEFAULT_OCCT_EXACT_BOOLEAN_HISTORY_RECORD_LIMIT;
+  if (
+    !Number.isSafeInteger(limit) ||
+    limit < 0 ||
+    limit > TOPOLOGY_HASH_UPPER_BOUND
+  ) {
+    throw new RangeError(
+      "maxExactBooleanHistoryRecords must be a signed 32-bit non-negative integer",
+    );
+  }
+  return limit;
+}
 
 type TopologyHistory = KernelTopologySnapshot["history"];
 
@@ -533,6 +557,13 @@ export interface OcctKernelOptions {
   readonly moduleFactory?: OcctModuleFactory;
   readonly tessellation?: MeshOptions;
   readonly modelingTolerance?: number;
+  /**
+   * Maximum exact Boolean history records materialized across Wasm and
+   * JavaScript. Raise this explicit resource budget for exceptionally large
+   * models; the facade ABI ceiling is 2,147,483,647.
+   * @default 1_000_000
+   */
+  readonly maxExactBooleanHistoryRecords?: number;
   readonly onOutput?: (message: string) => void;
   readonly onError?: (message: string) => void;
 }
@@ -575,6 +606,7 @@ class OcctKernel implements GeometryKernel {
   private readonly facade: OcctFacadeProbe | undefined;
   private readonly tessellation: MeshOptions;
   private readonly modelingTolerance: number;
+  private readonly maxExactBooleanHistoryRecords: number;
   private readonly ownedShapes = new WeakSet<OcctShape>();
   private readonly liveShapes = new Set<OcctShape>();
   private readonly topologyNamespace = nextTopologyNamespace++;
@@ -585,11 +617,15 @@ class OcctKernel implements GeometryKernel {
     raw: RawOcctKernel,
     facade: OcctFacadeProbe | undefined,
     options: OcctKernelOptions = {},
+    maxExactBooleanHistoryRecords = exactBooleanHistoryRecordLimit(
+      options.maxExactBooleanHistoryRecords,
+    ),
   ) {
     this.raw = raw;
     this.facade = facade;
     this.tessellation = options.tessellation ?? {};
     this.modelingTolerance = options.modelingTolerance ?? 1e-7;
+    this.maxExactBooleanHistoryRecords = maxExactBooleanHistoryRecords;
     this.capabilities = {
       ...OcctKernel.BASE_CAPABILITIES,
       ...(facade?.draft === undefined
@@ -598,7 +634,10 @@ class OcctKernel implements GeometryKernel {
             features: [...OcctKernel.BASE_CAPABILITIES.features, "draft"],
             exactIndexedTopologyEvolution: {
               protocolVersion: 1 as const,
-              features: ["draft" as const],
+              features:
+                facade.boolean === undefined
+                  ? (["draft"] as const)
+                  : (["draft", "boolean"] as const),
             },
           }),
       ...(facade?.pipeShell === undefined
@@ -2172,6 +2211,15 @@ class OcctKernel implements GeometryKernel {
     }
     const targetShape = this.shape(target);
     const toolShapes = tools.map((tool) => this.shape(tool));
+    if (this.facade?.boolean !== undefined) {
+      return this.booleanWithExactEvolution(
+        this.facade.boolean,
+        operation,
+        targetShape,
+        toolShapes,
+        context,
+      );
+    }
     const targetHandle = targetShape[OCCT_SHAPE];
     const toolHandles = toolShapes.map((tool) => tool[OCCT_SHAPE]);
     const inherited = uniqueLineage([
@@ -2205,6 +2253,83 @@ class OcctKernel implements GeometryKernel {
       });
     } catch (error) {
       if (ownsCurrent) this.raw.release(current);
+      throw error;
+    }
+  }
+
+  private booleanWithExactEvolution(
+    module: OcctBooleanFacadeModule,
+    operation: "union" | "subtract" | "intersect",
+    target: OcctShape,
+    tools: readonly OcctShape[],
+    context?: KernelFeatureContext,
+  ): KernelShape {
+    checkContext(context);
+    const inputs = [target, ...tools];
+    const inputSnapshots = inputs.map((input) => {
+      checkContext(context);
+      return this.topology(input);
+    });
+    const inputHandles = inputs.map((input) => input[OCCT_SHAPE]);
+    const inherited = uniqueLineage(inputs.flatMap((input) => input.lineage));
+    const rawKernel = this.raw.getRawKernel();
+    try {
+      return adoptOcctBoolean({
+        module,
+        kernel: rawKernel,
+        operation,
+        targetId: inputHandles[0]!,
+        toolIds: inputHandles.slice(1),
+        maxHistoryRecords: this.maxExactBooleanHistoryRecords,
+        validate: (report: OcctBooleanReportSnapshot) => {
+          checkContext(context);
+          report.evolution.inputCounts.forEach((declared, index) => {
+            this.assertTopologyCounts(
+              declared,
+              this.rawTopologyCounts(inputHandles[index]!),
+              `boolean inputCounts[${index}]`,
+            );
+          });
+        },
+        adopt: ({ resultId, report }) => {
+          checkContext(context);
+          const provisional = this.own(resultId as ShapeHandle, context, {
+            inherited,
+            relation: "modified",
+            history: inputSnapshots.every(
+              (snapshot) => snapshot.history === "complete",
+            )
+              ? "complete"
+              : "partial",
+          });
+          try {
+            const outputSnapshot = this.topology(provisional);
+            this.assertTopologyCounts(
+              report.evolution.resultCounts,
+              this.rawTopologyCounts(provisional[OCCT_SHAPE]),
+              "boolean resultCounts",
+            );
+            provisional.topologySnapshot =
+              reduceCompleteIndexedTopologyEvolution({
+                evolution: report.evolution,
+                inputs: inputSnapshots,
+                output: outputSnapshot,
+                allowCreated: true,
+                ...(context?.feature === undefined
+                  ? {}
+                  : { feature: context.feature }),
+              });
+            return provisional;
+          } catch (error) {
+            this.abandonTransferredShape(provisional);
+            throw error;
+          }
+        },
+      });
+    } catch (error) {
+      if (error instanceof OcctBooleanFacadeProtocolError) {
+        throw new TopologyEvolutionProtocolError(error.message);
+      }
       throw error;
     }
   }
@@ -2771,7 +2896,7 @@ class OcctKernel implements GeometryKernel {
     };
   }
 
-  private assertDraftTopologyCounts(
+  private assertTopologyCounts(
     declared: IndexedTopologyCounts,
     actual: IndexedTopologyCounts,
     label: string,
@@ -2865,7 +2990,7 @@ class OcctKernel implements GeometryKernel {
         neutralOrigin: options.neutralPlane.origin,
         neutralNormal: options.neutralPlane.normal,
         validate: (report: OcctDraftReportSnapshot) => {
-          this.assertDraftTopologyCounts(
+          this.assertTopologyCounts(
             report.evolution.inputCounts[0]!,
             this.rawTopologyCounts(inputHandle),
             "draft inputCounts[0]",
@@ -2879,7 +3004,7 @@ class OcctKernel implements GeometryKernel {
           });
           try {
             const outputSnapshot = this.topology(provisional);
-            this.assertDraftTopologyCounts(
+            this.assertTopologyCounts(
               report.evolution.resultCounts,
               this.rawTopologyCounts(provisional[OCCT_SHAPE]),
               "draft resultCounts",
@@ -3327,6 +3452,20 @@ class OcctKernel implements GeometryKernel {
   measure(shape: KernelShape): ShapeMeasurements {
     const owned = this.shape(shape);
     const handle = owned[OCCT_SHAPE];
+    const vertices = this.raw.subShapeCount(handle, "vertex");
+    const edges = this.raw.subShapeCount(handle, "edge");
+    const faces = this.raw.subShapeCount(handle, "face");
+    if (vertices === 0 && edges === 0 && faces === 0) {
+      return {
+        volume: 0,
+        surfaceArea: 0,
+        centerOfMass: null,
+        inertiaTensor: zeroMassProperties().inertiaTensor,
+        boundingBox: { min: [0, 0, 0], max: [0, 0, 0] },
+        genus: 0,
+        tolerance: this.modelingTolerance,
+      };
+    }
     const bounds = this.raw.getBoundingBox(handle, false);
     const solids = this.raw.getSubShapes(handle, "solid");
     let nativeMassProperties = zeroMassProperties();
@@ -3383,9 +3522,6 @@ class OcctKernel implements GeometryKernel {
       owned.volumeOverride === undefined
         ? nativeMassProperties
         : rescaleMassProperties(nativeMassProperties, owned.volumeOverride);
-    const vertices = this.raw.subShapeCount(handle, "vertex");
-    const edges = this.raw.subShapeCount(handle, "edge");
-    const faces = this.raw.subShapeCount(handle, "face");
     const eulerCharacteristic = vertices - edges + faces;
     return {
       volume: massProperties.volume,
@@ -3455,6 +3591,9 @@ class OcctKernel implements GeometryKernel {
 export async function createOcctKernel(
   options: OcctKernelOptions = {},
 ): Promise<GeometryKernel> {
+  const maxExactBooleanHistoryRecords = exactBooleanHistoryRecordLimit(
+    options.maxExactBooleanHistoryRecords,
+  );
   const [{ OcctKernel: RawKernel }, createModule] = await Promise.all([
     import("occt-wasm"),
     options.moduleFactory === undefined
@@ -3489,7 +3628,12 @@ export async function createOcctKernel(
   ) => RawOcctKernel;
   const raw = new KernelConstructor(module);
   try {
-    return new OcctKernel(raw, facade, options);
+    return new OcctKernel(
+      raw,
+      facade,
+      options,
+      maxExactBooleanHistoryRecords,
+    );
   } catch (error) {
     raw[Symbol.dispose]();
     throw error;

@@ -62,6 +62,17 @@ export interface ReduceIndexedTopologyEvolutionOptions {
   readonly feature?: string;
 }
 
+/** Options for a complete, potentially non-bijective topology evolution. */
+export interface ReduceCompleteIndexedTopologyEvolutionOptions
+  extends ReduceIndexedTopologyEvolutionOptions {
+  /**
+   * Whether source-less CREATED records are valid for this feature profile.
+   * Exact Boolean history permits them only for higher-order result topology
+   * that no individual operand's native history can attribute.
+   */
+  readonly allowCreated?: boolean;
+}
+
 /** Exact-capability data is authoritative; malformed data must never downgrade. */
 export class TopologyEvolutionProtocolError extends Error {
   constructor(message: string) {
@@ -79,12 +90,27 @@ type SupportedEvolutionRelation =
   | typeof INDEXED_TOPOLOGY_RELATION.PRESERVED
   | typeof INDEXED_TOPOLOGY_RELATION.MODIFIED;
 
+type CompleteEvolutionRelation =
+  | SupportedEvolutionRelation
+  | typeof INDEXED_TOPOLOGY_RELATION.GENERATED
+  | typeof INDEXED_TOPOLOGY_RELATION.DELETED
+  | typeof INDEXED_TOPOLOGY_RELATION.CREATED;
+
 interface ValidatedRecord {
   readonly sourceShapeIndex: number;
   readonly sourceKind: SupportedTopologyKind;
   readonly sourceIndex: number;
   readonly relation: SupportedEvolutionRelation;
   readonly resultKind: SupportedTopologyKind;
+  readonly resultIndex: number;
+}
+
+interface ValidatedCompleteRecord {
+  readonly sourceShapeIndex: number;
+  readonly sourceKind: SupportedTopologyKind | typeof INDEXED_TOPOLOGY_KIND.NONE;
+  readonly sourceIndex: number;
+  readonly relation: CompleteEvolutionRelation;
+  readonly resultKind: SupportedTopologyKind | typeof INDEXED_TOPOLOGY_KIND.NONE;
   readonly resultIndex: number;
 }
 
@@ -427,6 +453,336 @@ function validateEvolutionEnvelope(evolution: IndexedTopologyEvolutionEnvelope):
   return { records, inputCounts, resultCounts };
 }
 
+interface CompleteEvolutionValidationOptions {
+  readonly allowCreated: boolean;
+}
+
+function completeRecordKey(record: IndexedTopologyEvolutionRecord): string {
+  return [
+    record.sourceShapeIndex,
+    record.sourceKind,
+    record.sourceIndex,
+    record.relation,
+    record.resultKind,
+    record.resultIndex,
+  ].join(":");
+}
+
+function validateCompleteKind(
+  value: number,
+  label: string,
+): SupportedTopologyKind {
+  switch (value) {
+    case INDEXED_TOPOLOGY_KIND.FACE:
+    case INDEXED_TOPOLOGY_KIND.EDGE:
+    case INDEXED_TOPOLOGY_KIND.VERTEX:
+      return value;
+    case INDEXED_TOPOLOGY_KIND.NONE:
+      return protocolError(`${label} cannot be NONE for this relation`);
+    default:
+      return protocolError(`${label} contains unknown topology kind '${value}'`);
+  }
+}
+
+function validateCompleteEvolutionEnvelope(
+  evolution: IndexedTopologyEvolutionEnvelope,
+  options: CompleteEvolutionValidationOptions,
+): {
+  readonly records: readonly ValidatedCompleteRecord[];
+  readonly inputCounts: readonly IndexedTopologyCounts[];
+  readonly resultCounts: IndexedTopologyCounts;
+} {
+  if (typeof evolution !== "object" || evolution === null) {
+    protocolError("evolution must be an object");
+  }
+  if (evolution.version !== 1) {
+    protocolError(`version must be 1, received '${String(evolution.version)}'`);
+  }
+  if (evolution.complete !== true) {
+    protocolError("history must declare complete coverage");
+  }
+  assertCount(evolution.inputShapeCount, "inputShapeCount");
+  if (evolution.inputShapeCount === 0) {
+    protocolError("inputShapeCount must be at least one");
+  }
+  if (!Array.isArray(evolution.inputCounts)) {
+    protocolError("inputCounts must be an array");
+  }
+  if (evolution.inputCounts.length !== evolution.inputShapeCount) {
+    protocolError(
+      `inputCounts has ${evolution.inputCounts.length} entries; expected ${evolution.inputShapeCount}`,
+    );
+  }
+  const inputCounts = Array.from(evolution.inputCounts, (counts, index) =>
+    validateCounts(counts, `inputCounts[${index}]`),
+  );
+  const resultCounts = validateCounts(evolution.resultCounts, "resultCounts");
+  if (!Array.isArray(evolution.records)) {
+    protocolError("records must be an array");
+  }
+  if (evolution.records.length > INT32_MAX) {
+    protocolError("records exceeds the signed 32-bit record limit");
+  }
+
+  const exactRecords = new Set<string>();
+  const linkedPairs = new Set<string>();
+  const sourceStates = new Map<
+    string,
+    { successor: boolean; deleted: boolean }
+  >();
+  const resultStates = new Map<
+    string,
+    { attributed: boolean; created: boolean }
+  >();
+
+  const requireSource = (
+    sourceShapeIndex: number,
+    sourceKind: SupportedTopologyKind,
+    sourceIndex: number,
+    label: string,
+  ): void => {
+    assertIndex(sourceShapeIndex, `${label}.sourceShapeIndex`);
+    assertIndex(sourceIndex, `${label}.sourceIndex`);
+    if (sourceShapeIndex >= inputCounts.length) {
+      protocolError(
+        `${label}.sourceShapeIndex '${sourceShapeIndex}' is out of range`,
+      );
+    }
+    if (sourceIndex >= countForKind(inputCounts[sourceShapeIndex]!, sourceKind)) {
+      protocolError(`${label}.sourceIndex '${sourceIndex}' is out of range`);
+    }
+  };
+  const requireResult = (
+    resultKind: SupportedTopologyKind,
+    resultIndex: number,
+    label: string,
+  ): void => {
+    assertIndex(resultIndex, `${label}.resultIndex`);
+    if (resultIndex >= countForKind(resultCounts, resultKind)) {
+      protocolError(`${label}.resultIndex '${resultIndex}' is out of range`);
+    }
+  };
+
+  const records = Array.from(
+    evolution.records,
+    (record, recordIndex): ValidatedCompleteRecord => {
+      if (typeof record !== "object" || record === null) {
+        protocolError(`records[${recordIndex}] must be an object`);
+      }
+      const label = `records[${recordIndex}]`;
+      assertInt32(record.sourceShapeIndex, `${label}.sourceShapeIndex`);
+      assertInt32(record.sourceKind, `${label}.sourceKind`);
+      assertInt32(record.sourceIndex, `${label}.sourceIndex`);
+      assertInt32(record.relation, `${label}.relation`);
+      assertInt32(record.resultKind, `${label}.resultKind`);
+      assertInt32(record.resultIndex, `${label}.resultIndex`);
+
+      const exact = completeRecordKey(record);
+      if (exactRecords.has(exact)) {
+        protocolError(`${label} duplicates an earlier evolution record`);
+      }
+      exactRecords.add(exact);
+
+      switch (record.relation) {
+        case INDEXED_TOPOLOGY_RELATION.PRESERVED:
+        case INDEXED_TOPOLOGY_RELATION.MODIFIED:
+        case INDEXED_TOPOLOGY_RELATION.GENERATED: {
+          const sourceKind = validateCompleteKind(
+            record.sourceKind,
+            `${label}.sourceKind`,
+          );
+          const resultKind = validateCompleteKind(
+            record.resultKind,
+            `${label}.resultKind`,
+          );
+          requireSource(
+            record.sourceShapeIndex,
+            sourceKind,
+            record.sourceIndex,
+            label,
+          );
+          requireResult(resultKind, record.resultIndex, label);
+          if (
+            record.relation !== INDEXED_TOPOLOGY_RELATION.GENERATED &&
+            sourceKind !== resultKind
+          ) {
+            protocolError(`${label} changes topology kind without GENERATED`);
+          }
+
+          const source = recordKey(
+            record.sourceShapeIndex,
+            sourceKind,
+            record.sourceIndex,
+          );
+          const result = resultKey(resultKind, record.resultIndex);
+          const pair = `${source}>${result}`;
+          if (linkedPairs.has(pair)) {
+            protocolError(`${label} gives one source/result pair multiple relations`);
+          }
+          linkedPairs.add(pair);
+
+          const sourceState = sourceStates.get(source) ?? {
+            successor: false,
+            deleted: false,
+          };
+          if (
+            record.relation !== INDEXED_TOPOLOGY_RELATION.GENERATED
+          ) {
+            if (sourceState.deleted) {
+              protocolError(`${label} contradicts a DELETED source record`);
+            }
+            sourceState.successor = true;
+          }
+          sourceStates.set(source, sourceState);
+
+          const resultState = resultStates.get(result) ?? {
+            attributed: false,
+            created: false,
+          };
+          if (resultState.created) {
+            protocolError(`${label} attributes a source-less CREATED result`);
+          }
+          resultState.attributed = true;
+          resultStates.set(result, resultState);
+          return {
+            sourceShapeIndex: record.sourceShapeIndex,
+            sourceKind,
+            sourceIndex: record.sourceIndex,
+            relation: record.relation,
+            resultKind,
+            resultIndex: record.resultIndex,
+          };
+        }
+        case INDEXED_TOPOLOGY_RELATION.DELETED: {
+          const sourceKind = validateCompleteKind(
+            record.sourceKind,
+            `${label}.sourceKind`,
+          );
+          requireSource(
+            record.sourceShapeIndex,
+            sourceKind,
+            record.sourceIndex,
+            label,
+          );
+          if (
+            record.resultKind !== INDEXED_TOPOLOGY_KIND.NONE ||
+            record.resultIndex !== -1
+          ) {
+            protocolError(`${label} must use NONE/-1 for a DELETED result`);
+          }
+          const source = recordKey(
+            record.sourceShapeIndex,
+            sourceKind,
+            record.sourceIndex,
+          );
+          const sourceState = sourceStates.get(source) ?? {
+            successor: false,
+            deleted: false,
+          };
+          if (sourceState.successor) {
+            protocolError(`${label} contradicts a preserved/modified successor`);
+          }
+          sourceState.deleted = true;
+          sourceStates.set(source, sourceState);
+          return {
+            sourceShapeIndex: record.sourceShapeIndex,
+            sourceKind,
+            sourceIndex: record.sourceIndex,
+            relation: record.relation,
+            resultKind: INDEXED_TOPOLOGY_KIND.NONE,
+            resultIndex: -1,
+          };
+        }
+        case INDEXED_TOPOLOGY_RELATION.CREATED: {
+          if (!options.allowCreated) {
+            protocolError(`${label} uses CREATED, which this feature profile forbids`);
+          }
+          if (
+            record.sourceShapeIndex !== -1 ||
+            record.sourceKind !== INDEXED_TOPOLOGY_KIND.NONE ||
+            record.sourceIndex !== -1
+          ) {
+            protocolError(`${label} must use -1/NONE/-1 for a CREATED source`);
+          }
+          const resultKind = validateCompleteKind(
+            record.resultKind,
+            `${label}.resultKind`,
+          );
+          requireResult(resultKind, record.resultIndex, label);
+          const result = resultKey(resultKind, record.resultIndex);
+          const resultState = resultStates.get(result) ?? {
+            attributed: false,
+            created: false,
+          };
+          if (resultState.attributed) {
+            protocolError(`${label} marks an attributed result as source-less CREATED`);
+          }
+          resultState.created = true;
+          resultStates.set(result, resultState);
+          return {
+            sourceShapeIndex: -1,
+            sourceKind: INDEXED_TOPOLOGY_KIND.NONE,
+            sourceIndex: -1,
+            relation: record.relation,
+            resultKind,
+            resultIndex: record.resultIndex,
+          };
+        }
+        default:
+          return protocolError(
+            `record contains unknown relation '${record.relation}'`,
+          );
+      }
+    },
+  );
+
+  const kinds = [
+    INDEXED_TOPOLOGY_KIND.FACE,
+    INDEXED_TOPOLOGY_KIND.EDGE,
+    INDEXED_TOPOLOGY_KIND.VERTEX,
+  ] as const;
+  let sourceTotal = 0;
+  for (const count of inputCounts) {
+    for (const kind of kinds) {
+      sourceTotal = checkedAdd(
+        sourceTotal,
+        countForKind(count, kind),
+        "source topology count",
+      );
+    }
+  }
+  if (sourceStates.size !== sourceTotal) {
+    protocolError(
+      `records cover ${sourceStates.size} source topology items; expected ${sourceTotal}`,
+    );
+  }
+  for (const [source, state] of sourceStates) {
+    if (!state.successor && !state.deleted) {
+      protocolError(`source topology '${source}' has no successor or DELETED record`);
+    }
+  }
+  let resultTotal = 0;
+  for (const kind of kinds) {
+    resultTotal = checkedAdd(
+      resultTotal,
+      countForKind(resultCounts, kind),
+      "result topology count",
+    );
+  }
+  if (resultStates.size !== resultTotal) {
+    protocolError(
+      `records cover ${resultStates.size} result topology items; expected ${resultTotal}`,
+    );
+  }
+  for (const [result, state] of resultStates) {
+    if (!state.attributed && !state.created) {
+      protocolError(`result topology '${result}' has no evolution record`);
+    }
+  }
+
+  return { records, inputCounts, resultCounts };
+}
+
 /**
  * Validates the version-1 exact preserved/modified bijection without touching
  * any topology snapshots. Raw-kernel adapters use this before transferring an
@@ -437,6 +793,23 @@ export function validateExactIndexedTopologyEvolutionEnvelope(
   evolution: IndexedTopologyEvolutionEnvelope,
 ): void {
   validateEvolutionEnvelope(evolution);
+}
+
+/**
+ * Validates complete version-1 non-bijective topology evolution.
+ *
+ * PRESERVED and MODIFIED are same-kind source/result links; GENERATED may
+ * change kind; DELETED terminates a source with NONE/-1; and CREATED starts a
+ * source-less result with -1/NONE/-1. Feature adapters may forbid CREATED when
+ * their operation contract requires every result to be attributable.
+ */
+export function validateCompleteIndexedTopologyEvolutionEnvelope(
+  evolution: IndexedTopologyEvolutionEnvelope,
+  options: { readonly allowCreated?: boolean } = {},
+): void {
+  validateCompleteEvolutionEnvelope(evolution, {
+    allowCreated: options.allowCreated ?? true,
+  });
 }
 
 function inheritedLineage(
@@ -554,6 +927,209 @@ export function reduceIndexedTopologyEvolution(
       lineage: inheritedLineage(source, evolution.relation, options.feature),
     });
   });
+
+  return Object.freeze({
+    history: options.inputs.every((input) => input.history === "complete")
+      ? "complete"
+      : "partial",
+    faces: Object.freeze(faces),
+    edges: Object.freeze(edges),
+  });
+}
+
+function lineageIdentity(lineage: KernelTopologyLineage): string {
+  return [
+    lineage.feature,
+    lineage.relation,
+    lineage.role ?? "",
+    lineage.source?.kind ?? "",
+    lineage.source?.sketch ?? "",
+    lineage.source?.entity ?? "",
+  ].join("\u0000");
+}
+
+function copyDescriptorLineage(
+  source: KernelFaceDescriptor | KernelEdgeDescriptor,
+): readonly KernelTopologyLineage[] {
+  return source.lineage.map((item) => {
+    return Object.freeze({
+      ...item,
+      ...(item.source === undefined
+        ? {}
+        : { source: Object.freeze({ ...item.source }) }),
+    });
+  });
+}
+
+function compareCompleteRecords(
+  first: ValidatedCompleteRecord,
+  second: ValidatedCompleteRecord,
+): number {
+  return (
+    first.resultKind - second.resultKind ||
+    first.resultIndex - second.resultIndex ||
+    first.sourceShapeIndex - second.sourceShapeIndex ||
+    first.sourceKind - second.sourceKind ||
+    first.sourceIndex - second.sourceIndex ||
+    first.relation - second.relation
+  );
+}
+
+/**
+ * Applies a complete non-bijective indexed evolution graph to an output.
+ *
+ * Lineage is merged in canonical source-index order, independent of native
+ * record order. Only same-kind PRESERVED/MODIFIED identity links inherit
+ * semantic lineage. GENERATED remains exact causal coverage without pretending
+ * that a new subshape has the source's identity. Results without an identity
+ * predecessor are created by the current feature; otherwise MODIFIED reflects
+ * whether any identity predecessor changed.
+ */
+export function reduceCompleteIndexedTopologyEvolution(
+  options: ReduceCompleteIndexedTopologyEvolutionOptions,
+): KernelTopologySnapshot {
+  if (
+    options.feature !== undefined &&
+    (typeof options.feature !== "string" || options.feature.length === 0)
+  ) {
+    throw new TypeError(
+      "Topology evolution feature must be a non-empty string when provided",
+    );
+  }
+  const validated = validateCompleteEvolutionEnvelope(options.evolution, {
+    allowCreated: options.allowCreated ?? true,
+  });
+  if (
+    !Array.isArray(options.inputs) ||
+    options.inputs.length !== options.evolution.inputShapeCount
+  ) {
+    protocolError(
+      `inputs has ${Array.isArray(options.inputs) ? options.inputs.length : "an invalid"} count; expected ${options.evolution.inputShapeCount}`,
+    );
+  }
+  for (let index = 0; index < validated.inputCounts.length; index += 1) {
+    validateSnapshot(
+      options.inputs[index]!,
+      validated.inputCounts[index]!,
+      `inputs[${index}]`,
+    );
+  }
+  validateSnapshot(options.output, validated.resultCounts, "output");
+
+  const faceEvolution = Array.from(
+    { length: validated.resultCounts.faces },
+    (): ValidatedCompleteRecord[] => [],
+  );
+  const edgeEvolution = Array.from(
+    { length: validated.resultCounts.edges },
+    (): ValidatedCompleteRecord[] => [],
+  );
+  for (const record of [...validated.records].sort(compareCompleteRecords)) {
+    if (record.resultKind === INDEXED_TOPOLOGY_KIND.FACE) {
+      faceEvolution[record.resultIndex]!.push(record);
+    } else if (record.resultKind === INDEXED_TOPOLOGY_KIND.EDGE) {
+      edgeEvolution[record.resultIndex]!.push(record);
+    }
+  }
+
+  const reduceDescriptor = <
+    Descriptor extends KernelFaceDescriptor | KernelEdgeDescriptor,
+  >(
+    descriptor: Descriptor,
+    records: readonly ValidatedCompleteRecord[],
+  ): Descriptor => {
+    const lineage: KernelTopologyLineage[] = [];
+    const seen = new Set<string>();
+    let hasIdentityPredecessor = false;
+    let hasModifiedIdentity = false;
+    let hasCreationCause = false;
+    const append = (item: KernelTopologyLineage): void => {
+      const identity = lineageIdentity(item);
+      if (seen.has(identity)) return;
+      seen.add(identity);
+      lineage.push(item);
+    };
+
+    for (const record of records) {
+      if (
+        record.relation === INDEXED_TOPOLOGY_RELATION.CREATED
+      ) {
+        hasCreationCause = true;
+        continue;
+      }
+      if (
+        record.relation === INDEXED_TOPOLOGY_RELATION.DELETED ||
+        record.sourceKind === INDEXED_TOPOLOGY_KIND.NONE
+      ) {
+        continue;
+      }
+      if (record.relation === INDEXED_TOPOLOGY_RELATION.GENERATED) {
+        hasCreationCause = true;
+        continue;
+      }
+      hasIdentityPredecessor = true;
+      if (record.relation === INDEXED_TOPOLOGY_RELATION.MODIFIED) {
+        hasModifiedIdentity = true;
+      }
+      const sourceSnapshot = options.inputs[record.sourceShapeIndex]!;
+      const source =
+        record.sourceKind === INDEXED_TOPOLOGY_KIND.FACE
+          ? sourceSnapshot.faces[record.sourceIndex]
+          : record.sourceKind === INDEXED_TOPOLOGY_KIND.EDGE
+            ? sourceSnapshot.edges[record.sourceIndex]
+            : undefined;
+      if (source !== undefined) {
+        for (const item of copyDescriptorLineage(source)) {
+          append(item);
+        }
+      }
+    }
+    const currentRelation = hasIdentityPredecessor
+      ? hasModifiedIdentity
+        ? "modified"
+        : undefined
+      : hasCreationCause
+        ? "created"
+        : undefined;
+    const alreadyCreatedByCurrentFeature =
+      options.feature !== undefined &&
+      lineage.some(
+        (item) =>
+          item.feature === options.feature &&
+          item.relation === "created" &&
+          item.role === undefined &&
+          item.source === undefined,
+      );
+    if (
+      options.feature !== undefined &&
+      currentRelation !== undefined &&
+      !(currentRelation === "modified" && alreadyCreatedByCurrentFeature)
+    ) {
+      append(
+        Object.freeze({
+          feature: options.feature,
+          relation: currentRelation,
+        }),
+      );
+    }
+    return Object.freeze({
+      ...descriptor,
+      lineage: Object.freeze(lineage),
+    }) as unknown as Descriptor;
+  };
+
+  const faces = options.output.faces.map((descriptor, resultIndex) =>
+    reduceDescriptor(
+      descriptor,
+      faceEvolution[resultIndex]!,
+    ),
+  );
+  const edges = options.output.edges.map((descriptor, resultIndex) =>
+    reduceDescriptor(
+      descriptor,
+      edgeEvolution[resultIndex]!,
+    ),
+  );
 
   return Object.freeze({
     history: options.inputs.every((input) => input.history === "complete")

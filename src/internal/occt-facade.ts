@@ -6,12 +6,16 @@ import type {
   OcctDraftFacadeModule,
   OcctDraftRawKernel,
 } from "./occt-draft.js";
+import type { OcctBooleanFacadeModule } from "./occt-boolean.js";
 
 export const OCCT_DRAFT_FACADE_VERSION =
   "invariantcad-facade@0.2.0+occt-wasm.3.7.0";
 
 export const OCCT_CONTROLLED_PIPE_SHELL_FACADE_VERSION =
   "invariantcad-facade@0.3.0+occt-wasm.3.7.0";
+
+export const OCCT_BOOLEAN_FACADE_VERSION =
+  "invariantcad-facade@0.4.0+occt-wasm.3.7.0";
 
 const DRAFT_FACADE_MARKERS = Object.freeze([
   "InvariantCadDraftReport",
@@ -27,6 +31,13 @@ const CONTROLLED_PIPE_SHELL_FACADE_MARKERS = Object.freeze([
   "invariantcadPipeShellSolid",
 ] as const);
 
+const BOOLEAN_FACADE_MARKERS = Object.freeze([
+  ...CONTROLLED_PIPE_SHELL_FACADE_MARKERS,
+  "InvariantCadBooleanOperation",
+  "InvariantCadBooleanReport",
+  "invariantcadBooleanAtomic",
+] as const);
+
 const TOPOLOGY_KIND_MEMBERS = Object.freeze({
   NONE: INDEXED_TOPOLOGY_KIND.NONE,
   FACE: INDEXED_TOPOLOGY_KIND.FACE,
@@ -40,6 +51,12 @@ const TOPOLOGY_RELATION_MEMBERS = Object.freeze({
   GENERATED: INDEXED_TOPOLOGY_RELATION.GENERATED,
   DELETED: INDEXED_TOPOLOGY_RELATION.DELETED,
   CREATED: INDEXED_TOPOLOGY_RELATION.CREATED,
+});
+
+const BOOLEAN_OPERATION_MEMBERS = Object.freeze({
+  UNION: 0,
+  SUBTRACT: 1,
+  INTERSECT: 2,
 });
 
 /** Structural view of the controlled PipeShell report returned by Embind. */
@@ -81,6 +98,7 @@ export interface OcctDraftFacadeProbe {
   readonly module: OcctDraftFacadeModule;
   readonly draft: OcctDraftFacadeModule;
   readonly pipeShell: undefined;
+  readonly boolean: undefined;
 }
 
 export interface OcctControlledPipeShellFacadeProbe {
@@ -89,11 +107,22 @@ export interface OcctControlledPipeShellFacadeProbe {
   readonly module: OcctControlledPipeShellFacadeModule;
   readonly draft: OcctDraftFacadeModule;
   readonly pipeShell: OcctControlledPipeShellFacadeModule;
+  readonly boolean: undefined;
+}
+
+export interface OcctBooleanFacadeProbe {
+  readonly abi: "0.4";
+  readonly version: typeof OCCT_BOOLEAN_FACADE_VERSION;
+  readonly module: OcctBooleanFacadeModule;
+  readonly draft: OcctDraftFacadeModule;
+  readonly pipeShell: OcctControlledPipeShellFacadeModule;
+  readonly boolean: OcctBooleanFacadeModule;
 }
 
 export type OcctFacadeProbe =
   | OcctDraftFacadeProbe
-  | OcctControlledPipeShellFacadeProbe;
+  | OcctControlledPipeShellFacadeProbe
+  | OcctBooleanFacadeProbe;
 
 /**
  * Kept under its original name so callers that catch the 0.2 probe error do
@@ -183,6 +212,35 @@ function validateDraftSurface(candidate: Record<string, unknown>): void {
   );
 }
 
+function validateControlledPipeShellSurface(
+  candidate: Record<string, unknown>,
+): void {
+  if (typeof candidate.InvariantCadPipeShellReport !== "function") {
+    facadeProtocolError(
+      "InvariantCadPipeShellReport must be an Embind class marker",
+    );
+  }
+  if (typeof candidate.invariantcadPipeShellSolid !== "function") {
+    facadeProtocolError("invariantcadPipeShellSolid must be a function");
+  }
+}
+
+function validateBooleanSurface(candidate: Record<string, unknown>): void {
+  if (typeof candidate.InvariantCadBooleanReport !== "function") {
+    facadeProtocolError(
+      "InvariantCadBooleanReport must be an Embind class marker",
+    );
+  }
+  if (typeof candidate.invariantcadBooleanAtomic !== "function") {
+    facadeProtocolError("invariantcadBooleanAtomic must be a function");
+  }
+  assertExactNumericEnum(
+    candidate.InvariantCadBooleanOperation,
+    BOOLEAN_OPERATION_MEMBERS,
+    "InvariantCadBooleanOperation",
+  );
+}
+
 /**
  * Detects only a complete, known owned facade. Marker-free modules are stock
  * OCCT and return `undefined`; partial, extended, mixed-version, and unknown
@@ -200,34 +258,43 @@ export function probeOcctFacade(module: unknown): OcctFacadeProbe | undefined {
     markers,
     CONTROLLED_PIPE_SHELL_FACADE_MARKERS,
   );
-  if (!isDraft && !isControlledPipeShell) {
+  const isBoolean = exactMarkerSet(markers, BOOLEAN_FACADE_MARKERS);
+  if (!isDraft && !isControlledPipeShell && !isBoolean) {
     facadeProtocolError(
-      `marker set is '${markers.join(",")}', expected exact ABI 0.2 or 0.3 markers`,
+      `marker set is '${markers.join(",")}', expected exact ABI 0.2, 0.3, or 0.4 markers`,
     );
   }
 
   const candidate = module as Record<string, unknown>;
   validateDraftSurface(candidate);
-  if (isControlledPipeShell) {
-    if (typeof candidate.InvariantCadPipeShellReport !== "function") {
-      facadeProtocolError(
-        "InvariantCadPipeShellReport must be an Embind class marker",
-      );
-    }
-    if (typeof candidate.invariantcadPipeShellSolid !== "function") {
-      facadeProtocolError("invariantcadPipeShellSolid must be a function");
-    }
+  if (isControlledPipeShell || isBoolean) {
+    validateControlledPipeShellSurface(candidate);
   }
+  if (isBoolean) validateBooleanSurface(candidate);
 
   const rawVersion = candidate.invariantcadFacadeVersion as () => unknown;
   const version = rawVersion();
-  const expectedVersion = isControlledPipeShell
-    ? OCCT_CONTROLLED_PIPE_SHELL_FACADE_VERSION
-    : OCCT_DRAFT_FACADE_VERSION;
+  const expectedVersion = isBoolean
+    ? OCCT_BOOLEAN_FACADE_VERSION
+    : isControlledPipeShell
+      ? OCCT_CONTROLLED_PIPE_SHELL_FACADE_VERSION
+      : OCCT_DRAFT_FACADE_VERSION;
   if (version !== expectedVersion) {
     facadeProtocolError(
       `version is '${String(version)}', expected '${expectedVersion}'`,
     );
+  }
+
+  if (isBoolean) {
+    const booleanModule = module as unknown as OcctBooleanFacadeModule;
+    return Object.freeze({
+      abi: "0.4" as const,
+      version: OCCT_BOOLEAN_FACADE_VERSION,
+      module: booleanModule,
+      draft: booleanModule as unknown as OcctDraftFacadeModule,
+      pipeShell: booleanModule as unknown as OcctControlledPipeShellFacadeModule,
+      boolean: booleanModule,
+    });
   }
 
   if (isControlledPipeShell) {
@@ -239,6 +306,7 @@ export function probeOcctFacade(module: unknown): OcctFacadeProbe | undefined {
       module: controlledModule,
       draft: controlledModule,
       pipeShell: controlledModule,
+      boolean: undefined,
     });
   }
 
@@ -249,6 +317,7 @@ export function probeOcctFacade(module: unknown): OcctFacadeProbe | undefined {
     module: draftModule,
     draft: draftModule,
     pipeShell: undefined,
+    boolean: undefined,
   });
 }
 

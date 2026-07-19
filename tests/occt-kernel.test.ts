@@ -35,6 +35,37 @@ function profileCurveSource(entity: string): ProfileCurveSource {
 }
 
 describe("OCCT exact-kernel integration", () => {
+  it("measures an empty Boolean result without asking OCCT for nonexistent bounds", async () => {
+    const kernel = await createOcctKernel();
+    const target = kernel.box!([10, 10, 10], false);
+    const toolBase = kernel.box!([10, 10, 10], false);
+    let tool: KernelShape | undefined;
+    let empty: KernelShape | undefined;
+    try {
+      tool = kernel.transform!(toolBase, [
+        { kind: "translate", value: [20, 0, 0] },
+      ]);
+      empty = kernel.boolean!("intersect", target, [tool]);
+      expect(kernel.measure(empty)).toMatchObject({
+        volume: 0,
+        surfaceArea: 0,
+        centerOfMass: null,
+        boundingBox: { min: [0, 0, 0], max: [0, 0, 0] },
+        genus: 0,
+      });
+      expect(kernel.topology!(empty)).toMatchObject({
+        faces: [],
+        edges: [],
+      });
+    } finally {
+      if (empty !== undefined) kernel.disposeShape(empty);
+      if (tool !== undefined) kernel.disposeShape(tool);
+      kernel.disposeShape(toolBase);
+      kernel.disposeShape(target);
+      kernel.dispose();
+    }
+  });
+
   it("recenters native integration before measuring large world translations", async () => {
     const kernel = await createOcctKernel();
     const box = kernel.box!([2, 4, 6], true);
