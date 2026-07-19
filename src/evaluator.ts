@@ -31,16 +31,18 @@ import {
   type Dimension,
   type ExpressionIR,
 } from "./expressions.js";
-import type {
-  AssemblyInstanceIR,
-  DesignConfigurationIR,
-  DesignDocument,
-  MaterialDefinitionIR,
-  NodeIR,
-  PartNodeIR,
-  RefIR,
-  TopologySelectionIR,
-  TransformOperationIR,
+import {
+  DOCUMENT_VERSION_V2,
+  DOCUMENT_VERSION_V3,
+  type AssemblyInstanceIR,
+  type DesignConfigurationIR,
+  type DesignDocument,
+  type MaterialDefinitionIR,
+  type NodeIR,
+  type PartNodeIR,
+  type RefIR,
+  type TopologySelectionIR,
+  type TransformOperationIR,
 } from "./ir.js";
 import {
   COMPOSITE_SWEEP_REFINEMENT_PROTOCOL_VERSION,
@@ -1914,7 +1916,10 @@ export class Evaluator {
           );
         }
         const registry =
-          document.version === 2 ? document.topologyReferences : undefined;
+          document.version === DOCUMENT_VERSION_V2 ||
+          document.version === DOCUMENT_VERSION_V3
+            ? document.topologyReferences
+            : undefined;
         if (registry === undefined) {
           throw new EvaluationFailure(
             diagnostic(

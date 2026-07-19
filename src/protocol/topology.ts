@@ -2,7 +2,8 @@ import type { Vec3 } from "../core/math.js";
 
 export type TopologyKind = "face" | "edge";
 
-export const FACE_TOPOLOGY_ROLES = Object.freeze([
+/** Face-role vocabulary frozen into document v1. */
+export const FACE_TOPOLOGY_ROLES_V1 = Object.freeze([
   "box.face.x-min",
   "box.face.x-max",
   "box.face.y-min",
@@ -21,7 +22,19 @@ export const FACE_TOPOLOGY_ROLES = Object.freeze([
   "revolve.face.swept",
 ] as const);
 
-export const EDGE_TOPOLOGY_ROLES = Object.freeze([
+/** Document v2 did not expand the semantic role vocabulary. */
+export const FACE_TOPOLOGY_ROLES_V2 = FACE_TOPOLOGY_ROLES_V1;
+
+/** Face-role vocabulary introduced by document v3. */
+export const FACE_TOPOLOGY_ROLES_V3 = Object.freeze([
+  ...FACE_TOPOLOGY_ROLES_V2,
+  "loft.face.start-cap",
+  "loft.face.end-cap",
+  "loft.face.side",
+] as const);
+
+/** Edge-role vocabulary frozen into document v1. */
+export const EDGE_TOPOLOGY_ROLES_V1 = Object.freeze([
   "box.edge.x-min-y-min",
   "box.edge.x-min-y-max",
   "box.edge.x-max-y-min",
@@ -41,21 +54,56 @@ export const EDGE_TOPOLOGY_ROLES = Object.freeze([
   "extrude.edge.lateral",
 ] as const);
 
-export const TOPOLOGY_ROLES = Object.freeze([
-  ...FACE_TOPOLOGY_ROLES,
-  ...EDGE_TOPOLOGY_ROLES,
+/** Document v2 did not expand the semantic role vocabulary. */
+export const EDGE_TOPOLOGY_ROLES_V2 = EDGE_TOPOLOGY_ROLES_V1;
+
+/** Edge-role vocabulary introduced by document v3. */
+export const EDGE_TOPOLOGY_ROLES_V3 = Object.freeze([
+  ...EDGE_TOPOLOGY_ROLES_V2,
+  "loft.edge.section-rim",
+  "loft.edge.lateral",
 ] as const);
 
-export type FaceTopologyRole = (typeof FACE_TOPOLOGY_ROLES)[number];
-export type EdgeTopologyRole = (typeof EDGE_TOPOLOGY_ROLES)[number];
-export type TopologyRole = (typeof TOPOLOGY_ROLES)[number];
+export const TOPOLOGY_ROLES_V1 = Object.freeze([
+  ...FACE_TOPOLOGY_ROLES_V1,
+  ...EDGE_TOPOLOGY_ROLES_V1,
+] as const);
+
+export const TOPOLOGY_ROLES_V2 = TOPOLOGY_ROLES_V1;
+
+export const TOPOLOGY_ROLES_V3 = Object.freeze([
+  ...FACE_TOPOLOGY_ROLES_V3,
+  ...EDGE_TOPOLOGY_ROLES_V3,
+] as const);
+
+/** Current face-role vocabulary. */
+export const FACE_TOPOLOGY_ROLES = FACE_TOPOLOGY_ROLES_V3;
+/** Current edge-role vocabulary. */
+export const EDGE_TOPOLOGY_ROLES = EDGE_TOPOLOGY_ROLES_V3;
+/** Current closed semantic-role vocabulary. */
+export const TOPOLOGY_ROLES = TOPOLOGY_ROLES_V3;
+
+export type FaceTopologyRoleV1 = (typeof FACE_TOPOLOGY_ROLES_V1)[number];
+export type FaceTopologyRoleV2 = (typeof FACE_TOPOLOGY_ROLES_V2)[number];
+export type FaceTopologyRoleV3 = (typeof FACE_TOPOLOGY_ROLES_V3)[number];
+export type EdgeTopologyRoleV1 = (typeof EDGE_TOPOLOGY_ROLES_V1)[number];
+export type EdgeTopologyRoleV2 = (typeof EDGE_TOPOLOGY_ROLES_V2)[number];
+export type EdgeTopologyRoleV3 = (typeof EDGE_TOPOLOGY_ROLES_V3)[number];
+export type TopologyRoleV1 = (typeof TOPOLOGY_ROLES_V1)[number];
+export type TopologyRoleV2 = (typeof TOPOLOGY_ROLES_V2)[number];
+export type TopologyRoleV3 = (typeof TOPOLOGY_ROLES_V3)[number];
+
+export type FaceTopologyRole = FaceTopologyRoleV3;
+export type EdgeTopologyRole = EdgeTopologyRoleV3;
+export type TopologyRole = TopologyRoleV3;
 
 export type TopologyRoleProducer =
   | "box"
   | "cylinder"
   | "sphere"
   | "extrude"
-  | "revolve";
+  | "revolve"
+  | "loft";
 export type TopologyRoleSource = "none" | "sketch-curve";
 
 export interface TopologyRoleRule {
@@ -106,6 +154,11 @@ export const TOPOLOGY_ROLE_RULES = Object.freeze({
   "revolve.face.start-cap": roleRule("revolve", "face"),
   "revolve.face.end-cap": roleRule("revolve", "face"),
   "revolve.face.swept": roleRule("revolve", "face", "sketch-curve"),
+  "loft.face.start-cap": roleRule("loft", "face"),
+  "loft.face.end-cap": roleRule("loft", "face"),
+  "loft.face.side": roleRule("loft", "face", "sketch-curve"),
+  "loft.edge.section-rim": roleRule("loft", "edge", "sketch-curve"),
+  "loft.edge.lateral": roleRule("loft", "edge"),
 } as const satisfies Readonly<Record<TopologyRole, TopologyRoleRule>>);
 
 declare const KERNEL_TOPOLOGY_KEY: unique symbol;

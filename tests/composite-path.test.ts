@@ -544,7 +544,7 @@ describe("exact composite path document contract", () => {
     expect(cloneDocument(document)).toEqual(document);
     expect(await hashDocument(parsed.value)).toBe(await hashDocument(document));
     expect(await hashDocument(document)).toBe(
-      "b113b509c0a02e230984d9e5774ff021d2786b8fe5960c7022cc4a40e0513fe6",
+      "dad4a109ee40972e151becf5de2daab180c5690502c9e58def0d4c8c135b5aae",
     );
   });
 

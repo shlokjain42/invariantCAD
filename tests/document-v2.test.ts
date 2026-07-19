@@ -5,8 +5,10 @@ import { mm } from "../src/expressions.js";
 import {
   DOCUMENT_SCHEMA_V1,
   DOCUMENT_SCHEMA_V2,
+  DOCUMENT_SCHEMA_V3,
   DOCUMENT_VERSION_V1,
   DOCUMENT_VERSION_V2,
+  DOCUMENT_VERSION_V3,
   type DesignDocumentV1,
   type DesignDocumentV2,
   type TopologyQueryIRV1,
@@ -22,12 +24,13 @@ import {
 import {
   DesignDocumentSchema,
   DesignDocumentV1Schema,
+  DesignDocumentV2Schema,
   TopologyQuerySchema,
   TopologyQueryV1Schema,
   TopologyQueryV2Schema,
 } from "../src/schema.js";
 import type {
-  PersistentTopologyReference,
+  PersistentTopologyReferenceV2,
   TopologyMatchTolerance,
 } from "../src/topology-signatures.js";
 import type { CadResult, Diagnostic } from "../src/core/result.js";
@@ -40,7 +43,7 @@ const tolerance: TopologyMatchTolerance = Object.freeze({
 
 function faceReference(
   kernelFingerprint: string,
-): PersistentTopologyReference<"face"> {
+): PersistentTopologyReferenceV2<"face"> {
   return {
     protocolVersion: 1,
     kernelFingerprint,
@@ -87,7 +90,7 @@ function faceReference(
 
 function edgeReference(
   kernelFingerprint: string,
-): PersistentTopologyReference<"edge"> {
+): PersistentTopologyReferenceV2<"edge"> {
   return {
     protocolVersion: 1,
     kernelFingerprint,
@@ -119,11 +122,19 @@ function baseV2(name = "document-v2"): DesignDocumentV2 {
     size: [mm(10), mm(10), mm(10)],
   });
   cad.output("box", box);
-  const document = cad.build();
-  if (document.version !== DOCUMENT_VERSION_V2) {
-    throw new TypeError("The current authoring API did not emit document v2");
+  const current = cad.build();
+  if (current.version !== DOCUMENT_VERSION_V3) {
+    throw new TypeError("The current authoring API did not emit document v3");
   }
-  return document;
+  const document = DesignDocumentV2Schema.safeParse({
+    ...current,
+    schema: DOCUMENT_SCHEMA_V2,
+    version: DOCUMENT_VERSION_V2,
+  });
+  if (!document.success) {
+    throw new TypeError(`Document-v2 fixture is invalid: ${document.error.message}`);
+  }
+  return document.data;
 }
 
 function legacyV1(): DesignDocumentV1 {
@@ -135,8 +146,8 @@ function legacyV1(): DesignDocumentV1 {
   const result = cad.subtract("result", box, [sphere]);
   cad.output("result", result);
   const document = cad.build();
-  if (document.version !== DOCUMENT_VERSION_V2) {
-    throw new TypeError("The current authoring API did not emit document v2");
+  if (document.version !== DOCUMENT_VERSION_V3) {
+    throw new TypeError("The current authoring API did not emit document v3");
   }
   const { topologyReferences: _topologyReferences, ...body } = document;
   const legacy = DesignDocumentV1Schema.safeParse({
@@ -151,7 +162,7 @@ function legacyV1(): DesignDocumentV1 {
 }
 
 function withFaceRegistry(
-  variants: readonly PersistentTopologyReference<"face">[] = [
+  variants: readonly PersistentTopologyReferenceV2<"face">[] = [
     faceReference("test-kernel/z"),
     faceReference("test-kernel/a"),
   ],
@@ -208,24 +219,17 @@ describe("DesignDocument v2 serialization", () => {
     );
   });
 
-  it("validates before migrating v1 to v2 and treats v2 migration as idempotent", () => {
+  it("validates before migrating v1 to the current v3 grammar", () => {
     const source = legacyV1();
     const migrated = migrateDocument(source);
     expect(migrated.ok).toBe(true);
     if (!migrated.ok) return;
     expect(migrated.value).toEqual({
       ...source,
-      schema: DOCUMENT_SCHEMA_V2,
-      version: DOCUMENT_VERSION_V2,
+      schema: DOCUMENT_SCHEMA_V3,
+      version: DOCUMENT_VERSION_V3,
     });
     expect(Object.isFrozen(migrated.value)).toBe(true);
-
-    const repeated = migrateDocument(migrated.value);
-    expect(repeated).toEqual({
-      ok: true,
-      value: migrated.value,
-      diagnostics: [],
-    });
 
     const invalid = mutable(source);
     invalid.outputs.result.node = "missing";

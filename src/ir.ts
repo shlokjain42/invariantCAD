@@ -8,7 +8,13 @@ import type {
 } from "./core/ids.js";
 import type { JsonValue } from "./core/json.js";
 import type { Dimension, ExpressionIR } from "./expressions.js";
-import type { TopologyKind, TopologyRole } from "./protocol/topology.js";
+import type {
+  TopologyKind,
+  TopologyRole,
+  TopologyRoleV1,
+  TopologyRoleV2,
+  TopologyRoleV3,
+} from "./protocol/topology.js";
 import type { ShellDirection } from "./protocol/shell.js";
 import type { OffsetDirection } from "./protocol/offset.js";
 import type { SweepFrame, SweepTransition } from "./protocol/sweep.js";
@@ -20,11 +26,14 @@ export const DOCUMENT_VERSION_V1 = 1 as const;
 export const DOCUMENT_SCHEMA_V2 =
   "https://invariantcad.dev/schema/document/v2" as const;
 export const DOCUMENT_VERSION_V2 = 2 as const;
+export const DOCUMENT_SCHEMA_V3 =
+  "https://invariantcad.dev/schema/document/v3" as const;
+export const DOCUMENT_VERSION_V3 = 3 as const;
 
 /** Schema emitted by the current authoring API. */
-export const DOCUMENT_SCHEMA = DOCUMENT_SCHEMA_V2;
+export const DOCUMENT_SCHEMA = DOCUMENT_SCHEMA_V3;
 /** Version emitted by the current authoring API. */
-export const DOCUMENT_VERSION = DOCUMENT_VERSION_V2;
+export const DOCUMENT_VERSION = DOCUMENT_VERSION_V3;
 
 export type OutputKind = "profile" | "path" | "solid" | "part" | "assembly";
 export type DesignOutputKind = Exclude<OutputKind, "profile" | "path">;
@@ -344,11 +353,19 @@ export interface TopologyCardinalityIR {
  */
 export interface TopologyReferenceEntryIR<
   K extends TopologyKind = TopologyKind,
+  R extends TopologyRole = TopologyRole,
 > {
   readonly target: RefIR<"solid">;
   readonly topology: K;
-  readonly variants: readonly PersistentTopologyReference<K>[];
+  readonly variants: readonly PersistentTopologyReference<K, R>[];
 }
+
+export type TopologyReferenceEntryIRV2<
+  K extends TopologyKind = TopologyKind,
+> = TopologyReferenceEntryIR<K, TopologyRoleV2>;
+export type TopologyReferenceEntryIRV3<
+  K extends TopologyKind = TopologyKind,
+> = TopologyReferenceEntryIR<K, TopologyRoleV3>;
 
 /**
  * Version-aware topology query grammar. Persistent-reference atoms were added
@@ -356,9 +373,12 @@ export interface TopologyReferenceEntryIR<
  */
 declare const topologyQueryPersistentCapability: unique symbol;
 
-export type TopologyQueryIRFor<AllowPersistent extends boolean> = {
+export type TopologyQueryIRFor<
+  AllowPersistent extends boolean,
+  R extends TopologyRole = TopologyRole,
+> = {
   /** Type-only variance marker; never serialized into a document. */
-  readonly [topologyQueryPersistentCapability]?: AllowPersistent;
+  readonly [topologyQueryPersistentCapability]?: readonly [AllowPersistent, R];
 } &
   (
     | { readonly op: "all" }
@@ -372,7 +392,7 @@ export type TopologyQueryIRFor<AllowPersistent extends boolean> = {
         readonly op: "origin";
         readonly feature: NodeId;
         readonly relation: TopologyOriginRelation;
-        readonly role?: TopologyRole;
+        readonly role?: R;
         readonly source?: TopologySourceIR;
       }
     | { readonly op: "surface"; readonly kind: string }
@@ -391,45 +411,52 @@ export type TopologyQueryIRFor<AllowPersistent extends boolean> = {
         readonly op: "adjacentTo";
         readonly selection: TopologySelectionIRFor<
           TopologyKind,
-          AllowPersistent
+          AllowPersistent,
+          R
         >;
       }
     | {
         readonly op: "and" | "or";
-        readonly queries: readonly TopologyQueryIRFor<AllowPersistent>[];
+        readonly queries: readonly TopologyQueryIRFor<AllowPersistent, R>[];
       }
     | {
         readonly op: "not";
-        readonly query: TopologyQueryIRFor<AllowPersistent>;
+        readonly query: TopologyQueryIRFor<AllowPersistent, R>;
       }
   );
 
 export interface TopologySelectionIRFor<
   K extends TopologyKind = TopologyKind,
   AllowPersistent extends boolean = boolean,
+  R extends TopologyRole = TopologyRole,
 > {
   readonly topology: K;
-  readonly query: TopologyQueryIRFor<AllowPersistent>;
+  readonly query: TopologyQueryIRFor<AllowPersistent, R>;
   readonly cardinality: TopologyCardinalityIR;
 }
 
 /** Topology queries accepted by the original document-v1 grammar. */
-export type TopologyQueryIRV1 = TopologyQueryIRFor<false>;
-/** Topology queries accepted by the current document-v2 grammar. */
-export type TopologyQueryIRV2 = TopologyQueryIRFor<boolean>;
+export type TopologyQueryIRV1 = TopologyQueryIRFor<false, TopologyRoleV1>;
+/** Topology queries accepted by the frozen document-v2 grammar. */
+export type TopologyQueryIRV2 = TopologyQueryIRFor<boolean, TopologyRoleV2>;
+/** Topology queries accepted by the current document-v3 grammar. */
+export type TopologyQueryIRV3 = TopologyQueryIRFor<boolean, TopologyRoleV3>;
 /** Current topology query grammar. */
-export type TopologyQueryIR = TopologyQueryIRV2;
+export type TopologyQueryIR = TopologyQueryIRV3;
 
 export type TopologySelectionIRV1<
   K extends TopologyKind = TopologyKind,
-> = TopologySelectionIRFor<K, false>;
+> = TopologySelectionIRFor<K, false, TopologyRoleV1>;
 export type TopologySelectionIRV2<
   K extends TopologyKind = TopologyKind,
-> = TopologySelectionIRFor<K, boolean>;
+> = TopologySelectionIRFor<K, boolean, TopologyRoleV2>;
+export type TopologySelectionIRV3<
+  K extends TopologyKind = TopologyKind,
+> = TopologySelectionIRFor<K, boolean, TopologyRoleV3>;
 /** Current topology selection grammar. */
 export type TopologySelectionIR<
   K extends TopologyKind = TopologyKind,
-> = TopologySelectionIRV2<K>;
+> = TopologySelectionIRV3<K>;
 
 export interface FilletNodeIR {
   readonly kind: "fillet";
@@ -546,6 +573,19 @@ export type DraftNodeIRV1 = Omit<DraftNodeIR, "faces"> & {
   readonly faces: TopologySelectionIRV1<"face">;
 };
 
+export type FilletNodeIRV2 = Omit<FilletNodeIR, "edges"> & {
+  readonly edges: TopologySelectionIRV2<"edge">;
+};
+export type ChamferNodeIRV2 = Omit<ChamferNodeIR, "edges"> & {
+  readonly edges: TopologySelectionIRV2<"edge">;
+};
+export type ShellNodeIRV2 = Omit<ShellNodeIR, "openings"> & {
+  readonly openings: TopologySelectionIRV2<"face">;
+};
+export type DraftNodeIRV2 = Omit<DraftNodeIR, "faces"> & {
+  readonly faces: TopologySelectionIRV2<"face">;
+};
+
 /** Nodes accepted by the original document-v1 grammar. */
 export type NodeIRV1 =
   | Exclude<
@@ -556,8 +596,18 @@ export type NodeIRV1 =
   | ChamferNodeIRV1
   | ShellNodeIRV1
   | DraftNodeIRV1;
-/** Nodes accepted by the current document-v2 grammar. */
-export type NodeIRV2 = NodeIR;
+/** Nodes accepted by the frozen document-v2 grammar. */
+export type NodeIRV2 =
+  | Exclude<
+      NodeIR,
+      FilletNodeIR | ChamferNodeIR | ShellNodeIR | DraftNodeIR
+    >
+  | FilletNodeIRV2
+  | ChamferNodeIRV2
+  | ShellNodeIRV2
+  | DraftNodeIRV2;
+/** Nodes accepted by the current document-v3 grammar. */
+export type NodeIRV3 = NodeIR;
 
 interface DesignDocumentBody<N extends NodeIR = NodeIR> {
   readonly name: string;
@@ -585,17 +635,29 @@ export interface DesignDocumentV1 extends DesignDocumentBody<NodeIRV1> {
   readonly topologyReferences?: never;
 }
 
-/** Current document grammar with document-owned persistent topology evidence. */
+/** Frozen document-v2 grammar with document-owned persistent topology evidence. */
 export interface DesignDocumentV2 extends DesignDocumentBody<NodeIRV2> {
   readonly schema: typeof DOCUMENT_SCHEMA_V2;
   readonly version: typeof DOCUMENT_VERSION_V2;
   readonly topologyReferences?: Readonly<
-    Record<TopologyReferenceId, TopologyReferenceEntryIR>
+    Record<TopologyReferenceId, TopologyReferenceEntryIRV2>
+  >;
+}
+
+/** Current document grammar with the v3 semantic topology-role vocabulary. */
+export interface DesignDocumentV3 extends DesignDocumentBody<NodeIRV3> {
+  readonly schema: typeof DOCUMENT_SCHEMA_V3;
+  readonly version: typeof DOCUMENT_VERSION_V3;
+  readonly topologyReferences?: Readonly<
+    Record<TopologyReferenceId, TopologyReferenceEntryIRV3>
   >;
 }
 
 /** Every document version accepted by validation and evaluation. */
-export type DesignDocument = DesignDocumentV1 | DesignDocumentV2;
+export type DesignDocument =
+  | DesignDocumentV1
+  | DesignDocumentV2
+  | DesignDocumentV3;
 
 export type NodeReference = RefIR<OutputKind>;
 

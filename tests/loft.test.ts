@@ -337,7 +337,7 @@ describe("ruled solid loft document contract", () => {
     expect(parsed.value).toEqual(document);
     expect(cloneDocument(document)).toEqual(document);
     expect(await hashDocument(document)).toBe(
-      "ff03d48bc92e3bb1b0958a6a5b96b53c310ef9d9c56101f2c5bf134d6eacf27e",
+      "c84e4ed163f06be070a81bbba877d02aa674297ac01a3d681ed9b62847ce9dca",
     );
 
     const reversed = JSON.parse(serialized) as any;
@@ -485,6 +485,7 @@ describe("ruled solid loft profile compatibility", () => {
         | "degenerate-profile"
         | "orientation-mismatch"
         | "curve-signature-mismatch"
+        | "curve-phase-mismatch"
         | "coincident-station"
         | "non-monotonic-stations";
       readonly profiles: readonly ResolvedProfile[];
@@ -532,6 +533,25 @@ describe("ruled solid loft profile compatibility", () => {
       {
         reason: "curve-signature-mismatch",
         profiles: [rectangleProfile(0), circleProfile(10)],
+        profileIndex: 1,
+      },
+      {
+        reason: "curve-phase-mismatch",
+        profiles: [
+          rectangleProfile(0),
+          (() => {
+            const profile = rectangleProfile(10);
+            return {
+              ...profile,
+              outer: {
+                curves: [
+                  ...profile.outer.curves.slice(1),
+                  profile.outer.curves[0]!,
+                ],
+              },
+            };
+          })(),
+        ],
         profileIndex: 1,
       },
       {
@@ -713,6 +733,7 @@ describe("ruled solid loft evaluator protocol", () => {
         | "degenerate-profile"
         | "orientation-mismatch"
         | "curve-signature-mismatch"
+        | "curve-phase-mismatch"
         | "coincident-station"
         | "non-monotonic-stations";
       readonly ids: readonly string[];
@@ -775,6 +796,26 @@ describe("ruled solid loft evaluator protocol", () => {
         profiles: {
           first: rectangleProfile(0),
           second: circleProfile(10),
+        },
+        profileIndex: 1,
+      },
+      {
+        reason: "curve-phase-mismatch",
+        ids: ["first", "second"],
+        profiles: {
+          first: rectangleProfile(0),
+          second: (() => {
+            const profile = rectangleProfile(10);
+            return {
+              ...profile,
+              outer: {
+                curves: [
+                  ...profile.outer.curves.slice(1),
+                  profile.outer.curves[0]!,
+                ],
+              },
+            };
+          })(),
         },
         profileIndex: 1,
       },

@@ -186,7 +186,7 @@ function consume(
 }
 
 describe("persistent topology reference authoring", () => {
-  it("emits a canonical, deeply frozen v2 registry without freezing caller data", () => {
+  it("emits a canonical, deeply frozen v3 registry without freezing caller data", () => {
     const cad = design("persistent-registry");
     const body = box(cad, "body");
     const high = faceReference("z-kernel/topology@1");
@@ -202,10 +202,10 @@ describe("persistent topology reference authoring", () => {
     const reference = cad.topologyReference("mounting-face", body, options);
     const document = cad.build();
     expect(document).toMatchObject({
-      schema: "https://invariantcad.dev/schema/document/v2",
-      version: 2,
+      schema: "https://invariantcad.dev/schema/document/v3",
+      version: 3,
     });
-    if (document.version !== 2) throw new Error("Expected a v2 document");
+    if (document.version !== 3) throw new Error("Expected a v3 document");
     const entry = document.topologyReferences?.[reference.id];
     expect(entry).toMatchObject({
       target: { node: body.node, kind: "solid" },
@@ -283,7 +283,7 @@ describe("persistent topology reference authoring", () => {
     ).toThrow("Duplicate topology reference");
 
     const document = cad.build();
-    if (document.version !== 2) throw new Error("Expected a v2 document");
+    if (document.version !== 3) throw new Error("Expected a v3 document");
     expect(Object.keys(document.topologyReferences ?? {})).toEqual([
       "registered",
     ]);

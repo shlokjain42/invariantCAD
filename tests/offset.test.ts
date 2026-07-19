@@ -48,7 +48,7 @@ describe("whole-solid offsets", () => {
     ]);
     expect(outputKindForNode(document.nodes[expanded.node]!)).toBe("solid");
     expect(await hashDocument(document)).toBe(
-      "8be37282b78d0577b5db76b0e1ef8c3631b6f9243383fc701c37a888692c0812",
+      "45a10dc83a0e7ea0e8d63d09c11fb5803d5277fe80ea252311b2ea7e585f9c7b",
     );
     expect(cloneDocument(document)).toEqual(document);
     expect(parseDocumentValue(JSON.parse(stringifyDocument(document))).ok).toBe(

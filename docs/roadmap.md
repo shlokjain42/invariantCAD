@@ -30,7 +30,9 @@ InvariantCAD's goal is one coherent TypeScript CAD system, not one monolithic ge
 - Evaluation-scoped face/edge topology snapshots and capability negotiation
 - Semantic origin/geometry/adjacency selectors with explicit cardinality
 - Closed primitive/extrusion roles plus source-aware revolution swept faces, partial-turn caps, full-turn cap omission, axis-boundary collapse, deliberately unnamed revolution edges/artifacts, and sketch-curve source provenance through transforms
-- OCCT topology descriptor semantics v2, with exact fingerprint gating from descriptor v1 while retaining persistent-reference protocol v1
+- Closed bounded ruled-loft roles for source-free start/end caps, source-aware two-lineage side faces and section rims when source data exists, and source-free lateral edges for non-circular curves; direct unsourced profiles never gain invented sources, circular seams remain unnamed, authored curve phase must align, and incomplete or ambiguous correspondence downgrades to partial history
+- OCCT topology descriptor semantics v3, with exact fingerprint gating from descriptor v2 while retaining persistent-reference protocol v1
+- Document v3, adding only the five loft-role literals while preserving v1/v2 parsing, bytes, hashes, and direct evaluation; explicit v1/v2 migration upgrades to v3 without recapturing descriptor evidence
 - First exact constant-radius fillet driven by semantic edge selection
 - First exact equal-distance chamfer driven by semantic edge selection
 - First exact constant-thickness inward/outward shell driven by semantic face openings
@@ -56,15 +58,16 @@ Facade ABI/bundle numbers version the native adapter boundary and are independen
 
 - Extend complete shell/offset provenance beyond the owned OCCT ABI 0.6 path while retaining stock OCCT and legacy owned facades as supported partial-history implementations
 - Extend complete Boolean and edge-treatment provenance beyond the owned OCCT ABI 0.4/0.5 paths while retaining stock OCCT and legacy owned facades as supported partial-history implementations; Manifold retains its declared geometry operations without topology snapshots
-- Expand role and source mapping beyond the landed primitive, extrusion, and revolution-face families
-- Landed: topology-signature protocol v1 for detached face/edge references, with key-free structured geometry and one-hop adjacency evidence, optional semantic compatibility fingerprints, exact fingerprint gating including OCCT descriptor v2, partial-history fallback, and fail-closed missing/ambiguous resolution
-- Landed: Document v2 topology-reference registries and typed persistent selector atoms, with v1 preservation/migration, canonical normalized variants, exact direct-target and fingerprint binding, bounded shared resolution, and fillet/chamfer/shell/draft consumption
+- Expand role and source mapping beyond the landed primitive, extrusion, revolution-face, and bounded ruled-loft families
+- Landed: topology-signature protocol v1 for detached face/edge references, with key-free structured geometry and one-hop adjacency evidence, optional semantic compatibility fingerprints, exact fingerprint gating including OCCT descriptor v3, partial-history fallback, and fail-closed missing/ambiguous resolution
+- Landed: Document v2 topology-reference registries and typed persistent selector atoms, retained by Document v3 with v1/v2 preservation, explicit migration, canonical normalized variants, exact direct-target and fingerprint binding, bounded shared resolution, and fillet/chamfer/shell/draft consumption
+- Freeze node-kind membership and document-body fields in explicit per-version type/schema lists before the next document grammar expansion
 - Expand persistent intent into broader topology kinds and feature-family naming without assigning arbitrary identities to symmetric topology
 - Expanded selection diagnostics and provenance explanations
 - Incremental feature hashes and cross-run cache
 - Change-impact and geometric diff APIs
 
-Current topology keys and ABI indices remain evaluation-scoped. Protocol-v1 references persist detached evidence rather than those keys and resolve to a fresh key only for one compatible current candidate. Document v2 serializes that evidence and selector intent, never the resolved key or native shape. This is not a geometric-diff system or cross-run shape cache. Exact ABI 0.4 Boolean, ABI 0.5 fillet/chamfer, and ABI 0.6 shell/offset history prove one evaluation's evolution graph and strengthen semantic-lineage evidence, but do not themselves make a native index persistent.
+Current topology keys and ABI indices remain evaluation-scoped. Protocol-v1 references persist detached evidence rather than those keys and resolve to a fresh key only for one compatible current candidate. Document v2 and v3 serialize that evidence and selector intent, never the resolved key or native shape. Document v3 is the document grammar that admits loft roles; OCCT descriptor `@3` is the independent semantic compatibility declaration used during resolution, while persistent-reference protocol v1 remains unchanged. This is not a geometric-diff system or cross-run shape cache. Exact ABI 0.4 Boolean, ABI 0.5 fillet/chamfer, and ABI 0.6 shell/offset history prove one evaluation's evolution graph and strengthen semantic-lineage evidence, but do not themselves make a native index persistent.
 
 ## 0.4 — advanced mechanical features
 

@@ -24,6 +24,8 @@ import {
   type KernelTopologySnapshot,
   type TopologyKind,
   type TopologyRole,
+  type TopologyRoleV2,
+  type TopologyRoleV3,
 } from "./protocol/topology.js";
 
 export const TOPOLOGY_SIGNATURE_PROTOCOL_VERSION = 1 as const;
@@ -81,9 +83,18 @@ export type TopologyGeometrySignature<
   ? TopologyFaceGeometrySignature
   : TopologyEdgeGeometrySignature;
 
-export interface TopologyNeighborSignature {
+/** Persisted lineage with a document-version-specific semantic-role grammar. */
+export type PersistentTopologyLineage<
+  R extends TopologyRole = TopologyRole,
+> = Omit<KernelTopologyLineage, "role"> & {
+  readonly role?: R;
+};
+
+export interface TopologyNeighborSignature<
+  R extends TopologyRole = TopologyRole,
+> {
   readonly topology: TopologyKind;
-  readonly lineage: readonly KernelTopologyLineage[];
+  readonly lineage: readonly PersistentTopologyLineage<R>[];
   readonly geometry: TopologyGeometrySignature;
 }
 
@@ -96,16 +107,32 @@ export interface TopologyNeighborSignature {
  */
 export interface PersistentTopologyReference<
   K extends TopologyKind = TopologyKind,
+  R extends TopologyRole = TopologyRole,
 > {
   readonly protocolVersion: typeof TOPOLOGY_SIGNATURE_PROTOCOL_VERSION;
   readonly kernelFingerprint: string;
   readonly topology: K;
   readonly capturedHistory: KernelTopologySnapshot["history"];
   readonly tolerance: TopologyMatchTolerance;
-  readonly lineage: readonly KernelTopologyLineage[];
+  readonly lineage: readonly PersistentTopologyLineage<R>[];
   readonly geometry: TopologyGeometrySignature<K>;
-  readonly adjacency: readonly TopologyNeighborSignature[];
+  readonly adjacency: readonly TopologyNeighborSignature<R>[];
 }
+
+export type PersistentTopologyLineageV2 =
+  PersistentTopologyLineage<TopologyRoleV2>;
+export type PersistentTopologyLineageV3 =
+  PersistentTopologyLineage<TopologyRoleV3>;
+export type TopologyNeighborSignatureV2 =
+  TopologyNeighborSignature<TopologyRoleV2>;
+export type TopologyNeighborSignatureV3 =
+  TopologyNeighborSignature<TopologyRoleV3>;
+export type PersistentTopologyReferenceV2<
+  K extends TopologyKind = TopologyKind,
+> = PersistentTopologyReference<K, TopologyRoleV2>;
+export type PersistentTopologyReferenceV3<
+  K extends TopologyKind = TopologyKind,
+> = PersistentTopologyReference<K, TopologyRoleV3>;
 
 export type TopologyMatchEvidence =
   | "semantic-lineage"
@@ -192,12 +219,12 @@ function immutableBounds(bounds: KernelTopologyBounds): KernelTopologyBounds {
   });
 }
 
-function canonicalLineage(
-  lineage: readonly KernelTopologyLineage[],
-): readonly KernelTopologyLineage[] {
-  const unique = new Map<string, KernelTopologyLineage>();
+function canonicalLineage<R extends TopologyRole>(
+  lineage: readonly PersistentTopologyLineage<R>[],
+): readonly PersistentTopologyLineage<R>[] {
+  const unique = new Map<string, PersistentTopologyLineage<R>>();
   for (const item of lineage) {
-    const copied: KernelTopologyLineage = {
+    const copied: PersistentTopologyLineage<R> = {
       feature: item.feature,
       relation: item.relation,
       ...(item.role === undefined ? {} : { role: item.role }),
@@ -307,9 +334,12 @@ function canonicalGeometrySignature<K extends TopologyKind>(
   }) as TopologyGeometrySignature<K>;
 }
 
-function canonicalPersistentTopologyReference<K extends TopologyKind>(
-  reference: PersistentTopologyReference<K>,
-): PersistentTopologyReference<K> {
+function canonicalPersistentTopologyReference<
+  K extends TopologyKind,
+  R extends TopologyRole,
+>(
+  reference: PersistentTopologyReference<K, R>,
+): PersistentTopologyReference<K, R> {
   const adjacency = reference.adjacency
     .map((neighbor) => {
       const signature = Object.freeze({
@@ -343,7 +373,7 @@ function canonicalPersistentTopologyReference<K extends TopologyKind>(
     lineage: canonicalLineage(reference.lineage),
     geometry: canonicalGeometrySignature(reference.geometry),
     adjacency,
-  }) as unknown as PersistentTopologyReference<K>;
+  }) as unknown as PersistentTopologyReference<K, R>;
 }
 
 interface DescriptorSignatureContext {
@@ -1060,10 +1090,13 @@ function caughtSignatureFailure<T>(error: unknown): CadResult<T> {
  * Copies, validates, canonicalizes, and freezes untrusted persistent evidence.
  * Adjacency multiplicity is significant and is therefore sorted, not deduped.
  */
-export function normalizePersistentTopologyReference<K extends TopologyKind>(
-  value: PersistentTopologyReference<K>,
+export function normalizePersistentTopologyReference<
+  K extends TopologyKind,
+  R extends TopologyRole = TopologyRole,
+>(
+  value: PersistentTopologyReference<K, R>,
   options?: NormalizePersistentTopologyReferenceOptions,
-): CadResult<PersistentTopologyReference<K>>;
+): CadResult<PersistentTopologyReference<K, R>>;
 export function normalizePersistentTopologyReference(
   value: unknown,
   options?: NormalizePersistentTopologyReferenceOptions,
@@ -1737,7 +1770,7 @@ export function resolveTopologyReference<K extends TopologyKind>(
         "Topology resolution options are malformed or unsupported",
       );
     }
-    const normalizedReference = normalizePersistentTopologyReference<K>(
+    const normalizedReference = normalizePersistentTopologyReference(
       reference,
       { limits: normalized.limits },
     );

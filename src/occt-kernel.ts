@@ -717,7 +717,7 @@ class OcctKernel implements GeometryKernel {
       !(this.modelingTolerance > 0)
         ? undefined
         : [
-            "invariantcad-topology-descriptor@2",
+            "invariantcad-topology-descriptor@3",
             "occt-wasm@3.7.0",
             `runtime=${topologySignatureRuntime}`,
             `modelingTolerance=${this.modelingTolerance}`,
@@ -1372,6 +1372,235 @@ class OcctKernel implements GeometryKernel {
     };
   }
 
+  private loftTopologyAnnotation(
+    profiles: readonly ResolvedProfile[],
+    sectionCurves: readonly (readonly ProfileCurveHandle[])[],
+    sectionFaces: readonly ShapeHandle[],
+    loftShape: ShapeHandle,
+    context?: KernelFeatureContext,
+  ): TopologyAnnotation {
+    const sourceOf = (
+      curve: ResolvedCurve,
+    ): KernelTopologySource | undefined =>
+      curve.source === undefined
+        ? undefined
+        : {
+            kind: "sketch-entity",
+            sketch: curve.source.sketch,
+            entity: curve.source.entity,
+          };
+    const seeds: TopologyLineageSeed[] = [];
+    let forcePartial = false;
+    const attempt = (build: () => void): void => {
+      checkContext(context);
+      try {
+        build();
+      } catch {
+        checkContext(context);
+        forcePartial = true;
+      }
+    };
+
+    attempt(() => {
+      seeds.push(
+        this.topologySeedFromHandle(
+          sectionFaces[0]!,
+          "face",
+          semanticLineage(context, "loft.face.start-cap"),
+        ),
+      );
+    });
+    attempt(() => {
+      seeds.push(
+        this.topologySeedFromHandle(
+          sectionFaces.at(-1)!,
+          "face",
+          semanticLineage(context, "loft.face.end-cap"),
+        ),
+      );
+    });
+
+    for (const curves of sectionCurves) {
+      for (const item of curves) {
+        attempt(() => {
+          seeds.push(
+            this.topologySeedFromHandle(
+              item.handle,
+              "edge",
+              semanticLineage(
+                context,
+                "loft.edge.section-rim",
+                sourceOf(item.curve),
+              ),
+            ),
+          );
+        });
+      }
+    }
+
+    const resultEdges: ShapeHandle[] = [];
+    const resultEdgeEndpoints: {
+      readonly handle: ShapeHandle;
+      readonly first: Vec3;
+      readonly second: Vec3;
+    }[] = [];
+    try {
+      attempt(() => {
+        resultEdges.push(...this.raw.getSubShapes(loftShape, "edge"));
+        for (const edge of resultEdges) {
+          checkContext(context);
+          const vertices = this.raw.getSubShapes(edge, "vertex");
+          try {
+            if (vertices.length !== 2) continue;
+            resultEdgeEndpoints.push({
+              handle: edge,
+              first: vectorFromOcct(this.raw.vertexPosition(vertices[0]!)),
+              second: vectorFromOcct(this.raw.vertexPosition(vertices[1]!)),
+            });
+          } finally {
+            this.releaseHandles(vertices);
+          }
+        }
+      });
+      for (
+        let sectionIndex = 0;
+        sectionIndex < profiles.length - 1;
+        sectionIndex += 1
+      ) {
+        const firstProfile = profiles[sectionIndex]!;
+        const secondProfile = profiles[sectionIndex + 1]!;
+        const firstCurves = sectionCurves[sectionIndex]!;
+        const secondCurves = sectionCurves[sectionIndex + 1]!;
+        for (
+          let curveIndex = 0;
+          curveIndex < firstCurves.length;
+          curveIndex += 1
+        ) {
+          const first = firstCurves[curveIndex]!;
+          const second = secondCurves[curveIndex]!;
+          attempt(() => {
+            const temporary: ShapeHandle[] = [];
+            try {
+              const firstWire = this.raw.makeWire([first.handle]);
+              temporary.push(firstWire);
+              const secondWire = this.raw.makeWire([second.handle]);
+              temporary.push(secondWire);
+              const ruledSide = this.raw.loft(
+                [firstWire, secondWire],
+                false,
+                true,
+              );
+              temporary.push(ruledSide);
+              const sideSeeds = this.topologyFaceSeedsFromShape(
+                ruledSide,
+                uniqueLineage([
+                  ...semanticLineage(
+                    context,
+                    "loft.face.side",
+                    sourceOf(first.curve),
+                  ),
+                  ...semanticLineage(
+                    context,
+                    "loft.face.side",
+                    sourceOf(second.curve),
+                  ),
+                ]),
+              );
+              if (sideSeeds.length !== 1) forcePartial = true;
+              seeds.push(...sideSeeds);
+              // A closed circle has no authored boundary vertex. OCCT still
+              // materializes a seam, but naming that implementation-selected
+              // edge would manufacture topology identity that the profile did
+              // not provide.
+              if (first.curve.kind === "circle") return;
+              const firstStart = pointOnPlane(
+                curveStart(first.curve),
+                firstProfile.plane,
+              );
+              const secondStart = pointOnPlane(
+                curveStart(second.curve),
+                secondProfile.plane,
+              );
+              const firstPosition = vectorFromOcct(firstStart);
+              const secondPosition = vectorFromOcct(secondStart);
+              const coordinateScale = Math.max(
+                1,
+                ...firstPosition.map(Math.abs),
+                ...secondPosition.map(Math.abs),
+              );
+              const tolerance = Math.max(
+                this.modelingTolerance * 20,
+                coordinateScale * Number.EPSILON * 64,
+              );
+              const joinsAuthoredStarts = (candidate: {
+                readonly first: Vec3;
+                readonly second: Vec3;
+              }): boolean =>
+                (vectorDistance(candidate.first, firstPosition) <= tolerance &&
+                  vectorDistance(candidate.second, secondPosition) <=
+                    tolerance) ||
+                (vectorDistance(candidate.second, firstPosition) <= tolerance &&
+                  vectorDistance(candidate.first, secondPosition) <= tolerance);
+              const lateral: ShapeHandle[] = [];
+              for (
+                let edgeIndex = 0;
+                edgeIndex < resultEdgeEndpoints.length;
+                edgeIndex += 1
+              ) {
+                if ((edgeIndex & 255) === 0) checkContext(context);
+                const candidate = resultEdgeEndpoints[edgeIndex]!;
+                if (joinsAuthoredStarts(candidate)) {
+                  lateral.push(candidate.handle);
+                }
+              }
+              if (lateral.length !== 1) {
+                forcePartial = true;
+              } else {
+                seeds.push(
+                  this.topologySeedFromHandle(
+                    lateral[0]!,
+                    "edge",
+                    semanticLineage(context, "loft.edge.lateral"),
+                  ),
+                );
+              }
+            } finally {
+              this.releaseHandles(temporary);
+            }
+          });
+        }
+      }
+      checkContext(context);
+    } finally {
+      this.releaseHandles(resultEdges);
+    }
+
+    const curveCount = sectionCurves[0]!.length;
+    const authoredVertexCurveCount = sectionCurves[0]!.filter(
+      (item) => item.curve.kind !== "circle",
+    ).length;
+    return {
+      seeds,
+      requireSeedCoverage: ["face"],
+      ...(forcePartial ? { forcePartial: true } : {}),
+      ...(context?.feature === undefined
+        ? {}
+        : {
+            expectedRoles: {
+              feature: context.feature,
+              counts: {
+                "loft.face.start-cap": 1,
+                "loft.face.end-cap": 1,
+                "loft.face.side": (profiles.length - 1) * curveCount,
+                "loft.edge.section-rim": profiles.length * curveCount,
+                "loft.edge.lateral":
+                  (profiles.length - 1) * authoredVertexCurveCount,
+              },
+            },
+          }),
+    };
+  }
+
   box(
     size: Vec3,
     center: boolean,
@@ -1554,13 +1783,16 @@ class OcctKernel implements GeometryKernel {
     if (issue !== undefined) throw new RangeError(issue.message);
 
     const allocated: ShapeHandle[] = [];
-    const curves: ProfileCurveHandle[] = [];
+    const sectionCurves: ProfileCurveHandle[][] = [];
+    const sectionFaces: ShapeHandle[] = [];
     const wires: ShapeHandle[] = [];
     let result: ShapeHandle | undefined;
     try {
       for (const [index, profile] of profiles.entries()) {
         checkContext(context);
+        const curves: ProfileCurveHandle[] = [];
         const wire = this.loopWire(profile.outer, profile.plane, allocated, curves);
+        sectionCurves.push(curves);
         wires.push(wire);
         const curveCount = profile.outer.curves.length;
         if (
@@ -1576,6 +1808,7 @@ class OcctKernel implements GeometryKernel {
         }
         const sectionFace = this.raw.makeFace(wire);
         allocated.push(sectionFace);
+        sectionFaces.push(sectionFace);
         if (
           this.raw.isNull(sectionFace) ||
           this.raw.getShapeType(sectionFace) !== "face" ||
@@ -1662,7 +1895,15 @@ class OcctKernel implements GeometryKernel {
       if (!(volume > minimumVolume)) {
         throw new RangeError("Loft did not produce a positive-volume solid");
       }
-      return this.own(result, context);
+      return this.own(result, context, {
+        annotation: this.loftTopologyAnnotation(
+          profiles,
+          sectionCurves,
+          sectionFaces,
+          result,
+          context,
+        ),
+      });
     } catch (error) {
       if (result !== undefined) this.raw.release(result);
       throw error;
@@ -2863,22 +3104,31 @@ class OcctKernel implements GeometryKernel {
         ? descriptor.surface.kind
         : descriptor.curve.kind;
     if (seed.geometryKind !== geometryKind) return false;
-    const close = (first: number, second: number): boolean =>
+    const measureClose = (first: number, second: number): boolean =>
       Math.abs(first - second) <=
       Math.max(
         this.modelingTolerance * 20,
         Math.max(1, Math.abs(first), Math.abs(second)) * 1e-8,
       );
+    const coordinateClose = (first: number, second: number): boolean =>
+      Math.abs(first - second) <=
+      Math.max(
+        this.modelingTolerance * 20,
+        binary64Ulp(first) * 64,
+        binary64Ulp(second) * 64,
+      );
     const descriptorMeasure =
       descriptor.topology === "face" ? descriptor.area : descriptor.length;
     return (
-      close(seed.measure, descriptorMeasure) &&
-      seed.center.every((value, index) => close(value, descriptor.center[index]!)) &&
+      measureClose(seed.measure, descriptorMeasure) &&
+      seed.center.every((value, index) =>
+        coordinateClose(value, descriptor.center[index]!),
+      ) &&
       seed.bounds.min.every((value, index) =>
-        close(value, descriptor.bounds.min[index]!),
+        coordinateClose(value, descriptor.bounds.min[index]!),
       ) &&
       seed.bounds.max.every((value, index) =>
-        close(value, descriptor.bounds.max[index]!),
+        coordinateClose(value, descriptor.bounds.max[index]!),
       )
     );
   }
@@ -3087,13 +3337,17 @@ class OcctKernel implements GeometryKernel {
       if (expectedRoles !== undefined) {
         const actual = new Map<TopologyRole, number>();
         for (const descriptor of [...faces, ...edges]) {
+          const descriptorRoles = new Set<TopologyRole>();
           for (const lineage of descriptor.lineage) {
             if (
               lineage.feature === expectedRoles.feature &&
               lineage.role !== undefined
             ) {
-              actual.set(lineage.role, (actual.get(lineage.role) ?? 0) + 1);
+              descriptorRoles.add(lineage.role);
             }
+          }
+          for (const role of descriptorRoles) {
+            actual.set(role, (actual.get(role) ?? 0) + 1);
           }
         }
         const expected = Object.entries(expectedRoles.counts) as readonly [

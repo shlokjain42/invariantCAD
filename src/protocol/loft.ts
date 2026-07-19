@@ -1,4 +1,5 @@
 import {
+  curveStart,
   resolvedCurveIsFinite,
   resolvedLoopIsClosed,
   type NumericPlane,
@@ -28,6 +29,7 @@ export interface LoftProfileValidationIssue {
     | "degenerate-profile"
     | "orientation-mismatch"
     | "curve-signature-mismatch"
+    | "curve-phase-mismatch"
     | "coincident-station"
     | "non-monotonic-stations";
   readonly profileIndex?: number;
@@ -56,6 +58,94 @@ function directedCurveKind(curve: ResolvedCurve): string {
     case "circle":
       return curve.reversed ? "circle:reversed" : "circle:forward";
   }
+}
+
+function normalizedCurveStartPhase(
+  curves: readonly ResolvedCurve[],
+): {
+  readonly points: readonly (readonly [number, number])[];
+  readonly scale: number;
+} {
+  const starts = curves.map(curveStart);
+  const center = starts.reduce(
+    (sum, point) => [sum[0] + point[0], sum[1] + point[1]] as const,
+    [0, 0] as const,
+  );
+  const mean = [center[0] / starts.length, center[1] / starts.length] as const;
+  const centered = starts.map(
+    (point) => [point[0] - mean[0], point[1] - mean[1]] as const,
+  );
+  const scale = Math.sqrt(
+    centered.reduce(
+      (sum, point) => sum + point[0] ** 2 + point[1] ** 2,
+      0,
+    ) / centered.length,
+  );
+  const divisor = Number.isFinite(scale) && scale > 0 ? scale : 1;
+  return {
+    points: centered.map(
+      (point) => [point[0] / divisor, point[1] / divisor] as const,
+    ),
+    scale,
+  };
+}
+
+/**
+ * OCCT may silently rotate a wire's start vertex to minimize twisting. Reject
+ * profiles whose geometry more strongly supports a nonzero cyclic pairing so
+ * the authored curve-index correspondence remains the one we can name.
+ */
+function preferredCurvePhaseShift(
+  reference: readonly ResolvedCurve[],
+  candidate: readonly ResolvedCurve[],
+  tolerance: number,
+): number {
+  if (reference.length <= 1 || reference.length !== candidate.length) return 0;
+  const first = normalizedCurveStartPhase(reference);
+  const second = normalizedCurveStartPhase(candidate);
+  if (
+    !Number.isFinite(first.scale) ||
+    !Number.isFinite(second.scale) ||
+    !(first.scale > tolerance) ||
+    !(second.scale > tolerance)
+  ) {
+    return 0;
+  }
+
+  const cost = (shift: number): number => {
+    let total = 0;
+    for (let index = 0; index < reference.length; index += 1) {
+      const shiftedIndex = (index + shift) % candidate.length;
+      if (
+        directedCurveKind(reference[index]!) !==
+        directedCurveKind(candidate[shiftedIndex]!)
+      ) {
+        return Number.POSITIVE_INFINITY;
+      }
+      const left = first.points[index]!;
+      const right = second.points[shiftedIndex]!;
+      total += (left[0] - right[0]) ** 2 + (left[1] - right[1]) ** 2;
+    }
+    return total / reference.length;
+  };
+
+  const authoredCost = cost(0);
+  let preferredShift = 0;
+  let preferredCost = authoredCost;
+  for (let shift = 1; shift < reference.length; shift += 1) {
+    const candidateCost = cost(shift);
+    if (candidateCost < preferredCost) {
+      preferredCost = candidateCost;
+      preferredShift = shift;
+    }
+  }
+  const normalizedTolerance = Math.max(
+    1e-12,
+    (tolerance / Math.min(first.scale, second.scale)) ** 2 * 64,
+  );
+  return preferredCost + normalizedTolerance < authoredCost
+    ? preferredShift
+    : 0;
 }
 
 /**
@@ -181,6 +271,24 @@ export function validateRuledSolidLoftProfiles(
         curveIndex,
         expected: firstSignature[curveIndex],
         actual: signature[curveIndex],
+      };
+    }
+
+    const preferredShift = preferredCurvePhaseShift(
+      first.outer.curves,
+      profile.outer.curves,
+      tolerance,
+    );
+    if (preferredShift !== 0) {
+      return {
+        message:
+          "Loft profiles must preserve the authored boundary curve phase",
+        path: profilePath,
+        reason: "curve-phase-mismatch",
+        profileIndex: index,
+        curveIndex: 0,
+        expected: 0,
+        actual: preferredShift,
       };
     }
 

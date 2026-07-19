@@ -13,6 +13,7 @@ import {
   topology,
   validateDocument,
   vec2,
+  vec3,
   type GeometryKernel,
   type DesignDocument,
 } from "../src/index.js";
@@ -110,6 +111,75 @@ function mutableRevolveRoleDocument(): any {
   return JSON.parse(stringifyDocument(revolveRoleDocument()));
 }
 
+function loftRoleDocument(
+  selection: "side" | "section-rim" = "side",
+): ReturnType<ReturnType<typeof design>["build"]> {
+  const cad = design("loft-topology-role-validation");
+  const lower = cad.sketch(
+    "lower-profile",
+    plane.xy(vec3(mm(0), mm(0), mm(0))),
+    (sketch) =>
+      sketch.profile(
+        sketch.rectangle("lower", { width: mm(20), height: mm(10) }),
+      ),
+  );
+  const middle = cad.sketch(
+    "middle-profile",
+    plane.xy(vec3(mm(0), mm(0), mm(5))),
+    (sketch) =>
+      sketch.profile(
+        sketch.rectangle("middle", { width: mm(16), height: mm(8) }),
+      ),
+  );
+  const upper = cad.sketch(
+    "upper-profile",
+    plane.xy(vec3(mm(0), mm(0), mm(10))),
+    (sketch) =>
+      sketch.profile(
+        sketch.rectangle("upper", { width: mm(12), height: mm(6) }),
+      ),
+  );
+  cad.sketch(
+    "other-loft-profile",
+    plane.xy(vec3(mm(0), mm(0), mm(15))),
+    (sketch) =>
+      sketch.profile(
+        sketch.rectangle("other-loft", { width: mm(4), height: mm(4) }),
+      ),
+  );
+  const loft = cad.loft("loft", [lower, middle, upper]);
+  if (selection === "side") {
+    const side = topology.faces
+      .createdBy(loft, {
+        role: "loft.face.side",
+        source: { sketch: middle, entity: "middle.e0" },
+      })
+      .atLeast(1);
+    cad.output(
+      "treated",
+      cad.shell("treated", loft, { openings: side, thickness: mm(1) }),
+    );
+  } else {
+    const rim = topology.edges
+      .createdBy(loft, {
+        role: "loft.edge.section-rim",
+        source: { sketch: middle, entity: "middle.e0" },
+      })
+      .select();
+    cad.output(
+      "treated",
+      cad.fillet("treated", loft, { edges: rim, radius: mm(1) }),
+    );
+  }
+  return cad.build();
+}
+
+function mutableLoftRoleDocument(
+  selection: "side" | "section-rim" = "side",
+): any {
+  return JSON.parse(stringifyDocument(loftRoleDocument(selection)));
+}
+
 function expectSemanticFailure(
   value: unknown,
   message: string,
@@ -141,6 +211,36 @@ describe("closed topology role validation", () => {
     for (const role of EDGE_TOPOLOGY_ROLES) {
       expect(TOPOLOGY_ROLE_RULES[role].topology).toBe("edge");
     }
+    expect(TOPOLOGY_ROLE_RULES["loft.face.start-cap"]).toEqual({
+      producer: "loft",
+      topology: "face",
+      relation: "created",
+      source: "none",
+    });
+    expect(TOPOLOGY_ROLE_RULES["loft.face.end-cap"]).toEqual({
+      producer: "loft",
+      topology: "face",
+      relation: "created",
+      source: "none",
+    });
+    expect(TOPOLOGY_ROLE_RULES["loft.face.side"]).toEqual({
+      producer: "loft",
+      topology: "face",
+      relation: "created",
+      source: "sketch-curve",
+    });
+    expect(TOPOLOGY_ROLE_RULES["loft.edge.section-rim"]).toEqual({
+      producer: "loft",
+      topology: "edge",
+      relation: "created",
+      source: "sketch-curve",
+    });
+    expect(TOPOLOGY_ROLE_RULES["loft.edge.lateral"]).toEqual({
+      producer: "loft",
+      topology: "edge",
+      relation: "created",
+      source: "none",
+    });
   });
 
   it("rejects an unknown serialized role structurally", () => {
@@ -340,6 +440,157 @@ describe("closed topology role validation", () => {
       "/nodes/hollow/openings/query/source/sketch",
     );
   });
+
+  it("accepts a loft side sourced by any one of its ordered direct profiles", () => {
+    const result = parseDocumentValue(mutableLoftRoleDocument());
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(
+      (result.value.nodes as Readonly<Record<string, unknown>>).treated,
+    ).toEqual(
+      expect.objectContaining({
+        kind: "shell",
+        openings: expect.objectContaining({
+          topology: "face",
+          query: {
+            op: "origin",
+            feature: "loft",
+            relation: "created",
+            role: "loft.face.side",
+            source: {
+              kind: "sketch-entity",
+              sketch: "middle-profile",
+              entity: "middle.e0",
+            },
+          },
+        }),
+      }),
+    );
+  });
+
+  it("accepts a loft section rim sourced by one of its direct profiles", () => {
+    const result = parseDocumentValue(
+      mutableLoftRoleDocument("section-rim"),
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(
+      (result.value.nodes as Readonly<Record<string, unknown>>).treated,
+    ).toEqual(
+      expect.objectContaining({
+        kind: "fillet",
+        edges: expect.objectContaining({
+          topology: "edge",
+          query: {
+            op: "origin",
+            feature: "loft",
+            relation: "created",
+            role: "loft.edge.section-rim",
+            source: {
+              kind: "sketch-entity",
+              sketch: "middle-profile",
+              entity: "middle.e0",
+            },
+          },
+        }),
+      }),
+    );
+  });
+
+  it("consumes a source-aware loft section rim through a real OCCT fillet", async () => {
+    const cad = design("evaluated-loft-rim-selector");
+    const lower = cad.sketch("lower", plane.xy(), (sketch) =>
+      sketch.profile(
+        sketch.rectangle("outline", { width: mm(20), height: mm(10) }),
+      ),
+    );
+    const upper = cad.sketch(
+      "upper",
+      plane.xy(vec3(mm(0), mm(0), mm(10))),
+      (sketch) =>
+        sketch.profile(
+          sketch.rectangle("outline", { width: mm(20), height: mm(10) }),
+        ),
+    );
+    const loft = cad.loft("loft", [lower, upper]);
+    const rim = topology.edges
+      .createdBy(loft, {
+        role: "loft.edge.section-rim",
+        source: { sketch: lower, entity: "outline.e0" },
+      })
+      .select();
+    cad.output(
+      "treated",
+      cad.fillet("treated", loft, { edges: rim, radius: mm(1) }),
+    );
+
+    const evaluator = await createEvaluator({ kernel: await createOcctKernel() });
+    try {
+      const result = await evaluator.evaluate(cad.build());
+      expect(
+        result.ok,
+        result.ok ? undefined : JSON.stringify(result.diagnostics),
+      ).toBe(true);
+      if (!result.ok) return;
+      try {
+        const measured = result.value.output("treated").measure();
+        expect(measured.volume).toBeGreaterThan(0);
+        expect(measured.surfaceArea).toBeGreaterThan(0);
+      } finally {
+        result.value.dispose();
+      }
+    } finally {
+      evaluator.dispose();
+    }
+  });
+
+  it("accepts source-free loft cap and lateral-edge roles", () => {
+    const cap = mutableLoftRoleDocument();
+    cap.nodes.treated.openings.query.role = "loft.face.start-cap";
+    delete cap.nodes.treated.openings.query.source;
+    expect(parseDocumentValue(cap).ok).toBe(true);
+
+    const lateral = mutableLoftRoleDocument("section-rim");
+    lateral.nodes.treated.edges.query.role = "loft.edge.lateral";
+    delete lateral.nodes.treated.edges.query.source;
+    expect(parseDocumentValue(lateral).ok).toBe(true);
+
+    const endCap = mutableLoftRoleDocument();
+    endCap.nodes.treated.openings.query.role = "loft.face.end-cap";
+    delete endCap.nodes.treated.openings.query.source;
+    expect(parseDocumentValue(endCap).ok).toBe(true);
+  });
+
+  it("rejects a loft source sketch outside its ordered direct profiles", () => {
+    const invalid = mutableLoftRoleDocument();
+    invalid.nodes.treated.openings.query.source.sketch = "other-loft-profile";
+    invalid.nodes.treated.openings.query.source.entity = "other-loft.e0";
+
+    expectSemanticFailure(
+      invalid,
+      "is not one of the direct profiles of loft 'loft'",
+      "/nodes/treated/openings/query/source/sketch",
+    );
+  });
+
+  it.each([
+    ["face cap", "side", "loft.face.start-cap", "openings"],
+    ["lateral edge", "section-rim", "loft.edge.lateral", "edges"],
+  ] as const)(
+    "rejects a sketch source on a source-free loft %s role",
+    (_label, selection, role, selectionField) => {
+      const invalid = mutableLoftRoleDocument(selection);
+      invalid.nodes.treated[selectionField].query.role = role;
+
+      expectSemanticFailure(
+        invalid,
+        "cannot originate from one sketch boundary entity",
+        `/nodes/treated/${selectionField}/query/source`,
+      );
+    },
+  );
 
   it.each([
     {

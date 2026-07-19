@@ -238,7 +238,7 @@ describe("document draft contract", () => {
     ]);
     expect(outputKindForNode(document.nodes[drafted.node]!)).toBe("solid");
     expect(await hashDocument(document)).toBe(
-      "cc86735bb1ec28b881503153db3c4fe66889e7d5bae48be01db13bd649a95cef",
+      "d94b37fab1507982386618b87dd09b00cf7ee635d95477211670e6c402ed7471",
     );
 
     const serialized = stringifyDocument(document);

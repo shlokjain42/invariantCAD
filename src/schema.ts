@@ -2,30 +2,49 @@ import { z } from "zod";
 import {
   DOCUMENT_SCHEMA_V1,
   DOCUMENT_SCHEMA_V2,
+  DOCUMENT_SCHEMA_V3,
   DOCUMENT_VERSION_V1,
   DOCUMENT_VERSION_V2,
+  DOCUMENT_VERSION_V3,
   type DesignDocument,
   type DesignDocumentV1,
   type DesignDocumentV2,
+  type DesignDocumentV3,
   type NodeIR,
   type NodeIRV1,
+  type NodeIRV2,
+  type NodeIRV3,
   type TopologyReferenceEntryIR,
+  type TopologyReferenceEntryIRV2,
+  type TopologyReferenceEntryIRV3,
   type TopologyQueryIR,
   type TopologyQueryIRFor,
   type TopologyQueryIRV1,
   type TopologyQueryIRV2,
+  type TopologyQueryIRV3,
   type TopologySelectionIR,
   type TopologySelectionIRFor,
   type TopologySelectionIRV1,
   type TopologySelectionIRV2,
+  type TopologySelectionIRV3,
 } from "./ir.js";
 import type { ExpressionIR } from "./expressions.js";
-import { TOPOLOGY_ROLES } from "./protocol/topology.js";
+import {
+  TOPOLOGY_ROLES_V1,
+  TOPOLOGY_ROLES_V2,
+  TOPOLOGY_ROLES_V3,
+  type TopologyRole,
+  type TopologyRoleV1,
+  type TopologyRoleV2,
+  type TopologyRoleV3,
+} from "./protocol/topology.js";
 import { SHELL_DIRECTIONS } from "./protocol/shell.js";
 import { OFFSET_DIRECTIONS } from "./protocol/offset.js";
 import {
   normalizePersistentTopologyReference,
   type PersistentTopologyReference,
+  type PersistentTopologyReferenceV2,
+  type PersistentTopologyReferenceV3,
 } from "./topology-signatures.js";
 
 const DimensionSchema = z.enum(["scalar", "length", "angle", "massDensity"]);
@@ -223,16 +242,20 @@ type DiscriminatedUnionVariants = Parameters<
   typeof z.discriminatedUnion
 >[1];
 
-function createTopologySchemas<AllowPersistent extends boolean>(
+function createTopologySchemas<
+  AllowPersistent extends boolean,
+  R extends TopologyRole,
+>(
   allowPersistent: AllowPersistent,
+  roles: readonly R[],
 ): {
-  readonly query: z.ZodType<TopologyQueryIRFor<AllowPersistent>>;
+  readonly query: z.ZodType<TopologyQueryIRFor<AllowPersistent, R>>;
   readonly selection: z.ZodType<
-    TopologySelectionIRFor<"face" | "edge", AllowPersistent>
+    TopologySelectionIRFor<"face" | "edge", AllowPersistent, R>
   >;
 } {
   let selectionSchema!: z.ZodType<
-    TopologySelectionIRFor<"face" | "edge", AllowPersistent>
+    TopologySelectionIRFor<"face" | "edge", AllowPersistent, R>
   >;
   const querySchema = z.lazy(() => {
     const persistent = z
@@ -249,7 +272,7 @@ function createTopologySchemas<AllowPersistent extends boolean>(
           op: z.literal("origin"),
           feature: z.string(),
           relation: z.enum(["created", "modified"]),
-          role: z.enum(TOPOLOGY_ROLES).optional(),
+          role: z.enum(roles as [R, ...R[]]).optional(),
           source: TopologySourceSchema.optional(),
         })
         .strict(),
@@ -302,7 +325,7 @@ function createTopologySchemas<AllowPersistent extends boolean>(
       "op",
       variants as unknown as DiscriminatedUnionVariants,
     );
-  }) as z.ZodType<TopologyQueryIRFor<AllowPersistent>>;
+  }) as z.ZodType<TopologyQueryIRFor<AllowPersistent, R>>;
 
   selectionSchema = z.lazy(() =>
     z
@@ -313,46 +336,104 @@ function createTopologySchemas<AllowPersistent extends boolean>(
       })
       .strict(),
   ) as z.ZodType<
-    TopologySelectionIRFor<"face" | "edge", AllowPersistent>
+    TopologySelectionIRFor<"face" | "edge", AllowPersistent, R>
   >;
   return { query: querySchema, selection: selectionSchema };
 }
 
-const topologySchemasV1 = createTopologySchemas(false);
-const topologySchemasV2 = createTopologySchemas<boolean>(true);
+const topologySchemasV1 = createTopologySchemas<false, TopologyRoleV1>(
+  false,
+  TOPOLOGY_ROLES_V1,
+);
+const topologySchemasV2 = createTopologySchemas<boolean, TopologyRoleV2>(
+  true,
+  TOPOLOGY_ROLES_V2,
+);
+const topologySchemasV3 = createTopologySchemas<boolean, TopologyRoleV3>(
+  true,
+  TOPOLOGY_ROLES_V3,
+);
 
 export const TopologyQueryV1Schema: z.ZodType<TopologyQueryIRV1> =
   topologySchemasV1.query;
 export const TopologyQueryV2Schema: z.ZodType<TopologyQueryIRV2> =
-  topologySchemasV2.query;
+  topologySchemasV2.query as z.ZodType<TopologyQueryIRV2>;
+export const TopologyQueryV3Schema: z.ZodType<TopologyQueryIRV3> =
+  topologySchemasV3.query as z.ZodType<TopologyQueryIRV3>;
 export const TopologySelectionV1Schema: z.ZodType<TopologySelectionIRV1> =
   topologySchemasV1.selection;
 export const TopologySelectionV2Schema: z.ZodType<TopologySelectionIRV2> =
-  topologySchemasV2.selection;
+  topologySchemasV2.selection as z.ZodType<TopologySelectionIRV2>;
+export const TopologySelectionV3Schema: z.ZodType<TopologySelectionIRV3> =
+  topologySchemasV3.selection as z.ZodType<TopologySelectionIRV3>;
 
-/** Current document-v2 topology query schema. */
+/** Current document-v3 topology query schema. */
 export const TopologyQuerySchema: z.ZodType<TopologyQueryIR> =
-  TopologyQueryV2Schema;
-/** Current document-v2 topology selection schema. */
+  TopologyQueryV3Schema;
+/** Current document-v3 topology selection schema. */
 export const TopologySelectionSchema: z.ZodType<TopologySelectionIR> =
-  TopologySelectionV2Schema;
+  TopologySelectionV3Schema;
 
 /**
  * The transform is intentionally the topology-signature implementation's
  * defensive copier rather than a second, drifting structural grammar here.
+ * The document-version role check happens only after that defensive copy.
  */
-export const PersistentTopologyReferenceSchema: z.ZodType<PersistentTopologyReference> =
-  z.unknown().transform((value, context) => {
+function createPersistentTopologyReferenceSchema<R extends TopologyRole>(
+  roles: readonly R[],
+): z.ZodType<PersistentTopologyReference<"face" | "edge", R>> {
+  const allowedRoles = new Set<TopologyRole>(roles);
+  return z.unknown().transform((value, context) => {
     const normalized = normalizePersistentTopologyReference(value);
-    if (normalized.ok) return normalized.value;
-    for (const item of normalized.diagnostics) {
-      context.addIssue({
-        code: "custom",
-        message: item.message,
-      });
+    if (!normalized.ok) {
+      for (const item of normalized.diagnostics) {
+        context.addIssue({
+          code: "custom",
+          message: item.message,
+        });
+      }
+      return z.NEVER;
     }
-    return z.NEVER;
-  }) as z.ZodType<PersistentTopologyReference>;
+
+    let valid = true;
+    const checkLineage = (
+      lineage: PersistentTopologyReference["lineage"],
+      path: readonly (string | number)[],
+    ): void => {
+      lineage.forEach((item, index) => {
+        if (item.role !== undefined && !allowedRoles.has(item.role)) {
+          valid = false;
+          context.addIssue({
+            code: "custom",
+            message: `Topology role '${item.role}' is not supported by this document version`,
+            path: [...path, index, "role"],
+          });
+        }
+      });
+    };
+    checkLineage(normalized.value.lineage, ["lineage"]);
+    normalized.value.adjacency.forEach((neighbor, index) => {
+      checkLineage(neighbor.lineage, ["adjacency", index, "lineage"]);
+    });
+    if (!valid) return z.NEVER;
+    return normalized.value as PersistentTopologyReference<
+      "face" | "edge",
+      R
+    >;
+  }) as z.ZodType<PersistentTopologyReference<"face" | "edge", R>>;
+}
+
+export const PersistentTopologyReferenceV2Schema: z.ZodType<PersistentTopologyReferenceV2> =
+  createPersistentTopologyReferenceSchema(
+    TOPOLOGY_ROLES_V2,
+  ) as z.ZodType<PersistentTopologyReferenceV2>;
+export const PersistentTopologyReferenceV3Schema: z.ZodType<PersistentTopologyReferenceV3> =
+  createPersistentTopologyReferenceSchema(
+    TOPOLOGY_ROLES_V3,
+  ) as z.ZodType<PersistentTopologyReferenceV3>;
+/** Current document-v3 persistent topology evidence schema. */
+export const PersistentTopologyReferenceSchema: z.ZodType<PersistentTopologyReference> =
+  PersistentTopologyReferenceV3Schema;
 
 const SolidRefSchema = z
   .object({
@@ -361,34 +442,54 @@ const SolidRefSchema = z
   })
   .strict();
 
-const TopologyReferenceEntrySchema: z.ZodType<TopologyReferenceEntryIR> = z
-  .object({
-    target: SolidRefSchema,
-    topology: z.enum(["face", "edge"]),
-    variants: z.array(PersistentTopologyReferenceSchema).min(1),
-  })
-  .strict()
-  .superRefine((entry, context) => {
-    const fingerprints = new Set<string>();
-    entry.variants.forEach((variant, index) => {
-      if (variant.topology !== entry.topology) {
-        context.addIssue({
-          code: "custom",
-          message: `Topology reference variant selects ${variant.topology}s, not ${entry.topology}s`,
-          path: ["variants", index, "topology"],
-        });
-      }
-      const fingerprint = `${variant.protocolVersion}\u0000${variant.kernelFingerprint}`;
-      if (fingerprints.has(fingerprint)) {
-        context.addIssue({
-          code: "custom",
-          message: `Topology reference variants must have unique protocol-version and kernel-fingerprint pairs; duplicate '${variant.kernelFingerprint}'`,
-          path: ["variants", index, "kernelFingerprint"],
-        });
-      }
-      fingerprints.add(fingerprint);
-    });
-  }) as unknown as z.ZodType<TopologyReferenceEntryIR>;
+function createTopologyReferenceEntrySchema<R extends TopologyRole>(
+  referenceSchema: z.ZodType<
+    PersistentTopologyReference<"face" | "edge", R>
+  >,
+): z.ZodType<TopologyReferenceEntryIR<"face" | "edge", R>> {
+  return z
+    .object({
+      target: SolidRefSchema,
+      topology: z.enum(["face", "edge"]),
+      variants: z.array(referenceSchema).min(1),
+    })
+    .strict()
+    .superRefine((entry, context) => {
+      const fingerprints = new Set<string>();
+      entry.variants.forEach((variant, index) => {
+        if (variant.topology !== entry.topology) {
+          context.addIssue({
+            code: "custom",
+            message: `Topology reference variant selects ${variant.topology}s, not ${entry.topology}s`,
+            path: ["variants", index, "topology"],
+          });
+        }
+        const fingerprint = `${variant.protocolVersion}\u0000${variant.kernelFingerprint}`;
+        if (fingerprints.has(fingerprint)) {
+          context.addIssue({
+            code: "custom",
+            message: `Topology reference variants must have unique protocol-version and kernel-fingerprint pairs; duplicate '${variant.kernelFingerprint}'`,
+            path: ["variants", index, "kernelFingerprint"],
+          });
+        }
+        fingerprints.add(fingerprint);
+      });
+    }) as unknown as z.ZodType<
+    TopologyReferenceEntryIR<"face" | "edge", R>
+  >;
+}
+
+export const TopologyReferenceEntryV2Schema: z.ZodType<TopologyReferenceEntryIRV2> =
+  createTopologyReferenceEntrySchema(
+    PersistentTopologyReferenceV2Schema,
+  ) as z.ZodType<TopologyReferenceEntryIRV2>;
+export const TopologyReferenceEntryV3Schema: z.ZodType<TopologyReferenceEntryIRV3> =
+  createTopologyReferenceEntrySchema(
+    PersistentTopologyReferenceV3Schema,
+  ) as z.ZodType<TopologyReferenceEntryIRV3>;
+/** Current document-v3 topology-reference registry entry schema. */
+export const TopologyReferenceEntrySchema: z.ZodType<TopologyReferenceEntryIR> =
+  TopologyReferenceEntryV3Schema;
 
 function createNodeSchema(topologySelectionSchema: z.ZodType) {
   return z.discriminatedUnion("kind", [
@@ -579,12 +680,17 @@ function createNodeSchema(topologySelectionSchema: z.ZodType) {
   ]);
 }
 
-const NodeSchema = createNodeSchema(
-  TopologySelectionV2Schema,
-) as unknown as z.ZodType<NodeIR>;
-const NodeV1Schema = createNodeSchema(
+export const NodeV1Schema = createNodeSchema(
   TopologySelectionV1Schema,
 ) as unknown as z.ZodType<NodeIRV1>;
+export const NodeV2Schema = createNodeSchema(
+  TopologySelectionV2Schema,
+) as unknown as z.ZodType<NodeIRV2>;
+export const NodeV3Schema = createNodeSchema(
+  TopologySelectionV3Schema,
+) as unknown as z.ZodType<NodeIRV3>;
+/** Current document-v3 node schema. */
+export const NodeSchema: z.ZodType<NodeIR> = NodeV3Schema;
 
 const ConfigurationSchema = z
   .object({
@@ -694,8 +800,9 @@ export const DesignDocumentV2Schema: z.ZodType<DesignDocumentV2> = z
     schema: z.literal(DOCUMENT_SCHEMA_V2),
     version: z.literal(DOCUMENT_VERSION_V2),
     ...DesignDocumentBodyShape,
+    nodes: z.record(z.string(), NodeV2Schema),
     topologyReferences: z
-      .record(IdSchema, TopologyReferenceEntrySchema)
+      .record(IdSchema, TopologyReferenceEntryV2Schema)
       .refine(
         (references) => Object.keys(references).length > 0,
         "Topology reference registry cannot be empty; omit it instead",
@@ -704,7 +811,23 @@ export const DesignDocumentV2Schema: z.ZodType<DesignDocumentV2> = z
   })
   .strict() as unknown as z.ZodType<DesignDocumentV2>;
 
+export const DesignDocumentV3Schema: z.ZodType<DesignDocumentV3> = z
+  .object({
+    schema: z.literal(DOCUMENT_SCHEMA_V3),
+    version: z.literal(DOCUMENT_VERSION_V3),
+    ...DesignDocumentBodyShape,
+    topologyReferences: z
+      .record(IdSchema, TopologyReferenceEntryV3Schema)
+      .refine(
+        (references) => Object.keys(references).length > 0,
+        "Topology reference registry cannot be empty; omit it instead",
+      )
+      .optional(),
+  })
+  .strict() as unknown as z.ZodType<DesignDocumentV3>;
+
 export const DesignDocumentSchema: z.ZodType<DesignDocument> = z.union([
   DesignDocumentV1Schema,
   DesignDocumentV2Schema,
+  DesignDocumentV3Schema,
 ]) as z.ZodType<DesignDocument>;
