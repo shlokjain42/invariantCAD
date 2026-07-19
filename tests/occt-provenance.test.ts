@@ -216,6 +216,69 @@ function expectRectangleExtrusionInventory(
   }
 }
 
+function expectRectangleRevolutionInventory(
+  value: KernelTopologySnapshot,
+  feature: string,
+  sketch: string,
+  partial: boolean,
+): void {
+  expect(value.history).toBe("complete");
+  expect(value.faces).toHaveLength(partial ? 5 : 3);
+  expect(value.edges).toHaveLength(partial ? 9 : 3);
+  expectBroadCreation(value, feature);
+
+  expect([...roleInventory(value.faces, feature)].sort()).toEqual(
+    [
+      "revolve.face.swept",
+      "revolve.face.swept",
+      "revolve.face.swept",
+      ...(partial
+        ? ["revolve.face.start-cap", "revolve.face.end-cap"]
+        : []),
+    ].sort(),
+  );
+  expect(roleInventory(value.edges, feature)).toEqual([]);
+
+  for (const entity of ["bottom", "right", "top"]) {
+    expect(
+      value.faces.filter((face) =>
+        face.lineage.some(
+          (item) =>
+            item.feature === feature &&
+            item.relation === "created" &&
+            item.role === "revolve.face.swept" &&
+            item.source?.kind === "sketch-entity" &&
+            item.source.sketch === sketch &&
+            item.source.entity === entity,
+        ),
+      ),
+      `${entity} should identify one swept face`,
+    ).toHaveLength(1);
+  }
+  expect(
+    descriptors(value).filter((descriptor) =>
+      descriptor.lineage.some(
+        (item) =>
+          item.feature === feature &&
+          item.source?.kind === "sketch-entity" &&
+          item.source.sketch === sketch &&
+          item.source.entity === "left",
+      ),
+    ),
+  ).toHaveLength(0);
+
+  for (const descriptor of descriptors(value)) {
+    for (const item of featureLineage(descriptor, feature)) {
+      if (
+        item.role === "revolve.face.start-cap" ||
+        item.role === "revolve.face.end-cap"
+      ) {
+        expect(item.source).toBeUndefined();
+      }
+    }
+  }
+}
+
 function expectCurveSourceTriplet(
   value: KernelTopologySnapshot,
   feature: string,
@@ -425,6 +488,282 @@ describe("OCCT semantic provenance inventory", () => {
       expectRectangleExtrusionInventory(snapshot(shape), "extrude", "profile");
     } finally {
       kernel.disposeShape(shape);
+    }
+  });
+
+  it.each([
+    { plane: "XY" as const, angle: Math.PI * 2 },
+    { plane: "XZ" as const, angle: Math.PI / 2 },
+    { plane: "YZ" as const, angle: Math.PI },
+  ])(
+    "maps rectangle revolution faces and sources on $plane through $angle radians",
+    ({ plane, angle }) => {
+      const feature = `revolve-${plane}-${angle}`;
+      const sketch = `profile-${plane}-${angle}`;
+      const profile = rectangleProfile(
+        { plane, origin: [11, -7, 3] },
+        sketch,
+      );
+      const shape = kernel.revolve!(profile, { angle }, { feature });
+      try {
+        expectRectangleRevolutionInventory(
+          snapshot(shape),
+          feature,
+          sketch,
+          angle !== Math.PI * 2,
+        );
+      } finally {
+        kernel.disposeShape(shape);
+      }
+    },
+  );
+
+  it("maps a revolved semicircle while leaving its axis and kernel artifacts unnamed", () => {
+    const profile: ResolvedProfile = {
+      plane: { plane: "XY", origin: [5, -2, 7] },
+      outer: {
+        curves: [
+          {
+            kind: "arc",
+            center: [0, 0],
+            radius: 4,
+            startAngle: -Math.PI / 2,
+            endAngle: Math.PI / 2,
+            clockwise: false,
+            source: source("arc", "sphere-profile"),
+          },
+          {
+            kind: "line",
+            start: [0, 4],
+            end: [0, -4],
+            source: source("axis", "sphere-profile"),
+          },
+        ],
+      },
+      holes: [],
+    };
+    const shape = kernel.revolve!(
+      profile,
+      { angle: Math.PI * 2 },
+      { feature: "sphere-revolve" },
+    );
+    try {
+      const value = snapshot(shape);
+      expect(value.history).toBe("complete");
+      expect(value.faces).toHaveLength(1);
+      expect(value.edges).toHaveLength(3);
+      expect(roleInventory(value.faces, "sphere-revolve")).toEqual([
+        "revolve.face.swept",
+      ]);
+      expect(roleInventory(value.edges, "sphere-revolve")).toEqual([]);
+      expect(value.faces[0]!.lineage).toContainEqual({
+        feature: "sphere-revolve",
+        relation: "created",
+        role: "revolve.face.swept",
+        source: source("arc", "sphere-profile"),
+      });
+      expect(
+        descriptors(value).some((descriptor) =>
+          descriptor.lineage.some(
+            (item) => item.source?.entity === "axis",
+          ),
+        ),
+      ).toBe(false);
+      expectBroadCreation(value, "sphere-revolve");
+    } finally {
+      kernel.disposeShape(shape);
+    }
+  });
+
+  it("does not erase a native swept face when caller tolerance exceeds its radius", () => {
+    const innerRadius = 2e-7;
+    const profile: ResolvedProfile = {
+      plane: { plane: "XY", origin: [0, 0, 0] },
+      outer: {
+        curves: [
+          {
+            kind: "line",
+            start: [innerRadius, 0],
+            end: [4, 0],
+            source: source("bottom", "thin-profile"),
+          },
+          {
+            kind: "line",
+            start: [4, 0],
+            end: [4, 3],
+            source: source("outer", "thin-profile"),
+          },
+          {
+            kind: "line",
+            start: [4, 3],
+            end: [innerRadius, 3],
+            source: source("top", "thin-profile"),
+          },
+          {
+            kind: "line",
+            start: [innerRadius, 3],
+            end: [innerRadius, 0],
+            source: source("inner", "thin-profile"),
+          },
+        ],
+      },
+      holes: [],
+    };
+    const shape = kernel.revolve!(
+      profile,
+      { angle: Math.PI * 2 },
+      { feature: "thin-revolve", tolerance: 1e-6 },
+    );
+    try {
+      const value = snapshot(shape);
+      expect(value.history).toBe("complete");
+      expect(value.faces).toHaveLength(4);
+      expect(roleInventory(value.faces, "thin-revolve")).toHaveLength(4);
+      for (const entity of ["bottom", "outer", "top", "inner"]) {
+        expect(
+          value.faces.filter((face) =>
+            face.lineage.some(
+              (item) =>
+                item.role === "revolve.face.swept" &&
+                item.source?.entity === entity,
+            ),
+          ),
+        ).toHaveLength(1);
+      }
+    } finally {
+      kernel.disposeShape(shape);
+    }
+  });
+
+  it("downgrades a semantically partial turn when OCCT collapses it to a full turn", () => {
+    const shape = kernel.revolve!(
+      rectangleProfile({ plane: "XY", origin: [0, 0, 0] }),
+      { angle: Math.PI * 2 - 1e-14 },
+      { feature: "near-full-revolve" },
+    );
+    try {
+      const value = snapshot(shape);
+      expect(value.faces).toHaveLength(3);
+      expect(value.history).toBe("partial");
+      expect(roleInventory(value.faces, "near-full-revolve")).toEqual([
+        "revolve.face.swept",
+        "revolve.face.swept",
+        "revolve.face.swept",
+      ]);
+    } finally {
+      kernel.disposeShape(shape);
+    }
+  });
+
+  it("preserves partial-revolution roles and sources through rotation and translation", () => {
+    const revolution = kernel.revolve!(
+      rectangleProfile(
+        { plane: "XY", origin: [2, -3, 5] },
+        "transform-revolve-profile",
+      ),
+      { angle: Math.PI / 2 },
+      { feature: "revolve-before-transform" },
+    );
+    let transformed: KernelShape | undefined;
+    try {
+      const before = snapshot(revolution);
+      transformed = kernel.transform!(
+        revolution,
+        [
+          { kind: "rotate", value: [0.2, 0.4, 0.1] },
+          { kind: "translate", value: [100, 5, 7] },
+        ],
+        { feature: "moved-revolve" },
+      );
+      const after = snapshot(transformed);
+      expect(after.history).toBe("complete");
+
+      const semanticInventory = (
+        value: KernelTopologySnapshot,
+      ): readonly string[] =>
+        descriptors(value)
+          .flatMap((descriptor) =>
+            featureLineage(descriptor, "revolve-before-transform").flatMap(
+              (item) =>
+                item.role === undefined
+                  ? []
+                  : [
+                      [
+                        descriptor.topology,
+                        item.role,
+                        item.source?.kind ?? "",
+                        item.source?.sketch ?? "",
+                        item.source?.entity ?? "",
+                      ].join("|"),
+                    ],
+            ),
+          )
+          .sort();
+
+      expect(semanticInventory(after)).toEqual(semanticInventory(before));
+      expect(roleInventory(after.faces, "revolve-before-transform")).toHaveLength(
+        5,
+      );
+      for (const descriptor of descriptors(after)) {
+        expect(descriptor.lineage).toContainEqual({
+          feature: "moved-revolve",
+          relation: "modified",
+        });
+      }
+    } finally {
+      if (transformed !== undefined) kernel.disposeShape(transformed);
+      kernel.disposeShape(revolution);
+    }
+  });
+
+  it("cancels during revolution provenance construction and recovers", async () => {
+    const localKernel = await createOcctKernel();
+    const raw = (localKernel as any).raw as Record<
+      string,
+      (...arguments_: any[]) => any
+    >;
+    const originalRevolve = raw.revolve!.bind(raw);
+    const abort = new AbortController();
+    let revolveCalls = 0;
+    try {
+      try {
+        raw.revolve = (...arguments_: any[]) => {
+          const result = originalRevolve(...arguments_);
+          revolveCalls += 1;
+          if (revolveCalls === 2) abort.abort();
+          return result;
+        };
+        expect(() =>
+          localKernel.revolve!(
+            rectangleProfile({ plane: "XY", origin: [0, 0, 0] }),
+            { angle: Math.PI * 2 },
+            {
+              feature: "cancelled-revolve",
+              signal: abort.signal,
+            },
+          ),
+        ).toThrow("aborted");
+        expect(revolveCalls).toBe(2);
+      } finally {
+        raw.revolve = originalRevolve;
+      }
+
+      const recovered = localKernel.revolve!(
+        rectangleProfile({ plane: "XY", origin: [0, 0, 0] }),
+        { angle: Math.PI * 2 },
+        { feature: "recovered-revolve" },
+      );
+      try {
+        const value = localKernel.topology!(recovered);
+        expect(value.history).toBe("complete");
+        expect(roleInventory(value.faces, "recovered-revolve")).toHaveLength(
+          3,
+        );
+      } finally {
+        localKernel.disposeShape(recovered);
+      }
+    } finally {
+      localKernel.dispose();
     }
   });
 

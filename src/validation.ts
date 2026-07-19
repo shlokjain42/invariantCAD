@@ -721,11 +721,15 @@ function validateTopologySelection(
           }
         }
         if (query.source !== undefined) {
-          if (query.relation !== "created" || feature?.kind !== "extrude") {
+          const profileProducer =
+            feature?.kind === "extrude" || feature?.kind === "revolve"
+              ? feature
+              : undefined;
+          if (query.relation !== "created" || profileProducer === undefined) {
             diagnostics.push(
               diagnostic(
                 "TOPOLOGY_SELECTOR_INVALID",
-                "Sketch-entity topology sources require topology created by an extrusion",
+                "Sketch-entity topology sources require topology created by an extrusion or revolution",
                 { severity: "error", path: `${queryPath}/source` },
               ),
             );
@@ -792,13 +796,17 @@ function validateTopologySelection(
               );
             }
             if (
-              feature?.kind === "extrude" &&
-              feature.profile.node !== query.source.sketch
+              profileProducer !== undefined &&
+              profileProducer.profile.node !== query.source.sketch
             ) {
+              const producerName =
+                profileProducer.kind === "extrude"
+                  ? "extrusion"
+                  : "revolution";
               diagnostics.push(
                 diagnostic(
                   "TOPOLOGY_SELECTOR_INVALID",
-                  `Sketch '${query.source.sketch}' is not the direct profile of extrusion '${query.feature}'`,
+                  `Sketch '${query.source.sketch}' is not the direct profile of ${producerName} '${query.feature}'`,
                   { severity: "error", path: `${queryPath}/source/sketch` },
                 ),
               );

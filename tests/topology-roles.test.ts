@@ -12,6 +12,7 @@ import {
   stringifyDocument,
   topology,
   validateDocument,
+  vec2,
   type GeometryKernel,
   type DesignDocument,
 } from "../src/index.js";
@@ -63,6 +64,50 @@ function roleDocument(
 
 function mutableRoleDocument(): any {
   return JSON.parse(stringifyDocument(roleDocument()));
+}
+
+function revolveRoleDocument(): ReturnType<
+  ReturnType<typeof design>["build"]
+> {
+  const cad = design("revolve-topology-role-validation");
+  const radius = mm(10);
+  const profile = cad.sketch("revolve-profile", plane.xy(), (sketch) =>
+    sketch.profile(
+      sketch.rectangle("section", {
+        width: radius,
+        height: mm(20),
+        center: vec2(radius.mul(0.5), mm(0)),
+      }),
+    ),
+  );
+  cad.sketch("other-revolve-profile", plane.xy(), (sketch) =>
+    sketch.profile(
+      sketch.rectangle("other-section", {
+        width: mm(4),
+        height: mm(4),
+        center: vec2(mm(2), mm(0)),
+      }),
+    ),
+  );
+  const revolution = cad.revolve("revolution", profile);
+  const swept = topology.faces
+    .createdBy(revolution, {
+      role: "revolve.face.swept",
+      source: { sketch: profile, entity: "section.e1" },
+    })
+    .select();
+  cad.output(
+    "hollow",
+    cad.shell("hollow", revolution, {
+      openings: swept,
+      thickness: mm(1),
+    }),
+  );
+  return cad.build();
+}
+
+function mutableRevolveRoleDocument(): any {
+  return JSON.parse(stringifyDocument(revolveRoleDocument()));
 }
 
 function expectSemanticFailure(
@@ -241,6 +286,58 @@ describe("closed topology role validation", () => {
           },
         }),
       }),
+    );
+  });
+
+  it("accepts a swept revolution face with its direct sketch-curve source", () => {
+    const result = parseDocumentValue(mutableRevolveRoleDocument());
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(
+      (result.value.nodes as Readonly<Record<string, unknown>>).hollow,
+    ).toEqual(
+      expect.objectContaining({
+        kind: "shell",
+        openings: expect.objectContaining({
+          topology: "face",
+          query: {
+            op: "origin",
+            feature: "revolution",
+            relation: "created",
+            role: "revolve.face.swept",
+            source: {
+              kind: "sketch-entity",
+              sketch: "revolve-profile",
+              entity: "section.e1",
+            },
+          },
+        }),
+      }),
+    );
+  });
+
+  it("rejects an extrusion role on a revolution", () => {
+    const invalid = mutableRevolveRoleDocument();
+    invalid.nodes.hollow.openings.query.role = "extrude.face.side";
+
+    expectSemanticFailure(
+      invalid,
+      "is not valid for revolve feature 'revolution'",
+      "/nodes/hollow/openings/query/role",
+    );
+  });
+
+  it("rejects a source sketch that is not the revolution's direct profile", () => {
+    const invalid = mutableRevolveRoleDocument();
+    invalid.nodes.hollow.openings.query.source.sketch =
+      "other-revolve-profile";
+    invalid.nodes.hollow.openings.query.source.entity = "other-section.e1";
+
+    expectSemanticFailure(
+      invalid,
+      "is not the direct profile of revolution 'revolution'",
+      "/nodes/hollow/openings/query/source/sketch",
     );
   });
 

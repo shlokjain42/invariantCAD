@@ -29,7 +29,8 @@ InvariantCAD's goal is one coherent TypeScript CAD system, not one monolithic ge
 - Explicit exact-to-mesh conversion with tolerances
 - Evaluation-scoped face/edge topology snapshots and capability negotiation
 - Semantic origin/geometry/adjacency selectors with explicit cardinality
-- Closed primitive/extrusion roles and sketch-curve source provenance through transforms
+- Closed primitive/extrusion roles plus source-aware revolution swept faces, partial-turn caps, full-turn cap omission, axis-boundary collapse, deliberately unnamed revolution edges/artifacts, and sketch-curve source provenance through transforms
+- OCCT topology descriptor semantics v2, with exact fingerprint gating from descriptor v1 while retaining persistent-reference protocol v1
 - First exact constant-radius fillet driven by semantic edge selection
 - First exact equal-distance chamfer driven by semantic edge selection
 - First exact constant-thickness inward/outward shell driven by semantic face openings
@@ -54,9 +55,9 @@ Facade ABI/bundle numbers version the native adapter boundary and are independen
 ## 0.3 — persistent design intent
 
 - Extend complete shell/offset provenance beyond the owned OCCT ABI 0.6 path while retaining stock OCCT and legacy owned facades as supported partial-history implementations
-- Extend complete Boolean and edge-treatment provenance beyond the owned OCCT ABI 0.4/0.5 paths while retaining stock OCCT, legacy owned facades, and Manifold as supported partial-history implementations where they provide the base operation
-- Expanded role and source mapping for additional feature families
-- Landed: topology-signature protocol v1 for detached face/edge references, with key-free structured geometry and one-hop adjacency evidence, optional semantic compatibility fingerprints, exact fingerprint gating, partial-history fallback, and fail-closed missing/ambiguous resolution
+- Extend complete Boolean and edge-treatment provenance beyond the owned OCCT ABI 0.4/0.5 paths while retaining stock OCCT and legacy owned facades as supported partial-history implementations; Manifold retains its declared geometry operations without topology snapshots
+- Expand role and source mapping beyond the landed primitive, extrusion, and revolution-face families
+- Landed: topology-signature protocol v1 for detached face/edge references, with key-free structured geometry and one-hop adjacency evidence, optional semantic compatibility fingerprints, exact fingerprint gating including OCCT descriptor v2, partial-history fallback, and fail-closed missing/ambiguous resolution
 - Expand the bounded v1 reference layer into persistent document selectors and broader topology-kind/feature-family naming without assigning arbitrary identities to symmetric topology
 - Expanded selection diagnostics and provenance explanations
 - Incremental feature hashes and cross-run cache

@@ -211,7 +211,10 @@ interface TopologyAnnotation {
     readonly feature: string;
     readonly counts: Readonly<Partial<Record<TopologyRole, number>>>;
   };
-  readonly requireSeedCoverage?: boolean;
+  readonly requireSeedCoverage?:
+    | true
+    | readonly ("face" | "edge")[];
+  readonly forcePartial?: boolean;
 }
 
 class OcctShape implements KernelShape {
@@ -714,7 +717,7 @@ class OcctKernel implements GeometryKernel {
       !(this.modelingTolerance > 0)
         ? undefined
         : [
-            "invariantcad-topology-descriptor@1",
+            "invariantcad-topology-descriptor@2",
             "occt-wasm@3.7.0",
             `runtime=${topologySignatureRuntime}`,
             `modelingTolerance=${this.modelingTolerance}`,
@@ -1266,6 +1269,109 @@ class OcctKernel implements GeometryKernel {
     };
   }
 
+  private revolveTopologyAnnotation(
+    profile: ResolvedProfile,
+    curves: readonly ProfileCurveHandle[],
+    profileFace: ShapeHandle,
+    angle: number,
+    context?: KernelFeatureContext,
+  ): TopologyAnnotation {
+    const basis = numericPlaneBasis(profile.plane);
+    const axis = {
+      point: occtVector(profile.plane.origin),
+      direction: occtVector(basis.v),
+    };
+    const sourceOf = (
+      curve: ResolvedCurve,
+    ): KernelTopologySource | undefined =>
+      curve.source === undefined
+        ? undefined
+        : {
+            kind: "sketch-entity",
+            sketch: curve.source.sketch,
+            entity: curve.source.entity,
+          };
+    const temporary: ShapeHandle[] = [];
+    const seeds: TopologyLineageSeed[] = [];
+    let sweptFaces = 0;
+    let forcePartial = false;
+    const fullTurn = angle === Math.PI * 2;
+    try {
+      for (const item of curves) {
+        checkContext(context);
+        try {
+          const swept = this.raw.revolve(item.handle, axis, angle);
+          temporary.push(swept);
+          const curveSeeds = this.topologyFaceSeedsFromShape(
+            swept,
+            semanticLineage(
+              context,
+              "revolve.face.swept",
+              sourceOf(item.curve),
+            ),
+          );
+          seeds.push(...curveSeeds);
+          sweptFaces += curveSeeds.length;
+        } catch {
+          forcePartial = true;
+        }
+      }
+      checkContext(context);
+      if (!fullTurn) {
+        checkContext(context);
+        try {
+          seeds.push(
+            this.topologySeedFromHandle(
+              profileFace,
+              "face",
+              semanticLineage(context, "revolve.face.start-cap"),
+            ),
+          );
+        } catch {
+          forcePartial = true;
+        }
+        checkContext(context);
+        try {
+          const endCap = this.raw.rotate(profileFace, axis, angle);
+          temporary.push(endCap);
+          seeds.push(
+            ...this.topologyFaceSeedsFromShape(
+              endCap,
+              semanticLineage(context, "revolve.face.end-cap"),
+            ),
+          );
+        } catch {
+          forcePartial = true;
+        }
+      }
+      checkContext(context);
+    } finally {
+      this.releaseHandles(temporary);
+    }
+
+    return {
+      seeds,
+      requireSeedCoverage: ["face"],
+      ...(forcePartial ? { forcePartial: true } : {}),
+      ...(context?.feature === undefined
+        ? {}
+        : {
+            expectedRoles: {
+              feature: context.feature,
+              counts: {
+                "revolve.face.swept": sweptFaces,
+                ...(fullTurn
+                  ? {}
+                  : {
+                      "revolve.face.start-cap": 1,
+                      "revolve.face.end-cap": 1,
+                    }),
+              },
+            },
+          }),
+    };
+  }
+
   box(
     size: Vec3,
     center: boolean,
@@ -1403,22 +1509,32 @@ class OcctKernel implements GeometryKernel {
     checkContext(context);
     const built = this.profileFace(profile);
     const axis = numericPlaneBasis(profile.plane).v;
+    let result: ShapeHandle | undefined;
     try {
-      return this.own(
-        this.raw.revolve(
-          built.face,
-          {
-            point: {
-              x: profile.plane.origin[0],
-              y: profile.plane.origin[1],
-              z: profile.plane.origin[2],
-            },
-            direction: occtVector(axis),
+      result = this.raw.revolve(
+        built.face,
+        {
+          point: {
+            x: profile.plane.origin[0],
+            y: profile.plane.origin[1],
+            z: profile.plane.origin[2],
           },
-          options.angle,
-        ),
-        context,
+          direction: occtVector(axis),
+        },
+        options.angle,
       );
+      return this.own(result, context, {
+        annotation: this.revolveTopologyAnnotation(
+          profile,
+          built.curves,
+          built.face,
+          options.angle,
+          context,
+        ),
+      });
+    } catch (error) {
+      if (result !== undefined) this.raw.release(result);
+      throw error;
     } finally {
       this.releaseHandles(built.allocated);
     }
@@ -2719,6 +2835,24 @@ class OcctKernel implements GeometryKernel {
         };
   }
 
+  private topologyFaceSeedsFromShape(
+    handle: ShapeHandle,
+    lineage: readonly KernelTopologyLineage[],
+  ): readonly TopologyLineageSeed[] {
+    if (this.raw.isNull(handle)) return [];
+    if (this.raw.getShapeType(handle) === "face") {
+      return [this.topologySeedFromHandle(handle, "face", lineage)];
+    }
+    const faces = this.raw.getSubShapes(handle, "face");
+    try {
+      return faces.map((face) =>
+        this.topologySeedFromHandle(face, "face", lineage),
+      );
+    } finally {
+      this.releaseHandles(faces);
+    }
+  }
+
   private topologySeedMatches(
     seed: TopologyLineageSeed,
     descriptor: TopologyDescriptor,
@@ -2907,7 +3041,7 @@ class OcctKernel implements GeometryKernel {
         KernelTopologyLineage[]
       >();
       const seedMatches = new Map<KernelTopologyKey, number>();
-      let annotationComplete = true;
+      let annotationComplete = owned.annotation?.forcePartial !== true;
       for (const seed of owned.annotation?.seeds ?? []) {
         const matches = baseDescriptors.filter((descriptor) =>
           this.topologySeedMatches(seed, descriptor),
@@ -2927,10 +3061,14 @@ class OcctKernel implements GeometryKernel {
           existing.push(...seed.lineage);
         }
       }
+      const requiredSeedCoverage = owned.annotation?.requireSeedCoverage;
       if (
-        owned.annotation?.requireSeedCoverage === true &&
+        requiredSeedCoverage !== undefined &&
         baseDescriptors.some(
-          (descriptor) => seedMatches.get(descriptor.key) !== 1,
+          (descriptor) =>
+            (requiredSeedCoverage === true ||
+              requiredSeedCoverage.includes(descriptor.topology)) &&
+            seedMatches.get(descriptor.key) !== 1,
         )
       ) {
         annotationComplete = false;

@@ -7,6 +7,7 @@ import {
   design,
   mm,
   plane,
+  rad,
   scalarVec3,
   tf,
   vec2,
@@ -278,6 +279,53 @@ describe("geometry evaluation", () => {
       expect(measured.boundingBox.max[2]).toBeCloseTo(10, 2);
     } finally {
       result.dispose();
+    }
+  });
+
+  it("normalizes admitted floating-point overshoot to one exact full turn", async () => {
+    const delegate = await createManifoldKernel();
+    let receivedAngle: number | undefined;
+    const kernel = new Proxy(delegate, {
+      get(target, property) {
+        if (property === "id") return "full-turn-normalization";
+        if (property === "revolve") {
+          return (
+            ...arguments_: Parameters<NonNullable<GeometryKernel["revolve"]>>
+          ) => {
+            receivedAngle = arguments_[1].angle;
+            return target.revolve!(...arguments_);
+          };
+        }
+        const value: unknown = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as GeometryKernel;
+    const localEvaluator = await createEvaluator({ kernel });
+    try {
+      const cad = design("normalized-full-turn");
+      const radius = mm(10);
+      const profile = cad.sketch("profile", plane.xy(), (sketch) =>
+        sketch.profile(
+          sketch.rectangle("section", {
+            width: radius,
+            height: mm(30),
+            center: vec2(radius.mul(0.5), mm(0)),
+          }),
+        ),
+      );
+      cad.output(
+        "solid",
+        cad.revolve("solid", profile, {
+          angle: rad(Math.PI * 2 + 5e-11),
+        }),
+      );
+
+      const result = await localEvaluator.evaluate(cad.build());
+      expect(result.ok).toBe(true);
+      if (result.ok) result.value.dispose();
+      expect(receivedAngle).toBe(Math.PI * 2);
+    } finally {
+      localEvaluator.dispose();
     }
   });
 

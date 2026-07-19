@@ -2084,9 +2084,10 @@ export class Evaluator {
                 }),
               );
             }
+            const effectiveAngle = Math.min(angle, Math.PI * 2);
             result = ownShape(
               this.kernel.revolve!(profile.profile, {
-                angle,
+                angle: effectiveAngle,
                 ...(node.segments === undefined ? {} : { segments: node.segments }),
               }, featureContext(id)),
               id,

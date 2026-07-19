@@ -16,6 +16,9 @@ export const FACE_TOPOLOGY_ROLES = Object.freeze([
   "extrude.face.start-cap",
   "extrude.face.end-cap",
   "extrude.face.side",
+  "revolve.face.start-cap",
+  "revolve.face.end-cap",
+  "revolve.face.swept",
 ] as const);
 
 export const EDGE_TOPOLOGY_ROLES = Object.freeze([
@@ -47,7 +50,12 @@ export type FaceTopologyRole = (typeof FACE_TOPOLOGY_ROLES)[number];
 export type EdgeTopologyRole = (typeof EDGE_TOPOLOGY_ROLES)[number];
 export type TopologyRole = (typeof TOPOLOGY_ROLES)[number];
 
-export type TopologyRoleProducer = "box" | "cylinder" | "sphere" | "extrude";
+export type TopologyRoleProducer =
+  | "box"
+  | "cylinder"
+  | "sphere"
+  | "extrude"
+  | "revolve";
 export type TopologyRoleSource = "none" | "sketch-curve";
 
 export interface TopologyRoleRule {
@@ -95,6 +103,9 @@ export const TOPOLOGY_ROLE_RULES = Object.freeze({
   "extrude.edge.start-rim": roleRule("extrude", "edge", "sketch-curve"),
   "extrude.edge.end-rim": roleRule("extrude", "edge", "sketch-curve"),
   "extrude.edge.lateral": roleRule("extrude", "edge"),
+  "revolve.face.start-cap": roleRule("revolve", "face"),
+  "revolve.face.end-cap": roleRule("revolve", "face"),
+  "revolve.face.swept": roleRule("revolve", "face", "sketch-curve"),
 } as const satisfies Readonly<Record<TopologyRole, TopologyRoleRule>>);
 
 declare const KERNEL_TOPOLOGY_KEY: unique symbol;
