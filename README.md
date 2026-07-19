@@ -395,7 +395,23 @@ const resolved = resolveTopologyReference(reference.value, nextTopology.value, {
   capabilities: nextSignatures,
   limits: signatureLimits,
 });
+
+const explained = explainTopologyReference(
+  reference.value,
+  nextTopology.value,
+  { capabilities: nextSignatures, limits: signatureLimits },
+);
+if (!explained.ok) throw new Error(explained.diagnostics[0]?.message);
+if (explained.value.outcome === "resolved") {
+  console.log(explained.value.key, explained.value.evidence);
+} else {
+  console.log(explained.value.outcome, explained.value.candidatesMatched);
+}
 ```
+
+`explainTopologyReference(...)` returns a deeply frozen version-1 aggregate report from the same bounded matching pass used by `resolveTopologyReference(...)`. Here `ok: true` means the analysis completed; `outcome` is separately `resolved`, `missing`, or `ambiguous`. Every report states the captured/current history modes, unique stored-anchor count, total candidates considered and matched, and per-strategy `considered`/`matched` counts for `semantic-lineage` and `geometry-adjacency`. Only `resolved` exposes a current evaluation-scoped key and evidence. Missing and ambiguous reports never expose candidate keys, native indices, ordinals, descriptors, or enumeration-derived samples. Malformed input, fingerprint incompatibility, invalid options, malformed snapshots, and exhausted work limits remain ordinary failed `CadResult`s rather than partial explanations.
+
+The `ExplainableTopologyReferenceResolutionSession` returned by `createTopologyReferenceResolutionSession(...)` adds `explain(reference)` beside `resolve(reference)`. Both project one object-identity-cached analysis, so asking for both does not repeat matching or recharge the session's cumulative work budget. Missing and ambiguous `resolve(...)` diagnostics also include the same frozen report in `details.explanation`, including when a document-owned persistent selector adds its reference ID and node/path context.
 
 `persistentReference(...)` composes with `and`, `or`, `not`, and `adjacentTo` like every other topology atom. A stored reference is bound to the consuming feature's direct solid input; an ancestor, descendant, unrelated node, or reference from another builder is rejected. Fillet, chamfer, shell, and draft consume these selectors today. Before evaluating the input solid, the evaluator requires face and edge topology, geometry, adjacency, and an exact signature protocol/fingerprint declaration, then verifies that every referenced entry has exactly one compatible variant. Missing capability, malformed capability metadata, and an unavailable fingerprint fail without invoking input geometry, topology extraction, or the feature.
 
@@ -482,7 +498,7 @@ The solver API is replaceable. The built-in solver is intentionally a v0.1 refer
 | Boolean topology evolution | Complete face/edge/vertex graph with explicitly supplied owned OCCT facade ABI 0.4 and later; partial on stock/legacy OCCT; unavailable on Manifold | Persistent cross-evaluation naming |
 | Fillet/chamfer topology evolution | Complete face/edge/vertex graph with explicitly supplied owned OCCT facade ABI 0.5 and later; partial on stock and owned ABI 0.2–0.4 | Persistent cross-evaluation naming |
 | Shell/whole-solid offset topology evolution | Complete face/edge/vertex graph with explicitly supplied owned OCCT facade ABI 0.6 and later; partial on stock and owned ABI 0.2–0.5 | Persistent cross-evaluation naming |
-| Persistent face/edge references | Protocol-v1 capture/resolution plus Document-v2/v3/v4 registries and selector atoms, with exact target/fingerprint binding, a published initial torture corpus, and no invented identity for symmetric topology | Broader naming across feature families and topology kinds |
+| Persistent face/edge references | Protocol-v1 capture/resolution plus versioned aggregate explanations and Document-v2/v3/v4 registries/selector atoms, with exact target/fingerprint binding, a published initial torture corpus, and no invented identity for symmetric topology | Broader naming across feature families and topology kinds |
 | Loft | OCCT ordered ruled-solid mode with matched hole-free sections and five fail-closed semantic face/edge roles | Smooth, guided, and open modes |
 | Sweep | OCCT open-polyline, one-edge circular-arc, and certified ordered line/arc composite solid modes with corrected-Frenet transport and six fail-closed semantic face/edge roles; owned facade ABI 0.6 retains the certified major multi-arc and eccentric-profile refinements introduced by ABI 0.3 | Bézier, B-spline, helix, guided, and variable-section modes |
 | Semantic face/edge selectors | Origin/geometry/adjacency and Document-v2/v3/v4 persistent-reference queries; v3 adds bounded ruled-loft roles and v4 adds bounded-sweep roles while every earlier grammar stays frozen | Remaining feature-family roles and an expanded torture corpus |

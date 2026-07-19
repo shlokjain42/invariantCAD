@@ -30,6 +30,7 @@ import {
 } from "./protocol/topology.js";
 
 export const TOPOLOGY_SIGNATURE_PROTOCOL_VERSION = 1 as const;
+export const TOPOLOGY_REFERENCE_EXPLANATION_VERSION = 1 as const;
 
 export interface TopologySignatureLimits {
   readonly maxTopologyItems: number;
@@ -152,6 +153,52 @@ export interface ResolvedTopologyReference {
   readonly evidence: TopologyMatchEvidence;
 }
 
+export interface TopologyReferenceStrategySummary {
+  /** Current candidates evaluated through this matching strategy. */
+  readonly considered: number;
+  /** Candidates accepted through this matching strategy. */
+  readonly matched: number;
+}
+
+export interface TopologyReferenceResolutionExplanationBase<
+  K extends TopologyKind = TopologyKind,
+> {
+  readonly version: typeof TOPOLOGY_REFERENCE_EXPLANATION_VERSION;
+  readonly topology: K;
+  readonly capturedHistory: KernelTopologySnapshot["history"];
+  readonly currentHistory: KernelTopologySnapshot["history"];
+  /** Number of unique semantic anchors carried by the stored item. */
+  readonly capturedSemanticAnchors: number;
+  readonly candidatesConsidered: number;
+  readonly candidatesMatched: number;
+  readonly strategies: Readonly<
+    Record<TopologyMatchEvidence, TopologyReferenceStrategySummary>
+  >;
+}
+
+/**
+ * Detached aggregate explanation for one completed reference search.
+ *
+ * Only a resolved explanation exposes a current evaluation-scoped key.
+ * Missing and ambiguous explanations contain counts, never candidate keys,
+ * native indices, array ordinals, or enumeration-derived samples.
+ */
+export type TopologyReferenceResolutionExplanation<
+  K extends TopologyKind = TopologyKind,
+> =
+  | (TopologyReferenceResolutionExplanationBase<K> & {
+      readonly outcome: "resolved";
+      /** Evaluation-scoped key for the current snapshot only. */
+      readonly key: KernelTopologyKey;
+      readonly evidence: TopologyMatchEvidence;
+    })
+  | (TopologyReferenceResolutionExplanationBase<K> & {
+      readonly outcome: "missing";
+    })
+  | (TopologyReferenceResolutionExplanationBase<K> & {
+      readonly outcome: "ambiguous";
+    });
+
 export interface CaptureTopologyReferenceOptions {
   readonly capabilities: KernelTopologySignatureCapabilities;
   readonly tolerance: TopologyMatchTolerance;
@@ -177,6 +224,14 @@ export interface TopologyReferenceResolutionSession {
   resolve<K extends TopologyKind>(
     reference: PersistentTopologyReference<K>,
   ): CadResult<ResolvedTopologyReference>;
+}
+
+/** Operation-local resolution session with cached aggregate explanations. */
+export interface ExplainableTopologyReferenceResolutionSession
+  extends TopologyReferenceResolutionSession {
+  explain<K extends TopologyKind>(
+    reference: PersistentTopologyReference<K>,
+  ): CadResult<TopologyReferenceResolutionExplanation<K>>;
 }
 
 type TopologyDescriptor = KernelFaceDescriptor | KernelEdgeDescriptor;
@@ -1058,18 +1113,18 @@ function signatureFailure<T>(
   code: DiagnosticCode,
   message: string,
   details: Readonly<Record<string, unknown>> = {},
-): CadResult<T> {
+): Extract<CadResult<T>, { readonly ok: false }> {
   return failure(
     diagnostic(code, message, {
       severity: "error",
       ...(Object.keys(details).length === 0 ? {} : { details }),
     }),
-  );
+  ) as Extract<CadResult<T>, { readonly ok: false }>;
 }
 
 function limitFailure<T>(
   error: TopologySignatureLimitError | KernelTopologySnapshotCopyLimitError,
-): CadResult<T> {
+): Extract<CadResult<T>, { readonly ok: false }> {
   return signatureFailure(
     "TOPOLOGY_SIGNATURE_LIMIT_EXCEEDED",
     error.message,
@@ -1081,7 +1136,9 @@ function limitFailure<T>(
   );
 }
 
-function caughtSignatureFailure<T>(error: unknown): CadResult<T> {
+function caughtSignatureFailure<T>(
+  error: unknown,
+): Extract<CadResult<T>, { readonly ok: false }> {
   if (
     isTopologySignatureLimitError(error) ||
     isKernelTopologySnapshotCopyLimitError(error)
@@ -1470,14 +1527,36 @@ function adjacencyCompatible(
   return true;
 }
 
-function matchEvidence(
+interface TopologyMatchDecision {
+  readonly strategy: TopologyMatchEvidence;
+  readonly matched: boolean;
+}
+
+const SEMANTIC_MATCH = Object.freeze({
+  strategy: "semantic-lineage",
+  matched: true,
+} as const satisfies TopologyMatchDecision);
+const SEMANTIC_MISMATCH = Object.freeze({
+  strategy: "semantic-lineage",
+  matched: false,
+} as const satisfies TopologyMatchDecision);
+const GEOMETRY_MATCH = Object.freeze({
+  strategy: "geometry-adjacency",
+  matched: true,
+} as const satisfies TopologyMatchDecision);
+const GEOMETRY_MISMATCH = Object.freeze({
+  strategy: "geometry-adjacency",
+  matched: false,
+} as const satisfies TopologyMatchDecision);
+
+function matchDecision(
   reference: CompiledTopologyReference,
   candidate: CompiledTopologyReference,
   budget: MatchingWorkBudget,
-): TopologyMatchEvidence | undefined {
+): TopologyMatchDecision {
   budget.candidatePair();
   if (reference.reference.topology !== candidate.reference.topology) {
-    return undefined;
+    return GEOMETRY_MISMATCH;
   }
   const completeHistory =
     reference.reference.capturedHistory === "complete" &&
@@ -1487,8 +1566,8 @@ function matchEvidence(
       return reference.base.anchors.length > 0 &&
         candidate.base.anchors.length > 0 &&
         arraysEqual(reference.base.anchors, candidate.base.anchors, budget)
-        ? "semantic-lineage"
-        : undefined;
+        ? SEMANTIC_MATCH
+        : SEMANTIC_MISMATCH;
     }
   }
   if (
@@ -1507,16 +1586,70 @@ function matchEvidence(
       budget,
     )
   ) {
-    return undefined;
+    return GEOMETRY_MISMATCH;
   }
-  return "geometry-adjacency";
+  return GEOMETRY_MATCH;
+}
+
+function matchEvidence(
+  reference: CompiledTopologyReference,
+  candidate: CompiledTopologyReference,
+  budget: MatchingWorkBudget,
+): TopologyMatchEvidence | undefined {
+  const decision = matchDecision(reference, candidate, budget);
+  return decision.matched ? decision.strategy : undefined;
+}
+
+interface CachedTopologyReferenceAnalysis<
+  K extends TopologyKind = TopologyKind,
+> {
+  readonly explanation: CadResult<TopologyReferenceResolutionExplanation<K>>;
+  readonly resolution: CadResult<ResolvedTopologyReference>;
+}
+
+function failedTopologyReferenceAnalysis<K extends TopologyKind>(
+  result: Extract<CadResult<unknown>, { readonly ok: false }>,
+): CachedTopologyReferenceAnalysis<K> {
+  return { explanation: result, resolution: result };
+}
+
+function resolutionFromExplanation(
+  explanation: TopologyReferenceResolutionExplanation,
+): CadResult<ResolvedTopologyReference> {
+  if (explanation.outcome === "resolved") {
+    return success(
+      Object.freeze({
+        key: explanation.key,
+        evidence: explanation.evidence,
+      }),
+    );
+  }
+  if (explanation.outcome === "missing") {
+    return signatureFailure(
+      "TOPOLOGY_MATCH_MISSING",
+      `Persistent topology reference matched no current ${explanation.topology}`,
+      {
+        topology: explanation.topology,
+        explanation,
+      },
+    );
+  }
+  return signatureFailure(
+    "TOPOLOGY_MATCH_AMBIGUOUS",
+    `Persistent topology reference matched ${explanation.candidatesMatched} current ${explanation.topology}s`,
+    {
+      topology: explanation.topology,
+      candidates: explanation.candidatesMatched,
+      explanation,
+    },
+  );
 }
 
 interface InternalTopologyReferenceResolutionSession
-  extends TopologyReferenceResolutionSession {
-  resolveNormalized(
-    reference: PersistentTopologyReference,
-  ): CadResult<ResolvedTopologyReference>;
+  extends ExplainableTopologyReferenceResolutionSession {
+  analyzeNormalized<K extends TopologyKind>(
+    reference: PersistentTopologyReference<K>,
+  ): CachedTopologyReferenceAnalysis<K>;
 }
 
 class TopologyReferenceResolutionSessionImpl
@@ -1528,9 +1661,9 @@ class TopologyReferenceResolutionSessionImpl
   private readonly budget: MatchingWorkBudget;
   private readonly compiler = new MatchingSignatureCompiler();
   private candidateContext: DescriptorSignatureContext | undefined;
-  private readonly results = new WeakMap<
+  private readonly analyses = new WeakMap<
     object,
-    CadResult<ResolvedTopologyReference>
+    CachedTopologyReferenceAnalysis
   >();
 
   constructor(
@@ -1543,53 +1676,73 @@ class TopologyReferenceResolutionSessionImpl
     this.budget = new MatchingWorkBudget(options.limits);
   }
 
-  resolve<K extends TopologyKind>(
+  private analyze<K extends TopologyKind>(
     reference: PersistentTopologyReference<K>,
-  ): CadResult<ResolvedTopologyReference> {
+  ): CachedTopologyReferenceAnalysis<K> {
     const cacheKey =
       typeof reference === "object" && reference !== null
         ? (reference as object)
         : undefined;
     if (cacheKey !== undefined) {
-      const cached = this.results.get(cacheKey);
-      if (cached !== undefined) return cached;
-      this.results.set(
+      const cached = this.analyses.get(cacheKey);
+      if (cached !== undefined) {
+        return cached as CachedTopologyReferenceAnalysis<K>;
+      }
+      this.analyses.set(
         cacheKey,
-        signatureFailure(
-          "TOPOLOGY_SIGNATURE_INVALID",
-          "Persistent topology reference resolution is reentrant",
+        failedTopologyReferenceAnalysis(
+          signatureFailure(
+            "TOPOLOGY_SIGNATURE_INVALID",
+            "Persistent topology reference resolution is reentrant",
+          ),
         ),
       );
     }
     const normalized = normalizePersistentTopologyReference(reference, {
       limits: this.limits,
     });
-    const result = normalized.ok
-      ? this.resolveNormalized(normalized.value)
-      : normalized;
-    if (cacheKey !== undefined) this.results.set(cacheKey, result);
-    return result;
+    const analysis = normalized.ok
+      ? this.analyzeNormalized(normalized.value)
+      : failedTopologyReferenceAnalysis<K>(normalized);
+    if (cacheKey !== undefined) {
+      this.analyses.set(cacheKey, analysis as CachedTopologyReferenceAnalysis);
+    }
+    return analysis;
   }
 
-  resolveNormalized(
-    reference: PersistentTopologyReference,
+  explain<K extends TopologyKind>(
+    reference: PersistentTopologyReference<K>,
+  ): CadResult<TopologyReferenceResolutionExplanation<K>> {
+    return this.analyze(reference).explanation;
+  }
+
+  resolve<K extends TopologyKind>(
+    reference: PersistentTopologyReference<K>,
   ): CadResult<ResolvedTopologyReference> {
+    return this.analyze(reference).resolution;
+  }
+
+  analyzeNormalized<K extends TopologyKind>(
+    reference: PersistentTopologyReference<K>,
+  ): CachedTopologyReferenceAnalysis<K> {
     try {
       if (reference.kernelFingerprint !== this.capabilities.fingerprint) {
-        return signatureFailure(
-          "TOPOLOGY_FINGERPRINT_MISMATCH",
-          "Persistent topology reference and current kernel descriptors are incompatible",
-          {
-            expected: reference.kernelFingerprint,
-            actual: this.capabilities.fingerprint,
-          },
+        return failedTopologyReferenceAnalysis(
+          signatureFailure(
+            "TOPOLOGY_FINGERPRINT_MISMATCH",
+            "Persistent topology reference and current kernel descriptors are incompatible",
+            {
+              expected: reference.kernelFingerprint,
+              actual: this.capabilities.fingerprint,
+            },
+          ),
         );
       }
       const universe =
         reference.topology === "face"
           ? this.snapshot.faces
           : this.snapshot.edges;
-      // Candidate evidence is tolerance-independent: matchEvidence applies the
+      // Candidate evidence is tolerance-independent: matchDecision applies the
       // stored reference's tolerance to both base and adjacency comparisons.
       // Reusing one context therefore avoids rebuilding full snapshot maps and
       // candidate signatures for every distinct stored tolerance.
@@ -1603,6 +1756,13 @@ class TopologyReferenceResolutionSessionImpl
         this.candidateContext = context;
       }
       const compiledReference = this.compiler.reference(reference);
+      const strategies: Record<
+        TopologyMatchEvidence,
+        { considered: number; matched: number }
+      > = {
+        "semantic-lineage": { considered: 0, matched: 0 },
+        "geometry-adjacency": { considered: 0, matched: 0 },
+      };
       const matches: {
         readonly descriptor: TopologyDescriptor;
         readonly evidence: TopologyMatchEvidence;
@@ -1612,35 +1772,45 @@ class TopologyReferenceResolutionSessionImpl
           descriptor.topology === "face"
             ? referenceForDescriptor(descriptor, context)
             : referenceForDescriptor(descriptor, context);
-        const evidence = matchEvidence(
+        const decision = matchDecision(
           compiledReference,
           this.compiler.reference(candidate),
           this.budget,
         );
-        if (evidence !== undefined) matches.push({ descriptor, evidence });
+        strategies[decision.strategy].considered += 1;
+        if (decision.matched) {
+          strategies[decision.strategy].matched += 1;
+          matches.push({ descriptor, evidence: decision.strategy });
+        }
       }
-      if (matches.length === 0) {
-        return signatureFailure(
-          "TOPOLOGY_MATCH_MISSING",
-          `Persistent topology reference matched no current ${reference.topology}`,
-          { topology: reference.topology },
-        );
-      }
-      if (matches.length > 1) {
-        return signatureFailure(
-          "TOPOLOGY_MATCH_AMBIGUOUS",
-          `Persistent topology reference matched ${matches.length} current ${reference.topology}s`,
-          { topology: reference.topology, candidates: matches.length },
-        );
-      }
-      return success(
-        Object.freeze({
-          key: matches[0]!.descriptor.key,
-          evidence: matches[0]!.evidence,
-        }),
-      );
+      const base = {
+        version: TOPOLOGY_REFERENCE_EXPLANATION_VERSION,
+        topology: reference.topology,
+        capturedHistory: reference.capturedHistory,
+        currentHistory: this.snapshot.history,
+        capturedSemanticAnchors: compiledReference.base.anchors.length,
+        candidatesConsidered: universe.length,
+        candidatesMatched: matches.length,
+        strategies,
+      } as const;
+      const explanation = deepFreeze(
+        matches.length === 0
+          ? { ...base, outcome: "missing" as const }
+          : matches.length > 1
+            ? { ...base, outcome: "ambiguous" as const }
+            : {
+                ...base,
+                outcome: "resolved" as const,
+                key: matches[0]!.descriptor.key,
+                evidence: matches[0]!.evidence,
+              },
+      ) as TopologyReferenceResolutionExplanation<K>;
+      return {
+        explanation: success(explanation),
+        resolution: resolutionFromExplanation(explanation),
+      };
     } catch (error) {
-      return caughtSignatureFailure(error);
+      return failedTopologyReferenceAnalysis(caughtSignatureFailure(error));
     }
   }
 }
@@ -1653,7 +1823,7 @@ class TopologyReferenceResolutionSessionImpl
 export function createTopologyReferenceResolutionSession(
   snapshot: KernelTopologySnapshot,
   options: ResolveTopologyReferenceOptions,
-): CadResult<TopologyReferenceResolutionSession> {
+): CadResult<ExplainableTopologyReferenceResolutionSession> {
   try {
     const normalized = normalizeResolveOptions(options);
     if (normalized === undefined) {
@@ -1791,7 +1961,44 @@ export function resolveTopologyReference<K extends TopologyKind>(
     return new TopologyReferenceResolutionSessionImpl(
       normalizedSnapshot.value,
       normalized,
-    ).resolveNormalized(normalizedReference.value);
+    ).analyzeNormalized(normalizedReference.value).resolution;
+  } catch (error) {
+    return caughtSignatureFailure(error);
+  }
+}
+
+/**
+ * Explains one bounded reference search without changing fail-closed resolve
+ * semantics. A successful CadResult means the analysis completed; inspect the
+ * explanation outcome to distinguish resolved, missing, and ambiguous identity.
+ */
+export function explainTopologyReference<K extends TopologyKind>(
+  reference: PersistentTopologyReference<K>,
+  snapshot: KernelTopologySnapshot,
+  options: ResolveTopologyReferenceOptions,
+): CadResult<TopologyReferenceResolutionExplanation<K>> {
+  try {
+    const normalized = normalizeResolveOptions(options);
+    if (normalized === undefined) {
+      return signatureFailure(
+        "TOPOLOGY_SIGNATURE_INVALID",
+        "Topology explanation options are malformed or unsupported",
+      );
+    }
+    const normalizedReference = normalizePersistentTopologyReference(
+      reference,
+      { limits: normalized.limits },
+    );
+    if (!normalizedReference.ok) return normalizedReference;
+    const normalizedSnapshot = normalizeKernelTopologySnapshot(
+      snapshot,
+      normalized.limits,
+    );
+    if (!normalizedSnapshot.ok) return normalizedSnapshot;
+    return new TopologyReferenceResolutionSessionImpl(
+      normalizedSnapshot.value,
+      normalized,
+    ).analyzeNormalized(normalizedReference.value).explanation;
   } catch (error) {
     return caughtSignatureFailure(error);
   }

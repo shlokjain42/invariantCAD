@@ -18,6 +18,7 @@ protocol, not a claim that every topology edit already has durable identity.
 | Partial-to-full revolution | Persist a partial-revolution start cap at 90 degrees, then evaluate 180, 360, and 270 degrees | The partial turns resolve, the full turn fails missing because the cap does not exist, and the cap resolves again when it reappears |
 | Repeated sweep semantics | Attempt to capture one of two sides produced from the same profile curve by a two-segment path | Capture fails with `TOPOLOGY_MATCH_AMBIGUOUS` and two candidates because path-segment identity is intentionally not authored |
 | Fingerprint variants | Store a compatible variant and an unrelated variant in both authoring orders | Only the exact protocol/fingerprint variant is eligible; authoring order has no effect |
+| Resolution explanations | Explain semantic, partial-history, mixed-strategy, missing, and ambiguous searches directly and through a shared session | Versioned frozen aggregates have exact considered/matched invariants; only a resolved outcome has a current key; within one shared session, explaining and resolving the same object performs one bounded search |
 | Cancellation and ownership | Abort from topology extraction for persistent fillet, chamfer, shell, and draft; also exercise success, missing, ambiguous, and work-limit exits | Cancellation reports `EVALUATION_ABORTED`, no downstream feature is invoked, and every created shape is released exactly once |
 
 The real-kernel cycles additionally compare the OCCT arena shape count with its
@@ -27,15 +28,19 @@ accidentally retaining evaluation-scoped keys or native shapes.
 
 The source-repository fixtures are
 `tests/topology-persistence-torture-transform.test.ts`,
-`tests/topology-persistence-torture-chains.test.ts`, and
-`tests/topology-reference-evaluator.test.ts`.
+`tests/topology-persistence-torture-chains.test.ts`,
+`tests/topology-reference-evaluator.test.ts`,
+`tests/topology-reference-explanations.test.ts`, and
+`tests/topology-signatures-occt.test.ts`.
 Run them with:
 
 ```sh
 pnpm vitest run \
   tests/topology-persistence-torture-transform.test.ts \
   tests/topology-persistence-torture-chains.test.ts \
-  tests/topology-reference-evaluator.test.ts
+  tests/topology-reference-evaluator.test.ts \
+  tests/topology-reference-explanations.test.ts \
+  tests/topology-signatures-occt.test.ts
 ```
 
 The ordinary full-test, coverage, build, declaration, and packed-consumer gates

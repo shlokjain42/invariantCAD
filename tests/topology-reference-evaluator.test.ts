@@ -624,6 +624,16 @@ describe("document-owned topology references in evaluator", () => {
     expect(result.diagnostics[0]).toMatchObject({
       code: "TOPOLOGY_MATCH_AMBIGUOUS",
       node: "treated",
+      details: {
+        reference: "stored-edge",
+        explanation: {
+          version: 1,
+          outcome: "ambiguous",
+          topology: "edge",
+          candidatesConsidered: 2,
+          candidatesMatched: 2,
+        },
+      },
     });
     expect(harness.filletKeys).toHaveLength(0);
     expect(harness.disposeShapeCalls()).toBe(1);
@@ -677,6 +687,16 @@ describe("document-owned topology references in evaluator", () => {
       expect(result.diagnostics[0]).toMatchObject({
         code: "TOPOLOGY_MATCH_MISSING",
         node: "treated",
+        details: {
+          reference: "stored-edge",
+          explanation: {
+            version: 1,
+            outcome: "missing",
+            topology: "edge",
+            candidatesConsidered: 2,
+            candidatesMatched: 0,
+          },
+        },
       });
       expect(result.diagnostics[0]?.path).toMatch(/\/reference$/u);
       expect(harness.boxCalls()).toBe(1);

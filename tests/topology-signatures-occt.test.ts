@@ -1,19 +1,219 @@
 import { describe, expect, it } from "vitest";
 import {
+  TOPOLOGY_REFERENCE_EXPLANATION_VERSION,
   captureTopologyReference,
   createEvaluator,
+  createTopologyReferenceResolutionSession,
   design,
   EvaluatedSolid,
+  explainTopologyReference,
   mm,
   plane,
   resolveTopologyReference,
   vec2,
   vec3,
+  type KernelShape,
   type KernelTopologyKey,
+  type TopologyReferenceResolutionExplanation,
 } from "../src/index.js";
 import { createOcctKernel } from "../src/occt-kernel.js";
 
+function expectDeeplyFrozen(value: unknown, seen = new Set<object>()): void {
+  if (typeof value !== "object" || value === null || seen.has(value)) return;
+  seen.add(value);
+  expect(Object.isFrozen(value)).toBe(true);
+  for (const child of Object.values(value)) expectDeeplyFrozen(child, seen);
+}
+
+function expectAggregateInvariants(
+  explanation: TopologyReferenceResolutionExplanation,
+  candidateUniverse: number,
+): void {
+  const strategies = Object.values(explanation.strategies);
+  expect(explanation.candidatesConsidered).toBe(candidateUniverse);
+  expect(explanation.candidatesMatched).toBeLessThanOrEqual(
+    explanation.candidatesConsidered,
+  );
+  expect(
+    strategies.reduce((total, strategy) => total + strategy.considered, 0),
+  ).toBe(explanation.candidatesConsidered);
+  expect(
+    strategies.reduce((total, strategy) => total + strategy.matched, 0),
+  ).toBe(explanation.candidatesMatched);
+}
+
 describe("OCCT persistent topology reference integration", () => {
+  it("explains an edge resolved by semantic lineage through a real OCCT transform", async () => {
+    const kernel = await createOcctKernel();
+    const source = kernel.box!([10, 20, 30], false, {
+      feature: "source-box",
+    });
+    let moved: KernelShape | undefined;
+    try {
+      const capabilities = kernel.capabilities.topology?.signatures;
+      expect(capabilities).toBeDefined();
+      if (capabilities === undefined) return;
+
+      const before = kernel.topology!(source);
+      const sourceEdge = before.edges.find((edge) =>
+        edge.lineage.some(
+          (lineage) =>
+            lineage.feature === "source-box" &&
+            lineage.role === "box.edge.x-min-y-min",
+        ),
+      );
+      expect(sourceEdge).toBeDefined();
+      if (sourceEdge === undefined) return;
+      const captured = captureTopologyReference(
+        before,
+        "edge",
+        sourceEdge.key,
+        {
+          capabilities,
+          tolerance: { linear: 1e-6, angular: 1e-9, relative: 1e-9 },
+        },
+      );
+      expect(captured.ok).toBe(true);
+      if (!captured.ok) return;
+
+      moved = kernel.transform!(
+        source,
+        [
+          { kind: "rotate", value: [0.2, 0.4, 0.1] },
+          { kind: "translate", value: [100, 5, 7] },
+        ],
+        { feature: "moved-box" },
+      );
+      const after = kernel.topology!(moved);
+      expect(after.history).toBe("complete");
+
+      const explained = explainTopologyReference(captured.value, after, {
+        capabilities,
+      });
+      expect(explained.ok).toBe(true);
+      if (!explained.ok || explained.value.outcome !== "resolved") return;
+      const explanation = explained.value;
+      expect(explanation).toMatchObject({
+        version: TOPOLOGY_REFERENCE_EXPLANATION_VERSION,
+        outcome: "resolved",
+        topology: "edge",
+        capturedHistory: "complete",
+        currentHistory: "complete",
+        candidatesMatched: 1,
+        evidence: "semantic-lineage",
+        strategies: {
+          "semantic-lineage": {
+            considered: explanation.candidatesConsidered,
+            matched: 1,
+          },
+          "geometry-adjacency": { considered: 0, matched: 0 },
+        },
+      });
+      expect(explanation.capturedSemanticAnchors).toBeGreaterThan(0);
+      expectAggregateInvariants(explanation, after.edges.length);
+      expectDeeplyFrozen(explanation);
+
+      const currentEdge = after.edges.find(
+        (edge) => edge.key === explanation.key,
+      );
+      expect(currentEdge?.lineage).toContainEqual({
+        feature: "moved-box",
+        relation: "modified",
+      });
+      expect(explanation.key).not.toBe(sourceEdge.key);
+      expect(JSON.stringify(explanation)).not.toContain(sourceEdge.key);
+    } finally {
+      if (moved !== undefined) kernel.disposeShape(moved);
+      kernel.disposeShape(source);
+      kernel.dispose();
+    }
+  });
+
+  it("explains geometry-adjacency resolution from a real partial-history OCCT offset", async () => {
+    const kernel = await createOcctKernel();
+    const source = kernel.box!([10, 20, 30], false, {
+      feature: "source-box",
+    });
+    let expanded: KernelShape | undefined;
+    try {
+      const capabilities = kernel.capabilities.topology?.signatures;
+      expect(capabilities).toBeDefined();
+      if (capabilities === undefined) return;
+
+      expanded = kernel.offset!(
+        source,
+        { distance: 1, direction: "outward", tolerance: 1e-6 },
+        { feature: "expanded-box" },
+      );
+      const snapshot = kernel.topology!(expanded);
+      expect(snapshot.history).toBe("partial");
+      const face = snapshot.faces.find(
+        (candidate) =>
+          candidate.surface.kind === "plane" &&
+          candidate.surface.normal?.[0] === -1,
+      );
+      expect(face).toBeDefined();
+      if (face === undefined) return;
+      const captured = captureTopologyReference(
+        snapshot,
+        "face",
+        face.key,
+        {
+          capabilities,
+          tolerance: { linear: 1e-6, angular: 1e-9, relative: 1e-9 },
+        },
+      );
+      expect(captured.ok).toBe(true);
+      if (!captured.ok) return;
+      expect(captured.value.capturedHistory).toBe("partial");
+
+      const session = createTopologyReferenceResolutionSession(snapshot, {
+        capabilities,
+      });
+      expect(session.ok).toBe(true);
+      if (!session.ok) return;
+      const explained = session.value.explain(captured.value);
+      expect(explained.ok).toBe(true);
+      if (!explained.ok || explained.value.outcome !== "resolved") return;
+      expect(session.value.explain(captured.value)).toBe(explained);
+      const explanation = explained.value;
+      expect(explanation).toMatchObject({
+        version: TOPOLOGY_REFERENCE_EXPLANATION_VERSION,
+        outcome: "resolved",
+        topology: "face",
+        capturedHistory: "partial",
+        currentHistory: "partial",
+        candidatesMatched: 1,
+        key: face.key,
+        evidence: "geometry-adjacency",
+        strategies: {
+          "semantic-lineage": { considered: 0, matched: 0 },
+          "geometry-adjacency": {
+            considered: explanation.candidatesConsidered,
+            matched: 1,
+          },
+        },
+      });
+      expectAggregateInvariants(explanation, snapshot.faces.length);
+      expectDeeplyFrozen(explanation);
+
+      const resolved = session.value.resolve(captured.value);
+      expect(session.value.resolve(captured.value)).toBe(resolved);
+      expect(resolved).toEqual({
+        ok: true,
+        value: {
+          key: explanation.key,
+          evidence: explanation.evidence,
+        },
+        diagnostics: [],
+      });
+    } finally {
+      if (expanded !== undefined) kernel.disposeShape(expanded);
+      kernel.disposeShape(source);
+      kernel.dispose();
+    }
+  });
+
   it("rejects a stored descriptor-@3 reference against current descriptor-@4 OCCT", async () => {
     const kernel = await createOcctKernel();
     const shape = kernel.box!([10, 20, 30], false, { feature: "box" });

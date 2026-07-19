@@ -397,12 +397,15 @@ export {
 } from "./topology-resolution.js";
 export {
   DEFAULT_TOPOLOGY_SIGNATURE_LIMITS,
+  TOPOLOGY_REFERENCE_EXPLANATION_VERSION,
   TOPOLOGY_SIGNATURE_PROTOCOL_VERSION,
   captureTopologyReference,
   createTopologyReferenceResolutionSession,
+  explainTopologyReference,
   normalizePersistentTopologyReference,
   resolveTopologyReference,
   type CaptureTopologyReferenceOptions,
+  type ExplainableTopologyReferenceResolutionSession,
   type PersistentTopologyReference,
   type PersistentTopologyReferenceV2,
   type PersistentTopologyReferenceV3,
@@ -423,6 +426,9 @@ export {
   type TopologyNeighborSignatureV2,
   type TopologyNeighborSignatureV3,
   type TopologyNeighborSignatureV4,
+  type TopologyReferenceResolutionExplanation,
+  type TopologyReferenceResolutionExplanationBase,
+  type TopologyReferenceStrategySummary,
   type TopologySignatureLimits,
   type TopologyReferenceResolutionSession,
 } from "./topology-signatures.js";
