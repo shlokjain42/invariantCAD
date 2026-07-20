@@ -1,10 +1,13 @@
 import {
   diagnostic,
+  failure,
   safeErrorMessage,
+  success,
   type CadResult,
   type Diagnostic,
 } from "./core/result.js";
 import type { Vec3 } from "./core/math.js";
+import { deepFreeze } from "./core/json.js";
 import type { NodeId, TopologyReferenceId } from "./core/ids.js";
 import type { ExpressionIR } from "./expressions.js";
 import type {
@@ -30,6 +33,37 @@ import {
 } from "./topology-signatures.js";
 
 type KernelTopologyDescriptor = KernelFaceDescriptor | KernelEdgeDescriptor;
+
+export const TOPOLOGY_SELECTION_EXPLANATION_VERSION = 1 as const;
+
+export interface TopologySelectionResolutionExplanationBase<
+  K extends TopologyKind = TopologyKind,
+> {
+  readonly version: typeof TOPOLOGY_SELECTION_EXPLANATION_VERSION;
+  readonly topology: K;
+  readonly currentHistory: KernelTopologySnapshot["history"];
+  readonly candidatesConsidered: number;
+  readonly candidatesMatched: number;
+  readonly minimumRequired: number;
+  readonly maximumAllowed: number | null;
+}
+
+/** Aggregate result of one completed topology-selection resolution pass. */
+export type TopologySelectionResolutionExplanation<
+  K extends TopologyKind = TopologyKind,
+> =
+  | (TopologySelectionResolutionExplanationBase<K> & {
+      readonly outcome: "resolved";
+      /** Evaluation-scoped keys for the current snapshot only. */
+      readonly keys: readonly KernelTopologyKey[];
+    })
+  | (TopologySelectionResolutionExplanationBase<K> & {
+      readonly outcome: "missing";
+    })
+  | (TopologySelectionResolutionExplanationBase<K> & {
+      readonly outcome: "ambiguous";
+      readonly maximumAllowed: number;
+    });
 
 export interface TopologyResolutionContext {
   readonly evaluate: (expression: ExpressionIR) => number;
@@ -261,12 +295,107 @@ function persistentFailure(
   });
 }
 
-function resolveSelectionOrThrow(
-  selection: TopologySelectionIR,
+interface TopologySelectionAnalysis<K extends TopologyKind = TopologyKind> {
+  readonly topology: K;
+  readonly currentHistory: KernelTopologySnapshot["history"];
+  readonly universe: readonly KernelTopologyDescriptor[];
+  readonly byKey: ReadonlyMap<KernelTopologyKey, KernelTopologyDescriptor>;
+  /** A fresh, sorted array owned by this analysis. */
+  readonly matched: KernelTopologyKey[];
+  readonly minimumRequired: number;
+  readonly maximumAllowed: number | null;
+}
+
+function explanationFromSelectionAnalysis<K extends TopologyKind>(
+  analysis: TopologySelectionAnalysis<K>,
+): TopologySelectionResolutionExplanation<K> {
+  const base = {
+    version: TOPOLOGY_SELECTION_EXPLANATION_VERSION,
+    topology: analysis.topology,
+    currentHistory: analysis.currentHistory,
+    candidatesConsidered: analysis.universe.length,
+    candidatesMatched: analysis.matched.length,
+    minimumRequired: analysis.minimumRequired,
+    maximumAllowed: analysis.maximumAllowed,
+  } as const;
+  return deepFreeze(
+    analysis.matched.length < analysis.minimumRequired
+      ? { ...base, outcome: "missing" as const }
+      : analysis.maximumAllowed !== null &&
+          analysis.matched.length > analysis.maximumAllowed
+        ? {
+            ...base,
+            outcome: "ambiguous" as const,
+            maximumAllowed: analysis.maximumAllowed,
+          }
+        : {
+            ...base,
+            outcome: "resolved" as const,
+            keys: [...analysis.matched],
+          },
+  ) as TopologySelectionResolutionExplanation<K>;
+}
+
+function resolutionFromSelectionAnalysis(
+  analysis: TopologySelectionAnalysis,
+  context: TopologyResolutionContext,
+): CadResult<readonly KernelTopologyKey[]> {
+  if (analysis.matched.length < analysis.minimumRequired) {
+    const explanation = explanationFromSelectionAnalysis(analysis);
+    return failure(
+      diagnostic(
+        "TOPOLOGY_SELECTION_MISSING",
+        `Topology selector matched ${analysis.matched.length} ${analysis.topology}${analysis.matched.length === 1 ? "" : "s"}; expected at least ${analysis.minimumRequired}`,
+        {
+          ...location(context),
+          details: {
+            topology: analysis.topology,
+            actual: analysis.matched.length,
+            minimum: analysis.minimumRequired,
+            candidates: canonicalSummaries(analysis.universe),
+            candidatesTruncated: analysis.universe.length > 20,
+            explanation,
+          },
+        },
+      ),
+    );
+  }
+  if (
+    analysis.maximumAllowed !== null &&
+    analysis.matched.length > analysis.maximumAllowed
+  ) {
+    const explanation = explanationFromSelectionAnalysis(analysis);
+    return failure(
+      diagnostic(
+        "TOPOLOGY_SELECTION_AMBIGUOUS",
+        `Topology selector matched ${analysis.matched.length} ${analysis.topology}s; expected at most ${analysis.maximumAllowed}`,
+        {
+          ...location(context),
+          details: {
+            topology: analysis.topology,
+            actual: analysis.matched.length,
+            maximum: analysis.maximumAllowed,
+            matches: canonicalSummaries(
+              analysis.matched.map((key) => analysis.byKey.get(key)!),
+            ),
+            matchesTruncated: analysis.matched.length > 20,
+            explanation,
+          },
+        },
+      ),
+    );
+  }
+  // Preserve the legacy successful result's runtime-mutability contract. The
+  // fresh matched array is not shared with an explanation projection.
+  return success(analysis.matched);
+}
+
+function analyzeSelectionOrThrow<K extends TopologyKind>(
+  selection: TopologySelectionIR<K>,
   snapshot: KernelTopologySnapshot,
   context: TopologyResolutionContext,
   persistent: PersistentReferenceResolutionState | undefined,
-): readonly KernelTopologyKey[] {
+): TopologySelectionAnalysis<K> {
   if (
     !Number.isInteger(selection.cardinality.min) ||
     selection.cardinality.min < 1 ||
@@ -567,19 +696,33 @@ function resolveSelectionOrThrow(
             topology: selection.topology,
           });
         }
-        const adjacentKeys = new Set(
-          resolveSelectionOrThrow(
-            query.selection,
-            snapshot,
-            {
-              ...context,
-              ...(queryPath === undefined
-                ? {}
-                : { path: `${queryPath}/selection` }),
-            },
-            persistent,
-          ),
+        const adjacentContext: TopologyResolutionContext = {
+          ...context,
+          ...(queryPath === undefined
+            ? {}
+            : { path: `${queryPath}/selection` }),
+        };
+        const adjacentAnalysis = analyzeSelectionOrThrow(
+          query.selection,
+          snapshot,
+          adjacentContext,
+          persistent,
         );
+        const adjacentResolution = resolutionFromSelectionAnalysis(
+          adjacentAnalysis,
+          adjacentContext,
+        );
+        if (!adjacentResolution.ok) {
+          throw new TopologyResolutionFailure(
+            adjacentResolution.diagnostics[0] ??
+              diagnostic(
+                "TOPOLOGY_SELECTOR_INVALID",
+                "Nested topology selection failed without a diagnostic",
+                location(queryContext),
+              ),
+          );
+        }
+        const adjacentKeys = new Set(adjacentResolution.value);
         return new Set(
           universe
             .filter((descriptor) => {
@@ -628,52 +771,27 @@ function resolveSelectionOrThrow(
     }
   };
 
-  const matched = [...resolveQuery(selection.query, selectionPath(context, "query"))].sort();
+  const matched = [
+    ...resolveQuery(selection.query, selectionPath(context, "query")),
+  ].sort();
   const { min, max } = selection.cardinality;
-  if (matched.length < min) {
-    throw new TopologyResolutionFailure(
-      diagnostic(
-        "TOPOLOGY_SELECTION_MISSING",
-        `Topology selector matched ${matched.length} ${selection.topology}${matched.length === 1 ? "" : "s"}; expected at least ${min}`,
-        {
-          ...location(context),
-          details: {
-            topology: selection.topology,
-            actual: matched.length,
-            minimum: min,
-            candidates: canonicalSummaries(universe),
-            candidatesTruncated: universe.length > 20,
-          },
-        },
-      ),
-    );
-  }
-  if (max !== undefined && matched.length > max) {
-    throw new TopologyResolutionFailure(
-      diagnostic(
-        "TOPOLOGY_SELECTION_AMBIGUOUS",
-        `Topology selector matched ${matched.length} ${selection.topology}s; expected at most ${max}`,
-        {
-          ...location(context),
-          details: {
-            topology: selection.topology,
-            actual: matched.length,
-            maximum: max,
-            matches: canonicalSummaries(matched.map((key) => byKey.get(key)!)),
-            matchesTruncated: matched.length > 20,
-          },
-        },
-      ),
-    );
-  }
-  return matched;
+  return {
+    topology: selection.topology,
+    currentHistory: snapshot.history,
+    universe,
+    byKey,
+    matched,
+    minimumRequired: min,
+    maximumAllowed: max ?? null,
+  };
 }
 
-export function resolveTopologySelection(
-  selection: TopologySelectionIR,
+function runTopologySelection<K extends TopologyKind, T>(
+  selection: TopologySelectionIR<K>,
   snapshot: KernelTopologySnapshot,
   context: TopologyResolutionContext,
-): CadResult<readonly KernelTopologyKey[]> {
+  project: (analysis: TopologySelectionAnalysis<K>) => CadResult<T>,
+): CadResult<T> {
   let snapshotValidated = false;
   try {
     const requirements = topologySelectionRequirements(selection);
@@ -720,16 +838,14 @@ export function resolveTopologySelection(
       detachedSnapshot = normalizedSnapshot.value;
     }
     snapshotValidated = true;
-    return {
-      ok: true,
-      value: resolveSelectionOrThrow(
+    return project(
+      analyzeSelectionOrThrow(
         selection,
         detachedSnapshot,
         context,
         persistent,
       ),
-      diagnostics: [],
-    };
+    );
   } catch (error) {
     const value =
       isTopologyResolutionFailure(error)
@@ -746,4 +862,35 @@ export function resolveTopologySelection(
           );
     return { ok: false, diagnostics: [value] };
   }
+}
+
+export function resolveTopologySelection<K extends TopologyKind>(
+  selection: TopologySelectionIR<K>,
+  snapshot: KernelTopologySnapshot,
+  context: TopologyResolutionContext,
+): CadResult<readonly KernelTopologyKey[]> {
+  return runTopologySelection(
+    selection,
+    snapshot,
+    context,
+    (analysis) => resolutionFromSelectionAnalysis(analysis, context),
+  );
+}
+
+/**
+ * Explains one completed topology-selection pass. Missing and ambiguous
+ * cardinality are successful explanation outcomes; malformed inputs and nested
+ * selection failures remain failed CadResults.
+ */
+export function explainTopologySelection<K extends TopologyKind>(
+  selection: TopologySelectionIR<K>,
+  snapshot: KernelTopologySnapshot,
+  context: TopologyResolutionContext,
+): CadResult<TopologySelectionResolutionExplanation<K>> {
+  return runTopologySelection(
+    selection,
+    snapshot,
+    context,
+    (analysis) => success(explanationFromSelectionAnalysis(analysis)),
+  );
 }

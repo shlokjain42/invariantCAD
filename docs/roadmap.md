@@ -66,7 +66,7 @@ Facade ABI/bundle numbers version the native adapter boundary and are independen
 - Landed: topology-reference explanation v1, with deeply frozen resolved/missing/ambiguous aggregate reports, per-strategy considered/matched counts from the original bounded matching pass, key-free non-resolved outcomes, shared-session caching, and evaluator diagnostic propagation
 - Landed: frozen node-kind membership and top-level document-body fields through explicit v1/v2/v3/v4 TypeScript and Zod lists, compile-time tuple/union tripwires, strict runtime inventory tests, and allow-listed migration copying before the next document grammar expansion
 - Expand persistent intent into broader topology kinds and feature-family naming without assigning arbitrary identities to symmetric topology
-- Expand ordinary selector diagnostics and persistent explanations beyond the landed aggregate report without exposing arbitrary candidate identity or matcher implementation order
+- Landed: ordinary topology-selection explanation v1, with deeply frozen resolved/missing/ambiguous aggregate reports, exact universe/match/cardinality counts, keys only on resolved outcomes, and the same report attached to legacy missing/ambiguous diagnostics; direct resolve and explain calls remain separate passes
 - Incremental feature hashes and cross-run cache
 - Change-impact and geometric diff APIs
 

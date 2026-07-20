@@ -170,6 +170,7 @@ import {
   angleVec3,
   deg,
   design,
+  explainTopologySelection,
   mm,
   plane,
   scalarVec3,
@@ -311,6 +312,45 @@ The bounded sweep contract has six role literals. Let `C` be the number of direc
 OCCT proves that inventory from the result's face-edge incidence graph: it anchors the authored start section, walks one uniquely corresponding side-face layer per path segment, finds one terminal cap and its rims, and checks curve-local lateral adjacency and complete role counts. A branch, gap, reused or ambiguous candidate, incomplete coverage, unexpected nonlocal mapping, or distant false correspondence downgrades the snapshot to partial history rather than publishing incomplete semantic naming.
 
 Selectors also support curve/surface kind, edge direction, face normal, radius, adjacency, `and`/`or`/`not`, and explicit cardinality. Zero matches produce `TOPOLOGY_SELECTION_MISSING`; excess matches produce `TOPOLOGY_SELECTION_AMBIGUOUS`. The exact backend currently provides complete feature provenance for primitives, extrusions, revolutions, lofts, bounded sweeps whose graph proof succeeds, and topology-preserving transforms, plus the semantic roles and sketch sources above. The matched owned ABI 0.6 facade provides exact indexed evolution for draft, Boolean, fillet, chamfer, shell, and offset. Boolean history remains partial on stock/default OCCT and older owned ABIs; fillet/chamfer history remains partial on stock/default OCCT and owned ABIs 0.2–0.4; shell/offset history remains partial on stock/default OCCT and owned ABIs 0.2–0.5. Origin queries against any partial-history result fail with `TOPOLOGY_HISTORY_UNAVAILABLE` rather than choosing unstable topology, while geometry-only selectors can still inspect it. Manifold exposes none of these topology snapshots or selectors; Manifold and stock/default OCCT both report an explicit capability error for draft.
+
+### Explain ordinary topology selections
+
+`explainTopologySelection(...)` exposes the aggregate result of one ordinary face/edge selector pass without turning missing or ambiguous cardinality into a failed operation:
+
+```ts
+// Given a live evaluated solid from a topology-capable kernel:
+const current = evaluatedSolid.topology();
+if (!current.ok) throw new Error(current.diagnostics[0]?.message);
+
+const selection = topology.faces.all().exactly(1);
+const explainedSelection = explainTopologySelection(
+  selection.ir,
+  current.value,
+  {
+    // This `all` query contains no expressions, so evaluation is never called.
+    evaluate: () => {
+      throw new Error("Unexpected selector expression");
+    },
+  },
+);
+if (!explainedSelection.ok) {
+  throw new Error(explainedSelection.diagnostics[0]?.message);
+}
+
+switch (explainedSelection.value.outcome) {
+  case "resolved":
+    console.log(explainedSelection.value.keys);
+    break;
+  case "missing":
+  case "ambiguous":
+    console.log(explainedSelection.value.candidatesMatched);
+    break;
+}
+```
+
+Topology-selection explanation version 1 is a deeply frozen discriminated union. Every completed report contains `version`, `topology`, `currentHistory`, `candidatesConsidered`, `candidatesMatched`, `minimumRequired`, and `maximumAllowed`; an omitted maximum is represented as `null`. `outcome` is `resolved`, `missing`, or `ambiguous`. Only `resolved` adds the sorted current evaluation-scoped `keys`; missing and ambiguous reports are key-free. Invalid selections, query inputs, snapshots, and any nested selection failure—including persistent-reference resolution—remain failed `CadResult`s rather than explanation outcomes.
+
+`resolveTopologySelection(...)` keeps its legacy fail-closed return shape. Its `TOPOLOGY_SELECTION_MISSING` and `TOPOLOGY_SELECTION_AMBIGUOUS` diagnostics now include the same version-1 aggregate under `details.explanation`. A direct `resolveTopologySelection(...)` call and a direct `explainTopologySelection(...)` call are separate normalization and selector passes; there is no shared-session or cross-call cache for ordinary selections.
 
 ### Persistent topology references across evaluations
 

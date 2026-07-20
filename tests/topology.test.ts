@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   SHELL_DIRECTIONS,
   SHELL_JOIN_SEMANTICS,
+  TOPOLOGY_SELECTION_EXPLANATION_VERSION,
   captureTopologyReference,
   createEvaluator,
   createManifoldKernel,
   design,
+  explainTopologySelection,
   hashDocument,
   parseDocumentValue,
   resolveTopologySelection,
@@ -22,6 +24,7 @@ import {
   type GeometryKernel,
   type KernelTopologyKey,
   type KernelTopologySnapshot,
+  type TopologyResolutionContext,
 } from "../src/index.js";
 import type { NodeId, TopologyReferenceId } from "../src/core/ids.js";
 import type {
@@ -462,27 +465,45 @@ describe("semantic topology selections", () => {
     expect(direction.and(line).ir).toEqual(line.and(direction).ir);
 
     const selection = direction.and(line).exactly(4).ir;
-    const forward = resolveTopologySelection(selection, snapshot(), {
+    const context: TopologyResolutionContext = {
       evaluate: (expression) =>
         expression.op === "literal" ? expression.value : Number.NaN,
       node: "rounded",
       path: "/nodes/rounded/edges",
-    });
+    };
+    const forward = resolveTopologySelection(selection, snapshot(), context);
     const reverse = resolveTopologySelection(
       selection,
       snapshot([...verticalEdges].reverse()),
-      {
-        evaluate: (expression) =>
-          expression.op === "literal" ? expression.value : Number.NaN,
-        node: "rounded",
-        path: "/nodes/rounded/edges",
-      },
+      context,
     );
-    expect(forward.ok).toBe(true);
+    expect(forward).toEqual({
+      ok: true,
+      value: [key("e00"), key("e01"), key("e10"), key("e11")],
+      diagnostics: [],
+    });
+    if (forward.ok) expect(Object.isFrozen(forward.value)).toBe(false);
     expect(reverse.ok).toBe(true);
     if (!forward.ok || !reverse.ok) return;
-    expect(forward.value).toEqual([key("e00"), key("e01"), key("e10"), key("e11")]);
     expect(reverse.value).toEqual(forward.value);
+
+    const explained = explainTopologySelection(selection, snapshot(), context);
+    expect(explained.ok).toBe(true);
+    if (!explained.ok) return;
+    expect(explained.value).toEqual({
+      version: TOPOLOGY_SELECTION_EXPLANATION_VERSION,
+      outcome: "resolved",
+      topology: "edge",
+      currentHistory: "complete",
+      candidatesConsidered: 4,
+      candidatesMatched: 4,
+      minimumRequired: 4,
+      maximumAllowed: 4,
+      keys: [key("e00"), key("e01"), key("e10"), key("e11")],
+    });
+    expect(Object.isFrozen(explained.value)).toBe(true);
+    if (explained.value.outcome !== "resolved") return;
+    expect(Object.isFrozen(explained.value.keys)).toBe(true);
   });
 
   it("resolves persistent atoms from one normalized snapshot and caches each ID once", () => {
@@ -702,12 +723,35 @@ describe("semantic topology selections", () => {
       context,
     );
     expect(ambiguous.ok).toBe(false);
-    expect(ambiguous.diagnostics[0]).toEqual(
-      expect.objectContaining({
-        code: "TOPOLOGY_SELECTION_AMBIGUOUS",
-        path: "/nodes/rounded/edges",
-      }),
+    const ambiguousDiagnostic = ambiguous.diagnostics[0]!;
+    expect(ambiguousDiagnostic).toMatchObject({
+      code: "TOPOLOGY_SELECTION_AMBIGUOUS",
+      message: "Topology selector matched 4 edges; expected at most 1",
+      node: "rounded",
+      path: "/nodes/rounded/edges",
+      details: {
+        topology: "edge",
+        actual: 4,
+        maximum: 1,
+        matchesTruncated: false,
+        explanation: {
+          version: TOPOLOGY_SELECTION_EXPLANATION_VERSION,
+          outcome: "ambiguous",
+          topology: "edge",
+          currentHistory: "complete",
+          candidatesConsidered: 4,
+          candidatesMatched: 4,
+          minimumRequired: 1,
+          maximumAllowed: 1,
+        },
+      },
+    });
+    expect((ambiguousDiagnostic.details?.matches as readonly unknown[]).length).toBe(
+      4,
     );
+    const ambiguousExplanation = ambiguousDiagnostic.details?.explanation as object;
+    expect(Object.isFrozen(ambiguousExplanation)).toBe(true);
+    expect(Object.hasOwn(ambiguousExplanation, "keys")).toBe(false);
 
     const missing = resolveTopologySelection(
       topology.edges.curve("circle").select().ir,
@@ -715,7 +759,35 @@ describe("semantic topology selections", () => {
       context,
     );
     expect(missing.ok).toBe(false);
-    expect(missing.diagnostics[0]?.code).toBe("TOPOLOGY_SELECTION_MISSING");
+    const missingDiagnostic = missing.diagnostics[0]!;
+    expect(missingDiagnostic).toMatchObject({
+      code: "TOPOLOGY_SELECTION_MISSING",
+      message: "Topology selector matched 0 edges; expected at least 1",
+      node: "rounded",
+      path: "/nodes/rounded/edges",
+      details: {
+        topology: "edge",
+        actual: 0,
+        minimum: 1,
+        candidatesTruncated: false,
+        explanation: {
+          version: TOPOLOGY_SELECTION_EXPLANATION_VERSION,
+          outcome: "missing",
+          topology: "edge",
+          currentHistory: "complete",
+          candidatesConsidered: 4,
+          candidatesMatched: 0,
+          minimumRequired: 1,
+          maximumAllowed: 1,
+        },
+      },
+    });
+    expect((missingDiagnostic.details?.candidates as readonly unknown[]).length).toBe(
+      4,
+    );
+    const missingExplanation = missingDiagnostic.details?.explanation as object;
+    expect(Object.isFrozen(missingExplanation)).toBe(true);
+    expect(Object.hasOwn(missingExplanation, "keys")).toBe(false);
 
     const cad = design("origin-query");
     const box = cad.box("box", { size: vec3(mm(1), mm(1), mm(1)) });
@@ -844,6 +916,100 @@ describe("semantic topology selections", () => {
     );
     expect(complement.ok).toBe(true);
     if (complement.ok) expect(complement.value).toEqual([key("fy")]);
+  });
+
+  it("preserves evaluator selection diagnostics while attaching explanations", async () => {
+    const delegate = await createManifoldKernel();
+    let filletInvoked = false;
+    const kernel = new Proxy(delegate, {
+      get(target, property) {
+        if (property === "id") return "selection-explanation-test";
+        if (property === "capabilities") {
+          return {
+            ...target.capabilities,
+            features: [...target.capabilities.features, "fillet"],
+            topology: {
+              kinds: ["face", "edge"],
+              provenance: "feature",
+              semanticRoles: true,
+              sketchSources: true,
+              geometry: true,
+              adjacency: true,
+            },
+          };
+        }
+        if (property === "topology") return () => snapshot();
+        if (property === "fillet") {
+          return () => {
+            filletInvoked = true;
+            throw new Error("Fillet must not run after selection failure");
+          };
+        }
+        const value: unknown = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as GeometryKernel;
+    const evaluator = await createEvaluator({ kernel });
+
+    try {
+      const cases = [
+        {
+          name: "missing",
+          selection: topology.edges.curve("circle").select(),
+          code: "TOPOLOGY_SELECTION_MISSING",
+          outcome: "missing",
+          candidatesMatched: 0,
+        },
+        {
+          name: "ambiguous",
+          selection: topology.edges.all().select(),
+          code: "TOPOLOGY_SELECTION_AMBIGUOUS",
+          outcome: "ambiguous",
+          candidatesMatched: 4,
+        },
+      ] as const;
+
+      for (const fixture of cases) {
+        const cad = design(`selection-${fixture.name}`);
+        const box = cad.box("box", {
+          size: vec3(mm(10), mm(20), mm(30)),
+        });
+        const rounded = cad.fillet("rounded", box, {
+          edges: fixture.selection,
+          radius: mm(1),
+        });
+        cad.output("rounded", rounded);
+
+        const result = await evaluator.evaluate(cad.build());
+        expect(result.ok).toBe(false);
+        const selectionDiagnostic = result.diagnostics.find(
+          (item) => item.code === fixture.code,
+        );
+        expect(selectionDiagnostic).toMatchObject({
+          code: fixture.code,
+          node: "rounded",
+          path: "/nodes/rounded/edges",
+          details: {
+            explanation: {
+              version: TOPOLOGY_SELECTION_EXPLANATION_VERSION,
+              outcome: fixture.outcome,
+              topology: "edge",
+              currentHistory: "complete",
+              candidatesConsidered: 4,
+              candidatesMatched: fixture.candidatesMatched,
+              minimumRequired: 1,
+              maximumAllowed: 1,
+            },
+          },
+        });
+        const explanation = selectionDiagnostic?.details?.explanation as object;
+        expect(Object.isFrozen(explanation)).toBe(true);
+        expect(Object.hasOwn(explanation, "keys")).toBe(false);
+      }
+      expect(filletInvoked).toBe(false);
+    } finally {
+      evaluator.dispose();
+    }
   });
 
   it("fails before selection when the active kernel cannot fillet", async () => {

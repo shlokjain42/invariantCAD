@@ -390,9 +390,13 @@ export {
   type TopologySelection,
 } from "./topology.js";
 export {
+  TOPOLOGY_SELECTION_EXPLANATION_VERSION,
+  explainTopologySelection,
   resolveTopologySelection,
   topologySelectionRequirements,
   type TopologyResolutionContext,
+  type TopologySelectionResolutionExplanation,
+  type TopologySelectionResolutionExplanationBase,
   type TopologySelectionRequirements,
 } from "./topology-resolution.js";
 export {
