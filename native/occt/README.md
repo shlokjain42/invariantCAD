@@ -226,6 +226,11 @@ ordinary `draft` support and feature-scoped `exactIndexedTopologyEvolution` v1
 for draft. ABI 0.4 adds `boolean`; ABI 0.5 adds `fillet` and `chamfer`; ABI 0.6
 advertises the protocol for `draft`, `boolean`, `fillet`, `chamfer`, `shell`,
 and `offset`.
+The TypeScript descriptor declaration is conditional on that probed surface:
+stock OCCT and recognized owned facades through ABI 0.4 remain topology
+descriptor `@4`, while ABI 0.5 and later advertise descriptor `@5` because the
+adapter can derive exact generated edge-to-face treatment roles. This does not
+change persistent-reference protocol v1 or the current facade ABI 0.6.
 The global topology provenance remains `feature`; a feature-scoped proof does
 not promote unrelated operations. Default `createOcctKernel()` loads stock OCCT
 and remains usable for its other exact features, but it does not advertise or
@@ -353,9 +358,14 @@ transaction. It validates the operation and amount echoes, requested and
 selected seeds, add/skip/contour/build counters, topology counts, full graph,
 and `READY` same-kernel transfer state before taking the result. After transfer,
 it validates result counts and reduces public lineage. Only preserved/modified
-identity successors inherit prior lineage, roles, and sketch sources;
-generated-only and source-less-created topology is created by the current
-fillet or chamfer. Untaken reports release their result, and an adoption,
+identity successors inherit prior lineage, roles, and sketch sources. The
+adapter assigns `fillet.face.blend` or `chamfer.face.bevel` only to an
+identity-less result face with an exact incoming `GENERATED` record from a
+source edge. It does not inspect surface type, enumeration order, or the seed
+list. The role is a source-free class label, so several faces can share it and
+remain deliberately ambiguous as individual persistent references. Generated
+edges, vertex-generated faces, and residual source-less `CREATED` faces or
+edges remain unnamed. Untaken reports release their result, and an adoption,
 cancellation, validation, or reduction failure releases a transferred root
 exactly once.
 

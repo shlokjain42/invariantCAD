@@ -19,10 +19,12 @@ import {
   DOCUMENT_SCHEMA_V2,
   DOCUMENT_SCHEMA_V3,
   DOCUMENT_SCHEMA_V4,
+  DOCUMENT_SCHEMA_V5,
   DOCUMENT_VERSION_V1,
   DOCUMENT_VERSION_V2,
   DOCUMENT_VERSION_V3,
   DOCUMENT_VERSION_V4,
+  DOCUMENT_VERSION_V5,
   nodeDependencies,
   outputKindForNode,
   type DesignDocument,
@@ -42,6 +44,7 @@ import {
   TOPOLOGY_ROLES_V2,
   TOPOLOGY_ROLES_V3,
   TOPOLOGY_ROLES_V4,
+  TOPOLOGY_ROLES_V5,
   TOPOLOGY_ROLE_RULES,
   type TopologyKind,
   type TopologyRole,
@@ -62,6 +65,8 @@ function topologyRolesForDocumentVersion(
       return TOPOLOGY_ROLES_V3;
     case DOCUMENT_VERSION_V4:
       return TOPOLOGY_ROLES_V4;
+    case DOCUMENT_VERSION_V5:
+      return TOPOLOGY_ROLES_V5;
   }
 }
 
@@ -695,13 +700,15 @@ function validateTopologySelection(
             (document.schema === DOCUMENT_SCHEMA_V3 &&
               document.version === DOCUMENT_VERSION_V3) ||
             (document.schema === DOCUMENT_SCHEMA_V4 &&
-              document.version === DOCUMENT_VERSION_V4)
+              document.version === DOCUMENT_VERSION_V4) ||
+            (document.schema === DOCUMENT_SCHEMA_V5 &&
+              document.version === DOCUMENT_VERSION_V5)
           )
         ) {
           diagnostics.push(
             diagnostic(
               "TOPOLOGY_SELECTOR_INVALID",
-              "Persistent topology references require document version 2, 3, or 4",
+              "Persistent topology references require document version 2, 3, 4, or 5",
               {
                 severity: "error",
                 path: `${queryPath}/reference`,
@@ -856,9 +863,11 @@ function validateTopologySelection(
         if (query.source !== undefined) {
           const supportsLoftSources =
             document.version === DOCUMENT_VERSION_V3 ||
-            document.version === DOCUMENT_VERSION_V4;
+            document.version === DOCUMENT_VERSION_V4 ||
+            document.version === DOCUMENT_VERSION_V5;
           const supportsSweepSources =
-            document.version === DOCUMENT_VERSION_V4;
+            document.version === DOCUMENT_VERSION_V4 ||
+            document.version === DOCUMENT_VERSION_V5;
           const profileProducer =
             feature?.kind === "extrude" ||
             feature?.kind === "revolve" ||
@@ -870,7 +879,8 @@ function validateTopologySelection(
             diagnostics.push(
               diagnostic(
                 "TOPOLOGY_SELECTOR_INVALID",
-                document.version === DOCUMENT_VERSION_V4
+                document.version === DOCUMENT_VERSION_V4 ||
+                  document.version === DOCUMENT_VERSION_V5
                   ? "Sketch-entity topology sources require topology created by an extrusion, revolution, loft, or sweep"
                   : document.version === DOCUMENT_VERSION_V3
                     ? "Sketch-entity topology sources require topology created by an extrusion, revolution, or loft"
@@ -1476,7 +1486,15 @@ function validateTopologyReferences(
     schema === DOCUMENT_SCHEMA_V3 && version === DOCUMENT_VERSION_V3;
   const isVersion4 =
     schema === DOCUMENT_SCHEMA_V4 && version === DOCUMENT_VERSION_V4;
-  if (!isVersion1 && !isVersion2 && !isVersion3 && !isVersion4) {
+  const isVersion5 =
+    schema === DOCUMENT_SCHEMA_V5 && version === DOCUMENT_VERSION_V5;
+  if (
+    !isVersion1 &&
+    !isVersion2 &&
+    !isVersion3 &&
+    !isVersion4 &&
+    !isVersion5
+  ) {
     diagnostics.push(
       diagnostic(
         "IR_INVALID",
@@ -1492,6 +1510,7 @@ function validateTopologyReferences(
               { schema: DOCUMENT_SCHEMA_V2, version: DOCUMENT_VERSION_V2 },
               { schema: DOCUMENT_SCHEMA_V3, version: DOCUMENT_VERSION_V3 },
               { schema: DOCUMENT_SCHEMA_V4, version: DOCUMENT_VERSION_V4 },
+              { schema: DOCUMENT_SCHEMA_V5, version: DOCUMENT_VERSION_V5 },
             ],
           },
         },
@@ -1507,11 +1526,11 @@ function validateTopologyReferences(
     }
   ).topologyReferences;
   if (topologyReferences === undefined) return;
-  if (!isVersion2 && !isVersion3 && !isVersion4) {
+  if (!isVersion2 && !isVersion3 && !isVersion4 && !isVersion5) {
     diagnostics.push(
       diagnostic(
         "IR_INVALID",
-        "Persistent topology reference registries require document version 2, 3, or 4",
+        "Persistent topology reference registries require document version 2, 3, 4, or 5",
         { severity: "error", path: "/topologyReferences" },
       ),
     );

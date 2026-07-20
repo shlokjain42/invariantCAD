@@ -164,6 +164,7 @@ function created(kind: number, resultIndex: number): EvolutionRecord {
 function recordsFor(
   inputCounts: Counts,
   resultCounts: Counts,
+  generatedFaceSourceEdge: number,
 ): EvolutionRecord[] {
   const records: EvolutionRecord[] = [];
   for (const kind of [KIND.FACE, KIND.EDGE, KIND.VERTEX]) {
@@ -187,7 +188,18 @@ function recordsFor(
 
     for (let resultIndex = 0; resultIndex < resultCount; resultIndex += 1) {
       if (resultIndex === residualIndex || resultIndex >= inputCount) {
-        records.push(created(kind, resultIndex));
+        records.push(
+          kind === KIND.FACE && resultIndex === residualIndex
+            ? {
+                sourceShapeIndex: 0,
+                sourceKind: KIND.EDGE,
+                sourceIndex: generatedFaceSourceEdge,
+                relation: RELATION.GENERATED,
+                resultKind: KIND.FACE,
+                resultIndex,
+              }
+            : created(kind, resultIndex),
+        );
       }
     }
   }
@@ -294,7 +306,11 @@ function exactEdgeTreatmentFactory(
         installReleaseCounter(raw, state, resultId);
         const resultCounts = topologyCounts(raw, resultId);
         resultCounts.faces += options.resultFaceDelta ?? 0;
-        const records = recordsFor(inputCounts, resultCounts);
+        const records = recordsFor(
+          inputCounts,
+          resultCounts,
+          selectedEdgeIndices[0]!,
+        );
         if (options.malformedRelation) records[0]!.relation = RELATION.CREATED;
 
         state.invocations.push({
@@ -371,9 +387,6 @@ function exactEdgeTreatmentFactory(
   return { factory, state };
 }
 
-const stockFactory: OcctModuleFactory = (moduleOptions) =>
-  createStockOcctModule(moduleOptions);
-
 describe("OCCT ABI 0.5 exact fillet/chamfer integration", () => {
   it.each([-1, 0.5, 2_147_483_648, Number.NaN])(
     "rejects invalid history record budget %s before loading the module",
@@ -410,6 +423,13 @@ describe("OCCT ABI 0.5 exact fillet/chamfer integration", () => {
         ).toBe(true);
       }
       expect(kernel.capabilities.topology?.provenance).toBe("feature");
+      expect(kernel.capabilities.topology?.signatures).toEqual({
+        protocolVersion: 1,
+        fingerprint:
+          "invariantcad-topology-descriptor@5;occt-wasm@3.7.0;" +
+          "runtime=invariantcad-facade@0.5.0+occt-wasm.3.7.0;" +
+          "modelingTolerance=1e-7",
+      });
     } finally {
       kernel.dispose();
     }
@@ -478,45 +498,60 @@ describe("OCCT ABI 0.5 exact fillet/chamfer integration", () => {
     }
   });
 
-  it("reduces complete identity evolution and residual CREATED topology", async () => {
-    const fixture = exactEdgeTreatmentFactory();
-    const kernel = await createOcctKernel({ moduleFactory: fixture.factory });
-    try {
-      const input = kernel.box!([10, 20, 30], false, {
-        feature: "source-box",
-      });
-      const edge = kernel.topology!(input).edges[0]!;
-      const result = kernel.fillet!(
-        input,
-        [edge.key],
-        { radius: 1 },
-        { feature: "exact-fillet" },
-      );
-      const topology = kernel.topology!(result);
+  it.each([
+    ["fillet", "fillet.face.blend"],
+    ["chamfer", "chamfer.face.bevel"],
+  ] as const)(
+    "reduces exact %s GENERATED faces into their semantic role while residual CREATED topology stays unnamed",
+    async (operation, role) => {
+      const fixture = exactEdgeTreatmentFactory();
+      const kernel = await createOcctKernel({ moduleFactory: fixture.factory });
+      try {
+        const input = kernel.box!([10, 20, 30], false, {
+          feature: "source-box",
+        });
+        const edge = kernel.topology!(input).edges[0]!;
+        const feature = `exact-${operation}`;
+        const result =
+          operation === "fillet"
+            ? kernel.fillet!(
+                input,
+                [edge.key],
+                { radius: 1 },
+                { feature },
+              )
+            : kernel.chamfer!(
+                input,
+                [edge.key],
+                { distance: 1 },
+                { feature },
+              );
+        const topology = kernel.topology!(result);
 
-      expect(topology.history).toBe("complete");
-      expect(topology.faces[0]!.lineage).toContainEqual({
-        feature: "source-box",
-        relation: "created",
-        role: "box.face.x-min",
-      });
-      expect(topology.faces[0]!.lineage).toContainEqual({
-        feature: "exact-fillet",
-        relation: "modified",
-      });
-      expect(topology.faces[2]!.lineage).toEqual([
-        { feature: "exact-fillet", relation: "created" },
-      ]);
-      expect(topology.edges[2]!.lineage).toEqual([
-        { feature: "exact-fillet", relation: "created" },
-      ]);
+        expect(topology.history).toBe("complete");
+        expect(topology.faces[0]!.lineage).toContainEqual({
+          feature: "source-box",
+          relation: "created",
+          role: "box.face.x-min",
+        });
+        expect(topology.faces[0]!.lineage).toContainEqual({
+          feature,
+          relation: "modified",
+        });
+        expect(topology.faces[2]!.lineage).toEqual([
+          { feature, relation: "created", role },
+        ]);
+        expect(topology.edges[2]!.lineage).toEqual([
+          { feature, relation: "created" },
+        ]);
 
-      kernel.disposeShape(result);
-      kernel.disposeShape(input);
-    } finally {
-      kernel.dispose();
-    }
-  });
+        kernel.disposeShape(result);
+        kernel.disposeShape(input);
+      } finally {
+        kernel.dispose();
+      }
+    },
+  );
 
   it("rejects exact input count drift before transfer and returns report ownership", async () => {
     const fixture = exactEdgeTreatmentFactory({ inputFaceDelta: 1 });
@@ -707,8 +742,14 @@ describe("OCCT ABI 0.5 exact fillet/chamfer integration", () => {
   });
 
   it("keeps stock fillet and chamfer fallback history partial", async () => {
-    const kernel = await createOcctKernel({ moduleFactory: stockFactory });
+    const kernel = await createOcctKernel();
     try {
+      expect(kernel.capabilities.topology?.signatures).toEqual({
+        protocolVersion: 1,
+        fingerprint:
+          "invariantcad-topology-descriptor@4;occt-wasm@3.7.0;" +
+          "runtime=stock;modelingTolerance=1e-7",
+      });
       for (const feature of ["fillet", "chamfer"] as const) {
         expect(
           kernelSupports(

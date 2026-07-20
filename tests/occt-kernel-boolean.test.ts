@@ -461,6 +461,13 @@ describe("OCCT ABI 0.4 exact Boolean integration", () => {
         ),
       ).toBe(true);
       expect(kernel.capabilities.topology?.provenance).toBe("feature");
+      expect(kernel.capabilities.topology?.signatures).toEqual({
+        protocolVersion: 1,
+        fingerprint:
+          "invariantcad-topology-descriptor@4;occt-wasm@3.7.0;" +
+          "runtime=invariantcad-facade@0.4.0+occt-wasm.3.7.0;" +
+          "modelingTolerance=1e-7",
+      });
     } finally {
       kernel.dispose();
     }
@@ -827,6 +834,17 @@ describe("OCCT ABI 0.4 exact Boolean integration", () => {
     async (abi) => {
       const kernel = await createOcctKernel({ moduleFactory: legacyFactory(abi) });
       try {
+        expect(kernel.capabilities.topology?.signatures).toEqual(
+          abi === "stock"
+            ? undefined
+            : {
+                protocolVersion: 1,
+                fingerprint:
+                  "invariantcad-topology-descriptor@4;occt-wasm@3.7.0;" +
+                  `runtime=invariantcad-facade@${abi}.0+occt-wasm.3.7.0;` +
+                  "modelingTolerance=1e-7",
+              },
+        );
         expect(
           kernelSupports(
             kernel.capabilities,

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_DESIGN_DOCUMENT_LIMITS,
-  DOCUMENT_SCHEMA_V4,
-  DOCUMENT_VERSION_V4,
+  DOCUMENT_SCHEMA_V5,
+  DOCUMENT_VERSION_V5,
   TopologyReferenceRef,
   captureTopologyReference,
   deg,
@@ -204,11 +204,11 @@ describe("persistent topology reference authoring", () => {
     const reference = cad.topologyReference("mounting-face", body, options);
     const document = cad.build();
     expect(document).toMatchObject({
-      schema: DOCUMENT_SCHEMA_V4,
-      version: DOCUMENT_VERSION_V4,
+      schema: DOCUMENT_SCHEMA_V5,
+      version: DOCUMENT_VERSION_V5,
     });
-    if (document.version !== DOCUMENT_VERSION_V4) {
-      throw new Error("Expected a v4 document");
+    if (document.version !== DOCUMENT_VERSION_V5) {
+      throw new Error("Expected a v5 document");
     }
     const entry = document.topologyReferences?.[reference.id];
     expect(entry).toMatchObject({
@@ -287,8 +287,8 @@ describe("persistent topology reference authoring", () => {
     ).toThrow("Duplicate topology reference");
 
     const document = cad.build();
-    if (document.version !== DOCUMENT_VERSION_V4) {
-      throw new Error("Expected a v4 document");
+    if (document.version !== DOCUMENT_VERSION_V5) {
+      throw new Error("Expected a v5 document");
     }
     expect(Object.keys(document.topologyReferences ?? {})).toEqual([
       "registered",

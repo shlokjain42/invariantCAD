@@ -83,9 +83,9 @@ describe("OCCT document-owned persistent topology reference", () => {
       const persisted = parseDocument(serialized);
       expect(persisted.ok).toBe(true);
       if (!persisted.ok) return;
-      expect(persisted.value.version).toBe(4);
+      expect(persisted.value.version).toBe(5);
       const storedReferences =
-        persisted.value.version === 4
+        persisted.value.version === 5
           ? persisted.value.topologyReferences
           : undefined;
       expect(Object.keys(storedReferences ?? {})).toEqual(["xMinOpening"]);
@@ -211,9 +211,9 @@ describe("OCCT document-owned persistent topology reference", () => {
       const persisted = parseDocument(serialized);
       expect(persisted.ok).toBe(true);
       if (!persisted.ok) return;
-      expect(persisted.value.version).toBe(4);
+      expect(persisted.value.version).toBe(5);
       const storedReferences =
-        persisted.value.version === 4
+        persisted.value.version === 5
           ? persisted.value.topologyReferences
           : undefined;
       expect(Object.keys(storedReferences ?? {})).toEqual(["endCapOpening"]);
@@ -335,9 +335,9 @@ describe("OCCT document-owned persistent topology reference", () => {
       const persisted = parseDocument(serialized);
       expect(persisted.ok).toBe(true);
       if (!persisted.ok) return;
-      expect(persisted.value.version).toBe(4);
+      expect(persisted.value.version).toBe(5);
       const storedReferences =
-        persisted.value.version === 4
+        persisted.value.version === 5
           ? persisted.value.topologyReferences
           : undefined;
       expect(Object.keys(storedReferences ?? {})).toEqual(["endRim"]);

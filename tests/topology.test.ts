@@ -281,7 +281,7 @@ describe("semantic topology selections", () => {
     cad.output("hollow", hollow);
     const document = cad.build();
     expect(await hashDocument(document)).toBe(
-      "6422bd68500215bff6782cddd0199d52f56a94fe4f611d7e35bb89be983c8582",
+      "6d896d54dfbd19b167d55177492ef6e06fd349b374a539135945dc8610f46546",
     );
 
     expect(document.nodes[hollow.node]).toEqual({

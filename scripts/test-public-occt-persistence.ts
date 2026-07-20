@@ -127,10 +127,23 @@ function captureFace(
   );
 }
 
+function captureEdge(
+  snapshot: KernelTopologySnapshot,
+  key: KernelTopologyKey,
+  capabilities: KernelTopologySignatureCapabilities,
+): PersistentTopologyReference<"edge"> {
+  return valueOf(
+    captureTopologyReference(snapshot, "edge", key, {
+      capabilities,
+      tolerance,
+    }),
+  );
+}
+
 function persisted(document: DesignDocument): DesignDocument {
   const serialized = stringifyDocument(document);
   const parsed = valueOf(parseDocument(serialized));
-  assert.equal(parsed.version, 4);
+  assert.equal(parsed.version, 5);
   return parsed;
 }
 
@@ -138,9 +151,9 @@ function persistedFaceReference(
   document: DesignDocument,
   id: string,
 ): PersistentTopologyReference<"face"> {
-  assert.equal(document.version, 4);
-  if (document.version !== 4) {
-    throw new Error("Expected a persisted Document v4 topology registry");
+  assert.equal(document.version, 5);
+  if (document.version !== 5) {
+    throw new Error("Expected a persisted Document v5 topology registry");
   }
   const entry = document.topologyReferences?.[id];
   assert.ok(entry, `Missing persisted topology reference ${id}`);
@@ -148,6 +161,22 @@ function persistedFaceReference(
   const reference = entry.variants[0];
   assert.ok(reference, `Missing persisted topology variant ${id}`);
   return reference as PersistentTopologyReference<"face">;
+}
+
+function persistedEdgeReference(
+  document: DesignDocument,
+  id: string,
+): PersistentTopologyReference<"edge"> {
+  assert.equal(document.version, 5);
+  if (document.version !== 5) {
+    throw new Error("Expected a persisted Document v5 topology registry");
+  }
+  const entry = document.topologyReferences?.[id];
+  assert.ok(entry, `Missing persisted topology reference ${id}`);
+  assert.equal(entry.topology, "edge");
+  const reference = entry.variants[0];
+  assert.ok(reference, `Missing persisted topology variant ${id}`);
+  return reference as PersistentTopologyReference<"edge">;
 }
 
 function assertMissingExplanation(
@@ -208,6 +237,10 @@ async function assertExactTreatmentPersistence(
   shapeCount: () => number,
 ): Promise<void> {
   const baselineShapeCount = shapeCount();
+  const generatedRole =
+    operation === "fillet"
+      ? ("fillet.face.blend" as const)
+      : ("chamfer.face.bevel" as const);
   const cad = design(`owned exact ${operation} persistence`);
   const amount = cad.parameter.length("amount", mm(2));
   const box = cad.box(`${operation}-box`, {
@@ -234,8 +267,10 @@ async function assertExactTreatmentPersistence(
   });
   let inheritedReference: PersistentTopologyReference<"face">;
   let generatedReference: PersistentTopologyReference<"face">;
+  let unnamedEdgeReference: PersistentTopologyReference<"edge">;
   let inheritedCaptureKey: KernelTopologyKey;
   let generatedCaptureKey: KernelTopologyKey;
+  let unnamedEdgeCaptureKey: KernelTopologyKey;
   let captureKeys: readonly KernelTopologyKey[] = [];
   try {
     const snapshot = snapshotOf(captureRun, `${operation}-treated`);
@@ -258,12 +293,35 @@ async function assertExactTreatmentPersistence(
         face.lineage.some(
           (lineage) =>
             lineage.feature === `${operation}-treated` &&
-            lineage.relation === "created",
+            lineage.relation === "created" &&
+            lineage.role === generatedRole,
         ),
       `${operation} generated face`,
     );
+    const unnamedEdge = onlyItem(
+      snapshot.edges,
+      (edge) =>
+        edge.curve.kind === "line" &&
+        Math.abs(Math.abs(edge.curve.direction?.[2] ?? 0) - 1) <=
+          tolerance.angular &&
+        Math.abs(edge.center[0]) <= tolerance.linear &&
+        edge.center[1] > tolerance.linear &&
+        edge.lineage.some(
+          (lineage) =>
+            lineage.feature === `${operation}-treated` &&
+            lineage.relation === "created" &&
+            lineage.role === undefined &&
+            lineage.source === undefined,
+        ) &&
+        !edge.lineage.some(
+          (lineage) =>
+            lineage.role !== undefined || lineage.source !== undefined,
+        ),
+      `${operation} unnamed treatment edge`,
+    );
     inheritedCaptureKey = inherited.key;
     generatedCaptureKey = generated.key;
+    unnamedEdgeCaptureKey = unnamedEdge.key;
     inheritedReference = captureFace(
       snapshot,
       inherited.key,
@@ -274,8 +332,14 @@ async function assertExactTreatmentPersistence(
       generated.key,
       capabilities,
     );
+    unnamedEdgeReference = captureEdge(
+      snapshot,
+      unnamedEdge.key,
+      capabilities,
+    );
     assert.equal(inheritedReference.capturedHistory, "complete");
     assert.equal(generatedReference.capturedHistory, "complete");
+    assert.equal(unnamedEdgeReference.capturedHistory, "complete");
     assert.equal(
       inheritedReference.lineage.some(
         (lineage) => lineage.role === "box.face.x-max",
@@ -287,13 +351,30 @@ async function assertExactTreatmentPersistence(
         (lineage) =>
           lineage.feature === `${operation}-treated` &&
           lineage.relation === "created" &&
+          lineage.role === generatedRole &&
+          lineage.source === undefined,
+      ),
+      true,
+    );
+    assert.equal(
+      unnamedEdgeReference.lineage.some(
+        (lineage) =>
+          lineage.feature === `${operation}-treated` &&
+          lineage.relation === "created" &&
           lineage.role === undefined &&
           lineage.source === undefined,
       ),
       true,
     );
+    assert.equal(
+      unnamedEdgeReference.lineage.some(
+        (lineage) =>
+          lineage.role !== undefined || lineage.source !== undefined,
+      ),
+      false,
+    );
     assertKeyFree(
-      { inheritedReference, generatedReference },
+      { inheritedReference, generatedReference, unnamedEdgeReference },
       captureKeys,
       `${operation} detached references`,
     );
@@ -312,6 +393,10 @@ async function assertExactTreatmentPersistence(
     treated,
     { topology: "face", variants: [generatedReference] },
   );
+  cad.topologyReference(`${operation}-unnamed-edge`, treated, {
+    topology: "edge",
+    variants: [unnamedEdgeReference],
+  });
   const inheritedShell = cad.shell(`${operation}-inherited-shell`, treated, {
     openings: topology.faces.persistentReference(inheritedStored).select(),
     thickness: mm(0.25),
@@ -322,10 +407,22 @@ async function assertExactTreatmentPersistence(
     thickness: mm(0.25),
     direction: "inward",
   });
+  const roleShell = cad.shell(`${operation}-role-shell`, treated, {
+    openings: topology.faces
+      .createdBy(treated, { role: generatedRole })
+      .exactly(1),
+    thickness: mm(0.25),
+    direction: "inward",
+  });
   cad
     .output(`${operation}-inherited-shell`, inheritedShell)
-    .output(`${operation}-generated-shell`, generatedShell);
+    .output(`${operation}-generated-shell`, generatedShell)
+    .output(`${operation}-role-shell`, roleShell);
   const document = persisted(cad.build());
+  const persistedUnnamedEdgeReference = persistedEdgeReference(
+    document,
+    `${operation}-unnamed-edge`,
+  );
   assertKeyFree(document, captureKeys, `${operation} persisted document`);
 
   const unchanged = await evaluateOrThrow(evaluator, document, {
@@ -334,6 +431,7 @@ async function assertExactTreatmentPersistence(
       `${operation}-treated`,
       `${operation}-inherited-shell`,
       `${operation}-generated-shell`,
+      `${operation}-role-shell`,
     ],
   });
   try {
@@ -344,15 +442,25 @@ async function assertExactTreatmentPersistence(
     const generated = valueOf(
       resolveTopologyReference(generatedReference, snapshot, { capabilities }),
     );
+    const unnamedEdge = valueOf(
+      resolveTopologyReference(persistedUnnamedEdgeReference, snapshot, {
+        capabilities,
+      }),
+    );
     assert.equal(inherited.evidence, "semantic-lineage");
-    assert.equal(generated.evidence, "geometry-adjacency");
+    assert.equal(generated.evidence, "semantic-lineage");
+    assert.equal(unnamedEdge.evidence, "geometry-adjacency");
     assert.notEqual(inherited.key, inheritedCaptureKey);
     assert.notEqual(generated.key, generatedCaptureKey);
+    assert.notEqual(unnamedEdge.key, unnamedEdgeCaptureKey);
     assert.ok(
       solidOf(unchanged, `${operation}-inherited-shell`).measure().volume > 0,
     );
     assert.ok(
       solidOf(unchanged, `${operation}-generated-shell`).measure().volume > 0,
+    );
+    assert.ok(
+      solidOf(unchanged, `${operation}-role-shell`).measure().volume > 0,
     );
     assert.equal(
       unchanged.diagnostics.some((item) => item.code.startsWith("TOPOLOGY_")),
@@ -365,7 +473,12 @@ async function assertExactTreatmentPersistence(
 
   const changed = await evaluateOrThrow(evaluator, document, {
     amount: 1,
-    outputs: [`${operation}-treated`, `${operation}-inherited-shell`],
+    outputs: [
+      `${operation}-treated`,
+      `${operation}-inherited-shell`,
+      `${operation}-generated-shell`,
+      `${operation}-role-shell`,
+    ],
   });
   try {
     const snapshot = snapshotOf(changed, `${operation}-treated`);
@@ -374,49 +487,160 @@ async function assertExactTreatmentPersistence(
     );
     assert.equal(inherited.evidence, "semantic-lineage");
     assert.notEqual(inherited.key, inheritedCaptureKey);
-    assertMissingExplanation(
+    const generated = valueOf(
       resolveTopologyReference(generatedReference, snapshot, { capabilities }),
+    );
+    assert.equal(generated.evidence, "semantic-lineage");
+    assert.notEqual(generated.key, generatedCaptureKey);
+    assertMissingExplanation(
+      resolveTopologyReference(persistedUnnamedEdgeReference, snapshot, {
+        capabilities,
+      }),
       undefined,
-      captureKeys,
+      [...captureKeys, ...topologyKeys(snapshot)],
     );
     assert.ok(
       solidOf(changed, `${operation}-inherited-shell`).measure().volume > 0,
     );
+    assert.ok(
+      solidOf(changed, `${operation}-generated-shell`).measure().volume > 0,
+    );
+    assert.ok(solidOf(changed, `${operation}-role-shell`).measure().volume > 0);
   } finally {
     changed.dispose();
   }
   assert.equal(shapeCount(), baselineShapeCount, `${operation} changed cleanup`);
 
-  const rejected = await evaluator.evaluate(document, {
-    parameters: { amount: 1 },
-    outputs: [`${operation}-generated-shell`],
-  });
-  assertMissingExplanation(
-    rejected,
-    `/nodes/${operation}-generated-shell/openings/query/reference`,
-    captureKeys,
-  );
-  assert.equal(shapeCount(), baselineShapeCount, `${operation} failure cleanup`);
-
   const recovered = await evaluateOrThrow(evaluator, document, {
     amount: 2,
-    outputs: [`${operation}-treated`, `${operation}-generated-shell`],
+    outputs: [
+      `${operation}-treated`,
+      `${operation}-generated-shell`,
+      `${operation}-role-shell`,
+    ],
   });
   try {
     const snapshot = snapshotOf(recovered, `${operation}-treated`);
     const generated = valueOf(
       resolveTopologyReference(generatedReference, snapshot, { capabilities }),
     );
-    assert.equal(generated.evidence, "geometry-adjacency");
+    const unnamedEdge = valueOf(
+      resolveTopologyReference(persistedUnnamedEdgeReference, snapshot, {
+        capabilities,
+      }),
+    );
+    assert.equal(generated.evidence, "semantic-lineage");
+    assert.equal(unnamedEdge.evidence, "geometry-adjacency");
     assert.notEqual(generated.key, generatedCaptureKey);
+    assert.notEqual(unnamedEdge.key, unnamedEdgeCaptureKey);
     assert.equal(
       snapshotOf(recovered, `${operation}-generated-shell`).history,
+      "complete",
+    );
+    assert.equal(
+      snapshotOf(recovered, `${operation}-role-shell`).history,
       "complete",
     );
   } finally {
     recovered.dispose();
   }
   assert.equal(shapeCount(), baselineShapeCount, `${operation} recovery cleanup`);
+}
+
+async function assertExactTreatmentRoleAmbiguity(
+  operation: EdgeTreatment,
+  evaluator: Evaluator,
+  capabilities: KernelTopologySignatureCapabilities,
+  shapeCount: () => number,
+): Promise<void> {
+  const baselineShapeCount = shapeCount();
+  const generatedRole =
+    operation === "fillet"
+      ? ("fillet.face.blend" as const)
+      : ("chamfer.face.bevel" as const);
+  const cad = design(`owned exact ${operation} role ambiguity`);
+  const box = cad.box(`${operation}-ambiguity-box`, {
+    size: vec3(mm(10), mm(20), mm(30)),
+  });
+  const firstEdge = topology.edges.createdBy(box, {
+    role: "box.edge.x-min-y-min",
+  });
+  const oppositeEdge = topology.edges.createdBy(box, {
+    role: "box.edge.x-max-y-max",
+  });
+  const selectedEdges = firstEdge.or(oppositeEdge).exactly(2);
+  const treated =
+    operation === "fillet"
+      ? cad.fillet(`${operation}-ambiguity-treated`, box, {
+          edges: selectedEdges,
+          radius: mm(1),
+        })
+      : cad.chamfer(`${operation}-ambiguity-treated`, box, {
+          edges: selectedEdges,
+          distance: mm(1),
+        });
+  cad.output(`${operation}-ambiguity-treated`, treated);
+
+  const evaluated = await evaluateWithParametersOrThrow(
+    evaluator,
+    cad.build(),
+    {},
+    [`${operation}-ambiguity-treated`],
+  );
+  try {
+    const snapshot = snapshotOf(
+      evaluated,
+      `${operation}-ambiguity-treated`,
+    );
+    assert.equal(snapshot.history, "complete");
+    const generatedFaces = snapshot.faces.filter((face) =>
+      face.lineage.some(
+        (lineage) =>
+          lineage.feature === `${operation}-ambiguity-treated` &&
+          lineage.relation === "created" &&
+          lineage.role === generatedRole &&
+          lineage.source === undefined,
+      ),
+    );
+    assert.equal(
+      generatedFaces.length,
+      2,
+      `${operation} must produce two faces in the same semantic role class`,
+    );
+    const captured = captureTopologyReference(
+      snapshot,
+      "face",
+      generatedFaces[0]!.key,
+      { capabilities, tolerance },
+    );
+    assert.equal(
+      captured.ok,
+      false,
+      `${operation} multi-face semantic role unexpectedly captured uniquely`,
+    );
+    if (!captured.ok) {
+      const diagnostic = captured.diagnostics.find(
+        (item) => item.code === "TOPOLOGY_MATCH_AMBIGUOUS",
+      );
+      assert.ok(diagnostic, diagnosticText(captured));
+      assert.deepEqual(diagnostic.details, {
+        topology: "face",
+        candidates: 2,
+      });
+      assertKeyFree(
+        captured.diagnostics,
+        topologyKeys(snapshot),
+        `${operation} ambiguity diagnostic`,
+      );
+    }
+  } finally {
+    evaluated.dispose();
+  }
+  assert.equal(
+    shapeCount(),
+    baselineShapeCount,
+    `${operation} ambiguity cleanup`,
+  );
 }
 
 async function assertExactBooleanPersistence(
@@ -1139,7 +1363,7 @@ try {
   assert.deepEqual(capabilities, {
     protocolVersion: 1,
     fingerprint:
-      "invariantcad-topology-descriptor@4;occt-wasm@3.7.0;" +
+      "invariantcad-topology-descriptor@5;occt-wasm@3.7.0;" +
       "runtime=invariantcad-facade@0.6.0+occt-wasm.3.7.0;" +
       "modelingTolerance=1e-7",
   });
@@ -1169,6 +1393,12 @@ try {
   );
   for (const operation of ["fillet", "chamfer"] as const) {
     await assertExactTreatmentPersistence(
+      operation,
+      evaluator,
+      capabilities,
+      () => raw.shapeCount,
+    );
+    await assertExactTreatmentRoleAmbiguity(
       operation,
       evaluator,
       capabilities,

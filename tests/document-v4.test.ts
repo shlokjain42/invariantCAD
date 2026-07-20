@@ -1,26 +1,24 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import {
-  DOCUMENT_SCHEMA,
   DOCUMENT_SCHEMA_V1,
   DOCUMENT_SCHEMA_V2,
   DOCUMENT_SCHEMA_V3,
   DOCUMENT_SCHEMA_V4,
-  DOCUMENT_VERSION,
+  DOCUMENT_SCHEMA_V5,
   DOCUMENT_VERSION_V1,
   DOCUMENT_VERSION_V2,
   DOCUMENT_VERSION_V3,
   DOCUMENT_VERSION_V4,
+  DOCUMENT_VERSION_V5,
   DesignDocumentV1Schema,
   DesignDocumentV2Schema,
   DesignDocumentV3Schema,
   DesignDocumentV4Schema,
-  NodeSchema,
   NodeV3Schema,
   NodeV4Schema,
   PersistentTopologyReferenceV2Schema,
   PersistentTopologyReferenceV3Schema,
   PersistentTopologyReferenceV4Schema,
-  TOPOLOGY_ROLES,
   TOPOLOGY_ROLES_V1,
   TOPOLOGY_ROLES_V2,
   TOPOLOGY_ROLES_V3,
@@ -41,13 +39,13 @@ import {
   type DesignDocumentV2,
   type DesignDocumentV3,
   type DesignDocumentV4,
-  type NodeIR,
+  type DesignDocumentV5,
   type NodeIRV3,
   type NodeIRV4,
   type PersistentTopologyReferenceV2,
   type PersistentTopologyReferenceV3,
   type PersistentTopologyReferenceV4,
-  type ShellNodeIR,
+  type ShellNodeIRV4,
   type ShellNodeIRV3,
   type TopologyQueryIRV3,
   type TopologyQueryIRV4,
@@ -138,8 +136,8 @@ function versionedBoxes(): {
   const cad = design("document-v4-boundary");
   const box = cad.box("box", { size: vec3(mm(10), mm(20), mm(30)) });
   cad.output("box", box);
-  const v4 = cad.build();
-  const { topologyReferences: _topologyReferences, ...body } = v4;
+  const current = cad.build();
+  const { topologyReferences: _topologyReferences, ...body } = current;
   return {
     v1: DesignDocumentV1Schema.parse({
       ...body,
@@ -156,7 +154,11 @@ function versionedBoxes(): {
       schema: DOCUMENT_SCHEMA_V3,
       version: DOCUMENT_VERSION_V3,
     }),
-    v4,
+    v4: DesignDocumentV4Schema.parse({
+      ...body,
+      schema: DOCUMENT_SCHEMA_V4,
+      version: DOCUMENT_VERSION_V4,
+    }),
   };
 }
 
@@ -180,7 +182,13 @@ function withReference(
   };
 }
 
-function canonicalRegistry(document: DesignDocumentV2 | DesignDocumentV3 | DesignDocumentV4): string {
+function canonicalRegistry(
+  document:
+    | DesignDocumentV2
+    | DesignDocumentV3
+    | DesignDocumentV4
+    | DesignDocumentV5,
+): string {
   const serialized = JSON.parse(stringifyDocument(document)) as {
     readonly topologyReferences?: unknown;
   };
@@ -219,15 +227,15 @@ function sourceAwareSweepDocument(useDirectProfile: boolean): DesignDocumentV4 {
     "shell",
     cad.shell("shell", sweep, { openings: side, thickness: mm(0.25) }),
   );
-  return cad.build();
+  return DesignDocumentV4Schema.parse({
+    ...cad.build(),
+    schema: DOCUMENT_SCHEMA_V4,
+    version: DOCUMENT_VERSION_V4,
+  });
 }
 
 describe("DesignDocument v4 compatibility boundary", () => {
-  it("makes the six-role v4 vocabulary and authoring aliases current", () => {
-    expect(DOCUMENT_SCHEMA).toBe(DOCUMENT_SCHEMA_V4);
-    expect(DOCUMENT_VERSION).toBe(DOCUMENT_VERSION_V4);
-    expect(NodeSchema).toBe(NodeV4Schema);
-    expect(TOPOLOGY_ROLES).toBe(TOPOLOGY_ROLES_V4);
+  it("keeps the six-role v4 vocabulary frozen", () => {
     for (const roles of [
       TOPOLOGY_ROLES_V1,
       TOPOLOGY_ROLES_V2,
@@ -245,7 +253,8 @@ describe("DesignDocument v4 compatibility boundary", () => {
 
     const document = versionedBoxes().v4;
     expectTypeOf(document).toEqualTypeOf<DesignDocumentV4>();
-    expectTypeOf<NodeIR>().toEqualTypeOf<NodeIRV4>();
+    const node = Object.values(document.nodes)[0]!;
+    expectTypeOf(node).toEqualTypeOf<NodeIRV4>();
     expect(document).toMatchObject({
       schema: DOCUMENT_SCHEMA_V4,
       version: DOCUMENT_VERSION_V4,
@@ -352,7 +361,7 @@ describe("DesignDocument v4 compatibility boundary", () => {
       query,
       cardinality: { min: 1, max: 1 },
     };
-    const shell: ShellNodeIR = {
+    const shell: ShellNodeIRV4 = {
       kind: "shell",
       input: { node: feature, kind: "solid" },
       openings: selection,
@@ -377,7 +386,7 @@ describe("DesignDocument v4 compatibility boundary", () => {
     }
   });
 
-  it("migrates v1-v3 to v4, preserves v2/v3 evidence, and is idempotent for v4", () => {
+  it("migrates v1-v4 to v5 while preserving legacy evidence", () => {
     const documents = versionedBoxes();
     const v2Evidence = PersistentTopologyReferenceV2Schema.parse(
       referenceWithRole(
@@ -400,7 +409,7 @@ describe("DesignDocument v4 compatibility boundary", () => {
       withReference(documents.v3, v3Evidence),
     );
 
-    for (const source of [documents.v1, v2, v3]) {
+    for (const source of [documents.v1, v2, v3, documents.v4]) {
       const sourceBytes = stringifyDocument(source);
       const sourceRegistry =
         source.version === DOCUMENT_VERSION_V1
@@ -411,8 +420,8 @@ describe("DesignDocument v4 compatibility boundary", () => {
       expect(stringifyDocument(source)).toBe(sourceBytes);
       if (!migrated.ok) continue;
       expect(migrated.value).toMatchObject({
-        schema: DOCUMENT_SCHEMA_V4,
-        version: DOCUMENT_VERSION_V4,
+        schema: DOCUMENT_SCHEMA_V5,
+        version: DOCUMENT_VERSION_V5,
       });
       if (sourceRegistry !== undefined) {
         expect(canonicalRegistry(migrated.value)).toBe(sourceRegistry);
@@ -421,8 +430,5 @@ describe("DesignDocument v4 compatibility boundary", () => {
         );
       }
     }
-
-    const repeated = migrateDocument(documents.v4);
-    expect(repeated).toEqual({ ok: true, value: documents.v4, diagnostics: [] });
   });
 });

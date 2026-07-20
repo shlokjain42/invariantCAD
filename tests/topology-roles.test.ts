@@ -274,6 +274,50 @@ function mutableSweepRoleDocument(
   return JSON.parse(stringifyDocument(sweepRoleDocument(selection)));
 }
 
+function edgeTreatmentFaceRoleDocument(
+  operation: "fillet" | "chamfer",
+): ReturnType<ReturnType<typeof design>["build"]> {
+  const cad = design(`${operation}-face-role-validation`);
+  const box = cad.box(`${operation}-box`, {
+    size: vec3(mm(10), mm(20), mm(30)),
+  });
+  const seed = topology.edges
+    .createdBy(box, { role: "box.edge.x-min-y-min" })
+    .select();
+  const treated =
+    operation === "fillet"
+      ? cad.fillet(`${operation}-treated`, box, {
+          edges: seed,
+          radius: mm(1),
+        })
+      : cad.chamfer(`${operation}-treated`, box, {
+          edges: seed,
+          distance: mm(1),
+        });
+  const opening = topology.faces
+    .createdBy(treated, {
+      role:
+        operation === "fillet"
+          ? "fillet.face.blend"
+          : "chamfer.face.bevel",
+    })
+    .select();
+  cad.output(
+    `${operation}-consumer`,
+    cad.shell(`${operation}-consumer`, treated, {
+      openings: opening,
+      thickness: mm(0.25),
+    }),
+  );
+  return cad.build();
+}
+
+function mutableEdgeTreatmentFaceRoleDocument(
+  operation: "fillet" | "chamfer",
+): any {
+  return JSON.parse(stringifyDocument(edgeTreatmentFaceRoleDocument(operation)));
+}
+
 function expectSemanticFailure(
   value: unknown,
   message: string,
@@ -371,7 +415,89 @@ describe("closed topology role validation", () => {
       relation: "created",
       source: "none",
     });
+    expect(TOPOLOGY_ROLE_RULES["fillet.face.blend"]).toEqual({
+      producer: "fillet",
+      topology: "face",
+      relation: "created",
+      source: "none",
+    });
+    expect(TOPOLOGY_ROLE_RULES["chamfer.face.bevel"]).toEqual({
+      producer: "chamfer",
+      topology: "face",
+      relation: "created",
+      source: "none",
+    });
   });
+
+  it.each([
+    ["fillet", "fillet.face.blend"],
+    ["chamfer", "chamfer.face.bevel"],
+  ] as const)(
+    "accepts the Document-v5 %s generated-face role as a downstream selector",
+    (operation, role) => {
+      const result = parseDocumentValue(
+        mutableEdgeTreatmentFaceRoleDocument(operation),
+      );
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value.version).toBe(5);
+      expect(
+        (result.value.nodes as Readonly<Record<string, any>>)[
+          `${operation}-consumer`
+        ]?.openings.query,
+      ).toEqual({
+        op: "origin",
+        feature: `${operation}-treated`,
+        relation: "created",
+        role,
+      });
+    },
+  );
+
+  it.each([
+    ["fillet", "chamfer.face.bevel", "chamfer"],
+    ["chamfer", "fillet.face.blend", "fillet"],
+  ] as const)(
+    "rejects a %s selector carrying the other edge treatment's %s role",
+    (operation, foreignRole, foreignProducer) => {
+      const invalid = mutableEdgeTreatmentFaceRoleDocument(operation);
+      invalid.nodes[`${operation}-consumer`].openings.query.role = foreignRole;
+
+      expectSemanticFailure(
+        invalid,
+        `is not valid for ${operation} feature '${operation}-treated'`,
+        `/nodes/${operation}-consumer/openings/query/role`,
+      );
+      expect(foreignRole.startsWith(foreignProducer)).toBe(true);
+    },
+  );
+
+  it.each(["fillet", "chamfer"] as const)(
+    "rejects sketch-source and modified-origin claims for the source-free %s face role",
+    (operation) => {
+      const sourced = mutableEdgeTreatmentFaceRoleDocument(operation);
+      sourced.nodes[`${operation}-consumer`].openings.query.source = {
+        kind: "sketch-entity",
+        sketch: "missing-profile",
+        entity: "missing.e0",
+      };
+      expectSemanticFailure(
+        sourced,
+        "cannot originate from one sketch boundary entity",
+        `/nodes/${operation}-consumer/openings/query/source`,
+      );
+
+      const modified = mutableEdgeTreatmentFaceRoleDocument(operation);
+      modified.nodes[`${operation}-consumer`].openings.query.relation =
+        "modified";
+      expectSemanticFailure(
+        modified,
+        "roles currently describe created topology only",
+        `/nodes/${operation}-consumer/openings/query/relation`,
+      );
+    },
+  );
 
   it("rejects an unknown serialized role structurally", () => {
     const invalid = mutableRoleDocument();
@@ -729,12 +855,12 @@ describe("closed topology role validation", () => {
     ["source-aware start rim", "start-rim"],
     ["source-aware end rim", "end-rim"],
     ["lateral edge", "lateral"],
-  ] as const)("accepts the V4 sweep %s role contract", (_label, selection) => {
+  ] as const)("retains the V4 sweep %s role contract", (_label, selection) => {
     const result = parseDocumentValue(mutableSweepRoleDocument(selection));
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value.version).toBe(4);
+    expect(result.value.version).toBe(5);
   });
 
   it.each([

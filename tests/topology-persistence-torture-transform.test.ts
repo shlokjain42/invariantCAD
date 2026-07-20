@@ -212,7 +212,7 @@ describe("OCCT persistent-topology transform torture", () => {
       expect(serialized).not.toContain(oldEdgeKey);
       const parsed = parseDocument(serialized);
       expect(parsed.ok).toBe(true);
-      if (!parsed.ok || parsed.value.version !== 4) return;
+      if (!parsed.ok || parsed.value.version !== 5) return;
       expect(Object.keys(parsed.value.topologyReferences ?? {}).sort()).toEqual([
         "rightEndRim",
         "rightSide",
@@ -482,7 +482,7 @@ describe("OCCT persistent-topology transform torture", () => {
           expect(changedTopology.ok).toBe(true);
           if (changedTopology.ok) {
             const stored =
-              parsed.value.version === 4
+              parsed.value.version === 5
                 ? (Object.entries(parsed.value.topologyReferences ?? {}).find(
                     ([id]) => id === "removedRectangleSide",
                   )?.[1].variants[0] as

@@ -4,11 +4,24 @@ import {
   createEvaluator,
   deg,
   design,
+  DOCUMENT_SCHEMA_V2,
+  DOCUMENT_SCHEMA_V3,
+  DOCUMENT_SCHEMA_V4,
+  DOCUMENT_SCHEMA_V5,
+  DOCUMENT_VERSION_V2,
+  DOCUMENT_VERSION_V3,
+  DOCUMENT_VERSION_V4,
+  DOCUMENT_VERSION_V5,
+  DesignDocumentV2Schema,
+  DesignDocumentV3Schema,
+  DesignDocumentV4Schema,
+  DesignDocumentV5Schema,
   mm,
   scalarVec3,
   topology,
   vec3,
   type CadResult,
+  type DesignDocument,
   type EvaluatedDesign,
   type GeometryKernel,
   type KernelCapabilities,
@@ -337,7 +350,7 @@ function persistentConsumerDocument(consumer: PersistentConsumer) {
 
 async function evaluate(
   harness: Harness,
-  document = filletDocument(),
+  document: DesignDocument = filletDocument(),
   options: Parameters<Awaited<ReturnType<typeof createEvaluator>>["evaluate"]>[1] = {},
 ): Promise<CadResult<EvaluatedDesign>> {
   const evaluator = await createEvaluator({ kernel: harness.kernel });
@@ -464,6 +477,7 @@ describe("document-owned topology references in evaluator", () => {
       const result = await evaluate(harness, document);
 
       expect(result.ok).toBe(true);
+      expect(harness.boxCalls()).toBe(1);
       expect(harness.filletKeys).toEqual([[edges[0]!.key]]);
       expect(harness.disposeShapeCalls()).toBe(2);
       expectDisposedSerials(harness, [0, 1]);
@@ -533,6 +547,29 @@ describe("document-owned topology references in evaluator", () => {
     expect(shellHarness.disposeShapeCalls()).toBe(2);
     expectDisposedSerials(shellHarness, [0, 1]);
   });
+
+  it.each([
+    ["v2", DesignDocumentV2Schema, DOCUMENT_SCHEMA_V2, DOCUMENT_VERSION_V2],
+    ["v3", DesignDocumentV3Schema, DOCUMENT_SCHEMA_V3, DOCUMENT_VERSION_V3],
+    ["v4", DesignDocumentV4Schema, DOCUMENT_SCHEMA_V4, DOCUMENT_VERSION_V4],
+    ["v5", DesignDocumentV5Schema, DOCUMENT_SCHEMA_V5, DOCUMENT_VERSION_V5],
+  ] as const)(
+    "directly evaluates a persistent selector under the frozen %s envelope",
+    async (_label, schema, documentSchema, version) => {
+      const document = schema.parse({
+        ...filletDocument(),
+        schema: documentSchema,
+        version,
+      });
+      const harness = createHarness();
+      const result = await evaluate(harness, document);
+
+      expect(result.ok).toBe(true);
+      expect(harness.filletKeys).toEqual([[edges[0]!.key]]);
+      expect(harness.topologyCalls()).toBe(1);
+      expectDisposedSerials(harness, [0, 1]);
+    },
+  );
 
   it.each([
     "fillet",

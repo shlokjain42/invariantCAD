@@ -27,6 +27,7 @@ import {
   type TopologyRoleV2,
   type TopologyRoleV3,
   type TopologyRoleV4,
+  type TopologyRoleV5,
 } from "./protocol/topology.js";
 
 export const TOPOLOGY_SIGNATURE_PROTOCOL_VERSION = 1 as const;
@@ -127,12 +128,16 @@ export type PersistentTopologyLineageV3 =
   PersistentTopologyLineage<TopologyRoleV3>;
 export type PersistentTopologyLineageV4 =
   PersistentTopologyLineage<TopologyRoleV4>;
+export type PersistentTopologyLineageV5 =
+  PersistentTopologyLineage<TopologyRoleV5>;
 export type TopologyNeighborSignatureV2 =
   TopologyNeighborSignature<TopologyRoleV2>;
 export type TopologyNeighborSignatureV3 =
   TopologyNeighborSignature<TopologyRoleV3>;
 export type TopologyNeighborSignatureV4 =
   TopologyNeighborSignature<TopologyRoleV4>;
+export type TopologyNeighborSignatureV5 =
+  TopologyNeighborSignature<TopologyRoleV5>;
 export type PersistentTopologyReferenceV2<
   K extends TopologyKind = TopologyKind,
 > = PersistentTopologyReference<K, TopologyRoleV2>;
@@ -142,6 +147,9 @@ export type PersistentTopologyReferenceV3<
 export type PersistentTopologyReferenceV4<
   K extends TopologyKind = TopologyKind,
 > = PersistentTopologyReference<K, TopologyRoleV4>;
+export type PersistentTopologyReferenceV5<
+  K extends TopologyKind = TopologyKind,
+> = PersistentTopologyReference<K, TopologyRoleV5>;
 
 export type TopologyMatchEvidence =
   | "semantic-lineage"

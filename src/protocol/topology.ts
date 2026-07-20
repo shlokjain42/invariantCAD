@@ -41,6 +41,13 @@ export const FACE_TOPOLOGY_ROLES_V4 = Object.freeze([
   "sweep.face.side",
 ] as const);
 
+/** Face-role vocabulary introduced by document v5. */
+export const FACE_TOPOLOGY_ROLES_V5 = Object.freeze([
+  ...FACE_TOPOLOGY_ROLES_V4,
+  "fillet.face.blend",
+  "chamfer.face.bevel",
+] as const);
+
 /** Edge-role vocabulary frozen into document v1. */
 export const EDGE_TOPOLOGY_ROLES_V1 = Object.freeze([
   "box.edge.x-min-y-min",
@@ -80,6 +87,9 @@ export const EDGE_TOPOLOGY_ROLES_V4 = Object.freeze([
   "sweep.edge.lateral",
 ] as const);
 
+/** Document v5 did not expand the semantic edge-role vocabulary. */
+export const EDGE_TOPOLOGY_ROLES_V5 = EDGE_TOPOLOGY_ROLES_V4;
+
 export const TOPOLOGY_ROLES_V1 = Object.freeze([
   ...FACE_TOPOLOGY_ROLES_V1,
   ...EDGE_TOPOLOGY_ROLES_V1,
@@ -97,29 +107,37 @@ export const TOPOLOGY_ROLES_V4 = Object.freeze([
   ...EDGE_TOPOLOGY_ROLES_V4,
 ] as const);
 
+export const TOPOLOGY_ROLES_V5 = Object.freeze([
+  ...FACE_TOPOLOGY_ROLES_V5,
+  ...EDGE_TOPOLOGY_ROLES_V5,
+] as const);
+
 /** Current face-role vocabulary. */
-export const FACE_TOPOLOGY_ROLES = FACE_TOPOLOGY_ROLES_V4;
+export const FACE_TOPOLOGY_ROLES = FACE_TOPOLOGY_ROLES_V5;
 /** Current edge-role vocabulary. */
-export const EDGE_TOPOLOGY_ROLES = EDGE_TOPOLOGY_ROLES_V4;
+export const EDGE_TOPOLOGY_ROLES = EDGE_TOPOLOGY_ROLES_V5;
 /** Current closed semantic-role vocabulary. */
-export const TOPOLOGY_ROLES = TOPOLOGY_ROLES_V4;
+export const TOPOLOGY_ROLES = TOPOLOGY_ROLES_V5;
 
 export type FaceTopologyRoleV1 = (typeof FACE_TOPOLOGY_ROLES_V1)[number];
 export type FaceTopologyRoleV2 = (typeof FACE_TOPOLOGY_ROLES_V2)[number];
 export type FaceTopologyRoleV3 = (typeof FACE_TOPOLOGY_ROLES_V3)[number];
 export type FaceTopologyRoleV4 = (typeof FACE_TOPOLOGY_ROLES_V4)[number];
+export type FaceTopologyRoleV5 = (typeof FACE_TOPOLOGY_ROLES_V5)[number];
 export type EdgeTopologyRoleV1 = (typeof EDGE_TOPOLOGY_ROLES_V1)[number];
 export type EdgeTopologyRoleV2 = (typeof EDGE_TOPOLOGY_ROLES_V2)[number];
 export type EdgeTopologyRoleV3 = (typeof EDGE_TOPOLOGY_ROLES_V3)[number];
 export type EdgeTopologyRoleV4 = (typeof EDGE_TOPOLOGY_ROLES_V4)[number];
+export type EdgeTopologyRoleV5 = (typeof EDGE_TOPOLOGY_ROLES_V5)[number];
 export type TopologyRoleV1 = (typeof TOPOLOGY_ROLES_V1)[number];
 export type TopologyRoleV2 = (typeof TOPOLOGY_ROLES_V2)[number];
 export type TopologyRoleV3 = (typeof TOPOLOGY_ROLES_V3)[number];
 export type TopologyRoleV4 = (typeof TOPOLOGY_ROLES_V4)[number];
+export type TopologyRoleV5 = (typeof TOPOLOGY_ROLES_V5)[number];
 
-export type FaceTopologyRole = FaceTopologyRoleV4;
-export type EdgeTopologyRole = EdgeTopologyRoleV4;
-export type TopologyRole = TopologyRoleV4;
+export type FaceTopologyRole = FaceTopologyRoleV5;
+export type EdgeTopologyRole = EdgeTopologyRoleV5;
+export type TopologyRole = TopologyRoleV5;
 
 export type TopologyRoleProducer =
   | "box"
@@ -128,7 +146,9 @@ export type TopologyRoleProducer =
   | "extrude"
   | "revolve"
   | "loft"
-  | "sweep";
+  | "sweep"
+  | "fillet"
+  | "chamfer";
 export type TopologyRoleSource = "none" | "sketch-curve";
 
 export interface TopologyRoleRule {
@@ -190,6 +210,8 @@ export const TOPOLOGY_ROLE_RULES = Object.freeze({
   "sweep.edge.start-rim": roleRule("sweep", "edge", "sketch-curve"),
   "sweep.edge.end-rim": roleRule("sweep", "edge", "sketch-curve"),
   "sweep.edge.lateral": roleRule("sweep", "edge"),
+  "fillet.face.blend": roleRule("fillet", "face"),
+  "chamfer.face.bevel": roleRule("chamfer", "face"),
 } as const satisfies Readonly<Record<TopologyRole, TopologyRoleRule>>);
 
 declare const KERNEL_TOPOLOGY_KEY: unique symbol;

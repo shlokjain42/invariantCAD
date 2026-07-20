@@ -35,6 +35,7 @@ import {
   DOCUMENT_VERSION_V2,
   DOCUMENT_VERSION_V3,
   DOCUMENT_VERSION_V4,
+  DOCUMENT_VERSION_V5,
   type AssemblyInstanceIR,
   type DesignConfigurationIR,
   type DesignDocument,
@@ -1919,7 +1920,8 @@ export class Evaluator {
         const registry =
           document.version === DOCUMENT_VERSION_V2 ||
           document.version === DOCUMENT_VERSION_V3 ||
-          document.version === DOCUMENT_VERSION_V4
+          document.version === DOCUMENT_VERSION_V4 ||
+          document.version === DOCUMENT_VERSION_V5
             ? document.topologyReferences
             : undefined;
         if (registry === undefined) {

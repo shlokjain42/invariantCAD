@@ -15,6 +15,7 @@ import type {
   TopologyRoleV2,
   TopologyRoleV3,
   TopologyRoleV4,
+  TopologyRoleV5,
 } from "./protocol/topology.js";
 import type { ShellDirection } from "./protocol/shell.js";
 import type { OffsetDirection } from "./protocol/offset.js";
@@ -33,11 +34,14 @@ export const DOCUMENT_VERSION_V3 = 3 as const;
 export const DOCUMENT_SCHEMA_V4 =
   "https://invariantcad.dev/schema/document/v4" as const;
 export const DOCUMENT_VERSION_V4 = 4 as const;
+export const DOCUMENT_SCHEMA_V5 =
+  "https://invariantcad.dev/schema/document/v5" as const;
+export const DOCUMENT_VERSION_V5 = 5 as const;
 
 /** Schema emitted by the current authoring API. */
-export const DOCUMENT_SCHEMA = DOCUMENT_SCHEMA_V4;
+export const DOCUMENT_SCHEMA = DOCUMENT_SCHEMA_V5;
 /** Version emitted by the current authoring API. */
-export const DOCUMENT_VERSION = DOCUMENT_VERSION_V4;
+export const DOCUMENT_VERSION = DOCUMENT_VERSION_V5;
 
 /** Node discriminants accepted by the original document-v1 grammar. */
 export const NODE_KINDS_V1 = Object.freeze([
@@ -108,7 +112,7 @@ export const NODE_KINDS_V3 = Object.freeze([
   "part",
   "assembly",
 ] as const);
-/** Node discriminants accepted by the current document-v4 grammar. */
+/** Node discriminants accepted by the frozen document-v4 grammar. */
 export const NODE_KINDS_V4 = Object.freeze([
   "box",
   "cylinder",
@@ -131,15 +135,39 @@ export const NODE_KINDS_V4 = Object.freeze([
   "part",
   "assembly",
 ] as const);
+/** Node discriminants accepted by the current document-v5 grammar. */
+export const NODE_KINDS_V5 = Object.freeze([
+  "box",
+  "cylinder",
+  "sphere",
+  "sketch",
+  "polylinePath",
+  "circularArcPath",
+  "compositePath",
+  "extrude",
+  "revolve",
+  "loft",
+  "sweep",
+  "boolean",
+  "transform",
+  "fillet",
+  "chamfer",
+  "shell",
+  "offset",
+  "draft",
+  "part",
+  "assembly",
+] as const);
 /** Node discriminants accepted by the current authoring grammar. */
-export const NODE_KINDS = NODE_KINDS_V4;
+export const NODE_KINDS = NODE_KINDS_V5;
 
 export type NodeKindV1 = (typeof NODE_KINDS_V1)[number];
 export type NodeKindV2 = (typeof NODE_KINDS_V2)[number];
 export type NodeKindV3 = (typeof NODE_KINDS_V3)[number];
 export type NodeKindV4 = (typeof NODE_KINDS_V4)[number];
+export type NodeKindV5 = (typeof NODE_KINDS_V5)[number];
 /** Current node discriminant vocabulary. */
-export type NodeKind = NodeKindV4;
+export type NodeKind = NodeKindV5;
 
 export type OutputKind = "profile" | "path" | "solid" | "part" | "assembly";
 export type DesignOutputKind = Exclude<OutputKind, "profile" | "path">;
@@ -475,6 +503,9 @@ export type TopologyReferenceEntryIRV3<
 export type TopologyReferenceEntryIRV4<
   K extends TopologyKind = TopologyKind,
 > = TopologyReferenceEntryIR<K, TopologyRoleV4>;
+export type TopologyReferenceEntryIRV5<
+  K extends TopologyKind = TopologyKind,
+> = TopologyReferenceEntryIR<K, TopologyRoleV5>;
 
 /**
  * Version-aware topology query grammar. Persistent-reference atoms were added
@@ -550,10 +581,12 @@ export type TopologyQueryIRV1 = TopologyQueryIRFor<false, TopologyRoleV1>;
 export type TopologyQueryIRV2 = TopologyQueryIRFor<boolean, TopologyRoleV2>;
 /** Topology queries accepted by the frozen document-v3 grammar. */
 export type TopologyQueryIRV3 = TopologyQueryIRFor<boolean, TopologyRoleV3>;
-/** Topology queries accepted by the current document-v4 grammar. */
+/** Topology queries accepted by the frozen document-v4 grammar. */
 export type TopologyQueryIRV4 = TopologyQueryIRFor<boolean, TopologyRoleV4>;
+/** Topology queries accepted by the current document-v5 grammar. */
+export type TopologyQueryIRV5 = TopologyQueryIRFor<boolean, TopologyRoleV5>;
 /** Current topology query grammar. */
-export type TopologyQueryIR = TopologyQueryIRV4;
+export type TopologyQueryIR = TopologyQueryIRV5;
 
 export type TopologySelectionIRV1<
   K extends TopologyKind = TopologyKind,
@@ -567,10 +600,13 @@ export type TopologySelectionIRV3<
 export type TopologySelectionIRV4<
   K extends TopologyKind = TopologyKind,
 > = TopologySelectionIRFor<K, boolean, TopologyRoleV4>;
+export type TopologySelectionIRV5<
+  K extends TopologyKind = TopologyKind,
+> = TopologySelectionIRFor<K, boolean, TopologyRoleV5>;
 /** Current topology selection grammar. */
 export type TopologySelectionIR<
   K extends TopologyKind = TopologyKind,
-> = TopologySelectionIRV4<K>;
+> = TopologySelectionIRV5<K>;
 
 export interface FilletNodeIR {
   readonly kind: "fillet";
@@ -714,7 +750,33 @@ export type DraftNodeIRV3 = Omit<DraftNodeIR, "faces"> & {
   readonly faces: TopologySelectionIRV3<"face">;
 };
 
-/** Nodes accepted by the current document-v4 grammar. */
+export type FilletNodeIRV4 = Omit<FilletNodeIR, "edges"> & {
+  readonly edges: TopologySelectionIRV4<"edge">;
+};
+export type ChamferNodeIRV4 = Omit<ChamferNodeIR, "edges"> & {
+  readonly edges: TopologySelectionIRV4<"edge">;
+};
+export type ShellNodeIRV4 = Omit<ShellNodeIR, "openings"> & {
+  readonly openings: TopologySelectionIRV4<"face">;
+};
+export type DraftNodeIRV4 = Omit<DraftNodeIR, "faces"> & {
+  readonly faces: TopologySelectionIRV4<"face">;
+};
+
+export type FilletNodeIRV5 = Omit<FilletNodeIR, "edges"> & {
+  readonly edges: TopologySelectionIRV5<"edge">;
+};
+export type ChamferNodeIRV5 = Omit<ChamferNodeIR, "edges"> & {
+  readonly edges: TopologySelectionIRV5<"edge">;
+};
+export type ShellNodeIRV5 = Omit<ShellNodeIR, "openings"> & {
+  readonly openings: TopologySelectionIRV5<"face">;
+};
+export type DraftNodeIRV5 = Omit<DraftNodeIR, "faces"> & {
+  readonly faces: TopologySelectionIRV5<"face">;
+};
+
+/** Nodes accepted by the frozen document-v4 grammar. */
 export type NodeIRV4 =
   | BoxNodeIR
   | CylinderNodeIR
@@ -729,16 +791,39 @@ export type NodeIRV4 =
   | SweepNodeIR
   | BooleanNodeIR
   | TransformNodeIR
-  | FilletNodeIR
-  | ChamferNodeIR
-  | ShellNodeIR
+  | FilletNodeIRV4
+  | ChamferNodeIRV4
+  | ShellNodeIRV4
   | OffsetNodeIR
-  | DraftNodeIR
+  | DraftNodeIRV4
+  | PartNodeIR
+  | AssemblyNodeIR;
+
+/** Nodes accepted by the current document-v5 grammar. */
+export type NodeIRV5 =
+  | BoxNodeIR
+  | CylinderNodeIR
+  | SphereNodeIR
+  | SketchNodeIR
+  | PolylinePathNodeIR
+  | CircularArcPathNodeIR
+  | CompositePathNodeIR
+  | ExtrudeNodeIR
+  | RevolveNodeIR
+  | LoftNodeIR
+  | SweepNodeIR
+  | BooleanNodeIR
+  | TransformNodeIR
+  | FilletNodeIRV5
+  | ChamferNodeIRV5
+  | ShellNodeIRV5
+  | OffsetNodeIR
+  | DraftNodeIRV5
   | PartNodeIR
   | AssemblyNodeIR;
 
 /** Current node grammar. */
-export type NodeIR = NodeIRV4;
+export type NodeIR = NodeIRV5;
 
 /** Nodes accepted by the original document-v1 grammar. */
 export type NodeIRV1 =
@@ -803,6 +888,9 @@ type NodeKindsV3AreExact = AssertExact<
 >;
 type NodeKindsV4AreExact = AssertExact<
   ExactType<NodeKindV4, NodeIRV4["kind"]>
+>;
+type NodeKindsV5AreExact = AssertExact<
+  ExactType<NodeKindV5, NodeIRV5["kind"]>
 >;
 
 interface DesignDocumentBodyV1 {
@@ -881,6 +969,25 @@ interface DesignDocumentBodyV4 {
   readonly metadata?: Readonly<Record<string, JsonValue>>;
 }
 
+interface DesignDocumentBodyV5 {
+  readonly name: string;
+  readonly units: {
+    readonly length: "mm";
+    readonly angle: "rad";
+    readonly mass?: "kg";
+  };
+  readonly parameters: Readonly<Record<ParameterId, ParameterIR>>;
+  /** Omitted for legacy documents that do not define a material catalogue. */
+  readonly materials?: Readonly<Record<MaterialId, MaterialDefinitionIR>>;
+  /** Omitted when the design has no named configurations. */
+  readonly configurations?: Readonly<
+    Record<ConfigurationId, DesignConfigurationIR>
+  >;
+  readonly nodes: Readonly<Record<NodeId, NodeIRV5>>;
+  readonly outputs: Readonly<Record<string, RefIR<DesignOutputKind>>>;
+  readonly metadata?: Readonly<Record<string, JsonValue>>;
+}
+
 /** Original document grammar, retained for parsing and direct evaluation. */
 export interface DesignDocumentV1 extends DesignDocumentBodyV1 {
   readonly schema: typeof DOCUMENT_SCHEMA_V1;
@@ -906,7 +1013,7 @@ export interface DesignDocumentV3 extends DesignDocumentBodyV3 {
   >;
 }
 
-/** Current document grammar with the v4 semantic topology-role vocabulary. */
+/** Frozen document grammar with the v4 semantic topology-role vocabulary. */
 export interface DesignDocumentV4 extends DesignDocumentBodyV4 {
   readonly schema: typeof DOCUMENT_SCHEMA_V4;
   readonly version: typeof DOCUMENT_VERSION_V4;
@@ -915,12 +1022,22 @@ export interface DesignDocumentV4 extends DesignDocumentBodyV4 {
   >;
 }
 
+/** Current document grammar with the v5 semantic topology-role vocabulary. */
+export interface DesignDocumentV5 extends DesignDocumentBodyV5 {
+  readonly schema: typeof DOCUMENT_SCHEMA_V5;
+  readonly version: typeof DOCUMENT_VERSION_V5;
+  readonly topologyReferences?: Readonly<
+    Record<TopologyReferenceId, TopologyReferenceEntryIRV5>
+  >;
+}
+
 /** Every document version accepted by validation and evaluation. */
 export type DesignDocument =
   | DesignDocumentV1
   | DesignDocumentV2
   | DesignDocumentV3
-  | DesignDocumentV4;
+  | DesignDocumentV4
+  | DesignDocumentV5;
 
 export type NodeReference = RefIR<OutputKind>;
 

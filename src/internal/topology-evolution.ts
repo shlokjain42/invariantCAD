@@ -1,8 +1,11 @@
-import type {
-  KernelEdgeDescriptor,
-  KernelFaceDescriptor,
-  KernelTopologyLineage,
-  KernelTopologySnapshot,
+import {
+  TOPOLOGY_ROLE_RULES,
+  type TopologyKind,
+  type TopologyRole,
+  type KernelEdgeDescriptor,
+  type KernelFaceDescriptor,
+  type KernelTopologyLineage,
+  type KernelTopologySnapshot,
 } from "../protocol/topology.js";
 
 const INT32_MIN = -2_147_483_648;
@@ -71,6 +74,19 @@ export interface ReduceCompleteIndexedTopologyEvolutionOptions
    * topology that native source history cannot causally attribute.
    */
   readonly allowCreated?: boolean;
+  /**
+   * Treatment-face roles granted only to identity-less results with a matching
+   * exact GENERATED edge-to-face relation. Source-less CREATED results do not
+   * satisfy these rules.
+   */
+  readonly generatedTopologyRoles?: readonly ExactGeneratedTopologyRole[];
+}
+
+export interface ExactGeneratedTopologyRole {
+  readonly producer: "fillet" | "chamfer";
+  readonly source: "edge";
+  readonly result: "face";
+  readonly role: "fillet.face.blend" | "chamfer.face.bevel";
 }
 
 /** Exact-capability data is authoritative; malformed data must never downgrade. */
@@ -996,6 +1012,37 @@ export function reduceCompleteIndexedTopologyEvolution(
       "Topology evolution feature must be a non-empty string when provided",
     );
   }
+  const generatedTopologyRoles = options.generatedTopologyRoles ?? [];
+  if (generatedTopologyRoles.length > 0 && options.feature === undefined) {
+    throw new TypeError(
+      "Generated topology roles require a current topology evolution feature",
+    );
+  }
+  const generatedRoleResults = new Set<TopologyKind>();
+  for (const [index, generatedRole] of generatedTopologyRoles.entries()) {
+    const roleRule = TOPOLOGY_ROLE_RULES[generatedRole.role];
+    if (
+      roleRule === undefined ||
+      (generatedRole.role !== "fillet.face.blend" &&
+        generatedRole.role !== "chamfer.face.bevel") ||
+      generatedRole.source !== "edge" ||
+      generatedRole.result !== "face" ||
+      roleRule.producer !== generatedRole.producer ||
+      roleRule.topology !== generatedRole.result ||
+      roleRule.relation !== "created" ||
+      roleRule.source !== "none"
+    ) {
+      throw new TypeError(
+        `Generated topology role rule ${index} is incompatible with '${String(generatedRole.role)}'`,
+      );
+    }
+    if (generatedRoleResults.has(generatedRole.result)) {
+      throw new TypeError(
+        `Generated topology role rule ${index} duplicates result topology '${generatedRole.result}'`,
+      );
+    }
+    generatedRoleResults.add(generatedRole.result);
+  }
   const validated = validateCompleteEvolutionEnvelope(options.evolution, {
     allowCreated: options.allowCreated ?? true,
   });
@@ -1035,6 +1082,7 @@ export function reduceCompleteIndexedTopologyEvolution(
   const reduceDescriptor = <
     Descriptor extends KernelFaceDescriptor | KernelEdgeDescriptor,
   >(
+    topology: TopologyKind,
     descriptor: Descriptor,
     records: readonly ValidatedCompleteRecord[],
   ): Descriptor => {
@@ -1091,6 +1139,19 @@ export function reduceCompleteIndexedTopologyEvolution(
       : hasCreationCause
         ? "created"
         : undefined;
+    const generatedRole =
+      currentRelation === "created"
+        ? generatedTopologyRoles.find(
+            (rule) =>
+              rule.result === topology &&
+              records.some(
+                (record) =>
+                  record.relation === INDEXED_TOPOLOGY_RELATION.GENERATED &&
+                  record.sourceKind !== INDEXED_TOPOLOGY_KIND.NONE &&
+                  kindName(record.sourceKind) === rule.source,
+              ),
+          )?.role
+        : undefined;
     const alreadyCreatedByCurrentFeature =
       options.feature !== undefined &&
       lineage.some(
@@ -1109,6 +1170,7 @@ export function reduceCompleteIndexedTopologyEvolution(
         Object.freeze({
           feature: options.feature,
           relation: currentRelation,
+          ...(generatedRole === undefined ? {} : { role: generatedRole }),
         }),
       );
     }
@@ -1120,12 +1182,14 @@ export function reduceCompleteIndexedTopologyEvolution(
 
   const faces = options.output.faces.map((descriptor, resultIndex) =>
     reduceDescriptor(
+      "face",
       descriptor,
       faceEvolution[resultIndex]!,
     ),
   );
   const edges = options.output.edges.map((descriptor, resultIndex) =>
     reduceDescriptor(
+      "edge",
       descriptor,
       edgeEvolution[resultIndex]!,
     ),

@@ -296,6 +296,65 @@ function generatedOptions(
   };
 }
 
+function generatedEdgeFaceRoleOptions(
+  feature: "exact-fillet" | "exact-chamfer" = "exact-fillet",
+  sourceCount = 1,
+): ReduceCompleteIndexedTopologyEvolutionOptions {
+  const role =
+    feature === "exact-fillet"
+      ? ("fillet.face.blend" as const)
+      : ("chamfer.face.bevel" as const);
+  const generated = Array.from({ length: sourceCount }, (_, sourceIndex) =>
+    record(
+      0,
+      KIND.EDGE,
+      sourceIndex,
+      RELATION.GENERATED,
+      KIND.FACE,
+      0,
+    ),
+  );
+  const removed = Array.from({ length: sourceCount }, (_, sourceIndex) =>
+    deleted(0, KIND.EDGE, sourceIndex),
+  );
+  return {
+    feature,
+    inputs: [
+      snapshot(
+        "complete",
+        [],
+        Array.from({ length: sourceCount }, (_, index) =>
+          edge(`source-edge-${index}`, [
+            {
+              feature: "source-box",
+              relation: "created",
+              role:
+                index % 2 === 0
+                  ? "box.edge.x-min-y-min"
+                  : "box.edge.x-max-y-max",
+            },
+          ]),
+        ),
+      ),
+    ],
+    output: snapshot("partial", [face("generated-face", [])]),
+    evolution: envelope(
+      [counts(0, sourceCount)],
+      counts(1, 0),
+      [...generated, ...removed],
+    ),
+    allowCreated: false,
+    generatedTopologyRoles: [
+      {
+        producer: feature === "exact-fillet" ? "fillet" : "chamfer",
+        source: "edge",
+        result: "face",
+        role,
+      },
+    ],
+  };
+}
+
 function expectInvalid(
   value: IndexedTopologyEvolutionEnvelope,
   options: { readonly allowCreated?: boolean } = {},
@@ -394,6 +453,177 @@ describe("complete indexed topology evolution", () => {
     expect(result.edges[0]!.lineage).toEqual([
       { feature: "boolean-result", relation: "created" },
     ]);
+  });
+
+  it.each([
+    ["exact-fillet", "fillet.face.blend"],
+    ["exact-chamfer", "chamfer.face.bevel"],
+  ] as const)(
+    "grants the exact %s role only to an identity-less edge-generated face",
+    (feature, role) => {
+      const result = reduceCompleteIndexedTopologyEvolution(
+        generatedEdgeFaceRoleOptions(feature),
+      );
+
+      expect(result.faces[0]!.lineage).toEqual([
+        { feature, relation: "created", role },
+      ]);
+      expect(Object.isFrozen(result.faces[0]!.lineage)).toBe(true);
+      expect(Object.isFrozen(result.faces[0]!.lineage[0])).toBe(true);
+    },
+  );
+
+  it("deduplicates a generated role across multiple exact edge causes and ignores native record order", () => {
+    const options = generatedEdgeFaceRoleOptions("exact-fillet", 2);
+    const forward = reduceCompleteIndexedTopologyEvolution(options);
+    const reversed = reduceCompleteIndexedTopologyEvolution({
+      ...options,
+      evolution: {
+        ...options.evolution,
+        records: [...options.evolution.records].reverse(),
+      },
+    });
+
+    expect(forward).toEqual(reversed);
+    expect(forward.faces[0]!.lineage).toEqual([
+      {
+        feature: "exact-fillet",
+        relation: "created",
+        role: "fillet.face.blend",
+      },
+    ]);
+  });
+
+  it("does not grant a generated role to residual CREATED or the wrong GENERATED topology pair", () => {
+    const base = generatedEdgeFaceRoleOptions();
+    const residual = reduceCompleteIndexedTopologyEvolution({
+      ...base,
+      inputs: [snapshot("complete")],
+      evolution: envelope([counts(0, 0)], counts(1, 0), [
+        created(KIND.FACE, 0),
+      ]),
+      allowCreated: true,
+    });
+    const faceGenerated = reduceCompleteIndexedTopologyEvolution({
+      ...base,
+      inputs: [snapshot("complete", [face("source-face", [])])],
+      evolution: envelope([counts(1, 0)], counts(1, 0), [
+        record(0, KIND.FACE, 0, RELATION.GENERATED, KIND.FACE, 0),
+        deleted(0, KIND.FACE, 0),
+      ]),
+    });
+    const generatedEdge = reduceCompleteIndexedTopologyEvolution({
+      ...base,
+      output: snapshot("partial", [], [edge("generated-edge", [])]),
+      evolution: envelope([counts(0, 1)], counts(0, 1), [
+        record(0, KIND.EDGE, 0, RELATION.GENERATED, KIND.EDGE, 0),
+        deleted(0, KIND.EDGE, 0),
+      ]),
+    });
+
+    expect(residual.faces[0]!.lineage).toEqual([
+      { feature: "exact-fillet", relation: "created" },
+    ]);
+    expect(faceGenerated.faces[0]!.lineage).toEqual([
+      { feature: "exact-fillet", relation: "created" },
+    ]);
+    expect(generatedEdge.edges[0]!.lineage).toEqual([
+      { feature: "exact-fillet", relation: "created" },
+    ]);
+  });
+
+  it("lets a face identity predecessor suppress an additional edge-generated role", () => {
+    const base = generatedEdgeFaceRoleOptions();
+    const result = reduceCompleteIndexedTopologyEvolution({
+      ...base,
+      inputs: [
+        snapshot(
+          "complete",
+          [
+            face("source-face", [
+              {
+                feature: "source-box",
+                relation: "created",
+                role: "box.face.x-min",
+              },
+            ]),
+          ],
+          [edge("source-edge", [])],
+        ),
+      ],
+      evolution: envelope([counts(1, 1)], counts(1, 0), [
+        record(0, KIND.FACE, 0, RELATION.MODIFIED, KIND.FACE, 0),
+        record(0, KIND.EDGE, 0, RELATION.GENERATED, KIND.FACE, 0),
+        deleted(0, KIND.EDGE, 0),
+      ]),
+    });
+
+    expect(result.faces[0]!.lineage).toEqual([
+      {
+        feature: "source-box",
+        relation: "created",
+        role: "box.face.x-min",
+      },
+      { feature: "exact-fillet", relation: "modified" },
+    ]);
+  });
+
+  it("rejects multiple generated-role rules for the same result topology", () => {
+    const options = generatedEdgeFaceRoleOptions();
+    expect(() =>
+      reduceCompleteIndexedTopologyEvolution({
+        ...options,
+        generatedTopologyRoles: [
+          {
+            producer: "fillet",
+            source: "edge",
+            result: "face",
+            role: "fillet.face.blend",
+          },
+          {
+            producer: "chamfer",
+            source: "edge",
+            result: "face",
+            role: "chamfer.face.bevel",
+          },
+        ],
+      }),
+    ).toThrow("duplicates result topology 'face'");
+  });
+
+  it.each([
+    ["box", "box.face.x-min"],
+    ["chamfer", "fillet.face.blend"],
+  ] as const)(
+    "rejects producer '%s' for generated role '%s'",
+    (producer, role) => {
+      const options = generatedEdgeFaceRoleOptions();
+      expect(() =>
+        reduceCompleteIndexedTopologyEvolution({
+          ...options,
+          generatedTopologyRoles: [
+            { producer, source: "edge", result: "face", role } as any,
+          ],
+        }),
+      ).toThrow(`incompatible with '${role}'`);
+    },
+  );
+
+  it("rejects a generated treatment role without an edge-to-face cause", () => {
+    const options = generatedEdgeFaceRoleOptions();
+    expect(() =>
+      reduceCompleteIndexedTopologyEvolution({
+        ...options,
+        generatedTopologyRoles: [
+          {
+            producer: "fillet",
+            source: "face",
+            result: "face",
+            role: "fillet.face.blend",
+          } as any,
+        ],
+      }),
+    ).toThrow("incompatible with 'fillet.face.blend'");
   });
 
   it("lets an identity predecessor dominate additional GENERATED causality", () => {

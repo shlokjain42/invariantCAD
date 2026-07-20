@@ -4,40 +4,48 @@ import {
   DOCUMENT_SCHEMA_V2,
   DOCUMENT_SCHEMA_V3,
   DOCUMENT_SCHEMA_V4,
+  DOCUMENT_SCHEMA_V5,
   DOCUMENT_VERSION_V1,
   DOCUMENT_VERSION_V2,
   DOCUMENT_VERSION_V3,
   DOCUMENT_VERSION_V4,
+  DOCUMENT_VERSION_V5,
   NODE_KINDS_V1,
   NODE_KINDS_V2,
   NODE_KINDS_V3,
   NODE_KINDS_V4,
+  NODE_KINDS_V5,
   type DesignDocument,
   type DesignDocumentV1,
   type DesignDocumentV2,
   type DesignDocumentV3,
   type DesignDocumentV4,
+  type DesignDocumentV5,
   type NodeIR,
   type NodeIRV1,
   type NodeIRV2,
   type NodeIRV3,
   type NodeIRV4,
+  type NodeIRV5,
   type TopologyReferenceEntryIR,
   type TopologyReferenceEntryIRV2,
   type TopologyReferenceEntryIRV3,
   type TopologyReferenceEntryIRV4,
+  type TopologyReferenceEntryIRV5,
   type TopologyQueryIR,
   type TopologyQueryIRFor,
   type TopologyQueryIRV1,
   type TopologyQueryIRV2,
   type TopologyQueryIRV3,
   type TopologyQueryIRV4,
+  type TopologyQueryIRV5,
   type TopologySelectionIR,
   type TopologySelectionIRFor,
   type TopologySelectionIRV1,
   type TopologySelectionIRV2,
   type TopologySelectionIRV3,
   type TopologySelectionIRV4,
+  type TopologySelectionIRV5,
 } from "./ir.js";
 import type { ExpressionIR } from "./expressions.js";
 import {
@@ -45,11 +53,13 @@ import {
   TOPOLOGY_ROLES_V2,
   TOPOLOGY_ROLES_V3,
   TOPOLOGY_ROLES_V4,
+  TOPOLOGY_ROLES_V5,
   type TopologyRole,
   type TopologyRoleV1,
   type TopologyRoleV2,
   type TopologyRoleV3,
   type TopologyRoleV4,
+  type TopologyRoleV5,
 } from "./protocol/topology.js";
 import { SHELL_DIRECTIONS } from "./protocol/shell.js";
 import { OFFSET_DIRECTIONS } from "./protocol/offset.js";
@@ -59,6 +69,7 @@ import {
   type PersistentTopologyReferenceV2,
   type PersistentTopologyReferenceV3,
   type PersistentTopologyReferenceV4,
+  type PersistentTopologyReferenceV5,
 } from "./topology-signatures.js";
 
 const DimensionSchema = z.enum(["scalar", "length", "angle", "massDensity"]);
@@ -371,6 +382,10 @@ const topologySchemasV4 = createTopologySchemas<boolean, TopologyRoleV4>(
   true,
   TOPOLOGY_ROLES_V4,
 );
+const topologySchemasV5 = createTopologySchemas<boolean, TopologyRoleV5>(
+  true,
+  TOPOLOGY_ROLES_V5,
+);
 
 export const TopologyQueryV1Schema: z.ZodType<TopologyQueryIRV1> =
   topologySchemasV1.query;
@@ -380,6 +395,8 @@ export const TopologyQueryV3Schema: z.ZodType<TopologyQueryIRV3> =
   topologySchemasV3.query as z.ZodType<TopologyQueryIRV3>;
 export const TopologyQueryV4Schema: z.ZodType<TopologyQueryIRV4> =
   topologySchemasV4.query as z.ZodType<TopologyQueryIRV4>;
+export const TopologyQueryV5Schema: z.ZodType<TopologyQueryIRV5> =
+  topologySchemasV5.query as z.ZodType<TopologyQueryIRV5>;
 export const TopologySelectionV1Schema: z.ZodType<TopologySelectionIRV1> =
   topologySchemasV1.selection;
 export const TopologySelectionV2Schema: z.ZodType<TopologySelectionIRV2> =
@@ -388,13 +405,15 @@ export const TopologySelectionV3Schema: z.ZodType<TopologySelectionIRV3> =
   topologySchemasV3.selection as z.ZodType<TopologySelectionIRV3>;
 export const TopologySelectionV4Schema: z.ZodType<TopologySelectionIRV4> =
   topologySchemasV4.selection as z.ZodType<TopologySelectionIRV4>;
+export const TopologySelectionV5Schema: z.ZodType<TopologySelectionIRV5> =
+  topologySchemasV5.selection as z.ZodType<TopologySelectionIRV5>;
 
-/** Current document-v4 topology query schema. */
+/** Current document-v5 topology query schema. */
 export const TopologyQuerySchema: z.ZodType<TopologyQueryIR> =
-  TopologyQueryV4Schema;
-/** Current document-v4 topology selection schema. */
+  TopologyQueryV5Schema;
+/** Current document-v5 topology selection schema. */
 export const TopologySelectionSchema: z.ZodType<TopologySelectionIR> =
-  TopologySelectionV4Schema;
+  TopologySelectionV5Schema;
 
 /**
  * The transform is intentionally the topology-signature implementation's
@@ -457,9 +476,13 @@ export const PersistentTopologyReferenceV4Schema: z.ZodType<PersistentTopologyRe
   createPersistentTopologyReferenceSchema(
     TOPOLOGY_ROLES_V4,
   ) as z.ZodType<PersistentTopologyReferenceV4>;
-/** Current document-v4 persistent topology evidence schema. */
+export const PersistentTopologyReferenceV5Schema: z.ZodType<PersistentTopologyReferenceV5> =
+  createPersistentTopologyReferenceSchema(
+    TOPOLOGY_ROLES_V5,
+  ) as z.ZodType<PersistentTopologyReferenceV5>;
+/** Current document-v5 persistent topology evidence schema. */
 export const PersistentTopologyReferenceSchema: z.ZodType<PersistentTopologyReference> =
-  PersistentTopologyReferenceV4Schema;
+  PersistentTopologyReferenceV5Schema;
 
 const SolidRefSchema = z
   .object({
@@ -517,15 +540,20 @@ export const TopologyReferenceEntryV4Schema: z.ZodType<TopologyReferenceEntryIRV
   createTopologyReferenceEntrySchema(
     PersistentTopologyReferenceV4Schema,
   ) as z.ZodType<TopologyReferenceEntryIRV4>;
-/** Current document-v4 topology-reference registry entry schema. */
+export const TopologyReferenceEntryV5Schema: z.ZodType<TopologyReferenceEntryIRV5> =
+  createTopologyReferenceEntrySchema(
+    PersistentTopologyReferenceV5Schema,
+  ) as z.ZodType<TopologyReferenceEntryIRV5>;
+/** Current document-v5 topology-reference registry entry schema. */
 export const TopologyReferenceEntrySchema: z.ZodType<TopologyReferenceEntryIR> =
-  TopologyReferenceEntryV4Schema;
+  TopologyReferenceEntryV5Schema;
 
 type VersionedNodeKind =
   | NodeIRV1["kind"]
   | NodeIRV2["kind"]
   | NodeIRV3["kind"]
-  | NodeIRV4["kind"];
+  | NodeIRV4["kind"]
+  | NodeIRV5["kind"];
 
 function createNodeSchema(
   topologySelectionSchema: z.ZodType,
@@ -751,8 +779,12 @@ export const NodeV4Schema = createNodeSchema(
   TopologySelectionV4Schema,
   NODE_KINDS_V4,
 ) as unknown as z.ZodType<NodeIRV4>;
-/** Current document-v4 node schema. */
-export const NodeSchema: z.ZodType<NodeIR> = NodeV4Schema;
+export const NodeV5Schema = createNodeSchema(
+  TopologySelectionV5Schema,
+  NODE_KINDS_V5,
+) as unknown as z.ZodType<NodeIRV5>;
+/** Current document-v5 node schema. */
+export const NodeSchema: z.ZodType<NodeIR> = NodeV5Schema;
 
 const ConfigurationSchema = z
   .object({
@@ -868,6 +900,13 @@ const DocumentTopologyReferencesV4Schema = z
     "Topology reference registry cannot be empty; omit it instead",
   )
   .optional();
+const DocumentTopologyReferencesV5Schema = z
+  .record(IdSchema, TopologyReferenceEntryV5Schema)
+  .refine(
+    (references) => Object.keys(references).length > 0,
+    "Topology reference registry cannot be empty; omit it instead",
+  )
+  .optional();
 
 const DesignDocumentBodyShapeV1 = {
   name: DocumentNameSchema,
@@ -916,6 +955,18 @@ const DesignDocumentBodyShapeV4 = {
   topologyReferences: DocumentTopologyReferencesV4Schema,
 } as const;
 
+const DesignDocumentBodyShapeV5 = {
+  name: DocumentNameSchema,
+  units: DocumentUnitsSchema,
+  parameters: DocumentParametersSchema,
+  materials: DocumentMaterialsSchema,
+  configurations: DocumentConfigurationsSchema,
+  nodes: z.record(z.string(), NodeV5Schema),
+  outputs: DocumentOutputsSchema,
+  metadata: DocumentMetadataSchema,
+  topologyReferences: DocumentTopologyReferencesV5Schema,
+} as const;
+
 export const DesignDocumentV1Schema: z.ZodType<DesignDocumentV1> = z
   .object({
     schema: z.literal(DOCUMENT_SCHEMA_V1),
@@ -948,9 +999,18 @@ export const DesignDocumentV4Schema: z.ZodType<DesignDocumentV4> = z
   })
   .strict() as unknown as z.ZodType<DesignDocumentV4>;
 
+export const DesignDocumentV5Schema: z.ZodType<DesignDocumentV5> = z
+  .object({
+    schema: z.literal(DOCUMENT_SCHEMA_V5),
+    version: z.literal(DOCUMENT_VERSION_V5),
+    ...DesignDocumentBodyShapeV5,
+  })
+  .strict() as unknown as z.ZodType<DesignDocumentV5>;
+
 export const DesignDocumentSchema: z.ZodType<DesignDocument> = z.union([
   DesignDocumentV1Schema,
   DesignDocumentV2Schema,
   DesignDocumentV3Schema,
   DesignDocumentV4Schema,
+  DesignDocumentV5Schema,
 ]) as z.ZodType<DesignDocument>;

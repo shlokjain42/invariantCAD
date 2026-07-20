@@ -711,13 +711,15 @@ class OcctKernel implements GeometryKernel {
       (options.moduleFactory === undefined && options.wasm === undefined
         ? "stock"
         : undefined);
+    const topologyDescriptorVersion =
+      facade?.edgeTreatment === undefined ? 4 : 5;
     const topologySignatureFingerprint =
       topologySignatureRuntime === undefined ||
       !Number.isFinite(this.modelingTolerance) ||
       !(this.modelingTolerance > 0)
         ? undefined
         : [
-            "invariantcad-topology-descriptor@4",
+            `invariantcad-topology-descriptor@${topologyDescriptorVersion}`,
             "occt-wasm@3.7.0",
             `runtime=${topologySignatureRuntime}`,
             `modelingTolerance=${this.modelingTolerance}`,
@@ -4083,7 +4085,20 @@ class OcctKernel implements GeometryKernel {
                 allowCreated: true,
                 ...(context?.feature === undefined
                   ? {}
-                  : { feature: context.feature }),
+                  : {
+                      feature: context.feature,
+                      generatedTopologyRoles: [
+                        {
+                          producer: operation,
+                          source: "edge" as const,
+                          result: "face" as const,
+                          role:
+                            operation === "fillet"
+                              ? ("fillet.face.blend" as const)
+                              : ("chamfer.face.bevel" as const),
+                        },
+                      ],
+                    }),
               });
             return provisional;
           } catch (error) {
