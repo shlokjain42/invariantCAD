@@ -365,6 +365,8 @@ Topology-signature protocol v1 provides a bounded first persistent-topology slic
 
 The fingerprint is a semantic compatibility declaration for that kernel's topology descriptors, including any runtime or modeling-tolerance choices the kernel considers material. It is not a hash or cryptographic attestation of the native runtime bytes. Capture and resolution validate protocol v1 and require the fingerprint string to match exactly before considering a candidate. Applications should pass the capability advertised by the kernel that produced each snapshot; a missing declaration means that kernel has not promised compatibility with this protocol. Current recognized OCCT fingerprints begin with `invariantcad-topology-descriptor@4`; descriptor `@4` adds the bounded sweep anchors above to descriptor `@3`'s ruled-loft semantics. It deliberately does not match `@3` because authoritative new anchors can change capture and resolution, while the enclosing persistent-reference protocol remains version 1. An existing registry variant captured under `@3` therefore produces `TOPOLOGY_FINGERPRINT_MISMATCH` against `@4` unless the entry is explicitly recaptured or supplemented with a matching `@4` variant. `createOcctKernel()` advertises the declaration for its known default stock runtime and for a recognized owned facade. Supplying an explicit `wasm` or an unknown custom `moduleFactory` suppresses it unless facade probing recognizes the matched owned runtime.
 
+The executable [persistent-topology torture corpus](docs/persistent-topology-torture.md) covers both the stock descriptor `@4` floor and an explicit owned facade ABI 0.6 exact-evolution matrix. The exact gate distinguishes inherited semantic identity from unnamed generated topology: inherited Boolean, fillet/chamfer, shell, and draft items survive relevant parameter changes with fresh keys, while source-less generated treatment, shell, and offset faces resolve geometrically only when their evidence still matches and otherwise fail key-free. It never promotes a surface-type resemblance into persistent identity.
+
 `captureTopologyReference(...)` receives one snapshot, a face or edge key from that snapshot, the advertised signature capability, and explicit linear, angular, and relative match tolerances. Linear tolerance is an absolute error threshold for world-space centers and bounds: it does not grow merely because two compared coordinates are numerically far from the origin, though an actual translation still changes those coordinates and can prevent a match. Relative tolerance applies to measures and radii; face area also receives a linear-tolerance term scaled by the face's characteristic length. It returns a deeply frozen `PersistentTopologyReference` containing canonical semantic lineage, structured geometry, and structured one-hop adjacency evidence. The returned reference is detached: it contains no kernel key, native index, array ordinal, or enumeration-derived tiebreaker, so it can be stored by application code after the evaluation result is disposed. Call `EvaluatedSolid.topology()` before disposing its evaluation; calling it afterward throws through the normal evaluated-shape lifetime guard. A snapshot saved before disposal remains readable, but its keys are still scoped to that evaluation. The key-free captured reference is the durable evidence.
 
 Legacy `DesignDocumentV1` remains parseable, cloneable, directly evaluable, and hash-stable, but cannot contain persistent selectors. `DesignDocumentV2` adds the optional document-owned `topologyReferences` registry and persistent selector atom while retaining the pre-loft closed role vocabulary. `DesignDocumentV3` adds only the five serialized loft roles, including nested stored reference lineage and adjacency evidence. `DesignDocumentV4` adds only the six bounded-sweep role literals in the same locations, and the current builder emits v4. Registry entries bind one topology kind and one exact solid-node target to one or more protocol/fingerprint variants. Registry data is semantic: normalized evidence and canonical variant order participate in serialization and hashing. Parsing, cloning, stringifying, hashing, and direct evaluation preserve supplied v1, v2, and v3 documents without silently upgrading them. `migrateDocument` validates and upgrades v1, v2, or v3 to v4 and is idempotent for v4. Migration never captures, relabels, or rewrites stored descriptor evidence: a descriptor-`@3` fingerprint and its evidence remain exactly `@3` after document migration until an application explicitly captures or supplies a compatible `@4` variant.
@@ -847,9 +849,11 @@ downloaded, or extracted by `createOcctKernel`.
 `pnpm test:occt-facade-bundle` also packs the npm library, installs that tarball
 in a fresh temporary consumer, and checks the owned ABI 0.6 capability surface
 alongside direct/document-evaluated draft; exact Boolean, fillet/chamfer, and
-shell/offset evolution; and major multi-arc and eccentric-profile composite
-sweeps by passing the verified bundle runtime explicitly. The ordinary
-`pnpm test:package` does not require or discover owned-facade artifacts.
+shell/offset evolution; major multi-arc and eccentric-profile composite sweeps;
+and the exact persistent-topology matrix by passing the verified bundle runtime
+explicitly. The ordinary `pnpm test:package` does not require or discover
+owned-facade artifacts. A previously built default runtime can run just the
+persistence matrix with `pnpm test:occt-persistence-public`.
 
 The bundle also collects checksums, build provenance, an SBOM, source and
 relinking information, and applicable notices for review. Those materials are
@@ -889,6 +893,7 @@ pnpm example:bracket
 pnpm verify
 
 # Heavyweight owned-facade release checks (after building the facade)
+pnpm test:occt-persistence-public
 pnpm test:occt-facade-bundle
 ```
 
