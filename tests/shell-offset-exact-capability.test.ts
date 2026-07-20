@@ -55,7 +55,7 @@ interface ShellOffsetKernelOptions {
 }
 
 const exactShellOffsetTopology: KernelTopologyCapabilities = {
-  kinds: ["face", "edge"],
+  kinds: ["face", "edge", "vertex"],
   provenance: "feature",
   semanticRoles: false,
   sketchSources: false,
@@ -83,6 +83,7 @@ const topologySnapshot: KernelTopologySnapshot = {
     },
   ],
   edges: [],
+  vertices: [],
 };
 
 function createShellOffsetKernelHarness(
@@ -369,7 +370,7 @@ describe.each<ShellOffsetFeature>(["shell", "offset"])(
         exact: true,
         topologyCapabilities: null,
         implementTopology: true,
-        reason: `${feature} evolution requires face and edge topology with feature-or-history provenance`,
+        reason: `${feature} evolution requires face, edge, and vertex topology with feature-or-history provenance`,
       },
       {
         name: "face topology",
@@ -379,7 +380,7 @@ describe.each<ShellOffsetFeature>(["shell", "offset"])(
           kinds: ["edge"] as const,
         },
         implementTopology: true,
-        reason: `${feature} evolution requires face and edge topology with feature-or-history provenance`,
+        reason: `${feature} evolution requires face, edge, and vertex topology with feature-or-history provenance`,
       },
       {
         name: "edge topology",
@@ -389,7 +390,7 @@ describe.each<ShellOffsetFeature>(["shell", "offset"])(
           kinds: ["face"] as const,
         },
         implementTopology: true,
-        reason: `${feature} evolution requires face and edge topology with feature-or-history provenance`,
+        reason: `${feature} evolution requires face, edge, and vertex topology with feature-or-history provenance`,
       },
       {
         name: "feature provenance",
@@ -399,14 +400,14 @@ describe.each<ShellOffsetFeature>(["shell", "offset"])(
           provenance: "none" as const,
         },
         implementTopology: true,
-        reason: `${feature} evolution requires face and edge topology with feature-or-history provenance`,
+        reason: `${feature} evolution requires face, edge, and vertex topology with feature-or-history provenance`,
       },
       {
         name: "topology()",
         exact: true,
         topologyCapabilities: exactShellOffsetTopology,
         implementTopology: false,
-        reason: `${feature} evolution requires face and edge topology with feature-or-history provenance`,
+        reason: `${feature} evolution requires face, edge, and vertex topology with feature-or-history provenance`,
       },
     ])(
       "requires $name before selection or kernel execution when exact evolution is advertised",

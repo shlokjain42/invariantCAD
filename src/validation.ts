@@ -14,17 +14,20 @@ import {
   type Diagnostic,
 } from "./core/result.js";
 import type { Dimension, ExpressionIR } from "./expressions.js";
+import { pluralTopologyKind } from "./internal/topology-language.js";
 import {
   DOCUMENT_SCHEMA_V1,
   DOCUMENT_SCHEMA_V2,
   DOCUMENT_SCHEMA_V3,
   DOCUMENT_SCHEMA_V4,
   DOCUMENT_SCHEMA_V5,
+  DOCUMENT_SCHEMA_V6,
   DOCUMENT_VERSION_V1,
   DOCUMENT_VERSION_V2,
   DOCUMENT_VERSION_V3,
   DOCUMENT_VERSION_V4,
   DOCUMENT_VERSION_V5,
+  DOCUMENT_VERSION_V6,
   nodeDependencies,
   outputKindForNode,
   type DesignDocument,
@@ -45,6 +48,7 @@ import {
   TOPOLOGY_ROLES_V3,
   TOPOLOGY_ROLES_V4,
   TOPOLOGY_ROLES_V5,
+  TOPOLOGY_ROLES_V6,
   TOPOLOGY_ROLE_RULES,
   type TopologyKind,
   type TopologyRole,
@@ -67,6 +71,8 @@ function topologyRolesForDocumentVersion(
       return TOPOLOGY_ROLES_V4;
     case DOCUMENT_VERSION_V5:
       return TOPOLOGY_ROLES_V5;
+    case DOCUMENT_VERSION_V6:
+      return TOPOLOGY_ROLES_V6;
   }
 }
 
@@ -649,6 +655,18 @@ function validateTopologySelection(
   path: string,
   diagnostics: Diagnostic[],
 ): void {
+  if (
+    selection.topology === "vertex" &&
+    document.version !== DOCUMENT_VERSION_V6
+  ) {
+    diagnostics.push(
+      diagnostic(
+        "TOPOLOGY_SELECTOR_INVALID",
+        "Vertex topology selections require document version 6",
+        { severity: "error", path: `${path}/topology` },
+      ),
+    );
+  }
   if (selection.topology !== expected) {
     diagnostics.push(
       diagnostic(
@@ -702,13 +720,15 @@ function validateTopologySelection(
             (document.schema === DOCUMENT_SCHEMA_V4 &&
               document.version === DOCUMENT_VERSION_V4) ||
             (document.schema === DOCUMENT_SCHEMA_V5 &&
-              document.version === DOCUMENT_VERSION_V5)
+              document.version === DOCUMENT_VERSION_V5) ||
+            (document.schema === DOCUMENT_SCHEMA_V6 &&
+              document.version === DOCUMENT_VERSION_V6)
           )
         ) {
           diagnostics.push(
             diagnostic(
               "TOPOLOGY_SELECTOR_INVALID",
-              "Persistent topology references require document version 2, 3, 4, or 5",
+              "Persistent topology references require document version 2, 3, 4, 5, or 6",
               {
                 severity: "error",
                 path: `${queryPath}/reference`,
@@ -741,7 +761,7 @@ function validateTopologySelection(
           diagnostics.push(
             diagnostic(
               "TOPOLOGY_SELECTOR_INVALID",
-              `Persistent topology reference '${query.reference}' selects ${reference.topology}s, not ${topology}s`,
+              `Persistent topology reference '${query.reference}' selects ${pluralTopologyKind(reference.topology)}, not ${pluralTopologyKind(topology)}`,
               {
                 severity: "error",
                 path: `${queryPath}/reference`,
@@ -836,7 +856,7 @@ function validateTopologySelection(
             diagnostics.push(
               diagnostic(
                 "TOPOLOGY_SELECTOR_INVALID",
-                `Topology role '${query.role}' selects ${rule.topology}s, not ${topology}s`,
+                `Topology role '${query.role}' selects ${pluralTopologyKind(rule.topology)}, not ${pluralTopologyKind(topology)}`,
                 { severity: "error", path: `${queryPath}/role` },
               ),
             );
@@ -864,10 +884,12 @@ function validateTopologySelection(
           const supportsLoftSources =
             document.version === DOCUMENT_VERSION_V3 ||
             document.version === DOCUMENT_VERSION_V4 ||
-            document.version === DOCUMENT_VERSION_V5;
+            document.version === DOCUMENT_VERSION_V5 ||
+            document.version === DOCUMENT_VERSION_V6;
           const supportsSweepSources =
             document.version === DOCUMENT_VERSION_V4 ||
-            document.version === DOCUMENT_VERSION_V5;
+            document.version === DOCUMENT_VERSION_V5 ||
+            document.version === DOCUMENT_VERSION_V6;
           const profileProducer =
             feature?.kind === "extrude" ||
             feature?.kind === "revolve" ||
@@ -880,7 +902,8 @@ function validateTopologySelection(
               diagnostic(
                 "TOPOLOGY_SELECTOR_INVALID",
                 document.version === DOCUMENT_VERSION_V4 ||
-                  document.version === DOCUMENT_VERSION_V5
+                  document.version === DOCUMENT_VERSION_V5 ||
+                  document.version === DOCUMENT_VERSION_V6
                   ? "Sketch-entity topology sources require topology created by an extrusion, revolution, loft, or sweep"
                   : document.version === DOCUMENT_VERSION_V3
                     ? "Sketch-entity topology sources require topology created by an extrusion, revolution, or loft"
@@ -1017,6 +1040,15 @@ function validateTopologySelection(
         );
         break;
       case "radius":
+        if (topology === "vertex") {
+          diagnostics.push(
+            diagnostic(
+              "TOPOLOGY_SELECTOR_INVALID",
+              "Radius queries require face or edge topology",
+              { severity: "error", path: queryPath },
+            ),
+          );
+        }
         validateExpression(query.value, "length", document, `${queryPath}/value`, diagnostics);
         validateExpression(
           query.tolerance,
@@ -1026,25 +1058,63 @@ function validateTopologySelection(
           diagnostics,
         );
         break;
-      case "adjacentTo":
-        if (query.selection.topology === topology) {
+      case "position":
+        if (document.version !== DOCUMENT_VERSION_V6) {
           diagnostics.push(
             diagnostic(
               "TOPOLOGY_SELECTOR_INVALID",
-              "Adjacent topology selection must target the opposite topology kind",
+              "Position topology queries require document version 6",
+              { severity: "error", path: queryPath },
+            ),
+          );
+        }
+        incompatible("vertex", "Position");
+        query.value.forEach((value, index) =>
+          validateExpression(
+            value,
+            "length",
+            document,
+            `${queryPath}/value/${index}`,
+            diagnostics,
+          ),
+        );
+        validateExpression(
+          query.tolerance,
+          "length",
+          document,
+          `${queryPath}/tolerance`,
+          diagnostics,
+        );
+        break;
+      case "adjacentTo": {
+        const adjacentTopology = query.selection.topology;
+        const legalPair =
+          topology === "face"
+            ? adjacentTopology === "edge"
+            : topology === "edge"
+              ? adjacentTopology === "face" || adjacentTopology === "vertex"
+              : adjacentTopology === "edge";
+        if (!legalPair) {
+          diagnostics.push(
+            diagnostic(
+              "TOPOLOGY_SELECTOR_INVALID",
+              `Adjacent ${topology} topology must select ${
+                topology === "edge" ? "face or vertex" : "edge"
+              } topology`,
               { severity: "error", path: `${queryPath}/selection/topology` },
             ),
           );
         }
         validateTopologySelection(
           query.selection,
-          topology === "edge" ? "face" : "edge",
+          adjacentTopology,
           input,
           document,
           `${queryPath}/selection`,
           diagnostics,
         );
         break;
+      }
       case "and":
       case "or":
         if (query.queries.length === 0) {
@@ -1488,12 +1558,15 @@ function validateTopologyReferences(
     schema === DOCUMENT_SCHEMA_V4 && version === DOCUMENT_VERSION_V4;
   const isVersion5 =
     schema === DOCUMENT_SCHEMA_V5 && version === DOCUMENT_VERSION_V5;
+  const isVersion6 =
+    schema === DOCUMENT_SCHEMA_V6 && version === DOCUMENT_VERSION_V6;
   if (
     !isVersion1 &&
     !isVersion2 &&
     !isVersion3 &&
     !isVersion4 &&
-    !isVersion5
+    !isVersion5 &&
+    !isVersion6
   ) {
     diagnostics.push(
       diagnostic(
@@ -1511,6 +1584,7 @@ function validateTopologyReferences(
               { schema: DOCUMENT_SCHEMA_V3, version: DOCUMENT_VERSION_V3 },
               { schema: DOCUMENT_SCHEMA_V4, version: DOCUMENT_VERSION_V4 },
               { schema: DOCUMENT_SCHEMA_V5, version: DOCUMENT_VERSION_V5 },
+              { schema: DOCUMENT_SCHEMA_V6, version: DOCUMENT_VERSION_V6 },
             ],
           },
         },
@@ -1526,11 +1600,17 @@ function validateTopologyReferences(
     }
   ).topologyReferences;
   if (topologyReferences === undefined) return;
-  if (!isVersion2 && !isVersion3 && !isVersion4 && !isVersion5) {
+  if (
+    !isVersion2 &&
+    !isVersion3 &&
+    !isVersion4 &&
+    !isVersion5 &&
+    !isVersion6
+  ) {
     diagnostics.push(
       diagnostic(
         "IR_INVALID",
-        "Persistent topology reference registries require document version 2, 3, 4, or 5",
+        "Persistent topology reference registries require document version 2, 3, 4, 5, or 6",
         { severity: "error", path: "/topologyReferences" },
       ),
     );
@@ -1556,7 +1636,11 @@ function validateTopologyReferences(
   for (const [id, entry] of entries) {
     const path = `/topologyReferences/${id}`;
     validateRef(entry.target, "solid", document, `${path}/target`, diagnostics);
-    if (entry.topology !== "face" && entry.topology !== "edge") {
+    if (
+      entry.topology !== "face" &&
+      entry.topology !== "edge" &&
+      (!isVersion6 || entry.topology !== "vertex")
+    ) {
       diagnostics.push(
         diagnostic(
           "TOPOLOGY_SELECTOR_INVALID",
@@ -1607,6 +1691,18 @@ function validateTopologyReferences(
         );
         continue;
       }
+      if (!isVersion6 && normalized.value.protocolVersion !== 1) {
+        diagnostics.push(
+          diagnostic(
+            "TOPOLOGY_SIGNATURE_INVALID",
+            `Topology signature protocol v${normalized.value.protocolVersion} requires document version 6`,
+            {
+              severity: "error",
+              path: `${variantPath}/protocolVersion`,
+            },
+          ),
+        );
+      }
       normalized.value.lineage.forEach((lineage, lineageIndex) => {
         if (
           lineage.role !== undefined &&
@@ -1647,7 +1743,7 @@ function validateTopologyReferences(
         diagnostics.push(
           diagnostic(
             "TOPOLOGY_SIGNATURE_INVALID",
-            `Persistent topology variant selects ${normalized.value.topology}s, not ${entry.topology}s`,
+            `Persistent topology variant selects ${pluralTopologyKind(normalized.value.topology)}, not ${pluralTopologyKind(entry.topology)}`,
             {
               severity: "error",
               path: `${variantPath}/topology`,

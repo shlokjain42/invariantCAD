@@ -36,6 +36,7 @@ import {
   DOCUMENT_VERSION_V3,
   DOCUMENT_VERSION_V4,
   DOCUMENT_VERSION_V5,
+  DOCUMENT_VERSION_V6,
   type AssemblyInstanceIR,
   type DesignConfigurationIR,
   type DesignDocument,
@@ -112,7 +113,8 @@ import type {
   TopologyKind,
 } from "./protocol/topology.js";
 import {
-  TOPOLOGY_SIGNATURE_PROTOCOL_VERSION,
+  TOPOLOGY_SIGNATURE_PROTOCOL_VERSION_V1,
+  TOPOLOGY_SIGNATURE_PROTOCOL_VERSION_V2,
   type TopologySignatureLimits,
 } from "./topology-signatures.js";
 import {
@@ -147,38 +149,84 @@ type SignatureCapabilityInspection =
   | { readonly status: "invalid" }
   | {
       readonly status: "valid";
-      readonly value: KernelTopologySignatureCapabilities;
+      readonly value: readonly KernelTopologySignatureCapabilities[];
     };
 
-function inspectTopologySignatureCapabilities(
+function inspectTopologySignatureCapability(
   value: unknown,
+): KernelTopologySignatureCapabilities | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Readonly<Record<string, unknown>>;
+  const keys = Object.keys(record).sort();
+  if (
+    keys.length !== 2 ||
+    keys[0] !== "fingerprint" ||
+    keys[1] !== "protocolVersion"
+  ) {
+    return undefined;
+  }
+  const protocolVersion = record.protocolVersion;
+  const fingerprint = record.fingerprint;
+  if (
+    (protocolVersion !== TOPOLOGY_SIGNATURE_PROTOCOL_VERSION_V1 &&
+      protocolVersion !== TOPOLOGY_SIGNATURE_PROTOCOL_VERSION_V2) ||
+    typeof fingerprint !== "string" ||
+    fingerprint.length === 0
+  ) {
+    return undefined;
+  }
+  return { protocolVersion, fingerprint };
+}
+
+function inspectTopologySignatureCapabilities(
+  primary: unknown,
+  compatibility: unknown,
 ): SignatureCapabilityInspection {
-  if (value === undefined) return { status: "missing" };
+  if (primary === undefined && compatibility === undefined) {
+    return { status: "missing" };
+  }
   try {
-    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    const inspectedPrimary = inspectTopologySignatureCapability(primary);
+    if (inspectedPrimary === undefined) {
       return { status: "invalid" };
     }
-    const record = value as Readonly<Record<string, unknown>>;
-    const keys = Object.keys(record).sort();
-    if (
-      keys.length !== 2 ||
-      keys[0] !== "fingerprint" ||
-      keys[1] !== "protocolVersion"
-    ) {
+    if (compatibility !== undefined && !Array.isArray(compatibility)) {
       return { status: "invalid" };
     }
-    const protocolVersion = record.protocolVersion;
-    const fingerprint = record.fingerprint;
-    if (
-      protocolVersion !== TOPOLOGY_SIGNATURE_PROTOCOL_VERSION ||
-      typeof fingerprint !== "string" ||
-      fingerprint.length === 0
-    ) {
+    const compatibilityLength = Array.isArray(compatibility)
+      ? compatibility.length
+      : 0;
+    if (compatibilityLength > 1) return { status: "invalid" };
+    const profiles: KernelTopologySignatureCapabilities[] = [inspectedPrimary];
+    if (Array.isArray(compatibility)) {
+      for (let index = 0; index < compatibilityLength; index += 1) {
+        if (!Object.hasOwn(compatibility, index)) {
+          return { status: "invalid" };
+        }
+        const inspected = inspectTopologySignatureCapability(
+          compatibility[index],
+        );
+        if (
+          inspected === undefined ||
+          inspected.protocolVersion >= inspectedPrimary.protocolVersion
+        ) {
+          return { status: "invalid" };
+        }
+        profiles.push(inspected);
+      }
+    }
+    if (new Set(profiles.map((profile) => profile.protocolVersion)).size !== profiles.length) {
       return { status: "invalid" };
     }
     return {
       status: "valid",
-      value: { protocolVersion, fingerprint },
+      value: Object.freeze(
+        profiles.sort(
+          (first, second) => second.protocolVersion - first.protocolVersion,
+        ),
+      ),
     };
   } catch {
     return { status: "invalid" };
@@ -1626,7 +1674,6 @@ export class Evaluator {
         capability === "shell" ||
         capability === "offset"
       ) {
-        const requiresEdges = capability !== "draft";
         const topology: unknown = this.kernel.capabilities.topology;
         const topologyProvenance = (
           topology as { readonly provenance?: unknown } | undefined
@@ -1638,19 +1685,20 @@ export class Evaluator {
           !(topology as { readonly kinds: readonly unknown[] }).kinds.includes(
             "face",
           ) ||
-          (requiresEdges &&
-            !(topology as { readonly kinds: readonly unknown[] }).kinds.includes(
-              "edge",
-            )) ||
+          !(topology as { readonly kinds: readonly unknown[] }).kinds.includes(
+            "edge",
+          ) ||
+          !(topology as { readonly kinds: readonly unknown[] }).kinds.includes(
+            "vertex",
+          ) ||
           (topologyProvenance !== "feature" &&
             topologyProvenance !== "history") ||
           typeof this.kernel.topology !== "function"
         ) {
           protocolViolation(
-            `${capability} evolution requires ${requiresEdges ? "face and edge" : "face"} topology with feature-or-history provenance`,
+            `${capability} evolution requires face, edge, and vertex topology with feature-or-history provenance`,
             {
-              requiredTopologyKinds:
-                requiresEdges ? ["face", "edge"] : ["face"],
+              requiredTopologyKinds: ["face", "edge", "vertex"],
               requiredTopologyProvenance: "feature-or-history",
             },
           );
@@ -1875,6 +1923,7 @@ export class Evaluator {
       if (requirements.persistentReferences.length > 0) {
         const signatureCapabilities = inspectTopologySignatureCapabilities(
           topologyCapabilities.signatures,
+          topologyCapabilities.signatureProfiles,
         );
         if (signatureCapabilities.status === "missing") {
           throw new EvaluationFailure(
@@ -1910,8 +1959,38 @@ export class Evaluator {
                   kernel: this.kernel.id,
                   kind: "topology",
                   protocolViolation: true,
-                  expectedProtocolVersion:
-                    TOPOLOGY_SIGNATURE_PROTOCOL_VERSION,
+                  expectedProtocolVersions: [
+                    TOPOLOGY_SIGNATURE_PROTOCOL_VERSION_V1,
+                    TOPOLOGY_SIGNATURE_PROTOCOL_VERSION_V2,
+                  ],
+                },
+              },
+            ),
+          );
+        }
+        if (
+          signatureCapabilities.value.some(
+            (profile) =>
+              profile.protocolVersion ===
+              TOPOLOGY_SIGNATURE_PROTOCOL_VERSION_V2,
+          ) &&
+          (["face", "edge", "vertex"] as const).some(
+            (kind) => !topologyCapabilities.kinds.includes(kind),
+          )
+        ) {
+          throw new EvaluationFailure(
+            diagnostic(
+              "KERNEL_ERROR",
+              `Kernel '${this.kernel.id}' declares topology-signature protocol v2 without the complete vertex topology graph`,
+              {
+                severity: "error",
+                node: id,
+                path,
+                details: {
+                  kernel: this.kernel.id,
+                  kind: "topology",
+                  protocolViolation: true,
+                  requiredTopologyKinds: ["face", "edge", "vertex"],
                 },
               },
             ),
@@ -1921,7 +2000,8 @@ export class Evaluator {
           document.version === DOCUMENT_VERSION_V2 ||
           document.version === DOCUMENT_VERSION_V3 ||
           document.version === DOCUMENT_VERSION_V4 ||
-          document.version === DOCUMENT_VERSION_V5
+          document.version === DOCUMENT_VERSION_V5 ||
+          document.version === DOCUMENT_VERSION_V6
             ? document.topologyReferences
             : undefined;
         if (registry === undefined) {
@@ -1969,14 +2049,15 @@ export class Evaluator {
               ),
             );
           }
-          const compatible = entry.variants.some(
-            (variant) =>
-              variant.protocolVersion ===
-                signatureCapabilities.value.protocolVersion &&
-              variant.kernelFingerprint ===
-                signatureCapabilities.value.fingerprint,
+          const compatibleProfile = signatureCapabilities.value.find(
+            (profile) =>
+              entry.variants.some(
+                (variant) =>
+                  variant.protocolVersion === profile.protocolVersion &&
+                  variant.kernelFingerprint === profile.fingerprint,
+              ),
           );
-          if (!compatible) {
+          if (compatibleProfile === undefined) {
             throw new EvaluationFailure(
               diagnostic(
                 "TOPOLOGY_FINGERPRINT_MISMATCH",
@@ -1988,10 +2069,7 @@ export class Evaluator {
                   details: {
                     reference: referenceId,
                     kernel: this.kernel.id,
-                    protocolVersion:
-                      signatureCapabilities.value.protocolVersion,
-                    kernelFingerprint:
-                      signatureCapabilities.value.fingerprint,
+                    profiles: signatureCapabilities.value,
                     available: entry.variants
                       .map((variant) => ({
                         protocolVersion: variant.protocolVersion,
@@ -2002,6 +2080,37 @@ export class Evaluator {
                           second.kernelFingerprint,
                         ),
                       ),
+                  },
+                },
+              ),
+            );
+          }
+          const requiredKinds: readonly TopologyKind[] =
+            compatibleProfile.protocolVersion ===
+            TOPOLOGY_SIGNATURE_PROTOCOL_VERSION_V1
+              ? ["face", "edge"]
+              : entry.topology === "edge"
+                ? ["face", "edge", "vertex"]
+                : entry.topology === "face"
+                  ? ["face", "edge"]
+                  : ["edge", "vertex"];
+          const missingKinds = requiredKinds.filter(
+            (kind) => !topologyCapabilities.kinds.includes(kind),
+          );
+          if (missingKinds.length > 0) {
+            throw new EvaluationFailure(
+              diagnostic(
+                "KERNEL_CAPABILITY_MISSING",
+                `Kernel '${this.kernel.id}' cannot resolve persistent topology reference '${referenceId}'`,
+                {
+                  severity: "error",
+                  node: id,
+                  path,
+                  details: {
+                    kernel: this.kernel.id,
+                    kind: "topology",
+                    reference: referenceId,
+                    missing: missingKinds.map((kind) => `${kind}-topology`),
                   },
                 },
               ),

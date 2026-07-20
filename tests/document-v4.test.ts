@@ -4,12 +4,12 @@ import {
   DOCUMENT_SCHEMA_V2,
   DOCUMENT_SCHEMA_V3,
   DOCUMENT_SCHEMA_V4,
-  DOCUMENT_SCHEMA_V5,
+  DOCUMENT_SCHEMA_V6,
   DOCUMENT_VERSION_V1,
   DOCUMENT_VERSION_V2,
   DOCUMENT_VERSION_V3,
   DOCUMENT_VERSION_V4,
-  DOCUMENT_VERSION_V5,
+  DOCUMENT_VERSION_V6,
   DesignDocumentV1Schema,
   DesignDocumentV2Schema,
   DesignDocumentV3Schema,
@@ -40,6 +40,7 @@ import {
   type DesignDocumentV3,
   type DesignDocumentV4,
   type DesignDocumentV5,
+  type DesignDocumentV6,
   type NodeIRV3,
   type NodeIRV4,
   type PersistentTopologyReferenceV2,
@@ -187,7 +188,8 @@ function canonicalRegistry(
     | DesignDocumentV2
     | DesignDocumentV3
     | DesignDocumentV4
-    | DesignDocumentV5,
+    | DesignDocumentV5
+    | DesignDocumentV6,
 ): string {
   const serialized = JSON.parse(stringifyDocument(document)) as {
     readonly topologyReferences?: unknown;
@@ -420,8 +422,8 @@ describe("DesignDocument v4 compatibility boundary", () => {
       expect(stringifyDocument(source)).toBe(sourceBytes);
       if (!migrated.ok) continue;
       expect(migrated.value).toMatchObject({
-        schema: DOCUMENT_SCHEMA_V5,
-        version: DOCUMENT_VERSION_V5,
+        schema: DOCUMENT_SCHEMA_V6,
+        version: DOCUMENT_VERSION_V6,
       });
       if (sourceRegistry !== undefined) {
         expect(canonicalRegistry(migrated.value)).toBe(sourceRegistry);

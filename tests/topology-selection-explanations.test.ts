@@ -41,6 +41,7 @@ function edge(
     length: 10,
     curve: options.curve ?? { kind: "line", direction: [0, 0, 1] },
     faces: options.faces ?? [],
+    vertices: [],
   };
 }
 
@@ -101,6 +102,7 @@ function mainSnapshot(
     history,
     faces: reverse ? [...mainFaces].reverse() : mainFaces,
     edges: reverse ? [...mainEdges].reverse() : mainEdges,
+    vertices: [],
   };
 }
 
@@ -151,6 +153,7 @@ function persistentFixture(): {
       history: "partial",
       faces: [],
       edges: [edge("captured-edge", { center: [2, 3, 4] })],
+      vertices: [],
     },
     "edge",
     key("captured-edge"),
@@ -337,6 +340,7 @@ describe("topology-selection resolution explanations", () => {
       history: "partial",
       faces: [],
       edges: [edge("current-edge", { center: [2, 3, 4] })],
+      vertices: [],
     };
     const context = {
       ...literalContext,
@@ -387,6 +391,7 @@ describe("topology-selection resolution explanations", () => {
         edge("current-first", { center: [2, 3, 4] }),
         edge("current-second", { center: [2, 3, 4] }),
       ],
+      vertices: [],
     };
     const diagnostic = failureDiagnostic(
       explainTopologySelection(fixture.selection, current, {
@@ -548,6 +553,7 @@ describe("topology-selection resolution explanations", () => {
       history: "complete",
       faces: [],
       edges: [duplicate, duplicate],
+      vertices: [],
     };
     expect(
       failureDiagnostic(

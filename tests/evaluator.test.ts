@@ -105,8 +105,10 @@ describe("geometry evaluation", () => {
           length: 2,
           curve: { kind: "line", direction: [1, 0, 0] },
           faces: ["cached-face"],
+          vertices: [],
         },
       ],
+      vertices: [],
     } as unknown as KernelTopologySnapshot;
     const delegate = await createManifoldKernel();
     let topologyCalls = 0;

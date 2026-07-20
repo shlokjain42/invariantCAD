@@ -11,25 +11,41 @@ import {
   type KernelTopologyLineage,
   type KernelTopologySnapshot,
 } from "../src/index.js";
+import type { KernelVertexDescriptor } from "../src/protocol/topology.js";
+import { canonicalStringify } from "../src/core/json.js";
 import {
+  TOPOLOGY_SIGNATURE_PROTOCOL_VERSION_V1,
+  TOPOLOGY_SIGNATURE_PROTOCOL_VERSION_V2,
   createTopologyReferenceResolutionSession,
   normalizePersistentTopologyReference,
+  type PersistentTopologyReferenceProtocolV1,
+  type PersistentTopologyReferenceProtocolV2,
 } from "../src/topology-signatures.js";
 
 function key(value: string): KernelTopologyKey {
   return value as KernelTopologyKey;
 }
 
-const capabilities = {
+const capabilitiesV1 = {
   protocolVersion: 1 as const,
   fingerprint: "test-kernel/topology-signatures@1",
 };
+
+const capabilitiesV2 = {
+  protocolVersion: 2 as const,
+  fingerprint: "test-kernel/topology-signatures@2",
+};
+
+const capabilities = capabilitiesV1;
 
 const tolerance = {
   linear: 1e-6,
   angular: 1e-6,
   relative: 1e-8,
 };
+
+const expectedProtocolV1EdgeCaptureBytes =
+  '{"adjacency":[{"geometry":{"bounds":{"max":[10,0,0],"min":[0,0,0]},"center":[5,0,0],"kind":"plane","measure":10,"normal":[0,-1,0],"topology":"face"},"lineage":[{"feature":"box","relation":"created","role":"box.face.y-min"},{"feature":"box","relation":"created"}],"topology":"face"}],"capturedHistory":"complete","geometry":{"bounds":{"max":[10,0,0],"min":[0,0,0]},"center":[5,0,0],"direction":[1,0,0],"kind":"line","measure":10,"topology":"edge"},"kernelFingerprint":"test-kernel/topology-signatures@1","lineage":[{"feature":"box","relation":"created","role":"box.edge.x-min-y-min"},{"feature":"box","relation":"created"}],"protocolVersion":1,"tolerance":{"angular":0.000001,"linear":0.000001,"relative":1e-8},"topology":"edge"}';
 
 function face(
   id: string,
@@ -70,6 +86,7 @@ function edge(
     readonly length?: number;
     readonly curve?: KernelEdgeDescriptor["curve"];
     readonly faces?: readonly string[];
+    readonly vertices?: readonly string[];
   } = {},
 ): KernelEdgeDescriptor {
   const center = options.center ?? [0, 0, 0];
@@ -82,6 +99,24 @@ function edge(
     length: options.length ?? 10,
     curve: options.curve ?? { kind: "line", direction: [1, 0, 0] },
     faces: (options.faces ?? []).map(key),
+    vertices: (options.vertices ?? []).map(key),
+  };
+}
+
+function vertex(
+  id: string,
+  options: {
+    readonly point?: readonly [number, number, number];
+    readonly lineage?: readonly KernelTopologyLineage[];
+    readonly edges?: readonly string[];
+  } = {},
+): KernelVertexDescriptor {
+  return {
+    topology: "vertex",
+    key: key(id),
+    point: options.point ?? [0, 0, 0],
+    lineage: options.lineage ?? [],
+    edges: (options.edges ?? []).map(key),
   };
 }
 
@@ -89,8 +124,9 @@ function snapshot(
   faces: readonly KernelFaceDescriptor[],
   edges: readonly KernelEdgeDescriptor[] = [],
   history: KernelTopologySnapshot["history"] = "complete",
+  vertices: readonly KernelVertexDescriptor[] = [],
 ): KernelTopologySnapshot {
-  return { history, faces, edges };
+  return { history, faces, edges, vertices };
 }
 
 function broadLineage(feature = "producer"): readonly KernelTopologyLineage[] {
@@ -230,8 +266,10 @@ function adjacencySnapshot(prefix: string): KernelTopologySnapshot {
 }
 
 describe("persistent topology signatures", () => {
-  it("exports and embeds protocol version 1", () => {
-    expect(TOPOLOGY_SIGNATURE_PROTOCOL_VERSION).toBe(1);
+  it("exports protocol v1/v2 constants and emits the selected v1 profile", () => {
+    expect(TOPOLOGY_SIGNATURE_PROTOCOL_VERSION_V1).toBe(1);
+    expect(TOPOLOGY_SIGNATURE_PROTOCOL_VERSION_V2).toBe(2);
+    expect(TOPOLOGY_SIGNATURE_PROTOCOL_VERSION).toBe(2);
     const { before } = semanticSnapshots();
     const captured = capture(before, "face", key("old-min"));
     expect(captured.ok).toBe(true);
@@ -239,6 +277,460 @@ describe("persistent topology signatures", () => {
     expect(captured.value).toEqual(
       expect.objectContaining({ protocolVersion: 1 }),
     );
+    const typed: PersistentTopologyReferenceProtocolV1<"face"> =
+      captured.value;
+    expect(typed.topology).toBe("face");
+  });
+
+  it("freezes canonical protocol-v1 edge capture bytes", () => {
+    const value = snapshot(
+      [
+        face("face", {
+          center: [5, 0, 0],
+          bounds: { min: [0, 0, 0], max: [10, 0, 0] },
+          lineage: [
+            {
+              feature: "box",
+              relation: "created",
+              role: "box.face.y-min",
+            },
+            { feature: "box", relation: "created" },
+          ],
+          area: 10,
+          surface: { kind: "plane", normal: [0, -1, 0] },
+          edges: ["edge"],
+        }),
+      ],
+      [
+        edge("edge", {
+          center: [5, 0, 0],
+          bounds: { min: [0, 0, 0], max: [10, 0, 0] },
+          lineage: [
+            {
+              feature: "box",
+              relation: "created",
+              role: "box.edge.x-min-y-min",
+            },
+            { feature: "box", relation: "created" },
+          ],
+          length: 10,
+          curve: { kind: "line", direction: [1, 0, 0] },
+          faces: ["face"],
+          vertices: ["start", "end"],
+        }),
+      ],
+      "complete",
+      [
+        vertex("start", { point: [0, 0, 0], edges: ["edge"] }),
+        vertex("end", { point: [10, 0, 0], edges: ["edge"] }),
+      ],
+    );
+    const captured = captureTopologyReference(
+      value,
+      "edge",
+      key("edge"),
+      { capabilities: capabilitiesV1, tolerance },
+    );
+
+    expect(captured.ok).toBe(true);
+    if (!captured.ok) return;
+    expect(canonicalStringify(captured.value)).toBe(
+      expectedProtocolV1EdgeCaptureBytes,
+    );
+  });
+
+  it("captures protocol-v2 vertex point and incident-edge evidence", () => {
+    const value = snapshot(
+      [face("face", { edges: ["edge"] })],
+      [
+        edge("edge", {
+          faces: ["face"],
+          vertices: ["start", "end"],
+          center: [5, 0, 0],
+        }),
+      ],
+      "complete",
+      [
+        vertex("start", { point: [0, 0, 0], edges: ["edge"] }),
+        vertex("end", { point: [10, 0, 0], edges: ["edge"] }),
+      ],
+    );
+
+    const captured = captureTopologyReference(
+      value,
+      "vertex",
+      key("start"),
+      { capabilities: capabilitiesV2, tolerance },
+    );
+    expect(captured.ok).toBe(true);
+    if (!captured.ok) return;
+    const typed: PersistentTopologyReferenceProtocolV2<"vertex"> =
+      captured.value;
+    expect(typed).toMatchObject({
+      protocolVersion: 2,
+      kernelFingerprint: capabilitiesV2.fingerprint,
+      topology: "vertex",
+      geometry: { topology: "vertex", point: [0, 0, 0] },
+    });
+    expect(typed.adjacency.map((neighbor) => neighbor.topology)).toEqual([
+      "edge",
+    ]);
+    expectDeeplyFrozen(typed);
+  });
+
+  it("keeps protocol-v1 edge adjacency frozen while v2 adds endpoint vertices", () => {
+    const value = snapshot(
+      [face("face", { edges: ["edge"] })],
+      [
+        edge("edge", {
+          faces: ["face"],
+          vertices: ["start", "end"],
+        }),
+      ],
+      "complete",
+      [
+        vertex("start", { point: [0, 0, 0], edges: ["edge"] }),
+        vertex("end", { point: [10, 0, 0], edges: ["edge"] }),
+      ],
+    );
+    const legacy = captureTopologyReference(value, "edge", key("edge"), {
+      capabilities: capabilitiesV1,
+      tolerance,
+    });
+    const current = captureTopologyReference(value, "edge", key("edge"), {
+      capabilities: capabilitiesV2,
+      tolerance,
+    });
+    expect(legacy.ok).toBe(true);
+    expect(current.ok).toBe(true);
+    if (!legacy.ok || !current.ok) return;
+    expect(legacy.value.protocolVersion).toBe(1);
+    expect(legacy.value.adjacency.map((neighbor) => neighbor.topology)).toEqual([
+      "face",
+    ]);
+    expect(current.value.protocolVersion).toBe(2);
+    expect(
+      current.value.adjacency.map((neighbor) => neighbor.topology).sort(),
+    ).toEqual(["face", "vertex", "vertex"]);
+  });
+
+  it("normalizes both protocols and rejects v1 vertices or illegal v2 incidence", () => {
+    const validVertex = {
+      protocolVersion: 2,
+      kernelFingerprint: capabilitiesV2.fingerprint,
+      topology: "vertex",
+      capturedHistory: "complete",
+      tolerance,
+      lineage: [],
+      geometry: { topology: "vertex", point: [1, 2, 3] },
+      adjacency: [],
+    } as const;
+    const normalized = normalizePersistentTopologyReference(validVertex);
+    expect(normalized.ok).toBe(true);
+    if (normalized.ok) {
+      expect(normalized.value).toEqual(validVertex);
+      expectDeeplyFrozen(normalized.value);
+    }
+
+    expect(
+      failureCode(
+        normalizePersistentTopologyReference({
+          ...validVertex,
+          protocolVersion: 1,
+        }),
+      ),
+    ).toBe("TOPOLOGY_SIGNATURE_INVALID");
+    expect(
+      failureCode(
+        normalizePersistentTopologyReference({
+          ...validVertex,
+          adjacency: [
+            {
+              topology: "face",
+              lineage: [],
+              geometry: {
+                topology: "face",
+                kind: "plane",
+                measure: 1,
+                center: [0, 0, 0],
+                bounds: { min: [0, 0, 0], max: [0, 0, 0] },
+              },
+            },
+          ],
+        }),
+      ),
+    ).toBe("TOPOLOGY_SIGNATURE_INVALID");
+  });
+
+  it("resolves protocol-v2 vertices and rejects protocol or fingerprint drift", () => {
+    const before = snapshot(
+      [],
+      [edge("old-edge", { vertices: ["old-vertex"] })],
+      "complete",
+      [vertex("old-vertex", { point: [1, 2, 3], edges: ["old-edge"] })],
+    );
+    const after = snapshot(
+      [],
+      [edge("new-edge", { vertices: ["new-vertex"] })],
+      "complete",
+      [vertex("new-vertex", { point: [1, 2, 3], edges: ["new-edge"] })],
+    );
+    const captured = captureTopologyReference(
+      before,
+      "vertex",
+      key("old-vertex"),
+      { capabilities: capabilitiesV2, tolerance },
+    );
+    expect(captured.ok).toBe(true);
+    if (!captured.ok) return;
+
+    const resolved = resolveTopologyReference(captured.value, after, {
+      capabilities: capabilitiesV2,
+    });
+    expect(resolved.ok).toBe(true);
+    if (resolved.ok) expect(resolved.value.key).toBe(key("new-vertex"));
+
+    expect(
+      failureCode(
+        resolveTopologyReference(captured.value, after, {
+          capabilities: capabilitiesV1,
+        }),
+      ),
+    ).toBe("TOPOLOGY_FINGERPRINT_MISMATCH");
+    expect(
+      failureCode(
+        resolveTopologyReference(captured.value, after, {
+          capabilities: { ...capabilitiesV2, fingerprint: "different" },
+        }),
+      ),
+    ).toBe("TOPOLOGY_FINGERPRINT_MISMATCH");
+  });
+
+  it("resolves a moved vertex from its complete incident-edge semantic anchors", () => {
+    const lineage = (
+      role: Exclude<KernelTopologyLineage["role"], undefined>,
+    ) => [
+      { feature: "box", relation: "created" as const, role },
+    ];
+    const before = snapshot(
+      [],
+      [
+        edge("old-x", {
+          lineage: lineage("box.edge.y-min-z-min"),
+          vertices: ["old-corner"],
+        }),
+        edge("old-y", {
+          lineage: lineage("box.edge.x-min-z-min"),
+          vertices: ["old-corner"],
+        }),
+        edge("old-z", {
+          lineage: lineage("box.edge.x-min-y-min"),
+          vertices: ["old-corner"],
+        }),
+      ],
+      "complete",
+      [vertex("old-corner", { point: [0, 0, 0], edges: ["old-x", "old-y", "old-z"] })],
+    );
+    const after = snapshot(
+      [],
+      [
+        edge("new-x", {
+          center: [110, 20, 30],
+          length: 20,
+          lineage: lineage("box.edge.y-min-z-min"),
+          vertices: ["new-corner"],
+        }),
+        edge("new-y", {
+          center: [100, 35, 30],
+          length: 30,
+          lineage: lineage("box.edge.x-min-z-min"),
+          vertices: ["new-corner"],
+        }),
+        edge("new-z", {
+          center: [100, 20, 50],
+          length: 40,
+          lineage: lineage("box.edge.x-min-y-min"),
+          vertices: ["new-corner"],
+        }),
+        edge("other-x", {
+          center: [110, 50, 70],
+          length: 20,
+          lineage: lineage("box.edge.y-max-z-max"),
+          vertices: ["other-corner"],
+        }),
+        edge("other-y", {
+          center: [120, 35, 70],
+          length: 30,
+          lineage: lineage("box.edge.x-max-z-max"),
+          vertices: ["other-corner"],
+        }),
+        edge("other-z", {
+          center: [120, 50, 50],
+          length: 40,
+          lineage: lineage("box.edge.x-max-y-max"),
+          vertices: ["other-corner"],
+        }),
+      ],
+      "complete",
+      [
+        vertex("new-corner", {
+          point: [100, 20, 30],
+          edges: ["new-x", "new-y", "new-z"],
+        }),
+        vertex("other-corner", {
+          point: [120, 50, 70],
+          edges: ["other-x", "other-y", "other-z"],
+        }),
+      ],
+    );
+    const captured = captureTopologyReference(
+      before,
+      "vertex",
+      key("old-corner"),
+      { capabilities: capabilitiesV2, tolerance },
+    );
+    expect(captured.ok).toBe(true);
+    if (!captured.ok) return;
+
+    const resolved = resolveTopologyReference(captured.value, after, {
+      capabilities: capabilitiesV2,
+    });
+    expect(resolved).toEqual({
+      ok: true,
+      value: {
+        key: key("new-corner"),
+        evidence: "semantic-lineage",
+      },
+      diagnostics: [],
+    });
+  });
+
+  it("never cross-matches face and vertex neighbors in protocol-v2 edge evidence", () => {
+    const anchored = (entity: string): readonly KernelTopologyLineage[] => [
+      {
+        feature: "source-feature",
+        relation: "created",
+        source: {
+          kind: "sketch-entity",
+          sketch: "profile",
+          entity,
+        },
+      },
+    ];
+    const before = snapshot(
+      [
+        face("old-face", {
+          lineage: anchored("face-anchor"),
+          edges: ["old-edge"],
+        }),
+      ],
+      [
+        edge("old-edge", {
+          faces: ["old-face"],
+          vertices: ["old-vertex"],
+        }),
+      ],
+      "complete",
+      [
+        vertex("old-vertex", {
+          lineage: anchored("vertex-anchor"),
+          edges: ["old-edge"],
+        }),
+      ],
+    );
+    const after = snapshot(
+      [
+        face("new-face", {
+          lineage: anchored("vertex-anchor"),
+          edges: ["new-edge"],
+        }),
+      ],
+      [
+        edge("new-edge", {
+          faces: ["new-face"],
+          vertices: ["new-vertex"],
+        }),
+      ],
+      "complete",
+      [
+        vertex("new-vertex", {
+          lineage: anchored("face-anchor"),
+          edges: ["new-edge"],
+        }),
+      ],
+    );
+    const captured = captureTopologyReference(
+      before,
+      "edge",
+      key("old-edge"),
+      { capabilities: capabilitiesV2, tolerance },
+    );
+    expect(captured.ok).toBe(true);
+    if (!captured.ok) return;
+
+    expect(
+      failureCode(
+        resolveTopologyReference(captured.value, after, {
+          capabilities: capabilitiesV2,
+        }),
+      ),
+    ).toBe("TOPOLOGY_MATCH_MISSING");
+  });
+
+  it("applies stored point tolerance and fails closed for a v2 vertex orbit", () => {
+    const before = snapshot(
+      [],
+      [edge("source-edge", { vertices: ["source"] })],
+      "partial",
+      [vertex("source", { point: [1, 2, 3], edges: ["source-edge"] })],
+    );
+    const captured = captureTopologyReference(
+      before,
+      "vertex",
+      key("source"),
+      { capabilities: capabilitiesV2, tolerance },
+    );
+    expect(captured.ok).toBe(true);
+    if (!captured.ok) return;
+
+    const moved = snapshot(
+      [],
+      [edge("moved-edge", { vertices: ["moved"] })],
+      "partial",
+      [
+        vertex("moved", {
+          point: [1 + tolerance.linear * 2, 2, 3],
+          edges: ["moved-edge"],
+        }),
+      ],
+    );
+    expect(
+      failureCode(
+        resolveTopologyReference(captured.value, moved, {
+          capabilities: capabilitiesV2,
+        }),
+      ),
+    ).toBe("TOPOLOGY_MATCH_MISSING");
+
+    const symmetric = snapshot(
+      [],
+      [
+        edge("edge-a", { vertices: ["candidate-a"] }),
+        edge("edge-b", { vertices: ["candidate-b"] }),
+      ],
+      "partial",
+      [
+        vertex("candidate-a", { point: [1, 2, 3], edges: ["edge-a"] }),
+        vertex("candidate-b", { point: [1, 2, 3], edges: ["edge-b"] }),
+      ],
+    );
+    expect(
+      failureCode(
+        resolveTopologyReference(captured.value, symmetric, {
+          capabilities: capabilitiesV2,
+        }),
+      ),
+    ).toBe("TOPOLOGY_MATCH_AMBIGUOUS");
   });
 
   it("normalizes persistent evidence into one canonical deeply frozen value", () => {
@@ -299,7 +791,11 @@ describe("persistent topology signatures", () => {
       "producer-b",
     ]);
     expect(
-      normalized.value.adjacency.map((item) => item.geometry.center[0]),
+      normalized.value.adjacency.map((item) =>
+        item.geometry.topology === "vertex"
+          ? item.geometry.point[0]
+          : item.geometry.center[0],
+      ),
     ).toEqual([1, 2, 2]);
     expect(normalized.value.adjacency[1]?.lineage.map((item) => item.feature)).toEqual([
       "neighbor-a",

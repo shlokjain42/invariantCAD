@@ -45,7 +45,7 @@ interface EdgeTreatmentKernelOptions {
 }
 
 const exactEdgeTreatmentTopology: KernelTopologyCapabilities = {
-  kinds: ["face", "edge"],
+  kinds: ["face", "edge", "vertex"],
   provenance: "feature",
   semanticRoles: false,
   sketchSources: false,
@@ -66,12 +66,14 @@ const selectedEdge: KernelEdgeDescriptor = {
   length: 10,
   curve: { kind: "line", direction: [0, 0, 1] },
   faces: [],
+  vertices: [],
 };
 
 const topologySnapshot: KernelTopologySnapshot = {
   history: "complete",
   faces: [],
   edges: [selectedEdge],
+  vertices: [],
 };
 
 function createEdgeTreatmentKernelHarness(
@@ -300,7 +302,7 @@ describe.each<EdgeTreatmentFeature>(["fillet", "chamfer"])(
         exact: true,
         topologyCapabilities: null,
         implementTopology: true,
-        reason: `${feature} evolution requires face and edge topology with feature-or-history provenance`,
+        reason: `${feature} evolution requires face, edge, and vertex topology with feature-or-history provenance`,
       },
       {
         name: "face topology",
@@ -310,7 +312,7 @@ describe.each<EdgeTreatmentFeature>(["fillet", "chamfer"])(
           kinds: ["edge"] as const,
         },
         implementTopology: true,
-        reason: `${feature} evolution requires face and edge topology with feature-or-history provenance`,
+        reason: `${feature} evolution requires face, edge, and vertex topology with feature-or-history provenance`,
       },
       {
         name: "edge topology",
@@ -320,7 +322,7 @@ describe.each<EdgeTreatmentFeature>(["fillet", "chamfer"])(
           kinds: ["face"] as const,
         },
         implementTopology: true,
-        reason: `${feature} evolution requires face and edge topology with feature-or-history provenance`,
+        reason: `${feature} evolution requires face, edge, and vertex topology with feature-or-history provenance`,
       },
       {
         name: "feature provenance",
@@ -330,14 +332,14 @@ describe.each<EdgeTreatmentFeature>(["fillet", "chamfer"])(
           provenance: "none" as const,
         },
         implementTopology: true,
-        reason: `${feature} evolution requires face and edge topology with feature-or-history provenance`,
+        reason: `${feature} evolution requires face, edge, and vertex topology with feature-or-history provenance`,
       },
       {
         name: "topology()",
         exact: true,
         topologyCapabilities: exactEdgeTreatmentTopology,
         implementTopology: false,
-        reason: `${feature} evolution requires face and edge topology with feature-or-history provenance`,
+        reason: `${feature} evolution requires face, edge, and vertex topology with feature-or-history provenance`,
       },
     ])(
       "requires $name before selector resolution when exact evolution is advertised",

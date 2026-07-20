@@ -8,13 +8,14 @@ import {
   type Diagnostic,
 } from "./core/result.js";
 import {
-  DOCUMENT_SCHEMA_V5,
+  DOCUMENT_SCHEMA_V6,
   DOCUMENT_VERSION_V2,
   DOCUMENT_VERSION_V3,
   DOCUMENT_VERSION_V4,
   DOCUMENT_VERSION_V5,
+  DOCUMENT_VERSION_V6,
   type DesignDocument,
-  type DesignDocumentV5,
+  type DesignDocumentV6,
   type TopologyReferenceEntryIR,
 } from "./ir.js";
 import {
@@ -24,6 +25,7 @@ import {
   DesignDocumentV3Schema,
   DesignDocumentV4Schema,
   DesignDocumentV5Schema,
+  DesignDocumentV6Schema,
 } from "./schema.js";
 import { canonicalizeTopologySelectionIR } from "./topology.js";
 import { normalizePersistentTopologyReference } from "./topology-signatures.js";
@@ -103,7 +105,8 @@ function canonicalizeDocumentTopology(
     (canonicalDocument.version !== DOCUMENT_VERSION_V2 &&
       canonicalDocument.version !== DOCUMENT_VERSION_V3 &&
       canonicalDocument.version !== DOCUMENT_VERSION_V4 &&
-      canonicalDocument.version !== DOCUMENT_VERSION_V5) ||
+      canonicalDocument.version !== DOCUMENT_VERSION_V5 &&
+      canonicalDocument.version !== DOCUMENT_VERSION_V6) ||
     canonicalDocument.topologyReferences === undefined
   ) {
     return canonicalDocument;
@@ -183,7 +186,9 @@ function parseDocumentValueWithLimits(
               ? DesignDocumentV4Schema
               : version === 5
                 ? DesignDocumentV5Schema
-                : DesignDocumentSchema;
+                : version === 6
+                  ? DesignDocumentV6Schema
+                  : DesignDocumentSchema;
     parsed = schema.safeParse(snapshot) as ReturnType<
       typeof DesignDocumentSchema.safeParse
     >;
@@ -300,17 +305,17 @@ export function cloneDocument(
 export function migrateDocument(
   value: unknown,
   options: ParseDocumentOptions = {},
-): CadResult<DesignDocumentV5> {
+): CadResult<DesignDocumentV6> {
   const parsed = parseDocumentValue(value, options);
   if (!parsed.ok) return parsed;
-  if (parsed.value.version === DOCUMENT_VERSION_V5) {
+  if (parsed.value.version === DOCUMENT_VERSION_V6) {
     return success(parsed.value, parsed.diagnostics);
   }
   const source = parsed.value;
   const migrated = parseDocumentValue(
     {
-      schema: DOCUMENT_SCHEMA_V5,
-      version: DOCUMENT_VERSION_V5,
+      schema: DOCUMENT_SCHEMA_V6,
+      version: DOCUMENT_VERSION_V6,
       name: source.name,
       units: source.units,
       parameters: source.parameters,
@@ -327,7 +332,8 @@ export function migrateDocument(
         : {}),
       ...((source.version === DOCUMENT_VERSION_V2 ||
         source.version === DOCUMENT_VERSION_V3 ||
-        source.version === DOCUMENT_VERSION_V4) &&
+        source.version === DOCUMENT_VERSION_V4 ||
+        source.version === DOCUMENT_VERSION_V5) &&
       Object.hasOwn(source, "topologyReferences")
         ? { topologyReferences: source.topologyReferences }
         : {}),
@@ -335,10 +341,10 @@ export function migrateDocument(
     options,
   );
   if (!migrated.ok) return migrated;
-  return migrated.value.version === DOCUMENT_VERSION_V5
+  return migrated.value.version === DOCUMENT_VERSION_V6
     ? success(migrated.value, migrated.diagnostics)
     : failure(
-        diagnostic("IR_INVALID", "Document migration did not produce version 5", {
+        diagnostic("IR_INVALID", "Document migration did not produce version 6", {
           severity: "error",
           path: "/version",
         }),

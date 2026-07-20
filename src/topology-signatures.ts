@@ -13,30 +13,47 @@ import {
   isKernelTopologySnapshotCopyLimitError,
   normalizeKernelTopologySnapshot,
 } from "./internal/topology-snapshot.js";
+import { pluralTopologyKind } from "./internal/topology-language.js";
 import {
   TOPOLOGY_ROLE_RULES,
   type KernelEdgeDescriptor,
   type KernelFaceDescriptor,
+  type KernelVertexDescriptor,
   type KernelTopologyBounds,
   type KernelTopologyKey,
   type KernelTopologyLineage,
   type KernelTopologySignatureCapabilities,
+  type KernelTopologySignatureCapabilitiesV1,
+  type KernelTopologySignatureCapabilitiesV2,
   type KernelTopologySnapshot,
   type TopologyKind,
+  type TopologyKindV1,
   type TopologyRole,
   type TopologyRoleV2,
   type TopologyRoleV3,
   type TopologyRoleV4,
   type TopologyRoleV5,
+  type TopologyRoleV6,
 } from "./protocol/topology.js";
 
-export const TOPOLOGY_SIGNATURE_PROTOCOL_VERSION = 1 as const;
+export const TOPOLOGY_SIGNATURE_PROTOCOL_VERSION_V1 = 1 as const;
+export const TOPOLOGY_SIGNATURE_PROTOCOL_VERSION_V2 = 2 as const;
+/** Protocol emitted by current capture operations. */
+export const TOPOLOGY_SIGNATURE_PROTOCOL_VERSION =
+  TOPOLOGY_SIGNATURE_PROTOCOL_VERSION_V2;
 export const TOPOLOGY_REFERENCE_EXPLANATION_VERSION = 1 as const;
+
+type LegacyTopologyKind = TopologyKindV1;
+type TopologySignatureProtocolVersion =
+  | typeof TOPOLOGY_SIGNATURE_PROTOCOL_VERSION_V1
+  | typeof TOPOLOGY_SIGNATURE_PROTOCOL_VERSION_V2;
 
 export interface TopologySignatureLimits {
   readonly maxTopologyItems: number;
   readonly maxAdjacencyLinks: number;
   readonly maxEvidenceRecords: number;
+  /** Stored registry variants inspected across one persistent-selection operation. */
+  readonly maxReferenceVariants: number;
   readonly maxCandidatePairs: number;
   readonly maxMatchingSteps: number;
 }
@@ -46,6 +63,7 @@ export const DEFAULT_TOPOLOGY_SIGNATURE_LIMITS: TopologySignatureLimits =
     maxTopologyItems: 100_000,
     maxAdjacencyLinks: 1_000_000,
     maxEvidenceRecords: 1_000_000,
+    maxReferenceVariants: 20_000,
     maxCandidatePairs: 1_000_000,
     maxMatchingSteps: 10_000_000,
   });
@@ -80,11 +98,19 @@ export interface TopologyEdgeGeometrySignature
   readonly direction?: Vec3;
 }
 
+/** Protocol-v2 point evidence for one exact B-Rep vertex. */
+export interface TopologyVertexGeometrySignature {
+  readonly topology: "vertex";
+  readonly point: Vec3;
+}
+
 export type TopologyGeometrySignature<
   K extends TopologyKind = TopologyKind,
 > = K extends "face"
   ? TopologyFaceGeometrySignature
-  : TopologyEdgeGeometrySignature;
+  : K extends "edge"
+    ? TopologyEdgeGeometrySignature
+    : TopologyVertexGeometrySignature;
 
 /** Persisted lineage with a document-version-specific semantic-role grammar. */
 export type PersistentTopologyLineage<
@@ -93,7 +119,15 @@ export type PersistentTopologyLineage<
   readonly role?: R;
 };
 
-export interface TopologyNeighborSignature<
+export interface TopologyNeighborSignatureProtocolV1<
+  R extends TopologyRole = TopologyRole,
+> {
+  readonly topology: LegacyTopologyKind;
+  readonly lineage: readonly PersistentTopologyLineage<R>[];
+  readonly geometry: TopologyGeometrySignature<LegacyTopologyKind>;
+}
+
+export interface TopologyNeighborSignatureProtocolV2<
   R extends TopologyRole = TopologyRole,
 > {
   readonly topology: TopologyKind;
@@ -101,26 +135,65 @@ export interface TopologyNeighborSignature<
   readonly geometry: TopologyGeometrySignature;
 }
 
+/** Current neighbor evidence accepts both supported wire protocols. */
+export type TopologyNeighborSignature<
+  R extends TopologyRole = TopologyRole,
+> =
+  | TopologyNeighborSignatureProtocolV1<R>
+  | TopologyNeighborSignatureProtocolV2<R>;
+
 /**
- * Detached face/edge evidence that can be stored between evaluations.
+ * Detached topology evidence that can be stored between evaluations.
  *
  * It intentionally contains no kernel topology key, native index, array
  * ordinal, or enumeration-derived discriminator. A symmetric item therefore
  * remains ambiguous instead of receiving an invented persistent identity.
  */
-export interface PersistentTopologyReference<
-  K extends TopologyKind = TopologyKind,
+interface PersistentTopologyReferenceBase<
+  K extends TopologyKind,
   R extends TopologyRole = TopologyRole,
 > {
-  readonly protocolVersion: typeof TOPOLOGY_SIGNATURE_PROTOCOL_VERSION;
   readonly kernelFingerprint: string;
   readonly topology: K;
   readonly capturedHistory: KernelTopologySnapshot["history"];
   readonly tolerance: TopologyMatchTolerance;
   readonly lineage: readonly PersistentTopologyLineage<R>[];
   readonly geometry: TopologyGeometrySignature<K>;
-  readonly adjacency: readonly TopologyNeighborSignature<R>[];
 }
+
+interface PersistentTopologyReferenceProtocolV1Shape<
+  K extends LegacyTopologyKind,
+  R extends TopologyRole = TopologyRole,
+> extends PersistentTopologyReferenceBase<K, R> {
+  readonly protocolVersion: typeof TOPOLOGY_SIGNATURE_PROTOCOL_VERSION_V1;
+  readonly adjacency: readonly TopologyNeighborSignatureProtocolV1<R>[];
+}
+
+export type PersistentTopologyReferenceProtocolV1<
+  K extends LegacyTopologyKind = LegacyTopologyKind,
+  R extends TopologyRole = TopologyRole,
+> = PersistentTopologyReferenceProtocolV1Shape<K, R>;
+
+interface PersistentTopologyReferenceProtocolV2Shape<
+  K extends TopologyKind,
+  R extends TopologyRole = TopologyRole,
+> extends PersistentTopologyReferenceBase<K, R> {
+  readonly protocolVersion: typeof TOPOLOGY_SIGNATURE_PROTOCOL_VERSION_V2;
+  readonly adjacency: readonly TopologyNeighborSignatureProtocolV2<R>[];
+}
+
+export type PersistentTopologyReferenceProtocolV2<
+  K extends TopologyKind = TopologyKind,
+  R extends TopologyRole = TopologyRole,
+> = PersistentTopologyReferenceProtocolV2Shape<K, R>;
+
+/** Every reference understood by the current runtime. */
+export type PersistentTopologyReference<
+  K extends TopologyKind = TopologyKind,
+  R extends TopologyRole = TopologyRole,
+> =
+  | PersistentTopologyReferenceProtocolV1<K & LegacyTopologyKind, R>
+  | PersistentTopologyReferenceProtocolV2<K, R>;
 
 export type PersistentTopologyLineageV2 =
   PersistentTopologyLineage<TopologyRoleV2>;
@@ -130,26 +203,35 @@ export type PersistentTopologyLineageV4 =
   PersistentTopologyLineage<TopologyRoleV4>;
 export type PersistentTopologyLineageV5 =
   PersistentTopologyLineage<TopologyRoleV5>;
+export type PersistentTopologyLineageV6 =
+  PersistentTopologyLineage<TopologyRoleV6>;
 export type TopologyNeighborSignatureV2 =
-  TopologyNeighborSignature<TopologyRoleV2>;
+  TopologyNeighborSignatureProtocolV1<TopologyRoleV2>;
 export type TopologyNeighborSignatureV3 =
-  TopologyNeighborSignature<TopologyRoleV3>;
+  TopologyNeighborSignatureProtocolV1<TopologyRoleV3>;
 export type TopologyNeighborSignatureV4 =
-  TopologyNeighborSignature<TopologyRoleV4>;
+  TopologyNeighborSignatureProtocolV1<TopologyRoleV4>;
 export type TopologyNeighborSignatureV5 =
-  TopologyNeighborSignature<TopologyRoleV5>;
+  TopologyNeighborSignatureProtocolV1<TopologyRoleV5>;
+export type TopologyNeighborSignatureV6 =
+  TopologyNeighborSignature<TopologyRoleV6>;
 export type PersistentTopologyReferenceV2<
-  K extends TopologyKind = TopologyKind,
-> = PersistentTopologyReference<K, TopologyRoleV2>;
+  K extends LegacyTopologyKind = LegacyTopologyKind,
+> = PersistentTopologyReferenceProtocolV1<K, TopologyRoleV2>;
 export type PersistentTopologyReferenceV3<
-  K extends TopologyKind = TopologyKind,
-> = PersistentTopologyReference<K, TopologyRoleV3>;
+  K extends LegacyTopologyKind = LegacyTopologyKind,
+> = PersistentTopologyReferenceProtocolV1<K, TopologyRoleV3>;
 export type PersistentTopologyReferenceV4<
-  K extends TopologyKind = TopologyKind,
-> = PersistentTopologyReference<K, TopologyRoleV4>;
+  K extends LegacyTopologyKind = LegacyTopologyKind,
+> = PersistentTopologyReferenceProtocolV1<K, TopologyRoleV4>;
 export type PersistentTopologyReferenceV5<
+  K extends LegacyTopologyKind = LegacyTopologyKind,
+> = PersistentTopologyReferenceProtocolV1<K, TopologyRoleV5>;
+
+/** Document-v6 evidence; its role vocabulary currently equals document v5. */
+export type PersistentTopologyReferenceV6<
   K extends TopologyKind = TopologyKind,
-> = PersistentTopologyReference<K, TopologyRoleV5>;
+> = PersistentTopologyReference<K, TopologyRoleV6>;
 
 export type TopologyMatchEvidence =
   | "semantic-lineage"
@@ -242,7 +324,10 @@ export interface ExplainableTopologyReferenceResolutionSession
   ): CadResult<TopologyReferenceResolutionExplanation<K>>;
 }
 
-type TopologyDescriptor = KernelFaceDescriptor | KernelEdgeDescriptor;
+type TopologyDescriptor =
+  | KernelFaceDescriptor
+  | KernelEdgeDescriptor
+  | KernelVertexDescriptor;
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -368,39 +453,64 @@ function edgeGeometry(
   });
 }
 
+function vertexGeometry(
+  descriptor: KernelVertexDescriptor,
+): TopologyVertexGeometrySignature {
+  return Object.freeze({
+    topology: "vertex" as const,
+    point: immutableVector(descriptor.point),
+  });
+}
+
 function geometrySignature(
   descriptor: TopologyDescriptor,
 ): TopologyGeometrySignature {
-  return descriptor.topology === "face"
-    ? faceGeometry(descriptor)
-    : edgeGeometry(descriptor);
+  switch (descriptor.topology) {
+    case "face":
+      return faceGeometry(descriptor);
+    case "edge":
+      return edgeGeometry(descriptor);
+    case "vertex":
+      return vertexGeometry(descriptor);
+  }
 }
 
 function canonicalGeometrySignature<K extends TopologyKind>(
   geometry: TopologyGeometrySignature<K>,
 ): TopologyGeometrySignature<K> {
+  if (geometry.topology === "vertex") {
+    return Object.freeze({
+      topology: "vertex",
+      point: immutableVector(
+        (geometry as TopologyVertexGeometrySignature).point,
+      ),
+    }) as TopologyGeometrySignature<K>;
+  }
+  const measured = geometry as
+    | TopologyFaceGeometrySignature
+    | TopologyEdgeGeometrySignature;
   const directional =
-    geometry.topology === "face"
-      ? geometry.normal
-      : (geometry as TopologyEdgeGeometrySignature).direction;
+    measured.topology === "face"
+      ? measured.normal
+      : measured.direction;
   return Object.freeze({
-    topology: geometry.topology,
-    kind: geometry.kind,
-    measure: Object.is(geometry.measure, -0) ? 0 : geometry.measure,
-    center: immutableVector(geometry.center),
-    bounds: immutableBounds(geometry.bounds),
+    topology: measured.topology,
+    kind: measured.kind,
+    measure: Object.is(measured.measure, -0) ? 0 : measured.measure,
+    center: immutableVector(measured.center),
+    bounds: immutableBounds(measured.bounds),
     ...(directional === undefined
       ? {}
-      : geometry.topology === "face"
+      : measured.topology === "face"
         ? { normal: immutableVector(directional) }
         : { direction: immutableVector(directional) }),
-    ...(geometry.axis === undefined
+    ...(measured.axis === undefined
       ? {}
-      : { axis: immutableVector(geometry.axis) }),
-    ...(geometry.radius === undefined
+      : { axis: immutableVector(measured.axis) }),
+    ...(measured.radius === undefined
       ? {}
       : {
-          radius: Object.is(geometry.radius, -0) ? 0 : geometry.radius,
+          radius: Object.is(measured.radius, -0) ? 0 : measured.radius,
         }),
   }) as TopologyGeometrySignature<K>;
 }
@@ -453,6 +563,7 @@ interface DescriptorSignatureContext {
   readonly tolerance: TopologyMatchTolerance;
   readonly faces: ReadonlyMap<KernelTopologyKey, KernelFaceDescriptor>;
   readonly edges: ReadonlyMap<KernelTopologyKey, KernelEdgeDescriptor>;
+  readonly vertices: ReadonlyMap<KernelTopologyKey, KernelVertexDescriptor>;
   readonly neighbors: Map<
     KernelTopologyKey,
     {
@@ -477,6 +588,9 @@ function descriptorSignatureContext(
     tolerance,
     faces: new Map(snapshot.faces.map((descriptor) => [descriptor.key, descriptor])),
     edges: new Map(snapshot.edges.map((descriptor) => [descriptor.key, descriptor])),
+    vertices: new Map(
+      snapshot.vertices.map((descriptor) => [descriptor.key, descriptor]),
+    ),
     neighbors: new Map(),
     references: new Map(),
   };
@@ -504,24 +618,32 @@ function compiledNeighborSignature(
   return compiled;
 }
 
-function referenceForDescriptor<K extends TopologyKind>(
-  descriptor: K extends "face" ? KernelFaceDescriptor : KernelEdgeDescriptor,
+function referenceForDescriptor(
+  descriptor: TopologyDescriptor,
   context: DescriptorSignatureContext,
-): PersistentTopologyReference<K> {
+): PersistentTopologyReference {
   const cached = context.references.get(descriptor.key);
   if (cached !== undefined) {
-    return cached as PersistentTopologyReference<K>;
+    return cached;
   }
-  const adjacent = (
+  const adjacentDescriptors: readonly TopologyDescriptor[] =
     descriptor.topology === "face"
       ? descriptor.edges.map((key) => context.edges.get(key)!)
-      : descriptor.faces.map((key) => context.faces.get(key)!)
-  )
+      : descriptor.topology === "vertex"
+        ? descriptor.edges.map((key) => context.edges.get(key)!)
+        : context.capabilities.protocolVersion ===
+            TOPOLOGY_SIGNATURE_PROTOCOL_VERSION_V1
+          ? descriptor.faces.map((key) => context.faces.get(key)!)
+          : [
+              ...descriptor.faces.map((key) => context.faces.get(key)!),
+              ...descriptor.vertices.map((key) => context.vertices.get(key)!),
+            ];
+  const adjacent = adjacentDescriptors
     .map((neighbor) => compiledNeighborSignature(neighbor, context))
     .sort((first, second) => lexicalCompare(first.sortKey, second.sortKey))
     .map((compiled) => compiled.signature);
   const reference = deepFreeze({
-    protocolVersion: TOPOLOGY_SIGNATURE_PROTOCOL_VERSION,
+    protocolVersion: context.capabilities.protocolVersion,
     kernelFingerprint: context.capabilities.fingerprint,
     topology: descriptor.topology,
     capturedHistory: context.snapshot.history,
@@ -533,7 +655,7 @@ function referenceForDescriptor<K extends TopologyKind>(
     lineage: canonicalLineage(descriptor.lineage),
     geometry: geometrySignature(descriptor),
     adjacency: adjacent,
-  }) as unknown as PersistentTopologyReference<K>;
+  }) as unknown as PersistentTopologyReference;
   context.references.set(descriptor.key, reference);
   return reference;
 }
@@ -582,7 +704,8 @@ function normalizeCapabilities(
   const protocolVersion = value.protocolVersion;
   const fingerprint = value.fingerprint;
   if (
-    protocolVersion !== TOPOLOGY_SIGNATURE_PROTOCOL_VERSION ||
+    (protocolVersion !== TOPOLOGY_SIGNATURE_PROTOCOL_VERSION_V1 &&
+      protocolVersion !== TOPOLOGY_SIGNATURE_PROTOCOL_VERSION_V2) ||
     typeof fingerprint !== "string" ||
     fingerprint.length === 0
   ) {
@@ -606,6 +729,7 @@ const LIMIT_KEYS = Object.freeze([
   "maxTopologyItems",
   "maxAdjacencyLinks",
   "maxEvidenceRecords",
+  "maxReferenceVariants",
   "maxCandidatePairs",
   "maxMatchingSteps",
 ] as const satisfies readonly (keyof TopologySignatureLimits)[]);
@@ -794,6 +918,9 @@ function lineageIsValid(value: unknown, topology: TopologyKind): boolean {
 
 function geometryIsValid(value: unknown, topology: TopologyKind): boolean {
   if (!isRecord(value) || value.topology !== topology) return false;
+  if (topology === "vertex") {
+    return exactKeys(value, ["topology", "point"]) && vector(value.point);
+  }
   const optional = topology === "face" ? "normal" : "direction";
   const allowed = ["topology", "kind", "measure", "center", "bounds"];
   if (value[optional] !== undefined) allowed.push(optional);
@@ -833,6 +960,23 @@ function geometryIsValid(value: unknown, topology: TopologyKind): boolean {
   );
 }
 
+function adjacentTopologyIsValid(
+  protocolVersion: TopologySignatureProtocolVersion,
+  topology: TopologyKind,
+  adjacent: unknown,
+): adjacent is TopologyKind {
+  if (protocolVersion === TOPOLOGY_SIGNATURE_PROTOCOL_VERSION_V1) {
+    return topology === "face" ? adjacent === "edge" : adjacent === "face";
+  }
+  switch (topology) {
+    case "face":
+    case "vertex":
+      return adjacent === "edge";
+    case "edge":
+      return adjacent === "face" || adjacent === "vertex";
+  }
+}
+
 function referenceIsValid(
   value: unknown,
 ): value is PersistentTopologyReference {
@@ -848,10 +992,15 @@ function referenceIsValid(
       "geometry",
       "adjacency",
     ]) ||
-    value.protocolVersion !== TOPOLOGY_SIGNATURE_PROTOCOL_VERSION ||
+    (value.protocolVersion !== TOPOLOGY_SIGNATURE_PROTOCOL_VERSION_V1 &&
+      value.protocolVersion !== TOPOLOGY_SIGNATURE_PROTOCOL_VERSION_V2) ||
     typeof value.kernelFingerprint !== "string" ||
     value.kernelFingerprint.length === 0 ||
-    (value.topology !== "face" && value.topology !== "edge") ||
+    (value.topology !== "face" &&
+      value.topology !== "edge" &&
+      value.topology !== "vertex") ||
+    (value.protocolVersion === TOPOLOGY_SIGNATURE_PROTOCOL_VERSION_V1 &&
+      value.topology === "vertex") ||
     (value.capturedHistory !== "complete" &&
       value.capturedHistory !== "partial") ||
     !toleranceIsValid(value.tolerance) ||
@@ -861,16 +1010,19 @@ function referenceIsValid(
   ) {
     return false;
   }
-  const opposite = value.topology === "face" ? "edge" : "face";
   for (let index = 0; index < value.adjacency.length; index += 1) {
     if (!Object.hasOwn(value.adjacency, index)) return false;
     const neighbor = value.adjacency[index];
     if (
       !isRecord(neighbor) ||
       !exactKeys(neighbor, ["topology", "lineage", "geometry"]) ||
-      neighbor.topology !== opposite ||
-      !lineageIsValid(neighbor.lineage, opposite) ||
-      !geometryIsValid(neighbor.geometry, opposite)
+      !adjacentTopologyIsValid(
+        value.protocolVersion,
+        value.topology,
+        neighbor.topology,
+      ) ||
+      !lineageIsValid(neighbor.lineage, neighbor.topology) ||
+      !geometryIsValid(neighbor.geometry, neighbor.topology)
     ) {
       return false;
     }
@@ -989,6 +1141,15 @@ function copyReferenceGeometry(
   topology: TopologyKind,
 ): TopologyGeometrySignature {
   if (!isRecord(value)) return referenceCopyFailure();
+  if (topology === "vertex") {
+    if (!exactKeys(value, ["topology", "point"])) {
+      return referenceCopyFailure();
+    }
+    return Object.freeze({
+      topology: value.topology,
+      point: copyReferenceVector(value.point),
+    }) as unknown as TopologyVertexGeometrySignature;
+  }
   const directional = topology === "face" ? "normal" : "direction";
   const actual = Object.keys(value);
   const expected = ["topology", "kind", "measure", "center", "bounds"];
@@ -1023,7 +1184,6 @@ function copyReferenceGeometry(
 
 function copyReferenceNeighbor(
   value: unknown,
-  topology: TopologyKind,
   resources: ReferenceCopyResources,
 ): TopologyNeighborSignature {
   if (
@@ -1033,12 +1193,19 @@ function copyReferenceNeighbor(
     return referenceCopyFailure();
   }
   const copiedTopology = value.topology;
+  if (
+    copiedTopology !== "face" &&
+    copiedTopology !== "edge" &&
+    copiedTopology !== "vertex"
+  ) {
+    return referenceCopyFailure();
+  }
   const lineage = value.lineage;
   const geometry = value.geometry;
   return Object.freeze({
     topology: copiedTopology,
     lineage: copyReferenceLineage(lineage, resources),
-    geometry: copyReferenceGeometry(geometry, topology),
+    geometry: copyReferenceGeometry(geometry, copiedTopology),
   }) as unknown as TopologyNeighborSignature;
 }
 
@@ -1071,7 +1238,11 @@ function detachPersistentTopologyReference(
   const rawGeometry = value.geometry;
   const rawAdjacency = value.adjacency;
   if (
-    (topology !== "face" && topology !== "edge") ||
+    (protocolVersion !== TOPOLOGY_SIGNATURE_PROTOCOL_VERSION_V1 &&
+      protocolVersion !== TOPOLOGY_SIGNATURE_PROTOCOL_VERSION_V2) ||
+    (topology !== "face" && topology !== "edge" && topology !== "vertex") ||
+    (protocolVersion === TOPOLOGY_SIGNATURE_PROTOCOL_VERSION_V1 &&
+      topology === "vertex") ||
     !isRecord(rawTolerance) ||
     !exactKeys(rawTolerance, ["linear", "angular", "relative"]) ||
     !Array.isArray(rawAdjacency)
@@ -1084,7 +1255,6 @@ function detachPersistentTopologyReference(
   const linear = rawTolerance.linear;
   const angular = rawTolerance.angular;
   const relative = rawTolerance.relative;
-  const opposite = topology === "face" ? "edge" : "face";
   const resources: ReferenceCopyResources = {
     limits,
     evidenceRecords: 0,
@@ -1095,13 +1265,7 @@ function detachPersistentTopologyReference(
     if (!Object.hasOwn(copiedAdjacency.value, index)) {
       return referenceCopyFailure();
     }
-    adjacency.push(
-      copyReferenceNeighbor(
-        copiedAdjacency.value[index],
-        opposite,
-        resources,
-      ),
-    );
+    adjacency.push(copyReferenceNeighbor(copiedAdjacency.value[index], resources));
   }
   const detached = {
     protocolVersion,
@@ -1268,9 +1432,16 @@ function geometryClose(
   second: TopologyGeometrySignature,
   tolerance: TopologyMatchTolerance,
 ): boolean {
-  if (first.topology !== second.topology || first.kind !== second.kind) {
+  if (first.topology !== second.topology) {
     return false;
   }
+  if (first.topology === "vertex" && second.topology === "vertex") {
+    return vectorClose(first.point, second.point, tolerance);
+  }
+  if (first.topology === "vertex" || second.topology === "vertex") {
+    return false;
+  }
+  if (first.kind !== second.kind) return false;
   const measureAbsolute =
     first.topology === "face"
       ? tolerance.linear *
@@ -1445,6 +1616,11 @@ function baseSignaturesCompatible(
   completeHistory: boolean,
   budget: MatchingWorkBudget,
 ): boolean {
+  if (
+    first.signature.geometry.topology !== second.signature.geometry.topology
+  ) {
+    return false;
+  }
   if (completeHistory) {
     if (first.anchors.length > 0 || second.anchors.length > 0) {
       return (
@@ -1535,6 +1711,15 @@ function adjacencyCompatible(
   return true;
 }
 
+function fullySemanticallyAnchored(
+  adjacency: readonly CompiledBaseSignature[],
+): boolean {
+  return (
+    adjacency.length > 0 &&
+    adjacency.every((neighbor) => neighbor.anchors.length > 0)
+  );
+}
+
 interface TopologyMatchDecision {
   readonly strategy: TopologyMatchEvidence;
   readonly matched: boolean;
@@ -1576,6 +1761,26 @@ function matchDecision(
         arraysEqual(reference.base.anchors, candidate.base.anchors, budget)
         ? SEMANTIC_MATCH
         : SEMANTIC_MISMATCH;
+    }
+    if (
+      reference.reference.topology === "vertex" &&
+      candidate.reference.topology === "vertex"
+    ) {
+      const referenceAnchored = fullySemanticallyAnchored(reference.adjacency);
+      const candidateAnchored = fullySemanticallyAnchored(candidate.adjacency);
+      if (referenceAnchored || candidateAnchored) {
+        return referenceAnchored &&
+          candidateAnchored &&
+          adjacencyCompatible(
+            reference.adjacency,
+            candidate.adjacency,
+            reference.reference.tolerance,
+            true,
+            budget,
+          )
+          ? SEMANTIC_MATCH
+          : SEMANTIC_MISMATCH;
+      }
     }
   }
   if (
@@ -1644,7 +1849,7 @@ function resolutionFromExplanation(
   }
   return signatureFailure(
     "TOPOLOGY_MATCH_AMBIGUOUS",
-    `Persistent topology reference matched ${explanation.candidatesMatched} current ${explanation.topology}s`,
+    `Persistent topology reference matched ${explanation.candidatesMatched} current ${pluralTopologyKind(explanation.topology)}`,
     {
       topology: explanation.topology,
       candidates: explanation.candidatesMatched,
@@ -1677,11 +1882,12 @@ class TopologyReferenceResolutionSessionImpl
   constructor(
     snapshot: KernelTopologySnapshot,
     options: NormalizedResolveOptions,
+    budget?: MatchingWorkBudget,
   ) {
     this.snapshot = snapshot;
     this.capabilities = options.capabilities;
     this.limits = options.limits;
-    this.budget = new MatchingWorkBudget(options.limits);
+    this.budget = budget ?? new MatchingWorkBudget(options.limits);
   }
 
   private analyze<K extends TopologyKind>(
@@ -1734,6 +1940,18 @@ class TopologyReferenceResolutionSessionImpl
     reference: PersistentTopologyReference<K>,
   ): CachedTopologyReferenceAnalysis<K> {
     try {
+      if (reference.protocolVersion !== this.capabilities.protocolVersion) {
+        return failedTopologyReferenceAnalysis(
+          signatureFailure(
+            "TOPOLOGY_FINGERPRINT_MISMATCH",
+            "Persistent topology reference and current kernel signature protocols are incompatible",
+            {
+              expected: reference.protocolVersion,
+              actual: this.capabilities.protocolVersion,
+            },
+          ),
+        );
+      }
       if (reference.kernelFingerprint !== this.capabilities.fingerprint) {
         return failedTopologyReferenceAnalysis(
           signatureFailure(
@@ -1746,10 +1964,12 @@ class TopologyReferenceResolutionSessionImpl
           ),
         );
       }
-      const universe =
+      const universe: readonly TopologyDescriptor[] =
         reference.topology === "face"
           ? this.snapshot.faces
-          : this.snapshot.edges;
+          : reference.topology === "edge"
+            ? this.snapshot.edges
+            : this.snapshot.vertices;
       // Candidate evidence is tolerance-independent: matchDecision applies the
       // stored reference's tolerance to both base and adjacency comparisons.
       // Reusing one context therefore avoids rebuilding full snapshot maps and
@@ -1776,10 +1996,7 @@ class TopologyReferenceResolutionSessionImpl
         readonly evidence: TopologyMatchEvidence;
       }[] = [];
       for (const descriptor of universe) {
-        const candidate: PersistentTopologyReference =
-          descriptor.topology === "face"
-            ? referenceForDescriptor(descriptor, context)
-            : referenceForDescriptor(descriptor, context);
+        const candidate = referenceForDescriptor(descriptor, context);
         const decision = matchDecision(
           compiledReference,
           this.compiler.reference(candidate),
@@ -1823,6 +2040,111 @@ class TopologyReferenceResolutionSessionImpl
   }
 }
 
+export interface TopologyReferenceResolutionSessionGroup {
+  /** One detached snapshot shared by ordinary selection and every profile. */
+  readonly snapshot: KernelTopologySnapshot;
+  readonly limits: TopologySignatureLimits;
+  readonly profiles: readonly {
+    readonly capabilities: KernelTopologySignatureCapabilities;
+    readonly session: ExplainableTopologyReferenceResolutionSession;
+  }[];
+}
+
+/** @internal Creates profile-specific matchers with one cumulative work budget. */
+export function createTopologyReferenceResolutionSessionGroup(
+  snapshot: KernelTopologySnapshot,
+  options: {
+    readonly capabilities: readonly KernelTopologySignatureCapabilities[];
+    readonly limits?: Partial<TopologySignatureLimits>;
+  },
+): CadResult<TopologyReferenceResolutionSessionGroup> {
+  try {
+    if (!isRecord(options)) {
+      return signatureFailure(
+        "TOPOLOGY_SIGNATURE_INVALID",
+        "Topology resolution session-group options are malformed",
+      );
+    }
+    const hasLimits = Object.hasOwn(options, "limits");
+    const rawCapabilities: unknown = options.capabilities;
+    const capabilityCount = Array.isArray(rawCapabilities)
+      ? rawCapabilities.length
+      : 0;
+    if (
+      !exactKeys(options, hasLimits ? ["capabilities", "limits"] : ["capabilities"]) ||
+      !Array.isArray(rawCapabilities) ||
+      capabilityCount === 0 ||
+      capabilityCount > 2
+    ) {
+      return signatureFailure(
+        "TOPOLOGY_SIGNATURE_INVALID",
+        "Topology resolution session-group options are malformed",
+      );
+    }
+    const capabilities: KernelTopologySignatureCapabilities[] = [];
+    const protocols = new Set<number>();
+    for (let index = 0; index < capabilityCount; index += 1) {
+      if (!Object.hasOwn(rawCapabilities, index)) {
+        return signatureFailure(
+          "TOPOLOGY_SIGNATURE_INVALID",
+          "Topology resolution signature profiles cannot be sparse",
+        );
+      }
+      const normalized = normalizeCapabilities(rawCapabilities[index]);
+      if (
+        normalized === undefined ||
+        protocols.has(normalized.protocolVersion) ||
+        (index > 0 &&
+          normalized.protocolVersion >= capabilities[0]!.protocolVersion)
+      ) {
+        return signatureFailure(
+          "TOPOLOGY_SIGNATURE_INVALID",
+          "Topology resolution signature profiles are malformed or duplicated",
+        );
+      }
+      protocols.add(normalized.protocolVersion);
+      capabilities.push(normalized);
+    }
+    const rawLimits = hasLimits ? options.limits : undefined;
+    if (hasLimits && rawLimits === undefined) {
+      return signatureFailure(
+        "TOPOLOGY_SIGNATURE_INVALID",
+        "Topology resolution session-group limits are malformed",
+      );
+    }
+    const limits = normalizeLimits(rawLimits);
+    if (limits === undefined) {
+      return signatureFailure(
+        "TOPOLOGY_SIGNATURE_INVALID",
+        "Topology resolution session-group limits are malformed",
+      );
+    }
+    const normalizedSnapshot = normalizeKernelTopologySnapshot(snapshot, limits);
+    if (!normalizedSnapshot.ok) return normalizedSnapshot;
+    const budget = new MatchingWorkBudget(limits);
+    return success(
+      Object.freeze({
+        snapshot: normalizedSnapshot.value,
+        limits,
+        profiles: Object.freeze(
+          capabilities.map((profile) =>
+            Object.freeze({
+              capabilities: profile,
+              session: new TopologyReferenceResolutionSessionImpl(
+                normalizedSnapshot.value,
+                Object.freeze({ capabilities: profile, limits }),
+                budget,
+              ),
+            }),
+          ),
+        ),
+      }),
+    );
+  } catch (error) {
+    return caughtSignatureFailure(error);
+  }
+}
+
 /**
  * Creates one operation-local resolver. Kernel snapshot access is detached and
  * validated exactly once; all subsequent reference resolutions share matching
@@ -1856,6 +2178,28 @@ export function createTopologyReferenceResolutionSession(
   }
 }
 
+export function captureTopologyReference<K extends LegacyTopologyKind>(
+  snapshot: KernelTopologySnapshot,
+  topology: K,
+  key: KernelTopologyKey,
+  options: CaptureTopologyReferenceOptions & {
+    readonly capabilities: KernelTopologySignatureCapabilitiesV1;
+  },
+): CadResult<PersistentTopologyReferenceProtocolV1<K>>;
+export function captureTopologyReference<K extends TopologyKind>(
+  snapshot: KernelTopologySnapshot,
+  topology: K,
+  key: KernelTopologyKey,
+  options: CaptureTopologyReferenceOptions & {
+    readonly capabilities: KernelTopologySignatureCapabilitiesV2;
+  },
+): CadResult<PersistentTopologyReferenceProtocolV2<K>>;
+export function captureTopologyReference<K extends TopologyKind>(
+  snapshot: KernelTopologySnapshot,
+  topology: K,
+  key: KernelTopologyKey,
+  options: CaptureTopologyReferenceOptions,
+): CadResult<PersistentTopologyReference<K>>;
 export function captureTopologyReference<K extends TopologyKind>(
   snapshot: KernelTopologySnapshot,
   topology: K,
@@ -1870,10 +2214,24 @@ export function captureTopologyReference<K extends TopologyKind>(
         "Topology capture options are malformed or unsupported",
       );
     }
-    if (topology !== "face" && topology !== "edge") {
+    if (
+      topology !== "face" &&
+      topology !== "edge" &&
+      topology !== "vertex"
+    ) {
       return signatureFailure(
         "TOPOLOGY_SIGNATURE_INVALID",
-        "Persistent topology references support faces and edges only",
+        "Persistent topology references support faces, edges, and vertices only",
+      );
+    }
+    if (
+      normalized.capabilities.protocolVersion ===
+        TOPOLOGY_SIGNATURE_PROTOCOL_VERSION_V1 &&
+      topology === "vertex"
+    ) {
+      return signatureFailure(
+        "TOPOLOGY_SIGNATURE_INVALID",
+        "Persistent topology signature protocol v1 supports faces and edges only",
       );
     }
     if (typeof key !== "string" || key.length === 0) {
@@ -1888,8 +2246,12 @@ export function captureTopologyReference<K extends TopologyKind>(
     );
     if (!normalizedSnapshot.ok) return normalizedSnapshot;
     const currentSnapshot = normalizedSnapshot.value;
-    const universe =
-      topology === "face" ? currentSnapshot.faces : currentSnapshot.edges;
+    const universe: readonly TopologyDescriptor[] =
+      topology === "face"
+        ? currentSnapshot.faces
+        : topology === "edge"
+          ? currentSnapshot.edges
+          : currentSnapshot.vertices;
     const descriptor = universe.find((item) => item.key === key);
     if (descriptor === undefined) {
       return signatureFailure(
@@ -1903,23 +2265,13 @@ export function captureTopologyReference<K extends TopologyKind>(
       normalized.capabilities,
       normalized.tolerance,
     );
-    const reference = referenceForDescriptor(
-      descriptor as K extends "face"
-        ? KernelFaceDescriptor
-        : KernelEdgeDescriptor,
-      context,
-    );
+    const reference = referenceForDescriptor(descriptor, context);
     const budget = new MatchingWorkBudget(normalized.limits);
     const compiler = new MatchingSignatureCompiler();
     const compiledReference = compiler.reference(reference);
     let matches = 0;
     for (const candidate of universe) {
-      const candidateReference = referenceForDescriptor(
-        candidate as K extends "face"
-          ? KernelFaceDescriptor
-          : KernelEdgeDescriptor,
-        context,
-      );
+      const candidateReference = referenceForDescriptor(candidate, context);
       if (
         matchEvidence(
           compiledReference,
@@ -1933,11 +2285,11 @@ export function captureTopologyReference<K extends TopologyKind>(
     if (matches !== 1) {
       return signatureFailure(
         "TOPOLOGY_MATCH_AMBIGUOUS",
-        `Topology evidence identifies ${matches} ${topology}s in the capture snapshot`,
+        `Topology evidence identifies ${matches} ${pluralTopologyKind(topology)} in the capture snapshot`,
         { topology, candidates: matches },
       );
     }
-    return success(reference);
+    return success(reference as PersistentTopologyReference<K>);
   } catch (error) {
     return caughtSignatureFailure(error);
   }

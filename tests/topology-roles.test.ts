@@ -441,7 +441,7 @@ describe("closed topology role validation", () => {
 
       expect(result.ok).toBe(true);
       if (!result.ok) return;
-      expect(result.value.version).toBe(5);
+      expect(result.value.version).toBe(6);
       expect(
         (result.value.nodes as Readonly<Record<string, any>>)[
           `${operation}-consumer`
@@ -860,7 +860,7 @@ describe("closed topology role validation", () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value.version).toBe(5);
+    expect(result.value.version).toBe(6);
   });
 
   it.each([

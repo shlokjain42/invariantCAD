@@ -38,7 +38,7 @@ import {
   type AssemblyInstanceIR,
   type AssemblyNodeIR,
   type DesignConfigurationIR,
-  type DesignDocumentV5,
+  type DesignDocumentV6,
   type DesignOutputKind,
   type MaterialDefinitionIR,
   type NodeIR,
@@ -662,8 +662,14 @@ export class DesignBuilder {
     }
 
     const rawOptions = readTopologyReferenceOptions(options);
-    if (rawOptions.topology !== "face" && rawOptions.topology !== "edge") {
-      throw new TypeError("Topology reference kind must be 'face' or 'edge'");
+    if (
+      rawOptions.topology !== "face" &&
+      rawOptions.topology !== "edge" &&
+      rawOptions.topology !== "vertex"
+    ) {
+      throw new TypeError(
+        "Topology reference kind must be 'face', 'edge', or 'vertex'",
+      );
     }
     const copiedVariants = copyTopologyReferenceVariants(rawOptions.variants);
     const aggregateVariantCount =
@@ -1337,7 +1343,7 @@ export class DesignBuilder {
     return this;
   }
 
-  build(): DesignDocumentV5 {
+  build(): DesignDocumentV6 {
     return deepFreeze({
       schema: DOCUMENT_SCHEMA,
       version: DOCUMENT_VERSION,

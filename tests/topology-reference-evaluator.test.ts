@@ -39,6 +39,11 @@ const signatureCapabilities = {
   protocolVersion: 1 as const,
   fingerprint,
 };
+const v2Fingerprint = "topology-reference-evaluator-test/signatures@2";
+const signatureCapabilitiesV2 = {
+  protocolVersion: 2 as const,
+  fingerprint: v2Fingerprint,
+};
 const tolerance = { linear: 1e-9, angular: 1e-9, relative: 1e-9 };
 
 function key(value: string): KernelTopologyKey {
@@ -71,12 +76,14 @@ const edges: readonly KernelEdgeDescriptor[] = [0, 1].map((index) => ({
   length: 10,
   curve: { kind: "line", direction: [1, 0, 0] },
   faces: [key(`face-${index}`)],
+  vertices: [],
 }));
 
 const snapshot: KernelTopologySnapshot = {
   history: "complete",
   faces,
   edges,
+  vertices: [],
 };
 
 function ambiguousSnapshot(): KernelTopologySnapshot {
@@ -92,6 +99,7 @@ function ambiguousSnapshot(): KernelTopologySnapshot {
       key: descriptor.key,
       faces: [faces[index]!.key],
     })),
+    vertices: [],
   };
 }
 
@@ -110,10 +118,25 @@ function capture<K extends "face" | "edge">(
 const edgeReferences = [capture("edge", edges[0]!.key), capture("edge", edges[1]!.key)] as const;
 const faceReference = capture("face", faces[0]!.key);
 
+function captureV2Edge(topologyKey: KernelTopologyKey) {
+  const result = captureTopologyReference(snapshot, "edge", topologyKey, {
+    capabilities: signatureCapabilitiesV2,
+    tolerance,
+  });
+  if (!result.ok) throw new Error("Evaluator fixture v2 edge did not capture");
+  return result.value;
+}
+
+const v2EdgeReferences = [
+  captureV2Edge(edges[0]!.key),
+  captureV2Edge(edges[1]!.key),
+] as const;
+
 const OMIT_SIGNATURES = Symbol("omit-signatures");
 
 interface HarnessOptions {
   readonly signatures?: unknown | typeof OMIT_SIGNATURES;
+  readonly signatureProfiles?: unknown;
   readonly topology?: Partial<KernelTopologyCapabilities>;
   readonly topologySnapshot?: KernelTopologySnapshot;
   readonly topologyHook?: () => void;
@@ -148,13 +171,16 @@ function createHarness(options: HarnessOptions = {}): Harness {
     ? options.signatures
     : signatureCapabilities;
   const topologyCapabilities = {
-    kinds: ["face", "edge"],
+    kinds: ["face", "edge", "vertex"],
     provenance: "feature",
     semanticRoles: false,
     sketchSources: false,
     geometry: true,
     adjacency: true,
     ...(signatures === OMIT_SIGNATURES ? {} : { signatures }),
+    ...(Object.hasOwn(options, "signatureProfiles")
+      ? { signatureProfiles: options.signatureProfiles }
+      : {}),
     ...options.topology,
   } as unknown as KernelTopologyCapabilities;
   const capabilities = {
@@ -290,6 +316,29 @@ function twoReferenceFilletDocument() {
   return cad.build();
 }
 
+function mixedProfileFilletDocument() {
+  const cad = design("shared cross-profile persistent edge budget");
+  const box = cad.box("box", { size: vec3(mm(10), mm(10), mm(10)) });
+  const v2 = cad.topologyReference("edge-v2", box, {
+    topology: "edge",
+    variants: [v2EdgeReferences[0]],
+  });
+  const v1 = cad.topologyReference("edge-v1", box, {
+    topology: "edge",
+    variants: [edgeReferences[1]],
+  });
+  const selected = topology.edges
+    .persistentReference(v2)
+    .or(topology.edges.persistentReference(v1))
+    .exactly(2);
+  const treated = cad.fillet("treated", box, {
+    edges: selected,
+    radius: mm(1),
+  });
+  cad.output("result", treated);
+  return cad.build();
+}
+
 function shellDocument() {
   const cad = design("persistent face evaluator");
   const box = cad.box("box", { size: vec3(mm(10), mm(10), mm(10)) });
@@ -400,7 +449,7 @@ describe("document-owned topology references in evaluator", () => {
   });
 
   it.each([
-    ["wrong version", { protocolVersion: 2, fingerprint }],
+    ["wrong version", { protocolVersion: 3, fingerprint }],
     ["empty fingerprint", { protocolVersion: 1, fingerprint: "" }],
     ["extra key", { protocolVersion: 1, fingerprint, extra: true }],
     ["non-object", "invalid"],
@@ -433,6 +482,141 @@ describe("document-owned topology references in evaluator", () => {
       details: { protocolViolation: true },
     });
     expectNoGeometryCalls(harness);
+  });
+
+  it.each([
+    ["non-array", "invalid"],
+    ["too many profiles", new Array(2)],
+    ["invalid item", [{ protocolVersion: 1, fingerprint: "" }]],
+    [
+      "duplicate protocol",
+      [{ protocolVersion: 1, fingerprint: "other/signatures@1" }],
+    ],
+  ])(
+    "rejects malformed compatibility signature profiles: %s",
+    async (_name, signatureProfiles) => {
+      const harness = createHarness({ signatureProfiles });
+      const result = await evaluate(harness);
+
+      expect(result.ok).toBe(false);
+      expect(result.diagnostics[0]).toMatchObject({
+        code: "KERNEL_ERROR",
+        node: "treated",
+        path: "/nodes/treated/edges",
+        details: { protocolViolation: true },
+      });
+      expectNoGeometryCalls(harness);
+    },
+  );
+
+  it("rejects a compatibility profile newer than the primary declaration", async () => {
+    const harness = createHarness({
+      signatures: signatureCapabilities,
+      signatureProfiles: [signatureCapabilitiesV2],
+    });
+    const result = await evaluate(harness);
+
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics[0]).toMatchObject({
+      code: "KERNEL_ERROR",
+      details: { protocolViolation: true },
+    });
+    expectNoGeometryCalls(harness);
+  });
+
+  it("rejects compatibility profiles without a primary declaration", async () => {
+    const harness = createHarness({
+      signatures: OMIT_SIGNATURES,
+      signatureProfiles: [signatureCapabilities],
+    });
+    const result = await evaluate(harness);
+
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics[0]).toMatchObject({
+      code: "KERNEL_ERROR",
+      details: { protocolViolation: true },
+    });
+    expectNoGeometryCalls(harness);
+  });
+
+  it("resolves frozen protocol-v1 evidence through a v2 kernel compatibility profile", async () => {
+    const harness = createHarness({
+      signatures: signatureCapabilitiesV2,
+      signatureProfiles: [signatureCapabilities],
+    });
+    const result = await evaluate(harness);
+
+    expect(result.ok).toBe(true);
+    expect(harness.filletKeys).toEqual([[edges[0]!.key]]);
+    expect(harness.topologyCalls()).toBe(1);
+    expectDisposedSerials(harness, [0, 1]);
+  });
+
+  it("resolves protocol-v1 evidence with a v1-only face/edge kernel", async () => {
+    const harness = createHarness({
+      signatures: signatureCapabilities,
+      topology: { kinds: ["face", "edge"] },
+    });
+    const result = await evaluate(harness);
+
+    expect(result.ok).toBe(true);
+    expect(harness.filletKeys).toEqual([[edges[0]!.key]]);
+    expect(harness.topologyCalls()).toBe(1);
+    expectDisposedSerials(harness, [0, 1]);
+  });
+
+  it("captures a compatibility-profile array length once before inspection", async () => {
+    let lengthReads = 0;
+    let itemReads = 0;
+    const profiles = new Proxy([signatureCapabilities], {
+      get(target, property, receiver) {
+        if (property === "length") {
+          lengthReads += 1;
+          return lengthReads === 1 ? 1 : 1_000_000;
+        }
+        if (property === "0") itemReads += 1;
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    const harness = createHarness({
+      signatures: signatureCapabilitiesV2,
+      signatureProfiles: profiles,
+    });
+    const result = await evaluate(harness);
+
+    expect(result.ok).toBe(true);
+    expect(lengthReads).toBe(1);
+    expect(itemReads).toBe(1);
+    expect(harness.filletKeys).toEqual([[edges[0]!.key]]);
+  });
+
+  it("prefers protocol v2 deterministically when both stored variants are compatible", async () => {
+    const harness = createHarness({
+      signatures: signatureCapabilitiesV2,
+      signatureProfiles: [signatureCapabilities],
+    });
+    const result = await evaluate(
+      harness,
+      filletDocument([edgeReferences[0], v2EdgeReferences[1]]),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(harness.filletKeys).toEqual([[edges[1]!.key]]);
+    expect(harness.topologyCalls()).toBe(1);
+    expectDisposedSerials(harness, [0, 1]);
+  });
+
+  it("resolves v2 and protocol-v1 compatibility references in one operation", async () => {
+    const harness = createHarness({
+      signatures: signatureCapabilitiesV2,
+      signatureProfiles: [signatureCapabilities],
+    });
+    const result = await evaluate(harness, mixedProfileFilletDocument());
+
+    expect(result.ok).toBe(true);
+    expect(harness.filletKeys).toEqual([[edges[0]!.key, edges[1]!.key]]);
+    expect(harness.topologyCalls()).toBe(1);
+    expectDisposedSerials(harness, [0, 1]);
   });
 
   it("rejects an unavailable exact fingerprint before evaluating the input", async () => {
@@ -615,6 +799,7 @@ describe("document-owned topology references in evaluator", () => {
           return ambiguous.faces;
         },
         edges: ambiguous.edges,
+        vertices: ambiguous.vertices,
       },
     });
     const result = await evaluate(harness, filletDocument(), {
@@ -700,6 +885,33 @@ describe("document-owned topology references in evaluator", () => {
     expect(harness.disposeShapeCalls()).toBe(1);
   });
 
+  it("shares one matching work budget across v2 and compatibility-profile sessions", async () => {
+    const harness = createHarness({
+      signatures: signatureCapabilitiesV2,
+      signatureProfiles: [signatureCapabilities],
+    });
+    const result = await evaluate(harness, mixedProfileFilletDocument(), {
+      topologySignatureLimits: { maxCandidatePairs: 3 },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics[0]).toMatchObject({
+      code: "TOPOLOGY_SIGNATURE_LIMIT_EXCEEDED",
+      node: "treated",
+      path: "/nodes/treated/edges/query/queries/1/reference",
+      details: {
+        resource: "maxCandidatePairs",
+        limit: 3,
+        actual: 4,
+        reference: "edge-v2",
+      },
+    });
+    expect(harness.boxCalls()).toBe(1);
+    expect(harness.topologyCalls()).toBe(1);
+    expect(harness.filletKeys).toHaveLength(0);
+    expect(harness.disposeShapeCalls()).toBe(1);
+  });
+
   it.each(["and", "or", "not"] as const)(
     "keeps a persistent failure fatal through %s",
     async (wrapper) => {
@@ -764,4 +976,34 @@ describe("document-owned topology references in evaluator", () => {
       expectNoGeometryCalls(harness);
     },
   );
+
+  it("rejects a protocol-v2 declaration without the complete vertex graph capability", async () => {
+    const captured = captureTopologyReference(
+      snapshot,
+      "edge",
+      edges[0]!.key,
+      {
+        capabilities: signatureCapabilitiesV2,
+        tolerance,
+      },
+    );
+    expect(captured.ok).toBe(true);
+    if (!captured.ok) return;
+    const harness = createHarness({
+      signatures: signatureCapabilitiesV2,
+      topology: { kinds: ["face", "edge"] },
+    });
+    const document = filletDocument([captured.value]);
+    const result = await evaluate(harness, document);
+
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics[0]).toMatchObject({
+      code: "KERNEL_ERROR",
+      details: {
+        protocolViolation: true,
+        requiredTopologyKinds: ["face", "edge", "vertex"],
+      },
+    });
+    expectNoGeometryCalls(harness);
+  });
 });

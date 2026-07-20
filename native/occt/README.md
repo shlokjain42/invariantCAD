@@ -69,6 +69,7 @@ pair directly through the native fixture corpus:
 pnpm build:occt-facade
 pnpm test:occt-facade
 pnpm test:occt-draft-public
+pnpm test:occt-persistence-public
 ```
 
 The native fixture exercises the raw ABI, including all three exact Boolean
@@ -81,8 +82,10 @@ record budgets; empty Boolean results; report cloning; foreign-kernel
 rejection; and one-shot transfer.
 The public smoke loads the same generated pair through `createOcctKernel` and
 exercises direct and evaluated draft, exact Boolean, fillet/chamfer, and
-shell/offset lineage, plus controlled major multi-arc, eccentric-profile, and
-conditioned near-full PipeShell transfers. These heavyweight tests are
+shell/offset lineage, protocol-v2 vertex persistence with the descriptor-`@6`
+primary profile, exact protocol-v1 descriptor-`@5` compatibility, plus
+controlled major multi-arc, eccentric-profile, and conditioned near-full
+PipeShell transfers. These heavyweight tests are
 intentionally separate from normal `pnpm verify`. Generated artifacts stay
 under the ignored
 `.artifacts/occt-facade/` directory and are not committed or included in the
@@ -226,11 +229,23 @@ ordinary `draft` support and feature-scoped `exactIndexedTopologyEvolution` v1
 for draft. ABI 0.4 adds `boolean`; ABI 0.5 adds `fillet` and `chamfer`; ABI 0.6
 advertises the protocol for `draft`, `boolean`, `fillet`, `chamfer`, `shell`,
 and `offset`.
-The TypeScript descriptor declaration is conditional on that probed surface:
-stock OCCT and recognized owned facades through ABI 0.4 remain topology
-descriptor `@4`, while ABI 0.5 and later advertise descriptor `@5` because the
-adapter can derive exact generated edge-to-face treatment roles. This does not
-change persistent-reference protocol v1 or the current facade ABI 0.6.
+The TypeScript descriptor declaration is conditional on that probed surface.
+Known stock OCCT and every recognized owned facade now advertise
+topology-signature protocol v2 with primary descriptor `@6`, including exact
+B-Rep vertex points and reciprocal edge↔vertex incidence. The adapter also
+publishes one exact protocol-v1 compatibility profile: stock and owned ABI
+0.2–0.4 retain precisely their former descriptor `@4` fingerprint, while ABI
+0.5 and later retain precisely their former descriptor `@5` fingerprint with
+its exact generated edge-to-face treatment roles. Protocol-v1 face/edge wire
+bytes, evidence construction, and matching behavior remain frozen and ignore
+the added vertex evidence.
+
+These descriptor/profile changes do not change the native boundary. The owned
+facade ABI remains 0.6, and `exactIndexedTopologyEvolution` remains version 1.
+Document v6 and topology-signature protocol v2 are separate TypeScript/document
+axes; no semantic vertex roles are introduced. Distinct coincident B-Rep
+vertices remain separate snapshot items and resolve ambiguously when their
+key-free point and edge evidence cannot distinguish them.
 The global topology provenance remains `feature`; a feature-scoped proof does
 not promote unrelated operations. Default `createOcctKernel()` loads stock OCCT
 and remains usable for its other exact features, but it does not advertise or

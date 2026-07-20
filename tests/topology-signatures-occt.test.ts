@@ -214,13 +214,13 @@ describe("OCCT persistent topology reference integration", () => {
     }
   });
 
-  it("rejects a stored descriptor-@3 reference against current descriptor-@4 OCCT", async () => {
+  it("rejects a stored descriptor-@5 reference against current descriptor-@6 OCCT", async () => {
     const kernel = await createOcctKernel();
     const shape = kernel.box!([10, 20, 30], false, { feature: "box" });
     try {
       const currentCapabilities = kernel.capabilities.topology?.signatures;
       expect(currentCapabilities?.fingerprint).toContain(
-        "invariantcad-topology-descriptor@4",
+        "invariantcad-topology-descriptor@6",
       );
       if (currentCapabilities === undefined) return;
 
@@ -232,11 +232,11 @@ describe("OCCT persistent topology reference integration", () => {
       );
       expect(face).toBeDefined();
       if (face === undefined) return;
-      const storedDescriptorV3Capabilities = {
+      const storedDescriptorV5Capabilities = {
         ...currentCapabilities,
         fingerprint: currentCapabilities.fingerprint.replace(
-          "topology-descriptor@4",
-          "topology-descriptor@3",
+          "topology-descriptor@6",
+          "topology-descriptor@5",
         ),
       };
       const captured = captureTopologyReference(
@@ -244,7 +244,7 @@ describe("OCCT persistent topology reference integration", () => {
         "face",
         face.key,
         {
-          capabilities: storedDescriptorV3Capabilities,
+          capabilities: storedDescriptorV5Capabilities,
           tolerance: { linear: 1e-6, angular: 1e-9, relative: 1e-9 },
         },
       );
@@ -271,15 +271,86 @@ describe("OCCT persistent topology reference integration", () => {
     }
   });
 
+  it("captures and resolves through the advertised legacy protocol-v1 profile while v2 remains primary", async () => {
+    const kernel = await createOcctKernel();
+    const source = kernel.box!([10, 20, 30], false, { feature: "box" });
+    let moved: KernelShape | undefined;
+    try {
+      const primary = kernel.capabilities.topology?.signatures;
+      const legacy = kernel.capabilities.topology?.signatureProfiles?.find(
+        (profile) => profile.protocolVersion === 1,
+      );
+      expect(primary).toEqual({
+        protocolVersion: 2,
+        fingerprint:
+          "invariantcad-topology-descriptor@6;occt-wasm@3.7.0;runtime=stock;modelingTolerance=1e-7",
+      });
+      expect(legacy).toEqual({
+        protocolVersion: 1,
+        fingerprint:
+          "invariantcad-topology-descriptor@4;occt-wasm@3.7.0;runtime=stock;modelingTolerance=1e-7",
+      });
+      if (primary === undefined || legacy === undefined) return;
+
+      const before = kernel.topology!(source);
+      const face = before.faces.find((candidate) =>
+        candidate.lineage.some(
+          (lineage) => lineage.role === "box.face.x-min",
+        ),
+      );
+      expect(face).toBeDefined();
+      if (face === undefined) return;
+      const captured = captureTopologyReference(before, "face", face.key, {
+        capabilities: legacy,
+        tolerance: { linear: 1e-6, angular: 1e-9, relative: 1e-9 },
+      });
+      expect(captured.ok).toBe(true);
+      if (!captured.ok) return;
+      expect(captured.value).toMatchObject({
+        protocolVersion: 1,
+        kernelFingerprint: legacy.fingerprint,
+        topology: "face",
+      });
+
+      moved = kernel.transform!(
+        source,
+        [{ kind: "translate", value: [25, -5, 3] }],
+        { feature: "moved" },
+      );
+      const after = kernel.topology!(moved);
+      const resolved = resolveTopologyReference(captured.value, after, {
+        capabilities: legacy,
+      });
+      expect(resolved.ok).toBe(true);
+      if (resolved.ok) {
+        expect(resolved.value.evidence).toBe("semantic-lineage");
+      }
+
+      const wrongProfile = resolveTopologyReference(captured.value, after, {
+        capabilities: primary,
+      });
+      expect(wrongProfile.ok).toBe(false);
+      if (!wrongProfile.ok) {
+        expect(wrongProfile.diagnostics[0]).toMatchObject({
+          code: "TOPOLOGY_FINGERPRINT_MISMATCH",
+        });
+      }
+    } finally {
+      if (moved !== undefined) kernel.disposeShape(moved);
+      kernel.disposeShape(source);
+      kernel.dispose();
+    }
+  });
+
   it("captures, detaches, and resolves a semantic face across evaluations", async () => {
     const kernel = await createOcctKernel();
     const evaluator = await createEvaluator({ kernel });
     try {
       const signatureCapabilities = kernel.capabilities.topology?.signatures;
       expect(signatureCapabilities).toEqual({
-        protocolVersion: 1,
+        protocolVersion: 2,
         fingerprint:
-          "invariantcad-topology-descriptor@4;occt-wasm@3.7.0;runtime=stock;modelingTolerance=1e-7",
+          "invariantcad-topology-descriptor@6;occt-wasm@3.7.0;runtime=stock;modelingTolerance=1e-7",
       });
       if (signatureCapabilities === undefined) return;
 
@@ -370,7 +441,7 @@ describe("OCCT persistent topology reference integration", () => {
     try {
       const signatureCapabilities = kernel.capabilities.topology?.signatures;
       expect(signatureCapabilities?.fingerprint).toContain(
-        "invariantcad-topology-descriptor@4",
+        "invariantcad-topology-descriptor@6",
       );
       if (signatureCapabilities === undefined) return;
 
@@ -479,7 +550,7 @@ describe("OCCT persistent topology reference integration", () => {
     try {
       const signatureCapabilities = kernel.capabilities.topology?.signatures;
       expect(signatureCapabilities?.fingerprint).toContain(
-        "invariantcad-topology-descriptor@4",
+        "invariantcad-topology-descriptor@6",
       );
       if (signatureCapabilities === undefined) return;
 
@@ -596,7 +667,7 @@ describe("OCCT persistent topology reference integration", () => {
     try {
       const signatureCapabilities = kernel.capabilities.topology?.signatures;
       expect(signatureCapabilities?.fingerprint).toContain(
-        "invariantcad-topology-descriptor@4",
+        "invariantcad-topology-descriptor@6",
       );
       if (signatureCapabilities === undefined) return;
 

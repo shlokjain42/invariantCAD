@@ -74,7 +74,7 @@ function capture<K extends TopologyKind>(
 
 function persisted(document: DesignDocument): DesignDocument {
   const parsed = valueOf(parseDocument(stringifyDocument(document)));
-  expect(parsed.version).toBe(5);
+  expect(parsed.version).toBe(6);
   return parsed;
 }
 

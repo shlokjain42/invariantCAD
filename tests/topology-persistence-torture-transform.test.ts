@@ -98,7 +98,7 @@ describe("OCCT persistent-topology transform torture", () => {
       const baselineShapeCount = raw.shapeCount;
       const capabilities = kernel.capabilities.topology?.signatures;
       expect(capabilities?.fingerprint).toContain(
-        "invariantcad-topology-descriptor@4",
+        "invariantcad-topology-descriptor@6",
       );
       if (capabilities === undefined) return;
 
@@ -212,7 +212,7 @@ describe("OCCT persistent-topology transform torture", () => {
       expect(serialized).not.toContain(oldEdgeKey);
       const parsed = parseDocument(serialized);
       expect(parsed.ok).toBe(true);
-      if (!parsed.ok || parsed.value.version !== 5) return;
+      if (!parsed.ok || parsed.value.version !== 6) return;
       expect(Object.keys(parsed.value.topologyReferences ?? {}).sort()).toEqual([
         "rightEndRim",
         "rightSide",
@@ -482,7 +482,7 @@ describe("OCCT persistent-topology transform torture", () => {
           expect(changedTopology.ok).toBe(true);
           if (changedTopology.ok) {
             const stored =
-              parsed.value.version === 5
+              parsed.value.version === 6
                 ? (Object.entries(parsed.value.topologyReferences ?? {}).find(
                     ([id]) => id === "removedRectangleSide",
                   )?.[1].variants[0] as

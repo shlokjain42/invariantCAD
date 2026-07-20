@@ -1,20 +1,24 @@
 # Persistent-topology torture suite
 
 InvariantCAD's persistent-topology contract is fail-closed: a run passes when a
-reference resolves to exactly one compatible current face or edge, and also when
-an unsupported identity is rejected with the documented missing or ambiguous
-diagnostic. Success never means guessing from a kernel index or enumeration
-order.
+reference resolves to exactly one compatible current face, edge, or exact B-Rep
+vertex, and also when an unsupported identity is rejected with the documented
+missing or ambiguous diagnostic. Success never means guessing from a kernel
+index or enumeration order.
 
-The published corpus has two executable compatibility floors: the stock OCCT
-descriptor `@4` runtime and the matched owned facade ABI 0.6 descriptor-`@5`
-exact-evolution runtime. They share persistent-reference protocol v1 and test
-the currently documented face/edge contract; neither is a claim that every
-topology edit already has durable identity.
+The published corpus exercises protocol-v2 primary descriptor `@6` on both the
+known stock OCCT runtime and the matched owned facade ABI 0.6 exact-evolution
+runtime. Each runtime also exposes its exact protocol-v1 compatibility floor:
+descriptor `@4` for stock and owned ABI 0.2–0.4, or descriptor `@5` for owned
+ABI 0.5+. The v1 fixtures pin their original face/edge evidence and byte
+behavior, while v2 adds vertices and edge↔vertex evidence. None of these
+profiles claims that every topology edit already has durable identity.
 
 | Boundary | Repeated evaluations | Required result |
 |---|---|---|
-| Complete extrusion lineage through a rigid transform | Capture a source-aware side face and end-rim edge at the baseline, dispose the capture run, serialize/parse Document v5, then evaluate square symmetry, width/height crossover, and the original baseline with changing rotation and translation | Both references resolve by `semantic-lineage` to current evaluation-scoped keys while no capture key is serialized; downstream shell and fillet succeed with checked volume and bounds |
+| Complete extrusion lineage through a rigid transform | Capture a source-aware side face and end-rim edge at the baseline, dispose the capture run, serialize/parse Document v6, then evaluate square symmetry, width/height crossover, and the original baseline with changing rotation and translation | Both references resolve by `semantic-lineage` to current evaluation-scoped keys while no capture key is serialized; downstream shell and fillet succeed with checked volume and bounds |
+| Exact vertex persistence | Capture one exact box vertex with protocol v2, dispose the capture run, round-trip Document v6, then translate and resize the box | The reference resolves by `semantic-lineage` to one fresh evaluation-scoped vertex key from its complete anchored incident-edge set; no native index or capture key enters the document |
+| Coincident vertex ambiguity | Present distinct exact B-Rep vertices with identical point, lineage, and incident-edge evidence | Capture or resolution fails key-free with `TOPOLOGY_MATCH_AMBIGUOUS`; coincident coordinates never collapse distinct B-Rep identity and enumeration never breaks the tie |
 | Authored source disappearance | Replace a rectangle profile with a circle while retaining the surrounding node IDs | Direct resolution and the downstream shell fail with `TOPOLOGY_MATCH_MISSING` |
 | Partial Boolean history | Capture an unaffected drilled-box edge, vary the hole radius from `0.05` to `9` mm, cross the target width/height, then restore it | Stable cases resolve through bounded geometry/adjacency; the adjacency-changing crossover fails missing; restoring the original dimensions resolves again |
 | Exact Boolean history | Capture the inherited cylindrical tool-side face from an exact subtraction, vary the hole radius through `1`, `2`, `5`, and `8` mm, move the tool entirely outside the target, then restore it | Radius changes resolve by `semantic-lineage` and drive a downstream adjacent-edge fillet; disappearance and its consumer fail key-free missing; restoration resolves again |
@@ -25,7 +29,7 @@ topology edit already has durable identity.
 | Exact offset history | Capture the source-less positive-Z face of an inward offset, change the offset distance, then restore it | An identical run resolves by `geometry-adjacency` and drives a downstream shell. The changed distance fails key-free missing because exact offset currently carries no upstream box role onto that generated face; restoration resolves again |
 | Partial-to-full revolution | Persist a partial-revolution start cap at 90 degrees, then evaluate 180, 360, and 270 degrees | The partial turns resolve, the full turn fails missing because the cap does not exist, and the cap resolves again when it reappears |
 | Repeated sweep semantics | Attempt to capture one of two sides produced from the same profile curve by a two-segment path | Capture fails with `TOPOLOGY_MATCH_AMBIGUOUS` and two candidates because path-segment identity is intentionally not authored |
-| Fingerprint variants | Store a compatible variant and an unrelated variant in both authoring orders | Only the exact protocol/fingerprint variant is eligible; authoring order has no effect |
+| Protocol and fingerprint variants | Store protocol-v2 `@6`, exact protocol-v1 `@4`/`@5`, and unrelated variants in different authoring orders | Only an exact protocol/fingerprint pair is eligible; when both supported generations are present, v2 is selected deterministically and authoring order has no effect |
 | Resolution explanations | Explain semantic, partial-history, mixed-strategy, missing, and ambiguous searches directly and through a shared session | Versioned frozen aggregates have exact considered/matched invariants; only a resolved outcome has a current key; within one shared session, explaining and resolving the same object performs one bounded search |
 | Cancellation and ownership | Abort from topology extraction for persistent fillet, chamfer, shell, and draft; also exercise success, missing, ambiguous, and work-limit exits | Cancellation reports `EVALUATION_ABORTED`, no downstream feature is invoked, and every created shape is released exactly once |
 
@@ -42,10 +46,19 @@ blend/bevel class role when the complete native graph proves an incoming
 edge-to-face `GENERATED` relation. The reducer does not inspect surface type,
 result order, or selected-edge indices. Generated and residual-created edges,
 residual-created faces, vertex-caused faces, and generated shell/offset topology
-remain unnamed. Protocol v1 may resolve those unnamed items geometrically in an
-identical reevaluation, but a parameter change is allowed to fail missing. The
-two class roles were introduced together by descriptor `@5` and Document v5;
-facade ABI 0.6 and persistent-reference protocol v1 remain unchanged.
+remain unnamed. Vertices have no semantic role vocabulary at all. Protocol v2
+can nevertheless resolve a vertex semantically when both complete snapshots
+provide the same fully anchored incident-edge set. Otherwise it falls back to
+point plus incident-edge geometry, and a parameter change may fail missing.
+Distinct coincident vertices remain separate candidates and fail ambiguous when
+their evidence cannot distinguish them.
+
+The version boundaries are tested independently. Document v6 admits vertex
+references and queries while v1–v5 stay frozen. Signature protocol v2 adds
+vertex evidence while protocol-v1 reference bytes, evidence construction, and
+matching stay frozen. OCCT descriptor `@6` is primary and `@4`/`@5` are exact
+v1 compatibility profiles. The owned facade ABI remains 0.6 and its separate
+exact indexed topology-evolution protocol remains version 1.
 
 The source-repository fixtures are
 `tests/topology-persistence-torture-transform.test.ts`,

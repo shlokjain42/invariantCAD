@@ -19,6 +19,7 @@ describe("kernel topology snapshot validation", () => {
       history: "complete",
       faces: [],
       edges: [],
+      vertices: [],
     };
 
     const result = validateKernelTopologySnapshot(snapshot);
@@ -63,6 +64,16 @@ describe("kernel topology snapshot validation", () => {
           length: 2,
           curve: { kind: "line", direction: [1, 0, 0] },
           faces: ["face"],
+          vertices: ["vertex"],
+        },
+      ],
+      vertices: [
+        {
+          topology: "vertex",
+          key: "vertex",
+          point: [0, 0, 0],
+          lineage: [{ feature: "extrude", relation: "created" }],
+          edges: ["edge"],
         },
       ],
     } as unknown as KernelTopologySnapshot;
@@ -81,6 +92,7 @@ describe("kernel topology snapshot validation", () => {
       source.faces[0]!.lineage[0]!.source,
     );
     expect(detached.edges[0]!.curve).not.toBe(source.edges[0]!.curve);
+    expect(detached.vertices[0]!.point).not.toBe(source.vertices[0]!.point);
     expectDeeplyFrozen(detached);
     expect(Object.isFrozen(source)).toBe(false);
     expect(Object.isFrozen(source.faces[0]!.center)).toBe(false);
@@ -92,6 +104,7 @@ describe("kernel topology snapshot validation", () => {
     expect(detached.faces[0]!.center).toEqual([1, 2, 3]);
     expect(detached.faces[0]!.lineage[0]!.source?.entity).toBe("segment");
     expect(detached.edges[0]!.curve.direction).toEqual([1, 0, 0]);
+    expect(detached.vertices[0]!.point).toEqual([0, 0, 0]);
   });
 
   it("maps protocol failures to the existing kernel diagnostic", () => {
@@ -99,6 +112,7 @@ describe("kernel topology snapshot validation", () => {
       history: "unknown",
       faces: [],
       edges: [],
+      vertices: [],
     });
 
     expect(result).toEqual({
@@ -121,6 +135,7 @@ describe("kernel topology snapshot validation", () => {
         history: "complete",
         faces: sparseFaces,
         edges: [],
+        vertices: [],
       }),
     ).toEqual(
       expect.objectContaining({
@@ -152,6 +167,7 @@ describe("kernel topology snapshot validation", () => {
           },
         ],
         edges: [],
+        vertices: [],
       }),
     ).toEqual(expect.objectContaining({ ok: false }));
 
@@ -172,6 +188,7 @@ describe("kernel topology snapshot validation", () => {
           },
         ],
         edges: [],
+        vertices: [],
       }),
     ).toEqual(expect.objectContaining({ ok: false }));
   });
@@ -179,6 +196,8 @@ describe("kernel topology snapshot validation", () => {
   it("validates reciprocal incidence without degree-squared includes scans", () => {
     const faceEdges = ["edge"];
     const edgeFaces = ["face"];
+    const edgeVertices = ["vertex"];
+    const vertexEdges = ["edge"];
     let includesCalls = 0;
     const rejectIncludes = (): never => {
       includesCalls += 1;
@@ -186,6 +205,8 @@ describe("kernel topology snapshot validation", () => {
     };
     Object.defineProperty(faceEdges, "includes", { value: rejectIncludes });
     Object.defineProperty(edgeFaces, "includes", { value: rejectIncludes });
+    Object.defineProperty(edgeVertices, "includes", { value: rejectIncludes });
+    Object.defineProperty(vertexEdges, "includes", { value: rejectIncludes });
 
     const result = validateKernelTopologySnapshot({
       history: "complete",
@@ -211,12 +232,85 @@ describe("kernel topology snapshot validation", () => {
           length: 0,
           curve: { kind: "line" },
           faces: edgeFaces,
+          vertices: edgeVertices,
+        },
+      ],
+      vertices: [
+        {
+          topology: "vertex",
+          key: "vertex",
+          point: [0, 0, 0],
+          lineage: [],
+          edges: vertexEdges,
         },
       ],
     });
 
     expect(result.ok).toBe(true);
     expect(includesCalls).toBe(0);
+  });
+
+  it("rejects invalid vertex points and non-reciprocal edge incidence", () => {
+    const edge = {
+      topology: "edge",
+      key: "edge",
+      center: [0, 0, 0],
+      bounds: { min: [0, 0, 0], max: [0, 0, 0] },
+      lineage: [],
+      length: 0,
+      curve: { kind: "line" },
+      faces: [],
+      vertices: ["vertex"],
+    };
+    const invalidPoint = validateKernelTopologySnapshot({
+      history: "complete",
+      faces: [],
+      edges: [edge],
+      vertices: [
+        {
+          topology: "vertex",
+          key: "vertex",
+          point: [Number.NaN, 0, 0],
+          lineage: [],
+          edges: ["edge"],
+        },
+      ],
+    });
+    expect(invalidPoint).toEqual(
+      expect.objectContaining({
+        ok: false,
+        diagnostics: [
+          expect.objectContaining({
+            message: "Geometry kernel returned an invalid topology point",
+          }),
+        ],
+      }),
+    );
+
+    const nonReciprocal = validateKernelTopologySnapshot({
+      history: "complete",
+      faces: [],
+      edges: [edge],
+      vertices: [
+        {
+          topology: "vertex",
+          key: "vertex",
+          point: [0, 0, 0],
+          lineage: [],
+          edges: [],
+        },
+      ],
+    });
+    expect(nonReciprocal).toEqual(
+      expect.objectContaining({
+        ok: false,
+        diagnostics: [
+          expect.objectContaining({
+            message: "Geometry kernel returned invalid edge-to-vertex adjacency",
+          }),
+        ],
+      }),
+    );
   });
 
   it("accepts scale-independent finite direction vectors", () => {
@@ -240,6 +334,7 @@ describe("kernel topology snapshot validation", () => {
             },
           ],
           edges: [],
+          vertices: [],
         }).ok,
       ).toBe(true);
     }
@@ -271,6 +366,7 @@ describe("kernel topology snapshot validation", () => {
         },
       ],
       edges: [],
+      vertices: [],
     });
 
     expect(result.ok).toBe(true);
@@ -349,7 +445,7 @@ describe("kernel topology snapshot validation", () => {
     });
 
     const result = normalizeKernelTopologySnapshot(
-      { history: "complete", faces, edges: [] },
+      { history: "complete", faces, edges: [], vertices: [] },
       {
         maxTopologyItems: 1,
         maxAdjacencyLinks: 0,
@@ -392,6 +488,7 @@ describe("kernel topology snapshot validation", () => {
         },
       ],
       edges: [],
+      vertices: [],
     });
 
     expect(result.ok).toBe(false);
@@ -406,7 +503,7 @@ describe("kernel topology snapshot validation", () => {
     const revoked = Proxy.revocable({}, {});
     revoked.revoke();
     const snapshot = Object.defineProperty(
-      { faces: [], edges: [] },
+      { faces: [], edges: [], vertices: [] },
       "history",
       {
         enumerable: true,

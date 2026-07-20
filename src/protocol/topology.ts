@@ -1,6 +1,8 @@
 import type { Vec3 } from "../core/math.js";
 
-export type TopologyKind = "face" | "edge";
+export type TopologyKindV1 = "face" | "edge";
+export type TopologyKindV2 = TopologyKindV1 | "vertex";
+export type TopologyKind = TopologyKindV2;
 
 /** Face-role vocabulary frozen into document v1. */
 export const FACE_TOPOLOGY_ROLES_V1 = Object.freeze([
@@ -48,6 +50,9 @@ export const FACE_TOPOLOGY_ROLES_V5 = Object.freeze([
   "chamfer.face.bevel",
 ] as const);
 
+/** Document v6 did not expand the semantic face-role vocabulary. */
+export const FACE_TOPOLOGY_ROLES_V6 = FACE_TOPOLOGY_ROLES_V5;
+
 /** Edge-role vocabulary frozen into document v1. */
 export const EDGE_TOPOLOGY_ROLES_V1 = Object.freeze([
   "box.edge.x-min-y-min",
@@ -90,6 +95,17 @@ export const EDGE_TOPOLOGY_ROLES_V4 = Object.freeze([
 /** Document v5 did not expand the semantic edge-role vocabulary. */
 export const EDGE_TOPOLOGY_ROLES_V5 = EDGE_TOPOLOGY_ROLES_V4;
 
+/** Document v6 did not expand the semantic edge-role vocabulary. */
+export const EDGE_TOPOLOGY_ROLES_V6 = EDGE_TOPOLOGY_ROLES_V5;
+
+/** Vertex roles remain deliberately empty through document v6. */
+export const VERTEX_TOPOLOGY_ROLES_V1 = Object.freeze([] as const);
+export const VERTEX_TOPOLOGY_ROLES_V2 = VERTEX_TOPOLOGY_ROLES_V1;
+export const VERTEX_TOPOLOGY_ROLES_V3 = VERTEX_TOPOLOGY_ROLES_V2;
+export const VERTEX_TOPOLOGY_ROLES_V4 = VERTEX_TOPOLOGY_ROLES_V3;
+export const VERTEX_TOPOLOGY_ROLES_V5 = VERTEX_TOPOLOGY_ROLES_V4;
+export const VERTEX_TOPOLOGY_ROLES_V6 = VERTEX_TOPOLOGY_ROLES_V5;
+
 export const TOPOLOGY_ROLES_V1 = Object.freeze([
   ...FACE_TOPOLOGY_ROLES_V1,
   ...EDGE_TOPOLOGY_ROLES_V1,
@@ -112,32 +128,47 @@ export const TOPOLOGY_ROLES_V5 = Object.freeze([
   ...EDGE_TOPOLOGY_ROLES_V5,
 ] as const);
 
+/** Document v6 did not expand the semantic topology-role vocabulary. */
+export const TOPOLOGY_ROLES_V6 = TOPOLOGY_ROLES_V5;
+
 /** Current face-role vocabulary. */
-export const FACE_TOPOLOGY_ROLES = FACE_TOPOLOGY_ROLES_V5;
+export const FACE_TOPOLOGY_ROLES = FACE_TOPOLOGY_ROLES_V6;
 /** Current edge-role vocabulary. */
-export const EDGE_TOPOLOGY_ROLES = EDGE_TOPOLOGY_ROLES_V5;
+export const EDGE_TOPOLOGY_ROLES = EDGE_TOPOLOGY_ROLES_V6;
+/** Current vertex-role vocabulary. */
+export const VERTEX_TOPOLOGY_ROLES = VERTEX_TOPOLOGY_ROLES_V6;
 /** Current closed semantic-role vocabulary. */
-export const TOPOLOGY_ROLES = TOPOLOGY_ROLES_V5;
+export const TOPOLOGY_ROLES = TOPOLOGY_ROLES_V6;
 
 export type FaceTopologyRoleV1 = (typeof FACE_TOPOLOGY_ROLES_V1)[number];
 export type FaceTopologyRoleV2 = (typeof FACE_TOPOLOGY_ROLES_V2)[number];
 export type FaceTopologyRoleV3 = (typeof FACE_TOPOLOGY_ROLES_V3)[number];
 export type FaceTopologyRoleV4 = (typeof FACE_TOPOLOGY_ROLES_V4)[number];
 export type FaceTopologyRoleV5 = (typeof FACE_TOPOLOGY_ROLES_V5)[number];
+export type FaceTopologyRoleV6 = (typeof FACE_TOPOLOGY_ROLES_V6)[number];
 export type EdgeTopologyRoleV1 = (typeof EDGE_TOPOLOGY_ROLES_V1)[number];
 export type EdgeTopologyRoleV2 = (typeof EDGE_TOPOLOGY_ROLES_V2)[number];
 export type EdgeTopologyRoleV3 = (typeof EDGE_TOPOLOGY_ROLES_V3)[number];
 export type EdgeTopologyRoleV4 = (typeof EDGE_TOPOLOGY_ROLES_V4)[number];
 export type EdgeTopologyRoleV5 = (typeof EDGE_TOPOLOGY_ROLES_V5)[number];
+export type EdgeTopologyRoleV6 = (typeof EDGE_TOPOLOGY_ROLES_V6)[number];
+export type VertexTopologyRoleV1 = (typeof VERTEX_TOPOLOGY_ROLES_V1)[number];
+export type VertexTopologyRoleV2 = (typeof VERTEX_TOPOLOGY_ROLES_V2)[number];
+export type VertexTopologyRoleV3 = (typeof VERTEX_TOPOLOGY_ROLES_V3)[number];
+export type VertexTopologyRoleV4 = (typeof VERTEX_TOPOLOGY_ROLES_V4)[number];
+export type VertexTopologyRoleV5 = (typeof VERTEX_TOPOLOGY_ROLES_V5)[number];
+export type VertexTopologyRoleV6 = (typeof VERTEX_TOPOLOGY_ROLES_V6)[number];
 export type TopologyRoleV1 = (typeof TOPOLOGY_ROLES_V1)[number];
 export type TopologyRoleV2 = (typeof TOPOLOGY_ROLES_V2)[number];
 export type TopologyRoleV3 = (typeof TOPOLOGY_ROLES_V3)[number];
 export type TopologyRoleV4 = (typeof TOPOLOGY_ROLES_V4)[number];
 export type TopologyRoleV5 = (typeof TOPOLOGY_ROLES_V5)[number];
+export type TopologyRoleV6 = (typeof TOPOLOGY_ROLES_V6)[number];
 
-export type FaceTopologyRole = FaceTopologyRoleV5;
-export type EdgeTopologyRole = EdgeTopologyRoleV5;
-export type TopologyRole = TopologyRoleV5;
+export type FaceTopologyRole = FaceTopologyRoleV6;
+export type EdgeTopologyRole = EdgeTopologyRoleV6;
+export type VertexTopologyRole = VertexTopologyRoleV6;
+export type TopologyRole = TopologyRoleV6;
 
 export type TopologyRoleProducer =
   | "box"
@@ -236,9 +267,15 @@ export interface KernelTopologyCapabilities {
    * compatible with the versioned persistent-reference protocol.
    */
   readonly signatures?: KernelTopologySignatureCapabilities;
+  /**
+   * Additional descriptor profiles retained for exact compatibility with
+   * earlier persistent-reference protocols. The primary `signatures`
+   * declaration is not repeated here.
+   */
+  readonly signatureProfiles?: readonly KernelTopologySignatureCapabilities[];
 }
 
-export interface KernelTopologySignatureCapabilities {
+export interface KernelTopologySignatureCapabilitiesV1 {
   readonly protocolVersion: 1;
   /**
    * Semantic compatibility fingerprint for the descriptor implementation.
@@ -246,6 +283,16 @@ export interface KernelTopologySignatureCapabilities {
    */
   readonly fingerprint: string;
 }
+
+export interface KernelTopologySignatureCapabilitiesV2 {
+  readonly protocolVersion: 2;
+  /** Semantic compatibility fingerprint for protocol-v2 descriptors. */
+  readonly fingerprint: string;
+}
+
+export type KernelTopologySignatureCapabilities =
+  | KernelTopologySignatureCapabilitiesV1
+  | KernelTopologySignatureCapabilitiesV2;
 
 export interface KernelTopologySource {
   readonly kind: "sketch-entity";
@@ -279,11 +326,14 @@ export interface KernelCurveDescriptor {
   readonly radius?: number;
 }
 
-interface KernelTopologyDescriptorBase {
+interface KernelTopologyIdentityBase {
   readonly key: KernelTopologyKey;
+  readonly lineage: readonly KernelTopologyLineage[];
+}
+
+interface KernelTopologyDescriptorBase extends KernelTopologyIdentityBase {
   readonly center: Vec3;
   readonly bounds: KernelTopologyBounds;
-  readonly lineage: readonly KernelTopologyLineage[];
 }
 
 export interface KernelFaceDescriptor extends KernelTopologyDescriptorBase {
@@ -298,6 +348,17 @@ export interface KernelEdgeDescriptor extends KernelTopologyDescriptorBase {
   readonly length: number;
   readonly curve: KernelCurveDescriptor;
   readonly faces: readonly KernelTopologyKey[];
+  readonly vertices: readonly KernelTopologyKey[];
+}
+
+/**
+ * One exact B-Rep vertex. Mesh/tessellation vertices are not represented by
+ * this protocol.
+ */
+export interface KernelVertexDescriptor extends KernelTopologyIdentityBase {
+  readonly topology: "vertex";
+  readonly point: Vec3;
+  readonly edges: readonly KernelTopologyKey[];
 }
 
 export interface KernelTopologySnapshot {
@@ -305,4 +366,5 @@ export interface KernelTopologySnapshot {
   readonly history: "complete" | "partial";
   readonly faces: readonly KernelFaceDescriptor[];
   readonly edges: readonly KernelEdgeDescriptor[];
+  readonly vertices: readonly KernelVertexDescriptor[];
 }

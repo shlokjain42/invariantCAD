@@ -1374,10 +1374,17 @@ const kernel = await createOcctKernel({
 });
 try {
   assert.deepEqual(kernel.capabilities.topology?.signatures, {
-    protocolVersion: 1,
+    protocolVersion: 2,
     fingerprint:
-      "invariantcad-topology-descriptor@5;occt-wasm@3.7.0;runtime=invariantcad-facade@0.6.0+occt-wasm.3.7.0;modelingTolerance=1e-7",
+      "invariantcad-topology-descriptor@6;occt-wasm@3.7.0;runtime=invariantcad-facade@0.6.0+occt-wasm.3.7.0;modelingTolerance=1e-7",
   });
+  assert.deepEqual(kernel.capabilities.topology?.signatureProfiles, [
+    {
+      protocolVersion: 1,
+      fingerprint:
+        "invariantcad-topology-descriptor@5;occt-wasm@3.7.0;runtime=invariantcad-facade@0.6.0+occt-wasm.3.7.0;modelingTolerance=1e-7",
+    },
+  ]);
   assertDirectDraft(kernel);
   assertDirectBoolean(kernel);
   assertDirectEdgeTreatments(kernel);

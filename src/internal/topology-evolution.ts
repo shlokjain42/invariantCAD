@@ -6,6 +6,7 @@ import {
   type KernelFaceDescriptor,
   type KernelTopologyLineage,
   type KernelTopologySnapshot,
+  type KernelVertexDescriptor,
 } from "../protocol/topology.js";
 
 const INT32_MIN = -2_147_483_648;
@@ -267,6 +268,14 @@ function validateSnapshot(
       `${label}.edges has ${Array.isArray(candidate.edges) ? candidate.edges.length : "an invalid"} count; expected ${counts.edges}`,
     );
   }
+  if (
+    !Array.isArray(candidate.vertices) ||
+    candidate.vertices.length !== counts.vertices
+  ) {
+    protocolError(
+      `${label}.vertices has ${Array.isArray(candidate.vertices) ? candidate.vertices.length : "an invalid"} count; expected ${counts.vertices}`,
+    );
+  }
   for (let index = 0; index < candidate.faces.length; index += 1) {
     const descriptor = candidate.faces[index];
     if (typeof descriptor !== "object" || descriptor === null) {
@@ -286,6 +295,16 @@ function validateSnapshot(
       protocolError(`${label}.edges[${index}] is not an edge descriptor`);
     }
     validateLineage(descriptor.lineage, `${label}.edges[${index}].lineage`);
+  }
+  for (let index = 0; index < candidate.vertices.length; index += 1) {
+    const descriptor = candidate.vertices[index];
+    if (typeof descriptor !== "object" || descriptor === null) {
+      protocolError(`${label}.vertices[${index}] must be a descriptor`);
+    }
+    if (descriptor.topology !== "vertex") {
+      protocolError(`${label}.vertices[${index}] is not a vertex descriptor`);
+    }
+    validateLineage(descriptor.lineage, `${label}.vertices[${index}].lineage`);
   }
 }
 
@@ -829,7 +848,7 @@ export function validateCompleteIndexedTopologyEvolutionEnvelope(
 }
 
 function inheritedLineage(
-  source: KernelFaceDescriptor | KernelEdgeDescriptor,
+  source: KernelFaceDescriptor | KernelEdgeDescriptor | KernelVertexDescriptor,
   relation: SupportedEvolutionRelation,
   feature: string | undefined,
 ): readonly KernelTopologyLineage[] {
@@ -901,13 +920,16 @@ export function reduceIndexedTopologyEvolution(
   const edgeEvolution: Array<DescriptorEvolution | undefined> = Array.from(
     { length: validated.resultCounts.edges },
   );
+  const vertexEvolution: Array<DescriptorEvolution | undefined> = Array.from(
+    { length: validated.resultCounts.vertices },
+  );
   for (const record of validated.records) {
     const target =
       record.resultKind === INDEXED_TOPOLOGY_KIND.FACE
         ? faceEvolution
         : record.resultKind === INDEXED_TOPOLOGY_KIND.EDGE
           ? edgeEvolution
-          : undefined;
+          : vertexEvolution;
     if (target !== undefined) {
       target[record.resultIndex] = {
         sourceShapeIndex: record.sourceShapeIndex,
@@ -943,6 +965,19 @@ export function reduceIndexedTopologyEvolution(
       lineage: inheritedLineage(source, evolution.relation, options.feature),
     });
   });
+  const vertices = options.output.vertices.map((descriptor, resultIndex) => {
+    const evolution = vertexEvolution[resultIndex];
+    if (evolution === undefined) {
+      return protocolError(`vertex result '${resultIndex}' has no evolution record`);
+    }
+    const source = options.inputs[evolution.sourceShapeIndex]!.vertices[
+      evolution.sourceIndex
+    ]!;
+    return Object.freeze({
+      ...descriptor,
+      lineage: inheritedLineage(source, evolution.relation, options.feature),
+    });
+  });
 
   return Object.freeze({
     history: options.inputs.every((input) => input.history === "complete")
@@ -950,6 +985,7 @@ export function reduceIndexedTopologyEvolution(
       : "partial",
     faces: Object.freeze(faces),
     edges: Object.freeze(edges),
+    vertices: Object.freeze(vertices),
   });
 }
 
@@ -965,7 +1001,7 @@ function lineageIdentity(lineage: KernelTopologyLineage): string {
 }
 
 function copyDescriptorLineage(
-  source: KernelFaceDescriptor | KernelEdgeDescriptor,
+  source: KernelFaceDescriptor | KernelEdgeDescriptor | KernelVertexDescriptor,
 ): readonly KernelTopologyLineage[] {
   return source.lineage.map((item) => {
     return Object.freeze({
@@ -1071,16 +1107,25 @@ export function reduceCompleteIndexedTopologyEvolution(
     { length: validated.resultCounts.edges },
     (): ValidatedCompleteRecord[] => [],
   );
+  const vertexEvolution = Array.from(
+    { length: validated.resultCounts.vertices },
+    (): ValidatedCompleteRecord[] => [],
+  );
   for (const record of [...validated.records].sort(compareCompleteRecords)) {
     if (record.resultKind === INDEXED_TOPOLOGY_KIND.FACE) {
       faceEvolution[record.resultIndex]!.push(record);
     } else if (record.resultKind === INDEXED_TOPOLOGY_KIND.EDGE) {
       edgeEvolution[record.resultIndex]!.push(record);
+    } else if (record.resultKind === INDEXED_TOPOLOGY_KIND.VERTEX) {
+      vertexEvolution[record.resultIndex]!.push(record);
     }
   }
 
   const reduceDescriptor = <
-    Descriptor extends KernelFaceDescriptor | KernelEdgeDescriptor,
+    Descriptor extends
+      | KernelFaceDescriptor
+      | KernelEdgeDescriptor
+      | KernelVertexDescriptor,
   >(
     topology: TopologyKind,
     descriptor: Descriptor,
@@ -1125,7 +1170,7 @@ export function reduceCompleteIndexedTopologyEvolution(
           ? sourceSnapshot.faces[record.sourceIndex]
           : record.sourceKind === INDEXED_TOPOLOGY_KIND.EDGE
             ? sourceSnapshot.edges[record.sourceIndex]
-            : undefined;
+            : sourceSnapshot.vertices[record.sourceIndex];
       if (source !== undefined) {
         for (const item of copyDescriptorLineage(source)) {
           append(item);
@@ -1194,6 +1239,13 @@ export function reduceCompleteIndexedTopologyEvolution(
       edgeEvolution[resultIndex]!,
     ),
   );
+  const vertices = options.output.vertices.map((descriptor, resultIndex) =>
+    reduceDescriptor(
+      "vertex",
+      descriptor,
+      vertexEvolution[resultIndex]!,
+    ),
+  );
 
   return Object.freeze({
     history: options.inputs.every((input) => input.history === "complete")
@@ -1201,5 +1253,6 @@ export function reduceCompleteIndexedTopologyEvolution(
       : "partial",
     faces: Object.freeze(faces),
     edges: Object.freeze(edges),
+    vertices: Object.freeze(vertices),
   });
 }

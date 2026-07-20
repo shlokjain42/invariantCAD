@@ -14,6 +14,7 @@ import {
   type KernelTopologyLineage,
   type KernelTopologyKey,
   type KernelTopologySnapshot,
+  type KernelVertexDescriptor,
   type TopologyKind,
   type TopologyRole,
 } from "../protocol/topology.js";
@@ -284,6 +285,7 @@ function copyEdgeDescriptor(
   const axis = rawCurve.axis;
   const radius = rawCurve.radius;
   const faces = edge.faces;
+  const vertices = edge.vertices;
   return {
     topology,
     key,
@@ -303,7 +305,27 @@ function copyEdgeDescriptor(
       ...(radius === undefined ? {} : { radius }),
     },
     faces: copyTopologyKeys(faces, context),
+    vertices: copyTopologyKeys(vertices, context),
   } as unknown as KernelEdgeDescriptor;
+}
+
+function copyVertexDescriptor(
+  value: unknown,
+  context: KernelTopologySnapshotCopyContext,
+): KernelVertexDescriptor {
+  const vertex = recordValue(value);
+  const topology = vertex.topology;
+  const key = vertex.key;
+  const point = vertex.point;
+  const lineage = vertex.lineage;
+  const edges = vertex.edges;
+  return {
+    topology,
+    key,
+    point: copyVector(point),
+    lineage: copyLineageArray(lineage, context),
+    edges: copyTopologyKeys(edges, context),
+  } as unknown as KernelVertexDescriptor;
 }
 
 /**
@@ -321,6 +343,7 @@ export function detachKernelTopologySnapshot(
   const history = rawSnapshot.history;
   const rawFaces = rawSnapshot.faces;
   const rawEdges = rawSnapshot.edges;
+  const rawVertices = rawSnapshot.vertices;
   const copiedFaces = copyArray(
     rawFaces,
     "Geometry kernel returned invalid topology collections",
@@ -329,9 +352,14 @@ export function detachKernelTopologySnapshot(
     rawEdges,
     "Geometry kernel returned invalid topology collections",
   );
+  const copiedVertices = copyArray(
+    rawVertices,
+    "Geometry kernel returned invalid topology collections",
+  );
   const faceCount = copiedFaces.length;
   const edgeCount = copiedEdges.length;
-  const topologyItems = faceCount + edgeCount;
+  const vertexCount = copiedVertices.length;
+  const topologyItems = faceCount + edgeCount + vertexCount;
   const context: KernelTopologySnapshotCopyContext = {
     limits,
     adjacencyLinks: 0,
@@ -352,10 +380,21 @@ export function detachKernelTopologySnapshot(
     }
     edges[index] = copyEdgeDescriptor(copiedEdges.value[index], context);
   }
+  const vertices = new Array<KernelVertexDescriptor>(vertexCount);
+  for (let index = 0; index < vertexCount; index += 1) {
+    if (!Object.hasOwn(copiedVertices.value, index)) {
+      throw new TypeError("Geometry kernel returned sparse topology collections");
+    }
+    vertices[index] = copyVertexDescriptor(
+      copiedVertices.value[index],
+      context,
+    );
+  }
   const detached = {
     history,
     faces,
     edges,
+    vertices,
   } as unknown as KernelTopologySnapshot;
   assertValidKernelTopologySnapshot(detached, (message, details): never => {
     throw new KernelTopologySnapshotValidationError(message, details);
@@ -365,7 +404,7 @@ export function detachKernelTopologySnapshot(
 
 /**
  * Validates an untrusted kernel topology snapshot and its complete reciprocal
- * face/edge incidence graph.
+ * face/edge and edge/vertex incidence graphs.
  *
  * The caller owns failure representation so protocol users can preserve their
  * public diagnostic boundary without duplicating snapshot validation.
@@ -387,7 +426,11 @@ export function assertValidKernelTopologySnapshot(
       history: snapshot.history,
     });
   }
-  if (!Array.isArray(snapshot.faces) || !Array.isArray(snapshot.edges)) {
+  if (
+    !Array.isArray(snapshot.faces) ||
+    !Array.isArray(snapshot.edges) ||
+    !Array.isArray(snapshot.vertices)
+  ) {
     fail("Geometry kernel returned invalid topology collections", {});
   }
 
@@ -407,7 +450,7 @@ export function assertValidKernelTopologySnapshot(
   const topologyKeys = (
     value: unknown,
     topology: TopologyKind,
-    adjacency: "faces" | "edges",
+    adjacency: "faces" | "edges" | "vertices",
   ): value is readonly KernelTopologyKey[] => {
     if (!Array.isArray(value)) {
       fail("Geometry kernel returned invalid topology adjacency", {
@@ -527,7 +570,26 @@ export function assertValidKernelTopologySnapshot(
       !recordValue(rawDescriptor) ||
       rawDescriptor.topology !== topology ||
       typeof rawDescriptor.key !== "string" ||
-      rawDescriptor.key.length === 0 ||
+      rawDescriptor.key.length === 0
+    ) {
+      fail("Geometry kernel returned an invalid topology descriptor", {
+        topology,
+      });
+    }
+    const key = rawDescriptor.key as KernelTopologyKey;
+    if (keys.has(key)) {
+      fail("Geometry kernel returned a duplicate topology key", { topology });
+    }
+    keys.add(key);
+    lineage(rawDescriptor.lineage, topology);
+    if (topology === "vertex") {
+      if (!vector(rawDescriptor.point)) {
+        fail("Geometry kernel returned an invalid topology point", { topology });
+      }
+      topologyKeys(rawDescriptor.edges, topology, "edges");
+      return;
+    }
+    if (
       !vector(rawDescriptor.center) ||
       !recordValue(rawDescriptor.bounds) ||
       !vector(rawDescriptor.bounds.min) ||
@@ -544,12 +606,6 @@ export function assertValidKernelTopologySnapshot(
     if (bounds.min.some((minimum, index) => minimum > bounds.max[index]!)) {
       fail("Geometry kernel returned invalid topology bounds", { topology });
     }
-    const key = rawDescriptor.key as KernelTopologyKey;
-    if (keys.has(key)) {
-      fail("Geometry kernel returned a duplicate topology key", { topology });
-    }
-    keys.add(key);
-    lineage(rawDescriptor.lineage, topology);
     if (topology === "face") {
       if (
         typeof rawDescriptor.area !== "number" ||
@@ -570,6 +626,7 @@ export function assertValidKernelTopologySnapshot(
       }
       geometry(rawDescriptor.curve, topology);
       topologyKeys(rawDescriptor.faces, topology, "faces");
+      topologyKeys(rawDescriptor.vertices, topology, "vertices");
     }
   };
 
@@ -591,17 +648,38 @@ export function assertValidKernelTopologySnapshot(
     }
     validateDescriptor(snapshot.edges[index], "edge");
   }
+  for (let index = 0; index < snapshot.vertices.length; index += 1) {
+    if (!Object.hasOwn(snapshot.vertices, index)) {
+      fail("Geometry kernel returned sparse topology collections", {
+        topology: "vertex",
+        index,
+      });
+    }
+    validateDescriptor(snapshot.vertices[index], "vertex");
+  }
   const faces = snapshot.faces as unknown as readonly KernelFaceDescriptor[];
   const edges = snapshot.edges as unknown as readonly KernelEdgeDescriptor[];
+  const vertices =
+    snapshot.vertices as unknown as readonly KernelVertexDescriptor[];
   const faceKeys = new Set(faces.map((face) => face.key));
   const edgeKeys = new Set(edges.map((edge) => edge.key));
+  const vertexKeys = new Set(vertices.map((vertex) => vertex.key));
   const faceByKey = new Map(faces.map((face) => [face.key, face]));
   const edgeByKey = new Map(edges.map((edge) => [edge.key, edge]));
+  const vertexByKey = new Map(
+    vertices.map((vertex) => [vertex.key, vertex]),
+  );
   const faceEdges = new Map(
     faces.map((face) => [face.key, new Set(face.edges)]),
   );
   const edgeFaces = new Map(
     edges.map((edge) => [edge.key, new Set(edge.faces)]),
+  );
+  const edgeVertices = new Map(
+    edges.map((edge) => [edge.key, new Set(edge.vertices)]),
+  );
+  const vertexEdges = new Map(
+    vertices.map((vertex) => [vertex.key, new Set(vertex.edges)]),
   );
   for (const face of faces) {
     for (const edgeKey of face.edges) {
@@ -623,6 +701,28 @@ export function assertValidKernelTopologySnapshot(
           topology: "edge",
           dangling: !faceKeys.has(faceKey),
           reciprocal: face !== undefined,
+        });
+      }
+    }
+    for (const vertexKey of edge.vertices) {
+      const vertex = vertexByKey.get(vertexKey);
+      if (vertex === undefined || !vertexEdges.get(vertexKey)!.has(edge.key)) {
+        fail("Geometry kernel returned invalid edge-to-vertex adjacency", {
+          topology: "edge",
+          dangling: !vertexKeys.has(vertexKey),
+          reciprocal: vertex !== undefined,
+        });
+      }
+    }
+  }
+  for (const vertex of vertices) {
+    for (const edgeKey of vertex.edges) {
+      const edge = edgeByKey.get(edgeKey);
+      if (edge === undefined || !edgeVertices.get(edgeKey)!.has(vertex.key)) {
+        fail("Geometry kernel returned invalid vertex-to-edge adjacency", {
+          topology: "vertex",
+          dangling: !edgeKeys.has(edgeKey),
+          reciprocal: edge !== undefined,
         });
       }
     }

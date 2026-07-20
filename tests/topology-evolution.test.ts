@@ -15,6 +15,7 @@ import type {
   KernelTopologyKey,
   KernelTopologyLineage,
   KernelTopologySnapshot,
+  KernelVertexDescriptor,
 } from "../src/protocol/topology.js";
 
 function key(value: string): KernelTopologyKey {
@@ -50,6 +51,20 @@ function edge(
     length: 8,
     curve: { kind: "line", direction: [1, 0, 0] },
     faces: [key(`${id}:face`)],
+    vertices: [key(`${id}:vertex`)],
+  };
+}
+
+function vertex(
+  id: string,
+  lineage: readonly KernelTopologyLineage[],
+): KernelVertexDescriptor {
+  return {
+    topology: "vertex",
+    key: key(id),
+    point: [2, 3, 4],
+    lineage,
+    edges: [key(`${id}:edge`)],
   };
 }
 
@@ -57,8 +72,9 @@ function snapshot(
   history: KernelTopologySnapshot["history"],
   faces: readonly KernelFaceDescriptor[],
   edges: readonly KernelEdgeDescriptor[],
+  vertices: readonly KernelVertexDescriptor[] = [],
 ): KernelTopologySnapshot {
-  return { history, faces, edges };
+  return { history, faces, edges, vertices };
 }
 
 function counts(
@@ -99,12 +115,14 @@ function simpleOptions(): ReduceIndexedTopologyEvolutionOptions {
         "complete",
         [face("input-face", inputLineage)],
         [edge("input-edge", inputLineage)],
+        [vertex("input-vertex", inputLineage)],
       ),
     ],
     output: snapshot(
       "partial",
       [face("result-face", outputLineage)],
       [edge("result-edge", outputLineage)],
+      [vertex("result-vertex", outputLineage)],
     ),
     evolution: {
       version: 1,
@@ -153,11 +171,13 @@ describe("exact indexed topology evolution", () => {
       "complete",
       [face("first-face", firstFaceLineage)],
       [edge("first-edge", edgeLineage)],
+      [vertex("first-vertex", edgeLineage)],
     );
     const secondInput = snapshot(
       "complete",
       [face("second-face", secondFaceLineage)],
       [],
+      [vertex("second-vertex", secondFaceLineage)],
     );
     const baseLineage = [
       { feature: "base-must-be-replaced", relation: "created" as const },
@@ -173,6 +193,10 @@ describe("exact indexed topology evolution", () => {
         "partial",
         [firstOutputFace, secondOutputFace],
         [outputEdge],
+        [
+          vertex("result-vertex-0", baseLineage),
+          vertex("result-vertex-1", baseLineage),
+        ],
       ),
       evolution: {
         version: 1,
@@ -197,8 +221,12 @@ describe("exact indexed topology evolution", () => {
     ]);
     expect(result.faces[1]!.lineage).toEqual(firstFaceLineage);
     expect(result.edges[0]!.lineage).toEqual(edgeLineage);
+    expect(result.vertices[0]!.lineage).toEqual(secondFaceLineage);
+    expect(result.vertices[1]!.lineage).toEqual(edgeLineage);
     expect(
-      [...result.faces, ...result.edges].flatMap((item) => item.lineage),
+      [...result.faces, ...result.edges, ...result.vertices].flatMap(
+        (item) => item.lineage,
+      ),
     ).not.toContainEqual({
       feature: "base-must-be-replaced",
       relation: "created",
@@ -213,12 +241,19 @@ describe("exact indexed topology evolution", () => {
     expect(result.edges[0]!.key).toBe(outputEdge.key);
     expect(result.edges[0]!.curve).toBe(outputEdge.curve);
     expect(result.edges[0]!.faces).toBe(outputEdge.faces);
+    expect(result.edges[0]!.vertices).toBe(outputEdge.vertices);
     expect(result.edges[0]!.length).toBe(outputEdge.length);
+    expect(result.vertices[0]!.point).toEqual([2, 3, 4]);
 
     expect(Object.isFrozen(result)).toBe(true);
     expect(Object.isFrozen(result.faces)).toBe(true);
     expect(Object.isFrozen(result.edges)).toBe(true);
-    for (const descriptor of [...result.faces, ...result.edges]) {
+    expect(Object.isFrozen(result.vertices)).toBe(true);
+    for (const descriptor of [
+      ...result.faces,
+      ...result.edges,
+      ...result.vertices,
+    ]) {
       expect(Object.isFrozen(descriptor)).toBe(true);
       expect(Object.isFrozen(descriptor.lineage)).toBe(true);
     }
@@ -240,6 +275,10 @@ describe("exact indexed topology evolution", () => {
     expect(result.edges[0]!.lineage).toEqual([
       { feature: "box", relation: "created" },
     ]);
+    expect(result.vertices[0]!.lineage).toEqual([
+      { feature: "box", relation: "created" },
+      { feature: "draft", relation: "modified" },
+    ]);
   });
 
   it("preserves exact inherited lineage when no feature context is provided", () => {
@@ -255,6 +294,9 @@ describe("exact indexed topology evolution", () => {
       { feature: "box", relation: "created" },
     ]);
     expect(result.edges[0]!.lineage).toEqual([
+      { feature: "box", relation: "created" },
+    ]);
+    expect(result.vertices[0]!.lineage).toEqual([
       { feature: "box", relation: "created" },
     ]);
   });
@@ -274,12 +316,14 @@ describe("exact indexed topology evolution", () => {
           "complete",
           [face("mutable-input-face", sourceLineage)],
           [edge("mutable-input-edge", sourceLineage)],
+          [vertex("mutable-input-vertex", sourceLineage)],
         ),
       ],
       output: snapshot(
         "complete",
         [face("mutable-output-face", baseLineage)],
         [edge("mutable-output-edge", baseLineage)],
+        [vertex("mutable-output-vertex", baseLineage)],
       ),
     });
 

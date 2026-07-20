@@ -3,12 +3,12 @@ import {
   DOCUMENT_SCHEMA_V1,
   DOCUMENT_SCHEMA_V2,
   DOCUMENT_SCHEMA_V3,
-  DOCUMENT_SCHEMA_V5,
+  DOCUMENT_SCHEMA_V6,
   DOCUMENT_VERSION,
   DOCUMENT_VERSION_V1,
   DOCUMENT_VERSION_V2,
   DOCUMENT_VERSION_V3,
-  DOCUMENT_VERSION_V5,
+  DOCUMENT_VERSION_V6,
   DesignDocumentV1Schema,
   DesignDocumentV2Schema,
   DesignDocumentV3Schema,
@@ -165,8 +165,8 @@ function withReference(
 }
 
 describe("DesignDocument v3 compatibility boundary", () => {
-  it("keeps the v3 role vocabulary frozen after v5 becomes current", () => {
-    expect(DOCUMENT_VERSION).toBe(DOCUMENT_VERSION_V5);
+  it("keeps the v3 role vocabulary frozen after v6 becomes current", () => {
+    expect(DOCUMENT_VERSION).toBe(DOCUMENT_VERSION_V6);
     expect(Object.isFrozen(TOPOLOGY_ROLES_V1)).toBe(true);
     expect(Object.isFrozen(TOPOLOGY_ROLES_V2)).toBe(true);
     expect(Object.isFrozen(TOPOLOGY_ROLES_V3)).toBe(true);
@@ -279,7 +279,7 @@ describe("DesignDocument v3 compatibility boundary", () => {
     );
   });
 
-  it("migrates v1/v2/v3 to v5 and preserves @2 evidence", () => {
+  it("migrates v1/v2/v3 to v6 and preserves @2 evidence", () => {
     const { v1, v2 } = legacyDocuments();
     const legacyVariant = PersistentTopologyReferenceV2Schema.parse({
       ...referenceWithLoftRole(
@@ -304,8 +304,8 @@ describe("DesignDocument v3 compatibility boundary", () => {
       expect(migrated.ok).toBe(true);
       if (!migrated.ok) continue;
       expect(migrated.value).toMatchObject({
-        schema: DOCUMENT_SCHEMA_V5,
-        version: DOCUMENT_VERSION_V5,
+        schema: DOCUMENT_SCHEMA_V6,
+        version: DOCUMENT_VERSION_V6,
       });
       expect(Object.isFrozen(migrated.value)).toBe(true);
       if (source.version === DOCUMENT_VERSION_V2) {

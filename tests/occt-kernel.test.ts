@@ -471,13 +471,38 @@ describe("OCCT exact-kernel integration", () => {
       expect(snapshot.history).toBe("complete");
       expect(snapshot.faces).toHaveLength(6);
       expect(snapshot.edges).toHaveLength(12);
-      expect(new Set([...snapshot.faces, ...snapshot.edges].map((item) => item.key)).size).toBe(18);
+      expect(snapshot.vertices).toHaveLength(8);
+      expect(
+        new Set(
+          [...snapshot.faces, ...snapshot.edges, ...snapshot.vertices].map(
+            (item) => item.key,
+          ),
+        ).size,
+      ).toBe(26);
       for (const face of snapshot.faces) {
         expect(face.edges.length).toBeGreaterThanOrEqual(4);
         for (const edge of face.edges) {
           expect(snapshot.edges.find((candidate) => candidate.key === edge)?.faces).toContain(
             face.key,
           );
+        }
+      }
+      for (const edge of snapshot.edges) {
+        expect(edge.vertices).toHaveLength(2);
+        for (const vertex of edge.vertices) {
+          expect(
+            snapshot.vertices.find((candidate) => candidate.key === vertex)
+              ?.edges,
+          ).toContain(edge.key);
+        }
+      }
+      for (const vertex of snapshot.vertices) {
+        expect(vertex.edges).toHaveLength(3);
+        for (const edge of vertex.edges) {
+          expect(
+            snapshot.edges.find((candidate) => candidate.key === edge)
+              ?.vertices,
+          ).toContain(vertex.key);
         }
       }
       const vertical = snapshot.edges.filter((edge) => {

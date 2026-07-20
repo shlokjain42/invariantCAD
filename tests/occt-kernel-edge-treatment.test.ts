@@ -424,12 +424,21 @@ describe("OCCT ABI 0.5 exact fillet/chamfer integration", () => {
       }
       expect(kernel.capabilities.topology?.provenance).toBe("feature");
       expect(kernel.capabilities.topology?.signatures).toEqual({
-        protocolVersion: 1,
+        protocolVersion: 2,
         fingerprint:
-          "invariantcad-topology-descriptor@5;occt-wasm@3.7.0;" +
+          "invariantcad-topology-descriptor@6;occt-wasm@3.7.0;" +
           "runtime=invariantcad-facade@0.5.0+occt-wasm.3.7.0;" +
           "modelingTolerance=1e-7",
       });
+      expect(kernel.capabilities.topology?.signatureProfiles).toEqual([
+        {
+          protocolVersion: 1,
+          fingerprint:
+            "invariantcad-topology-descriptor@5;occt-wasm@3.7.0;" +
+            "runtime=invariantcad-facade@0.5.0+occt-wasm.3.7.0;" +
+            "modelingTolerance=1e-7",
+        },
+      ]);
     } finally {
       kernel.dispose();
     }
@@ -745,11 +754,19 @@ describe("OCCT ABI 0.5 exact fillet/chamfer integration", () => {
     const kernel = await createOcctKernel();
     try {
       expect(kernel.capabilities.topology?.signatures).toEqual({
-        protocolVersion: 1,
+        protocolVersion: 2,
         fingerprint:
-          "invariantcad-topology-descriptor@4;occt-wasm@3.7.0;" +
+          "invariantcad-topology-descriptor@6;occt-wasm@3.7.0;" +
           "runtime=stock;modelingTolerance=1e-7",
       });
+      expect(kernel.capabilities.topology?.signatureProfiles).toEqual([
+        {
+          protocolVersion: 1,
+          fingerprint:
+            "invariantcad-topology-descriptor@4;occt-wasm@3.7.0;" +
+            "runtime=stock;modelingTolerance=1e-7",
+        },
+      ]);
       for (const feature of ["fillet", "chamfer"] as const) {
         expect(
           kernelSupports(

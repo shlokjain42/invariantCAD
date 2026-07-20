@@ -26,6 +26,7 @@ import type {
   KernelTopologyLineage,
   KernelTopologySnapshot,
   KernelTopologySource,
+  KernelVertexDescriptor,
   TopologyRole,
 } from "./protocol/topology.js";
 import type {
@@ -187,14 +188,17 @@ function exactSolidOffsetHistoryRecordLimit(
 type TopologyHistory = KernelTopologySnapshot["history"];
 
 interface RetainedTopologyHandle {
-  readonly topology: "face" | "edge";
+  readonly topology: "face" | "edge" | "vertex";
   readonly handle: ShapeHandle;
 }
 
-type TopologyDescriptor = KernelFaceDescriptor | KernelEdgeDescriptor;
+type TopologyDescriptor =
+  | KernelFaceDescriptor
+  | KernelEdgeDescriptor
+  | KernelVertexDescriptor;
 
 interface TopologyLineageSeed {
-  readonly topology: "face" | "edge";
+  readonly topology: "face" | "edge" | "vertex";
   readonly geometryKind: string;
   readonly center: Vec3;
   readonly bounds: { readonly min: Vec3; readonly max: Vec3 };
@@ -213,7 +217,7 @@ interface TopologyAnnotation {
   };
   readonly requireSeedCoverage?:
     | true
-    | readonly ("face" | "edge")[];
+    | readonly ("face" | "edge" | "vertex")[];
   readonly forcePartial?: boolean;
 }
 
@@ -292,7 +296,7 @@ function directedUnitVectorsMatch(
 function topologyKey(
   namespace: number,
   serial: number,
-  topology: "face" | "edge",
+  topology: "face" | "edge" | "vertex",
   index: number,
 ): KernelTopologyKey {
   return `${namespace}:${serial}:${topology}:${index}` as KernelTopologyKey;
@@ -663,7 +667,7 @@ class OcctKernel implements GeometryKernel {
     nativeImports: ["step", "brep", "brep-binary"],
     nativeExports: ["step", "brep", "brep-binary"],
     topology: {
-      kinds: ["face", "edge"],
+      kinds: ["face", "edge", "vertex"],
       provenance: "feature",
       semanticRoles: true,
       sketchSources: true,
@@ -711,7 +715,7 @@ class OcctKernel implements GeometryKernel {
       (options.moduleFactory === undefined && options.wasm === undefined
         ? "stock"
         : undefined);
-    const topologyDescriptorVersion =
+    const legacyTopologyDescriptorVersion =
       facade?.edgeTreatment === undefined ? 4 : 5;
     const topologySignatureFingerprint =
       topologySignatureRuntime === undefined ||
@@ -719,7 +723,18 @@ class OcctKernel implements GeometryKernel {
       !(this.modelingTolerance > 0)
         ? undefined
         : [
-            `invariantcad-topology-descriptor@${topologyDescriptorVersion}`,
+            "invariantcad-topology-descriptor@6",
+            "occt-wasm@3.7.0",
+            `runtime=${topologySignatureRuntime}`,
+            `modelingTolerance=${this.modelingTolerance}`,
+          ].join(";");
+    const legacyTopologySignatureFingerprint =
+      topologySignatureRuntime === undefined ||
+      !Number.isFinite(this.modelingTolerance) ||
+      !(this.modelingTolerance > 0)
+        ? undefined
+        : [
+            `invariantcad-topology-descriptor@${legacyTopologyDescriptorVersion}`,
             "occt-wasm@3.7.0",
             `runtime=${topologySignatureRuntime}`,
             `modelingTolerance=${this.modelingTolerance}`,
@@ -732,9 +747,15 @@ class OcctKernel implements GeometryKernel {
           ? {}
           : {
               signatures: {
-                protocolVersion: 1 as const,
+                protocolVersion: 2 as const,
                 fingerprint: topologySignatureFingerprint,
               },
+              signatureProfiles: [
+                {
+                  protocolVersion: 1 as const,
+                  fingerprint: legacyTopologySignatureFingerprint!,
+                },
+              ],
             }),
       },
       ...(facade?.draft === undefined
@@ -1017,6 +1038,7 @@ class OcctKernel implements GeometryKernel {
           const role = `box.face.${["x", "y", "z"][axis]}-${sign}` as TopologyRole;
           return semanticLineage(context, role);
         }
+        if (descriptor.topology !== "edge") return [];
         const direction = descriptor.curve.direction;
         if (direction === undefined) return [];
         const absolute = direction.map(Math.abs);
@@ -1085,6 +1107,7 @@ class OcctKernel implements GeometryKernel {
             ? semanticLineage(context, "cylinder.face.side")
             : [];
         }
+        if (descriptor.topology !== "edge") return [];
         if (descriptor.curve.kind === "circle") {
           const distanceToBottom = Math.abs(descriptor.center[2] - zMin);
           const distanceToTop = Math.abs(descriptor.center[2] - zMax);
@@ -3378,6 +3401,7 @@ class OcctKernel implements GeometryKernel {
         for (const descriptor of [
           ...inputSnapshot.faces,
           ...inputSnapshot.edges,
+          ...inputSnapshot.vertices,
         ]) {
           const retained = inputShape.topologyHandles.get(descriptor.key);
           if (retained === undefined) {
@@ -3493,26 +3517,38 @@ class OcctKernel implements GeometryKernel {
 
   private topologySeedFromHandle(
     handle: ShapeHandle,
-    topology: "face" | "edge",
+    topology: "face" | "edge" | "vertex",
     lineage: readonly KernelTopologyLineage[],
   ): TopologyLineageSeed {
-    return topology === "face"
-      ? {
-          topology,
-          geometryKind: this.raw.surfaceType(handle),
-          center: vectorFromOcct(this.raw.getSurfaceCenterOfMass(handle)),
-          bounds: this.topologyBounds(handle),
-          measure: this.raw.getSurfaceArea(handle),
-          lineage,
-        }
-      : {
-          topology,
-          geometryKind: this.raw.curveType(handle),
-          center: vectorFromOcct(this.raw.getLinearCenterOfMass(handle)),
-          bounds: this.topologyBounds(handle),
-          measure: this.raw.curveLength(handle),
-          lineage,
-        };
+    if (topology === "face") {
+      return {
+        topology,
+        geometryKind: this.raw.surfaceType(handle),
+        center: vectorFromOcct(this.raw.getSurfaceCenterOfMass(handle)),
+        bounds: this.topologyBounds(handle),
+        measure: this.raw.getSurfaceArea(handle),
+        lineage,
+      };
+    }
+    if (topology === "edge") {
+      return {
+        topology,
+        geometryKind: this.raw.curveType(handle),
+        center: vectorFromOcct(this.raw.getLinearCenterOfMass(handle)),
+        bounds: this.topologyBounds(handle),
+        measure: this.raw.curveLength(handle),
+        lineage,
+      };
+    }
+    const point = vectorFromOcct(this.raw.vertexPosition(handle));
+    return {
+      topology,
+      geometryKind: "point",
+      center: point,
+      bounds: { min: [...point] as Vec3, max: [...point] as Vec3 },
+      measure: 0,
+      lineage,
+    };
   }
 
   private topologySeedGeometryMatches(
@@ -3577,14 +3613,29 @@ class OcctKernel implements GeometryKernel {
     const geometryKind =
       descriptor.topology === "face"
         ? descriptor.surface.kind
-        : descriptor.curve.kind;
+        : descriptor.topology === "edge"
+          ? descriptor.curve.kind
+          : "point";
     const descriptorMeasure =
-      descriptor.topology === "face" ? descriptor.area : descriptor.length;
+      descriptor.topology === "face"
+        ? descriptor.area
+        : descriptor.topology === "edge"
+          ? descriptor.length
+          : 0;
+    const center =
+      descriptor.topology === "vertex" ? descriptor.point : descriptor.center;
+    const bounds =
+      descriptor.topology === "vertex"
+        ? {
+            min: [...descriptor.point] as Vec3,
+            max: [...descriptor.point] as Vec3,
+          }
+        : descriptor.bounds;
     return this.topologySeedGeometryMatches(seed, {
       topology: descriptor.topology,
       geometryKind,
-      center: descriptor.center,
-      bounds: descriptor.bounds,
+      center,
+      bounds,
       measure: descriptorMeasure,
       lineage: [],
     });
@@ -3672,9 +3723,13 @@ class OcctKernel implements GeometryKernel {
 
     const faceHandles: ShapeHandle[] = [];
     const edgeHandles: ShapeHandle[] = [];
+    const vertexHandles: ShapeHandle[] = [];
     try {
       faceHandles.push(...this.raw.getSubShapes(owned[OCCT_SHAPE], "face"));
       edgeHandles.push(...this.raw.getSubShapes(owned[OCCT_SHAPE], "edge"));
+      vertexHandles.push(
+        ...this.raw.getSubShapes(owned[OCCT_SHAPE], "vertex"),
+      );
 
       const faceKeys = faceHandles.map((_, index) =>
         topologyKey(this.topologyNamespace, owned.serial, "face", index),
@@ -3682,13 +3737,25 @@ class OcctKernel implements GeometryKernel {
       const edgeKeys = edgeHandles.map((_, index) =>
         topologyKey(this.topologyNamespace, owned.serial, "edge", index),
       );
+      const vertexKeys = vertexHandles.map((_, index) =>
+        topologyKey(this.topologyNamespace, owned.serial, "vertex", index),
+      );
       const faceEdges = faceHandles.map(() => new Set<KernelTopologyKey>());
       const edgeFaces = edgeHandles.map(() => new Set<KernelTopologyKey>());
+      const edgeVertices = edgeHandles.map(() => new Set<KernelTopologyKey>());
+      const vertexEdges = vertexHandles.map(() => new Set<KernelTopologyKey>());
       const edgeHashBuckets = new Map<number, number[]>();
       edgeHandles.forEach((edge, index) => {
         const hash = this.raw.hashCode(edge, TOPOLOGY_HASH_UPPER_BOUND);
         const bucket = edgeHashBuckets.get(hash);
         if (bucket === undefined) edgeHashBuckets.set(hash, [index]);
+        else bucket.push(index);
+      });
+      const vertexHashBuckets = new Map<number, number[]>();
+      vertexHandles.forEach((vertex, index) => {
+        const hash = this.raw.hashCode(vertex, TOPOLOGY_HASH_UPPER_BOUND);
+        const bucket = vertexHashBuckets.get(hash);
+        if (bucket === undefined) vertexHashBuckets.set(hash, [index]);
         else bucket.push(index);
       });
 
@@ -3715,6 +3782,31 @@ class OcctKernel implements GeometryKernel {
         }
       });
 
+      edgeHandles.forEach((edge, edgeIndex) => {
+        const nestedVertices = this.raw.getSubShapes(edge, "vertex");
+        try {
+          for (const nestedVertex of nestedVertices) {
+            const hash = this.raw.hashCode(
+              nestedVertex,
+              TOPOLOGY_HASH_UPPER_BOUND,
+            );
+            const candidates = vertexHashBuckets.get(hash) ?? [];
+            const vertexIndex = candidates.find((candidate) =>
+              this.raw.isSame(nestedVertex, vertexHandles[candidate]!),
+            );
+            if (vertexIndex === undefined) {
+              throw new Error(
+                "OCCT returned an edge vertex absent from the parent shape",
+              );
+            }
+            edgeVertices[edgeIndex]!.add(vertexKeys[vertexIndex]!);
+            vertexEdges[vertexIndex]!.add(edgeKeys[edgeIndex]!);
+          }
+        } finally {
+          this.releaseHandles(nestedVertices);
+        }
+      });
+
       const baseFaces: readonly KernelFaceDescriptor[] = faceHandles.map(
         (face, index) => ({
           topology: "face",
@@ -3737,11 +3829,22 @@ class OcctKernel implements GeometryKernel {
           length: this.raw.curveLength(edge),
           curve: this.curveDescriptor(edge),
           faces: Object.freeze([...edgeFaces[index]!].sort()),
+          vertices: Object.freeze([...edgeVertices[index]!].sort()),
+        }),
+      );
+      const baseVertices: readonly KernelVertexDescriptor[] = vertexHandles.map(
+        (vertex, index) => ({
+          topology: "vertex",
+          key: vertexKeys[index]!,
+          point: vectorFromOcct(this.raw.vertexPosition(vertex)),
+          lineage: owned.lineage,
+          edges: Object.freeze([...vertexEdges[index]!].sort()),
         }),
       );
       const baseDescriptors: readonly TopologyDescriptor[] = [
         ...baseFaces,
         ...baseEdges,
+        ...baseVertices,
       ];
       const seededLineage = new Map<
         KernelTopologyKey,
@@ -3790,10 +3893,11 @@ class OcctKernel implements GeometryKernel {
       };
       const faces = baseFaces.map(annotate);
       const edges = baseEdges.map(annotate);
+      const vertices = baseVertices.map(annotate);
       const expectedRoles = owned.annotation?.expectedRoles;
       if (expectedRoles !== undefined) {
         const actual = new Map<TopologyRole, number>();
-        for (const descriptor of [...faces, ...edges]) {
+        for (const descriptor of [...faces, ...edges, ...vertices]) {
           const descriptorRoles = new Set<TopologyRole>();
           for (const lineage of descriptor.lineage) {
             if (
@@ -3833,6 +3937,12 @@ class OcctKernel implements GeometryKernel {
           handle,
         });
       });
+      vertexHandles.forEach((handle, index) => {
+        owned.topologyHandles.set(vertexKeys[index]!, {
+          topology: "vertex",
+          handle,
+        });
+      });
       const snapshot: KernelTopologySnapshot = Object.freeze({
         history:
           owned.history === "complete" && annotationComplete
@@ -3840,12 +3950,14 @@ class OcctKernel implements GeometryKernel {
             : "partial",
         faces: Object.freeze(faces),
         edges: Object.freeze(edges),
+        vertices: Object.freeze(vertices),
       });
       owned.topologySnapshot = snapshot;
       return snapshot;
     } catch (error) {
       owned.topologyHandles.clear();
       owned.topologySnapshot = undefined;
+      this.releaseHandles(vertexHandles);
       this.releaseHandles(edgeHandles);
       this.releaseHandles(faceHandles);
       throw error;

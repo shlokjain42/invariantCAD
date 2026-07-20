@@ -6,42 +6,51 @@ import {
   DOCUMENT_SCHEMA_V3,
   DOCUMENT_SCHEMA_V4,
   DOCUMENT_SCHEMA_V5,
+  DOCUMENT_SCHEMA_V6,
   DOCUMENT_VERSION,
   DOCUMENT_VERSION_V1,
   DOCUMENT_VERSION_V2,
   DOCUMENT_VERSION_V3,
   DOCUMENT_VERSION_V4,
   DOCUMENT_VERSION_V5,
+  DOCUMENT_VERSION_V6,
   DesignDocumentSchema,
   DesignDocumentV1Schema,
   DesignDocumentV2Schema,
   DesignDocumentV3Schema,
   DesignDocumentV4Schema,
   DesignDocumentV5Schema,
+  DesignDocumentV6Schema,
   NodeSchema,
   NodeV4Schema,
   NodeV5Schema,
+  NodeV6Schema,
   PersistentTopologyReferenceSchema,
   PersistentTopologyReferenceV2Schema,
   PersistentTopologyReferenceV3Schema,
   PersistentTopologyReferenceV4Schema,
   PersistentTopologyReferenceV5Schema,
+  PersistentTopologyReferenceV6Schema,
   TOPOLOGY_ROLES,
   TOPOLOGY_ROLES_V1,
   TOPOLOGY_ROLES_V2,
   TOPOLOGY_ROLES_V3,
   TOPOLOGY_ROLES_V4,
   TOPOLOGY_ROLES_V5,
+  TOPOLOGY_ROLES_V6,
   TopologyQuerySchema,
   TopologyQueryV1Schema,
   TopologyQueryV2Schema,
   TopologyQueryV3Schema,
   TopologyQueryV4Schema,
   TopologyQueryV5Schema,
+  TopologyQueryV6Schema,
   TopologyReferenceEntrySchema,
   TopologyReferenceEntryV5Schema,
+  TopologyReferenceEntryV6Schema,
   TopologySelectionSchema,
   TopologySelectionV5Schema,
+  TopologySelectionV6Schema,
   design,
   migrateDocument,
   mm,
@@ -54,31 +63,42 @@ import {
   type DesignDocumentV3,
   type DesignDocumentV4,
   type DesignDocumentV5,
+  type DesignDocumentV6,
   type ChamferNodeIR,
   type ChamferNodeIRV5,
+  type ChamferNodeIRV6,
   type DraftNodeIR,
   type DraftNodeIRV5,
+  type DraftNodeIRV6,
   type FilletNodeIR,
   type FilletNodeIRV5,
+  type FilletNodeIRV6,
   type NodeIR,
   type NodeIRV4,
   type NodeIRV5,
+  type NodeIRV6,
   type PersistentTopologyReference,
   type PersistentTopologyReferenceV4,
   type PersistentTopologyReferenceV5,
+  type PersistentTopologyReferenceV6,
   type ShellNodeIR,
   type ShellNodeIRV4,
   type ShellNodeIRV5,
+  type ShellNodeIRV6,
   type TopologyQueryIR,
   type TopologyQueryIRV4,
   type TopologyQueryIRV5,
+  type TopologyQueryIRV6,
   type TopologyReferenceEntryIR,
   type TopologyReferenceEntryIRV5,
+  type TopologyReferenceEntryIRV6,
   type TopologySelectionIR,
   type TopologySelectionIRV4,
   type TopologySelectionIRV5,
+  type TopologySelectionIRV6,
   type TopologyRole,
   type TopologyRoleV5,
+  type TopologyRoleV6,
 } from "../src/index.js";
 
 const edgeTreatmentFaceRoles = [
@@ -100,10 +120,10 @@ const currentFeatureNodeAliases = [
   true,
   true,
 ] as const satisfies readonly [
-  ExactType<FilletNodeIR, FilletNodeIRV5>,
-  ExactType<ChamferNodeIR, ChamferNodeIRV5>,
-  ExactType<ShellNodeIR, ShellNodeIRV5>,
-  ExactType<DraftNodeIR, DraftNodeIRV5>,
+  ExactType<FilletNodeIR, FilletNodeIRV6>,
+  ExactType<ChamferNodeIR, ChamferNodeIRV6>,
+  ExactType<ShellNodeIR, ShellNodeIRV6>,
+  ExactType<DraftNodeIR, DraftNodeIRV6>,
 ];
 
 function topologyGeometry(topologyKind: "face" | "edge") {
@@ -168,12 +188,13 @@ function versionedBoxes(): {
   readonly v3: DesignDocumentV3;
   readonly v4: DesignDocumentV4;
   readonly v5: DesignDocumentV5;
+  readonly v6: DesignDocumentV6;
 } {
   const cad = design("document-v5-boundary");
   const box = cad.box("box", { size: vec3(mm(10), mm(20), mm(30)) });
   cad.output("box", box);
-  const v5 = cad.build();
-  const { topologyReferences: _topologyReferences, ...body } = v5;
+  const v6 = cad.build();
+  const { topologyReferences: _topologyReferences, ...body } = v6;
   return {
     v1: DesignDocumentV1Schema.parse({
       ...body,
@@ -195,7 +216,12 @@ function versionedBoxes(): {
       schema: DOCUMENT_SCHEMA_V4,
       version: DOCUMENT_VERSION_V4,
     }),
-    v5,
+    v5: DesignDocumentV5Schema.parse({
+      ...body,
+      schema: DOCUMENT_SCHEMA_V5,
+      version: DOCUMENT_VERSION_V5,
+    }),
+    v6,
   };
 }
 
@@ -205,7 +231,8 @@ function withReference(
     | DesignDocumentV2
     | DesignDocumentV3
     | DesignDocumentV4
-    | DesignDocumentV5,
+    | DesignDocumentV5
+    | DesignDocumentV6,
   variant: PersistentTopologyReferenceV5,
 ): unknown {
   return {
@@ -221,46 +248,57 @@ function withReference(
 }
 
 describe("DesignDocument v5 compatibility boundary", () => {
-  it("moves every current runtime and authoring alias to v5", () => {
-    expect(DOCUMENT_SCHEMA).toBe(DOCUMENT_SCHEMA_V5);
-    expect(DOCUMENT_VERSION).toBe(DOCUMENT_VERSION_V5);
+  it("keeps v5 frozen after current runtime and authoring aliases move to v6", () => {
+    expect(DOCUMENT_SCHEMA).toBe(DOCUMENT_SCHEMA_V6);
+    expect(DOCUMENT_VERSION).toBe(DOCUMENT_VERSION_V6);
     for (const document of Object.values(versionedBoxes())) {
       expect(DesignDocumentSchema.safeParse(document).success).toBe(true);
     }
-    expect(NodeSchema).toBe(NodeV5Schema);
-    expect(TopologyQuerySchema).toBe(TopologyQueryV5Schema);
-    expect(TopologySelectionSchema).toBe(TopologySelectionV5Schema);
+    expect(NodeSchema).toBe(NodeV6Schema);
+    expect(TopologyQuerySchema).toBe(TopologyQueryV6Schema);
+    expect(TopologySelectionSchema).toBe(TopologySelectionV6Schema);
     expect(PersistentTopologyReferenceSchema).toBe(
-      PersistentTopologyReferenceV5Schema,
+      PersistentTopologyReferenceV6Schema,
     );
     expect(TopologyReferenceEntrySchema).toBe(
-      TopologyReferenceEntryV5Schema,
+      TopologyReferenceEntryV6Schema,
     );
-    expect(TOPOLOGY_ROLES).toBe(TOPOLOGY_ROLES_V5);
+    expect(TOPOLOGY_ROLES).toBe(TOPOLOGY_ROLES_V6);
 
-    const built = versionedBoxes().v5;
-    expectTypeOf(built).toEqualTypeOf<DesignDocumentV5>();
-    expectTypeOf<NodeIR>().toEqualTypeOf<NodeIRV5>();
+    const built = versionedBoxes().v6;
+    expectTypeOf(built).toEqualTypeOf<DesignDocumentV6>();
+    expectTypeOf<NodeIR>().toEqualTypeOf<NodeIRV6>();
     expect(currentFeatureNodeAliases).toEqual([true, true, true, true]);
-    expectTypeOf<TopologyQueryIR>().toEqualTypeOf<TopologyQueryIRV5>();
+    expectTypeOf<TopologyQueryIR>().toEqualTypeOf<TopologyQueryIRV6>();
     expectTypeOf<TopologySelectionIR>().toEqualTypeOf<
-      TopologySelectionIRV5
+      TopologySelectionIRV6
     >();
-    expectTypeOf<TopologyRole>().toEqualTypeOf<TopologyRoleV5>();
+    expectTypeOf<TopologyRole>().toEqualTypeOf<TopologyRoleV6>();
     expectTypeOf<PersistentTopologyReference>().toEqualTypeOf<
-      PersistentTopologyReferenceV5
+      PersistentTopologyReferenceV6
     >();
     expectTypeOf<TopologyReferenceEntryIR>().toEqualTypeOf<
-      TopologyReferenceEntryIRV5
+      TopologyReferenceEntryIRV6
     >();
     expect(built).toMatchObject({
-      schema: DOCUMENT_SCHEMA_V5,
-      version: DOCUMENT_VERSION_V5,
+      schema: DOCUMENT_SCHEMA_V6,
+      version: DOCUMENT_VERSION_V6,
     });
+
+    expect(NodeV5Schema).not.toBe(NodeSchema);
+    expect(TopologyQueryV5Schema).not.toBe(TopologyQuerySchema);
+    expect(TopologySelectionV5Schema).not.toBe(TopologySelectionSchema);
+    expect(PersistentTopologyReferenceV5Schema).not.toBe(
+      PersistentTopologyReferenceSchema,
+    );
+    expect(TopologyReferenceEntryV5Schema).not.toBe(
+      TopologyReferenceEntrySchema,
+    );
+    expect(TOPOLOGY_ROLES_V5).toBe(TOPOLOGY_ROLES);
   });
 
   it.each(edgeTreatmentFaceRoles)(
-    "admits '%s' only in the v5 query grammar",
+    "first admits '%s' in v5 and retains it in v6 query grammar",
     (role) => {
       const query = {
         op: "origin",
@@ -273,17 +311,19 @@ describe("DesignDocument v5 compatibility boundary", () => {
       expect(TopologyQueryV3Schema.safeParse(query).success).toBe(false);
       expect(TopologyQueryV4Schema.safeParse(query).success).toBe(false);
       expect(TopologyQueryV5Schema.safeParse(query).success).toBe(true);
+      expect(TopologyQueryV6Schema.safeParse(query).success).toBe(true);
     },
   );
 
   it.each(edgeTreatmentFaceRoles)(
-    "admits '%s' only in v5 persistent lineage and adjacency",
+    "first admits '%s' in v5 and retains it in v6 persistent evidence",
     (role) => {
       expect(TOPOLOGY_ROLES_V1).not.toContain(role);
       expect(TOPOLOGY_ROLES_V2).not.toContain(role);
       expect(TOPOLOGY_ROLES_V3).not.toContain(role);
       expect(TOPOLOGY_ROLES_V4).not.toContain(role);
       expect(TOPOLOGY_ROLES_V5).toContain(role);
+      expect(TOPOLOGY_ROLES_V6).toContain(role);
 
       for (const placement of ["lineage", "adjacency"] as const) {
         const reference = referenceWithRole(
@@ -302,6 +342,9 @@ describe("DesignDocument v5 compatibility boundary", () => {
         ).toBe(false);
         expect(
           PersistentTopologyReferenceV5Schema.safeParse(reference).success,
+        ).toBe(true);
+        expect(
+          PersistentTopologyReferenceV6Schema.safeParse(reference).success,
         ).toBe(true);
       }
     },
@@ -340,6 +383,11 @@ describe("DesignDocument v5 compatibility boundary", () => {
         expect(
           DesignDocumentV5Schema.safeParse(
             withReference(documents.v5, reference),
+          ).success,
+        ).toBe(true);
+        expect(
+          DesignDocumentV6Schema.safeParse(
+            withReference(documents.v6, reference),
           ).success,
         ).toBe(true);
       }
@@ -411,11 +459,11 @@ describe("DesignDocument v5 compatibility boundary", () => {
 
       const parsed = parseDocumentValue(cad.build());
       expect(parsed.ok).toBe(true);
-      if (parsed.ok) expect(parsed.value.version).toBe(DOCUMENT_VERSION_V5);
+      if (parsed.ok) expect(parsed.value.version).toBe(DOCUMENT_VERSION_V6);
     },
   );
 
-  it("migrates frozen v4 evidence to v5 without rewriting descriptor data", () => {
+  it("migrates frozen v4 evidence through v5 to v6 without rewriting descriptor data", () => {
     const documents = versionedBoxes();
     const evidence = PersistentTopologyReferenceV4Schema.parse({
       ...referenceWithRole(
@@ -441,8 +489,8 @@ describe("DesignDocument v5 compatibility boundary", () => {
     expect(migrated.ok).toBe(true);
     if (!migrated.ok) return;
     expect(migrated.value).toMatchObject({
-      schema: DOCUMENT_SCHEMA_V5,
-      version: DOCUMENT_VERSION_V5,
+      schema: DOCUMENT_SCHEMA_V6,
+      version: DOCUMENT_VERSION_V6,
     });
     expect(
       JSON.parse(stringifyDocument(migrated.value)).topologyReferences,

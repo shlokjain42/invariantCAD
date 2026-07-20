@@ -5,10 +5,10 @@ import { mm } from "../src/expressions.js";
 import {
   DOCUMENT_SCHEMA_V1,
   DOCUMENT_SCHEMA_V2,
-  DOCUMENT_SCHEMA_V5,
+  DOCUMENT_SCHEMA_V6,
   DOCUMENT_VERSION_V1,
   DOCUMENT_VERSION_V2,
-  DOCUMENT_VERSION_V5,
+  DOCUMENT_VERSION_V6,
   type DesignDocumentV1,
   type DesignDocumentV2,
   type TopologyQueryIRV1,
@@ -123,8 +123,8 @@ function baseV2(name = "document-v2"): DesignDocumentV2 {
   });
   cad.output("box", box);
   const current = cad.build();
-  if (current.version !== DOCUMENT_VERSION_V5) {
-    throw new TypeError("The current authoring API did not emit document v5");
+  if (current.version !== DOCUMENT_VERSION_V6) {
+    throw new TypeError("The current authoring API did not emit document v6");
   }
   const document = DesignDocumentV2Schema.safeParse({
     ...current,
@@ -146,8 +146,8 @@ function legacyV1(): DesignDocumentV1 {
   const result = cad.subtract("result", box, [sphere]);
   cad.output("result", result);
   const document = cad.build();
-  if (document.version !== DOCUMENT_VERSION_V5) {
-    throw new TypeError("The current authoring API did not emit document v5");
+  if (document.version !== DOCUMENT_VERSION_V6) {
+    throw new TypeError("The current authoring API did not emit document v6");
   }
   const { topologyReferences: _topologyReferences, ...body } = document;
   const legacy = DesignDocumentV1Schema.safeParse({
@@ -226,8 +226,8 @@ describe("DesignDocument v2 serialization", () => {
     if (!migrated.ok) return;
     expect(migrated.value).toEqual({
       ...source,
-      schema: DOCUMENT_SCHEMA_V5,
-      version: DOCUMENT_VERSION_V5,
+      schema: DOCUMENT_SCHEMA_V6,
+      version: DOCUMENT_VERSION_V6,
     });
     expect(Object.isFrozen(migrated.value)).toBe(true);
 

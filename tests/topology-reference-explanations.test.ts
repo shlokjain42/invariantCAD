@@ -67,7 +67,7 @@ function snapshot(
   faces: readonly KernelFaceDescriptor[],
   history: KernelTopologySnapshot["history"] = "complete",
 ): KernelTopologySnapshot {
-  return { history, faces, edges: [] };
+  return { history, faces, edges: [], vertices: [] };
 }
 
 function failureDiagnostic(result: CadResult<unknown>): Diagnostic {

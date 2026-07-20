@@ -48,6 +48,7 @@ const draftSnapshot: KernelTopologySnapshot = {
     edges: [],
   })),
   edges: [],
+  vertices: [],
 };
 
 interface DraftInvocation {
@@ -87,7 +88,7 @@ function createDraftKernelHarness(
     nativeImports: [],
     nativeExports: [],
     topology: {
-      kinds: ["face"],
+      kinds: ["face", "edge", "vertex"],
       provenance: "feature",
       semanticRoles: false,
       sketchSources: false,
@@ -238,7 +239,7 @@ describe("document draft contract", () => {
     ]);
     expect(outputKindForNode(document.nodes[drafted.node]!)).toBe("solid");
     expect(await hashDocument(document)).toBe(
-      "bbdfcb38da38c13e20dd096a80beebbaf28a8afaf655dcb2ae9e8bf18469ae27",
+      "f15a8092c120b0eca0206eb072b3df8a2d12fcc00c7c2db137fd124b7da75ed2",
     );
 
     const serialized = stringifyDocument(document);

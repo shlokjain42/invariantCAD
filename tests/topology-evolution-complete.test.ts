@@ -16,6 +16,7 @@ import type {
   KernelTopologyKey,
   KernelTopologyLineage,
   KernelTopologySnapshot,
+  KernelVertexDescriptor,
 } from "../src/protocol/topology.js";
 
 const INT32_MAX = 2_147_483_647;
@@ -53,6 +54,20 @@ function edge(
     length: 8,
     curve: { kind: "line", direction: [1, 0, 0] },
     faces: [key(`${id}:face`)],
+    vertices: [key(`${id}:vertex`)],
+  };
+}
+
+function vertex(
+  id: string,
+  lineage: readonly KernelTopologyLineage[],
+): KernelVertexDescriptor {
+  return {
+    topology: "vertex",
+    key: key(id),
+    point: [2, 3, 4],
+    lineage,
+    edges: [key(`${id}:edge`)],
   };
 }
 
@@ -60,8 +75,9 @@ function snapshot(
   history: KernelTopologySnapshot["history"],
   faces: readonly KernelFaceDescriptor[] = [],
   edges: readonly KernelEdgeDescriptor[] = [],
+  vertices: readonly KernelVertexDescriptor[] = [],
 ): KernelTopologySnapshot {
-  return { history, faces, edges };
+  return { history, faces, edges, vertices };
 }
 
 function counts(
@@ -713,10 +729,16 @@ describe("complete indexed topology evolution", () => {
       allowCreated: false,
     });
 
-    expect(result).toEqual({ history: "complete", faces: [], edges: [] });
+    expect(result).toEqual({
+      history: "complete",
+      faces: [],
+      edges: [],
+      vertices: [],
+    });
     expect(Object.isFrozen(result)).toBe(true);
     expect(Object.isFrozen(result.faces)).toBe(true);
     expect(Object.isFrozen(result.edges)).toBe(true);
+    expect(Object.isFrozen(result.vertices)).toBe(true);
   });
 
   it("propagates partial input history while applying complete local evolution", () => {
@@ -781,6 +803,45 @@ describe("complete indexed topology evolution", () => {
         ),
       ),
     ).not.toThrow();
+  });
+
+  it("reduces vertex-only history and preserves the exact output descriptor", () => {
+    const sourceLineage: readonly KernelTopologyLineage[] = [
+      { feature: "box", relation: "created" },
+    ];
+    const outputVertex = vertex("result-vertex", [
+      { feature: "untrusted-output", relation: "created" },
+    ]);
+    const result = reduceCompleteIndexedTopologyEvolution({
+      feature: "boolean",
+      inputs: [
+        snapshot(
+          "complete",
+          [],
+          [],
+          [vertex("source-vertex", sourceLineage)],
+        ),
+      ],
+      output: snapshot("partial", [], [], [outputVertex]),
+      evolution: envelope(
+        [counts(0, 0, 1)],
+        counts(0, 0, 1),
+        [record(0, KIND.VERTEX, 0, RELATION.MODIFIED, KIND.VERTEX, 0)],
+      ),
+    });
+
+    expect(result.history).toBe("complete");
+    expect(result.vertices).toHaveLength(1);
+    expect(result.vertices[0]!.key).toBe(outputVertex.key);
+    expect(result.vertices[0]!.point).toBe(outputVertex.point);
+    expect(result.vertices[0]!.edges).toBe(outputVertex.edges);
+    expect(result.vertices[0]!.lineage).toEqual([
+      { feature: "box", relation: "created" },
+      { feature: "boolean", relation: "modified" },
+    ]);
+    expect(Object.isFrozen(result.vertices)).toBe(true);
+    expect(Object.isFrozen(result.vertices[0])).toBe(true);
+    expect(Object.isFrozen(result.vertices[0]!.lineage)).toBe(true);
   });
 
   it.each([

@@ -1,6 +1,13 @@
 import { entityId } from "./core/ids.js";
 import { canonicalStringify, deepFreeze } from "./core/json.js";
-import { deg, mm, type AngleExpression, type LengthExpression, type ScalarVec3Expression } from "./expressions.js";
+import {
+  deg,
+  mm,
+  type AngleExpression,
+  type LengthExpression,
+  type ScalarVec3Expression,
+  type Vec3Expression,
+} from "./expressions.js";
 import type {
   ModelRef,
   ProfileRef,
@@ -22,7 +29,11 @@ import type {
 type AnyModelRef = ModelRef<"profile" | "solid" | "part" | "assembly">;
 
 export interface TopologyOriginOptions<K extends TopologyKind = TopologyKind> {
-  readonly role?: K extends "face" ? FaceTopologyRole : EdgeTopologyRole;
+  readonly role?: K extends "face"
+    ? FaceTopologyRole
+    : K extends "edge"
+      ? EdgeTopologyRole
+      : never;
   readonly source?: {
     readonly sketch: ProfileRef;
     readonly entity: string;
@@ -353,9 +364,37 @@ class EdgeTopologyQueries extends TopologyQueries<"edge"> {
     });
   }
 
-  adjacentTo(selection: TopologySelection<"face">): TopologyQuery<"edge"> {
+  adjacentTo<K extends "face" | "vertex">(
+    selection: TopologySelection<K>,
+  ): TopologyQuery<"edge"> {
     return new TopologyQuery(
       "edge",
+      { op: "adjacentTo", selection: selection.ir },
+      selection.references,
+      selection.persistentReferences,
+    );
+  }
+}
+
+class VertexTopologyQueries extends TopologyQueries<"vertex"> {
+  constructor() {
+    super("vertex");
+  }
+
+  position(
+    value: Vec3Expression,
+    tolerance: LengthExpression = mm(1e-6),
+  ): TopologyQuery<"vertex"> {
+    return new TopologyQuery("vertex", {
+      op: "position",
+      value: [value[0].ir, value[1].ir, value[2].ir],
+      tolerance: tolerance.ir,
+    });
+  }
+
+  adjacentTo(selection: TopologySelection<"edge">): TopologyQuery<"vertex"> {
+    return new TopologyQuery(
+      "vertex",
       { op: "adjacentTo", selection: selection.ir },
       selection.references,
       selection.persistentReferences,
@@ -408,4 +447,5 @@ class FaceTopologyQueries extends TopologyQueries<"face"> {
 export const topology = Object.freeze({
   edges: Object.freeze(new EdgeTopologyQueries()),
   faces: Object.freeze(new FaceTopologyQueries()),
+  vertices: Object.freeze(new VertexTopologyQueries()),
 });

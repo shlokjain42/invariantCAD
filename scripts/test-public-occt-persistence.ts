@@ -11,6 +11,7 @@ import {
   mm,
   parseDocument,
   resolveTopologyReference,
+  resolveTopologySelection,
   scalarVec3,
   stringifyDocument,
   topology,
@@ -89,6 +90,7 @@ function topologyKeys(
   return [
     ...snapshot.faces.map((face) => face.key),
     ...snapshot.edges.map((edge) => edge.key),
+    ...snapshot.vertices.map((vertex) => vertex.key),
   ];
 }
 
@@ -140,10 +142,23 @@ function captureEdge(
   );
 }
 
+function captureVertex(
+  snapshot: KernelTopologySnapshot,
+  key: KernelTopologyKey,
+  capabilities: KernelTopologySignatureCapabilities,
+): PersistentTopologyReference<"vertex"> {
+  return valueOf(
+    captureTopologyReference(snapshot, "vertex", key, {
+      capabilities,
+      tolerance,
+    }),
+  );
+}
+
 function persisted(document: DesignDocument): DesignDocument {
   const serialized = stringifyDocument(document);
   const parsed = valueOf(parseDocument(serialized));
-  assert.equal(parsed.version, 5);
+  assert.equal(parsed.version, 6);
   return parsed;
 }
 
@@ -151,9 +166,9 @@ function persistedFaceReference(
   document: DesignDocument,
   id: string,
 ): PersistentTopologyReference<"face"> {
-  assert.equal(document.version, 5);
-  if (document.version !== 5) {
-    throw new Error("Expected a persisted Document v5 topology registry");
+  assert.equal(document.version, 6);
+  if (document.version !== 6) {
+    throw new Error("Expected a persisted Document v6 topology registry");
   }
   const entry = document.topologyReferences?.[id];
   assert.ok(entry, `Missing persisted topology reference ${id}`);
@@ -167,9 +182,9 @@ function persistedEdgeReference(
   document: DesignDocument,
   id: string,
 ): PersistentTopologyReference<"edge"> {
-  assert.equal(document.version, 5);
-  if (document.version !== 5) {
-    throw new Error("Expected a persisted Document v5 topology registry");
+  assert.equal(document.version, 6);
+  if (document.version !== 6) {
+    throw new Error("Expected a persisted Document v6 topology registry");
   }
   const entry = document.topologyReferences?.[id];
   assert.ok(entry, `Missing persisted topology reference ${id}`);
@@ -177,6 +192,22 @@ function persistedEdgeReference(
   const reference = entry.variants[0];
   assert.ok(reference, `Missing persisted topology variant ${id}`);
   return reference as PersistentTopologyReference<"edge">;
+}
+
+function persistedVertexReference(
+  document: DesignDocument,
+  id: string,
+): PersistentTopologyReference<"vertex"> {
+  assert.equal(document.version, 6);
+  if (document.version !== 6) {
+    throw new Error("Expected a persisted Document v6 topology registry");
+  }
+  const entry = document.topologyReferences?.[id];
+  assert.ok(entry, `Missing persisted topology reference ${id}`);
+  assert.equal(entry.topology, "vertex");
+  const reference = entry.variants[0];
+  assert.ok(reference, `Missing persisted topology variant ${id}`);
+  return reference as PersistentTopologyReference<"vertex">;
 }
 
 function assertMissingExplanation(
@@ -1313,6 +1344,180 @@ async function assertExactOffsetPersistence(
   assert.equal(shapeCount(), baselineShapeCount, "offset recovery cleanup");
 }
 
+async function assertVertexAndLegacyProfilePersistence(
+  evaluator: Evaluator,
+  primaryCapabilities: KernelTopologySignatureCapabilities,
+  legacyCapabilities: KernelTopologySignatureCapabilities,
+  shapeCount: () => number,
+): Promise<void> {
+  const baselineShapeCount = shapeCount();
+  const cad = design("owned vertex and legacy-profile persistence");
+  const width = cad.parameter.length("vertex-width", mm(10));
+  const depth = cad.parameter.length("vertex-depth", mm(20));
+  const height = cad.parameter.length("vertex-height", mm(30));
+  const shift = cad.parameter.length("vertex-shift", mm(0));
+  const box = cad.box("vertex-box", {
+    size: vec3(width, depth, height),
+  });
+  const moved = cad.translate(
+    "vertex-moved",
+    box,
+    vec3(shift, mm(0), mm(0)),
+  );
+  cad.output("vertex-moved", moved);
+
+  const captureRun = await evaluateWithParametersOrThrow(
+    evaluator,
+    cad.build(),
+    {
+      "vertex-width": 10,
+      "vertex-depth": 20,
+      "vertex-height": 30,
+      "vertex-shift": 0,
+    },
+    ["vertex-moved"],
+  );
+  let vertexReference: PersistentTopologyReference<"vertex">;
+  let legacyEdgeReference: PersistentTopologyReference<"edge">;
+  let vertexCaptureKey: KernelTopologyKey;
+  let legacyEdgeCaptureKey: KernelTopologyKey;
+  let captureKeys: readonly KernelTopologyKey[] = [];
+  try {
+    const snapshot = snapshotOf(captureRun, "vertex-moved");
+    captureKeys = topologyKeys(snapshot);
+    assert.equal(snapshot.history, "complete");
+    assert.equal(snapshot.vertices.length, 8);
+    assert.equal(snapshot.edges.length, 12);
+    assert.equal(
+      snapshot.edges.every((edge) => edge.vertices.length === 2),
+      true,
+    );
+    assert.equal(
+      snapshot.vertices.every((vertex) => vertex.edges.length === 3),
+      true,
+    );
+    const corner = onlyItem(
+      snapshot.vertices,
+      (vertex) => vertex.point.every((component) => Math.abs(component) <= tolerance.linear),
+      "translated-box origin corner",
+    );
+    const legacyEdge = onlyItem(
+      snapshot.edges,
+      (edge) =>
+        edge.lineage.some(
+          (lineage) => lineage.role === "box.edge.x-min-y-min",
+        ),
+      "translated-box legacy edge",
+    );
+    vertexCaptureKey = corner.key;
+    legacyEdgeCaptureKey = legacyEdge.key;
+    vertexReference = captureVertex(
+      snapshot,
+      corner.key,
+      primaryCapabilities,
+    );
+    legacyEdgeReference = captureEdge(
+      snapshot,
+      legacyEdge.key,
+      legacyCapabilities,
+    );
+    assert.equal(vertexReference.protocolVersion, 2);
+    assert.equal(legacyEdgeReference.protocolVersion, 1);
+    assert.equal(vertexReference.topology, "vertex");
+    assert.equal(
+      vertexReference.lineage.every((lineage) => lineage.role === undefined),
+      true,
+    );
+    assert.equal(vertexReference.adjacency.length, 3);
+    assert.equal(
+      vertexReference.adjacency.every(
+        (neighbor) =>
+          neighbor.topology === "edge" &&
+          neighbor.lineage.some((lineage) => lineage.role !== undefined),
+      ),
+      true,
+    );
+    assert.equal(
+      legacyEdgeReference.adjacency.every(
+        (neighbor) => neighbor.topology === "face",
+      ),
+      true,
+    );
+    assertKeyFree(
+      { vertexReference, legacyEdgeReference },
+      captureKeys,
+      "vertex and legacy detached references",
+    );
+  } finally {
+    captureRun.dispose();
+  }
+  assert.equal(shapeCount(), baselineShapeCount, "vertex capture cleanup");
+
+  cad.topologyReference("moved-corner", moved, {
+    topology: "vertex",
+    variants: [vertexReference],
+  });
+  cad.topologyReference("legacy-edge", moved, {
+    topology: "edge",
+    variants: [legacyEdgeReference],
+  });
+  const document = persisted(cad.build());
+  const persistedVertex = persistedVertexReference(document, "moved-corner");
+  const persistedLegacyEdge = persistedEdgeReference(document, "legacy-edge");
+  assertKeyFree(document, captureKeys, "vertex persistence document");
+
+  const changed = await evaluateWithParametersOrThrow(
+    evaluator,
+    document,
+    {
+      "vertex-width": 16,
+      "vertex-depth": 11,
+      "vertex-height": 24,
+      "vertex-shift": 37,
+    },
+    ["vertex-moved"],
+  );
+  try {
+    const snapshot = snapshotOf(changed, "vertex-moved");
+    const resolvedVertex = valueOf(
+      resolveTopologyReference(persistedVertex, snapshot, {
+        capabilities: primaryCapabilities,
+      }),
+    );
+    const resolvedLegacyEdge = valueOf(
+      resolveTopologyReference(persistedLegacyEdge, snapshot, {
+        capabilities: legacyCapabilities,
+      }),
+    );
+    assert.equal(resolvedVertex.evidence, "semantic-lineage");
+    assert.equal(resolvedLegacyEdge.evidence, "semantic-lineage");
+    assert.notEqual(resolvedVertex.key, vertexCaptureKey);
+    assert.notEqual(resolvedLegacyEdge.key, legacyEdgeCaptureKey);
+    const currentVertex = onlyItem(
+      snapshot.vertices,
+      (vertex) => vertex.key === resolvedVertex.key,
+      "resolved moved corner",
+    );
+    assert.deepEqual(currentVertex.point, [37, 0, 0]);
+    const positioned = resolveTopologySelection(
+      topology.vertices.position(vec3(mm(37), mm(0), mm(0))).exactly(1).ir,
+      snapshot,
+      {
+        evaluate: (expression) => {
+          if (expression.op !== "literal") {
+            throw new Error("Public vertex position fixture expected literals");
+          }
+          return expression.value;
+        },
+      },
+    );
+    assert.deepEqual(valueOf(positioned), [resolvedVertex.key]);
+  } finally {
+    changed.dispose();
+  }
+  assert.equal(shapeCount(), baselineShapeCount, "vertex changed cleanup");
+}
+
 const runtimeDirectory = parseRuntimeDirectory(process.argv.slice(2));
 const gluePath = resolve(runtimeDirectory, "occt-wasm.js");
 const wasmPath = resolve(runtimeDirectory, "occt-wasm.wasm");
@@ -1361,16 +1566,34 @@ try {
   const capabilities = kernel.capabilities.topology?.signatures;
   assert.ok(capabilities, "owned OCCT signature support was not advertised");
   assert.deepEqual(capabilities, {
-    protocolVersion: 1,
+    protocolVersion: 2,
     fingerprint:
-      "invariantcad-topology-descriptor@5;occt-wasm@3.7.0;" +
+      "invariantcad-topology-descriptor@6;occt-wasm@3.7.0;" +
       "runtime=invariantcad-facade@0.6.0+occt-wasm.3.7.0;" +
       "modelingTolerance=1e-7",
   });
+  const signatureProfiles = kernel.capabilities.topology?.signatureProfiles;
+  assert.deepEqual(signatureProfiles, [
+    {
+      protocolVersion: 1,
+      fingerprint:
+        "invariantcad-topology-descriptor@5;occt-wasm@3.7.0;" +
+        "runtime=invariantcad-facade@0.6.0+occt-wasm.3.7.0;" +
+        "modelingTolerance=1e-7",
+    },
+  ]);
+  const legacyCapabilities = signatureProfiles?.[0];
+  assert.ok(legacyCapabilities, "owned OCCT legacy signature profile was not advertised");
   const raw = (kernel as unknown as {
     readonly raw: { readonly shapeCount: number };
   }).raw;
   evaluator = await createEvaluator({ kernel });
+  await assertVertexAndLegacyProfilePersistence(
+    evaluator,
+    capabilities,
+    legacyCapabilities,
+    () => raw.shapeCount,
+  );
   await assertExactBooleanPersistence(
     evaluator,
     capabilities,
