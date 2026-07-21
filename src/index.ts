@@ -35,6 +35,23 @@ export {
   type TopologyReferenceOptions,
 } from "./design.js";
 export {
+  DESIGN_IMPACT_REPORT_VERSION,
+  analyzeDesignImpact,
+  type AnalyzeDesignImpactOptions,
+  type DesignConfigurationImpact,
+  type DesignConfigurationImpactReason,
+  type DesignImpactChanges,
+  type DesignImpactReport,
+  type DesignImpactSeedInventory,
+  type DesignMaterialImpact,
+  type DesignMaterialImpactReason,
+  type DesignNodeImpact,
+  type DesignNodeImpactReason,
+  type DesignOutputImpact,
+  type DesignParameterImpact,
+  type DesignParameterImpactReason,
+} from "./design-impact.js";
+export {
   Expression,
   Parameter,
   angleVec3,
@@ -122,6 +139,7 @@ export {
   NODE_KINDS_V5,
   NODE_KINDS_V6,
   nodeDependencies,
+  nodeParameterDependencies,
   outputKindForNode,
   type AssemblyInstanceIR,
   type AssemblyNodeIR,
@@ -254,7 +272,11 @@ export {
 } from "./evaluator.js";
 export type {
   ConfigurationId,
+  EntityId,
   MaterialId,
+  NodeId,
+  OutputName,
+  ParameterId,
   TopologyReferenceId,
 } from "./core/ids.js";
 export {

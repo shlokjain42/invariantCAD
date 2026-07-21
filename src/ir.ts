@@ -7,7 +7,11 @@ import type {
   TopologyReferenceId,
 } from "./core/ids.js";
 import type { JsonValue } from "./core/json.js";
-import type { Dimension, ExpressionIR } from "./expressions.js";
+import {
+  expressionDependencies,
+  type Dimension,
+  type ExpressionIR,
+} from "./expressions.js";
 import type {
   TopologyKind,
   TopologyKindV1,
@@ -1193,6 +1197,258 @@ export type DesignDocument =
   | DesignDocumentV6;
 
 export type NodeReference = RefIR<OutputKind>;
+
+function unreachableIrVariant(value: never, family: string): never {
+  const discriminant = (value as { readonly kind?: unknown; readonly op?: unknown })
+    .kind ?? (value as { readonly op?: unknown }).op;
+  throw new TypeError(
+    `Unsupported ${family} variant '${String(discriminant)}'`,
+  );
+}
+
+function collectVecParameterDependencies(
+  value: Vec2ExpressionIR | Vec3ExpressionIR,
+  output: Set<ParameterId>,
+): void {
+  for (const expression of value) expressionDependencies(expression, output);
+}
+
+function collectTransformParameterDependencies(
+  operation: TransformOperationIR,
+  output: Set<ParameterId>,
+): void {
+  switch (operation.kind) {
+    case "translate":
+    case "rotate":
+    case "scale":
+      collectVecParameterDependencies(operation.value, output);
+      return;
+    case "mirror":
+      collectVecParameterDependencies(operation.normal, output);
+      return;
+    default:
+      return unreachableIrVariant(operation, "transform operation");
+  }
+}
+
+function collectTopologyQueryParameterDependencies(
+  query: TopologyQueryIR,
+  output: Set<ParameterId>,
+): void {
+  switch (query.op) {
+    case "all":
+    case "persistentReference":
+    case "origin":
+    case "surface":
+    case "curve":
+      return;
+    case "normal":
+    case "direction":
+      collectVecParameterDependencies(query.value, output);
+      expressionDependencies(query.tolerance, output);
+      return;
+    case "radius":
+      expressionDependencies(query.value, output);
+      expressionDependencies(query.tolerance, output);
+      return;
+    case "position":
+      collectVecParameterDependencies(query.value, output);
+      expressionDependencies(query.tolerance, output);
+      return;
+    case "adjacentTo":
+      collectTopologyQueryParameterDependencies(query.selection.query, output);
+      return;
+    case "and":
+    case "or":
+      for (const child of query.queries) {
+        collectTopologyQueryParameterDependencies(child, output);
+      }
+      return;
+    case "not":
+      collectTopologyQueryParameterDependencies(query.query, output);
+      return;
+    default:
+      return unreachableIrVariant(query, "topology query");
+  }
+}
+
+function collectSketchEntityParameterDependencies(
+  entity: SketchEntityIR,
+  output: Set<ParameterId>,
+): void {
+  switch (entity.kind) {
+    case "point":
+      expressionDependencies(entity.x, output);
+      expressionDependencies(entity.y, output);
+      return;
+    case "line":
+      return;
+    case "circle":
+      expressionDependencies(entity.radius, output);
+      return;
+    case "arc":
+      expressionDependencies(entity.radius, output);
+      expressionDependencies(entity.startAngle, output);
+      expressionDependencies(entity.endAngle, output);
+      return;
+    default:
+      return unreachableIrVariant(entity, "sketch entity");
+  }
+}
+
+function collectSketchConstraintParameterDependencies(
+  constraint: SketchConstraintIR,
+  output: Set<ParameterId>,
+): void {
+  switch (constraint.kind) {
+    case "coincident":
+    case "horizontal":
+    case "vertical":
+    case "fixed":
+    case "parallel":
+    case "perpendicular":
+    case "equalLength":
+    case "equalRadius":
+    case "midpoint":
+    case "tangent":
+      return;
+    case "distance":
+    case "distanceX":
+    case "distanceY":
+    case "length":
+    case "angle":
+    case "radius":
+    case "diameter":
+      expressionDependencies(constraint.value, output);
+      return;
+    default:
+      return unreachableIrVariant(constraint, "sketch constraint");
+  }
+}
+
+function collectCompositePathSegmentParameterDependencies(
+  segment: CompositePathSegmentIR,
+  output: Set<ParameterId>,
+): void {
+  switch (segment.kind) {
+    case "line":
+      collectVecParameterDependencies(segment.end, output);
+      return;
+    case "circularArc":
+      collectVecParameterDependencies(segment.through, output);
+      collectVecParameterDependencies(segment.end, output);
+      return;
+    default:
+      return unreachableIrVariant(segment, "composite path segment");
+  }
+}
+
+/**
+ * Returns the parameter IDs referenced by every expression owned by `node`.
+ *
+ * The traversal is structural and deliberately ignores arbitrary metadata JSON.
+ * Results are unique, sorted by ID, and frozen so callers can safely reuse them
+ * as deterministic dependency-graph inputs.
+ */
+export function nodeParameterDependencies(
+  node: NodeIR,
+): readonly ParameterId[] {
+  const output = new Set<ParameterId>();
+  switch (node.kind) {
+    case "box":
+      collectVecParameterDependencies(node.size, output);
+      break;
+    case "cylinder":
+      expressionDependencies(node.height, output);
+      expressionDependencies(node.radiusBottom, output);
+      expressionDependencies(node.radiusTop, output);
+      break;
+    case "sphere":
+      expressionDependencies(node.radius, output);
+      break;
+    case "sketch":
+      collectVecParameterDependencies(node.plane.origin, output);
+      for (const entity of Object.values(node.entities)) {
+        collectSketchEntityParameterDependencies(entity, output);
+      }
+      for (const constraint of Object.values(node.constraints)) {
+        collectSketchConstraintParameterDependencies(constraint, output);
+      }
+      break;
+    case "polylinePath":
+      for (const point of node.points) {
+        collectVecParameterDependencies(point, output);
+      }
+      break;
+    case "circularArcPath":
+      collectVecParameterDependencies(node.start, output);
+      collectVecParameterDependencies(node.through, output);
+      collectVecParameterDependencies(node.end, output);
+      break;
+    case "compositePath":
+      collectVecParameterDependencies(node.start, output);
+      for (const segment of node.segments) {
+        collectCompositePathSegmentParameterDependencies(segment, output);
+      }
+      break;
+    case "extrude":
+      expressionDependencies(node.distance, output);
+      expressionDependencies(node.twist, output);
+      collectVecParameterDependencies(node.scaleTop, output);
+      break;
+    case "revolve":
+      expressionDependencies(node.angle, output);
+      break;
+    case "loft":
+    case "sweep":
+    case "boolean":
+      break;
+    case "transform":
+      for (const operation of node.operations) {
+        collectTransformParameterDependencies(operation, output);
+      }
+      break;
+    case "fillet":
+      collectTopologyQueryParameterDependencies(node.edges.query, output);
+      expressionDependencies(node.radius, output);
+      break;
+    case "chamfer":
+      collectTopologyQueryParameterDependencies(node.edges.query, output);
+      expressionDependencies(node.distance, output);
+      break;
+    case "shell":
+      collectTopologyQueryParameterDependencies(node.openings.query, output);
+      expressionDependencies(node.thickness, output);
+      expressionDependencies(node.tolerance, output);
+      break;
+    case "offset":
+      expressionDependencies(node.distance, output);
+      expressionDependencies(node.tolerance, output);
+      break;
+    case "draft":
+      collectTopologyQueryParameterDependencies(node.faces.query, output);
+      expressionDependencies(node.angle, output);
+      collectVecParameterDependencies(node.pullDirection, output);
+      collectVecParameterDependencies(node.neutralPlane.origin, output);
+      collectVecParameterDependencies(node.neutralPlane.normal, output);
+      break;
+    case "part":
+      if (node.massDensity !== undefined) {
+        expressionDependencies(node.massDensity, output);
+      }
+      break;
+    case "assembly":
+      for (const instance of node.instances) {
+        for (const operation of instance.placement) {
+          collectTransformParameterDependencies(operation, output);
+        }
+      }
+      break;
+    default:
+      return unreachableIrVariant(node, "node");
+  }
+  return Object.freeze([...output].sort());
+}
 
 export function nodeDependencies(node: NodeIR): readonly RefIR[] {
   switch (node.kind) {

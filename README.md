@@ -752,6 +752,35 @@ const semanticHash = await hashDocument(document);
 
 Canonical serialization sorts record keys, normalizes negative zero, rejects non-finite numbers, and produces identical bytes regardless of feature construction order. Top-level document metadata is excluded from semantic hashes unless requested; metadata attached to parameters, materials, nodes, and configurations remains part of their authored document semantics. Persistent topology registry data is always semantic.
 
+### Authored change impact
+
+`analyzeDesignImpact(...)` provides a deterministic, kernel-free answer to "what authored definitions can be affected if these IDs change?" Seed one or more existing nodes, parameters, materials, configurations, or persistent topology references:
+
+```ts
+import {
+  DESIGN_IMPACT_REPORT_VERSION,
+  analyzeDesignImpact,
+} from "invariantcad";
+
+const impact = analyzeDesignImpact(document, {
+  parameters: [width.id],
+});
+
+if (impact.ok) {
+  console.log(impact.value.version === DESIGN_IMPACT_REPORT_VERSION); // true
+  console.log(impact.value.nodes);
+  console.log(impact.value.outputs);
+}
+```
+
+Authored-impact report version 1 detaches and validates the document before traversing it. Seed arrays accept ordinary string IDs, then validate them against the shared ID grammar and the document inventory before returning branded IDs. The analysis deduplicates and sorts the seeds, follows parameter expressions and bounds, material density, configuration overrides, persistent selectors, and feature-DAG dependencies, and returns deeply frozen sorted inventories for impacted parameters, materials, configurations, nodes, and outputs.
+
+The base design and every named configuration that changes evaluation are propagated independently, then unioned existentially: an entry is reported when it can be affected in at least one current evaluation context. Dependency paths never jump between mutually exclusive configurations. Parameter overrides replace default-expression edges only in their own context while bounds remain active; part-material overrides select the effective material; and suppressed assembly instances contribute neither component nor placement dependencies until a configuration enables them. Every impacted node carries deterministic reasons and a `direct` flag. `direct: true` means the node is reached directly in at least one context; downstream-only nodes report `direct: false`.
+
+`AnalyzeDesignImpactOptions.limits` uses the same partial `DesignDocumentLimits` contract as parsing. `maxStructuralValues` additionally caps context-qualified propagation work and returns a structured `IR_INVALID` diagnostic instead of allowing a configuration-by-graph product to grow without bound.
+
+This is conservative propagation over the current authored dependency graph, not a comparison between two documents. An ID seed does not identify which field changed, and v1 cannot predict newly added or deleted definitions or dependencies. It does not inspect or compare B-Reps, validate a cached artifact, infer persistent topology identity, or claim that a kernel will produce geometrically different output. Cross-run shape caching still requires a separate, versioned kernel artifact protocol with exact runtime compatibility and explicit handle ownership.
+
 The current authoring API emits `DesignDocumentV6`. `parseDocument`, `parseDocumentValue`, `stringifyDocument`, `cloneDocument`, `hashDocument`, validation, and evaluation preserve a supplied v1, v2, v3, v4, v5, or v6 document. `migrateDocument` validates and upgrades v1–v5 to v6 and is idempotent for v6. V1 cannot contain a topology-reference registry or persistent selector atom; v2 can but retains the pre-loft role vocabulary; v3 adds loft roles but rejects sweep and edge-treatment roles; v4 adds the six sweep roles but rejects `fillet.face.blend` and `chamfer.face.bevel`; v5 adds exactly those two face roles while remaining face/edge-only; and v6 adds persistent vertices, vertex `position(...)`, and edge↔vertex adjacency without adding semantic vertex roles. V1–v5 remain frozen and directly evaluable. Migration never rewrites a stored protocol version, descriptor fingerprint, lineage, geometry, or adjacency record. The document schema version is independent of the npm package version, primary OCCT topology descriptor `@6`, protocol-v1 compatibility descriptor `@4`/`@5`, owned facade ABI 0.6, exact-evolution protocol v1, and persistent-reference protocol v1/v2.
 
 Parsing first captures a bounded, detached snapshot before recursive schema validation and freezing, so accessors and proxies cannot change the value after its limits were checked. `ParseDocumentOptions.limits` can override the exported frozen `DEFAULT_DESIGN_DOCUMENT_LIMITS` ceilings for UTF-8 bytes, structural occurrences (including shared aliases), nesting depth, actual selector-query nodes, registry entries, variants, stored adjacency links, and lineage evidence. Sparse arrays, cycles, non-JSON object instances, unknown versioned persistent fields, and malformed or oversized stored evidence fail as structured `IR_INVALID` diagnostics.
