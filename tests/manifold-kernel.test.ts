@@ -6,6 +6,7 @@ geometryKernelConformance({
   id: "manifold",
   create: createManifoldKernel,
   relativeTolerance: 1e-7,
+  shapeArtifacts: "absent",
 });
 
 describe("Manifold mass-property integration", () => {

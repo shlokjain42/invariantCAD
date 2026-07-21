@@ -24,6 +24,7 @@ geometryKernelConformance({
   id: "occt",
   create: createOcctKernel,
   relativeTolerance: 1e-9,
+  shapeArtifacts: "absent",
 });
 
 function profileCurveSource(entity: string): ProfileCurveSource {

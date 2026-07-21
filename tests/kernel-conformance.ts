@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   COMPOSITE_SWEEP_REFINEMENT_PROTOCOL_VERSION,
+  inspectKernelShapeArtifactSupport,
   kernelSupports,
   momentOfInertiaAboutAxis,
   principalInertia,
@@ -21,6 +22,8 @@ export interface KernelConformanceOptions {
   readonly id: string;
   readonly create: () => Promise<GeometryKernel>;
   readonly relativeTolerance?: number;
+  /** Defaults to absent; codec-capable backends must opt in explicitly. */
+  readonly shapeArtifacts?: "absent" | "supported";
 }
 
 function rectangleLoop(
@@ -187,6 +190,9 @@ export function geometryKernelConformance(
       if (kernel.capabilities.nativeExports.length > 0) {
         expect(kernel.exportShape).toBeTypeOf("function");
       }
+      expect(inspectKernelShapeArtifactSupport(kernel).status).toBe(
+        options.shapeArtifacts ?? "absent",
+      );
       if (kernel.capabilities.topology !== undefined) {
         expect(kernel.topology).toBeTypeOf("function");
         expect(new Set(kernel.capabilities.topology.kinds).size).toBe(

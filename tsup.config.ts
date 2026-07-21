@@ -1,7 +1,12 @@
 import { defineConfig } from "tsup";
 
 export default defineConfig({
-  entry: ["src/index.ts", "src/cli.ts", "src/occt-kernel.ts"],
+  entry: [
+    "src/index.ts",
+    "src/cli.ts",
+    "src/conformance.ts",
+    "src/occt-kernel.ts",
+  ],
   format: ["esm"],
   dts: false,
   clean: true,

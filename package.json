@@ -8,6 +8,7 @@
   "files": [
     "dist",
     "docs/persistent-topology-torture.md",
+    "docs/shape-artifact-conformance.md",
     "licenses",
     "README.md",
     "LICENSE",
@@ -20,6 +21,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./conformance": {
+      "types": "./dist/conformance.d.ts",
+      "import": "./dist/conformance.js"
     },
     "./kernels/occt": {
       "types": "./dist/occt-kernel.d.ts",
