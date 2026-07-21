@@ -27,8 +27,6 @@ import {
 import { exportMesh, type MeshExportFormat } from "./exporters.js";
 import {
   evaluateExpression,
-  Expression,
-  type Dimension,
   type ExpressionIR,
 } from "./expressions.js";
 import {
@@ -123,8 +121,12 @@ import {
 } from "./protocol/draft.js";
 import { TopologyEvolutionProtocolError } from "./internal/topology-evolution.js";
 import { normalizeKernelTopologySnapshot } from "./internal/topology-snapshot.js";
+import {
+  resolveEvaluationParameters,
+  type EvaluationParameterOverride,
+} from "./internal/evaluation-parameters.js";
 
-export type ParameterOverride = number | Expression<Dimension>;
+export type ParameterOverride = EvaluationParameterOverride;
 export type ShapeExportFormat = MeshExportFormat | KernelExchangeFormat;
 
 export interface EvaluationOptions {
@@ -319,202 +321,6 @@ class EvaluationFailure extends Error {
     this.name = "EvaluationFailure";
     this.diagnostic = value;
   }
-}
-
-interface ParameterResolution {
-  readonly values: ReadonlyMap<ParameterId, number>;
-  readonly diagnostics: readonly Diagnostic[];
-}
-
-function resolveParameters(
-  document: DesignDocument,
-  overrides: Readonly<Record<string, ParameterOverride>>,
-  configurationId: ConfigurationId | null,
-  configuration: DesignConfigurationIR | undefined,
-): CadResult<ParameterResolution> {
-  const diagnostics: Diagnostic[] = [];
-  const values = new Map<ParameterId, number>();
-  const states = new Map<ParameterId, "visiting" | "resolved">();
-  const configurationOverrides = configuration?.parameterOverrides ?? {};
-  const sourcePath = (id: ParameterId): string => {
-    if (Object.hasOwn(overrides, id)) return `/parameters/${id}`;
-    if (Object.hasOwn(configurationOverrides, id)) {
-      return `/configurations/${configurationId}/parameterOverrides/${id}`;
-    }
-    return `/parameters/${id}/default`;
-  };
-  const resolve = (id: ParameterId, expected: Dimension): number => {
-    const existing = values.get(id);
-    if (existing !== undefined) return existing;
-    const definition = Object.hasOwn(document.parameters, id)
-      ? document.parameters[id]
-      : undefined;
-    if (definition === undefined) {
-      throw new EvaluationFailure(
-        diagnostic("PARAMETER_MISSING", `Missing parameter '${id}'`, {
-          severity: "error",
-          path: `/parameters/${id}`,
-        }),
-      );
-    }
-    if (definition.dimension !== expected) {
-      throw new EvaluationFailure(
-        diagnostic(
-          "EXPRESSION_DIMENSION_MISMATCH",
-          `Parameter '${id}' is ${definition.dimension}, expected ${expected}`,
-          { severity: "error", path: `/parameters/${id}` },
-        ),
-      );
-    }
-    if (states.get(id) === "visiting") {
-      throw new EvaluationFailure(
-        diagnostic("PARAMETER_CYCLE", `Parameter '${id}' is part of a cycle`, {
-          severity: "error",
-          path: sourcePath(id),
-        }),
-      );
-    }
-    states.set(id, "visiting");
-    const override = Object.hasOwn(overrides, id)
-      ? overrides[id]
-      : undefined;
-    const hasConfigurationOverride = Object.hasOwn(configurationOverrides, id);
-    let value: number;
-    if (typeof override === "number") {
-      value = override;
-    } else {
-      const expression =
-        override instanceof Expression
-          ? override.ir
-          : hasConfigurationOverride
-            ? configurationOverrides[id]!
-            : definition.default;
-      if (override instanceof Expression && override.dimension !== definition.dimension) {
-        throw new EvaluationFailure(
-          diagnostic(
-            "EXPRESSION_DIMENSION_MISMATCH",
-            `Override for '${id}' is ${override.dimension}, expected ${definition.dimension}`,
-            { severity: "error", path: `/parameters/${id}` },
-          ),
-        );
-      }
-      value = evaluateExpression(expression, { resolveParameter: resolve });
-    }
-    if (
-      definition.dimension === "massDensity" &&
-      (!Number.isFinite(value) || !(value > 0))
-    ) {
-      throw new EvaluationFailure(
-        diagnostic(
-          "MASS_DENSITY_INVALID",
-          `Mass-density parameter '${id}' must be finite and strictly positive`,
-          {
-            severity: "error",
-            path: sourcePath(id),
-            details: { value },
-          },
-        ),
-      );
-    }
-    if (!Number.isFinite(value)) {
-      throw new EvaluationFailure(
-        diagnostic("EXPRESSION_INVALID", `Parameter '${id}' is not finite`, {
-          severity: "error",
-          path: sourcePath(id),
-        }),
-      );
-    }
-    values.set(id, value);
-    states.set(id, "resolved");
-    return value;
-  };
-
-  for (const key of Object.keys(overrides)) {
-    if (!Object.hasOwn(document.parameters, key)) {
-      diagnostics.push(
-        diagnostic("PARAMETER_MISSING", `Unknown parameter override '${key}'`, {
-          severity: "error",
-          path: `/parameters/${key}`,
-        }),
-      );
-    }
-  }
-  for (const [rawId, definition] of Object.entries(document.parameters) as [
-    ParameterId,
-    DesignDocument["parameters"][ParameterId],
-  ][]) {
-    try {
-      resolve(rawId, definition.dimension);
-    } catch (error) {
-      diagnostics.push(
-        error instanceof EvaluationFailure
-          ? error.diagnostic
-          : diagnostic(
-              definition.dimension === "massDensity"
-                ? "MASS_DENSITY_INVALID"
-                : "EXPRESSION_INVALID",
-              error instanceof Error ? error.message : String(error),
-              { severity: "error", path: sourcePath(rawId) },
-            ),
-      );
-    }
-  }
-  if (!hasErrors(diagnostics)) {
-    const context = { resolveParameter: resolve };
-    for (const [rawId, definition] of Object.entries(document.parameters) as [
-      ParameterId,
-      DesignDocument["parameters"][ParameterId],
-    ][]) {
-      const value = values.get(rawId)!;
-      let boundInvalid = false;
-      const bound = (
-        field: "min" | "max",
-        expression: ExpressionIR | undefined,
-      ): number | undefined => {
-        if (expression === undefined) return undefined;
-        try {
-          return evaluateExpression(expression, context);
-        } catch (error) {
-          boundInvalid = true;
-          diagnostics.push(
-            error instanceof EvaluationFailure
-              ? error.diagnostic
-              : diagnostic(
-                  definition.dimension === "massDensity"
-                    ? "MASS_DENSITY_INVALID"
-                    : "EXPRESSION_INVALID",
-                  `Parameter '${rawId}' ${field} bound is invalid: ${
-                    error instanceof Error ? error.message : String(error)
-                  }`,
-                  {
-                    severity: "error",
-                    path: `/parameters/${rawId}/${field}`,
-                  },
-                ),
-          );
-          return undefined;
-        }
-      };
-      const min = bound("min", definition.min);
-      const max = bound("max", definition.max);
-      if (boundInvalid) continue;
-      if ((min !== undefined && value < min) || (max !== undefined && value > max)) {
-        diagnostics.push(
-          diagnostic(
-            "PARAMETER_OUT_OF_RANGE",
-            `Parameter '${rawId}' value ${value} is outside ${min ?? "-∞"}..${max ?? "∞"}`,
-            {
-              severity: "error",
-              path: sourcePath(rawId),
-              details: { value, min, max },
-            },
-          ),
-        );
-      }
-    }
-  }
-  if (hasErrors(diagnostics)) return { ok: false, diagnostics };
-  return success({ values, diagnostics }, diagnostics);
 }
 
 function mirrorMatrix(normal: Vec3): Mat4 {
@@ -1330,7 +1136,7 @@ export class Evaluator {
       selectedConfiguration =
         document.configurations![selectedConfigurationId];
     }
-    const parameterResult = resolveParameters(
+    const parameterResult = resolveEvaluationParameters(
       document,
       options.parameters ?? {},
       selectedConfigurationId,

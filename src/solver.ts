@@ -62,6 +62,13 @@ export interface SketchSolveContext {
 export interface SketchSolverBackend {
   readonly id: string;
   readonly capabilities: SketchSolverCapabilities;
+  /**
+   * Exact cross-run numeric-semantics identity required by shape-artifact keys.
+   * Advertise this only after the solver has established compatibility across
+   * every runtime encoded by the value. Omission means cross-run artifact
+   * caching is unsupported for this solver.
+   */
+  readonly artifactCompatibilityFingerprint?: string;
   solve(sketch: SketchNodeIR, context: SketchSolveContext): SolvedSketch;
   dispose(): void;
 }
@@ -97,6 +104,10 @@ const SUPPORTED_CONSTRAINTS = [
   "tangent",
 ] as const satisfies readonly SketchConstraintIR["kind"][];
 
+function lexicalCompare(first: string, second: string): number {
+  return first < second ? -1 : first > second ? 1 : 0;
+}
+
 function makeVariables(
   sketch: SketchNodeIR,
   evaluate: (expression: ExpressionIR) => number,
@@ -104,10 +115,10 @@ function makeVariables(
   const pointOffset = new Map<EntityId, number>();
   const radiusOffset = new Map<EntityId, number>();
   const initial: number[] = [];
-  for (const [rawId, entity] of Object.entries(sketch.entities) as [
+  for (const [rawId, entity] of (Object.entries(sketch.entities) as [
     EntityId,
     SketchEntityIR,
-  ][]) {
+  ][]).sort(([first], [second]) => lexicalCompare(first, second))) {
     if (entity.kind === "point") {
       pointOffset.set(rawId, initial.length);
       initial.push(evaluate(entity.x), evaluate(entity.y));
@@ -170,10 +181,10 @@ function residualTerms(
   evaluate: (expression: ExpressionIR) => number,
 ): readonly ResidualTerm[] {
   const terms: ResidualTerm[] = [];
-  for (const [rawId, constraint] of Object.entries(sketch.constraints) as [
+  for (const [rawId, constraint] of (Object.entries(sketch.constraints) as [
     EntityId,
     SketchConstraintIR,
-  ][]) {
+  ][]).sort(([first], [second]) => lexicalCompare(first, second))) {
     const term = (...residuals: number[]): void => {
       terms.push({ constraint: rawId, values: residuals });
     };

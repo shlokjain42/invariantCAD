@@ -842,6 +842,92 @@ describe("named design configurations", () => {
     }
   });
 
+  it("contains hostile parameter override records inside the result boundary", async () => {
+    const cad = design("hostile-runtime-parameters");
+    const width = cad.parameter.length("width", mm(10));
+    const solid = cad.box("solid", {
+      size: vec3(width, mm(1), mm(1)),
+    });
+    cad.output("solid", solid);
+    const document = cad.build();
+
+    let unknownReads = 0;
+    const unknown = Object.defineProperty({}, "unknown", {
+      enumerable: true,
+      get() {
+        unknownReads += 1;
+        throw new Error("unknown parameter getter must not run");
+      },
+    }) as Record<string, number>;
+    const unknownResult = await evaluator.evaluate(document, {
+      parameters: unknown,
+    });
+    expect(unknownReads).toBe(0);
+    expect(unknownResult.ok).toBe(false);
+    if (!unknownResult.ok) {
+      expect(unknownResult.diagnostics).toEqual([
+        expect.objectContaining({
+          code: "PARAMETER_MISSING",
+          path: "/parameters/unknown",
+        }),
+      ]);
+    }
+
+    let knownReads = 0;
+    const throwing = Object.defineProperty({}, "width", {
+      enumerable: true,
+      get() {
+        knownReads += 1;
+        throw new Error("hostile parameter getter");
+      },
+    }) as Record<string, number>;
+    const getterResult = await evaluator.evaluate(document, {
+      parameters: throwing,
+    });
+    expect(knownReads).toBe(1);
+    expect(getterResult.ok).toBe(false);
+    if (!getterResult.ok) {
+      expect(getterResult.diagnostics).toEqual([
+        expect.objectContaining({
+          code: "EXPRESSION_INVALID",
+          message: "hostile parameter getter",
+          path: "/parameters",
+        }),
+      ]);
+    }
+
+    const revocable = Proxy.revocable<Record<string, number>>(
+      { width: 20 },
+      {},
+    );
+    revocable.revoke();
+    const revokedResult = await evaluator.evaluate(document, {
+      parameters: revocable.proxy,
+    });
+    expect(revokedResult.ok).toBe(false);
+    if (!revokedResult.ok) {
+      expect(revokedResult.diagnostics[0]).toMatchObject({
+        code: "EXPRESSION_INVALID",
+        path: "/parameters",
+      });
+    }
+
+    const revokedValue = Proxy.revocable({}, {});
+    revokedValue.revoke();
+    const revokedValueResult = await evaluator.evaluate(document, {
+      parameters: {
+        width: revokedValue.proxy as never,
+      },
+    });
+    expect(revokedValueResult.ok).toBe(false);
+    if (!revokedValueResult.ok) {
+      expect(revokedValueResult.diagnostics[0]).toMatchObject({
+        code: "EXPRESSION_INVALID",
+        path: "/parameters/width",
+      });
+    }
+  });
+
   it("resolves configuration expressions through effective dependencies and detects selected cycles", async () => {
     const cad = design("configuration-expression-dependencies");
     const width = cad.parameter.length("width", mm(10));
@@ -878,8 +964,9 @@ describe("named design configurations", () => {
     const cyclicCad = design("configuration-expression-cycle");
     const first = cyclicCad.parameter.length("first", mm(1));
     const second = cyclicCad.parameter.length("second", mm(2));
+    const downstream = cyclicCad.parameter.length("downstream", first);
     const cyclicSolid = cyclicCad.box("solid", {
-      size: vec3(first, mm(1), mm(1)),
+      size: vec3(downstream, mm(1), mm(1)),
     });
     cyclicCad.configuration("cyclic", (configuration) =>
       configuration.parameter(first, second).parameter(second, first),
@@ -896,6 +983,13 @@ describe("named design configurations", () => {
           path: "/configurations/cyclic/parameterOverrides/first",
         }),
       );
+      expect(
+        cycle.diagnostics.some(
+          (item) =>
+            item.code === "PARAMETER_CYCLE" &&
+            item.path === "/parameters/downstream/default",
+        ),
+      ).toBe(false);
     }
   });
 

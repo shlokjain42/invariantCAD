@@ -1782,33 +1782,65 @@ function detectGraphCycles(
   diagnostics: Diagnostic[],
 ): void {
   const states = new Map<NodeId, "visiting" | "visited">();
-  const stack: NodeId[] = [];
-  const visit = (id: NodeId): void => {
-    const state = states.get(id);
-    if (state === "visited") return;
-    if (state === "visiting") {
-      const start = stack.indexOf(id);
-      const cycle = [...stack.slice(start), id];
-      diagnostics.push(
-        diagnostic("GRAPH_CYCLE", `Feature graph contains a cycle: ${cycle.join(" -> ")}`, {
-          severity: "error",
-          node: id,
-          path: `/nodes/${id}`,
-        }),
-      );
-      return;
+  const path: NodeId[] = [];
+  const pathIndices = new Map<NodeId, number>();
+  interface Frame {
+    readonly id: NodeId;
+    readonly dependencies: readonly RefIR[];
+    next: number;
+  }
+  for (const root of Object.keys(document.nodes) as NodeId[]) {
+    if (states.has(root)) continue;
+    const rootNode = document.nodes[root];
+    if (rootNode === undefined) continue;
+    const frames: Frame[] = [
+      { id: root, dependencies: nodeDependencies(rootNode), next: 0 },
+    ];
+    states.set(root, "visiting");
+    pathIndices.set(root, 0);
+    path.push(root);
+    while (frames.length > 0) {
+      const frame = frames[frames.length - 1]!;
+      if (frame.next >= frame.dependencies.length) {
+        frames.pop();
+        path.pop();
+        pathIndices.delete(frame.id);
+        states.set(frame.id, "visited");
+        continue;
+      }
+      const dependency = frame.dependencies[frame.next++]!.node;
+      const state = states.get(dependency);
+      if (state === "visited") continue;
+      if (state === "visiting") {
+        const start = pathIndices.get(dependency) ?? 0;
+        const cycle = [...path.slice(start), dependency];
+        diagnostics.push(
+          diagnostic(
+            "GRAPH_CYCLE",
+            `Feature graph contains a cycle: ${cycle.join(" -> ")}`,
+            {
+              severity: "error",
+              node: dependency,
+              path: `/nodes/${dependency}`,
+            },
+          ),
+        );
+        continue;
+      }
+      const dependencyNode = Object.hasOwn(document.nodes, dependency)
+        ? document.nodes[dependency]
+        : undefined;
+      if (dependencyNode === undefined) continue;
+      states.set(dependency, "visiting");
+      pathIndices.set(dependency, path.length);
+      path.push(dependency);
+      frames.push({
+        id: dependency,
+        dependencies: nodeDependencies(dependencyNode),
+        next: 0,
+      });
     }
-    const node = Object.hasOwn(document.nodes, id)
-      ? document.nodes[id]
-      : undefined;
-    if (node === undefined) return;
-    states.set(id, "visiting");
-    stack.push(id);
-    for (const dependency of nodeDependencies(node)) visit(dependency.node);
-    stack.pop();
-    states.set(id, "visited");
-  };
-  for (const id of Object.keys(document.nodes) as NodeId[]) visit(id);
+  }
 }
 
 export function validateDocument(

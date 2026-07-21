@@ -4,7 +4,7 @@ Comprehensive, type-safe CAD-as-code for TypeScript.
 
 InvariantCAD represents a design as immutable, versioned JSON and evaluates it through replaceable geometry and sketch-solver backends. The public API never exposes WASM pointers or kernel-specific objects.
 
-> **Project status:** `0.1.0` is the released-foundation target. Current main adds named definition-scoped configurations and variant-aware BOMs, an exact OpenCascade B-Rep backend, analytic sketch-profile transfer, STEP/BREP exchange, bounded ruled solid lofts, explicit 3D polyline, circular-arc, and ordered line/arc composite paths with bounded exact solid sweeps, closed semantic face/edge roles through those bounded sweeps, sketch-boundary provenance, document-owned persistent face/edge/vertex selectors, exact selector-driven fillets and equal-distance chamfers, exact face-selected inward/outward shells, exact whole-solid inward/outward offsets, atomic semantic-face draft, and owned exact multi-input Boolean, fillet/chamfer, and shell/offset evolution when the matched InvariantCAD-owned OCCT facade is loaded. Complete topology history outside those owned feature slices is still under active development; see the [support matrix](#support-matrix) and [roadmap](docs/roadmap.md).
+> **Project status:** `0.1.0` is the released-foundation target. Current main adds named definition-scoped configurations and variant-aware BOMs, kernel-independent effective-feature Merkle hashes, a strict kernel-shape artifact/cache protocol foundation, an exact OpenCascade B-Rep backend, analytic sketch-profile transfer, STEP/BREP exchange, bounded ruled solid lofts, explicit 3D polyline, circular-arc, and ordered line/arc composite paths with bounded exact solid sweeps, closed semantic face/edge roles through those bounded sweeps, sketch-boundary provenance, document-owned persistent face/edge/vertex selectors, exact selector-driven fillets and equal-distance chamfers, exact face-selected inward/outward shells, exact whole-solid inward/outward offsets, atomic semantic-face draft, and owned exact multi-input Boolean, fillet/chamfer, and shell/offset evolution when the matched InvariantCAD-owned OCCT facade is loaded. No shipped geometry backend advertises the new artifact codec yet, and the evaluator does not consume a cross-run cache. Complete topology history outside those owned feature slices is still under active development; see the [support matrix](#support-matrix) and [roadmap](docs/roadmap.md).
 
 ## Install
 
@@ -470,7 +470,7 @@ With complete history on both snapshots, a unique stable role or sketch-source a
 
 Capture first proves that the detached evidence uniquely identifies the requested item in its own snapshot. Resolution likewise returns a current evaluation-scoped key only for exactly one compatible candidate. No match fails with `TOPOLOGY_MATCH_MISSING`; multiple matches fail with `TOPOLOGY_MATCH_AMBIGUOUS`; malformed references, options, tolerances, limits, and signature capabilities fail with `TOPOLOGY_SIGNATURE_INVALID`; malformed kernel snapshots fail as `KERNEL_ERROR`; and an exact fingerprint mismatch fails with `TOPOLOGY_FINGERPRINT_MISMATCH`. Resource normalization can return `TOPOLOGY_SIGNATURE_LIMIT_EXCEEDED` before deeper validation of an oversized input. Symmetric topology—including distinct coincident B-Rep vertices with indistinguishable evidence—therefore remains explicitly ambiguous; the protocol never invents identity from enumeration order.
 
-Persistent document selectors support exact B-Rep faces, edges, and vertices. Vertices currently have no semantic roles: they can be selected by position, origin lineage where available, persistence, set algebra, and edge adjacency, but never by an invented corner name. The selectors store evidence, never kernel keys or shapes, and therefore do not provide geometric diffing, incremental feature hashes, or cross-run shape caching. The [published persistent-topology torture suite](docs/persistent-topology-torture.md) records the exact stable, missing, ambiguous, cancellation, and ownership boundaries that the current implementation must pass.
+Persistent document selectors support exact B-Rep faces, edges, and vertices. Vertices currently have no semantic roles: they can be selected by position, origin lineage where available, persistence, set algebra, and edge adjacency, but never by an invented corner name. The selectors store evidence, never kernel keys or shapes, and therefore do not themselves provide geometric diffing, incremental feature identity, or cross-run shape caching. Feature-hash and artifact-cache protocols are separate layers described below. The [published persistent-topology torture suite](docs/persistent-topology-torture.md) records the exact stable, missing, ambiguous, cancellation, and ownership boundaries that the current implementation must pass.
 
 ## What works today
 
@@ -518,6 +518,8 @@ The solver API is replaceable. The built-in solver is intentionally a v0.1 refer
 - Binary STL, ASCII STL, and OBJ export
 - Canonical JSON serialization and structural/semantic validation
 - SHA-256 semantic document hashes
+- Context-effective, kernel-independent feature Merkle hashes for incremental invalidation
+- Versioned artifact key, record-integrity, bounded-store, and optional kernel-codec contracts; no shipped backend codec or evaluator cache integration yet
 - Structured diagnostics instead of opaque geometry exceptions
 - Node and browser runtime support with configurable WASM location
 
@@ -536,6 +538,8 @@ The solver API is replaceable. The built-in solver is intentionally a v0.1 refer
 | Density-aware part and heterogeneous-assembly mass | Explicit authored density | Yes |
 | Named configurations | Parameter, definition-scoped suppression, and part-material overrides | Effectivity and rule-driven variants |
 | Deterministic bill of materials | Fixed and nested assemblies, including selected configurations | Effectivity and alternate/substitute components |
+| Incremental feature identity | Feature-hash protocol v1 over one effective base/configuration/call-time context | Field-aware and geometric comparison where explicitly supported |
+| Cross-run kernel-shape cache | Strict key, artifact-codec, record-integrity, store, limit, and ownership foundation; no shipped backend advertises a codec and evaluation does not read it | Evaluator integration and backend-owned complete codecs |
 | Exact B-Rep primitives and core features | OCCT backend | Yes |
 | STEP and BREP import/export | OCCT backend | Yes |
 | IGES import/export | No | Exact backend |
@@ -779,9 +783,47 @@ The base design and every named configuration that changes evaluation are propag
 
 `AnalyzeDesignImpactOptions.limits` uses the same partial `DesignDocumentLimits` contract as parsing. `maxStructuralValues` additionally caps context-qualified propagation work and returns a structured `IR_INVALID` diagnostic instead of allowing a configuration-by-graph product to grow without bound.
 
-This is conservative propagation over the current authored dependency graph, not a comparison between two documents. An ID seed does not identify which field changed, and v1 cannot predict newly added or deleted definitions or dependencies. It does not inspect or compare B-Reps, validate a cached artifact, infer persistent topology identity, or claim that a kernel will produce geometrically different output. Cross-run shape caching still requires a separate, versioned kernel artifact protocol with exact runtime compatibility and explicit handle ownership.
+This is conservative propagation over the current authored dependency graph, not a comparison between two documents. An ID seed does not identify which field changed, and v1 cannot predict newly added or deleted definitions or dependencies. It does not inspect or compare B-Reps, validate a cached artifact, infer persistent topology identity, or claim that a kernel will produce geometrically different output. The separate feature-identity and artifact protocols below do not change those limits.
 
-The current authoring API emits `DesignDocumentV6`. `parseDocument`, `parseDocumentValue`, `stringifyDocument`, `cloneDocument`, `hashDocument`, validation, and evaluation preserve a supplied v1, v2, v3, v4, v5, or v6 document. `migrateDocument` validates and upgrades v1–v5 to v6 and is idempotent for v6. V1 cannot contain a topology-reference registry or persistent selector atom; v2 can but retains the pre-loft role vocabulary; v3 adds loft roles but rejects sweep and edge-treatment roles; v4 adds the six sweep roles but rejects `fillet.face.blend` and `chamfer.face.bevel`; v5 adds exactly those two face roles while remaining face/edge-only; and v6 adds persistent vertices, vertex `position(...)`, and edge↔vertex adjacency without adding semantic vertex roles. V1–v5 remain frozen and directly evaluable. Migration never rewrites a stored protocol version, descriptor fingerprint, lineage, geometry, or adjacency record. The document schema version is independent of the npm package version, primary OCCT topology descriptor `@6`, protocol-v1 compatibility descriptor `@4`/`@5`, owned facade ABI 0.6, exact-evolution protocol v1, and persistent-reference protocol v1/v2.
+### Incremental feature identity and shape-artifact foundation
+
+`hashDesignFeatures(...)` computes feature-hash protocol v1 for one effective evaluation context without invoking a geometry kernel. It applies the evaluator's configuration and call-time parameter precedence, removes effectively suppressed assembly instances, applies effective part materials, canonicalizes commutative selector logic, includes only consumed persistent-reference evidence, and builds a SHA-256 Merkle hash from each node's local intent, resolved direct parameter values, ordered direct dependencies, and dependency hashes:
+
+```ts
+import {
+  FEATURE_HASH_PROTOCOL_VERSION,
+  hashDesignFeatures,
+} from "invariantcad";
+
+const hashes = await hashDesignFeatures(document, {
+  configuration: "compact-single",
+  parameters: { width: 72 },
+});
+
+if (hashes.ok) {
+  console.log(hashes.value.hashProtocolVersion === FEATURE_HASH_PROTOCOL_VERSION);
+  console.log(hashes.value.nodes);
+  console.log(hashes.value.outputs);
+}
+```
+
+The report is deterministic, sorted, deeply frozen, cancellable through `HashDesignFeaturesOptions.signal`, and bounded by `FeatureHashLimits`; `DEFAULT_FEATURE_HASH_LIMITS` caps feature nodes, direct dependency links, and canonical bytes hashed. A pre-aborted signal returns structured `EVALUATION_ABORTED`. A configuration name is reported as context but is not itself salted into every node: two contexts with the same effective v1 intent can deliberately produce the same feature hash. An isolated change admitted by protocol v1 changes that feature and its Merkle descendants while unrelated branches retain their hashes.
+
+A tagged `FeatureHash` proves only equality of the bytes admitted by effective-intent protocol v1. It is not a B-Rep digest, geometric-equivalence proof, topology-identity proof, kernel result attestation, or sufficient cache key. In particular, it does not encode a kernel runtime or the sketch solver that will turn the intent into geometry.
+
+The optional kernel-shape artifact protocol supplies the stronger compatibility envelope required before such an intent hash can participate in a cache key. A supporting `GeometryKernel` must advertise `KernelCapabilities.shapeArtifacts` and implement both `encodeShapeArtifact(...)` and `decodeShapeArtifact(...)`. `inspectKernelShapeArtifactSupport(...)` distinguishes absent, malformed, and complete declarations. Native STEP/BREP import and export do not imply this capability.
+
+`createKernelShapeArtifactCacheKey(...)` accepts an `ArtifactCacheFeature`—the `node`, `outputKind`, and `hash` projection of a `DesignFeatureHashEntry`, so a full report entry can be passed directly. It requires `outputKind: "solid"` and a tagged protocol-v1 feature hash, then binds that entry to the artifact-cache and evaluator-semantics versions, kernel ID, backend-owned artifact format/version/compatibility fingerprint, and sketch-solver ID plus `artifactCompatibilityFingerprint`. A topology-signature descriptor fingerprint is intentionally insufficient and is never substituted for the artifact fingerprint.
+
+Solver artifact compatibility is fail-closed. The optional fingerprint claims exact cross-run numeric semantics across every runtime represented by that value, not merely the same solver class or algorithm name. The built-in reference solver deliberately omits it because its floating-point nonlinear implementation has not established that cross-runtime guarantee; a solver without a fingerprint cannot produce an artifact key.
+
+The record/store layer then provides `createArtifactCacheRecord(...)`, `validateArtifactCacheRecord(...)`, `readArtifactCacheRecord(...)`, `writeArtifactCacheRecord(...)`, `deleteArtifactCacheRecord(...)`, bounded `ArtifactCacheLimits`, and a copying `MemoryArtifactCacheStore`. Records carry exact key material, detached payload bytes, byte length, and a SHA-256 integrity digest. The store contract publishes one complete record or nothing; a custom store that knows an entry exceeds `context.maxBytes` throws `ArtifactCacheStoreLimitError` before materializing its payload. Integrity detects corruption or misrouting, not geometric correctness or authenticity. Encoding retains ownership of the source shape and returns fresh caller-owned bytes. Decode input is borrowed and cannot be mutated or retained; successful decode returns one new live current-kernel shape owned by the caller. Both codec directions must enforce `maxArtifactBytes`, observe cancellation, and clean up partial work before failing.
+
+The standalone store helpers apply operation and total-byte ceilings to that one call. `createArtifactCacheSession(...)` adds concurrency-safe aggregate accounting across calls: it serializes one session's reads, writes, and deletes, enforces cumulative `maxOperations`, `maxTotalReadBytes`, and `maxTotalWriteBytes`, exposes frozen `usage`, supports read-only/write-only modes, resolves queued cancellation promptly without allowing later work to overtake the active store call, and isolates synchronous or asynchronous event-listener failures from cache correctness.
+
+This is a protocol foundation, not an operational evaluator cache. Neither Manifold nor the stock or owned OCCT adapters currently advertises `shapeArtifacts`, and the evaluator does not read, decode, write, or evict these records. The low-level functions do not call a codec automatically. A generic OCCT BREP payload is deliberately insufficient: ordinary BREP import reconstructs geometry with partial history and does not round-trip the InvariantCAD wrapper's semantic lineage, complete/partial history state, topology annotations, analytic volume overrides, or other evaluator-observable backend state. A future OCCT artifact codec must preserve that complete contract under an exact runtime fingerprint before evaluator integration can safely land.
+
+The current authoring API emits `DesignDocumentV6`. `parseDocument`, `parseDocumentValue`, `stringifyDocument`, `cloneDocument`, `hashDocument`, validation, and evaluation preserve a supplied v1, v2, v3, v4, v5, or v6 document. `migrateDocument` validates and upgrades v1–v5 to v6 and is idempotent for v6. V1 cannot contain a topology-reference registry or persistent selector atom; v2 can but retains the pre-loft role vocabulary; v3 adds loft roles but rejects sweep and edge-treatment roles; v4 adds the six sweep roles but rejects `fillet.face.blend` and `chamfer.face.bevel`; v5 adds exactly those two face roles while remaining face/edge-only; and v6 adds persistent vertices, vertex `position(...)`, and edge↔vertex adjacency without adding semantic vertex roles. V1–v5 remain frozen and directly evaluable. Migration never rewrites a stored protocol version, descriptor fingerprint, lineage, geometry, or adjacency record. The document schema version is independent of the npm package version, primary OCCT topology descriptor `@6`, protocol-v1 compatibility descriptor `@4`/`@5`, owned facade ABI 0.6, exact-evolution protocol v1, persistent-reference protocol v1/v2, feature-hash protocol v1, artifact-cache protocol v1, kernel-shape-artifact protocol v1, and artifact evaluator-semantics version.
 
 Parsing first captures a bounded, detached snapshot before recursive schema validation and freezing, so accessors and proxies cannot change the value after its limits were checked. `ParseDocumentOptions.limits` can override the exported frozen `DEFAULT_DESIGN_DOCUMENT_LIMITS` ceilings for UTF-8 bytes, structural occurrences (including shared aliases), nesting depth, actual selector-query nodes, registry entries, variants, stored adjacency links, and lineage evidence. Sparse arrays, cycles, non-JSON object instances, unknown versioned persistent fields, and malformed or oversized stored evidence fail as structured `IR_INVALID` diagnostics.
 
@@ -797,7 +839,7 @@ if (!result.ok) {
 }
 ```
 
-Stable codes include `REFERENCE_MISSING`, `GRAPH_CYCLE`, `PARAMETER_OUT_OF_RANGE`, `CONFIGURATION_MISSING`, `MASS_DENSITY_INVALID`, `MASS_DENSITY_MISSING`, `MASS_PROPERTIES_INVALID`, `SKETCH_OVER_CONSTRAINED`, `EMPTY_RESULT`, `KERNEL_CAPABILITY_MISSING`, `TOPOLOGY_SELECTION_MISSING`, `TOPOLOGY_SELECTION_AMBIGUOUS`, `TOPOLOGY_HISTORY_UNAVAILABLE`, and `EVALUATION_ABORTED`.
+Stable codes include `REFERENCE_MISSING`, `GRAPH_CYCLE`, `PARAMETER_OUT_OF_RANGE`, `CONFIGURATION_MISSING`, `MASS_DENSITY_INVALID`, `MASS_DENSITY_MISSING`, `MASS_PROPERTIES_INVALID`, `SKETCH_OVER_CONSTRAINED`, `EMPTY_RESULT`, `KERNEL_CAPABILITY_MISSING`, `TOPOLOGY_SELECTION_MISSING`, `TOPOLOGY_SELECTION_AMBIGUOUS`, `TOPOLOGY_HISTORY_UNAVAILABLE`, `ARTIFACT_CACHE_ENTRY_INVALID`, `ARTIFACT_CACHE_LIMIT_EXCEEDED`, `ARTIFACT_CACHE_OPERATION_FAILED`, and `EVALUATION_ABORTED`.
 
 ## CLI
 

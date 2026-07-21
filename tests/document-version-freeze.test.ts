@@ -375,6 +375,27 @@ describe("frozen document-version grammar", () => {
     }
   });
 
+  it("preserves the frozen omission of own __proto__ metadata keys", async () => {
+    for (const { label, document } of versionCases()) {
+      const emptyMetadata = { ...document, metadata: {} } as typeof document;
+      const reservedMetadata = {
+        ...document,
+        metadata: JSON.parse('{"__proto__":{"polluted":true}}'),
+      } as typeof document;
+      expect(Object.hasOwn(reservedMetadata.metadata!, "__proto__"), label).toBe(
+        true,
+      );
+      expect(stringifyDocument(reservedMetadata), label).toBe(
+        stringifyDocument(emptyMetadata),
+      );
+      expect(
+        await hashDocument(reservedMetadata, { includeMetadata: true }),
+        label,
+      ).toBe(await hashDocument(emptyMetadata, { includeMetadata: true }));
+      expect(({} as { readonly polluted?: unknown }).polluted).toBeUndefined();
+    }
+  });
+
   it("directly evaluates every frozen document grammar and the current grammar", async () => {
     const evaluator = await createEvaluator();
     try {

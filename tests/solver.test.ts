@@ -46,6 +46,8 @@ describe("reference sketch solver", () => {
     if (node?.kind !== "sketch") throw new Error("Sketch node was not built");
     const solver = createReferenceSketchSolver();
     try {
+      // The numeric implementation has not established cross-runtime exactness.
+      expect(solver.artifactCompatibilityFingerprint).toBeUndefined();
       const solved = solver.solve(node, {
         evaluate: (expression) =>
           evaluateExpression(expression, {

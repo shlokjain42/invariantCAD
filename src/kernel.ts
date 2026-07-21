@@ -50,6 +50,29 @@ export type KernelExchangeFormat = "step" | "brep" | "brep-binary";
 export const GEOMETRY_KERNEL_PROTOCOL_VERSION = 1 as const;
 export const COMPOSITE_SWEEP_REFINEMENT_PROTOCOL_VERSION = 1 as const;
 export const EXACT_INDEXED_TOPOLOGY_EVOLUTION_PROTOCOL_VERSION = 1 as const;
+export const KERNEL_SHAPE_ARTIFACT_PROTOCOL_VERSION = 1 as const;
+
+export type Awaitable<T> = T | PromiseLike<T>;
+
+/**
+ * Strong, backend-owned round-trip support for disposable kernel shapes.
+ * Native exchange formats do not imply this capability.
+ */
+export interface KernelShapeArtifactCapabilities {
+  readonly protocolVersion: typeof KERNEL_SHAPE_ARTIFACT_PROTOCOL_VERSION;
+  /** Globally stable codec namespace. */
+  readonly format: string;
+  /** Backend-owned wire-format version. */
+  readonly formatVersion: number;
+  /** Exact runtime, implementation, tolerance, and option compatibility. */
+  readonly compatibilityFingerprint: string;
+}
+
+export interface KernelShapeArtifactContext {
+  readonly feature: string;
+  readonly signal?: AbortSignal;
+  readonly maxArtifactBytes: number;
+}
 
 /**
  * Additive guarantees beyond the base `compositeSweep` feature contract.
@@ -115,6 +138,8 @@ export interface KernelCapabilities {
   readonly topology?: KernelTopologyCapabilities;
   readonly compositeSweep?: KernelCompositeSweepCapabilities;
   readonly exactIndexedTopologyEvolution?: KernelExactIndexedTopologyEvolutionCapabilities;
+  /** Optional strong shape round-trip contract; ordinary import/export is weaker. */
+  readonly shapeArtifacts?: KernelShapeArtifactCapabilities;
 }
 
 function metadataType(value: unknown): string {
@@ -465,6 +490,30 @@ export interface GeometryKernel {
     format: KernelExchangeFormat,
     context?: KernelFeatureContext,
   ): Uint8Array;
+  /**
+   * Encodes without transferring ownership of `shape`. The payload must
+   * preserve every evaluator-observable shape semantic promised by
+   * `shapeArtifacts` and be a fresh, detached byte array owned by the caller.
+   * `maxArtifactBytes` is a hard output/materialization ceiling. The codec must
+   * observe cancellation at entry and during material work, and must not return
+   * an oversized or partial payload.
+   */
+  encodeShapeArtifact?(
+    shape: KernelShape,
+    context: KernelShapeArtifactContext,
+  ): Awaitable<Uint8Array>;
+  /**
+   * Returns one new live current-kernel shape owned by the caller. `artifact`
+   * is borrowed for this call: the codec must not mutate or retain it.
+   * `maxArtifactBytes` is a hard input/materialization ceiling. The codec must
+   * observe cancellation at entry and during material work, dispose any
+   * partially decoded native state on failure, and never return a partial
+   * shape.
+   */
+  decodeShapeArtifact?(
+    artifact: Uint8Array,
+    context: KernelShapeArtifactContext,
+  ): Awaitable<KernelShape>;
   mesh(shape: KernelShape, options?: MeshOptions): MeshData;
   measure(shape: KernelShape): ShapeMeasurements;
   status(shape: KernelShape): KernelShapeStatus;
