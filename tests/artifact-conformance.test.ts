@@ -38,6 +38,7 @@ const ARTIFACT_CAPABILITIES: KernelShapeArtifactCapabilities = Object.freeze({
 
 type Fault =
   | "none"
+  | "warm-only-encode"
   | "lossy-hidden-state"
   | "process-local"
   | "shared-encode-buffer"
@@ -48,7 +49,8 @@ type Fault =
   | "ignore-byte-ceiling"
   | "invalid-reduced-output"
   | "lossy-reduced-output"
-  | "source-coupled-decoded-ownership";
+  | "source-coupled-decoded-ownership"
+  | "pre-witness-cross-runtime-source-coupling";
 
 type Advertisement = "absent" | "supported" | "malformed";
 
@@ -60,6 +62,7 @@ interface ShapeState {
   visible: number;
   hidden: number;
   live: boolean;
+  warmed?: boolean;
   retained?: Uint8Array;
   coupling?: Coupling;
   sourceDependency?: Coupling;
@@ -131,7 +134,9 @@ class SyntheticHarness {
   readonly contexts: KernelShapeArtifactContext[] = [];
   readonly coupling: Coupling = { live: true };
   readonly fault: Fault;
+  peakLiveRuntimes = 0;
   private sharedEncodeBuffer: Uint8Array | undefined;
+  private preWitnessSourceCoupling: Coupling | undefined;
 
   constructor(fault: Fault = "none") {
     this.fault = fault;
@@ -154,6 +159,17 @@ class SyntheticHarness {
       const shape = rawShape as SyntheticShape;
       if (shape.owner !== runtime || !shape.state.live) {
         throw new TypeError("Shape is not live in this runtime");
+      }
+      if (this.fault === "warm-only-encode" && shape.state.warmed !== true) {
+        throw new TypeError("Synthetic codec requires a warmed shape");
+      }
+      if (
+        this.fault === "pre-witness-cross-runtime-source-coupling" &&
+        shape.state.warmed !== true
+      ) {
+        const coupling = { live: true };
+        shape.state.invalidatesSourceDependency = coupling;
+        this.preWitnessSourceCoupling = coupling;
       }
       const { visible, hidden } = this.semantic(shape);
       const bytes = artifactBytes(
@@ -181,7 +197,12 @@ class SyntheticHarness {
         throw new RangeError("Synthetic artifact exceeds maxArtifactBytes");
       }
       if (this.fault === "shared-encode-buffer") {
-        this.sharedEncodeBuffer ??= bytes;
+        if (
+          this.sharedEncodeBuffer === undefined ||
+          this.sharedEncodeBuffer.byteLength === 0
+        ) {
+          this.sharedEncodeBuffer = bytes;
+        }
         return this.sharedEncodeBuffer;
       }
       return bytes;
@@ -214,6 +235,10 @@ class SyntheticHarness {
         ...(this.fault === "source-coupled-decoded-ownership" &&
         runtime.activeSourceCoupling !== undefined
           ? { sourceDependency: runtime.activeSourceCoupling }
+          : {}),
+        ...(this.fault === "pre-witness-cross-runtime-source-coupling" &&
+        this.preWitnessSourceCoupling !== undefined
+          ? { sourceDependency: this.preWitnessSourceCoupling }
           : {}),
       };
       const shape: SyntheticShape = { kernel: KERNEL_ID, owner: runtime, state };
@@ -296,6 +321,10 @@ class SyntheticHarness {
     };
     runtime = { ordinal, kernel, codec, shapes, disposed: false };
     this.runtimes.push(runtime);
+    this.peakLiveRuntimes = Math.max(
+      this.peakLiveRuntimes,
+      this.runtimes.filter((item) => !item.disposed).length,
+    );
     return { kernel, codec };
   }
 
@@ -331,6 +360,7 @@ class SyntheticHarness {
     readonly hidden: number;
   } {
     if (!shape.state.live) throw new Error("Synthetic shape is disposed");
+    shape.state.warmed = true;
     if (shape.state.coupling !== undefined && !shape.state.coupling.live) {
       throw new Error("Synthetic decoded ownership was coupled");
     }
@@ -511,10 +541,14 @@ describe("kernel shape-artifact codec audit", () => {
       "current-runtime-self-round-trip",
     ]);
     expect(result.value.cases[1]?.artifacts.map((item) => item.role)).toEqual([
+      "pre-witness-source-encode",
       "first-encode",
       "second-encode",
       "second-generation-encode",
     ]);
+    expect(result.value.cases[1]?.checks).toContain(
+      "pre-witness-source-cross-instance-decode",
+    );
     expect(result.value.cases[0]?.artifacts).toEqual([
       expect.objectContaining({
         role: "golden-input",
@@ -532,15 +566,15 @@ describe("kernel shape-artifact codec audit", () => {
       ).toBe(true);
     }
     expect(result.value.usage.artifactBytes).toBe(
-      GOLDEN_ARTIFACT.byteLength * 4,
+      GOLDEN_ARTIFACT.byteLength * 5,
     );
     expectDeeplyFrozen(result.value);
     expectTypeOf(result.value).toEqualTypeOf<
       KernelShapeArtifactCodecAuditEvidence
     >();
-    expect(harness.runtimes).toHaveLength(2);
+    expect(harness.runtimes).toHaveLength(5);
     expect(new Set(harness.runtimes.map((runtime) => runtime.kernel)).size).toBe(
-      2,
+      5,
     );
     expect(
       harness.contexts.every((context) => context.maxArtifactBytes > 0),
@@ -553,6 +587,89 @@ describe("kernel shape-artifact codec audit", () => {
           runtime.kernel.decodeShapeArtifact === undefined,
       ),
     ).toBe(true);
+    harness.expectFullyDisposed();
+  });
+
+  it("rejects factory reuse in the dedicated pre-witness runtime pair", async () => {
+    const harness = new SyntheticHarness();
+    const configuration = await optionsFor(harness, "candidate");
+    const created: ReturnType<SyntheticHarness["create"]>[] = [];
+    let calls = 0;
+    const result = await auditKernelShapeArtifactCodec({
+      ...configuration,
+      target: {
+        mode: "candidate",
+        create: () => {
+          calls += 1;
+          if (calls <= 2) {
+            const runtime = harness.create("absent");
+            created.push(runtime);
+            return runtime;
+          }
+          return created[0]!;
+        },
+      },
+    });
+    expectFailure(result, "KERNEL_ERROR");
+    expect(result.ok ? "" : result.diagnostics[0]?.message).toContain(
+      "reused a kernel instance",
+    );
+    harness.expectFullyDisposed();
+  });
+
+  it("rejects reuse of an already disposed pre-witness runtime", async () => {
+    const harness = new SyntheticHarness();
+    const configuration = await optionsFor(harness, "candidate");
+    const created: ReturnType<SyntheticHarness["create"]>[] = [];
+    let calls = 0;
+    const result = await auditKernelShapeArtifactCodec({
+      ...configuration,
+      target: {
+        mode: "candidate",
+        create: () => {
+          calls += 1;
+          if (calls <= 4) {
+            const runtime = harness.create("absent");
+            created.push(runtime);
+            return runtime;
+          }
+          return created[3]!;
+        },
+      },
+    });
+    expect(calls).toBe(5);
+    expect(created[3]?.kernel).toBe(harness.runtimes[3]?.kernel);
+    expect(harness.runtimes[3]?.disposed).toBe(true);
+    expectFailure(result, "KERNEL_ERROR");
+    expect(result.ok ? "" : result.diagnostics[0]?.message).toContain(
+      "reused a kernel instance",
+    );
+    expect(harness.runtimes).toHaveLength(4);
+    harness.expectFullyDisposed();
+  });
+
+  it("releases dedicated pre-witness runtimes between self cases", async () => {
+    const harness = new SyntheticHarness();
+    const cases = await casesFor(harness);
+    const self = cases.find(
+      (item) => item.scope === "current-runtime-self-round-trip",
+    );
+    expect(self).toBeDefined();
+    if (self === undefined || self.scope !== "current-runtime-self-round-trip") {
+      return;
+    }
+    const result = await auditKernelShapeArtifactCodec(
+      await optionsFor(harness, "candidate", {
+        cases: [
+          self,
+          { ...self, id: "second-self-round-trip" },
+          ...cases.filter((item) => item.scope === "golden-decode"),
+        ],
+      }),
+    );
+    expect(result.ok, JSON.stringify(result.diagnostics)).toBe(true);
+    expect(harness.runtimes).toHaveLength(8);
+    expect(harness.peakLiveRuntimes).toBe(4);
     harness.expectFullyDisposed();
   });
 
@@ -641,6 +758,7 @@ describe("kernel shape-artifact codec audit", () => {
   );
 
   it.each([
+    ["warm-only-encode", "warmed shape"],
     ["lossy-hidden-state", "semantic witness"],
     ["process-local", "process instance"],
     ["shared-encode-buffer", "independent byte arrays"],
@@ -648,6 +766,7 @@ describe("kernel shape-artifact codec audit", () => {
     ["mutate-decode-input", "mutated its borrowed artifact input"],
     ["coupled-decoded-ownership", "valid kernel shape"],
     ["source-coupled-decoded-ownership", "valid kernel shape"],
+    ["pre-witness-cross-runtime-source-coupling", "valid kernel shape"],
   ] as const)(
     "rejects adversarial codec behavior: %s",
     async (fault, message) => {
@@ -845,6 +964,18 @@ describe("kernel shape-artifact codec audit", () => {
     );
     expectFailure(hostile, "ARTIFACT_CACHE_ENTRY_INVALID");
     expect(harness.runtimes).toHaveLength(0);
+
+    const { proxy: signalProxy, revoke: revokeSignal } = Proxy.revocable(
+      new AbortController().signal,
+      {},
+    );
+    revokeSignal();
+    const hostileSignal = await auditKernelShapeArtifactCodec({
+      ...valid,
+      signal: signalProxy,
+    });
+    expectFailure(hostileSignal, "ARTIFACT_CACHE_ENTRY_INVALID");
+    expect(harness.runtimes).toHaveLength(0);
   });
 });
 
@@ -896,10 +1027,26 @@ describe("shape-artifact witness helpers", () => {
     });
     expectFailure(aborted, "EVALUATION_ABORTED");
 
+    const { proxy: proxySignal, revoke: revokeSignal } = Proxy.revocable(
+      new AbortController().signal,
+      {},
+    );
+    revokeSignal();
+    const hostileSignal = await hashKernelShapeArtifactSemanticWitness("x", {
+      signal: proxySignal,
+    });
+    expectFailure(hostileSignal, "ARTIFACT_CACHE_ENTRY_INVALID");
+
     const malformed = await hashKernelShapeArtifactSemanticWitness("x", {
       maxBytes: Number.NaN,
     });
     expectFailure(malformed, "ARTIFACT_CACHE_ENTRY_INVALID");
+
+    const nullMaximum = await hashKernelShapeArtifactSemanticWitness(
+      "x",
+      { maxBytes: null } as unknown as { readonly maxBytes?: number },
+    );
+    expectFailure(nullMaximum, "ARTIFACT_CACHE_ENTRY_INVALID");
 
     const unknown = await hashKernelShapeArtifactSemanticWitness("x", {
       unexpected: true,

@@ -19,6 +19,45 @@ import {
   type KernelShapeArtifactCapabilities,
   type KernelShapeArtifactContext,
 } from "./kernel.js";
+import {
+  encodeKernelShapeSemanticObservation,
+  type KernelShapeSemanticObservation,
+} from "./shape-semantic-observation.js";
+
+export {
+  DEFAULT_KERNEL_SHAPE_SEMANTIC_OBSERVATION_LIMITS,
+  KERNEL_SHAPE_SEMANTIC_OBSERVATION_PROTOCOL_VERSION,
+  encodeKernelShapeSemanticObservation,
+  observeKernelShapeSemantics,
+  type KernelShapeSemanticCurveV1,
+  type KernelShapeSemanticEdgeV1,
+  type KernelShapeSemanticEncodedFloat32,
+  type KernelShapeSemanticEncodedFloat64,
+  type KernelShapeSemanticEncodedMeshVec3,
+  type KernelShapeSemanticEncodedVec3,
+  type KernelShapeSemanticFaceV1,
+  type KernelShapeSemanticLineageV1,
+  type KernelShapeSemanticMeasurementsV1,
+  type KernelShapeSemanticMeshOptionsV1,
+  type KernelShapeSemanticMeshRequest,
+  type KernelShapeSemanticMeshV1,
+  type KernelShapeSemanticNativeExchangeV1,
+  type KernelShapeSemanticNotApplicableFeature,
+  type KernelShapeSemanticObservation,
+  type KernelShapeSemanticObservationLimits,
+  type KernelShapeSemanticObservationPlan,
+  type KernelShapeSemanticObservationV1,
+  type KernelShapeSemanticOrientedTriangleV1,
+  type KernelShapeSemanticProbe,
+  type KernelShapeSemanticProbeContext,
+  type KernelShapeSemanticProbeObservationV1,
+  type KernelShapeSemanticSnapshotV1,
+  type KernelShapeSemanticStatusV1,
+  type KernelShapeSemanticSurfaceV1,
+  type KernelShapeSemanticTopologyV1,
+  type KernelShapeSemanticVertexV1,
+  type ObserveKernelShapeSemanticsOptions,
+} from "./shape-semantic-observation.js";
 
 export const KERNEL_SHAPE_ARTIFACT_CODEC_AUDIT_PROTOCOL_VERSION = 1 as const;
 export const KERNEL_SHAPE_ARTIFACT_SEMANTIC_WITNESS_PREFIX =
@@ -133,6 +172,7 @@ export interface AuditKernelShapeArtifactCodecOptions {
 
 export interface KernelShapeArtifactAuditArtifactEvidence {
   readonly role:
+    | "pre-witness-source-encode"
     | "first-encode"
     | "second-encode"
     | "reduced-ceiling-encode"
@@ -144,6 +184,7 @@ export interface KernelShapeArtifactAuditArtifactEvidence {
 }
 
 export type KernelShapeArtifactCodecAuditCheck =
+  | "pre-witness-source-cross-instance-decode"
   | "source-witness-before-encode"
   | "fresh-caller-owned-encode-bytes"
   | "encoded-byte-isolation-probed"
@@ -269,6 +310,11 @@ const ARRAY_BUFFER_BYTE_LENGTH_GETTER = Object.getOwnPropertyDescriptor(
   ArrayBuffer.prototype,
   "byteLength",
 )?.get;
+const ABORT_SIGNAL_ABORTED_GETTER =
+  typeof AbortSignal === "undefined"
+    ? undefined
+    : Object.getOwnPropertyDescriptor(AbortSignal.prototype, "aborted")?.get;
+const auditFailures = new WeakSet<object>();
 
 class AuditFailure extends Error {
   readonly diagnostic: Diagnostic;
@@ -277,7 +323,14 @@ class AuditFailure extends Error {
     super(value.message);
     this.name = "AuditFailure";
     this.diagnostic = value;
+    auditFailures.add(this);
   }
+}
+
+function isAuditFailure(value: unknown): value is AuditFailure {
+  return (
+    typeof value === "object" && value !== null && auditFailures.has(value)
+  );
 }
 
 function isPlainRecord(
@@ -401,8 +454,21 @@ function abortDiagnostic(message = "Kernel shape-artifact audit was aborted") {
   return diagnostic("EVALUATION_ABORTED", message, { severity: "error" });
 }
 
+function abortSignalIsAborted(signal: AbortSignal | undefined): boolean {
+  if (signal === undefined) return false;
+  try {
+    return ABORT_SIGNAL_ABORTED_GETTER !== undefined &&
+      Reflect.apply(ABORT_SIGNAL_ABORTED_GETTER, signal, []) === true;
+  } catch {
+    // A signal that becomes unreadable after validation is fail-closed.
+    return true;
+  }
+}
+
 function throwIfAborted(signal: AbortSignal | undefined): void {
-  if (signal?.aborted) throw new AuditFailure(abortDiagnostic());
+  if (abortSignalIsAborted(signal)) {
+    throw new AuditFailure(abortDiagnostic());
+  }
 }
 
 function isAbortError(error: unknown): boolean {
@@ -521,7 +587,9 @@ function captureSignal(value: unknown): CadResult<AbortSignal | undefined> {
   try {
     if (
       typeof AbortSignal !== "undefined" &&
-      value instanceof AbortSignal
+      value instanceof AbortSignal &&
+      ABORT_SIGNAL_ABORTED_GETTER !== undefined &&
+      typeof Reflect.apply(ABORT_SIGNAL_ABORTED_GETTER, value, []) === "boolean"
     ) {
       return success(value);
     }
@@ -767,10 +835,15 @@ async function hashBounded(
     ) {
       return invalidOptions("Witness hashing options contain unknown fields");
     }
-    maximum =
-      (options.maxBytes as number | undefined) ??
-      DEFAULT_KERNEL_SHAPE_ARTIFACT_CODEC_AUDIT_LIMITS.maxWitnessBytes;
-    rawSignal = options.signal;
+    const rawMaximum = Object.hasOwn(options, "maxBytes")
+      ? options.maxBytes
+      : undefined;
+    maximum = rawMaximum === undefined
+      ? DEFAULT_KERNEL_SHAPE_ARTIFACT_CODEC_AUDIT_LIMITS.maxWitnessBytes
+      : rawMaximum as number;
+    rawSignal = Object.hasOwn(options, "signal")
+      ? options.signal
+      : undefined;
   } catch (error) {
     return invalidOptions(
       safeErrorMessage(error, "Witness hashing options could not be inspected"),
@@ -781,7 +854,12 @@ async function hashBounded(
   }
   const signal = captureSignal(rawSignal);
   if (!signal.ok) return signal;
-  if (signal.value?.aborted) return failure(abortDiagnostic("Witness hashing was aborted"));
+  if (
+    signal.value !== undefined &&
+    abortSignalIsAborted(signal.value)
+  ) {
+    return failure(abortDiagnostic("Witness hashing was aborted"));
+  }
   let bytes: Uint8Array | undefined;
   try {
     if (typeof input === "string") {
@@ -808,7 +886,10 @@ async function hashBounded(
   }
   try {
     const digest = await sha256(bytes);
-    if (signal.value?.aborted) {
+    if (
+      signal.value !== undefined &&
+      abortSignalIsAborted(signal.value)
+    ) {
       return failure(abortDiagnostic("Witness hashing was aborted"));
     }
     return success(`${prefix}${digest}`);
@@ -836,6 +917,59 @@ export async function hashKernelShapeArtifactSemanticWitness(
   return result.ok
     ? success(result.value as KernelShapeArtifactSemanticWitness)
     : result;
+}
+
+/** Encodes and hashes one repository-canonical semantic observation. */
+export async function hashKernelShapeSemanticObservation(
+  observation: KernelShapeSemanticObservation,
+  options?: { readonly maxBytes?: number; readonly signal?: AbortSignal },
+): Promise<CadResult<KernelShapeArtifactSemanticWitness>> {
+  let maximum: number | undefined;
+  let signal: AbortSignal | undefined;
+  try {
+    if (
+      options !== undefined &&
+      (!isPlainRecord(options) ||
+        Object.keys(options).some(
+          (key) => key !== "maxBytes" && key !== "signal",
+        ))
+    ) {
+      return invalidOptions("Semantic observation hashing options are malformed");
+    }
+    maximum =
+      options !== undefined && Object.hasOwn(options, "maxBytes")
+        ? options.maxBytes
+        : undefined;
+    signal =
+      options !== undefined && Object.hasOwn(options, "signal")
+        ? options.signal
+        : undefined;
+  } catch (error) {
+    return invalidOptions(
+      safeErrorMessage(
+        error,
+        "Semantic observation hashing options could not be inspected",
+      ),
+    );
+  }
+  const capturedSignal = captureSignal(signal);
+  if (!capturedSignal.ok) return capturedSignal;
+  if (
+    capturedSignal.value !== undefined &&
+    abortSignalIsAborted(capturedSignal.value)
+  ) {
+    return failure(abortDiagnostic("Semantic observation hashing was aborted"));
+  }
+  const encoded = encodeKernelShapeSemanticObservation(observation, {
+    ...(maximum === undefined ? {} : { maxBytes: maximum }),
+  });
+  if (!encoded.ok) return encoded;
+  return hashKernelShapeArtifactSemanticWitness(encoded.value, {
+    ...(maximum === undefined ? {} : { maxBytes: maximum }),
+    ...(capturedSignal.value === undefined
+      ? {}
+      : { signal: capturedSignal.value }),
+  });
 }
 
 /** Hashes immutable golden bytes under a distinct fixture domain. */
@@ -984,7 +1118,7 @@ function candidateCodec(
       decode: decode.bind(raw) as KernelShapeArtifactCodecCandidate["decodeShapeArtifact"],
     };
   } catch (error) {
-    if (error instanceof AuditFailure) throw error;
+    if (isAuditFailure(error)) throw error;
     throw malformedCodecFailure(
       safeErrorMessage(error, "Candidate artifact codec could not be captured"),
     );
@@ -1054,15 +1188,36 @@ export async function auditKernelShapeArtifactCodec(
   const captured = captureOptions(options);
   if (!captured.ok) return captured;
   const configuration = captured.value;
-  if (configuration.signal?.aborted) return failure(abortDiagnostic());
+  if (
+    configuration.signal !== undefined &&
+    abortSignalIsAborted(configuration.signal)
+  ) {
+    return failure(abortDiagnostic());
+  }
 
   const runtimes: BoundRuntime[] = [];
+  const disposedKernels = new Set<GeometryKernel>();
   const shapes: TrackedShape[] = [];
   const caseEvidence: KernelShapeArtifactCodecCaseEvidence[] = [];
   let operations = 0;
   let artifactBytes = 0;
   let outcome: CadResult<KernelShapeArtifactCodecAuditEvidence> | undefined;
   const cleanupDiagnostics: Diagnostic[] = [];
+
+  const disposeRuntime = (
+    runtime: BoundRuntime,
+    label: string,
+  ): void => {
+    if (disposedKernels.has(runtime.kernel)) return;
+    disposedKernels.add(runtime.kernel);
+    try {
+      runtime.dispose();
+    } catch (error) {
+      throw kernelFailure(
+        safeErrorMessage(error, `${label} kernel cleanup failed`),
+      );
+    }
+  };
 
   const operation = (): void => {
     throwIfAborted(configuration.signal);
@@ -1145,6 +1300,30 @@ export async function auditKernelShapeArtifactCodec(
     }
   };
 
+  const createSource = async (
+    item: CapturedSelfCase,
+    runtime: BoundRuntime,
+    label: string,
+  ): Promise<TrackedShape> => {
+    operation();
+    let raw: unknown;
+    try {
+      raw = await item.createSource(runtime.kernel, {
+        ...(configuration.signal === undefined
+          ? {}
+          : { signal: configuration.signal }),
+      });
+    } catch (error) {
+      if (abortSignalIsAborted(configuration.signal) || isAbortError(error)) {
+        throw new AuditFailure(abortDiagnostic(`${label} was aborted`));
+      }
+      throw kernelFailure(`${label} failed: ${safeErrorMessage(error)}`);
+    }
+    const source = adopt(runtime, raw, label);
+    throwIfAborted(configuration.signal);
+    return source;
+  };
+
   const observe = async (
     item: CapturedCase,
     tracked: TrackedShape,
@@ -1163,7 +1342,7 @@ export async function auditKernelShapeArtifactCodec(
         throw kernelFailure(`${label} did not expose a live, valid kernel shape`);
       }
     } catch (error) {
-      if (error instanceof AuditFailure) throw error;
+      if (isAuditFailure(error)) throw error;
       throw kernelFailure(
         `${label} status check threw: ${safeErrorMessage(error)}`,
       );
@@ -1178,7 +1357,7 @@ export async function auditKernelShapeArtifactCodec(
       });
       throwIfAborted(configuration.signal);
     } catch (error) {
-      if (configuration.signal?.aborted || isAbortError(error)) {
+      if (abortSignalIsAborted(configuration.signal) || isAbortError(error)) {
         throw new AuditFailure(abortDiagnostic(`${label} was aborted`));
       }
       throw kernelFailure(
@@ -1186,7 +1365,9 @@ export async function auditKernelShapeArtifactCodec(
       );
     }
     if (!result.ok) {
-      if (configuration.signal?.aborted) throw new AuditFailure(abortDiagnostic());
+      if (abortSignalIsAborted(configuration.signal)) {
+        throw new AuditFailure(abortDiagnostic());
+      }
       const first = result.diagnostics[0];
       throw kernelFailure(
         first?.message ?? `${label} witness returned a failed result`,
@@ -1229,7 +1410,7 @@ export async function auditKernelShapeArtifactCodec(
       });
       throwIfAborted(configuration.signal);
     } catch (error) {
-      if (configuration.signal?.aborted || isAbortError(error)) {
+      if (abortSignalIsAborted(configuration.signal) || isAbortError(error)) {
         throw new AuditFailure(abortDiagnostic("Shape-artifact encode was aborted"));
       }
       throw kernelFailure(`Shape-artifact encode failed: ${safeErrorMessage(error)}`);
@@ -1284,7 +1465,7 @@ export async function auditKernelShapeArtifactCodec(
         maxArtifactBytes: maximum,
       });
     } catch (error) {
-      if (configuration.signal?.aborted || isAbortError(error)) {
+      if (abortSignalIsAborted(configuration.signal) || isAbortError(error)) {
         throw new AuditFailure(abortDiagnostic(`${label} was aborted`));
       }
       throw kernelFailure(`${label} failed: ${safeErrorMessage(error)}`);
@@ -1316,7 +1497,7 @@ export async function auditKernelShapeArtifactCodec(
       if (copied !== undefined) accountArtifact(copied);
       throw kernelFailure("Pre-aborted shape-artifact encode unexpectedly succeeded");
     } catch (error) {
-      if (error instanceof AuditFailure) throw error;
+      if (isAuditFailure(error)) throw error;
       if (!isAbortError(error)) {
         throw kernelFailure(
           "Pre-aborted shape-artifact encode did not reject with AbortError",
@@ -1349,11 +1530,11 @@ export async function auditKernelShapeArtifactCodec(
       }
       throw kernelFailure(`${label} unexpectedly succeeded`);
     } catch (error) {
-      if (error instanceof AuditFailure) throw error;
-      if (configuration.signal?.aborted) {
+      if (isAuditFailure(error)) throw error;
+      if (abortSignalIsAborted(configuration.signal)) {
         throw new AuditFailure(abortDiagnostic(`${label} was aborted`));
       }
-      if (signal?.aborted && !isAbortError(error)) {
+      if (abortSignalIsAborted(signal) && !isAbortError(error)) {
         throw kernelFailure(`${label} did not reject with AbortError`);
       }
     }
@@ -1368,14 +1549,14 @@ export async function auditKernelShapeArtifactCodec(
     try {
       created = await configuration.create();
     } catch (error) {
-      if (configuration.signal?.aborted || isAbortError(error)) {
+      if (abortSignalIsAborted(configuration.signal) || isAbortError(error)) {
         throw new AuditFailure(abortDiagnostic("Kernel audit target creation was aborted"));
       }
       throw kernelFailure(
         `Kernel audit target creation failed: ${safeErrorMessage(error)}`,
       );
     }
-    if (configuration.signal?.aborted) {
+    if (abortSignalIsAborted(configuration.signal)) {
       try {
         const rawKernel =
           configuration.mode === "advertised"
@@ -1430,6 +1611,11 @@ export async function auditKernelShapeArtifactCodec(
       const dispose = kernel.dispose.bind(kernel);
       const runtime = { ...partial, disposeShape, dispose };
       assertRuntimeIdentity(runtime, configuration.expectedIdentity);
+      if (runtimes.some((existing) => existing.kernel === kernel)) {
+        throw kernelFailure(
+          "Audit target factory reused a kernel instance where a fresh runtime was required",
+        );
+      }
       runtimes.push(runtime);
       return runtime;
     } catch (error) {
@@ -1452,7 +1638,7 @@ export async function auditKernelShapeArtifactCodec(
           );
         }
       }
-      if (error instanceof AuditFailure) throw error;
+      if (isAuditFailure(error)) throw error;
       throw malformedCodecFailure(
         safeErrorMessage(error, "Kernel audit target could not be captured"),
       );
@@ -1483,24 +1669,91 @@ export async function auditKernelShapeArtifactCodec(
       let observed: KernelShapeArtifactSemanticWitness;
 
       if (item.scope === "current-runtime-self-round-trip") {
-        operation();
-        let sourceRaw: unknown;
-        try {
-          sourceRaw = await item.createSource(producer.kernel, {
-            ...(configuration.signal === undefined
-              ? {}
-              : { signal: configuration.signal }),
-          });
-        } catch (error) {
-          if (configuration.signal?.aborted || isAbortError(error)) {
-            throw new AuditFailure(abortDiagnostic("Source-shape creation was aborted"));
-          }
-          throw kernelFailure(
-            `Source-shape creation failed: ${safeErrorMessage(error)}`,
-          );
-        }
-        const source = adopt(producer, sourceRaw, "Source-shape creation");
-        throwIfAborted(configuration.signal);
+        // Exercise one independently created source on dedicated fresh runtime
+        // instances before the audit calls status or witness code. The reviewed
+        // source factory is responsible for honoring the same pre-witness rule;
+        // only the minimal KernelShape ownership tag is inspected by adopt().
+        const preWitnessProducer = await makeRuntime();
+        const preWitnessConsumer = await makeRuntime();
+        const preWitnessSource = await createSource(
+          item,
+          preWitnessProducer,
+          "Pre-witness source-shape creation",
+        );
+        const preWitness = await encode(
+          preWitnessProducer,
+          preWitnessSource.shape,
+          item.feature,
+          configuration.limits.maxArtifactBytes,
+        );
+        artifacts.push(
+          artifactEvidence(
+            "pre-witness-source-encode",
+            preWitness.snapshot,
+            await sha256(preWitness.snapshot),
+          ),
+        );
+        detachOrMutate(preWitness.returned);
+        const preWitnessInput = preWitness.snapshot.slice();
+        const preWitnessDecoded = await decode(
+          preWitnessConsumer,
+          preWitnessInput,
+          item.feature,
+          preWitnessInput.byteLength,
+          "cross-instance pre-witness-source decode",
+        );
+        detachOrMutate(preWitnessInput);
+        observed = await observe(
+          item,
+          preWitnessDecoded,
+          "cross-instance pre-witness-source semantic witness",
+        );
+        await observe(
+          item,
+          preWitnessSource,
+          "pre-witness source after encode and decode",
+        );
+        disposeTracked(preWitnessDecoded);
+        await observe(
+          item,
+          preWitnessSource,
+          "pre-witness source after decoded-shape disposal",
+        );
+        disposeRuntime(preWitnessConsumer, "Pre-witness decoded-first consumer");
+        const preWitnessSourceFirstConsumer = await makeRuntime();
+        const preWitnessSourceFirstInput = preWitness.snapshot.slice();
+        const preWitnessSourceFirstDecoded = await decode(
+          preWitnessSourceFirstConsumer,
+          preWitnessSourceFirstInput,
+          item.feature,
+          preWitnessSourceFirstInput.byteLength,
+          "cross-instance pre-witness source-first decode",
+        );
+        detachOrMutate(preWitnessSourceFirstInput);
+        await observe(
+          item,
+          preWitnessSourceFirstDecoded,
+          "pre-witness decoded shape before source-first disposal",
+        );
+        disposeTracked(preWitnessSource);
+        await observe(
+          item,
+          preWitnessSourceFirstDecoded,
+          "pre-witness decoded shape after source-first disposal",
+        );
+        disposeTracked(preWitnessSourceFirstDecoded);
+        disposeRuntime(
+          preWitnessSourceFirstConsumer,
+          "Pre-witness source-first consumer",
+        );
+        disposeRuntime(preWitnessProducer, "Pre-witness producer");
+        checks.push("pre-witness-source-cross-instance-decode");
+
+        const source = await createSource(
+          item,
+          producer,
+          "Source-shape creation",
+        );
         observed = await observe(item, source, "source-before-encode");
         checks.push("source-witness-before-encode");
 
@@ -1598,8 +1851,8 @@ export async function auditKernelShapeArtifactCodec(
             );
             disposeTracked(reducedShape);
           } catch (error) {
-            if (error instanceof AuditFailure) throw error;
-            if (configuration.signal?.aborted) {
+            if (isAuditFailure(error)) throw error;
+            if (abortSignalIsAborted(configuration.signal)) {
               throw new AuditFailure(abortDiagnostic());
             }
             // Rejecting because a valid encoding cannot fit is conforming.
@@ -1853,9 +2106,9 @@ export async function auditKernelShapeArtifactCodec(
       }),
     );
   } catch (error) {
-    if (configuration.signal?.aborted || isAbortError(error)) {
+    if (abortSignalIsAborted(configuration.signal) || isAbortError(error)) {
       outcome = failure(abortDiagnostic());
-    } else if (error instanceof AuditFailure) {
+    } else if (isAuditFailure(error)) {
       outcome = failure(error.diagnostic);
     } else {
       outcome = failure(
@@ -1883,7 +2136,6 @@ export async function auditKernelShapeArtifactCodec(
         );
       }
     }
-    const disposedKernels = new Set<GeometryKernel>();
     for (let index = runtimes.length - 1; index >= 0; index -= 1) {
       const runtime = runtimes[index]!;
       if (disposedKernels.has(runtime.kernel)) continue;

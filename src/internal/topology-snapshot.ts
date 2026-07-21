@@ -54,6 +54,8 @@ export interface KernelTopologySnapshotCopyLimits {
   readonly maxTopologyItems: number;
   readonly maxAdjacencyLinks: number;
   readonly maxEvidenceRecords: number;
+  /** Optional aggregate UTF-8 ceiling for every captured string occurrence. */
+  readonly maxStringBytes?: number;
 }
 
 export type KernelTopologySnapshotCopyResource =
@@ -94,6 +96,11 @@ interface KernelTopologySnapshotCopyContext {
   readonly limits: KernelTopologySnapshotCopyLimits | undefined;
   adjacencyLinks: number;
   evidenceRecords: number;
+  stringBytes: number;
+}
+
+export interface KernelTopologySnapshotCopyUsage {
+  stringBytes: number;
 }
 
 const MAX_ARRAY_LENGTH = 0xffff_ffff;
@@ -125,6 +132,54 @@ function enforceCopyLimit(
   }
 }
 
+function utf8ByteLengthWithin(
+  value: string,
+  maximum: number,
+): number | undefined {
+  if (value.length > maximum) return undefined;
+  let bytes = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x7f) {
+      bytes += 1;
+    } else if (code <= 0x7ff) {
+      bytes += 2;
+    } else if (code >= 0xd800 && code <= 0xdbff) {
+      const following = value.charCodeAt(index + 1);
+      if (following >= 0xdc00 && following <= 0xdfff) {
+        bytes += 4;
+        index += 1;
+      } else {
+        // TextEncoder replaces an unpaired surrogate with U+FFFD.
+        bytes += 3;
+      }
+    } else {
+      bytes += 3;
+    }
+    if (bytes > maximum) return undefined;
+  }
+  return bytes;
+}
+
+function chargeString(
+  value: unknown,
+  context: KernelTopologySnapshotCopyContext,
+): void {
+  if (typeof value !== "string") return;
+  const limit = context.limits?.maxStringBytes;
+  if (limit === undefined) return;
+  const remaining = limit - context.stringBytes;
+  const bytes = utf8ByteLengthWithin(value, remaining);
+  if (bytes === undefined) {
+    throw new KernelTopologySnapshotCopyLimitError(
+      "maxStringBytes",
+      limit,
+      limit + 1,
+    );
+  }
+  context.stringBytes += bytes;
+}
+
 function copyVector(value: unknown): Vec3 {
   const message = "Geometry kernel returned an invalid topology vector";
   const copiedArray = copyArray(value, message);
@@ -151,12 +206,18 @@ function recordValue(value: unknown): Readonly<Record<string, unknown>> {
   return value as Readonly<Record<string, unknown>>;
 }
 
-function copyLineage(value: unknown): KernelTopologyLineage {
+function copyLineage(
+  value: unknown,
+  context: KernelTopologySnapshotCopyContext,
+): KernelTopologyLineage {
   const raw = recordValue(value);
   const feature = raw.feature;
   const relation = raw.relation;
   const role = raw.role;
   const rawSource = raw.source;
+  chargeString(feature, context);
+  chargeString(relation, context);
+  chargeString(role, context);
   const source =
     rawSource === undefined
       ? undefined
@@ -165,6 +226,9 @@ function copyLineage(value: unknown): KernelTopologyLineage {
           const kind = sourceRecord.kind;
           const sketch = sourceRecord.sketch;
           const entity = sourceRecord.entity;
+          chargeString(kind, context);
+          chargeString(sketch, context);
+          chargeString(entity, context);
           return { kind, sketch, entity };
         })();
   return {
@@ -196,7 +260,7 @@ function copyLineageArray(
     if (!Object.hasOwn(array, index)) {
       throw new TypeError("Geometry kernel returned sparse topology lineage");
     }
-    copied[index] = copyLineage(array[index]);
+    copied[index] = copyLineage(array[index], context);
   }
   return copied;
 }
@@ -222,7 +286,9 @@ function copyTopologyKeys(
     if (!Object.hasOwn(array, index)) {
       throw new TypeError("Geometry kernel returned sparse topology adjacency");
     }
-    copied[index] = array[index] as KernelTopologyKey;
+    const key = array[index];
+    chargeString(key, context);
+    copied[index] = key as KernelTopologyKey;
   }
   return copied;
 }
@@ -246,6 +312,9 @@ function copyFaceDescriptor(
   const axis = rawSurface.axis;
   const radius = rawSurface.radius;
   const edges = face.edges;
+  chargeString(topology, context);
+  chargeString(key, context);
+  chargeString(kind, context);
   return {
     topology,
     key,
@@ -286,6 +355,9 @@ function copyEdgeDescriptor(
   const radius = rawCurve.radius;
   const faces = edge.faces;
   const vertices = edge.vertices;
+  chargeString(topology, context);
+  chargeString(key, context);
+  chargeString(kind, context);
   return {
     topology,
     key,
@@ -319,6 +391,8 @@ function copyVertexDescriptor(
   const point = vertex.point;
   const lineage = vertex.lineage;
   const edges = vertex.edges;
+  chargeString(topology, context);
+  chargeString(key, context);
   return {
     topology,
     key,
@@ -338,6 +412,7 @@ function copyVertexDescriptor(
 export function detachKernelTopologySnapshot(
   snapshot: KernelTopologySnapshot,
   limits?: KernelTopologySnapshotCopyLimits,
+  usage?: KernelTopologySnapshotCopyUsage,
 ): KernelTopologySnapshot {
   const rawSnapshot = recordValue(snapshot);
   const history = rawSnapshot.history;
@@ -364,8 +439,10 @@ export function detachKernelTopologySnapshot(
     limits,
     adjacencyLinks: 0,
     evidenceRecords: 0,
+    stringBytes: 0,
   };
   enforceCopyLimit(context, "maxTopologyItems", topologyItems);
+  chargeString(history, context);
   const faces = new Array<KernelFaceDescriptor>(faceCount);
   for (let index = 0; index < faceCount; index += 1) {
     if (!Object.hasOwn(copiedFaces.value, index)) {
@@ -399,6 +476,7 @@ export function detachKernelTopologySnapshot(
   assertValidKernelTopologySnapshot(detached, (message, details): never => {
     throw new KernelTopologySnapshotValidationError(message, details);
   });
+  if (usage !== undefined) usage.stringBytes = context.stringBytes;
   return deepFreeze(detached);
 }
 
@@ -764,11 +842,13 @@ export function validateKernelTopologySnapshot(
 export function normalizeKernelTopologySnapshot(
   snapshot: unknown,
   limits?: KernelTopologySnapshotCopyLimits,
+  usage?: KernelTopologySnapshotCopyUsage,
 ): CadResult<KernelTopologySnapshot> {
   try {
     const detached = detachKernelTopologySnapshot(
       snapshot as KernelTopologySnapshot,
       limits,
+      usage,
     );
     return success(detached);
   } catch (error) {

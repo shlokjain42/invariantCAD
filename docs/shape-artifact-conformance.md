@@ -18,6 +18,14 @@ compatibility fingerprint, change
 `KernelCapabilities.shapeArtifacts`, or return an eligibility or certification
 token.
 
+The same entry point exports the repository-owned semantic-observation protocol
+v1: `observeKernelShapeSemantics(...)`,
+`encodeKernelShapeSemanticObservation(...)`, and
+`hashKernelShapeSemanticObservation(...)`. These functions replace ad hoc
+release-witness projections with one bounded canonical observation of the
+evaluator surface. They do not serialize a kernel shape and do not confer codec
+support or cache eligibility.
+
 ## Candidate and advertised modes
 
 The mode is part of the audit target and has release-significant meaning:
@@ -46,10 +54,13 @@ runtime being audited:
 import type { GeometryKernel, KernelShape } from "invariantcad";
 import {
   auditKernelShapeArtifactCodec,
-  hashKernelShapeArtifactSemanticWitness,
+  hashKernelShapeSemanticObservation,
+  observeKernelShapeSemantics,
   type KernelShapeArtifactCodecCandidate,
   type KernelShapeArtifactFixtureWitness,
   type KernelShapeArtifactSemanticWitness,
+  type KernelShapeArtifactWitness,
+  type KernelShapeSemanticObservationPlan,
 } from "invariantcad/conformance";
 
 declare function createDevelopmentKernel(): Promise<GeometryKernel>;
@@ -57,13 +68,27 @@ declare function candidateCodecFor(
   kernel: GeometryKernel,
 ): KernelShapeArtifactCodecCandidate;
 declare function createFixtureShape(kernel: GeometryKernel): KernelShape;
-declare function canonicalShapeObservation(
-  kernel: GeometryKernel,
-  shape: KernelShape,
-): string;
+declare const observationPlan: KernelShapeSemanticObservationPlan;
 declare const goldenBytes: Uint8Array;
 declare const expectedSemantic: KernelShapeArtifactSemanticWitness;
 declare const expectedGolden: KernelShapeArtifactFixtureWitness;
+
+const witness: KernelShapeArtifactWitness = async (kernel, shape, context) => {
+  const observed = await observeKernelShapeSemantics(
+    kernel,
+    shape,
+    observationPlan,
+    {
+      limits: { maxObservationBytes: context.maxBytes },
+      ...(context.signal === undefined ? {} : { signal: context.signal }),
+    },
+  );
+  if (!observed.ok) return observed;
+  return hashKernelShapeSemanticObservation(observed.value, {
+    maxBytes: context.maxBytes,
+    ...(context.signal === undefined ? {} : { signal: context.signal }),
+  });
+};
 
 const result = await auditKernelShapeArtifactCodec({
   target: {
@@ -89,16 +114,7 @@ const result = await auditKernelShapeArtifactCodec({
       scope: "current-runtime-self-round-trip",
       expectedWitness: expectedSemantic,
       createSource: (kernel) => createFixtureShape(kernel),
-      witness: (kernel, shape, context) =>
-        hashKernelShapeArtifactSemanticWitness(
-          canonicalShapeObservation(kernel, shape),
-          {
-            maxBytes: context.maxBytes,
-            ...(context.signal === undefined
-              ? {}
-              : { signal: context.signal }),
-          },
-        ),
+      witness,
     },
     {
       id: "asymmetric-box-golden-v1",
@@ -107,16 +123,7 @@ const result = await auditKernelShapeArtifactCodec({
       artifact: goldenBytes,
       expectedArtifactWitness: expectedGolden,
       expectedWitness: expectedSemantic,
-      witness: (kernel, shape, context) =>
-        hashKernelShapeArtifactSemanticWitness(
-          canonicalShapeObservation(kernel, shape),
-          {
-            maxBytes: context.maxBytes,
-            ...(context.signal === undefined
-              ? {}
-              : { signal: context.signal }),
-          },
-        ),
+      witness,
     },
   ],
 });
@@ -156,13 +163,16 @@ built-in reference solver artifact-compatible.
 ## Witnesses and golden artifacts
 
 Every semantic witness uses the fixed protocol tag and an exact SHA-256 digest;
-case IDs, rather than witness digests, must be unique. The caller supplies a
-canonical semantic observation through the case's witness callback and should
-use `hashKernelShapeArtifactSemanticWitness(...)` to hash its bounded bytes.
-The audit creates each source shape through the case factory, calls that witness,
+case IDs, rather than witness digests, must be unique. The audit still accepts a
+general witness callback, but repository release cases should build it with
+`observeKernelShapeSemantics(...)` and
+`hashKernelShapeSemanticObservation(...)`. The audit creates each source shape
+through the case factory. Its ordinary self-round-trip path observes the source,
 encodes it, decodes it on a separate current kernel instance, and repeatedly
-exact-compares the returned digest. Multiple cases may deliberately share one
-witness when they represent the same expected semantics.
+exact-compares the returned digest; the dedicated pre-witness path below
+intentionally performs its first encode before status or witness observation.
+Multiple cases may deliberately share one witness when they represent the same
+expected semantics.
 
 Golden artifacts are tagged fixtures with committed bytes and an expected
 semantic witness. They exercise decode compatibility independently of the
@@ -177,17 +187,102 @@ therefore needs a reviewed, fixed witness inventory, committed immutable golden
 bytes, and an external matrix that runs those fixtures in every supported
 process/runtime combination.
 
+## Repository semantic observation protocol
+
+`KernelShapeSemanticObservationV1` is a detached, deeply frozen record of one
+reviewed `KernelShapeSemanticObservationPlan`. The plan has a stable ID and at
+least one named mesh request; it also chooses whether topology is omitted,
+observed when supported, or required, and may request native-exchange and
+downstream-feature probes. `encodeKernelShapeSemanticObservation(...)` accepts
+only an observation captured by this runtime and emits bounded canonical-JSON
+UTF-8. `hashKernelShapeSemanticObservation(...)` encodes it and hashes it under
+the ordinary shape-semantic witness domain.
+
+The result is an exact **normalized evaluator-semantic quotient**, not a native
+shape dump and not a claim of unrestricted geometric equivalence. It deliberately
+forgets representation details that are not stable evaluator semantics—mesh
+vertex/index enumeration, a triangle's choice of first corner, topology keys,
+and native exchange bytes—while retaining the observations selected by the
+reviewed plan. Named mesh requests, native formats, probes, exclusions, and
+probe-result shapes are canonically ordered; duplicate topology-lineage records
+are treated as one sorted evidence set. Equality therefore means equality of
+this protocol version and plan after these declared normalizations. An
+incomplete plan can still miss a semantic difference, and a later protocol can
+intentionally define a different quotient.
+
+### Exact numbers and oriented meshes
+
+Measurements, mesh options, and topology numbers are finite IEEE-754 binary64
+values encoded as big-endian hexadecimal. Emitted mesh coordinates retain their
+actual Float32 values and are encoded as IEEE-754 binary32 big-endian
+hexadecimal. Negative zero is the only numeric normalization: both `-0` and
+`+0` encode as positive zero. Protocol v1 performs no decimal conversion,
+tolerance rounding, epsilon comparison, NaN substitution, or infinity handling;
+non-finite inputs are protocol failures.
+
+Each indexed mesh becomes a sorted multiset of oriented triangles. A triangle
+is represented by its three encoded coordinate triples. Cyclic corner rotations
+are normalized, because they preserve orientation, but reversal is not;
+winding remains semantic. Sorting removes vertex and triangle enumeration as an
+identity source, while retaining duplicate triangles and their multiplicity.
+The request ID and exact tessellation options are part of the observation, so
+release plans can exercise more than one reviewed tessellation profile.
+
+### Exact key-neutral topology labeling
+
+When topology is observed, the ordinary topology validator first detaches and
+validates the complete face/edge/vertex incidence snapshot and its history mode.
+The observation retains intrinsic face, edge, and vertex geometry; canonical
+lineage, roles, and sketch sources; complete/partial history; and reciprocal
+incidence. It discards every evaluation-scoped key.
+
+Canonical observation-local `f*`, `e*`, and `v*` labels are produced by exact
+incidence-graph canonicalization: intrinsic labels are refined by neighbor
+colors, unresolved color cells are exhaustively individualized, and the
+lexicographically least complete labeling wins. Search states are bounded by
+`maxCanonicalLabelStates`; color-refinement and labeling node/link work is
+separately bounded by `maxCanonicalWork`. Either ceiling fails rather than using
+enumeration as a tiebreaker. Thus isomorphic key-renamed snapshots encode
+equally, including symmetric graphs, provided the exact bounded search
+completes.
+
+### Feature, native-exchange, and ownership coverage
+
+A plan must account for every feature advertised by the runtime. Each advertised
+feature appears exactly once either as a downstream probe or in
+`notApplicableFeatures` with a nonempty reviewed reason; naming an unadvertised
+feature, duplicating a feature, or leaving one uncovered fails closed. An
+exclusion records an explicit corpus boundary—it is not evidence that the
+feature preserves semantics. A probe borrows the source and must return a
+nonempty array of new shapes. Source aliases and reused result aliases are
+rejected. A trusted probe receives its remaining accepted derived-shape
+allowance and must honor it. The observer snapshots every accepted result,
+disposes it, then re-observes the source; a successful observation therefore
+rejects a detected source mutation. A probe that mutates the source and then
+throws cannot be rolled back by this observational API and violates the probe
+contract. Accepted probe snapshots are sorted by their canonical semantic key,
+so callback enumeration is normalized while duplicate semantic results retain
+their multiplicity.
+
+Requested native formats must be advertised for both import and export and have
+both methods present. Exported bytes are detached and bounded, then imported as
+a new observer-owned shape. The observation includes the imported shape's
+semantics, not the native bytes. The imported shape is disposed and, on the
+successful round-trip path, the source is re-observed unchanged. These checks
+establish ownership only for the work the observer can see; backend-internal
+allocations and rollback after a failing native call still require backend
+resource instrumentation.
+
 ## What the audit compares
 
 The audit itself checks the shape's kernel tag, live `status`, repeated digest,
-and ownership behavior. The caller-defined witness determines all richer
-semantic coverage. A release witness should observe measurements, deterministic
-mesh projections, detached key-neutral topology semantics, applicable native
-format round trips, and feature-specific downstream behavior. For topology it
-should normalize fresh evaluation-scoped keys while retaining stable geometry,
-history mode, roles and sources, lineage, and adjacency evidence. A constant or
-incomplete witness can allow a lossy codec to pass this finite audit and is not
-acceptable release evidence.
+and ownership behavior. The witness determines all richer semantic coverage.
+The repository observer supplies the standard measurement, oriented-mesh,
+key-neutral-topology, native-round-trip, and downstream-probe projection, but
+the plan still determines which mesh profiles, native formats, probes, and
+reviewed exclusions are present. A constant, forged, or incomplete custom
+witness can allow a lossy codec to pass this finite audit and is not acceptable
+release evidence.
 
 This distinction matters. Artifact bytes need not be deterministic, and fresh
 decoded subshapes need not reuse source topology keys. The decoded shape must
@@ -206,6 +301,10 @@ compatibility claim.
 The audit treats ownership rules as part of the wire protocol, not as test
 hygiene:
 
+- for every self-round-trip case, an independently created pre-witness source
+  on a dedicated fresh producer is encoded before the audit calls `status` or
+  witness code, then decoded and witnessed on fresh consumers under both
+  disposal orders;
 - encoding borrows the source shape; the source remains live and unchanged;
 - each successful encode returns fresh, detached, caller-owned bytes;
 - mutating one returned array cannot affect the source, another encode, or
@@ -218,6 +317,23 @@ hygiene:
   tables. A process-global handle table can still survive this in-process test;
   committed goldens in a separate-process/runtime matrix are required to reject
   it.
+
+The pre-witness path catches a codec that accidentally serializes only caches or
+lazy state materialized by the audit's witness. The harness inspects only the
+minimum shape ownership tag before that first encode, then verifies the decoded
+result, the still-live source, and independent disposal. The case's reviewed
+`createSource` factory must itself avoid status, measurement, mesh, topology, or
+witness observation; the harness cannot enforce what opaque construction code
+does internally. This remains a black-box check and does not establish
+process-global coldness or prove that a backend has no hidden unmaterialized
+state.
+
+That dedicated pre-witness claim is intentionally limited to the positive,
+full-limit encode/decode path and its two disposal orders. Reduced-ceiling,
+pre-aborted, undersized, truncated, empty, and malformed-input checks run on the
+ordinary audit paths after semantic observation. They prove those negative
+contracts for the audited runtime and corpus, but do not separately prove a
+different implementation path behaves correctly before its first observation.
 
 Failures and cancellation must not make a source or previously decoded shape
 unusable. The harness owns and cleans up every kernel and returned shape it can
@@ -251,6 +367,54 @@ disposal orders, and cross-instance use. A backend-specific witness corpus
 should add corruption and fault-injection fixtures for every native format
 revision and semantic state the backend can create.
 
+The semantic observer has a separate cumulative resource envelope. Defaults are:
+
+| Limit | Default | Bounded work |
+|---|---:|---|
+| `maxOperations` | `10_000` | Kernel calls, probe calls, and owned-shape disposal |
+| `maxObservationBytes` | `16 MiB` | Canonical encoded observation |
+| `maxStringBytes` | `1 MiB` | Aggregate captured external UTF-8 strings |
+| `maxMeshRequests` | `16` | Named tessellation profiles in the plan |
+| `maxMeshVertices` | `2_000_000` | Aggregate emitted vertices |
+| `maxMeshTriangles` | `4_000_000` | Aggregate emitted triangles |
+| `maxTopologyItems` | `100_000` | Faces, edges, and vertices in one normalized snapshot |
+| `maxAdjacencyLinks` | `1_000_000` | Incidence entries in one normalized snapshot |
+| `maxLineageRecords` | `1_000_000` | Lineage records in one normalized snapshot |
+| `maxCanonicalLabelStates` | `1_000_000` | Exact graph-labeling search states |
+| `maxCanonicalWork` | `10_000_000` | Color-refinement and canonical-label node/link work units |
+| `maxNativeExchangeBytes` | `64 MiB` | One detached native export |
+| `maxProbes` | `64` | Each probe or feature-exclusion inventory |
+| `maxDerivedShapes` | `256` | Accepted imported and probe-produced shapes |
+
+Canonical size is walked exactly before the full canonical JSON string is
+created. Conservative per-snapshot lower bounds reject oversized triangle and
+topology materialization early, while the final exact UTF-8 check remains
+authoritative. Raw topology strings—including ephemeral keys and repeated
+adjacency-key occurrences that canonical output later removes—are charged while
+the snapshot is detached, before validation maps or sets can grow. The observer
+snapshots the relevant kernel capability metadata, methods, plans, arrays,
+measurements, status, and mesh fields before validation so accessors cannot pass
+a check and later supply different data.
+
+The observer checks cancellation at entry and around kernel calls, forwards it
+to native exchange and probe contexts, and abort-races asynchronous probes. A
+same-realm built-in Promise whose fulfillment reaction was already queued
+before the observer's cancellation reaction transfers its result for cleanup.
+For a custom or cross-realm PromiseLike, transfer occurs only when its captured
+fulfillment callback is delivered while the signal is not aborted. A probe that
+ignores cancellation and delivers later retains ownership of those results.
+Polls inside synchronous TypeScript mesh and graph loops observe only an abort
+already visible on the current thread; those loops do not yield to a same-thread
+timer. Likewise, an opaque synchronous native call cannot be preempted while it
+owns the thread. Resource ceilings, a worker/process timeout, or backend
+instrumentation provide the stronger uninterrupted-work bound.
+Limits and cancellation fail with structured diagnostics, and every shape that
+actually transferred to the observer is cleaned up on the failure path. A
+malicious trusted probe that returns an over-limit or hostile array may require
+scanning it to discover and release transferred owners, so `maxDerivedShapes`
+is an accepted-result ceiling rather than a sandbox for arbitrary callback
+code.
+
 ## Reading an audit report
 
 A successful report means only that the supplied runtime identity passed the
@@ -276,6 +440,18 @@ conjunction.
 
 Neither Manifold nor the stock or owned OCCT adapter currently advertises
 `shapeArtifacts`. This is intentional.
+
+For the lockfile-tested `manifold-3d` 3.5.1 runtime, the complete public
+`getMesh()` → `Mesh` → `Manifold` path is not an exact artifact boundary.
+`getMesh()` exposes Float32 positions while the native solid computes in double
+precision. The repository characterization translates a centered `1 × 2 × 3`
+box by `0.1` on X. Its source bounds are `[-0.4, 0.6]` on X and its volume is
+exactly `6`; complete public-Mesh reconstruction produces X bounds
+`[-0.4000000059604645, 0.6000000238418579]` and volume
+`6.000000178813934`. Calling `setTolerance(1.5e-12)` restores the source
+tolerance scalar but not those bounds or volume. A direct public-Mesh codec is
+therefore rejected; scalar sidecars cannot recover geometry already rounded to
+Float32 or make synchronous native work cancellable.
 
 For OCCT, ordinary STEP or BREP exchange reconstructs geometry but does not
 round-trip the wrapper-level semantic lineage, complete/partial history state,
