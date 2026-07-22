@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { inspectKernelShapeArtifactSupport } from "../src/artifact-cache.js";
 import {
   auditKernelShapeArtifactCodec,
+  hashKernelShapeArtifactFixtureWitness,
   hashKernelShapeSemanticObservation,
   type KernelShapeArtifactFixtureWitness,
   type KernelShapeArtifactSemanticWitness,
@@ -18,8 +19,13 @@ import {
 } from "../src/shape-semantic-observation.js";
 
 const MAX_ARTIFACT_BYTES = 64 * 1024 * 1024;
-const GOLDEN_BYTES = 18_043;
+const GOLDEN_BYTES = 11_591;
 const GOLDEN_FIXTURE_URL = new URL(
+  "./fixtures/occt-shape-candidate-v2-asymmetric-box.b64",
+  import.meta.url,
+);
+const LEGACY_V1_BYTES = 18_043;
+const LEGACY_V1_FIXTURE_URL = new URL(
   "./fixtures/occt-shape-candidate-v1-asymmetric-box.b64",
   import.meta.url,
 );
@@ -27,9 +33,11 @@ const GOLDEN_FIXTURE_URL = new URL(
 const EXPECTED_SEMANTIC =
   "invariantcad:kernel-shape-semantic:v1:sha256:40ae684e4a2fad512f54e1f1be4443acf7faf2f34fc6b281c7b816d8d3366cb2" as const satisfies KernelShapeArtifactSemanticWitness;
 const EXPECTED_FIXTURE =
+  "invariantcad:kernel-shape-artifact-fixture:v1:sha256:221d1ea2265a26df1293e63d625d25e85eb8a86041bdea53a927269427e3d16a" as const satisfies KernelShapeArtifactFixtureWitness;
+const EXPECTED_LEGACY_V1_FIXTURE =
   "invariantcad:kernel-shape-artifact-fixture:v1:sha256:42587aed42fcc554d15c4259ae00480c9a16a5c94531ee9af67a6b949744251f" as const satisfies KernelShapeArtifactFixtureWitness;
 const EXPECTED_FINGERPRINT =
-  "invariantcad-occt-shape-candidate@1;occt-wasm@3.7.0;runtime=stock;modelingTolerance=f64:3e7ad7f29abcaf48;linearDeflection=default;angularDeflection=default;relative=default;maxExactBooleanHistoryRecords=1000000;maxExactEdgeTreatmentHistoryRecords=1000000;maxExactSolidOffsetHistoryRecords=1000000;features=extrude,revolve,loft,sweep,circularArcSweep,compositeSweep,boolean,transform,fillet,chamfer,shell,offset;nativeArchive=occt-brep-binary;topologySidecar=artifact-local-index-v1;nativeStructure=ordered-type-orientation-v1;nativeMaterialization=unbounded-candidate-only";
+  "invariantcad-occt-shape-candidate@2;occt-wasm@3.7.0;runtime=stock;modelingTolerance=f64:3e7ad7f29abcaf48;linearDeflection=default;angularDeflection=default;relative=default;maxExactBooleanHistoryRecords=1000000;maxExactEdgeTreatmentHistoryRecords=1000000;maxExactSolidOffsetHistoryRecords=1000000;features=extrude,revolve,loft,sweep,circularArcSweep,compositeSweep,boolean,transform,fillet,chamfer,shell,offset;nativeArchive=occt-brep-binary;topologySidecar=bounded-binary-artifact-local-index-v2;nativeStructure=ordered-type-orientation-v1;nativeMaterialization=unbounded-candidate-only";
 
 /**
  * This inventory is intentionally literal. A change to the stock OCCT feature
@@ -129,20 +137,27 @@ const witness: KernelShapeArtifactWitness = async (
   });
 };
 
-async function goldenArtifact(): Promise<Uint8Array> {
-  const text = await readFile(GOLDEN_FIXTURE_URL, "utf8");
+async function fixtureBytes(
+  url: URL,
+  expectedBytes: number,
+): Promise<Uint8Array> {
+  const text = await readFile(url, "utf8");
   const encoded = text.replaceAll(/\s/g, "");
   if (!/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)) {
     throw new TypeError("OCCT candidate golden fixture is not canonical base64");
   }
   const bytes = Uint8Array.from(Buffer.from(encoded, "base64"));
   if (
-    bytes.byteLength !== GOLDEN_BYTES ||
+    bytes.byteLength !== expectedBytes ||
     Buffer.from(bytes).toString("base64") !== encoded
   ) {
     throw new TypeError("OCCT candidate golden fixture has an invalid length or encoding");
   }
   return bytes;
+}
+
+async function goldenArtifact(): Promise<Uint8Array> {
+  return fixtureBytes(GOLDEN_FIXTURE_URL, GOLDEN_BYTES);
 }
 
 async function candidateTarget(): Promise<{
@@ -161,6 +176,35 @@ async function candidateTarget(): Promise<{
 }
 
 describe("OCCT candidate shape-artifact conformance gate", () => {
+  it("retains the private v1 fixture only as an explicit fail-closed corpus", async () => {
+    const legacy = await fixtureBytes(LEGACY_V1_FIXTURE_URL, LEGACY_V1_BYTES);
+    const legacyWitness = await hashKernelShapeArtifactFixtureWitness(legacy, {
+      maxBytes: MAX_ARTIFACT_BYTES,
+    });
+    expect(legacyWitness.ok).toBe(true);
+    if (!legacyWitness.ok) return;
+    expect(legacyWitness.value).toBe(EXPECTED_LEGACY_V1_FIXTURE);
+    const kernel = await createOcctKernel();
+    try {
+      const candidate = getOcctShapeArtifactCodecCandidate(kernel);
+      expect(candidate).toBeDefined();
+      if (candidate === undefined) return;
+      const liveShapes = (
+        kernel as unknown as { readonly liveShapes: Set<unknown> }
+      ).liveShapes;
+      expect(liveShapes.size).toBe(0);
+      expect(() =>
+        candidate.decodeShapeArtifact(legacy, {
+          feature: "legacy-v1-negative-corpus",
+          maxArtifactBytes: MAX_ARTIFACT_BYTES,
+        }),
+      ).toThrow(/header/);
+      expect(liveShapes.size).toBe(0);
+    } finally {
+      kernel.dispose();
+    }
+  });
+
   it("passes the pinned self-round-trip and golden-decode corpus without certifying production", async () => {
     const production = await createOcctKernel();
     try {
@@ -185,13 +229,13 @@ describe("OCCT candidate shape-artifact conformance gate", () => {
         artifact: {
           protocolVersion: 1,
           format: "org.invariantcad.occt-shape-candidate",
-          formatVersion: 1,
+          formatVersion: 2,
           compatibilityFingerprint: EXPECTED_FINGERPRINT,
         },
       },
       cases: [
         {
-          id: "occt-asymmetric-role-box-self-v1",
+          id: "occt-asymmetric-role-box-self-v2",
           feature: "fixture.asymmetric-role-box",
           scope: "current-runtime-self-round-trip",
           expectedWitness: EXPECTED_SEMANTIC,
@@ -211,7 +255,7 @@ describe("OCCT candidate shape-artifact conformance gate", () => {
           witness,
         },
         {
-          id: "occt-asymmetric-role-box-golden-v1",
+          id: "occt-asymmetric-role-box-golden-v2",
           feature: "fixture.asymmetric-role-box",
           scope: "golden-decode",
           artifact: golden,
@@ -238,7 +282,7 @@ describe("OCCT candidate shape-artifact conformance gate", () => {
         artifact: {
           protocolVersion: 1,
           format: "org.invariantcad.occt-shape-candidate",
-          formatVersion: 1,
+          formatVersion: 2,
           compatibilityFingerprint: EXPECTED_FINGERPRINT,
         },
       },

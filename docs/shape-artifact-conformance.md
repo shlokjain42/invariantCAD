@@ -469,25 +469,59 @@ key-neutral semantic evidence rather than persisting those ephemeral keys.
 
 The repository now has a private OCCT candidate hook for developing that stronger
 boundary. It is not a package export, is not installed as the production
-kernel's codec, and does not add `KernelCapabilities.shapeArtifacts`. Its
-versioned envelope combines a binary BREP archive with a canonical sidecar for
+kernel's codec, and does not add `KernelCapabilities.shapeArtifacts`. Format v2
+combines a binary BREP archive with a bounded canonical binary sidecar for
 key-neutral face/edge/vertex structure and incidence, ordered root/subshape
 type-orientation evidence, wrapper lineage, complete/partial history, and
-analytic volume overrides. The encoder records the native topology arrays in
-order. Decode imports a new native root, generates fresh evaluation-scoped
-topology keys, and accepts the sidecar only if the new root type, orientations,
-counts, and arrays exactly match the recorded ordered structural evidence. A
-mismatch rejects the artifact and disposes the partial shape. Array positions
-are therefore fail-closed artifact-local verification coordinates, never
-serialized public keys or a claim that native enumeration is durable identity.
+analytic volume overrides.
 
-The historical repository gate combines direct cold/warm, state, corruption,
-byte, ownership, alternate-valid-BREP, and downstream-selection cases with one
-committed stock-runtime asymmetric-box artifact and literal semantic/fixture
-witnesses. That stock golden remains useful evidence, but it exercises the
-older unbounded stock-runtime candidate. It is neither an owned-facade golden
-nor a cross-platform or cross-process compatibility matrix, and the general
-audit correctly continues to classify it as non-certifying.
+The sidecar has a fixed 48-byte big-endian header. It declares its exact byte
+length, face/edge/vertex counts, aggregate adjacency links, aggregate lineage
+records, aggregate encoded string bytes, aggregate native orientations, both
+history tags, and optional-volume presence. Strings are length-prefixed UTF-16BE
+code units rather than UTF-8 conversions, so every JavaScript string, including
+unpaired surrogates, round-trips without replacement. Numeric geometry is finite
+big-endian binary64 with `-0` normalized to `+0`; tags and optional-field masks
+are closed.
+
+Encode detaches and canonicalizes the semantic graph, sorts and deduplicates
+lineage, replaces ephemeral keys with sorted artifact-local indices, performs a
+complete counting pass, and only then allocates and writes the exact output
+buffer. Decode rejects an invalid header, excessive declared aggregate, or
+impossible minimum representation before allocating topology tables. Nested
+reads charge the same lineage, adjacency, UTF-16 byte, and orientation totals;
+indices must be sorted, unique, and in range; canonical lineage order is strict;
+and exact end-of-input is mandatory. There is no JSON parse/object/re-encode
+canonicality pass. Decode then imports a new native root, generates fresh
+evaluation-scoped topology keys, and accepts the sidecar only if the new root
+type, orientations, counts, and arrays exactly match the recorded ordered
+structural evidence. A mismatch rejects the artifact and disposes the partial
+shape. Array positions are therefore fail-closed artifact-local verification
+coordinates, never serialized public keys or a claim that native enumeration is
+durable identity.
+
+The repository gate combines direct cold/warm, state, corruption, byte,
+ownership, alternate-valid-BREP, and downstream-selection cases with one
+committed deterministic stock-runtime v2 asymmetric-box artifact. It is
+`11,591` bytes and has fixture witness
+`invariantcad:kernel-shape-artifact-fixture:v1:sha256:221d1ea2265a26df1293e63d625d25e85eb8a86041bdea53a927269427e3d16a`.
+The byte-format revision leaves the independent semantic witness unchanged at
+`invariantcad:kernel-shape-semantic:v1:sha256:40ae684e4a2fad512f54e1f1be4443acf7faf2f34fc6b281c7b816d8d3366cb2`.
+The former v1 fixture remains committed only as a negative fail-closed corpus:
+the v2 decoder must reject it before native restoration. Verify the reviewed v2
+fixture without writing by running:
+
+```bash
+pnpm artifact:fixture:occt -- --check --version v2
+```
+
+The generator creates cold shapes in fresh kernels, requires two current
+encodes to be byte-identical, compares source and freshly decoded semantic
+witnesses, validates canonical base64, and then prints the byte count,
+fingerprint, and both witnesses. This remains one stock-runtime in-process
+golden, not an owned-facade, cross-platform, or cross-process compatibility
+matrix, and the general audit correctly continues to classify it as
+non-certifying.
 
 Owned facade ABI 0.7 closes a specific, previously open part of the candidate
 transport boundary:
@@ -522,14 +556,13 @@ codec. Stock OCCT and owned ABI 0.2 through 0.6 retain the earlier unbounded
 research path, and no shipped backend advertises
 `KernelCapabilities.shapeArtifacts`.
 
-The hook remains candidate-only for six independent reasons:
+Binary sidecar v2 closes the former JSON-intermediate allocation blocker. The
+hook remains candidate-only for five independent reasons:
 
 - an admitted binary BREP can declare large table, pole, knot, or related
   geometry counts that cause allocation amplification inside `BinTools::Read`.
   Those allocations occur before the post-read topology ceiling can reject the
   decoded graph;
-- canonical JSON parsing and comparison still materialize intermediate string,
-  object-graph, and encoded sidecar state before schema-specific budgets apply;
 - synchronous same-thread WASM does not yield for an ordinary timer-driven
   `AbortSignal`, so entry checks do not provide prompt in-flight cancellation;
 - ordered topology evidence is useful for fail-closed comparison in the pinned
@@ -543,17 +576,18 @@ The hook remains candidate-only for six independent reasons:
   builds.
 
 Production promotion therefore still requires strict native archive preflight
-and/or decode-time allocation quotas, bounded sidecar decoding, prompt
-cancellation outside the same-thread synchronous gap, durable artifact-local
-native subshape identity, exact loaded-runtime/build attestation, and reviewed
-cross-process goldens. The compatibility fingerprint must bind the native
+and/or decode-time allocation and work quotas, prompt cancellation outside the
+same-thread synchronous gap, durable artifact-local native subshape identity,
+exact loaded-runtime/build attestation, and reviewed cross-process goldens. The
+compatibility fingerprint must bind the native
 binary/WASM and JavaScript pair, wrapper, envelope and sidecar revisions,
 identity scheme, relevant tolerance and serialization options, and every other
 input that can change the result.
 
 ABI 0.7 resolves the candidate's former full-output-materialization and
-successful-result ownership gaps; it does not resolve the remaining allocation,
-sidecar, cancellation, identity, attestation, or compatibility-proof gaps.
+successful-result ownership gaps, while sidecar v2 resolves the JSON
+materialization gap. Neither resolves the remaining native preallocation,
+cancellation, identity, attestation, or compatibility-proof gaps.
 Advertising an ordinary native exchange function under the stronger
 shape-artifact capability would therefore remain incorrect, even when it can
 reconstruct a geometrically valid solid.

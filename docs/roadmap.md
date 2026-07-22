@@ -215,26 +215,35 @@ This is the current implementation frontier. The public protocol exists, but
 **no shipped backend advertises `shapeArtifacts` and the evaluator does not read
 or write cached shapes today**.
 
-- The repository-private OCCT candidate uses a versioned binary-BREP envelope
-  plus a canonical topology/native-orientation/lineage/history/volume sidecar.
-  Decode creates fresh evaluation keys and accepts the sidecar only after exact
-  root-type, orientation, count, and ordered structural verification.
+- The repository-private OCCT candidate format v2 uses a versioned binary-BREP
+  envelope plus a bounded canonical binary topology/native-orientation/lineage/
+  history/volume sidecar. Its fixed 48-byte big-endian header declares exact
+  length and aggregate topology, adjacency, lineage, UTF-16BE string-byte, and
+  orientation limits. Encode counts before allocating one exact output; decode
+  preflights the header and totals, requires closed canonical values and exact
+  EOF, creates fresh evaluation keys, and accepts state only after exact native
+  structural verification. This closes the former JSON-intermediate sidecar
+  allocation gap.
 - Direct state, corruption, ownership, and pinned asymmetric-box golden audits
-  pass on the reviewed runtime without certifying compatibility. ABI 0.7 adds a
-  capped chunked BinTools-v4 writer, borrowed-input length checks, strict
-  consumption, a post-read topology ceiling, report-owned decode, same-kernel
-  one-shot transfer, and exact TypeScript rollback. The owned-runtime path does
-  not fall back to legacy MEMFS.
+  pass on the reviewed runtime without certifying compatibility. The v2 golden
+  is `11,591` bytes with fixture witness
+  `invariantcad:kernel-shape-artifact-fixture:v1:sha256:221d1ea2265a26df1293e63d625d25e85eb8a86041bdea53a927269427e3d16a`;
+  its semantic witness remains
+  `invariantcad:kernel-shape-semantic:v1:sha256:40ae684e4a2fad512f54e1f1be4443acf7faf2f34fc6b281c7b816d8d3366cb2`.
+  V1 is retained only as a negative rejection fixture. Verify v2 with
+  `pnpm artifact:fixture:occt -- --check --version v2`. ABI 0.7 adds a capped
+  chunked BinTools-v4 writer, borrowed-input length checks, strict consumption,
+  a post-read topology ceiling, report-owned decode, same-kernel one-shot
+  transfer, and exact TypeScript rollback. The owned-runtime path does not fall
+  back to legacy MEMFS.
 - Promotion remains blocked by hostile native counts that can allocate before
-  post-read checks, sidecar JSON intermediate materialization, same-thread
-  synchronous WASM cancellation gaps, order-based symmetric topology, and the
-  absence of exact loaded-runtime attestation and reviewed cross-process
-  goldens.
+  post-read checks, same-thread synchronous WASM cancellation gaps, order-based
+  symmetric topology, and the absence of exact loaded-runtime attestation and
+  reviewed cross-process goldens.
 - Production work therefore requires strict archive preflight, native
   allocation and work quotas, promptly cancellable native operations, durable
-  artifact-local native identity markers rather than enumeration order, a
-  bounded binary sidecar, exact loaded JS/WASM/build attestation, and a reviewed
-  cross-process golden matrix.
+  artifact-local native identity markers rather than enumeration order, exact
+  loaded JS/WASM/build attestation, and a reviewed cross-process golden matrix.
 - Only after that matrix passes will OCCT advertise the capability. Evaluator
   integration must then cover per-solid cache read/decode and encode/write,
   fresh ownership, corruption, cancellation, cleanup, eviction, concurrent
