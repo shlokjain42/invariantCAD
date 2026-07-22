@@ -1,7 +1,4 @@
-import {
-  canonicalStringifyProtocol,
-  deepFreeze,
-} from "../core/json.js";
+import { deepFreeze } from "../core/json.js";
 import type { ShapeOrientation, ShapeType } from "occt-wasm";
 import {
   KERNEL_SHAPE_ARTIFACT_PROTOCOL_VERSION,
@@ -13,14 +10,16 @@ import {
 import { detachKernelTopologySnapshot } from "./topology-snapshot.js";
 import type {
   KernelCurveDescriptor,
-  KernelEdgeDescriptor,
-  KernelFaceDescriptor,
   KernelSurfaceDescriptor,
   KernelTopologyKey,
   KernelTopologyLineage,
   KernelTopologySnapshot,
-  KernelVertexDescriptor,
 } from "../protocol/topology.js";
+import {
+  decodeOcctArtifactSidecarV2,
+  encodeOcctArtifactSidecarV2,
+  OCCT_ARTIFACT_SIDECAR_V2_MIN_BYTES,
+} from "./occt-artifact-sidecar-v2.js";
 
 export const OCCT_SHAPE_ARTIFACT_CANDIDATE_ACCESS = Symbol(
   "InvariantCAD.OcctShapeArtifactCandidateAccess",
@@ -28,7 +27,7 @@ export const OCCT_SHAPE_ARTIFACT_CANDIDATE_ACCESS = Symbol(
 
 export const OCCT_SHAPE_ARTIFACT_CANDIDATE_FORMAT =
   "org.invariantcad.occt-shape-candidate" as const;
-export const OCCT_SHAPE_ARTIFACT_CANDIDATE_FORMAT_VERSION = 1 as const;
+export const OCCT_SHAPE_ARTIFACT_CANDIDATE_FORMAT_VERSION = 2 as const;
 
 type TopologyHistory = KernelTopologySnapshot["history"];
 
@@ -86,7 +85,7 @@ export interface OcctShapeArtifactCodecCandidate {
   ): KernelShape;
 }
 
-const ENVELOPE_VERSION = 1;
+const ENVELOPE_VERSION = 2;
 const HEADER_BYTES = 40;
 const MAX_UINT32 = 0xffff_ffff;
 const MAX_FINGERPRINT_BYTES = 1_024;
@@ -99,113 +98,8 @@ const MAGIC = new Uint8Array([
   0x49, 0x43, 0x41, 0x44, 0x4f, 0x43, 0x43, 0x54,
   0x41, 0x52, 0x54, 0x00, 0x00, 0x00, 0x00, 0x00,
 ]);
-const FLOAT64_PATTERN = /^[0-9a-f]{16}$/;
-const SHAPE_TYPES = new Set<ShapeType>([
-  "compound",
-  "compsolid",
-  "solid",
-  "shell",
-  "face",
-  "wire",
-  "edge",
-  "vertex",
-  "shape",
-]);
-const SHAPE_ORIENTATIONS = new Set<ShapeOrientation>([
-  "forward",
-  "reversed",
-  "internal",
-  "external",
-]);
 const textEncoder = new TextEncoder();
 const fatalTextDecoder = new TextDecoder("utf-8", { fatal: true });
-
-type EncodedFloat64 = string;
-type EncodedVec3 = readonly [
-  EncodedFloat64,
-  EncodedFloat64,
-  EncodedFloat64,
-];
-
-interface WireLineage {
-  readonly feature: string;
-  readonly relation: "created" | "modified";
-  readonly role: string | null;
-  readonly source: {
-    readonly kind: "sketch-entity";
-    readonly sketch: string;
-    readonly entity: string;
-  } | null;
-}
-
-interface WireSurface {
-  readonly kind: string;
-  readonly normal: EncodedVec3 | null;
-  readonly axis: EncodedVec3 | null;
-  readonly radius: EncodedFloat64 | null;
-}
-
-interface WireCurve {
-  readonly kind: string;
-  readonly direction: EncodedVec3 | null;
-  readonly axis: EncodedVec3 | null;
-  readonly radius: EncodedFloat64 | null;
-}
-
-interface WireFace {
-  readonly area: EncodedFloat64;
-  readonly center: EncodedVec3;
-  readonly bounds: {
-    readonly min: EncodedVec3;
-    readonly max: EncodedVec3;
-  };
-  readonly surface: WireSurface;
-  readonly lineage: readonly WireLineage[];
-  /** Artifact-local edge indices, never kernel topology keys. */
-  readonly edges: readonly number[];
-}
-
-interface WireEdge {
-  readonly length: EncodedFloat64;
-  readonly center: EncodedVec3;
-  readonly bounds: {
-    readonly min: EncodedVec3;
-    readonly max: EncodedVec3;
-  };
-  readonly curve: WireCurve;
-  readonly lineage: readonly WireLineage[];
-  /** Artifact-local face and vertex indices. */
-  readonly faces: readonly number[];
-  readonly vertices: readonly number[];
-}
-
-interface WireVertex {
-  readonly point: EncodedVec3;
-  readonly lineage: readonly WireLineage[];
-  /** Artifact-local edge indices. */
-  readonly edges: readonly number[];
-}
-
-interface WireStateV1 {
-  readonly protocolVersion: 1;
-  readonly history: TopologyHistory;
-  readonly lineage: readonly WireLineage[];
-  readonly nativeStructure: OcctShapeArtifactNativeStructure;
-  readonly topology: {
-    readonly history: TopologyHistory;
-    readonly faces: readonly WireFace[];
-    readonly edges: readonly WireEdge[];
-    readonly vertices: readonly WireVertex[];
-  };
-  readonly volumeOverride: EncodedFloat64 | null;
-}
-
-interface DecodeBudget {
-  topologyItems: number;
-  adjacencyLinks: number;
-  lineageRecords: number;
-  stringBytes: number;
-}
 
 function abortError(): DOMException {
   return new DOMException("OCCT shape-artifact operation was aborted", "AbortError");
@@ -239,413 +133,12 @@ function artifactLimit(context: KernelShapeArtifactContext): number {
   return Math.min(limit, MAX_UINT32);
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function exactKeys(
-  value: Record<string, unknown>,
-  expected: readonly string[],
-): boolean {
-  const actual = Object.keys(value).sort();
-  const wanted = [...expected].sort();
-  return (
-    actual.length === wanted.length &&
-    actual.every((key, index) => key === wanted[index])
-  );
-}
-
-function requiredRecord(
-  value: unknown,
-  keys: readonly string[],
-  label: string,
-): Record<string, unknown> {
-  if (!isRecord(value) || !exactKeys(value, keys)) {
-    throw new TypeError(`${label} is malformed`);
-  }
-  return value;
-}
-
-function requiredArray(value: unknown, label: string): readonly unknown[] {
-  if (!Array.isArray(value)) throw new TypeError(`${label} must be an array`);
-  return value;
-}
-
 function checkedLength(total: number, addition: number, label: string): number {
   const next = total + addition;
   if (!Number.isSafeInteger(next) || next > MAX_UINT32) {
     throw new RangeError(`${label} exceeds the candidate envelope limit`);
   }
   return next;
-}
-
-function utf8Length(value: string): number {
-  return textEncoder.encode(value).byteLength;
-}
-
-function chargeString(
-  value: unknown,
-  budget: DecodeBudget,
-  label: string,
-  allowEmpty = false,
-): string {
-  if (
-    typeof value !== "string" ||
-    (!allowEmpty && value.length === 0)
-  ) {
-    throw new TypeError(`${label} must be ${allowEmpty ? "a" : "a non-empty"} string`);
-  }
-  budget.stringBytes = checkedLength(
-    budget.stringBytes,
-    utf8Length(value),
-    "Shape-artifact strings",
-  );
-  if (budget.stringBytes > MAX_STRING_BYTES) {
-    throw new RangeError("Shape-artifact string budget was exceeded");
-  }
-  return value;
-}
-
-function encodeFloat64(value: number, label: string): EncodedFloat64 {
-  if (!Number.isFinite(value)) throw new TypeError(`${label} must be finite`);
-  const bytes = new Uint8Array(8);
-  // The repository semantic-observation protocol deliberately identifies the
-  // two signed-zero encodings. Keep the sidecar wire form unique as well.
-  new DataView(bytes.buffer).setFloat64(
-    0,
-    Object.is(value, -0) ? 0 : value,
-    false,
-  );
-  return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-function decodeFloat64(
-  value: unknown,
-  budget: DecodeBudget,
-  label: string,
-): number {
-  const encoded = chargeString(value, budget, label);
-  if (!FLOAT64_PATTERN.test(encoded)) {
-    throw new TypeError(`${label} must be one canonical binary64 value`);
-  }
-  const bytes = new Uint8Array(8);
-  for (let index = 0; index < bytes.length; index += 1) {
-    bytes[index] = Number.parseInt(encoded.slice(index * 2, index * 2 + 2), 16);
-  }
-  const decoded = new DataView(bytes.buffer).getFloat64(0, false);
-  if (!Number.isFinite(decoded)) throw new TypeError(`${label} must be finite`);
-  if (Object.is(decoded, -0)) {
-    throw new TypeError(`${label} uses a non-canonical signed-zero encoding`);
-  }
-  return decoded;
-}
-
-function encodeVec3(value: readonly number[], label: string): EncodedVec3 {
-  if (value.length !== 3) throw new TypeError(`${label} must contain three values`);
-  return [
-    encodeFloat64(value[0]!, `${label}[0]`),
-    encodeFloat64(value[1]!, `${label}[1]`),
-    encodeFloat64(value[2]!, `${label}[2]`),
-  ];
-}
-
-function decodeVec3(
-  value: unknown,
-  budget: DecodeBudget,
-  label: string,
-): [number, number, number] {
-  const values = requiredArray(value, label);
-  if (values.length !== 3) throw new TypeError(`${label} must contain three values`);
-  return [
-    decodeFloat64(values[0], budget, `${label}[0]`),
-    decodeFloat64(values[1], budget, `${label}[1]`),
-    decodeFloat64(values[2], budget, `${label}[2]`),
-  ];
-}
-
-function copyLineageRecord(
-  value: KernelTopologyLineage,
-  label: string,
-): KernelTopologyLineage {
-  if (
-    typeof value !== "object" ||
-    value === null ||
-    typeof value.feature !== "string" ||
-    value.feature.length === 0 ||
-    (value.relation !== "created" && value.relation !== "modified") ||
-    (value.role !== undefined &&
-      (typeof value.role !== "string" || value.role.length === 0))
-  ) {
-    throw new TypeError(`${label} is malformed`);
-  }
-  const source = value.source;
-  if (
-    source !== undefined &&
-    (value.relation !== "created" ||
-      source.kind !== "sketch-entity" ||
-      typeof source.sketch !== "string" ||
-      source.sketch.length === 0 ||
-      typeof source.entity !== "string" ||
-      source.entity.length === 0)
-  ) {
-    throw new TypeError(`${label}.source is malformed`);
-  }
-  return Object.freeze({
-    feature: value.feature,
-    relation: value.relation,
-    ...(value.role === undefined ? {} : { role: value.role }),
-    ...(source === undefined
-      ? {}
-      : {
-          source: Object.freeze({
-            kind: "sketch-entity" as const,
-            sketch: source.sketch,
-            entity: source.entity,
-          }),
-        }),
-  });
-}
-
-function copyGlobalLineage(
-  value: readonly KernelTopologyLineage[],
-): readonly KernelTopologyLineage[] {
-  if (!Array.isArray(value) || value.length > MAX_LINEAGE_RECORDS) {
-    throw new RangeError("Shape-artifact global lineage is malformed or oversized");
-  }
-  let stringBytes = 0;
-  const charge = (item: string): void => {
-    const remaining = MAX_STRING_BYTES - stringBytes;
-    if (item.length > remaining) {
-      throw new RangeError("Shape-artifact global lineage string budget was exceeded");
-    }
-    stringBytes = checkedLength(
-      stringBytes,
-      utf8Length(item),
-      "Shape-artifact global lineage strings",
-    );
-    if (stringBytes > MAX_STRING_BYTES) {
-      throw new RangeError("Shape-artifact global lineage string budget was exceeded");
-    }
-  };
-  return Object.freeze(
-    value.map((item, index) => {
-      const copied = copyLineageRecord(
-        item,
-        `Shape-artifact global lineage[${index}]`,
-      );
-      charge(copied.feature);
-      charge(copied.relation);
-      if (copied.role !== undefined) charge(copied.role);
-      if (copied.source !== undefined) {
-        charge(copied.source.kind);
-        charge(copied.source.sketch);
-        charge(copied.source.entity);
-      }
-      return copied;
-    }),
-  );
-}
-
-function encodeLineage(value: KernelTopologyLineage): WireLineage {
-  const copied = copyLineageRecord(value, "Shape-artifact lineage");
-  return {
-    feature: copied.feature,
-    relation: copied.relation,
-    role: copied.role ?? null,
-    source:
-      copied.source === undefined
-        ? null
-        : {
-            kind: "sketch-entity",
-            sketch: copied.source.sketch,
-            entity: copied.source.entity,
-          },
-  };
-}
-
-function wireLineageKey(value: WireLineage): string {
-  return canonicalStringifyProtocol(value);
-}
-
-function encodeLineageArray(
-  values: readonly KernelTopologyLineage[],
-): readonly WireLineage[] {
-  const unique = new Map<string, WireLineage>();
-  for (const value of values) {
-    const encoded = encodeLineage(value);
-    unique.set(wireLineageKey(encoded), encoded);
-  }
-  return Object.freeze(
-    [...unique]
-      .sort(([first], [second]) => (first < second ? -1 : first > second ? 1 : 0))
-      .map(([, value]) => value),
-  );
-}
-
-function decodeLineage(
-  value: unknown,
-  budget: DecodeBudget,
-  label: string,
-): KernelTopologyLineage {
-  budget.lineageRecords += 1;
-  if (budget.lineageRecords > MAX_LINEAGE_RECORDS) {
-    throw new RangeError("Shape-artifact lineage budget was exceeded");
-  }
-  const record = requiredRecord(
-    value,
-    ["feature", "relation", "role", "source"],
-    label,
-  );
-  const feature = chargeString(record.feature, budget, `${label}.feature`);
-  const relation = record.relation;
-  if (relation !== "created" && relation !== "modified") {
-    throw new TypeError(`${label}.relation is malformed`);
-  }
-  const role =
-    record.role === null
-      ? undefined
-      : chargeString(record.role, budget, `${label}.role`);
-  let source: KernelTopologyLineage["source"];
-  if (record.source !== null) {
-    const rawSource = requiredRecord(
-      record.source,
-      ["entity", "kind", "sketch"],
-      `${label}.source`,
-    );
-    if (rawSource.kind !== "sketch-entity" || relation !== "created") {
-      throw new TypeError(`${label}.source is malformed`);
-    }
-    chargeString(rawSource.kind, budget, `${label}.source.kind`);
-    source = Object.freeze({
-      kind: "sketch-entity",
-      sketch: chargeString(rawSource.sketch, budget, `${label}.source.sketch`),
-      entity: chargeString(rawSource.entity, budget, `${label}.source.entity`),
-    });
-  }
-  return Object.freeze({
-    feature,
-    relation,
-    ...(role === undefined ? {} : { role }),
-    ...(source === undefined ? {} : { source }),
-  }) as KernelTopologyLineage;
-}
-
-function decodeLineageArray(
-  value: unknown,
-  budget: DecodeBudget,
-  label: string,
-): readonly KernelTopologyLineage[] {
-  const values = requiredArray(value, label);
-  if (values.length > MAX_LINEAGE_RECORDS - budget.lineageRecords) {
-    throw new RangeError("Shape-artifact lineage budget was exceeded");
-  }
-  const decoded = Object.freeze(
-    values.map((item, index) =>
-      decodeLineage(item, budget, `${label}[${index}]`),
-    ),
-  );
-  let previous: string | undefined;
-  for (const item of decoded) {
-    const key = wireLineageKey(encodeLineage(item));
-    if (previous !== undefined && previous >= key) {
-      throw new TypeError(`${label} is not in canonical unique order`);
-    }
-    previous = key;
-  }
-  return decoded;
-}
-
-function encodeSurface(value: KernelSurfaceDescriptor): WireSurface {
-  if (typeof value.kind !== "string" || value.kind.length === 0) {
-    throw new TypeError("Shape-artifact surface kind is malformed");
-  }
-  return {
-    kind: value.kind,
-    normal: value.normal === undefined ? null : encodeVec3(value.normal, "surface.normal"),
-    axis: value.axis === undefined ? null : encodeVec3(value.axis, "surface.axis"),
-    radius:
-      value.radius === undefined
-        ? null
-        : encodeFloat64(value.radius, "surface.radius"),
-  };
-}
-
-function decodeSurface(
-  value: unknown,
-  budget: DecodeBudget,
-  label: string,
-): KernelSurfaceDescriptor {
-  const record = requiredRecord(
-    value,
-    ["axis", "kind", "normal", "radius"],
-    label,
-  );
-  const normal =
-    record.normal === null
-      ? undefined
-      : decodeVec3(record.normal, budget, `${label}.normal`);
-  const axis =
-    record.axis === null
-      ? undefined
-      : decodeVec3(record.axis, budget, `${label}.axis`);
-  const radius =
-    record.radius === null
-      ? undefined
-      : decodeFloat64(record.radius, budget, `${label}.radius`);
-  return Object.freeze({
-    kind: chargeString(record.kind, budget, `${label}.kind`),
-    ...(normal === undefined ? {} : { normal }),
-    ...(axis === undefined ? {} : { axis }),
-    ...(radius === undefined ? {} : { radius }),
-  });
-}
-
-function encodeCurve(value: KernelCurveDescriptor): WireCurve {
-  if (typeof value.kind !== "string" || value.kind.length === 0) {
-    throw new TypeError("Shape-artifact curve kind is malformed");
-  }
-  return {
-    kind: value.kind,
-    direction:
-      value.direction === undefined
-        ? null
-        : encodeVec3(value.direction, "curve.direction"),
-    axis: value.axis === undefined ? null : encodeVec3(value.axis, "curve.axis"),
-    radius:
-      value.radius === undefined
-        ? null
-        : encodeFloat64(value.radius, "curve.radius"),
-  };
-}
-
-function decodeCurve(
-  value: unknown,
-  budget: DecodeBudget,
-  label: string,
-): KernelCurveDescriptor {
-  const record = requiredRecord(
-    value,
-    ["axis", "direction", "kind", "radius"],
-    label,
-  );
-  const direction =
-    record.direction === null
-      ? undefined
-      : decodeVec3(record.direction, budget, `${label}.direction`);
-  const axis =
-    record.axis === null
-      ? undefined
-      : decodeVec3(record.axis, budget, `${label}.axis`);
-  const radius =
-    record.radius === null
-      ? undefined
-      : decodeFloat64(record.radius, budget, `${label}.radius`);
-  return Object.freeze({
-    kind: chargeString(record.kind, budget, `${label}.kind`),
-    ...(direction === undefined ? {} : { direction }),
-    ...(axis === undefined ? {} : { axis }),
-    ...(radius === undefined ? {} : { radius }),
-  });
 }
 
 function keyIndices(
@@ -676,448 +169,6 @@ function topologyIndex(
     result.set(key, index);
   });
   return result;
-}
-
-function nativeShapeType(value: unknown, label: string): ShapeType {
-  if (typeof value !== "string" || !SHAPE_TYPES.has(value as ShapeType)) {
-    throw new TypeError(`${label} is malformed`);
-  }
-  return value as ShapeType;
-}
-
-function nativeOrientation(
-  value: unknown,
-  label: string,
-): ShapeOrientation {
-  if (
-    typeof value !== "string" ||
-    !SHAPE_ORIENTATIONS.has(value as ShapeOrientation)
-  ) {
-    throw new TypeError(`${label} is malformed`);
-  }
-  return value as ShapeOrientation;
-}
-
-function nativeOrientationArray(
-  value: unknown,
-  expectedLength: number | undefined,
-  label: string,
-): readonly ShapeOrientation[] {
-  const values = requiredArray(value, label);
-  if (
-    (expectedLength !== undefined && values.length !== expectedLength) ||
-    values.length > MAX_ADJACENCY_LINKS
-  ) {
-    throw new RangeError(`${label} has an invalid or oversized length`);
-  }
-  return Object.freeze(
-    values.map((item, index) =>
-      nativeOrientation(item, `${label}[${index}]`),
-    ),
-  );
-}
-
-function copyNativeStructure(
-  value: unknown,
-  counts: {
-    readonly faces: number;
-    readonly edges: number;
-    readonly vertices: number;
-  },
-): OcctShapeArtifactNativeStructure {
-  const record = requiredRecord(
-    value,
-    [
-      "edgeOrientations",
-      "faceOrientations",
-      "rootOrientation",
-      "rootType",
-      "shellOrientations",
-      "solidOrientations",
-      "vertexOrientations",
-      "wireOrientations",
-    ],
-    "Shape-artifact native structure",
-  );
-  const solidOrientations = nativeOrientationArray(
-    record.solidOrientations,
-    undefined,
-    "Shape-artifact solid orientations",
-  );
-  const shellOrientations = nativeOrientationArray(
-    record.shellOrientations,
-    undefined,
-    "Shape-artifact shell orientations",
-  );
-  const wireOrientations = nativeOrientationArray(
-    record.wireOrientations,
-    undefined,
-    "Shape-artifact wire orientations",
-  );
-  const faceOrientations = nativeOrientationArray(
-    record.faceOrientations,
-    counts.faces,
-    "Shape-artifact face orientations",
-  );
-  const edgeOrientations = nativeOrientationArray(
-    record.edgeOrientations,
-    counts.edges,
-    "Shape-artifact edge orientations",
-  );
-  const vertexOrientations = nativeOrientationArray(
-    record.vertexOrientations,
-    counts.vertices,
-    "Shape-artifact vertex orientations",
-  );
-  const total =
-    solidOrientations.length +
-    shellOrientations.length +
-    wireOrientations.length +
-    faceOrientations.length +
-    edgeOrientations.length +
-    vertexOrientations.length;
-  if (!Number.isSafeInteger(total) || total > MAX_ADJACENCY_LINKS) {
-    throw new RangeError("Shape-artifact native structure budget was exceeded");
-  }
-  return Object.freeze({
-    rootType: nativeShapeType(record.rootType, "Shape-artifact root type"),
-    rootOrientation: nativeOrientation(
-      record.rootOrientation,
-      "Shape-artifact root orientation",
-    ),
-    solidOrientations,
-    shellOrientations,
-    wireOrientations,
-    faceOrientations,
-    edgeOrientations,
-    vertexOrientations,
-  });
-}
-
-function encodeWireState(
-  state: OcctShapeArtifactCapturedSidecarState,
-  signal?: AbortSignal,
-): WireStateV1 {
-  if (state.history !== "complete" && state.history !== "partial") {
-    throw new TypeError("Shape-artifact base history is malformed");
-  }
-  if (
-    state.volumeOverride !== undefined &&
-    (!Number.isFinite(state.volumeOverride) || state.volumeOverride < 0)
-  ) {
-    throw new TypeError("Shape-artifact volume override is malformed");
-  }
-  const topology = detachKernelTopologySnapshot(state.topology, {
-    maxTopologyItems: MAX_TOPOLOGY_ITEMS,
-    maxAdjacencyLinks: MAX_ADJACENCY_LINKS,
-    maxEvidenceRecords: MAX_LINEAGE_RECORDS,
-    maxStringBytes: MAX_STRING_BYTES,
-  });
-  const lineage = copyGlobalLineage(state.lineage);
-  const nativeStructure = copyNativeStructure(state.nativeStructure, {
-    faces: topology.faces.length,
-    edges: topology.edges.length,
-    vertices: topology.vertices.length,
-  });
-  const faceIndices = topologyIndex(
-    topology.faces.map((face) => face.key),
-    "Shape-artifact faces",
-  );
-  const edgeIndices = topologyIndex(
-    topology.edges.map((edge) => edge.key),
-    "Shape-artifact edges",
-  );
-  const vertexIndices = topologyIndex(
-    topology.vertices.map((vertex) => vertex.key),
-    "Shape-artifact vertices",
-  );
-  const faces = topology.faces.map((face, index): WireFace => {
-    if ((index & 0xff) === 0) checkAbort(signal);
-    return {
-      area: encodeFloat64(face.area, `topology.faces[${index}].area`),
-      center: encodeVec3(face.center, `topology.faces[${index}].center`),
-      bounds: {
-        min: encodeVec3(face.bounds.min, `topology.faces[${index}].bounds.min`),
-        max: encodeVec3(face.bounds.max, `topology.faces[${index}].bounds.max`),
-      },
-      surface: encodeSurface(face.surface),
-      lineage: encodeLineageArray(face.lineage),
-      edges: keyIndices(face.edges, edgeIndices, `topology.faces[${index}].edges`),
-    };
-  });
-  const edges = topology.edges.map((edge, index): WireEdge => {
-    if ((index & 0xff) === 0) checkAbort(signal);
-    return {
-      length: encodeFloat64(edge.length, `topology.edges[${index}].length`),
-      center: encodeVec3(edge.center, `topology.edges[${index}].center`),
-      bounds: {
-        min: encodeVec3(edge.bounds.min, `topology.edges[${index}].bounds.min`),
-        max: encodeVec3(edge.bounds.max, `topology.edges[${index}].bounds.max`),
-      },
-      curve: encodeCurve(edge.curve),
-      lineage: encodeLineageArray(edge.lineage),
-      faces: keyIndices(edge.faces, faceIndices, `topology.edges[${index}].faces`),
-      vertices: keyIndices(
-        edge.vertices,
-        vertexIndices,
-        `topology.edges[${index}].vertices`,
-      ),
-    };
-  });
-  const vertices = topology.vertices.map((vertex, index): WireVertex => {
-    if ((index & 0xff) === 0) checkAbort(signal);
-    return {
-      point: encodeVec3(vertex.point, `topology.vertices[${index}].point`),
-      lineage: encodeLineageArray(vertex.lineage),
-      edges: keyIndices(
-        vertex.edges,
-        edgeIndices,
-        `topology.vertices[${index}].edges`,
-      ),
-    };
-  });
-  return {
-    protocolVersion: 1,
-    history: state.history,
-    lineage: encodeLineageArray(lineage),
-    nativeStructure,
-    topology: {
-      history: topology.history,
-      faces,
-      edges,
-      vertices,
-    },
-    volumeOverride:
-      state.volumeOverride === undefined
-        ? null
-        : encodeFloat64(state.volumeOverride, "volumeOverride"),
-  };
-}
-
-function decodeHistory(value: unknown, label: string): TopologyHistory {
-  if (value !== "complete" && value !== "partial") {
-    throw new TypeError(`${label} is malformed`);
-  }
-  return value;
-}
-
-function decodeIndexArray(
-  value: unknown,
-  count: number,
-  budget: DecodeBudget,
-  label: string,
-): readonly number[] {
-  const values = requiredArray(value, label);
-  budget.adjacencyLinks = checkedLength(
-    budget.adjacencyLinks,
-    values.length,
-    "Shape-artifact adjacency",
-  );
-  if (budget.adjacencyLinks > MAX_ADJACENCY_LINKS) {
-    throw new RangeError("Shape-artifact adjacency budget was exceeded");
-  }
-  const output = values.map((item, index) => {
-    if (
-      typeof item !== "number" ||
-      !Number.isSafeInteger(item) ||
-      item < 0 ||
-      item >= count
-    ) {
-      throw new TypeError(`${label}[${index}] is outside its topology table`);
-    }
-    return item;
-  });
-  for (let index = 1; index < output.length; index += 1) {
-    if (output[index - 1]! >= output[index]!) {
-      throw new TypeError(`${label} is not in canonical unique order`);
-    }
-  }
-  return Object.freeze(output);
-}
-
-function localKey(
-  topology: "face" | "edge" | "vertex",
-  index: number,
-): KernelTopologyKey {
-  return `artifact:${topology}:${index}` as KernelTopologyKey;
-}
-
-function decodeWireState(
-  value: unknown,
-  brep: Uint8Array,
-  signal?: AbortSignal,
-): OcctShapeArtifactCapturedState {
-  const record = requiredRecord(
-    value,
-    [
-      "history",
-      "lineage",
-      "nativeStructure",
-      "protocolVersion",
-      "topology",
-      "volumeOverride",
-    ],
-    "Shape-artifact state",
-  );
-  if (record.protocolVersion !== 1) {
-    throw new TypeError("Shape-artifact state protocol version is unsupported");
-  }
-  const rawTopology = requiredRecord(
-    record.topology,
-    ["edges", "faces", "history", "vertices"],
-    "Shape-artifact topology",
-  );
-  const rawFaces = requiredArray(rawTopology.faces, "Shape-artifact topology faces");
-  const rawEdges = requiredArray(rawTopology.edges, "Shape-artifact topology edges");
-  const rawVertices = requiredArray(
-    rawTopology.vertices,
-    "Shape-artifact topology vertices",
-  );
-  const topologyItems = rawFaces.length + rawEdges.length + rawVertices.length;
-  if (!Number.isSafeInteger(topologyItems) || topologyItems > MAX_TOPOLOGY_ITEMS) {
-    throw new RangeError("Shape-artifact topology item budget was exceeded");
-  }
-  const budget: DecodeBudget = {
-    topologyItems,
-    adjacencyLinks: 0,
-    lineageRecords: 0,
-    stringBytes: 0,
-  };
-  const lineage = decodeLineageArray(record.lineage, budget, "Shape-artifact lineage");
-  const faces = rawFaces.map((value, index): KernelFaceDescriptor => {
-    if ((index & 0xff) === 0) checkAbort(signal);
-    const face = requiredRecord(
-      value,
-      ["area", "bounds", "center", "edges", "lineage", "surface"],
-      `Shape-artifact topology.faces[${index}]`,
-    );
-    const bounds = requiredRecord(
-      face.bounds,
-      ["max", "min"],
-      `Shape-artifact topology.faces[${index}].bounds`,
-    );
-    return {
-      topology: "face",
-      key: localKey("face", index),
-      area: decodeFloat64(face.area, budget, `topology.faces[${index}].area`),
-      center: decodeVec3(face.center, budget, `topology.faces[${index}].center`),
-      bounds: {
-        min: decodeVec3(bounds.min, budget, `topology.faces[${index}].bounds.min`),
-        max: decodeVec3(bounds.max, budget, `topology.faces[${index}].bounds.max`),
-      },
-      surface: decodeSurface(face.surface, budget, `topology.faces[${index}].surface`),
-      lineage: decodeLineageArray(
-        face.lineage,
-        budget,
-        `topology.faces[${index}].lineage`,
-      ),
-      edges: decodeIndexArray(
-        face.edges,
-        rawEdges.length,
-        budget,
-        `topology.faces[${index}].edges`,
-      ).map((edge) => localKey("edge", edge)),
-    };
-  });
-  const edges = rawEdges.map((value, index): KernelEdgeDescriptor => {
-    if ((index & 0xff) === 0) checkAbort(signal);
-    const edge = requiredRecord(
-      value,
-      ["bounds", "center", "curve", "faces", "length", "lineage", "vertices"],
-      `Shape-artifact topology.edges[${index}]`,
-    );
-    const bounds = requiredRecord(
-      edge.bounds,
-      ["max", "min"],
-      `Shape-artifact topology.edges[${index}].bounds`,
-    );
-    return {
-      topology: "edge",
-      key: localKey("edge", index),
-      length: decodeFloat64(edge.length, budget, `topology.edges[${index}].length`),
-      center: decodeVec3(edge.center, budget, `topology.edges[${index}].center`),
-      bounds: {
-        min: decodeVec3(bounds.min, budget, `topology.edges[${index}].bounds.min`),
-        max: decodeVec3(bounds.max, budget, `topology.edges[${index}].bounds.max`),
-      },
-      curve: decodeCurve(edge.curve, budget, `topology.edges[${index}].curve`),
-      lineage: decodeLineageArray(
-        edge.lineage,
-        budget,
-        `topology.edges[${index}].lineage`,
-      ),
-      faces: decodeIndexArray(
-        edge.faces,
-        rawFaces.length,
-        budget,
-        `topology.edges[${index}].faces`,
-      ).map((face) => localKey("face", face)),
-      vertices: decodeIndexArray(
-        edge.vertices,
-        rawVertices.length,
-        budget,
-        `topology.edges[${index}].vertices`,
-      ).map((vertex) => localKey("vertex", vertex)),
-    };
-  });
-  const vertices = rawVertices.map((value, index): KernelVertexDescriptor => {
-    if ((index & 0xff) === 0) checkAbort(signal);
-    const vertex = requiredRecord(
-      value,
-      ["edges", "lineage", "point"],
-      `Shape-artifact topology.vertices[${index}]`,
-    );
-    return {
-      topology: "vertex",
-      key: localKey("vertex", index),
-      point: decodeVec3(vertex.point, budget, `topology.vertices[${index}].point`),
-      lineage: decodeLineageArray(
-        vertex.lineage,
-        budget,
-        `topology.vertices[${index}].lineage`,
-      ),
-      edges: decodeIndexArray(
-        vertex.edges,
-        rawEdges.length,
-        budget,
-        `topology.vertices[${index}].edges`,
-      ).map((edge) => localKey("edge", edge)),
-    };
-  });
-  const topology = detachKernelTopologySnapshot(
-    {
-      history: decodeHistory(rawTopology.history, "Shape-artifact topology history"),
-      faces,
-      edges,
-      vertices,
-    },
-    {
-      maxTopologyItems: MAX_TOPOLOGY_ITEMS,
-      maxAdjacencyLinks: MAX_ADJACENCY_LINKS,
-      maxEvidenceRecords: MAX_LINEAGE_RECORDS,
-      maxStringBytes: MAX_STRING_BYTES,
-    },
-  );
-  const volumeOverride =
-    record.volumeOverride === null
-      ? undefined
-      : decodeFloat64(record.volumeOverride, budget, "Shape-artifact volumeOverride");
-  if (volumeOverride !== undefined && volumeOverride < 0) {
-    throw new TypeError("Shape-artifact volumeOverride must be non-negative");
-  }
-  const nativeStructure = copyNativeStructure(record.nativeStructure, {
-    faces: faces.length,
-    edges: edges.length,
-    vertices: vertices.length,
-  });
-  return Object.freeze({
-    brep,
-    lineage,
-    history: decodeHistory(record.history, "Shape-artifact base history"),
-    topology,
-    nativeStructure,
-    ...(volumeOverride === undefined ? {} : { volumeOverride }),
-  });
 }
 
 function bytesEqual(first: Uint8Array, second: Uint8Array): boolean {
@@ -1384,7 +435,13 @@ function encodeEnvelope(
     fingerprint.byteLength,
     "Artifact envelope",
   );
-  if (checkedLength(fixedMinimum, 2, "Artifact envelope") > maximum) {
+  if (
+    checkedLength(
+      fixedMinimum,
+      OCCT_ARTIFACT_SIDECAR_V2_MIN_BYTES + 1,
+      "Artifact envelope",
+    ) > maximum
+  ) {
     throw new RangeError("OCCT candidate artifact exceeds maxArtifactBytes");
   }
   let captured: OcctShapeArtifactCapturedSidecarState;
@@ -1395,9 +452,11 @@ function encodeEnvelope(
     throw error;
   }
   checkAbort(signal);
-  const wire = encodeWireState(captured, signal);
-  checkAbort(signal);
-  const state = textEncoder.encode(canonicalStringifyProtocol(wire));
+  const stateMaximum = Math.min(MAX_STATE_BYTES, maximum - fixedMinimum - 1);
+  const state = encodeOcctArtifactSidecarV2(captured, {
+    maxBytes: stateMaximum,
+    ...(signal === undefined ? {} : { signal }),
+  });
   if (state.byteLength === 0 || state.byteLength > MAX_STATE_BYTES) {
     throw new RangeError("OCCT candidate state section is empty or oversized");
   }
@@ -1520,31 +579,17 @@ function decodeEnvelope(
   }
   const stateBytes = artifact.subarray(offset, offset + stateLength);
   offset += stateLength;
-  let stateText: string;
-  try {
-    stateText = fatalTextDecoder.decode(stateBytes);
-  } catch {
-    throw new TypeError("OCCT candidate state is not UTF-8");
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(stateText) as unknown;
-  } catch {
-    throw new TypeError("OCCT candidate state is not valid JSON");
-  }
-  let canonical: Uint8Array;
-  try {
-    canonical = textEncoder.encode(canonicalStringifyProtocol(parsed));
-  } catch {
-    throw new TypeError("OCCT candidate state is not canonical JSON data");
-  }
-  if (!bytesEqual(canonical, stateBytes)) {
-    throw new TypeError("OCCT candidate state JSON is not canonical");
-  }
+  checkAbort(signal);
+  const sidecar = decodeOcctArtifactSidecarV2(stateBytes, {
+    ...(signal === undefined ? {} : { signal }),
+  });
   checkAbort(signal);
   // The host receives a copy, never a view into the caller-owned artifact.
   const brep = artifact.slice(offset, offset + brepLength);
-  const state = decodeWireState(parsed, brep, signal);
+  const state: OcctShapeArtifactCapturedState = Object.freeze({
+    ...sidecar,
+    brep,
+  });
   checkAbort(signal);
   let restored: KernelShape | undefined;
   try {

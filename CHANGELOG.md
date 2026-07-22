@@ -13,6 +13,17 @@
   request template, and expanded contributor guidance for the public project.
 - Added TS7-compatible source correctness linting and deterministic format
   hygiene checks to the ordinary verification and release gates.
+- Replaced the repository-private OCCT candidate's canonical-JSON state with a
+  bounded binary sidecar v2. Its 48-byte big-endian header preflights exact
+  topology, adjacency, lineage, UTF-16BE string, and native-orientation totals;
+  encoding uses a counting pass and one exact output allocation, while decoding
+  enforces canonical finite binary64 values, closed tags and masks, sorted
+  unique references, reciprocal topology, and exact EOF. The deterministic
+  `11,591`-byte v2 fixture preserves the v1 semantic witness, the former v1
+  fixture is retained as a negative corpus, and a read-only generator check is
+  part of ordinary verification. Production capability advertising remains
+  blocked by the separate native-allocation, cancellation, identity,
+  attestation, and cross-process proof gaps.
 
 ## [0.1.0] - 2026-07-22
 

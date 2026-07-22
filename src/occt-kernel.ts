@@ -5,6 +5,7 @@ import type {
   Vec3 as OcctVec3,
 } from "occt-wasm";
 import type { Vec2, Vec3 } from "./core/math.js";
+import { canonicalStringifyProtocol } from "./core/json.js";
 import type {
   GeometryKernel,
   KernelCapabilities,
@@ -359,7 +360,7 @@ function occtArtifactCandidateCompatibilityFingerprint(
       return undefined;
     }
     return [
-      "invariantcad-occt-shape-candidate@1",
+      "invariantcad-occt-shape-candidate@2",
       "occt-wasm@3.7.0",
       `runtime=${runtime}`,
       `modelingTolerance=f64:${artifactFloat64(modelingTolerance)}`,
@@ -381,7 +382,7 @@ function occtArtifactCandidateCompatibilityFingerprint(
       boundedNativeIo
         ? "nativeArchive=occt-brep-binary-v4;triangulation=false;normals=false"
         : "nativeArchive=occt-brep-binary",
-      "topologySidecar=artifact-local-index-v1",
+      "topologySidecar=bounded-binary-artifact-local-index-v2",
       "nativeStructure=ordered-type-orientation-v1",
       boundedNativeIo
         ? "nativeMaterialization=facade-capped-output-bounded-input-snapshot-v1"
@@ -398,14 +399,19 @@ function uniqueLineage(
   const unique = new Map<string, KernelTopologyLineage>();
   for (const value of values) {
     const source = value.source;
-    const key = [
-      value.feature,
-      value.relation,
-      value.role ?? "",
-      source?.kind ?? "",
-      source?.sketch ?? "",
-      source?.entity ?? "",
-    ].join("\u0000");
+    const key = canonicalStringifyProtocol({
+      feature: value.feature,
+      relation: value.relation,
+      role: value.role ?? null,
+      source:
+        source === undefined
+          ? null
+          : {
+              kind: source.kind,
+              sketch: source.sketch,
+              entity: source.entity,
+            },
+    });
     unique.set(key, value);
   }
   return Object.freeze([...unique.values()]);

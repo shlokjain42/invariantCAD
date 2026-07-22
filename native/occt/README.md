@@ -471,16 +471,39 @@ artifact byte allowance into this ABI, validates every report echo, and
 releases a transferred root if later sidecar adoption fails. Stock OCCT and
 owned ABI 0.2 through 0.6 retain the earlier unbounded research path.
 
+Candidate format v2 also replaces the former JSON semantic state with a bounded
+binary sidecar. Its fixed 48-byte big-endian header declares exact sidecar
+length and aggregate face, edge, vertex, adjacency, lineage, UTF-16BE
+string-byte, and native-orientation totals. The TypeScript encoder detaches and
+canonicalizes once, counts the complete representation before allocating, and
+writes one exact-size buffer. The decoder preflights the header, totals, and
+minimum representation before topology-table allocation, accepts only closed
+tags/masks and finite canonical binary64 values, charges nested collections
+against the declared totals, and requires exact EOF. UTF-16BE code units retain
+arbitrary JavaScript strings without replacement. This bounded sidecar is used
+with both the ABI 0.7 native path and the stock/legacy research path; it does not
+make their native materialization behavior equivalent.
+
+The reviewed deterministic stock-runtime v2 asymmetric-box fixture is `11,591`
+bytes with fixture witness
+`invariantcad:kernel-shape-artifact-fixture:v1:sha256:221d1ea2265a26df1293e63d625d25e85eb8a86041bdea53a927269427e3d16a`.
+Its semantic witness remains
+`invariantcad:kernel-shape-semantic:v1:sha256:40ae684e4a2fad512f54e1f1be4443acf7faf2f34fc6b281c7b816d8d3366cb2`.
+The v1 fixture is retained only to prove fail-closed rejection before native
+restore. Verify the current fixture without writing with
+`pnpm artifact:fixture:occt -- --check --version v2`.
+
 ABI 0.7 still does not advertise `KernelCapabilities.shapeArtifacts`. A small
 malformed v4 body can declare native geometry arrays that OCCT allocates before
-the post-read topology ceiling is available, the JSON sidecar has intermediate
-allocation amplification, synchronous same-thread WASM has an in-flight
-cancellation gap, ordered native enumeration is not durable identity for
-symmetric topology, and the runtime has no in-process proof of the exact
-JavaScript/WASM hashes. Production promotion therefore still requires a strict
-preflight/allocation quota, durable artifact-local native identity, bounded
-binary sidecar decoding, exact runtime attestation, and reviewed cross-process
-goldens.
+the post-read topology ceiling is available. Synchronous same-thread WASM also
+has an in-flight cancellation gap, ordered native enumeration is not durable
+identity for symmetric topology, the runtime has no in-process proof of the
+exact JavaScript/WASM/build hashes, and the stock fixture is not cross-process
+proof. Binary sidecar v2 closes the former JSON amplification blocker, but
+production promotion still requires strict native archive preflight and
+allocation/work quotas, prompt cancellation outside the same-thread gap,
+durable artifact-local native identity, exact runtime attestation, and reviewed
+owned-runtime cross-process goldens.
 
 The generated pair and its local package-neutral bundle remain ignored build
 artifacts and are not included in the `invariantcad` npm tarball. Until an

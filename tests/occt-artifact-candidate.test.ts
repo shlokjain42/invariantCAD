@@ -5,8 +5,14 @@ import type {
 } from "occt-wasm";
 import { inspectKernelShapeArtifactSupport } from "../src/artifact-cache.js";
 import type { KernelShapeArtifactCodecCandidate } from "../src/conformance.js";
-import { canonicalStringifyProtocol } from "../src/core/json.js";
-import { getOcctShapeArtifactCodecCandidate } from "../src/internal/occt-artifact-candidate.js";
+import {
+  getOcctShapeArtifactCodecCandidate,
+  type OcctShapeArtifactCapturedSidecarState,
+} from "../src/internal/occt-artifact-candidate.js";
+import {
+  decodeOcctArtifactSidecarV2,
+  encodeOcctArtifactSidecarV2,
+} from "../src/internal/occt-artifact-sidecar-v2.js";
 import type {
   GeometryKernel,
   KernelShape,
@@ -21,7 +27,10 @@ import type {
   ProfileCurveSource,
   ResolvedProfile,
 } from "../src/protocol/profile.js";
-import type { KernelTopologySnapshot } from "../src/protocol/topology.js";
+import type {
+  KernelTopologyLineage,
+  KernelTopologySnapshot,
+} from "../src/protocol/topology.js";
 import {
   observeKernelShapeSemantics,
   type KernelShapeSemanticObservation,
@@ -119,7 +128,7 @@ interface CandidateEnvelopeSections {
 }
 
 function envelopeSections(artifact: Uint8Array): CandidateEnvelopeSections {
-  // Candidate format v1 uses a fixed 40-byte big-endian header. Keeping this
+  // Candidate format v2 uses a fixed 40-byte big-endian header. Keeping this
   // parser here makes corruption cases target declared sections, not lucky
   // byte positions inside one fixture.
   expect(artifact.byteLength).toBeGreaterThanOrEqual(40);
@@ -154,38 +163,22 @@ function withIncrementedUint32(
   return corrupted;
 }
 
-function testRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new TypeError(`${label} is not an object`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function testArray(value: unknown, label: string): unknown[] {
-  if (!Array.isArray(value)) throw new TypeError(`${label} is not an array`);
-  return value;
-}
-
-function rewriteCanonicalState(
+function rewriteSidecarState(
   artifact: Uint8Array,
-  mutate: (state: Record<string, unknown>) => void,
+  transform: (
+    state: OcctShapeArtifactCapturedSidecarState,
+  ) => OcctShapeArtifactCapturedSidecarState,
 ): Uint8Array {
   const sections = envelopeSections(artifact);
-  const state = testRecord(
-    JSON.parse(
-      new TextDecoder("utf-8", { fatal: true }).decode(
-        artifact.subarray(
-          sections.stateOffset,
-          sections.stateOffset + sections.stateLength,
-        ),
-      ),
-    ) as unknown,
-    "candidate state",
+  const state = decodeOcctArtifactSidecarV2(
+    artifact.subarray(
+      sections.stateOffset,
+      sections.stateOffset + sections.stateLength,
+    ),
   );
-  mutate(state);
-  const encodedState = new TextEncoder().encode(
-    canonicalStringifyProtocol(state),
-  );
+  const encodedState = encodeOcctArtifactSidecarV2(transform(state), {
+    maxBytes: MAX_ARTIFACT_BYTES,
+  });
   const nextLength =
     artifact.byteLength - sections.stateLength + encodedState.byteLength;
   const rewritten = new Uint8Array(nextLength);
@@ -208,6 +201,20 @@ function rewriteCanonicalState(
   return rewritten;
 }
 
+function withFirstFaceAreaMismatch(
+  state: OcctShapeArtifactCapturedSidecarState,
+): OcctShapeArtifactCapturedSidecarState {
+  const face = state.topology.faces[0];
+  if (face === undefined) throw new TypeError("Candidate state has no first face");
+  return {
+    ...state,
+    topology: {
+      ...state.topology,
+      faces: [{ ...face, area: face.area + 0.125 }, ...state.topology.faces.slice(1)],
+    },
+  };
+}
+
 function replaceBrepSection(
   artifact: Uint8Array,
   brep: Uint8Array,
@@ -225,12 +232,6 @@ function replaceBrepSection(
   header.setUint32(32, brep.byteLength, false);
   header.setUint32(36, rewritten.byteLength, false);
   return rewritten;
-}
-
-function firstWireFace(state: Record<string, unknown>): Record<string, unknown> {
-  const topology = testRecord(state.topology, "candidate topology");
-  const faces = testArray(topology.faces, "candidate faces");
-  return testRecord(faces[0], "candidate first face");
 }
 
 function liveShapeCount(kernel: GeometryKernel): number {
@@ -440,6 +441,62 @@ describe("OCCT shape-artifact codec candidate", () => {
       if (decoded !== undefined) consumer.disposeShape(decoded);
       if (imported !== undefined) producer.disposeShape(imported);
       if (original !== undefined) producer.disposeShape(original);
+      consumer.dispose();
+      producer.dispose();
+    }
+  });
+
+  it("keeps NUL-containing lineage fields structurally distinct", async () => {
+    const producer = await createOcctKernel();
+    const consumer = await createOcctKernel();
+    let source: KernelShape | undefined;
+    let decoded: KernelShape | undefined;
+    try {
+      source = box(producer, "nul-lineage-box");
+      const artifact = await codec(producer).encodeShapeArtifact(
+        source,
+        ARTIFACT_CONTEXT,
+      );
+      const collidingUnderDelimiterJoin: readonly KernelTopologyLineage[] = [
+        {
+          feature: "nul-lineage",
+          relation: "created",
+          source: {
+            kind: "sketch-entity",
+            sketch: "a\0b",
+            entity: "c",
+          },
+        },
+        {
+          feature: "nul-lineage",
+          relation: "created",
+          source: {
+            kind: "sketch-entity",
+            sketch: "a",
+            entity: "b\0c",
+          },
+        },
+      ];
+      const rewritten = rewriteSidecarState(artifact, (state) => ({
+        ...state,
+        lineage: collidingUnderDelimiterJoin,
+      }));
+      decoded = await codec(consumer).decodeShapeArtifact(
+        rewritten,
+        ARTIFACT_CONTEXT,
+      );
+      const restoredLineage = (
+        decoded as KernelShape & {
+          readonly lineage: readonly KernelTopologyLineage[];
+        }
+      ).lineage;
+      expect(restoredLineage).toHaveLength(2);
+      expect(restoredLineage.map(({ source }) => source)).toEqual(
+        expect.arrayContaining(collidingUnderDelimiterJoin.map(({ source }) => source)),
+      );
+    } finally {
+      if (decoded !== undefined) consumer.disposeShape(decoded);
+      if (source !== undefined) producer.disposeShape(source);
       consumer.dispose();
       producer.dispose();
     }
@@ -682,43 +739,17 @@ describe("OCCT shape-artifact codec candidate", () => {
         badFingerprint[sections.fingerprintOffset]! ^ 1;
       const badState = artifact.slice();
       badState[sections.stateOffset] = 0xff;
+      const badStateLength = withIncrementedUint32(
+        artifact,
+        sections.stateOffset + 12,
+      );
       const badBrep = artifact.slice();
       badBrep[sections.brepOffset] =
         badBrep[sections.brepOffset]! ^ 0xff;
-      const unorderedAdjacency = rewriteCanonicalState(artifact, (state) => {
-        const edges = testArray(
-          firstWireFace(state).edges,
-          "candidate first-face edges",
-        );
-        expect(edges.length).toBeGreaterThan(1);
-        [edges[0], edges[1]] = [edges[1], edges[0]];
-      });
-      const unorderedLineage = rewriteCanonicalState(artifact, (state) => {
-        const lineage = testArray(
-          firstWireFace(state).lineage,
-          "candidate first-face lineage",
-        );
-        expect(lineage.length).toBeGreaterThan(1);
-        [lineage[0], lineage[1]] = [lineage[1], lineage[0]];
-      });
-      const negativeZero = rewriteCanonicalState(artifact, (state) => {
-        const surface = testRecord(
-          firstWireFace(state).surface,
-          "candidate first-face surface",
-        );
-        const normal = testArray(surface.normal, "candidate first-face normal");
-        const zeroIndex = normal.findIndex(
-          (value) => value === "0000000000000000",
-        );
-        expect(zeroIndex).toBeGreaterThanOrEqual(0);
-        normal[zeroIndex] = "8000000000000000";
-      });
-      const topologyMismatch = rewriteCanonicalState(artifact, (state) => {
-        const face = firstWireFace(state);
-        expect(face.area).toEqual(expect.stringMatching(/^[0-9a-f]{16}$/));
-        const area = face.area as string;
-        face.area = `${area.slice(0, -1)}${area.endsWith("0") ? "1" : "0"}`;
-      });
+      const topologyMismatch = rewriteSidecarState(
+        artifact,
+        withFirstFaceAreaMismatch,
+      );
       const malformed = [
         ["magic", badMagic],
         ["declared state length", withIncrementedUint32(artifact, 28)],
@@ -726,10 +757,8 @@ describe("OCCT shape-artifact codec candidate", () => {
         ["trailing bytes", trailing],
         ["fingerprint", badFingerprint],
         ["state", badState],
+        ["inner state length", badStateLength],
         ["BREP", badBrep],
-        ["unordered adjacency", unorderedAdjacency],
-        ["unordered lineage", unorderedLineage],
-        ["negative zero", negativeZero],
         ["post-adoption topology mismatch", topologyMismatch],
       ] as const;
 
@@ -882,13 +911,10 @@ describe("OCCT shape-artifact codec candidate", () => {
         source,
         ARTIFACT_CONTEXT,
       );
-      const topologyMismatch = rewriteCanonicalState(artifact, (state) => {
-        const face = firstWireFace(state);
-        const area = face.area;
-        expect(area).toEqual(expect.stringMatching(/^[0-9a-f]{16}$/));
-        const encoded = area as string;
-        face.area = `${encoded.slice(0, -1)}${encoded.endsWith("0") ? "1" : "0"}`;
-      });
+      const topologyMismatch = rewriteSidecarState(
+        artifact,
+        withFirstFaceAreaMismatch,
+      );
       const raw = rawOcctKernel(consumer);
       const originalRelease = raw.release.bind(raw);
       const arenaBefore = raw.shapeCount;
