@@ -461,13 +461,59 @@ and native subshape indices are evaluation-scoped; a codec needs a stable format
 that restores fresh face, edge, and vertex identities together with their
 key-neutral semantic evidence rather than persisting those ephemeral keys.
 
-A production codec must also bound native serialization before materializing an
-oversized payload, support prompt cancellation during native work, clean up
-partially created native objects, detach returned bytes, borrow decode input,
-and prove exact cross-process restoration through committed goldens. Its
-compatibility fingerprint must pin the native binary/WASM build, wrapper and
-format revisions, relevant tolerance and option semantics, and any other input
-that can change the result.
+The repository now has a private OCCT candidate hook for developing that stronger
+boundary. It is not a package export, is not installed as the production
+kernel's codec, and does not add `KernelCapabilities.shapeArtifacts`. Its
+versioned envelope combines a binary BREP archive with a canonical sidecar for
+key-neutral face/edge/vertex structure and incidence, ordered root/subshape
+type-orientation evidence, wrapper lineage, complete/partial history, and
+analytic volume overrides. The encoder records the native topology arrays in
+order. Decode imports a new native root, generates fresh evaluation-scoped
+topology keys, and accepts the sidecar only if the new root type, orientations,
+counts, and arrays exactly match the recorded ordered structural evidence. A
+mismatch rejects the artifact and disposes the partial shape. Array positions
+are therefore fail-closed artifact-local verification coordinates, never
+serialized public keys or a claim that native enumeration is durable identity.
+
+The repository gate combines direct cold/warm, state, corruption, byte,
+ownership, alternate-valid-BREP, and downstream-selection cases with one
+committed stock-runtime asymmetric-box artifact and literal semantic/fixture
+witnesses. The general audit still marks that evidence non-certifying, and this
+single golden is not a cross-platform or owned-facade matrix.
+
+This hook remains candidate-only for six independent reasons:
+
+- the current native BREP writer fully materializes its string or in-memory
+  filesystem payload before TypeScript can enforce `maxArtifactBytes`;
+- a small malformed binary can declare large table, pole, or knot counts and
+  trigger native allocations beyond the input-byte ceiling before parsing
+  fails;
+- canonical JSON parsing and comparison still materialize intermediate string,
+  object-graph, and encoded sidecar state before schema-specific budgets apply;
+- synchronous same-thread WASM does not yield for an ordinary timer-driven
+  `AbortSignal`, so entry checks cannot provide prompt in-flight cancellation;
+- exact order is useful for rejection in the pinned runtime, but
+  indistinguishable symmetric subshapes can be permuted without providing a
+  durable semantic identity proof;
+- the candidate fingerprint binds reviewed revision labels and options, not the
+  exact JavaScript/WASM hashes, OCCT build, toolchain, and serialization flags
+  required for a production runtime attestation.
+
+The next production step is an owned bounded native facade ABI. Encoding must
+place at most the admitted bytes in a report-owned capped buffer rather than a
+full temporary string or file. Decode must borrow bounded input and defend its
+native allocations; its report must retain any successful native shape until a
+validated one-shot same-kernel transfer. Report destruction, failed transfer,
+post-transfer adapter validation, overflow, malformed input, and cancellation
+must each release partial state exactly once. Durable artifact-local native
+identity markers must bind restored subshapes independently of order while the
+wrapper still creates fresh evaluation keys.
+
+A production codec must also prove exact cross-process restoration through
+committed goldens. Its compatibility fingerprint must pin the native
+binary/WASM and JavaScript pair, wrapper, envelope and sidecar revisions,
+native identity scheme, relevant tolerance and serialization options, and any
+other input that can change the result.
 
 Those serialization, cancellation, ownership, stable-subshape restoration, and
 fingerprint requirements remain open backend work. Advertising an ordinary

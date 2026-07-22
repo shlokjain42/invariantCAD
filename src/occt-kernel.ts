@@ -127,6 +127,13 @@ import {
   reduceIndexedTopologyEvolution,
   type IndexedTopologyCounts,
 } from "./internal/topology-evolution.js";
+import {
+  OCCT_SHAPE_ARTIFACT_CANDIDATE_ACCESS,
+  remapOcctShapeArtifactTopology,
+  type OcctShapeArtifactCandidateHost,
+  type OcctShapeArtifactCapturedState,
+  type OcctShapeArtifactNativeStructure,
+} from "./internal/occt-artifact-candidate.js";
 
 export {
   DEFAULT_OCCT_EXACT_BOOLEAN_HISTORY_RECORD_LIMIT,
@@ -300,6 +307,77 @@ function topologyKey(
   index: number,
 ): KernelTopologyKey {
   return `${namespace}:${serial}:${topology}:${index}` as KernelTopologyKey;
+}
+
+function artifactFloat64(value: number): string {
+  const bytes = new Uint8Array(8);
+  new DataView(bytes.buffer).setFloat64(0, Object.is(value, -0) ? 0 : value, false);
+  return [...bytes]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function occtArtifactCandidateCompatibilityFingerprint(
+  runtime: string | undefined,
+  modelingTolerance: number,
+  tessellation: MeshOptions,
+  maxExactBooleanHistoryRecords: number,
+  maxExactEdgeTreatmentHistoryRecords: number,
+  maxExactSolidOffsetHistoryRecords: number,
+  capabilities: KernelCapabilities,
+): string | undefined {
+  if (
+    runtime === undefined ||
+    !Number.isFinite(modelingTolerance) ||
+    !(modelingTolerance > 0)
+  ) {
+    return undefined;
+  }
+  try {
+    const linearDeflection = tessellation.linearDeflection;
+    const angularDeflection = tessellation.angularDeflection;
+    const relative = tessellation.relative;
+    if (
+      (linearDeflection !== undefined &&
+        (typeof linearDeflection !== "number" ||
+          !Number.isFinite(linearDeflection) ||
+          !(linearDeflection > 0))) ||
+      (angularDeflection !== undefined &&
+        (typeof angularDeflection !== "number" ||
+          !Number.isFinite(angularDeflection) ||
+          !(angularDeflection > 0))) ||
+      (relative !== undefined && typeof relative !== "boolean")
+    ) {
+      return undefined;
+    }
+    return [
+      "invariantcad-occt-shape-candidate@1",
+      "occt-wasm@3.7.0",
+      `runtime=${runtime}`,
+      `modelingTolerance=f64:${artifactFloat64(modelingTolerance)}`,
+      `linearDeflection=${
+        linearDeflection === undefined
+          ? "default"
+          : `f64:${artifactFloat64(linearDeflection)}`
+      }`,
+      `angularDeflection=${
+        angularDeflection === undefined
+          ? "default"
+          : `f64:${artifactFloat64(angularDeflection)}`
+      }`,
+      `relative=${relative === undefined ? "default" : String(relative)}`,
+      `maxExactBooleanHistoryRecords=${maxExactBooleanHistoryRecords}`,
+      `maxExactEdgeTreatmentHistoryRecords=${maxExactEdgeTreatmentHistoryRecords}`,
+      `maxExactSolidOffsetHistoryRecords=${maxExactSolidOffsetHistoryRecords}`,
+      `features=${capabilities.features.join(",")}`,
+      "nativeArchive=occt-brep-binary",
+      "topologySidecar=artifact-local-index-v1",
+      "nativeStructure=ordered-type-orientation-v1",
+      "nativeMaterialization=unbounded-candidate-only",
+    ].join(";");
+  } catch {
+    return undefined;
+  }
 }
 
 function uniqueLineage(
@@ -682,6 +760,9 @@ class OcctKernel implements GeometryKernel {
   private readonly maxExactBooleanHistoryRecords: number;
   private readonly maxExactEdgeTreatmentHistoryRecords: number;
   private readonly maxExactSolidOffsetHistoryRecords: number;
+  private readonly artifactCandidateCompatibilityFingerprint:
+    | string
+    | undefined;
   private readonly ownedShapes = new WeakSet<OcctShape>();
   private readonly liveShapes = new Set<OcctShape>();
   private readonly topologyNamespace = nextTopologyNamespace++;
@@ -704,7 +785,7 @@ class OcctKernel implements GeometryKernel {
   ) {
     this.raw = raw;
     this.facade = facade;
-    this.tessellation = options.tessellation ?? {};
+    this.tessellation = Object.freeze({ ...(options.tessellation ?? {}) });
     this.modelingTolerance = options.modelingTolerance ?? 1e-7;
     this.maxExactBooleanHistoryRecords = maxExactBooleanHistoryRecords;
     this.maxExactEdgeTreatmentHistoryRecords =
@@ -793,6 +874,16 @@ class OcctKernel implements GeometryKernel {
             },
           }),
     };
+    this.artifactCandidateCompatibilityFingerprint =
+      occtArtifactCandidateCompatibilityFingerprint(
+        topologySignatureRuntime,
+        this.modelingTolerance,
+        this.tessellation,
+        this.maxExactBooleanHistoryRecords,
+        this.maxExactEdgeTreatmentHistoryRecords,
+        this.maxExactSolidOffsetHistoryRecords,
+        this.capabilities,
+      );
     if (facade?.draft !== undefined) {
       this.draft = (shape, faces, resolved, context) =>
         this.draftWithExactEvolution(
@@ -803,6 +894,22 @@ class OcctKernel implements GeometryKernel {
           context,
         );
     }
+  }
+
+  get [OCCT_SHAPE_ARTIFACT_CANDIDATE_ACCESS]():
+    | OcctShapeArtifactCandidateHost
+    | undefined {
+    const compatibilityFingerprint =
+      this.artifactCandidateCompatibilityFingerprint;
+    return compatibilityFingerprint === undefined
+      ? undefined
+      : Object.freeze({
+          compatibilityFingerprint,
+          capture: (shape: KernelShape) =>
+            this.captureShapeArtifactCandidate(shape),
+          restore: (state: OcctShapeArtifactCapturedState) =>
+            this.restoreShapeArtifactCandidate(state),
+        });
   }
 
   private assertKernelLive(): void {
@@ -819,6 +926,127 @@ class OcctKernel implements GeometryKernel {
       throw new TypeError("Expected a live OCCT kernel shape");
     }
     return shape;
+  }
+
+  private captureShapeArtifactCandidate(
+    shape: KernelShape,
+  ): OcctShapeArtifactCapturedState {
+    const owned = this.shape(shape);
+    const topology = this.topology(owned);
+    const nativeStructure = this.captureShapeArtifactNativeStructure(
+      owned,
+      topology,
+    );
+    const brep = this.raw.toBREPBinary(owned[OCCT_SHAPE]).slice();
+    return Object.freeze({
+      brep,
+      lineage: owned.lineage,
+      history: owned.history,
+      topology,
+      nativeStructure,
+      ...(owned.volumeOverride === undefined
+        ? {}
+        : { volumeOverride: owned.volumeOverride }),
+    });
+  }
+
+  private restoreShapeArtifactCandidate(
+    state: OcctShapeArtifactCapturedState,
+  ): OcctShape {
+    this.assertKernelLive();
+    let handle: ShapeHandle | undefined;
+    let provisional: OcctShape | undefined;
+    try {
+      handle = this.raw.fromBREPBinary(state.brep);
+      provisional = this.own(handle, undefined, {
+        inherited: state.lineage,
+        history: state.history,
+        ...(state.volumeOverride === undefined
+          ? {}
+          : { volumeOverride: state.volumeOverride }),
+      });
+      handle = undefined;
+      const status = this.status(provisional);
+      if (!status.ok) {
+        throw new TypeError(
+          `OCCT candidate BREP did not restore a valid shape: ${status.code}`,
+        );
+      }
+      const freshTopology = this.topology(provisional);
+      const freshNativeStructure = this.captureShapeArtifactNativeStructure(
+        provisional,
+        freshTopology,
+      );
+      provisional.topologySnapshot = remapOcctShapeArtifactTopology(
+        state.topology,
+        freshTopology,
+        state.nativeStructure,
+        freshNativeStructure,
+      );
+      return provisional;
+    } catch (error) {
+      try {
+        if (provisional !== undefined) {
+          this.disposeShape(provisional);
+        } else if (handle !== undefined) {
+          this.raw.release(handle);
+        }
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          "OCCT candidate restore and cleanup both failed",
+        );
+      }
+      throw error;
+    }
+  }
+
+  private captureShapeArtifactNativeStructure(
+    shape: OcctShape,
+    topology: KernelTopologySnapshot,
+  ): OcctShapeArtifactNativeStructure {
+    const root = shape[OCCT_SHAPE];
+    const subshapeOrientations = (
+      kind: "solid" | "shell" | "wire",
+    ): OcctShapeArtifactNativeStructure[
+      | "solidOrientations"
+      | "shellOrientations"
+      | "wireOrientations"
+    ] => {
+      const handles = this.raw.getSubShapes(root, kind);
+      try {
+        return Object.freeze(
+          handles.map((handle) => this.raw.shapeOrientation(handle)),
+        );
+      } finally {
+        this.releaseHandles(handles);
+      }
+    };
+    const retainedOrientations = (
+      descriptors: readonly TopologyDescriptor[],
+      expected: "face" | "edge" | "vertex",
+    ) =>
+      Object.freeze(
+        descriptors.map((descriptor) => {
+          const retained = shape.topologyHandles.get(descriptor.key);
+          if (retained?.topology !== expected) {
+            throw new Error(
+              "OCCT topology snapshot lost a retained subshape handle",
+            );
+          }
+          return this.raw.shapeOrientation(retained.handle);
+        }),
+      );
+    return Object.freeze({
+      rootType: this.raw.getShapeType(root),
+      rootOrientation: this.raw.shapeOrientation(root),
+      solidOrientations: subshapeOrientations("solid"),
+      shellOrientations: subshapeOrientations("shell"),
+      wireOrientations: subshapeOrientations("wire"),
+      faceOrientations: retainedOrientations(topology.faces, "face"),
+      edgeOrientations: retainedOrientations(topology.edges, "edge"),
+      vertexOrientations: retainedOrientations(topology.vertices, "vertex"),
+    });
   }
 
   private own(
