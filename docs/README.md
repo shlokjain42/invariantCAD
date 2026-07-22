@@ -49,7 +49,8 @@ large navigation change.
 ## Canonical project files
 
 Repository-root [security](../SECURITY.md), [contribution](../CONTRIBUTING.md),
-[changelog](../CHANGELOG.md), [license](../LICENSE), and
-[third-party notice](../THIRD_PARTY_NOTICES.md) files remain canonical for npm
-and GitHub. Their Mintlify pages summarize and link to those sources rather than
-creating conflicting policy text.
+[support](../SUPPORT.md), [governance](../GOVERNANCE.md),
+[Code of Conduct](../CODE_OF_CONDUCT.md), [changelog](../CHANGELOG.md),
+[license](../LICENSE), and [third-party notice](../THIRD_PARTY_NOTICES.md) files
+remain canonical for npm and GitHub. Their Mintlify pages summarize and link to
+those sources rather than creating conflicting policy text.

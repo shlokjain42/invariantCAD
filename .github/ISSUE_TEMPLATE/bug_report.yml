@@ -1,0 +1,92 @@
+name: Bug report
+description: Report reproducible incorrect behavior in a supported InvariantCAD release.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a problem. Remove secrets and confidential CAD data, and use the smallest public reproduction you can provide. Security vulnerabilities belong in a private advisory, not this form.
+
+  - type: checkboxes
+    attributes:
+      label: Preflight
+      options:
+        - label: I searched existing issues and pull requests for this problem.
+          required: true
+        - label: I reproduced this with the latest available 0.1.x patch when practical.
+          required: true
+        - label: This report contains no credentials, private vulnerability details, or confidential geometry.
+          required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: InvariantCAD version
+      description: Output of `npm view invariantcad version` or the exact git commit.
+      placeholder: 0.1.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: kernel
+    attributes:
+      label: Geometry kernel
+      options:
+        - Manifold
+        - Stock OpenCascade
+        - InvariantCAD-owned OCCT facade
+        - Custom kernel
+        - Not applicable / document-only
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include Node or browser version, operating system, architecture, package manager, TypeScript/bundler, and main-thread or worker use.
+      placeholder: |
+        Node.js: 24.x
+        OS/architecture: Ubuntu x64
+        Package manager: pnpm 10.x
+        Runtime: Node main thread
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Provide a repository link or a complete minimal TypeScript example/design document. Explain how to run it.
+      render: typescript
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics and stack trace
+      description: Include diagnostic codes, details, topology explanation output, native errors, and stack traces where available.
+      render: text
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Note regressions, disposal behavior, resource usage, screenshots, or related upstream issues.

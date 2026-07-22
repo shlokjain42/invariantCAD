@@ -1,129 +1,463 @@
 ---
 title: "Roadmap"
-description: "Delivered foundation, near-term exact modeling and persistence work, and criteria for InvariantCAD 1.0."
+description: "What shipped in 0.1.0, what is active now, what is planned later, and the criteria for InvariantCAD 1.0."
 icon: "map"
 ---
 
 # InvariantCAD roadmap
 
-InvariantCAD's goal is one coherent TypeScript CAD system, not one monolithic geometry algorithm. Specialized kernels and solvers sit behind versioned protocols while the TypeScript API, document model, diagnostics, and design semantics remain stable.
+InvariantCAD's goal is one coherent TypeScript CAD platform, not one
+monolithic geometry algorithm. Specialized kernels, solvers, renderers,
+translators, and analysis engines sit behind versioned protocols while the
+TypeScript API, document model, diagnostics, and design semantics remain
+stable.
 
-## 0.1 — executable foundation
+## How to read this roadmap
 
-- Versioned, canonical design IR
-- Dimensioned expressions and bounded parameters
-- Sketch entities, explicit profiles, and reference constraint solver
-- Mesh primitives, extrude, revolve, booleans, and transforms
-- Parts and fixed-placement nested assemblies
-- Document-owned material definitions with explicit density, deterministic part references, and no name-based material lookup
-- Basic deterministic bills of materials for nested fixed-placement assemblies, including suppression, quantities, affine occurrence mass, and partial-mass diagnostics
-- Named definition-scoped configurations with parameter, instance-suppression, and part-material overrides, plus variant-aware bills of materials
-- Kernel-neutral volume, surface, bounds, center-of-mass, and centroidal-inertia measurement for solids and placed assemblies; deterministic principal/axis analysis, radii of gyration, explicit density-aware physical mass, and mesh/STL/OBJ export
-- Validation, diagnostics, hashing, CLI, examples, and conformance tests
+Every section has an explicit status:
 
-## 0.2 — exact mechanical modeling
+- **Shipped** means the behavior is in the public `invariantcad` 0.1.0 package
+  and is covered by its release gates.
+- **Repository-only** means the source, tests, or reproducible bundle tooling
+  exists in this repository but the capability is not distributed through the
+  public npm package.
+- **In progress** means the protocol or candidate exists, but a documented
+  promotion gate still blocks production use.
+- **Planned** means the capability is part of the intended platform but is not
+  implemented or advertised today.
+- **Deferred** means work will not begin until a named prerequisite or external
+  review is complete.
 
-- OpenCascade WASM/native backend
-- Curve-preserving resolved profiles with sketch-entity provenance
-- Exact primitives, extrude, revolve, booleans, and transforms
-- Bounded ruled solid lofts through ordered, compatible, hole-free profiles
-- Bounded exact solid sweeps along explicit open 3D polyline, three-point circular-arc, and ordered exact line/arc composite paths with corrected-Frenet transport
-- Exact kernel-neutral profile area/centroid moments, authoritative translated-world sweep-volume semantics, independent native-face certification, and geometry-derived capability refinement preflight for bounded composite sweeps
-- Exact lines, circles, conics, NURBS curves, and NURBS surfaces
-- STEP and OCCT BREP import/export, followed by IGES
-- Shape healing and validity diagnostics
-- Explicit exact-to-mesh conversion with tolerances
-- Evaluation-scoped exact B-Rep face/edge/vertex topology snapshots and capability negotiation
-- Semantic origin/geometry/adjacency selectors with explicit cardinality
-- Closed primitive/extrusion roles plus source-aware revolution swept faces, partial-turn caps, full-turn cap omission, axis-boundary collapse, deliberately unnamed revolution edges/artifacts, and sketch-curve source provenance through transforms
-- Closed bounded ruled-loft roles for source-free start/end caps, source-aware two-lineage side faces and section rims when source data exists, and source-free lateral edges for non-circular curves; direct unsourced profiles never gain invented sources, circular seams remain unnamed, authored curve phase must align, and incomplete or ambiguous correspondence downgrades to partial history
-- Closed bounded-sweep roles with path-directed source-free caps, `C*S` source-aware sides, `C` source-aware rims at each end, and `V*S` source-free laterals for `C` direct-profile curves, `S` authored path segments, and `V` authored non-circular curve starts; direct unsourced calls invent no sources, path-joint fragments and circular seams remain unnamed, and ambiguous, incomplete, or nonlocal graph correspondence downgrades to partial history
-- OCCT topology descriptor semantics `@4`, adding bounded-sweep anchors with exact fingerprint gating from descriptor `@3` while retaining persistent-reference protocol v1
-- Document v4, adding only the six sweep-role literals while preserving frozen v1/v2/v3 parsing, bytes, hashes, and direct evaluation; explicit v1/v2/v3 migration upgrades to v4, is idempotent for v4, and never rewrites stored descriptor evidence
-- Conditional OCCT topology descriptor semantics `@5` for recognized owned facade ABI 0.5+, adding only exact generated edge→face fillet/chamfer class anchors; stock and earlier owned runtimes remain descriptor `@4`, persistent-reference protocol remains v1, and current facade ABI 0.7 retains ABI 0.6's modeling/history surface while adding bounded artifact transport only for the repository-private candidate
-- Document v5, adding only `fillet.face.blend` and `chamfer.face.bevel` while preserving frozen v1–v4 grammars; explicit v1–v4 migration upgrades to v5, is idempotent for v5, and retains stored descriptor fingerprints and evidence verbatim
-- Topology-signature protocol v2 for detached face/edge/vertex references, adding vertex point evidence and reciprocal edge↔vertex one-hop evidence while retaining byte- and behavior-frozen protocol-v1 face/edge capture and resolution
-- OCCT topology descriptor `@6` as the primary protocol-v2 declaration for known stock and recognized owned runtimes, with one exact protocol-v1 compatibility profile retaining the former descriptor `@4` fingerprint on stock/owned ABI 0.2–0.4 or descriptor `@5` fingerprint on owned ABI 0.5+
-- Document v6 as the current authoring grammar, adding persistent vertices, vertex `position` queries, and edge↔vertex adjacency without semantic vertex roles; v1–v5 stay frozen and migration to v6 preserves every stored protocol, fingerprint, and evidence record verbatim
-- First exact constant-radius fillet driven by semantic edge selection
-- First exact equal-distance chamfer driven by semantic edge selection
-- First exact constant-thickness inward/outward shell driven by semantic face openings
-- First exact whole-solid inward/outward offset with fixed round joins
-- Atomic signed multi-face neutral-plane draft through semantic face selectors, enabled by the matched owned OCCT facade with exact indexed face/edge/vertex evolution
-- Owned OCCT facade ABI 0.4 multi-input union, subtraction, and intersection with target/tool authored order, isolated working copies and byte-stable arena operands, transactional fail-closed transfer, and complete face/edge/vertex `PRESERVED`/`MODIFIED`/`GENERATED`/`DELETED` plus residual source-less `CREATED` evolution
-- Identity-only public Boolean lineage: preserved/modified successors inherit proven roles and sources, while generated-only and higher-order source-less `CREATED` topology is created by the current Boolean without source-role inheritance
-- Caller-configurable exact Boolean history-record budgeting, passed into the native facade and enforced before native report materialization or indexed JavaScript copying, with a `1_000_000` default
-- Owned OCCT facade ABI 0.5 exact constant-radius fillet and equal-distance chamfer with complete face/edge/vertex `PRESERVED`/`MODIFIED`/`GENERATED`/`DELETED` plus residual source-less `CREATED` evolution; identity lineage is inherited only through preserved/modified records, while identity-less faces proved by exact generated edge→face records receive the strict blend/bevel class role and residual-created/generated edges stay unnamed
-- Canonical input-index-ordered tangent-contour seeds with duplicate/overlapping seed idempotence, one native build, and an exact selected-edge/progress echo
-- A deep topology-independent edge-treatment operand copy with proved original/copy correspondence and byte-stable arena input, plus report-owned same-kernel one-shot transfer and exactly-once rollback
-- Optional exact fillet/chamfer evaluator capability with stock and owned ABI 0.2–0.4 partial-history fallback, and an independent `maxExactEdgeTreatmentHistoryRecords` budget enforced before native materialization or indexed JavaScript copying
-- Owned OCCT facade ABI 0.6 exact face-selected shell and whole-solid offset with complete face/edge/vertex `PRESERVED`/`MODIFIED`/`GENERATED`/`DELETED` plus residual source-less `CREATED` evolution and identity-only public lineage
-- Canonical input-index-ordered shell openings, deep topology-independent solid copies with byte-stable arena inputs, and final-membership reconciliation for pinned OCCT generated-only replacements; a selected opening may correctly remain a `MODIFIED` planar rim rather than becoming `DELETED`
-- Optional exact shell/offset evaluator capability with stock and owned ABI 0.2–0.5 partial-history fallback, plus the independent `maxExactSolidOffsetHistoryRecords` budget enforced before native materialization or indexed JavaScript copying
-- Reproducible, digest-pinned OCCT facade build foundation
-- Local package-neutral distribution-bundle generation and strict verification for the owned OCCT facade ABI/bundle 0.7 JS/WASM pair, with checksums, provenance, SBOM, source/relinking information, notices, licenses, and the ordered seven-patch series ending in `0007-bounded-shape-artifacts.patch`; ABI 0.7 retains ABI 0.6's modeling/history surface and exposes its bounded artifact transport only to the repository-private candidate
-- External legal, release, and security review followed by publication through an explicit durable channel; the bundle remains separate from the `invariantcad` npm package and is never an implicit runtime download
+The earlier roadmap treated “0.1”, “0.2”, and “0.3” as sequential capability
+bands. Development did not stop at those boundaries: the public 0.1.0 release
+shipped the executable foundation, most of the former exact-mechanical 0.2
+track, and substantial persistent-intent work from the former 0.3 track. The
+headings below describe actual status instead of implying that already shipped
+work is waiting for a later version number. Future release numbers will be
+assigned to coherent, release-gated increments rather than to the old bands.
 
-Facade ABI/bundle numbers version the native adapter boundary and are independent of the product roadmap headings below. Current facade ABI 0.7 is an additive native-boundary release, not a product-roadmap milestone: it retains ABI 0.6's modeling/history surface and adds bounded artifact transport only for the repository-private candidate.
+## Shipped — public 0.1.0 platform
 
-## 0.3 — persistent design intent
+### Kernel-neutral authoring and product structure
 
-- Extend complete shell/offset provenance beyond the owned OCCT ABI 0.6 path while retaining stock OCCT and legacy owned facades as supported partial-history implementations
-- Extend complete Boolean and edge-treatment provenance beyond the owned OCCT ABI 0.4/0.5 paths while retaining stock OCCT and legacy owned facades as supported partial-history implementations; Manifold retains its declared geometry operations without topology snapshots
-- Expand role and source mapping beyond the landed primitive, extrusion, revolution-face, bounded ruled-loft, and bounded-sweep families and beyond the current sweep modes; do not assign path-segment or arbitrary seam identity
-- Landed: topology-signature protocol v2 for detached face/edge/vertex references, with key-free structured geometry, vertex points, and face↔edge/edge↔vertex one-hop evidence; protocol-v1 face/edge wire bytes, evidence, and matching remain frozen and supported through exact compatibility profiles
-- Landed: Document v2 topology-reference registries and typed persistent selector atoms, extended through current Document v6 with v1–v5 preservation, explicit migration to v6, canonical normalized variants, exact direct-target and protocol/fingerprint binding, bounded shared resolution, and fillet/chamfer/shell/draft consumption
-- Landed: an initial published persistent-topology parameter-torture corpus covering transformed complete lineage, partial Boolean fallback, topology disappearance and recovery, deliberate sweep ambiguity, multi-fingerprint registries, cancellation, and native ownership cleanup
-- Landed: an owned facade ABI 0.6 exact-evolution persistence matrix covering inherited Boolean, fillet/chamfer, shell, and draft semantic survival; exact generated fillet/chamfer face-role survival across amount changes and downstream role/persistent consumers; multi-face class ambiguity; unnamed generated shell/offset and treatment-edge baselines; serialization; and native arena cleanup
-- Landed: topology-reference explanation v1, with deeply frozen resolved/missing/ambiguous aggregate reports, per-strategy considered/matched counts from the original bounded matching pass, key-free non-resolved outcomes, shared-session caching, and evaluator diagnostic propagation
-- Landed: frozen node-kind membership and top-level document-body fields through explicit v1/v2/v3/v4/v5/v6 TypeScript and Zod lists, compile-time tuple/union tripwires, strict runtime inventory tests, and allow-listed migration copying
-- Expand persistent intent into broader feature-family naming, including any deliberately justified vertex roles, without assigning arbitrary identities to symmetric or coincident topology
-- Landed: ordinary topology-selection explanation v1, with deeply frozen resolved/missing/ambiguous aggregate reports, exact universe/match/cardinality counts, keys only on resolved outcomes, and the same report attached to legacy missing/ambiguous diagnostics; direct resolve and explain calls remain separate passes
-- Landed: authored change-impact report v1, with bounded detached-document/string-seed validation; context-qualified base/configuration closure over expressions, bounds, effective materials, active assembly instances, persistent selectors, and the feature DAG; and frozen reason-bearing impacted parameters, materials, configurations, nodes, and outputs
-- Landed: feature-hash protocol v1, with bounded cancellable kernel-independent SHA-256 Merkle identity for every node under one effective configuration/call-time parameter context, active assembly and material semantics, canonical consumed persistent evidence, and isolated-branch stability; these hashes identify admitted intent rather than geometry
-- Landed: artifact-cache protocol v1 foundation, with evaluator/kernel/artifact/solver-bound solid keys, fail-closed opt-in solver fingerprints (the built-in reference solver intentionally remains ineligible pending cross-runtime numeric conformance), optional all-or-nothing kernel codec capabilities, explicit encode/decode ownership, integrity-checked detached records, bounded cancellable stores, concurrency-safe aggregate sessions, and a copying reference memory store
-- Landed: the public framework-neutral `invariantcad/conformance` shape-codec audit boundary, with separate candidate and already-advertised modes, exact runtime identity matching, tagged semantic witnesses, golden-first decoding, dedicated fresh producer and consumer instances for reviewed pre-witness source encode/decode checks in both disposal orders, fresh-instance ownership/mutation isolation, empty/truncated-input, returned-byte-limit, and pre-abort checks, and finite evidence that deliberately confers neither certification nor cache eligibility
-- Landed: repository semantic-observation protocol v1, producing a bounded canonical evaluator-semantic quotient with exact normalized IEEE-754 numbers, sorted oriented Float32 triangle multisets, exact key-neutral topology-graph labeling under separate search-state and work budgets, complete advertised-feature probe-or-exclusion accounting, owned native round-trip and downstream-probe results, one-time hostile-input snapshots, pre-stringification exact byte checks, canonical encoding and tagged hashing, structured limits, and abort-raced asynchronous probes. It is a finite reviewed-corpus witness projection, not a native shape serializer or cache-validation proof
-- Landed as candidate-only: a repository-private OCCT artifact hook with a versioned binary-BREP envelope and canonical topology/native-orientation/lineage/history/volume sidecar. Decode creates fresh evaluation keys and accepts the sidecar only after exact root-type, orientation, count, and ordered structural verification. Direct state/corruption/ownership tests and a pinned asymmetric-box golden audit pass on the current stock runtime without certifying compatibility. Owned facade ABI 0.7 now supplies capped chunked BinTools-v4 output, borrowed-input length checking, strict consumption, a post-read topology ceiling, report-owned decode, same-kernel one-shot transfer, and exact TypeScript rollback; raw and owned-runtime tests prove the candidate does not fall back to legacy MEMFS. It has no package export and the production OCCT kernel still omits `shapeArtifacts`. Hostile native counts can still allocate beyond their input before post-read checks, sidecar JSON has pre-schema intermediate materialization, same-thread synchronous WASM has an in-flight cancellation gap, ordered topology cannot durably identify symmetric peers, and exact loaded runtime hashes are not attested
-- Complete the production OCCT artifact boundary: add strict archive preflight and native allocation/work quotas, prompt cancellable native work, durable artifact-local native identity markers rather than order as identity, a bounded binary sidecar, exact loaded JS/WASM/build attestation, and reviewed cross-process goldens. Then advertise only after the full feature matrix passes and integrate cache read/decode and encode/write into evaluation with cleanup, cancellation, corruption, eviction, and conformance gates. No shipped backend advertises a codec and the evaluator does not consume the protocol yet
-- Implement complete backend-owned codecs for other runtimes only when they can round-trip every evaluator-observable semantic. In the lockfile-tested Manifold 3.5.1 runtime, public Float32 Mesh reconstruction of a `1 × 2 × 3` box translated by `0.1` on X changes X bounds from `[-0.4, 0.6]` to `[-0.4000000059604645, 0.6000000238418579]` and volume from `6` to `6.000000178813934`; restoring tolerance does not restore the geometry
-- Document auto-diff and geometric/B-Rep comparison APIs
+- Versioned, canonical design IR with stable IDs, a validated feature DAG, and
+  frozen Document v1–v6 grammars with explicit migration to current Document
+  v6.
+- Dimensioned expressions, bounded parameters, explicit base units, named
+  configurations, call-time overrides, and deterministic dependency checks.
+- Sketch points, lines, arcs, and circles; explicit profiles and holes; a
+  reference constraint solver; and curve-preserving resolved profiles with
+  sketch-entity provenance.
+- Boxes, cylinders/cones, spheres, extrudes, revolves, Booleans, transforms,
+  bounded ruled solid lofts, and bounded exact solid sweeps along explicit open
+  3D polyline, three-point circular-arc, and ordered line/arc composite paths
+  with corrected-Frenet transport.
+- Parts, fixed-placement nested assemblies, document-owned materials with
+  explicit density, deterministic part references, instance suppression,
+  part-material overrides, and variant-aware deterministic bills of materials.
+- Kernel-neutral volume, surface area, bounds, center of mass, centroidal
+  inertia, principal/axis analysis, radii of gyration, density-aware physical
+  mass, affine occurrence mass, and structured partial-mass diagnostics.
+- Validation, structured diagnostics, canonical serialization and hashing,
+  authored change-impact analysis, effective feature hashes, CLI commands,
+  examples, package conformance, and explicit native-resource ownership.
 
-Current topology keys and ABI indices remain evaluation-scoped. Protocol-v2 references persist detached face/edge/vertex evidence rather than those keys and resolve to a fresh key only for one compatible current candidate; protocol-v1 does the same under its frozen face/edge contract. Document v2–v6 can serialize the evidence and selector intent admitted by each frozen grammar, never the resolved key or native shape. Four version axes are independent: Document v6 is the current JSON authoring grammar; persistent-reference protocol v2 is the current detached-evidence envelope while v1 remains supported unchanged; OCCT descriptor `@6` is the primary v2 declaration while exact v1 descriptor `@4`/`@5` fingerprints remain compatibility profiles; and facade ABI is 0.7 with `exactIndexedTopologyEvolution` still at v1. Migration to Document v6 never upgrades a stored protocol or descriptor fingerprint and never rewrites evidence. Authored impact v1 closes each current evaluation context independently; it is not a field-level or document auto-diff, cannot predict newly introduced dependencies, and is not a geometric/B-Rep comparison, cache-validation, or topology-identity system. Feature hashes identify effective v1 intent but are not geometry proofs or complete cache keys. Artifact-cache v1 supplies the compatibility and ownership envelope; semantic-observation v1 supplies an exact normalized projection of the finite plan being audited; and the conformance audit supplies bounded corpus evidence. None certifies a codec, establishes eligibility, or enables caching. Generic OCCT BREP exchange cannot fill the codec gap because it loses wrapper-level lineage, complete/partial history, topology annotations, analytic overrides, cached evaluator state, and stable fresh-subshape restoration. The Manifold public Mesh round trip loses exact double-precision geometry through Float32 positions. ABI 0.7 bounds native output before materialization but production codecs must also bound hostile decode allocation, observe cancellation during native work, and carry an exact runtime/format/options/tolerance fingerprint. Exact ABI 0.4 Boolean, ABI 0.5 fillet/chamfer, and ABI 0.6 shell/offset history prove one evaluation's evolution graph and strengthen semantic-lineage evidence, but do not themselves make a native index persistent. Vertices have no semantic roles, treatment roles name classes rather than individual faces, and indistinguishable symmetric or coincident candidates fail persistent matching as ambiguous. Real codecs and evaluator consumption remain future work.
+### Mesh and exact geometry backends
 
-## 0.4 — advanced mechanical features
+- The bundled Manifold backend provides watertight mesh primitives, extrude,
+  revolve, Boolean operations, transforms, measurement, and STL/OBJ workflows.
+- The stock OpenCascade backend provides exact B-Rep primitives, extrude,
+  revolve, Booleans, transforms, bounded ruled lofts, bounded line/arc sweeps,
+  constant-radius fillets, equal-distance chamfers, constant-thickness
+  inward/outward shells, and whole-solid inward/outward offsets with fixed
+  round joins.
+- STEP and text/binary OCCT BREP import/export, explicit exact-to-mesh
+  tessellation tolerances, and evaluated-output STL, OBJ, STEP, and BREP export
+  are public. Kernel-level import exists; a serializable imported-body feature
+  remains planned.
+- Exact kernel-neutral profile area and centroid moments, authoritative
+  translated-world sweep-volume semantics, independent native-face
+  certification, and geometry-derived composite-sweep capability preflight are
+  shipped for the bounded sweep contract.
+- Stock OCCT supports the exact geometry listed above with feature-dependent
+  partial topology history. The stronger complete-history paths described
+  under “Repository-only” are not silently implied by the npm package.
 
-- Asymmetric, distance-angle, and variable chamfer modes through semantic selectors
-- Variable fillet through semantic selectors
-- Closed, variable-thickness, and intersection/miter-join shell modes
-- Composite Bézier/B-spline/helix and guided or variable-section sweep modes; smooth/guided/open or holed loft modes; pipe; and two-dimensional wire/profile offset
-- Feature-specific validity and healing diagnostics
-- Expand the persistent-selection torture corpus across each newly named feature family and topology kind
+### Exact topology and persistent design intent
 
-## 0.5 — mechanical assemblies
+- Evaluation-scoped exact B-Rep face, edge, and vertex snapshots with explicit
+  capability negotiation, analytic geometry descriptors, reciprocal
+  adjacency, feature provenance, and sketch sources.
+- Semantic origin/geometry/adjacency selectors, set algebra, explicit
+  cardinality, and deeply frozen resolved/missing/ambiguous explanation reports.
+- Closed primitive/extrusion roles plus source-aware revolution swept faces,
+  partial-turn caps, full-turn cap omission, axis-boundary collapse,
+  deliberately unnamed revolution edges/artifacts, and sketch-curve source
+  provenance through transforms.
+- Closed bounded ruled-loft roles for source-free start/end caps, source-aware
+  two-lineage side faces and section rims when source data exists, and
+  source-free lateral edges for non-circular curves. Direct unsourced profiles
+  never gain invented sources, circular seams remain unnamed, authored curve
+  phase must align, and incomplete or ambiguous correspondence downgrades to
+  partial history.
+- Closed bounded-sweep roles with path-directed source-free caps, `C*S`
+  source-aware sides, `C` source-aware rims at each end, and `V*S` source-free
+  laterals for `C` direct-profile curves, `S` authored path segments, and `V`
+  authored non-circular curve starts. Direct unsourced calls invent no sources,
+  path-joint fragments and circular seams remain unnamed, and ambiguous,
+  incomplete, or nonlocal graph correspondence downgrades to partial history.
+- Topology-signature protocol v2 for detached face/edge/vertex references,
+  including vertex point evidence and reciprocal face↔edge and edge↔vertex
+  one-hop evidence. Protocol-v1 face/edge wire bytes, evidence, and matching
+  remain frozen and supported through exact compatibility profiles.
+- Document v2 topology-reference registries and typed persistent selector atoms,
+  extended through Document v6 with v1–v5 preservation, canonical normalized
+  variants, exact direct-target and protocol/fingerprint binding, bounded
+  shared resolution, and fillet/chamfer/shell/draft consumption.
+- OCCT topology descriptor `@6` is the primary protocol-v2 declaration for
+  known stock and recognized owned runtimes. One exact protocol-v1
+  compatibility profile retains descriptor `@4` for stock/owned ABI 0.2–0.4
+  or descriptor `@5` for owned ABI 0.5+.
+- Document v4 added only the six bounded-sweep role literals; Document v5 added
+  only `fillet.face.blend` and `chamfer.face.bevel`; Document v6 added persistent
+  vertices, vertex `position` queries, and edge↔vertex adjacency without adding
+  semantic vertex roles. Migrations preserve stored protocol, fingerprint,
+  lineage, geometry, and adjacency evidence verbatim.
+- The published persistence torture corpus covers transformed complete lineage,
+  partial Boolean fallback, topology disappearance and recovery, deliberate
+  sweep ambiguity, multiple fingerprints, cancellation, serialization, and
+  native ownership cleanup.
+- Authored design-impact report v1 performs bounded, configuration-aware reverse
+  dependency closure over expressions, bounds, effective materials, active
+  assembly instances, persistent selectors, the feature DAG, and outputs.
+- Feature-hash protocol v1 provides bounded, cancellable, kernel-independent
+  SHA-256 Merkle identity under one effective evaluation context. These hashes
+  identify admitted intent, not geometry or cache eligibility.
 
-- Assembly mate/joint solver protocol
-- Planar, cylindrical, concentric, distance, angle, gear, rack, and screw relations
-- Degrees of freedom and motion studies
-- Interference, clearance, and contact queries
-- Effectivity, rule-driven variants, and alternate/substitute components
+### Artifact and conformance foundations
 
-## 0.6 — documentation and manufacturing
+- Artifact-cache protocol v1 ships as a public storage and compatibility
+  foundation: evaluator/kernel/artifact/solver-bound solid keys, fail-closed
+  solver fingerprints, all-or-nothing optional codec capabilities, explicit
+  encode/decode ownership, integrity-checked detached records, bounded
+  cancellable stores, concurrency-safe aggregate sessions, and a copying
+  reference memory store.
+- The public framework-neutral `invariantcad/conformance` boundary audits
+  candidate or already-advertised shape codecs against exact runtime identity,
+  tagged semantic witnesses, golden-first decode fixtures, fresh producer and
+  consumer instances, both disposal orders, ownership and mutation isolation,
+  malformed input, byte ceilings, and pre-abort behavior. Finite audit evidence
+  deliberately confers neither certification nor cache eligibility.
+- Semantic-observation protocol v1 produces a bounded canonical
+  evaluator-semantic quotient with exact normalized IEEE-754 numbers, sorted
+  oriented Float32 triangle multisets, exact key-neutral topology-graph
+  labeling under separate search/work budgets, complete advertised-feature
+  probe-or-exclusion accounting, native round-trip and downstream-probe
+  results, hostile-input snapshots, byte checks, canonical encoding, tagged
+  hashing, structured limits, and abort-raced asynchronous probes.
 
-- Drawing views, sections, details, dimensions, tolerances, and title blocks
-- PMI and GD&T model
-- DXF/SVG/PDF drawing export
-- Sheet-metal bends, flat patterns, and bend tables
-- CAM stock, setups, operations, tool libraries, and postprocessor protocol
-- Additive-manufacturing checks and 3MF export
+## Repository-only — owned OCCT facade
+
+The owned facade is not part of the `invariantcad` npm package and is never an
+implicit runtime download.
+
+- ABI 0.4 provides ordered multi-input union, subtraction, and intersection
+  against isolated working copies with byte-stable arena operands,
+  transactional fail-closed transfer, and complete face/edge/vertex
+  `PRESERVED`/`MODIFIED`/`GENERATED`/`DELETED` plus residual source-less
+  `CREATED` evolution.
+- Boolean lineage is identity-only: preserved/modified successors inherit
+  proven roles and sources, while generated-only and higher-order source-less
+  `CREATED` topology is created by the current Boolean without source-role
+  inheritance. The caller-configurable history budget defaults to `1_000_000`
+  and is enforced before native report materialization or indexed JavaScript
+  copying.
+- ABI 0.5 adds exact constant-radius fillet and equal-distance chamfer evolution
+  with the same complete record classes. Canonical input-index-ordered
+  tangent-contour seeds are duplicate/overlap idempotent, one native build is
+  performed, and the report echoes exact selected-edge progress. A deep
+  topology-independent operand copy, proved original/copy correspondence,
+  report-owned same-kernel one-shot transfer, and exactly-once rollback protect
+  ownership. Identity-less faces receive strict blend/bevel class roles only
+  when exact generated edge→face records prove them; residual generated edges
+  remain unnamed.
+- ABI 0.6 adds exact face-selected shell and whole-solid offset evolution with
+  complete record classes and identity-only lineage. Shell openings are
+  canonical input-index ordered; solid copies are topology-independent and
+  byte-stable; final-membership reconciliation handles generated-only
+  replacements. A selected opening may correctly remain a `MODIFIED` planar
+  rim rather than becoming `DELETED`.
+- ABI 0.2–0.4 retain partial-history fillet/chamfer fallback and ABI 0.2–0.5
+  retain partial-history shell/offset fallback. Independent Boolean,
+  edge-treatment, and solid-offset history budgets are enforced before native
+  materialization or indexed copying.
+- The matched facade enables atomic signed multi-face neutral-plane draft
+  through semantic face selectors with exact indexed face/edge/vertex
+  evolution. It also strengthens bounded composite sweeps with controlled
+  corrected-Frenet/right-corner PipeShell refinements.
+- A reproducible, digest-pinned facade build foundation and strict local
+  package-neutral ABI/bundle 0.7 generation are present. The JS/WASM bundle
+  carries checksums, provenance, CycloneDX SBOM, source/relinking information,
+  notices, licenses, and the ordered seven-patch series ending in
+  `0007-bounded-shape-artifacts.patch`.
+
+Facade ABI/bundle numbers version the native adapter boundary, not product
+releases. ABI 0.7 retains ABI 0.6's modeling/history surface and adds bounded
+artifact transport only for the repository-private candidate.
+
+**Deferred:** public facade distribution requires external legal, release, and
+security review plus an explicit durable publication channel. Until then, the
+verified local bundle is not a supported public download.
+
+## In progress — production shape artifacts and transparent caching
+
+This is the current implementation frontier. The public protocol exists, but
+**no shipped backend advertises `shapeArtifacts` and the evaluator does not read
+or write cached shapes today**.
+
+- The repository-private OCCT candidate uses a versioned binary-BREP envelope
+  plus a canonical topology/native-orientation/lineage/history/volume sidecar.
+  Decode creates fresh evaluation keys and accepts the sidecar only after exact
+  root-type, orientation, count, and ordered structural verification.
+- Direct state, corruption, ownership, and pinned asymmetric-box golden audits
+  pass on the reviewed runtime without certifying compatibility. ABI 0.7 adds a
+  capped chunked BinTools-v4 writer, borrowed-input length checks, strict
+  consumption, a post-read topology ceiling, report-owned decode, same-kernel
+  one-shot transfer, and exact TypeScript rollback. The owned-runtime path does
+  not fall back to legacy MEMFS.
+- Promotion remains blocked by hostile native counts that can allocate before
+  post-read checks, sidecar JSON intermediate materialization, same-thread
+  synchronous WASM cancellation gaps, order-based symmetric topology, and the
+  absence of exact loaded-runtime attestation and reviewed cross-process
+  goldens.
+- Production work therefore requires strict archive preflight, native
+  allocation and work quotas, promptly cancellable native operations, durable
+  artifact-local native identity markers rather than enumeration order, a
+  bounded binary sidecar, exact loaded JS/WASM/build attestation, and a reviewed
+  cross-process golden matrix.
+- Only after that matrix passes will OCCT advertise the capability. Evaluator
+  integration must then cover per-solid cache read/decode and encode/write,
+  fresh ownership, corruption, cancellation, cleanup, eviction, concurrent
+  sessions, configuration/solver/kernel compatibility, and conformance gates.
+- Backend-owned codecs for other runtimes remain deferred until they can
+  round-trip every evaluator-observable semantic. In the lockfile-tested
+  Manifold 3.5.1 runtime, reconstructing a translated `1 × 2 × 3` box from the
+  public Float32 mesh changes X bounds from `[-0.4, 0.6]` to
+  `[-0.4000000059604645, 0.6000000238418579]` and volume from `6` to
+  `6.000000178813934`; restoring tolerance does not restore the geometry.
+
+## Planned — exact mechanical follow-through
+
+These items complete the useful exact-modeling baseline; they are not shipped
+unless separately marked above.
+
+- Extend complete Boolean, fillet/chamfer, and shell/offset provenance beyond
+  the owned ABI 0.4/0.5/0.6 paths while retaining stock OCCT and legacy facades
+  as supported partial-history implementations. Manifold retains declared mesh
+  operations without exact topology snapshots.
+- Expand role and source mapping beyond primitives, extrusion,
+  revolution-face, bounded ruled-loft, and current bounded-sweep families.
+  Add vertex roles only where a durable semantic identity can be justified;
+  never assign arbitrary identities to symmetric, coincident, path-joint, or
+  seam topology.
+- Add editable conic and NURBS curves, NURBS surfaces, general surfacing,
+  surface trimming/sewing, feature recognition, and feature-specific healing
+  and validity diagnostics.
+- Add IGES exchange and a serializable imported-body feature with explicit
+  units, healing policy, source fingerprint, and exact/mesh conversion losses.
+- Add document auto-diff plus geometric, mesh, and B-Rep comparison APIs. Keep
+  authored dependency impact, effective feature hashes, topology persistence,
+  and geometric equality as separate claims.
+
+## Planned — everyday modeling and authoring
+
+Comprehensiveness requires ordinary modeling workflows, not only deep kernel
+protocols.
+
+- Construction geometry, datum planes/axes/coordinate systems, projected and
+  external sketch geometry, trim/extend/split, sketch offset, mirror, linear
+  and circular sketch patterns, slots, ellipses/conics, and spline authoring.
+- A production sketch-solver integration with conflict sets, redundancy
+  explanations, stable degrees of freedom, drag solving, deterministic
+  diagnostics, and an audited cross-runtime artifact fingerprint.
+- Hole and hole-standard features, countersink/counterbore/thread metadata,
+  pockets, pads, ribs, webs, bosses, grooves, face draft variants, linear and
+  circular feature patterns, mirrors, and configurable feature suppression.
+- Asymmetric, distance-angle, and variable chamfers; variable fillets; closed,
+  variable-thickness, and intersection/miter-join shells.
+- Composite Bézier/B-spline/helix paths; guided, spine-controlled, or
+  variable-section sweeps; smooth/guided/open or holed lofts; pipes; and
+  two-dimensional wire/profile offset.
+- Selection ergonomics, reusable feature subgraphs, library parts/templates,
+  richer metadata and custom properties, document queries, and stable
+  diagnostics for partial, invalid, or self-intersecting results.
+- Extend the persistence torture corpus across every newly named feature family
+  and topology kind before advertising persistent downstream references.
+
+## Planned — viewer and interactive tooling
+
+The headless modeling package will remain renderer-independent. An optional
+viewer layer and reference browser application will provide:
+
+- WebGL/WebGPU-capable rendering adapters, camera/navigation controls, fit and
+  standard views, grids and axes, visibility/transparency controls, section
+  planes, exploded assemblies, and measurement overlays.
+- Face/edge/vertex picking mapped to evaluation-scoped topology keys and
+  authorable semantic selectors—never durable raw triangle or array indices.
+- Hover/highlight, multi-selection, selection explanations, feature-tree and
+  assembly-tree inspection, parameter/configuration editing, diagnostics, and
+  live rebuild state.
+- Tessellation levels of detail, progressive/worker-based evaluation, large
+  assembly culling, instancing, mesh reuse, and explicit cleanup of GPU and
+  WASM resources.
+- Framework adapters and embeddable components without coupling the document
+  model to React, Three.js, Babylon.js, or any one application stack.
+
+## Planned — mechanical assemblies
+
+- A versioned assembly mate/joint solver protocol and at least one industrial
+  solver integration.
+- Planar, cylindrical, concentric, coincident, distance, angle, gear, rack,
+  screw, slider, revolute, and fixed relations.
+- Degrees of freedom, grounded components, subassembly solving, motion studies,
+  limits, drivers, and deterministic solver diagnostics.
+- Interference, clearance, minimum-distance, contact, and swept-envelope
+  queries with semantic occurrence references.
+- Effectivity, rule-driven variants, alternate/substitute components,
+  configurable assembly structure, and scalable BOM/occurrence queries.
+
+## Planned — drawings, PMI, and manufacturing
+
+- Drawing views, projected/auxiliary/section/detail views, dimensions,
+  tolerances, annotations, tables, title blocks, and revision metadata.
+- A semantic PMI and GD&T model tied to persistent design intent rather than
+  ephemeral topology indices.
+- DXF, SVG, and PDF drawing export with deterministic layout and font policy.
+- Sheet-metal walls, bends, reliefs, hems, seams, flat patterns, bend
+  allowances, and bend tables.
+- CAM stock, work coordinate systems, setups, operations, tools, holders,
+  feeds/speeds, toolpaths, simulation, collision checks, and a versioned
+  postprocessor protocol.
+- Additive-manufacturing orientation/support checks, wall-thickness and
+  overhang analysis, mesh repair, and 3MF export.
+
+## Planned — CAE and engineering analysis
+
+- A solver-neutral analysis document for material properties beyond density,
+  coordinate systems, semantic loads, fixtures, contacts, mesh controls, cases,
+  and result provenance.
+- Surface and volume meshing protocols with quality metrics, convergence data,
+  adaptive refinement, and exact-geometry association.
+- Initial static structural, modal, thermal, and thermal-stress adapter
+  contracts, followed by nonlinear, transient, fatigue, fluid, or multiphysics
+  integrations where an external solver can satisfy the protocol.
+- Bounded result datasets, field queries, derived quantities, unit-safe result
+  comparison, and viewer overlays. InvariantCAD will orchestrate audited solver
+  adapters rather than pretending one TypeScript implementation is every CAE
+  solver.
+
+## Planned — plugin and ecosystem platform
+
+- Versioned plugin contracts for geometry kernels, sketch and assembly solvers,
+  import/export translators, analysis engines, renderers, generators, CAM
+  strategies, and postprocessors.
+- Capability negotiation, compatibility fingerprints, lifecycle and ownership
+  rules, cancellation, resource limits, structured diagnostics, and reusable
+  conformance suites for every extension category.
+- A manifest and discovery model that works in Node, browsers, workers, and
+  server deployments without allowing a plugin to mutate canonical documents
+  or bypass capability checks.
+- Security guidance and isolation boundaries for untrusted document data,
+  native/WASM plugins, file translators, and postprocessors. Sandboxing claims
+  will be made only for runtimes that can enforce them.
+- First-party adapters, examples, templates, framework integrations, and a
+  searchable ecosystem catalog after the contracts stabilize.
+
+## Planned — performance and runtime coverage
+
+- A benchmark corpus for sketches, feature chains, topology resolution,
+  imports, assemblies, tessellation, and repeated parameter/configuration
+  rebuilds, with checked time, memory, artifact-size, and native-handle budgets.
+- Incremental DAG evaluation backed by the production artifact cache, explicit
+  invalidation explanations, bounded parallelism, worker pools, cancellation,
+  and deterministic ownership under success and failure.
+- Streaming and chunked exchange where formats permit it, configurable memory
+  ceilings, large-model diagnostics, mesh/instance reuse, and leak-tested
+  long-running evaluators and viewer sessions.
+- Release-gated Node, browser, Web Worker, and server deployments. Firefox,
+  Safari, Deno, Bun, shared-memory WASM, and WebGPU will be advertised only
+  after dedicated compatibility and security gates exist.
+- Profiling hooks that expose stable phase and resource metrics without leaking
+  kernel handles or making timing part of deterministic design semantics.
+
+## Deferred and research-dependent work
+
+- Public distribution of the owned OCCT facade is deferred pending the external
+  legal, release, and security review described above.
+- Transparent Manifold shape artifacts are deferred until a backend-owned codec
+  preserves double-precision geometry and every evaluator-visible semantic; a
+  Float32 mesh reconstruction is not sufficient.
+- Durable identity for perfectly symmetric or coincident subshapes remains a
+  research problem. Such cases must continue to resolve as ambiguous rather
+  than acquiring enumeration-derived identity.
+- Real-time multi-user collaboration, PDM/PLM services, cloud execution, and
+  proprietary translator/solver distribution may build on the document and
+  plugin protocols, but hosted services are not prerequisites for the core
+  open-source library.
+- Generative or optimization systems may author and evaluate ordinary
+  InvariantCAD documents, but probabilistic output will not weaken validation,
+  determinism, topology, ownership, or capability contracts.
+
+## Protocol boundaries that remain true
+
+Topology keys and native ABI indices are evaluation-scoped. Protocol-v2
+references persist detached face/edge/vertex evidence and resolve to a fresh
+key only for one compatible current candidate; protocol v1 does the same under
+its frozen face/edge contract. Documents serialize evidence and selector
+intent, never resolved keys or native shapes.
+
+Four version axes are independent: Document v6 is the current JSON authoring
+grammar; persistent-reference protocol v2 is the current detached-evidence
+envelope while v1 remains supported; OCCT descriptor `@6` is the primary v2
+declaration while descriptor `@4`/`@5` fingerprints remain exact v1
+compatibility profiles; and facade ABI is 0.7 while exact indexed topology
+evolution remains protocol v1. Document migration never upgrades a stored
+protocol or descriptor fingerprint and never rewrites evidence.
+
+Authored impact v1 is not a field-level document diff and cannot predict newly
+introduced dependencies. Feature hashes are not geometry proofs or complete
+cache keys. Artifact-cache v1 supplies a compatibility and ownership envelope;
+semantic-observation v1 supplies an exact normalized projection of a finite
+reviewed plan; and the conformance audit supplies bounded corpus evidence. None
+alone certifies a codec, establishes cache eligibility, or enables caching.
+
+Generic OCCT BREP exchange cannot fill the codec gap because it loses
+wrapper-level lineage, complete/partial history, topology annotations, analytic
+overrides, cached evaluator state, and stable fresh-subshape restoration. Exact
+ABI 0.4 Boolean, ABI 0.5 fillet/chamfer, and ABI 0.6 shell/offset history prove
+one evaluation's evolution graph; they do not make a native index persistent.
+Vertices currently have no semantic roles, treatment roles name classes rather
+than individual faces, and indistinguishable candidates fail persistent
+matching as ambiguous.
 
 ## 1.0 criteria
 
-- Stable document schema and migration policy
-- Stable public TypeScript API
-- Exact B-Rep and mesh backends passing the conformance corpus
-- Industrial sketch and assembly solver integrations
-- Persistent topology robust across the published torture suite
-- Browser, Node, worker, and server deployments
-- Reproducible packages, SBOM, license notices, and security policy
-- Performance budgets and leak-free long-running evaluation
+- Stable document schema, migration policy, public TypeScript API, capability
+  negotiation, and extension versioning.
+- A coherent everyday modeling surface, exact B-Rep and mesh backends passing
+  the published conformance corpus, and documented conversion losses.
+- Industrial sketch and assembly solver integrations with deterministic,
+  structured diagnostics.
+- Persistent topology robust across the published feature and parameter torture
+  suites, with ambiguity preserved where identity cannot be proved.
+- A production viewer and supported Node, browser, worker, and server
+  deployments without coupling headless design semantics to one UI framework.
+- Reproducible packages, SBOMs, license notices, security policy, plugin threat
+  boundaries, and reviewed native/WASM distribution channels.
+- Production artifact caching and incremental evaluation with corruption,
+  compatibility, cancellation, cleanup, eviction, and cross-process gates.
+- Published performance budgets and leak-free long-running evaluation,
+  analysis, and viewer sessions on representative large models.
+- Complete documentation, examples, upgrade guides, support matrices, and
+  conformance kits sufficient for third-party kernels, solvers, translators,
+  viewers, and analysis plugins.

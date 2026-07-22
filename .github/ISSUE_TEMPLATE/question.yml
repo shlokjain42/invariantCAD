@@ -1,0 +1,43 @@
+name: Usage question
+description: Ask a focused public question about using or integrating InvariantCAD.
+title: "[Question]: "
+labels:
+  - question
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Public questions are answered on a best-effort basis. Do not attach confidential geometry, credentials, or vulnerability details.
+
+  - type: checkboxes
+    attributes:
+      label: Preflight
+      options:
+        - label: I searched the documentation, support matrix, and existing issues.
+          required: true
+        - label: This question contains no confidential or security-sensitive information.
+          required: true
+
+  - type: textarea
+    id: goal
+    attributes:
+      label: What are you trying to accomplish?
+    validations:
+      required: true
+
+  - type: textarea
+    id: attempt
+    attributes:
+      label: What have you tried?
+      description: Include a small code example, relevant document fragment, selected kernel, and diagnostics.
+      render: typescript
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Version and environment
+      description: InvariantCAD version, Node/browser, package manager, bundler, operating system, and kernel where relevant.
+    validations:
+      required: true

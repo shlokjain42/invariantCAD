@@ -26,6 +26,9 @@ Before creating a tag:
 The release workflow independently installs from the frozen lockfile, checks
 that the tag and package version match, reruns the full package and Chromium
 acceptance suite, and publishes from a GitHub-hosted runner with provenance.
+The acceptance suite includes strict TypeScript, source correctness and format
+hygiene, package metadata/types, clean-consumer installation, dependency audit,
+Mintlify validation and links, and the production browser bundle.
 
 ## One-time npm bootstrap
 
@@ -38,8 +41,8 @@ workflow no longer reads a registry token.
 Never commit an npm token or copy it into a workflow file, shell history, issue,
 release note, or CI log. The npm-side bootstrap token must also be revoked.
 
-Before the next release, configure the package's npm trusted publisher with
-these case-sensitive values:
+The package's npm trusted publisher is configured with these case-sensitive
+values:
 
 - provider: GitHub Actions;
 - organization or user: `shlokjain42`;
@@ -48,10 +51,14 @@ these case-sensitive values:
 - environment: `npm`; and
 - allowed action: `npm publish`.
 
-Then set npm publishing access to require 2FA and disallow traditional tokens.
+Publishing access requires 2FA and disallows traditional tokens.
 Future releases use the workflow's short-lived OIDC identity; no npm secret is
 needed. npm automatically emits provenance for a public package published from
 this public repository through trusted publishing.
+
+The first post-0.1.0 release is the end-to-end confirmation of this tokenless
+path. If npm returns `ENEEDAUTH`, verify every trusted-publisher field exactly;
+do not restore a long-lived publish secret.
 
 ## Publishing and verification
 

@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: InvariantCAD documentation
+    url: https://invariant-cad.mintlify.app
+    about: Read the guides, API surface, support matrix, and roadmap before opening an issue.
+  - name: Private security report
+    url: https://github.com/shlokjain42/invariantCAD/security/advisories/new
+    about: Report suspected vulnerabilities privately. Do not disclose them in a public issue.
+  - name: Support policy
+    url: https://github.com/shlokjain42/invariantCAD/blob/main/SUPPORT.md
+    about: Review supported versions, required reproduction information, and support boundaries.

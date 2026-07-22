@@ -4,6 +4,15 @@
 
 - Normalized the npm CLI executable target to npm's canonical package-relative
   form and added a release check for its path, shebang, and executable mode.
+- Replaced token-based release authentication with npm Trusted Publishing and
+  a short-lived GitHub Actions OIDC identity.
+- Reworked the roadmap into explicit shipped, repository-only, in-progress,
+  planned, and deferred tracks, including everyday modeling, visualization,
+  CAE, plugins, performance, runtime coverage, and measurable 1.0 criteria.
+- Added project governance, support, Code of Conduct, issue forms, a pull
+  request template, and expanded contributor guidance for the public project.
+- Added TS7-compatible source correctness linting and deterministic format
+  hygiene checks to the ordinary verification and release gates.
 
 ## [0.1.0] - 2026-07-22
 

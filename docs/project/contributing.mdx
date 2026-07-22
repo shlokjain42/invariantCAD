@@ -17,6 +17,7 @@ cd invariantCAD
 corepack enable
 pnpm install --frozen-lockfile
 pnpm check
+pnpm lint
 pnpm test
 ```
 
@@ -26,6 +27,7 @@ Node.js 20.19 or newer is required. The lockfile records the tested toolchain.
 
 ```bash
 pnpm check          # build + TypeScript
+pnpm lint           # source correctness + format hygiene
 pnpm test           # unit/integration suite
 pnpm test:browser   # production Vite bundle in Chromium
 pnpm lint:package   # package export/type lint
@@ -35,6 +37,12 @@ pnpm release:check  # complete release gate
 
 Run the smallest relevant loop while developing, then the proportional full
 gate before handing off a change.
+
+The canonical [support policy](https://github.com/shlokjain42/invariantCAD/blob/main/SUPPORT.md),
+[governance model](https://github.com/shlokjain42/invariantCAD/blob/main/GOVERNANCE.md),
+and [Code of Conduct](https://github.com/shlokjain42/invariantCAD/blob/main/CODE_OF_CONDUCT.md)
+describe the project's current single-maintainer boundaries and community
+process.
 
 ## Protocol changes
 

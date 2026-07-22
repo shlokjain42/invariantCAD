@@ -1,0 +1,27 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": [],
+  "categories": {
+    "correctness": "error"
+  },
+  "ignorePatterns": ["src/vendor/**"],
+  "rules": {
+    "eslint/no-unused-vars": "off"
+  },
+  "overrides": [
+    {
+      "files": ["tests/**/*.ts"],
+      "rules": {
+        "eslint/no-constant-condition": "off",
+        "eslint/no-control-regex": "off",
+        "eslint/no-unsafe-optional-chaining": "off"
+      }
+    },
+    {
+      "files": ["scripts/**/*.{mjs,ts}"],
+      "rules": {
+        "eslint/no-control-regex": "off"
+      }
+    }
+  ]
+}

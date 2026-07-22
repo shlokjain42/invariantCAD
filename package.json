@@ -51,6 +51,9 @@
   "scripts": {
     "build": "tsup && tsc -p tsconfig.build.json && node scripts/stage-manifold-runtime.mjs",
     "check": "pnpm build && tsc --noEmit",
+    "lint": "pnpm lint:source && pnpm format:check",
+    "lint:source": "oxlint --deny-warnings --report-unused-disable-directives src tests examples scripts tsup.config.ts vitest.config.ts",
+    "format:check": "node scripts/check-source-format.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:browser": "pnpm build && vite build --config tests/browser/vite.config.ts && playwright test --config tests/browser/playwright.config.ts",
@@ -74,7 +77,7 @@
     "test:occt-artifact-owned": "tsx scripts/test-owned-occt-artifact.ts",
     "test:occt-facade-bundle": "pnpm bundle:occt-facade && pnpm verify:occt-facade-bundle && pnpm pack --pack-destination .artifacts && node scripts/package-smoke.mjs --owned-facade-runtime-dir .artifacts/occt-facade-bundle/invariantcad-occt-facade-0.7.0/runtime && pnpm test:occt-persistence-public -- --runtime-dir .artifacts/occt-facade-bundle/invariantcad-occt-facade-0.7.0/runtime && pnpm test:occt-artifact-owned -- --runtime-dir .artifacts/occt-facade-bundle/invariantcad-occt-facade-0.7.0/runtime",
     "prepack": "pnpm build",
-    "verify": "pnpm check && pnpm test && pnpm docs:check && pnpm lint:package && pnpm test:package",
+    "verify": "pnpm check && pnpm lint && pnpm test && pnpm docs:check && pnpm lint:package && pnpm test:package",
     "release:check": "pnpm verify && pnpm audit:release && pnpm docs:release-check && pnpm test:browser"
   },
   "engines": {
@@ -101,6 +104,7 @@
     "@playwright/test": "^1.61.1",
     "@types/node": "^26.1.1",
     "@vitest/coverage-v8": "^4.1.10",
+    "oxlint": "1.75.0",
     "publint": "^0.3.21",
     "tsup": "^8.5.1",
     "tsx": "^4.23.1",

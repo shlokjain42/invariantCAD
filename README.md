@@ -169,16 +169,20 @@ design state, and all native lifetime boundaries are explicit.
 ```bash
 pnpm install --frozen-lockfile
 pnpm check
+pnpm lint
 pnpm test
 pnpm release:check
 ```
 
 `release:check` builds the package, runs the complete Node test suite, validates
-package exports, installs the packed tarball into a clean consumer, validates
-the Mintlify site and links, audits production dependencies, and executes the
-production browser bundle in Chromium.
+source correctness and format hygiene, validates package exports, installs the
+packed tarball into a clean consumer, validates the Mintlify site and links,
+audits production and development dependencies, and executes the production
+browser bundle in Chromium.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) before submitting a change.
+See [CONTRIBUTING.md](CONTRIBUTING.md) before submitting a change. Project
+support and decision-making are documented in [SUPPORT.md](SUPPORT.md) and
+[GOVERNANCE.md](GOVERNANCE.md).
 
 ## Security
 

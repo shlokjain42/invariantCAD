@@ -1,0 +1,85 @@
+name: Feature request
+description: Propose a CAD workflow, API, backend, or tooling capability.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the modeling problem first. InvariantCAD versions document, kernel, topology, artifact, and native protocols independently, so compatibility and failure semantics matter as much as an API shape.
+
+  - type: checkboxes
+    attributes:
+      label: Preflight
+      options:
+        - label: I searched existing issues, pull requests, the support matrix, and the roadmap.
+          required: true
+        - label: I am describing a generally useful capability rather than requesting private model-specific work.
+          required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem and use case
+      description: What real CAD-as-code workflow is blocked, and who needs it?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Primary area
+      options:
+        - Authoring and document model
+        - Sketching and constraints
+        - Solid or surface modeling
+        - Topology and persistent references
+        - Assemblies, configurations, or BOM
+        - Analysis and measurements
+        - Import, export, or interoperability
+        - Geometry kernel or conformance
+        - Browser, worker, CLI, or deployment
+        - Documentation or examples
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Required behavior
+      description: Define inputs, outputs, expected geometry/design intent, failure behavior, and important limits.
+    validations:
+      required: true
+
+  - type: textarea
+    id: api
+    attributes:
+      label: Possible API or document shape
+      description: Optional sketch only; maintainers may choose a different compatible boundary.
+      render: typescript
+
+  - type: textarea
+    id: backends
+    attributes:
+      label: Backend and compatibility considerations
+      description: Which kernels/runtimes must support it? Does it affect schemas, topology lineage, serialization, migration, native ownership, or interchange?
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Include current workarounds and why they are insufficient.
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance examples
+      description: List representative models, edge cases, diagnostics, or conformance cases that would demonstrate completion.
+
+  - type: checkboxes
+    attributes:
+      label: Contribution
+      options:
+        - label: I may be able to help design or implement this feature.

@@ -1,0 +1,55 @@
+name: Documentation report
+description: Report missing, unclear, stale, or incorrect documentation.
+title: "[Docs]: "
+labels:
+  - documentation
+body:
+  - type: checkboxes
+    attributes:
+      label: Preflight
+      options:
+        - label: I searched existing documentation issues and pull requests.
+          required: true
+
+  - type: input
+    id: location
+    attributes:
+      label: Documentation location
+      description: Link the Mintlify page, repository file, README section, or exported symbol.
+      placeholder: https://invariant-cad.mintlify.app/modeling/features
+    validations:
+      required: true
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Problem type
+      options:
+        - Incorrect behavior or API description
+        - Missing concept or API reference
+        - Unclear explanation
+        - Broken example or command
+        - Broken link or navigation
+        - Accessibility or presentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is wrong or missing?
+    validations:
+      required: true
+
+  - type: textarea
+    id: correction
+    attributes:
+      label: Suggested correction
+      description: Include verified behavior, a replacement example, or the questions the page should answer.
+
+  - type: input
+    id: version
+    attributes:
+      label: Relevant package version
+      placeholder: 0.1.0 or main
