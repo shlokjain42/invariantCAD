@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-const EXPECTED_FACADE_VERSION = "invariantcad-facade@0.6.0+occt-wasm.3.7.0";
+const EXPECTED_FACADE_VERSION = "invariantcad-facade@0.7.0+occt-wasm.3.7.0";
 const EXPECTED_TOPOLOGY_HISTORY_VERSION = 1;
 const EXACT_BOOLEAN_HISTORY_RECORD_LIMIT = 1_000_000;
 const EXACT_EDGE_TREATMENT_HISTORY_RECORD_LIMIT = 1_000_000;
@@ -82,6 +82,10 @@ assert.equal(typeof Module.InvariantCadEdgeTreatmentReport, "function");
 assert.equal(typeof Module.invariantcadEdgeTreatmentAtomic, "function");
 assert.equal(typeof Module.InvariantCadSolidOffsetReport, "function");
 assert.equal(typeof Module.invariantcadSolidOffsetAtomic, "function");
+assert.equal(typeof Module.InvariantCadArtifactWriteReport, "function");
+assert.equal(typeof Module.InvariantCadArtifactReadReport, "function");
+assert.equal(typeof Module.invariantcadWriteArtifactBrep, "function");
+assert.equal(typeof Module.invariantcadReadArtifactBrep, "function");
 assert.equal(typeof Module.InvariantCadPipeShellReport, "function");
 assert.equal(typeof Module.invariantcadPipeShellSolid, "function");
 
@@ -1195,6 +1199,220 @@ function runFixture(label, action) {
 
 try {
   kernel = new Module.OcctKernel();
+
+  runFixture("bounded artifact binary BREP", () => {
+    const source = kernel.makeBox(1, 2, 3);
+    const arenaWithSource = kernel.getShapeCount();
+    let bytes;
+    withReport(
+      Module.invariantcadWriteArtifactBrep(kernel, source, 1_000_000),
+      (report) => {
+        assert.equal(report.ok, true);
+        assert.equal(report.stage, "complete");
+        assert.equal(report.code, "OK");
+        assert.equal(report.maxOutputBytes, 1_000_000);
+        assert.equal(report.hasBytes(), true);
+        assert.ok(report.byteCount() > 0);
+        bytes = report.copyBytes();
+        assert.ok(bytes instanceof Uint8Array);
+        assert.equal(bytes.byteLength, report.byteCount());
+      },
+    );
+    assert.equal(kernel.getShapeCount(), arenaWithSource);
+
+    withReport(
+      Module.invariantcadWriteArtifactBrep(kernel, source, 0),
+      (failed) => {
+        assert.equal(failed.ok, false);
+        assert.equal(failed.code, "INVALID_OUTPUT_LIMIT");
+        assert.equal(failed.hasBytes(), false);
+      },
+    );
+    withReport(
+      Module.invariantcadWriteArtifactBrep(kernel, 0xffff_ffff, 1_000),
+      (failed) => {
+        assert.equal(failed.ok, false);
+        assert.equal(failed.code, "INVALID_SHAPE_ID");
+        assert.equal(failed.hasBytes(), false);
+      },
+    );
+    assert.equal(kernel.getShapeCount(), arenaWithSource);
+
+    withReport(
+      Module.invariantcadWriteArtifactBrep(kernel, source, bytes.byteLength),
+      (report) => {
+        assert.equal(report.ok, true);
+        assert.equal(report.maxOutputBytes, bytes.byteLength);
+        assert.deepEqual(report.copyBytes(), bytes);
+      },
+    );
+    withReport(
+      Module.invariantcadWriteArtifactBrep(
+        kernel,
+        source,
+        bytes.byteLength - 1,
+      ),
+      (report) => {
+        assert.equal(report.ok, false);
+        assert.equal(report.stage, "serialization");
+        assert.equal(report.code, "OUTPUT_LIMIT_EXCEEDED");
+        assert.equal(report.hasBytes(), false);
+        assert.equal(report.byteCount(), 0);
+      },
+    );
+    assert.equal(kernel.getShapeCount(), arenaWithSource);
+
+    const guarded = new Uint8Array(bytes.byteLength + 2);
+    guarded[0] = 0xa5;
+    guarded[guarded.byteLength - 1] = 0x5a;
+    guarded.set(bytes, 1);
+    const borrowed = guarded.subarray(1, guarded.byteLength - 1);
+    const report = Module.invariantcadReadArtifactBrep(
+      kernel,
+      borrowed,
+      borrowed.byteLength,
+      100,
+    );
+    const alias = report.clone();
+    const foreign = new Module.OcctKernel();
+    try {
+      assert.equal(report.ok, true);
+      assert.equal(report.stage, "complete");
+      assert.equal(report.code, "OK");
+      assert.equal(report.inputByteCount, borrowed.byteLength);
+      assert.equal(report.maxInputBytes, borrowed.byteLength);
+      assert.equal(report.consumedByteCount, borrowed.byteLength);
+      assert.ok(report.topologyItemCount > 0);
+      assert.ok(report.topologyItemCount <= 100);
+      assert.equal(report.maxTopologyItems, 100);
+      assert.equal(report.hasResult(), true);
+      assert.equal(report.transferCode(kernel), "READY");
+      assert.equal(report.transferCode(foreign), "WRONG_KERNEL");
+      assert.throws(() => report.takeResultId(foreign));
+      assert.equal(report.hasResult(), true);
+      assert.equal(report.transferCode(kernel), "READY");
+      assert.equal(kernel.getShapeCount(), arenaWithSource);
+      const restored = alias.takeResultId(kernel);
+      assert.equal(kernel.getShapeCount(), arenaWithSource + 1);
+      assert.equal(report.hasResult(), false);
+      assert.equal(report.transferCode(kernel), "ALREADY_TRANSFERRED");
+      assert.equal(alias.transferCode(kernel), "ALREADY_TRANSFERRED");
+      assert.throws(() => report.takeResultId(kernel));
+      assert.equal(kernel.getShapeType(restored), "solid");
+      assert.equal(kernel.isValid(restored), true);
+      assertClose(kernel.getVolume(restored), 6, VOLUME_TOLERANCE, "artifact.volume");
+      assert.equal(kernel.subShapeCount(restored, "face"), 6);
+      kernel.release(restored);
+    } finally {
+      alias.delete();
+      report.delete();
+      foreign.delete();
+    }
+    assert.equal(guarded[0], 0xa5);
+    assert.equal(guarded[guarded.byteLength - 1], 0x5a);
+    assert.deepEqual(borrowed, bytes);
+    assert.equal(kernel.getShapeCount(), arenaWithSource);
+
+    const untaken = Module.invariantcadReadArtifactBrep(
+      kernel,
+      bytes,
+      bytes.byteLength,
+      100,
+    );
+    const untakenAlias = untaken.clone();
+    assert.equal(untaken.ok, true);
+    assert.equal(untaken.transferCode(kernel), "READY");
+    untaken.delete();
+    assert.equal(untakenAlias.transferCode(kernel), "READY");
+    untakenAlias.delete();
+    assert.equal(kernel.getShapeCount(), arenaWithSource);
+
+    const wrongVersion = bytes.slice();
+    const versionMarker = wrongVersion.indexOf("V".charCodeAt(0));
+    assert.ok(versionMarker >= 0);
+    wrongVersion[versionMarker + 1] = "3".charCodeAt(0);
+    const failures = [
+      {
+        label: "empty",
+        input: new Uint8Array(),
+        inputLimit: 1,
+        topologyLimit: 100,
+        code: "EMPTY_INPUT",
+      },
+      {
+        label: "truncated",
+        input: bytes.subarray(0, 48),
+        inputLimit: 48,
+        topologyLimit: 100,
+        code: "OCCT_EXCEPTION",
+      },
+      {
+        label: "wrong version",
+        input: wrongVersion,
+        inputLimit: wrongVersion.byteLength,
+        topologyLimit: 100,
+        code: "UNSUPPORTED_ARCHIVE",
+      },
+      {
+        label: "trailing",
+        input: Uint8Array.from([...bytes, 0]),
+        inputLimit: bytes.byteLength + 1,
+        topologyLimit: 100,
+        code: "TRAILING_INPUT",
+      },
+      {
+        label: "input cap",
+        input: bytes,
+        inputLimit: bytes.byteLength - 1,
+        topologyLimit: 100,
+        code: "INPUT_LIMIT_EXCEEDED",
+      },
+      {
+        label: "invalid input cap",
+        input: bytes,
+        inputLimit: 0,
+        topologyLimit: 100,
+        code: "INVALID_INPUT_LIMIT",
+      },
+      {
+        label: "invalid topology cap",
+        input: bytes,
+        inputLimit: bytes.byteLength,
+        topologyLimit: 0,
+        code: "INVALID_TOPOLOGY_LIMIT",
+      },
+      {
+        label: "topology cap",
+        input: bytes,
+        inputLimit: bytes.byteLength,
+        topologyLimit: 1,
+        code: "TOPOLOGY_LIMIT_EXCEEDED",
+      },
+    ];
+    for (const failure of failures) {
+      const inputBefore = failure.input.slice();
+      withReport(
+        Module.invariantcadReadArtifactBrep(
+          kernel,
+          failure.input,
+          failure.inputLimit,
+          failure.topologyLimit,
+        ),
+        (failed) => {
+          assert.equal(failed.ok, false, `${failure.label}.ok`);
+          assert.equal(failed.code, failure.code, `${failure.label}.code`);
+          assert.equal(failed.hasResult(), false, `${failure.label}.result`);
+          assert.equal(
+            failed.transferCode(kernel),
+            "NO_RESULT",
+            `${failure.label}.transfer`,
+          );
+        },
+      );
+      assert.deepEqual(failure.input, inputBefore, `${failure.label}.input`);
+      assert.equal(kernel.getShapeCount(), arenaWithSource);
+    }
+  });
 
   runFixture("exact Boolean validation", () => {
     const target = kernel.makeBox(10, 10, 10);

@@ -475,48 +475,79 @@ mismatch rejects the artifact and disposes the partial shape. Array positions
 are therefore fail-closed artifact-local verification coordinates, never
 serialized public keys or a claim that native enumeration is durable identity.
 
-The repository gate combines direct cold/warm, state, corruption, byte,
-ownership, alternate-valid-BREP, and downstream-selection cases with one
+The historical repository gate combines direct cold/warm, state, corruption,
+byte, ownership, alternate-valid-BREP, and downstream-selection cases with one
 committed stock-runtime asymmetric-box artifact and literal semantic/fixture
-witnesses. The general audit still marks that evidence non-certifying, and this
-single golden is not a cross-platform or owned-facade matrix.
+witnesses. That stock golden remains useful evidence, but it exercises the
+older unbounded stock-runtime candidate. It is neither an owned-facade golden
+nor a cross-platform or cross-process compatibility matrix, and the general
+audit correctly continues to classify it as non-certifying.
 
-This hook remains candidate-only for six independent reasons:
+Owned facade ABI 0.7 closes a specific, previously open part of the candidate
+transport boundary:
 
-- the current native BREP writer fully materializes its string or in-memory
-  filesystem payload before TypeScript can enforce `maxArtifactBytes`;
-- a small malformed binary can declare large table, pole, or knot counts and
-  trigger native allocations beyond the input-byte ceiling before parsing
-  fails;
+- the native writer pins binary BREP format v4 with triangulation and normals
+  disabled, serializes into report-owned fixed-size chunks, and enforces the
+  caller's signed 32-bit output ceiling while writing. It exposes no partial
+  bytes on overflow, and a successful report creates the detached JavaScript
+  copy only after native serialization has completed within the cap. The
+  TypeScript candidate passes the remaining total-envelope allowance to the
+  writer and validates the report's limits and byte counts;
+- the reader checks the borrowed `Uint8Array` byte length against its input cap
+  before allocating one native snapshot of the admitted view. It requires the
+  strict binary BREP v4 header, reads from that snapshot without another full
+  transport copy, and requires exact input consumption, rejecting trailing
+  bytes;
+- after `BinTools::Read`, the reader counts the retained topology graph against
+  a caller-supplied item ceiling before running full B-Rep validity analysis.
+  This is a post-decode retention and analysis bound, not a pre-decode
+  allocation bound; and
+- write reports own their successful native byte chunks. Read reports own a
+  successful decoded root outside the kernel arena until one same-kernel
+  transfer; deleting an untaken report releases it. The TypeScript adapter
+  validates every report echo and releases a transferred root if subsequent
+  sidecar validation or adoption fails.
+
+These tests prove bounded retained native output, a pre-snapshot input-byte
+gate, pinned v4/no-triangulation serialization, exact archive consumption, a
+post-read topology ceiling, and transactional report ownership for the reviewed
+owned ABI 0.7 candidate path. They do not promote that path into a production
+codec. Stock OCCT and owned ABI 0.2 through 0.6 retain the earlier unbounded
+research path, and no shipped backend advertises
+`KernelCapabilities.shapeArtifacts`.
+
+The hook remains candidate-only for six independent reasons:
+
+- an admitted binary BREP can declare large table, pole, knot, or related
+  geometry counts that cause allocation amplification inside `BinTools::Read`.
+  Those allocations occur before the post-read topology ceiling can reject the
+  decoded graph;
 - canonical JSON parsing and comparison still materialize intermediate string,
   object-graph, and encoded sidecar state before schema-specific budgets apply;
 - synchronous same-thread WASM does not yield for an ordinary timer-driven
-  `AbortSignal`, so entry checks cannot provide prompt in-flight cancellation;
-- exact order is useful for rejection in the pinned runtime, but
-  indistinguishable symmetric subshapes can be permuted without providing a
-  durable semantic identity proof;
-- the candidate fingerprint binds reviewed revision labels and options, not the
-  exact JavaScript/WASM hashes, OCCT build, toolchain, and serialization flags
-  required for a production runtime attestation.
+  `AbortSignal`, so entry checks do not provide prompt in-flight cancellation;
+- ordered topology evidence is useful for fail-closed comparison in the pinned
+  runtime, but it is not durable identity for indistinguishable symmetric
+  subshapes;
+- the candidate fingerprint binds revision labels and options, not an
+  in-process attestation of the exact loaded JavaScript/WASM pair, OCCT build,
+  toolchain, and serialization flags; and
+- the one committed stock-runtime golden does not prove exact restoration by
+  the owned facade across fresh processes, platforms, or reviewed release
+  builds.
 
-The next production step is an owned bounded native facade ABI. Encoding must
-place at most the admitted bytes in a report-owned capped buffer rather than a
-full temporary string or file. Decode must borrow bounded input and defend its
-native allocations; its report must retain any successful native shape until a
-validated one-shot same-kernel transfer. Report destruction, failed transfer,
-post-transfer adapter validation, overflow, malformed input, and cancellation
-must each release partial state exactly once. Durable artifact-local native
-identity markers must bind restored subshapes independently of order while the
-wrapper still creates fresh evaluation keys.
-
-A production codec must also prove exact cross-process restoration through
-committed goldens. Its compatibility fingerprint must pin the native
+Production promotion therefore still requires strict native archive preflight
+and/or decode-time allocation quotas, bounded sidecar decoding, prompt
+cancellation outside the same-thread synchronous gap, durable artifact-local
+native subshape identity, exact loaded-runtime/build attestation, and reviewed
+cross-process goldens. The compatibility fingerprint must bind the native
 binary/WASM and JavaScript pair, wrapper, envelope and sidecar revisions,
-native identity scheme, relevant tolerance and serialization options, and any
-other input that can change the result.
+identity scheme, relevant tolerance and serialization options, and every other
+input that can change the result.
 
-Those serialization, cancellation, ownership, stable-subshape restoration, and
-fingerprint requirements remain open backend work. Advertising an ordinary
-native exchange function under the stronger shape-artifact capability would
-therefore be incorrect, even when it can reconstruct a geometrically valid
-solid.
+ABI 0.7 resolves the candidate's former full-output-materialization and
+successful-result ownership gaps; it does not resolve the remaining allocation,
+sidecar, cancellation, identity, attestation, or compatibility-proof gaps.
+Advertising an ordinary native exchange function under the stronger
+shape-artifact capability would therefore remain incorrect, even when it can
+reconstruct a geometrically valid solid.

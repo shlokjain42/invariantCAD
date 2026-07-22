@@ -1,0 +1,734 @@
+diff --git a/facade/include/occt_kernel.h b/facade/include/occt_kernel.h
+index 4656d10..ff40fe7 100644
+--- a/facade/include/occt_kernel.h
++++ b/facade/include/occt_kernel.h
+@@ -15,12 +15,18 @@
+ #include <TDocStd_Document.hxx>
+ #include <TopoDS_Shape.hxx>
+ 
++namespace emscripten {
++class val;
++}
++
+ class OcctKernel;
+ struct InvariantCadDraftTransferState;
+ struct InvariantCadBooleanTransferState;
+ struct InvariantCadEdgeTreatmentTransferState;
+ struct InvariantCadSolidOffsetTransferState;
+ struct InvariantCadPipeShellTransferState;
++struct InvariantCadArtifactWriteState;
++struct InvariantCadArtifactReadTransferState;
+ 
+ /// Evaluation-scoped topology kinds used by the indexed evolution ABI.
+ /// These numeric values are stable across facade ABI 0.2 and later.
+@@ -377,6 +383,83 @@ struct InvariantCadSolidOffsetReport {
+         double tolerance, int maxHistoryRecords);
+ };
+ 
++/// Bounded binary-BREP serialization result used by facade ABI 0.7.
++/// The report owns chunked native bytes whose aggregate payload never exceeds
++/// maxOutputBytes. copyBytes() creates a detached JavaScript Uint8Array only
++/// after native serialization has completed within that ceiling.
++struct InvariantCadArtifactWriteReport {
++    bool ok = false;
++    std::string stage = "validation";
++    std::string code = "INTERNAL_ERROR";
++    std::string message;
++    int maxOutputBytes = 0;
++
++    InvariantCadArtifactWriteReport() = default;
++    InvariantCadArtifactWriteReport(const InvariantCadArtifactWriteReport&) = default;
++    InvariantCadArtifactWriteReport& operator=(const InvariantCadArtifactWriteReport&) = default;
++    InvariantCadArtifactWriteReport(InvariantCadArtifactWriteReport&&) noexcept = default;
++    InvariantCadArtifactWriteReport& operator=(InvariantCadArtifactWriteReport&&) noexcept = default;
++
++    bool getOk() const { return ok; }
++    std::string getStage() const { return stage; }
++    std::string getCode() const { return code; }
++    std::string getMessage() const { return message; }
++    int getMaxOutputBytes() const { return maxOutputBytes; }
++
++    bool hasBytes() const;
++    int byteCount() const;
++    emscripten::val copyBytes() const;
++
++  private:
++    std::shared_ptr<InvariantCadArtifactWriteState> output_;
++
++    friend InvariantCadArtifactWriteReport invariantcadWriteArtifactBrep(
++        OcctKernel& kernel, uint32_t shapeId, int maxOutputBytes);
++};
++
++/// Bounded-input binary-BREP decode result used by facade ABI 0.7.
++/// JavaScript input is borrowed and length-checked before the facade snapshots
++/// it into native memory. A successful decoded shape remains outside the arena
++/// until one checked same-kernel takeResultId() call.
++struct InvariantCadArtifactReadReport {
++    bool ok = false;
++    std::string stage = "validation";
++    std::string code = "INTERNAL_ERROR";
++    std::string message;
++    int inputByteCount = 0;
++    int maxInputBytes = 0;
++    int consumedByteCount = 0;
++    int topologyItemCount = 0;
++    int maxTopologyItems = 0;
++
++    InvariantCadArtifactReadReport() = default;
++    InvariantCadArtifactReadReport(const InvariantCadArtifactReadReport&) = default;
++    InvariantCadArtifactReadReport& operator=(const InvariantCadArtifactReadReport&) = default;
++    InvariantCadArtifactReadReport(InvariantCadArtifactReadReport&&) noexcept = default;
++    InvariantCadArtifactReadReport& operator=(InvariantCadArtifactReadReport&&) noexcept = default;
++
++    bool getOk() const { return ok; }
++    std::string getStage() const { return stage; }
++    std::string getCode() const { return code; }
++    std::string getMessage() const { return message; }
++    int getInputByteCount() const { return inputByteCount; }
++    int getMaxInputBytes() const { return maxInputBytes; }
++    int getConsumedByteCount() const { return consumedByteCount; }
++    int getTopologyItemCount() const { return topologyItemCount; }
++    int getMaxTopologyItems() const { return maxTopologyItems; }
++
++    uint32_t takeResultId(OcctKernel& kernel);
++    bool hasResult() const;
++    std::string transferCode(const OcctKernel& kernel) const;
++
++  private:
++    std::shared_ptr<InvariantCadArtifactReadTransferState> transfer_;
++
++    friend InvariantCadArtifactReadReport invariantcadReadArtifactBrep(
++        OcctKernel& kernel, const emscripten::val& input,
++        int maxInputBytes, int maxTopologyItems);
++};
++
+ /// Transactional result of the controlled InvariantCAD PipeShell facade.
+ /// A successful untaken report owns its result outside the kernel arena.
+ struct InvariantCadPipeShellReport {
+@@ -445,6 +528,17 @@ InvariantCadSolidOffsetReport invariantcadSolidOffsetAtomic(
+     std::vector<uint32_t> openingFaceIds, double amount, int direction,
+     double tolerance, int maxHistoryRecords);
+ 
++/// Serializes one arena-owned shape through a native chunked sink that stops
++/// before writing a byte beyond maxOutputBytes.
++InvariantCadArtifactWriteReport invariantcadWriteArtifactBrep(
++    OcctKernel& kernel, uint32_t shapeId, int maxOutputBytes);
++
++/// Snapshots a borrowed Uint8Array only after its length passes maxInputBytes,
++/// decodes one binary BREP, and retains the shape for one checked transfer.
++InvariantCadArtifactReadReport invariantcadReadArtifactBrep(
++    OcctKernel& kernel, const emscripten::val& input,
++    int maxInputBytes, int maxTopologyItems);
++
+ /// Builds one corrected-Frenet, right-corner solid PipeShell with explicit
+ /// native tolerances. The report exposes OCCT's measured surface error and
+ /// retains the result outside the arena until a checked one-shot transfer.
+@@ -890,6 +984,7 @@ class OcctKernel {
+     friend struct InvariantCadEdgeTreatmentReport;
+     friend struct InvariantCadSolidOffsetReport;
+     friend struct InvariantCadPipeShellReport;
++    friend struct InvariantCadArtifactReadReport;
+     friend InvariantCadDraftReport invariantcadDraftFacesAtomic(
+         OcctKernel& kernel, uint32_t shapeId, std::vector<uint32_t> faceIds, double angleRad,
+         double pullX, double pullY, double pullZ, double neutralOriginX, double neutralOriginY,
+@@ -908,6 +1003,11 @@ class OcctKernel {
+         OcctKernel& kernel, int operation, uint32_t inputId,
+         std::vector<uint32_t> openingFaceIds, double amount, int direction,
+         double tolerance, int maxHistoryRecords);
++    friend InvariantCadArtifactWriteReport invariantcadWriteArtifactBrep(
++        OcctKernel& kernel, uint32_t shapeId, int maxOutputBytes);
++    friend InvariantCadArtifactReadReport invariantcadReadArtifactBrep(
++        OcctKernel& kernel, const emscripten::val& input,
++        int maxInputBytes, int maxTopologyItems);
+     uint32_t store(const TopoDS_Shape& shape);
+     uint32_t invariantcadStoreTransferredShape(const TopoDS_Shape& shape);
+     const TopoDS_Shape& get(uint32_t id) const;
+diff --git a/facade/src/invariantcad_bindings.cpp b/facade/src/invariantcad_bindings.cpp
+index 5f2fc25..9c700b3 100644
+--- a/facade/src/invariantcad_bindings.cpp
++++ b/facade/src/invariantcad_bindings.cpp
+@@ -196,6 +196,36 @@ EMSCRIPTEN_BINDINGS(invariantcad_facade) {
+         .function("topologyRecord", &InvariantCadSolidOffsetReport::topologyRecord)
+         .function("takeResultId", &InvariantCadSolidOffsetReport::takeResultId);
+ 
++    class_<InvariantCadArtifactWriteReport>("InvariantCadArtifactWriteReport")
++        .property("ok", &InvariantCadArtifactWriteReport::getOk)
++        .property("stage", &InvariantCadArtifactWriteReport::getStage)
++        .property("code", &InvariantCadArtifactWriteReport::getCode)
++        .property("message", &InvariantCadArtifactWriteReport::getMessage)
++        .property("maxOutputBytes",
++                  &InvariantCadArtifactWriteReport::getMaxOutputBytes)
++        .function("hasBytes", &InvariantCadArtifactWriteReport::hasBytes)
++        .function("byteCount", &InvariantCadArtifactWriteReport::byteCount)
++        .function("copyBytes", &InvariantCadArtifactWriteReport::copyBytes);
++
++    class_<InvariantCadArtifactReadReport>("InvariantCadArtifactReadReport")
++        .property("ok", &InvariantCadArtifactReadReport::getOk)
++        .property("stage", &InvariantCadArtifactReadReport::getStage)
++        .property("code", &InvariantCadArtifactReadReport::getCode)
++        .property("message", &InvariantCadArtifactReadReport::getMessage)
++        .property("inputByteCount",
++                  &InvariantCadArtifactReadReport::getInputByteCount)
++        .property("maxInputBytes",
++                  &InvariantCadArtifactReadReport::getMaxInputBytes)
++        .property("consumedByteCount",
++                  &InvariantCadArtifactReadReport::getConsumedByteCount)
++        .property("topologyItemCount",
++                  &InvariantCadArtifactReadReport::getTopologyItemCount)
++        .property("maxTopologyItems",
++                  &InvariantCadArtifactReadReport::getMaxTopologyItems)
++        .function("hasResult", &InvariantCadArtifactReadReport::hasResult)
++        .function("transferCode", &InvariantCadArtifactReadReport::transferCode)
++        .function("takeResultId", &InvariantCadArtifactReadReport::takeResultId);
++
+     class_<InvariantCadPipeShellReport>("InvariantCadPipeShellReport")
+         .property("ok", &InvariantCadPipeShellReport::getOk)
+         .property("stage", &InvariantCadPipeShellReport::getStage)
+@@ -217,5 +247,7 @@ EMSCRIPTEN_BINDINGS(invariantcad_facade) {
+     function("invariantcadBooleanAtomic", &invariantcadBooleanAtomic);
+     function("invariantcadEdgeTreatmentAtomic", &invariantcadEdgeTreatmentAtomic);
+     function("invariantcadSolidOffsetAtomic", &invariantcadSolidOffsetAtomic);
++    function("invariantcadWriteArtifactBrep", &invariantcadWriteArtifactBrep);
++    function("invariantcadReadArtifactBrep", &invariantcadReadArtifactBrep);
+     function("invariantcadPipeShellSolid", &invariantcadPipeShellSolid);
+ }
+diff --git a/facade/src/invariantcad_facade.cpp b/facade/src/invariantcad_facade.cpp
+index da79888..a3443e3 100644
+--- a/facade/src/invariantcad_facade.cpp
++++ b/facade/src/invariantcad_facade.cpp
+@@ -6,6 +6,7 @@
+ 
+ #include "occt_kernel.h"
+ 
++#include <BinTools.hxx>
+ #include <BRepCheck_Analyzer.hxx>
+ #include <BRepGProp.hxx>
+ #include <BRepAlgoAPI_Common.hxx>
+@@ -30,15 +31,19 @@
+ #include <TopTools_ShapeMapHasher.hxx>
+ #include <TopoDS.hxx>
+ #include <TopoDS_Iterator.hxx>
++#include <emscripten/bind.h>
+ #include <algorithm>
+ #include <cmath>
++#include <cstring>
+ #include <gp.hxx>
+ #include <gp_Dir.hxx>
+ #include <gp_Pln.hxx>
+ #include <gp_Pnt.hxx>
+ #include <limits>
+ #include <memory>
++#include <ostream>
+ #include <set>
++#include <streambuf>
+ #include <tuple>
+ #include <stdexcept>
+ #include <utility>
+@@ -85,14 +90,178 @@ struct InvariantCadPipeShellTransferState {
+     bool transferred = false;
+ };
+ 
++struct InvariantCadArtifactWriteState {
++    std::vector<std::vector<uint8_t>> chunks;
++    size_t byteCount = 0;
++};
++
++struct InvariantCadArtifactReadTransferState {
++    TopoDS_Shape result;
++    uint64_t kernelInstanceToken = 0;
++    bool transferred = false;
++};
++
+ namespace {
+ 
+ constexpr double kHalfPi = 1.57079632679489661923;
+ constexpr int kTopologyHistoryVersion = 1;
++constexpr size_t kArtifactChunkBytes = 64U * 1024U;
++constexpr char kArtifactArchiveHeader[] =
++    "\nOpen CASCADE Topology V4, (c) Open Cascade\n";
+ // Pinned OCCT's BRepOffsetAPI_DraftAngle::Add silently returns without adding
+ // a face at or below this absolute angle. Reject that range at our boundary.
+ constexpr double kKernelMinimumDraftAngle = 1.0e-4;
+ 
++class BoundedArtifactOutputBuffer final : public std::streambuf {
++  public:
++    explicit BoundedArtifactOutputBuffer(size_t maximum)
++        : maximum_(maximum), output_(std::make_shared<InvariantCadArtifactWriteState>()) {}
++
++    bool exceeded() const { return exceeded_; }
++    const std::shared_ptr<InvariantCadArtifactWriteState>& output() const { return output_; }
++
++  protected:
++    std::streamsize xsputn(const char* source, std::streamsize count) override {
++        if (count <= 0) {
++            return count < 0 ? 0 : count;
++        }
++        const size_t requested = static_cast<size_t>(count);
++        if (requested > maximum_ - output_->byteCount) {
++            exceeded_ = true;
++            return 0;
++        }
++        append(source, requested);
++        return count;
++    }
++
++    int_type overflow(int_type character) override {
++        if (traits_type::eq_int_type(character, traits_type::eof())) {
++            return traits_type::not_eof(character);
++        }
++        if (output_->byteCount == maximum_) {
++            exceeded_ = true;
++            return traits_type::eof();
++        }
++        const char value = traits_type::to_char_type(character);
++        append(&value, 1);
++        return character;
++    }
++
++  private:
++    void append(const char* source, size_t count) {
++        size_t sourceOffset = 0;
++        while (sourceOffset < count) {
++            if (output_->byteCount == allocatedCapacity_) {
++                const size_t capacity =
++                    std::min(kArtifactChunkBytes, maximum_ - allocatedCapacity_);
++                output_->chunks.emplace_back(capacity);
++                allocatedCapacity_ += capacity;
++            }
++            std::vector<uint8_t>& chunk = output_->chunks.back();
++            const size_t chunkStart = allocatedCapacity_ - chunk.size();
++            const size_t usedInChunk = output_->byteCount - chunkStart;
++            const size_t available = chunk.size() - usedInChunk;
++            const size_t copied = std::min(available, count - sourceOffset);
++            std::memcpy(chunk.data() + usedInChunk, source + sourceOffset, copied);
++            sourceOffset += copied;
++            output_->byteCount += copied;
++        }
++    }
++
++    size_t maximum_ = 0;
++    size_t allocatedCapacity_ = 0;
++    std::shared_ptr<InvariantCadArtifactWriteState> output_;
++    bool exceeded_ = false;
++};
++
++class BorrowedArtifactInputBuffer final : public std::streambuf {
++  public:
++    BorrowedArtifactInputBuffer(const uint8_t* bytes, size_t count)
++        : begin_(reinterpret_cast<char*>(const_cast<uint8_t*>(bytes))),
++          end_(begin_ + count) {
++        setg(begin_, begin_, end_);
++    }
++
++    size_t consumed() const {
++        return static_cast<size_t>(gptr() - eback());
++    }
++
++  protected:
++    pos_type seekoff(off_type offset, std::ios_base::seekdir direction,
++                     std::ios_base::openmode mode) override {
++        if ((mode & std::ios_base::in) == 0 ||
++            (mode & std::ios_base::out) != 0) {
++            return pos_type(off_type(-1));
++        }
++        off_type base = 0;
++        if (direction == std::ios_base::cur) {
++            base = static_cast<off_type>(gptr() - begin_);
++        } else if (direction == std::ios_base::end) {
++            base = static_cast<off_type>(end_ - begin_);
++        } else if (direction != std::ios_base::beg) {
++            return pos_type(off_type(-1));
++        }
++        const off_type extent = static_cast<off_type>(end_ - begin_);
++        if (offset < -base || offset > extent - base) {
++            return pos_type(off_type(-1));
++        }
++        const off_type target = base + offset;
++        setg(begin_, begin_ + target, end_);
++        return pos_type(target);
++    }
++
++    pos_type seekpos(pos_type position, std::ios_base::openmode mode) override {
++        if ((mode & std::ios_base::in) == 0 ||
++            (mode & std::ios_base::out) != 0) {
++            return pos_type(off_type(-1));
++        }
++        const off_type target = static_cast<off_type>(position);
++        const off_type extent = static_cast<off_type>(end_ - begin_);
++        if (target < 0 || target > extent) {
++            return pos_type(off_type(-1));
++        }
++        setg(begin_, begin_ + target, end_);
++        return position;
++    }
++
++  private:
++    char* begin_ = nullptr;
++    char* end_ = nullptr;
++};
++
++bool countTopologyWithinBudget(const TopoDS_Shape& root, int maximum,
++                               int& count) {
++    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> seen;
++    std::vector<TopoDS_Shape> pending;
++    seen.Add(root);
++    pending.push_back(root);
++    while (!pending.empty()) {
++        const TopoDS_Shape current = pending.back();
++        pending.pop_back();
++        for (TopoDS_Iterator iterator(current, false, false); iterator.More();
++             iterator.Next()) {
++            const TopoDS_Shape& child = iterator.Value();
++            if (seen.Contains(child)) {
++                continue;
++            }
++            if (seen.Extent() >= maximum) {
++                count = seen.Extent();
++                return false;
++            }
++            seen.Add(child);
++            pending.push_back(child);
++        }
++    }
++    count = seen.Extent();
++    return true;
++}
++
++bool hasStrictArtifactArchiveHeader(const std::vector<uint8_t>& bytes) {
++    constexpr size_t headerBytes = sizeof(kArtifactArchiveHeader) - 1;
++    return bytes.size() >= headerBytes &&
++           std::memcmp(bytes.data(), kArtifactArchiveHeader, headerBytes) == 0;
++}
++
+ struct TopologyCounts {
+     int solids = 0;
+     int shells = 0;
+@@ -1191,6 +1360,90 @@ std::string InvariantCadSolidOffsetReport::transferCode(
+     return "READY";
+ }
+ 
++bool InvariantCadArtifactWriteReport::hasBytes() const {
++    return output_ && output_->byteCount > 0;
++}
++
++int InvariantCadArtifactWriteReport::byteCount() const {
++    if (!output_) {
++        return 0;
++    }
++    if (output_->byteCount >
++        static_cast<size_t>(std::numeric_limits<int>::max())) {
++        throw std::overflow_error(
++            "InvariantCAD artifact output exceeds the ABI range");
++    }
++    return static_cast<int>(output_->byteCount);
++}
++
++emscripten::val InvariantCadArtifactWriteReport::copyBytes() const {
++    if (!hasBytes()) {
++        throw std::logic_error(
++            "InvariantCAD artifact write report has no bytes");
++    }
++    const int count = byteCount();
++    emscripten::val output =
++        emscripten::val::global("Uint8Array").new_(count);
++    size_t remaining = output_->byteCount;
++    size_t offset = 0;
++    for (const std::vector<uint8_t>& chunk : output_->chunks) {
++        const size_t copied = std::min(remaining, chunk.size());
++        if (copied == 0) {
++            break;
++        }
++        output.call<void>(
++            "set", emscripten::val(emscripten::typed_memory_view(
++                       copied, chunk.data())),
++            static_cast<unsigned int>(offset));
++        offset += copied;
++        remaining -= copied;
++    }
++    if (remaining != 0) {
++        throw std::logic_error(
++            "InvariantCAD artifact output chunks are incomplete");
++    }
++    return output;
++}
++
++uint32_t InvariantCadArtifactReadReport::takeResultId(OcctKernel& kernel) {
++    const std::string state = transferCode(kernel);
++    if (state == "NO_RESULT") {
++        throw std::runtime_error(
++            "InvariantCAD artifact read report has no transferable result");
++    }
++    if (state == "ALREADY_TRANSFERRED") {
++        throw std::runtime_error(
++            "InvariantCAD artifact read result was already transferred");
++    }
++    if (state == "WRONG_KERNEL") {
++        throw std::runtime_error(
++            "InvariantCAD artifact read result belongs to another kernel instance");
++    }
++    const uint32_t resultId =
++        kernel.invariantcadStoreTransferredShape(transfer_->result);
++    transfer_->transferred = true;
++    transfer_->result.Nullify();
++    return resultId;
++}
++
++bool InvariantCadArtifactReadReport::hasResult() const {
++    return transfer_ && !transfer_->transferred && !transfer_->result.IsNull();
++}
++
++std::string InvariantCadArtifactReadReport::transferCode(
++    const OcctKernel& kernel) const {
++    if (!transfer_) {
++        return "NO_RESULT";
++    }
++    if (transfer_->transferred || transfer_->result.IsNull()) {
++        return "ALREADY_TRANSFERRED";
++    }
++    if (transfer_->kernelInstanceToken != kernel.invariantcadInstanceToken_) {
++        return "WRONG_KERNEL";
++    }
++    return "READY";
++}
++
+ uint32_t InvariantCadPipeShellReport::takeResultId(OcctKernel& kernel) {
+     const std::string state = transferCode(kernel);
+     if (state == "NO_RESULT") {
+@@ -1492,8 +1745,236 @@ InvariantCadTopologyEvolutionRecord InvariantCadSolidOffsetReport::topologyRecor
+     return transfer_->topologyHistory.records[static_cast<size_t>(recordIndex)];
+ }
+ 
++InvariantCadArtifactWriteReport invariantcadWriteArtifactBrep(
++    OcctKernel& kernel, uint32_t shapeId, int maxOutputBytes) {
++    auto failure = [&](const char* stage, const char* code,
++                       const std::string& message) {
++        InvariantCadArtifactWriteReport report;
++        report.stage = stage;
++        report.code = code;
++        report.message = message;
++        report.maxOutputBytes = maxOutputBytes;
++        return report;
++    };
++    if (maxOutputBytes <= 0) {
++        return failure("validation", "INVALID_OUTPUT_LIMIT",
++                       "Artifact output limit must be a positive signed 32-bit integer");
++    }
++
++    const TopoDS_Shape* shape = nullptr;
++    try {
++        shape = &kernel.get(shapeId);
++    } catch (const std::exception& error) {
++        return failure("input", "INVALID_SHAPE_ID", error.what());
++    } catch (...) {
++        return failure("input", "INVALID_SHAPE_ID",
++                       "Unknown failure while resolving the artifact source shape");
++    }
++    if (shape->IsNull()) {
++        return failure("input", "NULL_SOURCE",
++                       "Artifact source shape must not be null");
++    }
++
++    BoundedArtifactOutputBuffer buffer(static_cast<size_t>(maxOutputBytes));
++    try {
++        std::ostream stream(&buffer);
++        stream.exceptions(std::ios::badbit | std::ios::failbit);
++        BinTools::Write(*shape, stream, false, false,
++                        BinTools_FormatVersion_VERSION_4);
++        stream.flush();
++    } catch (const Standard_Failure& error) {
++        if (buffer.exceeded()) {
++            return failure("serialization", "OUTPUT_LIMIT_EXCEEDED",
++                           "Binary BREP exceeds the configured artifact output limit");
++        }
++        return failure("serialization", "OCCT_EXCEPTION",
++                       error.GetMessageString());
++    } catch (const std::exception& error) {
++        if (buffer.exceeded()) {
++            return failure("serialization", "OUTPUT_LIMIT_EXCEEDED",
++                           "Binary BREP exceeds the configured artifact output limit");
++        }
++        return failure("serialization", "SERIALIZATION_FAILED", error.what());
++    } catch (...) {
++        if (buffer.exceeded()) {
++            return failure("serialization", "OUTPUT_LIMIT_EXCEEDED",
++                           "Binary BREP exceeds the configured artifact output limit");
++        }
++        return failure("serialization", "SERIALIZATION_FAILED",
++                       "Unknown failure while serializing binary BREP");
++    }
++    if (buffer.exceeded()) {
++        return failure("serialization", "OUTPUT_LIMIT_EXCEEDED",
++                       "Binary BREP exceeds the configured artifact output limit");
++    }
++    if (!buffer.output() || buffer.output()->byteCount == 0) {
++        return failure("serialization", "EMPTY_OUTPUT",
++                       "Binary BREP serialization produced no bytes");
++    }
++
++    InvariantCadArtifactWriteReport report;
++    report.ok = true;
++    report.stage = "complete";
++    report.code = "OK";
++    report.message = "Binary BREP serialization completed within the native byte limit";
++    report.maxOutputBytes = maxOutputBytes;
++    report.output_ = buffer.output();
++    return report;
++}
++
++InvariantCadArtifactReadReport invariantcadReadArtifactBrep(
++    OcctKernel& kernel, const emscripten::val& input, int maxInputBytes,
++    int maxTopologyItems) {
++    int inputByteCount = 0;
++    int consumedByteCount = 0;
++    int topologyItemCount = 0;
++    auto failure = [&](const char* stage, const char* code,
++                       const std::string& message) {
++        InvariantCadArtifactReadReport report;
++        report.stage = stage;
++        report.code = code;
++        report.message = message;
++        report.inputByteCount = inputByteCount;
++        report.maxInputBytes = maxInputBytes;
++        report.consumedByteCount = consumedByteCount;
++        report.topologyItemCount = topologyItemCount;
++        report.maxTopologyItems = maxTopologyItems;
++        return report;
++    };
++    if (maxInputBytes <= 0) {
++        return failure("validation", "INVALID_INPUT_LIMIT",
++                       "Artifact input limit must be a positive signed 32-bit integer");
++    }
++    if (maxTopologyItems <= 0) {
++        return failure("validation", "INVALID_TOPOLOGY_LIMIT",
++                       "Artifact topology limit must be a positive signed 32-bit integer");
++    }
++
++    try {
++        const emscripten::val uint8Array =
++            emscripten::val::global("Uint8Array");
++        if (!input.instanceof(uint8Array)) {
++            return failure("validation", "INVALID_INPUT_TYPE",
++                           "Artifact input must be a Uint8Array");
++        }
++        const double rawByteCount = input["byteLength"].as<double>();
++        if (!std::isfinite(rawByteCount) || rawByteCount < 0.0 ||
++            std::floor(rawByteCount) != rawByteCount ||
++            rawByteCount > static_cast<double>(std::numeric_limits<int>::max())) {
++            return failure("validation", "INPUT_RANGE",
++                           "Artifact input byte length exceeds the ABI range");
++        }
++        inputByteCount = static_cast<int>(rawByteCount);
++    } catch (const std::exception& error) {
++        return failure("validation", "INVALID_INPUT_TYPE", error.what());
++    } catch (...) {
++        return failure("validation", "INVALID_INPUT_TYPE",
++                       "Unknown failure while inspecting artifact input");
++    }
++    if (inputByteCount == 0) {
++        return failure("validation", "EMPTY_INPUT",
++                       "Artifact input must contain binary BREP bytes");
++    }
++    if (inputByteCount > maxInputBytes) {
++        return failure("validation", "INPUT_LIMIT_EXCEEDED",
++                       "Artifact input exceeds the configured native byte limit");
++    }
++
++    std::vector<uint8_t> snapshot;
++    try {
++        snapshot.resize(static_cast<size_t>(inputByteCount));
++        emscripten::val destination(emscripten::typed_memory_view(
++            snapshot.size(), snapshot.data()));
++        destination.call<void>("set", input);
++    } catch (const std::exception& error) {
++        return failure("copy", "INPUT_COPY_FAILED", error.what());
++    } catch (...) {
++        return failure("copy", "INPUT_COPY_FAILED",
++                       "Unknown failure while snapshotting artifact input");
++    }
++    if (!hasStrictArtifactArchiveHeader(snapshot)) {
++        return failure("validation", "UNSUPPORTED_ARCHIVE",
++                       "Artifact input is not the pinned binary BREP v4 archive");
++    }
++
++    TopoDS_Shape result;
++    BorrowedArtifactInputBuffer buffer(snapshot.data(), snapshot.size());
++    try {
++        std::istream stream(&buffer);
++        BinTools::Read(result, stream);
++        consumedByteCount = static_cast<int>(buffer.consumed());
++        if (stream.bad()) {
++            return failure("deserialization", "STREAM_FAILURE",
++                           "Binary BREP input stream failed");
++        }
++    } catch (const Standard_Failure& error) {
++        consumedByteCount = static_cast<int>(buffer.consumed());
++        return failure("deserialization", "OCCT_EXCEPTION",
++                       error.GetMessageString());
++    } catch (const std::exception& error) {
++        consumedByteCount = static_cast<int>(buffer.consumed());
++        return failure("deserialization", "DESERIALIZATION_FAILED", error.what());
++    } catch (...) {
++        consumedByteCount = static_cast<int>(buffer.consumed());
++        return failure("deserialization", "DESERIALIZATION_FAILED",
++                       "Unknown failure while deserializing binary BREP");
++    }
++    if (result.IsNull()) {
++        return failure("deserialization", "NULL_SHAPE",
++                       "Binary BREP did not produce a shape");
++    }
++    if (consumedByteCount != inputByteCount) {
++        return failure("deserialization", "TRAILING_INPUT",
++                       "Binary BREP input contains trailing bytes");
++    }
++    try {
++        if (!countTopologyWithinBudget(result, maxTopologyItems,
++                                       topologyItemCount)) {
++            return failure("validation", "TOPOLOGY_LIMIT_EXCEEDED",
++                           "Decoded BREP exceeds the configured topology-item limit");
++        }
++    } catch (const Standard_Failure& error) {
++        return failure("validation", "TOPOLOGY_OCCT_EXCEPTION",
++                       error.GetMessageString());
++    } catch (const std::exception& error) {
++        return failure("validation", "TOPOLOGY_FAILED", error.what());
++    } catch (...) {
++        return failure("validation", "TOPOLOGY_FAILED",
++                       "Unknown failure while counting decoded BREP topology");
++    }
++    try {
++        if (!BRepCheck_Analyzer(result).IsValid()) {
++            return failure("validation", "INVALID_SHAPE",
++                           "Binary BREP produced an invalid shape");
++        }
++    } catch (const Standard_Failure& error) {
++        return failure("validation", "VALIDATION_OCCT_EXCEPTION",
++                       error.GetMessageString());
++    } catch (const std::exception& error) {
++        return failure("validation", "VALIDATION_FAILED", error.what());
++    } catch (...) {
++        return failure("validation", "VALIDATION_FAILED",
++                       "Unknown failure while validating decoded BREP");
++    }
++
++    InvariantCadArtifactReadReport report;
++    report.ok = true;
++    report.stage = "complete";
++    report.code = "OK";
++    report.message = "Binary BREP decode completed within the native limits";
++    report.inputByteCount = inputByteCount;
++    report.maxInputBytes = maxInputBytes;
++    report.consumedByteCount = consumedByteCount;
++    report.topologyItemCount = topologyItemCount;
++    report.maxTopologyItems = maxTopologyItems;
++    report.transfer_ = std::make_shared<InvariantCadArtifactReadTransferState>();
++    report.transfer_->result = result;
++    report.transfer_->kernelInstanceToken = kernel.invariantcadInstanceToken_;
++    return report;
++}
++
+ std::string invariantcadFacadeVersion() {
+-    return "invariantcad-facade@0.6.0+occt-wasm.3.7.0";
++    return "invariantcad-facade@0.7.0+occt-wasm.3.7.0";
+ }
+ 
+ InvariantCadBooleanReport invariantcadBooleanAtomic(

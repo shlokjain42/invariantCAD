@@ -9,6 +9,7 @@ import type {
 import type { OcctBooleanFacadeModule } from "./occt-boolean.js";
 import type { OcctEdgeTreatmentFacadeModule } from "./occt-edge-treatment.js";
 import type { OcctSolidOffsetFacadeModule } from "./occt-solid-offset.js";
+import type { OcctArtifactFacadeModule } from "./occt-artifact-facade.js";
 
 export const OCCT_DRAFT_FACADE_VERSION =
   "invariantcad-facade@0.2.0+occt-wasm.3.7.0";
@@ -24,6 +25,9 @@ export const OCCT_EDGE_TREATMENT_FACADE_VERSION =
 
 export const OCCT_SOLID_OFFSET_FACADE_VERSION =
   "invariantcad-facade@0.6.0+occt-wasm.3.7.0";
+
+export const OCCT_ARTIFACT_FACADE_VERSION =
+  "invariantcad-facade@0.7.0+occt-wasm.3.7.0";
 
 const DRAFT_FACADE_MARKERS = Object.freeze([
   "InvariantCadDraftReport",
@@ -59,6 +63,14 @@ const SOLID_OFFSET_FACADE_MARKERS = Object.freeze([
   "InvariantCadSolidOffsetDirection",
   "InvariantCadSolidOffsetReport",
   "invariantcadSolidOffsetAtomic",
+] as const);
+
+const ARTIFACT_FACADE_MARKERS = Object.freeze([
+  ...SOLID_OFFSET_FACADE_MARKERS,
+  "InvariantCadArtifactReadReport",
+  "InvariantCadArtifactWriteReport",
+  "invariantcadReadArtifactBrep",
+  "invariantcadWriteArtifactBrep",
 ] as const);
 
 const TOPOLOGY_KIND_MEMBERS = Object.freeze({
@@ -139,6 +151,7 @@ export interface OcctDraftFacadeProbe {
   readonly boolean: undefined;
   readonly edgeTreatment: undefined;
   readonly solidOffset: undefined;
+  readonly artifact: undefined;
 }
 
 export interface OcctControlledPipeShellFacadeProbe {
@@ -150,6 +163,7 @@ export interface OcctControlledPipeShellFacadeProbe {
   readonly boolean: undefined;
   readonly edgeTreatment: undefined;
   readonly solidOffset: undefined;
+  readonly artifact: undefined;
 }
 
 export interface OcctBooleanFacadeProbe {
@@ -161,6 +175,7 @@ export interface OcctBooleanFacadeProbe {
   readonly boolean: OcctBooleanFacadeModule;
   readonly edgeTreatment: undefined;
   readonly solidOffset: undefined;
+  readonly artifact: undefined;
 }
 
 export interface OcctEdgeTreatmentFacadeProbe {
@@ -172,6 +187,7 @@ export interface OcctEdgeTreatmentFacadeProbe {
   readonly boolean: OcctBooleanFacadeModule;
   readonly edgeTreatment: OcctEdgeTreatmentFacadeModule;
   readonly solidOffset: undefined;
+  readonly artifact: undefined;
 }
 
 export interface OcctSolidOffsetFacadeProbe {
@@ -183,6 +199,23 @@ export interface OcctSolidOffsetFacadeProbe {
   readonly boolean: OcctBooleanFacadeModule;
   readonly edgeTreatment: OcctEdgeTreatmentFacadeModule;
   readonly solidOffset: OcctSolidOffsetFacadeModule;
+  readonly artifact: undefined;
+}
+
+export interface OcctOwnedArtifactFacadeModule
+  extends OcctSolidOffsetFacadeModule,
+    OcctArtifactFacadeModule {}
+
+export interface OcctArtifactFacadeProbe {
+  readonly abi: "0.7";
+  readonly version: typeof OCCT_ARTIFACT_FACADE_VERSION;
+  readonly module: OcctOwnedArtifactFacadeModule;
+  readonly draft: OcctDraftFacadeModule;
+  readonly pipeShell: OcctControlledPipeShellFacadeModule;
+  readonly boolean: OcctBooleanFacadeModule;
+  readonly edgeTreatment: OcctEdgeTreatmentFacadeModule;
+  readonly solidOffset: OcctSolidOffsetFacadeModule;
+  readonly artifact: OcctArtifactFacadeModule;
 }
 
 export type OcctFacadeProbe =
@@ -190,7 +223,8 @@ export type OcctFacadeProbe =
   | OcctControlledPipeShellFacadeProbe
   | OcctBooleanFacadeProbe
   | OcctEdgeTreatmentFacadeProbe
-  | OcctSolidOffsetFacadeProbe;
+  | OcctSolidOffsetFacadeProbe
+  | OcctArtifactFacadeProbe;
 
 /**
  * Kept under its original name so callers that catch the 0.2 probe error do
@@ -346,6 +380,25 @@ function validateSolidOffsetSurface(candidate: Record<string, unknown>): void {
   );
 }
 
+function validateArtifactSurface(candidate: Record<string, unknown>): void {
+  if (typeof candidate.InvariantCadArtifactWriteReport !== "function") {
+    facadeProtocolError(
+      "InvariantCadArtifactWriteReport must be an Embind class marker",
+    );
+  }
+  if (typeof candidate.InvariantCadArtifactReadReport !== "function") {
+    facadeProtocolError(
+      "InvariantCadArtifactReadReport must be an Embind class marker",
+    );
+  }
+  if (typeof candidate.invariantcadWriteArtifactBrep !== "function") {
+    facadeProtocolError("invariantcadWriteArtifactBrep must be a function");
+  }
+  if (typeof candidate.invariantcadReadArtifactBrep !== "function") {
+    facadeProtocolError("invariantcadReadArtifactBrep must be a function");
+  }
+}
+
 /**
  * Detects only a complete, known owned facade. Marker-free modules are stock
  * OCCT and return `undefined`; partial, extended, mixed-version, and unknown
@@ -369,44 +422,74 @@ export function probeOcctFacade(module: unknown): OcctFacadeProbe | undefined {
     EDGE_TREATMENT_FACADE_MARKERS,
   );
   const isSolidOffset = exactMarkerSet(markers, SOLID_OFFSET_FACADE_MARKERS);
+  const isArtifact = exactMarkerSet(markers, ARTIFACT_FACADE_MARKERS);
   if (
     !isDraft &&
     !isControlledPipeShell &&
     !isBoolean &&
     !isEdgeTreatment &&
-    !isSolidOffset
+    !isSolidOffset &&
+    !isArtifact
   ) {
     facadeProtocolError(
-      `marker set is '${markers.join(",")}', expected exact ABI 0.2, 0.3, 0.4, 0.5, or 0.6 markers`,
+      `marker set is '${markers.join(",")}', expected exact ABI 0.2, 0.3, 0.4, 0.5, 0.6, or 0.7 markers`,
     );
   }
 
   const candidate = module as Record<string, unknown>;
   validateDraftSurface(candidate);
-  if (isControlledPipeShell || isBoolean || isEdgeTreatment || isSolidOffset) {
+  if (
+    isControlledPipeShell ||
+    isBoolean ||
+    isEdgeTreatment ||
+    isSolidOffset ||
+    isArtifact
+  ) {
     validateControlledPipeShellSurface(candidate);
   }
-  if (isBoolean || isEdgeTreatment || isSolidOffset) {
+  if (isBoolean || isEdgeTreatment || isSolidOffset || isArtifact) {
     validateBooleanSurface(candidate);
   }
-  if (isEdgeTreatment || isSolidOffset) validateEdgeTreatmentSurface(candidate);
-  if (isSolidOffset) validateSolidOffsetSurface(candidate);
+  if (isEdgeTreatment || isSolidOffset || isArtifact) {
+    validateEdgeTreatmentSurface(candidate);
+  }
+  if (isSolidOffset || isArtifact) validateSolidOffsetSurface(candidate);
+  if (isArtifact) validateArtifactSurface(candidate);
 
   const rawVersion = candidate.invariantcadFacadeVersion as () => unknown;
   const version = rawVersion();
-  const expectedVersion = isSolidOffset
-    ? OCCT_SOLID_OFFSET_FACADE_VERSION
-    : isEdgeTreatment
-      ? OCCT_EDGE_TREATMENT_FACADE_VERSION
-      : isBoolean
-        ? OCCT_BOOLEAN_FACADE_VERSION
-        : isControlledPipeShell
-          ? OCCT_CONTROLLED_PIPE_SHELL_FACADE_VERSION
-          : OCCT_DRAFT_FACADE_VERSION;
+  const expectedVersion = isArtifact
+    ? OCCT_ARTIFACT_FACADE_VERSION
+    : isSolidOffset
+      ? OCCT_SOLID_OFFSET_FACADE_VERSION
+      : isEdgeTreatment
+        ? OCCT_EDGE_TREATMENT_FACADE_VERSION
+        : isBoolean
+          ? OCCT_BOOLEAN_FACADE_VERSION
+          : isControlledPipeShell
+            ? OCCT_CONTROLLED_PIPE_SHELL_FACADE_VERSION
+            : OCCT_DRAFT_FACADE_VERSION;
   if (version !== expectedVersion) {
     facadeProtocolError(
       `version is '${String(version)}', expected '${expectedVersion}'`,
     );
+  }
+
+  if (isArtifact) {
+    const artifactModule = module as unknown as OcctOwnedArtifactFacadeModule;
+    return Object.freeze({
+      abi: "0.7" as const,
+      version: OCCT_ARTIFACT_FACADE_VERSION,
+      module: artifactModule,
+      draft: artifactModule as unknown as OcctDraftFacadeModule,
+      pipeShell:
+        artifactModule as unknown as OcctControlledPipeShellFacadeModule,
+      boolean: artifactModule as unknown as OcctBooleanFacadeModule,
+      edgeTreatment:
+        artifactModule as unknown as OcctEdgeTreatmentFacadeModule,
+      solidOffset: artifactModule as unknown as OcctSolidOffsetFacadeModule,
+      artifact: artifactModule as unknown as OcctArtifactFacadeModule,
+    });
   }
 
   if (isSolidOffset) {
@@ -422,6 +505,7 @@ export function probeOcctFacade(module: unknown): OcctFacadeProbe | undefined {
       edgeTreatment:
         solidOffsetModule as unknown as OcctEdgeTreatmentFacadeModule,
       solidOffset: solidOffsetModule,
+      artifact: undefined,
     });
   }
 
@@ -438,6 +522,7 @@ export function probeOcctFacade(module: unknown): OcctFacadeProbe | undefined {
       boolean: edgeTreatmentModule as unknown as OcctBooleanFacadeModule,
       edgeTreatment: edgeTreatmentModule,
       solidOffset: undefined,
+      artifact: undefined,
     });
   }
 
@@ -452,6 +537,7 @@ export function probeOcctFacade(module: unknown): OcctFacadeProbe | undefined {
       boolean: booleanModule,
       edgeTreatment: undefined,
       solidOffset: undefined,
+      artifact: undefined,
     });
   }
 
@@ -467,6 +553,7 @@ export function probeOcctFacade(module: unknown): OcctFacadeProbe | undefined {
       boolean: undefined,
       edgeTreatment: undefined,
       solidOffset: undefined,
+      artifact: undefined,
     });
   }
 
@@ -480,6 +567,7 @@ export function probeOcctFacade(module: unknown): OcctFacadeProbe | undefined {
     boolean: undefined,
     edgeTreatment: undefined,
     solidOffset: undefined,
+    artifact: undefined,
   });
 }
 

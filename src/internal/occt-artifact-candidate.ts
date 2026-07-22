@@ -39,13 +39,17 @@ type TopologyHistory = KernelTopologySnapshot["history"];
  * annotations or exact indexed evolution. Runtime topology keys in this value
  * are private to the call and are replaced by the codec wire format.
  */
-export interface OcctShapeArtifactCapturedState {
-  readonly brep: Uint8Array;
+export interface OcctShapeArtifactCapturedSidecarState {
   readonly lineage: readonly KernelTopologyLineage[];
   readonly history: TopologyHistory;
   readonly topology: KernelTopologySnapshot;
   readonly nativeStructure: OcctShapeArtifactNativeStructure;
   readonly volumeOverride?: number;
+}
+
+export interface OcctShapeArtifactCapturedState
+  extends OcctShapeArtifactCapturedSidecarState {
+  readonly brep: Uint8Array;
 }
 
 /** Ordered native structure used only as a fail-closed candidate check. */
@@ -64,7 +68,8 @@ export interface OcctShapeArtifactNativeStructure {
 export interface OcctShapeArtifactCandidateHost {
   /** Candidate runtime/options identity; not a production build attestation. */
   readonly compatibilityFingerprint: string;
-  capture(shape: KernelShape): OcctShapeArtifactCapturedState;
+  capture(shape: KernelShape): OcctShapeArtifactCapturedSidecarState;
+  encodeNative(shape: KernelShape, maxBytes: number): Uint8Array;
   restore(state: OcctShapeArtifactCapturedState): KernelShape;
 }
 
@@ -790,7 +795,7 @@ function copyNativeStructure(
 }
 
 function encodeWireState(
-  state: OcctShapeArtifactCapturedState,
+  state: OcctShapeArtifactCapturedSidecarState,
   signal?: AbortSignal,
 ): WireStateV1 {
   if (state.history !== "complete" && state.history !== "partial") {
@@ -1382,7 +1387,7 @@ function encodeEnvelope(
   if (checkedLength(fixedMinimum, 2, "Artifact envelope") > maximum) {
     throw new RangeError("OCCT candidate artifact exceeds maxArtifactBytes");
   }
-  let captured: OcctShapeArtifactCapturedState;
+  let captured: OcctShapeArtifactCapturedSidecarState;
   try {
     captured = host.capture(shape);
   } catch (error) {
@@ -1390,24 +1395,37 @@ function encodeEnvelope(
     throw error;
   }
   checkAbort(signal);
-  if (!(captured.brep instanceof Uint8Array) || captured.brep.byteLength === 0) {
-    throw new TypeError("OCCT candidate host returned an invalid BREP payload");
-  }
-  let minimum = fixedMinimum;
-  minimum = checkedLength(minimum, captured.brep.byteLength, "Artifact envelope");
-  if (minimum > maximum) {
-    throw new RangeError("OCCT candidate artifact exceeds maxArtifactBytes");
-  }
   const wire = encodeWireState(captured, signal);
   checkAbort(signal);
   const state = textEncoder.encode(canonicalStringifyProtocol(wire));
   if (state.byteLength === 0 || state.byteLength > MAX_STATE_BYTES) {
     throw new RangeError("OCCT candidate state section is empty or oversized");
   }
-  const total = checkedLength(minimum, state.byteLength, "Artifact envelope");
-  if (total > maximum) {
+  const nativeBase = checkedLength(
+    fixedMinimum,
+    state.byteLength,
+    "Artifact envelope",
+  );
+  if (checkedLength(nativeBase, 1, "Artifact envelope") > maximum) {
     throw new RangeError("OCCT candidate artifact exceeds maxArtifactBytes");
   }
+  const nativeMaximum = maximum - nativeBase;
+  let brep: Uint8Array;
+  try {
+    brep = host.encodeNative(shape, nativeMaximum);
+  } catch (error) {
+    checkAbort(signal);
+    throw error;
+  }
+  checkAbort(signal);
+  if (
+    !(brep instanceof Uint8Array) ||
+    brep.byteLength === 0 ||
+    brep.byteLength > nativeMaximum
+  ) {
+    throw new TypeError("OCCT candidate host returned an invalid BREP payload");
+  }
+  const total = checkedLength(nativeBase, brep.byteLength, "Artifact envelope");
   checkAbort(signal);
   const output = new Uint8Array(total);
   output.set(MAGIC, 0);
@@ -1417,14 +1435,14 @@ function encodeEnvelope(
   header.setUint32(20, HEADER_BYTES, false);
   header.setUint32(24, fingerprint.byteLength, false);
   header.setUint32(28, state.byteLength, false);
-  header.setUint32(32, captured.brep.byteLength, false);
+  header.setUint32(32, brep.byteLength, false);
   header.setUint32(36, total, false);
   let offset = HEADER_BYTES;
   output.set(fingerprint, offset);
   offset += fingerprint.byteLength;
   output.set(state, offset);
   offset += state.byteLength;
-  output.set(captured.brep, offset);
+  output.set(brep, offset);
   checkAbort(signal);
   return output;
 }
@@ -1571,6 +1589,8 @@ function candidateHost(kernel: GeometryKernel): OcctShapeArtifactCandidateHost |
       typeof (host as Partial<OcctShapeArtifactCandidateHost>)
         .compatibilityFingerprint !== "string" ||
       typeof (host as Partial<OcctShapeArtifactCandidateHost>).capture !== "function" ||
+      typeof (host as Partial<OcctShapeArtifactCandidateHost>).encodeNative !==
+        "function" ||
       typeof (host as Partial<OcctShapeArtifactCandidateHost>).restore !== "function"
     ) {
       return undefined;

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  OCCT_ARTIFACT_FACADE_VERSION,
   OCCT_BOOLEAN_FACADE_VERSION,
   OCCT_CONTROLLED_PIPE_SHELL_FACADE_VERSION,
   OCCT_DRAFT_FACADE_VERSION,
@@ -93,6 +94,17 @@ function solidOffsetModule() {
   };
 }
 
+function artifactModule() {
+  return {
+    ...solidOffsetModule(),
+    InvariantCadArtifactWriteReport: class {},
+    InvariantCadArtifactReadReport: class {},
+    invariantcadFacadeVersion: vi.fn(() => OCCT_ARTIFACT_FACADE_VERSION),
+    invariantcadWriteArtifactBrep: vi.fn(),
+    invariantcadReadArtifactBrep: vi.fn(),
+  };
+}
+
 describe("owned OCCT facade capability probe", () => {
   it("classifies marker-free stock without trusting unrelated constructors", () => {
     expect(
@@ -116,6 +128,7 @@ describe("owned OCCT facade capability probe", () => {
       boolean: undefined,
       edgeTreatment: undefined,
       solidOffset: undefined,
+      artifact: undefined,
     });
     expect(Object.isFrozen(facade)).toBe(true);
     expect(probeOcctDraftFacade(module)).toBe(module);
@@ -134,6 +147,7 @@ describe("owned OCCT facade capability probe", () => {
       boolean: undefined,
       edgeTreatment: undefined,
       solidOffset: undefined,
+      artifact: undefined,
     });
     expect(Object.isFrozen(facade)).toBe(true);
     expect(probeOcctDraftFacade(module)).toBe(module);
@@ -152,6 +166,7 @@ describe("owned OCCT facade capability probe", () => {
       boolean: module,
       edgeTreatment: undefined,
       solidOffset: undefined,
+      artifact: undefined,
     });
     expect(Object.isFrozen(facade)).toBe(true);
     expect(probeOcctDraftFacade(module)).toBe(module);
@@ -170,6 +185,7 @@ describe("owned OCCT facade capability probe", () => {
       boolean: module,
       edgeTreatment: module,
       solidOffset: undefined,
+      artifact: undefined,
     });
     expect(Object.isFrozen(facade)).toBe(true);
     expect(probeOcctDraftFacade(module)).toBe(module);
@@ -188,6 +204,26 @@ describe("owned OCCT facade capability probe", () => {
       boolean: module,
       edgeTreatment: module,
       solidOffset: module,
+      artifact: undefined,
+    });
+    expect(Object.isFrozen(facade)).toBe(true);
+    expect(probeOcctDraftFacade(module)).toBe(module);
+  });
+
+  it("recognizes exact 0.7 as the bounded artifact facade", () => {
+    const module = artifactModule();
+    const facade = probeOcctFacade(module);
+
+    expect(facade).toEqual({
+      abi: "0.7",
+      version: OCCT_ARTIFACT_FACADE_VERSION,
+      module,
+      draft: module,
+      pipeShell: module,
+      boolean: module,
+      edgeTreatment: module,
+      solidOffset: module,
+      artifact: module,
     });
     expect(Object.isFrozen(facade)).toBe(true);
     expect(probeOcctDraftFacade(module)).toBe(module);
@@ -229,12 +265,21 @@ describe("owned OCCT facade capability probe", () => {
       OcctFacadeProtocolError,
     );
 
+    const partialArtifact = {
+      ...solidOffsetModule(),
+      InvariantCadArtifactWriteReport: class {},
+      invariantcadWriteArtifactBrep: vi.fn(),
+    };
+    expect(() => probeOcctFacade(partialArtifact)).toThrow(
+      OcctFacadeProtocolError,
+    );
+
     const extra = {
       ...booleanModule(),
       invariantcadFutureCapability: vi.fn(),
     };
     expect(() => probeOcctFacade(extra)).toThrow(
-      "expected exact ABI 0.2, 0.3, 0.4, 0.5, or 0.6",
+      "expected exact ABI 0.2, 0.3, 0.4, 0.5, 0.6, or 0.7",
     );
 
     const differentlyCasedUnknown = {
@@ -311,6 +356,14 @@ describe("owned OCCT facade capability probe", () => {
       `expected '${OCCT_SOLID_OFFSET_FACADE_VERSION}'`,
     );
 
+    const artifactMarkersSolidOffsetVersion = artifactModule();
+    artifactMarkersSolidOffsetVersion.invariantcadFacadeVersion.mockReturnValue(
+      OCCT_SOLID_OFFSET_FACADE_VERSION,
+    );
+    expect(() => probeOcctFacade(artifactMarkersSolidOffsetVersion)).toThrow(
+      `expected '${OCCT_ARTIFACT_FACADE_VERSION}'`,
+    );
+
     const wrongGlobal = controlledPipeShellModule();
     wrongGlobal.invariantcadPipeShellSolid = 7 as unknown as typeof wrongGlobal.invariantcadPipeShellSolid;
     expect(() => probeOcctFacade(wrongGlobal)).toThrow(
@@ -363,6 +416,20 @@ describe("owned OCCT facade capability probe", () => {
       {} as typeof wrongSolidOffsetClass.InvariantCadSolidOffsetReport;
     expect(() => probeOcctFacade(wrongSolidOffsetClass)).toThrow(
       "InvariantCadSolidOffsetReport must be an Embind class marker",
+    );
+
+    const wrongArtifactGlobal = artifactModule();
+    wrongArtifactGlobal.invariantcadReadArtifactBrep =
+      7 as unknown as typeof wrongArtifactGlobal.invariantcadReadArtifactBrep;
+    expect(() => probeOcctFacade(wrongArtifactGlobal)).toThrow(
+      "invariantcadReadArtifactBrep must be a function",
+    );
+
+    const wrongArtifactClass = artifactModule();
+    wrongArtifactClass.InvariantCadArtifactWriteReport =
+      {} as typeof wrongArtifactClass.InvariantCadArtifactWriteReport;
+    expect(() => probeOcctFacade(wrongArtifactClass)).toThrow(
+      "InvariantCadArtifactWriteReport must be an Embind class marker",
     );
   });
 

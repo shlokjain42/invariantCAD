@@ -54,11 +54,12 @@ the mounted cache.
 
 Patches belong in `native/occt/patches/` and should use Git's `a/` and `b/`
 path prefixes. Prefix filenames with an ordering number because lexical order is
-part of the build. Facade ABI 0.6 is the exact six-patch series
+part of the build. Facade ABI 0.7 is the exact seven-patch series
 `0001-atomic-multi-face-draft.patch`, `0002-indexed-draft-history.patch`,
 `0003-controlled-pipe-shell.patch`, `0004-exact-boolean-history.patch`,
-`0005-exact-edge-treatment-history.patch`, and
-`0006-exact-solid-offset-history.patch`.
+`0005-exact-edge-treatment-history.patch`,
+`0006-exact-solid-offset-history.patch`, and
+`0007-bounded-shape-artifacts.patch`.
 
 ## Native smoke test
 
@@ -79,7 +80,8 @@ source-less-created topology; stale intermediate-removal and
 generated-only-replacement cases; canonical tangent-contour seeds and shell
 openings; isolated working copies with byte-stable arena operands; separate
 record budgets; empty Boolean results; report cloning; foreign-kernel
-rejection; and one-shot transfer.
+rejection; one-shot transfer; and capped binary-BREP output plus bounded-input
+report-owned artifact decode.
 The public smoke loads the same generated pair through `createOcctKernel` and
 exercises direct and evaluated draft, exact Boolean, fillet/chamfer, and
 shell/offset lineage, protocol-v2 vertex persistence with the descriptor-`@6`
@@ -108,11 +110,11 @@ The packager reads `.artifacts/occt-facade/` and writes both of these ignored
 outputs:
 
 ```text
-.artifacts/occt-facade-bundle/invariantcad-occt-facade-0.6.0/
-.artifacts/occt-facade-bundle/invariantcad-occt-facade-0.6.0.tar.gz
+.artifacts/occt-facade-bundle/invariantcad-occt-facade-0.7.0/
+.artifacts/occt-facade-bundle/invariantcad-occt-facade-0.7.0.tar.gz
 ```
 
-`0.6.0` is the owned facade ABI and bundle version; it is independent of the
+`0.7.0` is the owned facade ABI and bundle version; it is independent of the
 InvariantCAD npm package version, document schema version, and product-roadmap
 milestone numbered 0.6.
 
@@ -228,7 +230,8 @@ override when their runtime or bundler requires it. ABI 0.2 and later advertise
 ordinary `draft` support and feature-scoped `exactIndexedTopologyEvolution` v1
 for draft. ABI 0.4 adds `boolean`; ABI 0.5 adds `fillet` and `chamfer`; ABI 0.6
 advertises the protocol for `draft`, `boolean`, `fillet`, `chamfer`, `shell`,
-and `offset`.
+and `offset`; ABI 0.7 preserves that feature proof and adds bounded artifact
+transport without advertising a production artifact codec.
 The TypeScript descriptor declaration is conditional on that probed surface.
 Known stock OCCT and every recognized owned facade now advertise
 topology-signature protocol v2 with primary descriptor `@6`, including exact
@@ -241,7 +244,7 @@ bytes, evidence construction, and matching behavior remain frozen and ignore
 the added vertex evidence.
 
 These descriptor/profile changes do not change the native boundary. The owned
-facade ABI remains 0.6, and `exactIndexedTopologyEvolution` remains version 1.
+facade ABI is 0.7, and `exactIndexedTopologyEvolution` remains version 1.
 Document v6 and topology-signature protocol v2 are separate TypeScript/document
 axes; no semantic vertex roles are introduced. Distinct coincident B-Rep
 vertices remain separate snapshot items and resolve ambiguously when their
@@ -449,6 +452,35 @@ the requested feature preserves the supported partial-history route. Stock
 OCCT and owned ABI 0.2–0.5 therefore keep exact shell/offset geometry with
 partial history. Malformed advertised metadata or an exact ABI 0.6 report is
 authoritative and fails closed before result exposure.
+
+Facade ABI 0.7 is additive: it retains the complete ABI 0.6 modeling surface
+and adds a candidate-only bounded binary-BREP transport. The native writer uses
+an explicitly pinned BinTools v4 archive with triangulation and normals
+disabled, writes into fixed-size chunks, and stops without exposing partial
+bytes before the caller's signed 32-bit byte ceiling is exceeded. A successful
+write report owns those chunks and creates a detached JavaScript `Uint8Array`
+only after serialization has completed inside the cap.
+
+The native reader accepts a borrowed `Uint8Array`, checks its byte length before
+copying, snapshots exactly that view, requires the pinned v4 header and exact
+input consumption, and rejects a decoded topology graph beyond the caller's
+item ceiling before running full B-Rep validity analysis. A successful shape
+remains outside the kernel arena until a same-kernel one-shot transfer; deleting
+an untaken report releases it. The TypeScript candidate passes its remaining
+artifact byte allowance into this ABI, validates every report echo, and
+releases a transferred root if later sidecar adoption fails. Stock OCCT and
+owned ABI 0.2 through 0.6 retain the earlier unbounded research path.
+
+ABI 0.7 still does not advertise `KernelCapabilities.shapeArtifacts`. A small
+malformed v4 body can declare native geometry arrays that OCCT allocates before
+the post-read topology ceiling is available, the JSON sidecar has intermediate
+allocation amplification, synchronous same-thread WASM has an in-flight
+cancellation gap, ordered native enumeration is not durable identity for
+symmetric topology, and the runtime has no in-process proof of the exact
+JavaScript/WASM hashes. Production promotion therefore still requires a strict
+preflight/allocation quota, durable artifact-local native identity, bounded
+binary sidecar decoding, exact runtime attestation, and reviewed cross-process
+goldens.
 
 The generated pair and its local package-neutral bundle remain ignored build
 artifacts and are not included in the `invariantcad` npm tarball. Until an

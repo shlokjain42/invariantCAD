@@ -871,6 +871,87 @@ describe("OCCT shape-artifact codec candidate", () => {
     }
   });
 
+  it("best-effort releases a partially restored owner after one retained-handle release throws", async () => {
+    const producer = await createOcctKernel();
+    const consumer = await createOcctKernel();
+    let source: KernelShape | undefined;
+    let decoded: KernelShape | undefined;
+    try {
+      source = box(producer, "release-failure-box");
+      const artifact = await codec(producer).encodeShapeArtifact(
+        source,
+        ARTIFACT_CONTEXT,
+      );
+      const topologyMismatch = rewriteCanonicalState(artifact, (state) => {
+        const face = firstWireFace(state);
+        const area = face.area;
+        expect(area).toEqual(expect.stringMatching(/^[0-9a-f]{16}$/));
+        const encoded = area as string;
+        face.area = `${encoded.slice(0, -1)}${encoded.endsWith("0") ? "1" : "0"}`;
+      });
+      const raw = rawOcctKernel(consumer);
+      const originalRelease = raw.release.bind(raw);
+      const arenaBefore = raw.shapeCount;
+      let injected = false;
+      raw.release = (handle: ShapeHandle): void => {
+        const liveShapes = (
+          consumer as unknown as { readonly liveShapes: Set<unknown> }
+        ).liveShapes;
+        const provisional = [...liveShapes][0] as
+          | {
+              readonly topologyHandles: Map<
+                unknown,
+                { readonly handle: ShapeHandle }
+              >;
+            }
+          | undefined;
+        const isRetained =
+          provisional !== undefined &&
+          [...provisional.topologyHandles.values()].some(
+            (retained) => retained.handle === handle,
+          );
+        originalRelease(handle);
+        if (!injected && isRetained) {
+          injected = true;
+          throw new Error("Injected retained-handle release failure");
+        }
+      };
+      let error: unknown;
+      try {
+        error = await expectRejected(() =>
+          codec(consumer).decodeShapeArtifact(
+            topologyMismatch,
+            ARTIFACT_CONTEXT,
+          ),
+        );
+      } finally {
+        raw.release = originalRelease;
+      }
+      expect(injected).toBe(true);
+      expect(error).toBeInstanceOf(AggregateError);
+      expect((error as AggregateError).errors).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            message: "Injected retained-handle release failure",
+          }),
+        ]),
+      );
+      expect(liveShapeCount(consumer)).toBe(0);
+      expect(raw.shapeCount).toBe(arenaBefore);
+
+      decoded = await codec(consumer).decodeShapeArtifact(
+        artifact,
+        ARTIFACT_CONTEXT,
+      );
+      expect(consumer.status(decoded)).toEqual({ ok: true, code: "VALID" });
+    } finally {
+      if (decoded !== undefined) consumer.disposeShape(decoded);
+      if (source !== undefined) producer.disposeShape(source);
+      consumer.dispose();
+      producer.dispose();
+    }
+  });
+
   it.each(
     [
       ["modeling tolerance", { modelingTolerance: 2e-7 }],

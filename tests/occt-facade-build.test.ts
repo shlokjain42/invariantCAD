@@ -29,6 +29,10 @@ const solidOffsetPatchUrl = new URL(
   "../native/occt/patches/0006-exact-solid-offset-history.patch",
   import.meta.url,
 );
+const artifactPatchUrl = new URL(
+  "../native/occt/patches/0007-bounded-shape-artifacts.patch",
+  import.meta.url,
+);
 const smokeUrl = new URL("../scripts/test-occt-facade.mjs", import.meta.url);
 const packagerUrl = new URL(
   "../scripts/package-occt-facade-bundle.mjs",
@@ -160,6 +164,19 @@ describe("owned OCCT facade build boundary", () => {
     expect(solidOffsetPatch).toContain("maxHistoryRecords");
     expect(solidOffsetPatch).toContain(
       "invariantcad-facade@0.6.0+occt-wasm.3.7.0",
+    );
+
+    const artifactPatch = await readFile(artifactPatchUrl, "utf8");
+    expect(artifactPatch).toContain("BoundedArtifactOutputBuffer");
+    expect(artifactPatch).toContain("InvariantCadArtifactWriteReport");
+    expect(artifactPatch).toContain("InvariantCadArtifactReadReport");
+    expect(artifactPatch).toContain("invariantcadWriteArtifactBrep");
+    expect(artifactPatch).toContain("invariantcadReadArtifactBrep");
+    expect(artifactPatch).toContain("OUTPUT_LIMIT_EXCEEDED");
+    expect(artifactPatch).toContain("TOPOLOGY_LIMIT_EXCEEDED");
+    expect(artifactPatch).toContain("BinTools_FormatVersion_VERSION_4");
+    expect(artifactPatch).toContain(
+      "invariantcad-facade@0.7.0+occt-wasm.3.7.0",
     );
 
     const releaseInput = JSON.parse(await readFile(releaseInputUrl, "utf8")) as {

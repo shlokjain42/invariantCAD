@@ -106,6 +106,11 @@ import {
   type OcctFacadeProbe,
 } from "./internal/occt-facade.js";
 import { adoptOcctControlledPipeShell } from "./internal/occt-pipe-shell.js";
+import {
+  OcctArtifactWriteError,
+  readBoundedOcctArtifactBrep,
+  writeBoundedOcctArtifactBrep,
+} from "./internal/occt-artifact-facade.js";
 import { resolvedCompositeSweepVolumeOracle } from "./internal/transported-profile-volume.js";
 import {
   combineMassProperties,
@@ -131,6 +136,7 @@ import {
   OCCT_SHAPE_ARTIFACT_CANDIDATE_ACCESS,
   remapOcctShapeArtifactTopology,
   type OcctShapeArtifactCandidateHost,
+  type OcctShapeArtifactCapturedSidecarState,
   type OcctShapeArtifactCapturedState,
   type OcctShapeArtifactNativeStructure,
 } from "./internal/occt-artifact-candidate.js";
@@ -143,6 +149,7 @@ export {
 
 const OCCT_SHAPE = Symbol("InvariantCAD.OcctShape");
 const TOPOLOGY_HASH_UPPER_BOUND = 2_147_483_647;
+const MAX_ARTIFACT_NATIVE_TOPOLOGY_ITEMS = 400_000;
 let nextTopologyNamespace = 1;
 
 function exactBooleanHistoryRecordLimit(value: number | undefined): number {
@@ -325,6 +332,7 @@ function occtArtifactCandidateCompatibilityFingerprint(
   maxExactEdgeTreatmentHistoryRecords: number,
   maxExactSolidOffsetHistoryRecords: number,
   capabilities: KernelCapabilities,
+  boundedNativeIo: boolean,
 ): string | undefined {
   if (
     runtime === undefined ||
@@ -370,10 +378,14 @@ function occtArtifactCandidateCompatibilityFingerprint(
       `maxExactEdgeTreatmentHistoryRecords=${maxExactEdgeTreatmentHistoryRecords}`,
       `maxExactSolidOffsetHistoryRecords=${maxExactSolidOffsetHistoryRecords}`,
       `features=${capabilities.features.join(",")}`,
-      "nativeArchive=occt-brep-binary",
+      boundedNativeIo
+        ? "nativeArchive=occt-brep-binary-v4;triangulation=false;normals=false"
+        : "nativeArchive=occt-brep-binary",
       "topologySidecar=artifact-local-index-v1",
       "nativeStructure=ordered-type-orientation-v1",
-      "nativeMaterialization=unbounded-candidate-only",
+      boundedNativeIo
+        ? "nativeMaterialization=facade-capped-output-bounded-input-snapshot-v1"
+        : "nativeMaterialization=unbounded-candidate-only",
     ].join(";");
   } catch {
     return undefined;
@@ -883,6 +895,7 @@ class OcctKernel implements GeometryKernel {
         this.maxExactEdgeTreatmentHistoryRecords,
         this.maxExactSolidOffsetHistoryRecords,
         this.capabilities,
+        facade?.artifact !== undefined,
       );
     if (facade?.draft !== undefined) {
       this.draft = (shape, faces, resolved, context) =>
@@ -907,6 +920,8 @@ class OcctKernel implements GeometryKernel {
           compatibilityFingerprint,
           capture: (shape: KernelShape) =>
             this.captureShapeArtifactCandidate(shape),
+          encodeNative: (shape: KernelShape, maxBytes: number) =>
+            this.encodeShapeArtifactCandidateNative(shape, maxBytes),
           restore: (state: OcctShapeArtifactCapturedState) =>
             this.restoreShapeArtifactCandidate(state),
         });
@@ -930,16 +945,14 @@ class OcctKernel implements GeometryKernel {
 
   private captureShapeArtifactCandidate(
     shape: KernelShape,
-  ): OcctShapeArtifactCapturedState {
+  ): OcctShapeArtifactCapturedSidecarState {
     const owned = this.shape(shape);
     const topology = this.topology(owned);
     const nativeStructure = this.captureShapeArtifactNativeStructure(
       owned,
       topology,
     );
-    const brep = this.raw.toBREPBinary(owned[OCCT_SHAPE]).slice();
     return Object.freeze({
-      brep,
       lineage: owned.lineage,
       history: owned.history,
       topology,
@@ -950,6 +963,39 @@ class OcctKernel implements GeometryKernel {
     });
   }
 
+  private encodeShapeArtifactCandidateNative(
+    shape: KernelShape,
+    maxBytes: number,
+  ): Uint8Array {
+    const owned = this.shape(shape);
+    if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
+      throw new RangeError("OCCT candidate native byte limit is invalid");
+    }
+    if (this.facade?.artifact === undefined) {
+      const brep = this.raw.toBREPBinary(owned[OCCT_SHAPE]).slice();
+      if (brep.byteLength > maxBytes) {
+        throw new RangeError("OCCT candidate artifact exceeds maxArtifactBytes");
+      }
+      return brep;
+    }
+    try {
+      return writeBoundedOcctArtifactBrep({
+        module: this.facade.artifact,
+        kernel: this.raw.getRawKernel(),
+        shapeId: owned[OCCT_SHAPE] as number,
+        maxOutputBytes: Math.min(maxBytes, TOPOLOGY_HASH_UPPER_BOUND),
+      });
+    } catch (error) {
+      if (
+        error instanceof OcctArtifactWriteError &&
+        error.diagnostics.code === "OUTPUT_LIMIT_EXCEEDED"
+      ) {
+        throw new RangeError("OCCT candidate artifact exceeds maxArtifactBytes");
+      }
+      throw error;
+    }
+  }
+
   private restoreShapeArtifactCandidate(
     state: OcctShapeArtifactCapturedState,
   ): OcctShape {
@@ -957,7 +1003,20 @@ class OcctKernel implements GeometryKernel {
     let handle: ShapeHandle | undefined;
     let provisional: OcctShape | undefined;
     try {
-      handle = this.raw.fromBREPBinary(state.brep);
+      if (this.facade?.artifact === undefined) {
+        handle = this.raw.fromBREPBinary(state.brep);
+      } else {
+        if (state.brep.byteLength > TOPOLOGY_HASH_UPPER_BOUND) {
+          throw new RangeError("OCCT candidate BREP exceeds the native ABI range");
+        }
+        handle = readBoundedOcctArtifactBrep({
+          module: this.facade.artifact,
+          kernel: this.raw.getRawKernel(),
+          input: state.brep,
+          maxInputBytes: state.brep.byteLength,
+          maxTopologyItems: MAX_ARTIFACT_NATIVE_TOPOLOGY_ITEMS,
+        }) as ShapeHandle;
+      }
       provisional = this.own(handle, undefined, {
         inherited: state.lineage,
         history: state.history,
@@ -5230,14 +5289,30 @@ class OcctKernel implements GeometryKernel {
     }
     if (shape.disposed) return;
     this.assertKernelLive();
+    const cleanupErrors: unknown[] = [];
     for (const retained of shape.topologyHandles.values()) {
-      this.raw.release(retained.handle);
+      try {
+        this.raw.release(retained.handle);
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
     }
     shape.topologyHandles.clear();
     shape.topologySnapshot = undefined;
-    this.raw.release(shape[OCCT_SHAPE]);
+    try {
+      this.raw.release(shape[OCCT_SHAPE]);
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
     shape.disposed = true;
     this.liveShapes.delete(shape);
+    if (cleanupErrors.length === 1) throw cleanupErrors[0];
+    if (cleanupErrors.length > 1) {
+      throw new AggregateError(
+        cleanupErrors,
+        "OCCT shape disposal encountered multiple release failures",
+      );
+    }
   }
 
   dispose(): void {

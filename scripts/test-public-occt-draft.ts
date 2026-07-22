@@ -1346,7 +1346,7 @@ const ownedModuleFactory: OcctModuleFactory = async (options) => {
   assert.equal(typeof candidate.invariantcadFacadeVersion, "function");
   assert.equal(
     (candidate.invariantcadFacadeVersion as () => unknown)(),
-    "invariantcad-facade@0.6.0+occt-wasm.3.7.0",
+    "invariantcad-facade@0.7.0+occt-wasm.3.7.0",
   );
   assert.equal(typeof candidate.InvariantCadSolidOffsetReport, "function");
   assert.equal(typeof candidate.invariantcadSolidOffsetAtomic, "function");
@@ -1376,13 +1376,13 @@ try {
   assert.deepEqual(kernel.capabilities.topology?.signatures, {
     protocolVersion: 2,
     fingerprint:
-      "invariantcad-topology-descriptor@6;occt-wasm@3.7.0;runtime=invariantcad-facade@0.6.0+occt-wasm.3.7.0;modelingTolerance=1e-7",
+      "invariantcad-topology-descriptor@6;occt-wasm@3.7.0;runtime=invariantcad-facade@0.7.0+occt-wasm.3.7.0;modelingTolerance=1e-7",
   });
   assert.deepEqual(kernel.capabilities.topology?.signatureProfiles, [
     {
       protocolVersion: 1,
       fingerprint:
-        "invariantcad-topology-descriptor@5;occt-wasm@3.7.0;runtime=invariantcad-facade@0.6.0+occt-wasm.3.7.0;modelingTolerance=1e-7",
+        "invariantcad-topology-descriptor@5;occt-wasm@3.7.0;runtime=invariantcad-facade@0.7.0+occt-wasm.3.7.0;modelingTolerance=1e-7",
     },
   ]);
   assertDirectDraft(kernel);
