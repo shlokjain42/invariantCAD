@@ -48,9 +48,5 @@ jobs:
       - name: Run release acceptance suite
         run: pnpm release:check
 
-      - name: Publish with npm provenance
+      - name: Publish through npm trusted publishing
         run: npm publish --access public --provenance
-        env:
-          # Required only for the first publish, before npm can trust this
-          # workflow through OIDC. Delete the secret after bootstrap.
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

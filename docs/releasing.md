@@ -29,24 +29,17 @@ acceptance suite, and publishes from a GitHub-hosted runner with provenance.
 
 ## One-time npm bootstrap
 
-An npm package must exist before its settings can authorize a trusted
-publisher. The first release therefore needs a short-lived npm credential:
-
-1. create an npm account, verify its email address, and enable two-factor
-   authentication;
-2. create a temporary granular access token that can publish the new public
-   package and has npm's non-interactive `bypass 2FA` capability;
-3. add it as the `NPM_TOKEN` secret in the GitHub `npm` environment;
-4. dispatch `.github/workflows/release.yml` against the release tag;
-5. verify the published package, provenance, owner, files, and `latest` tag;
-   and
-6. immediately delete the GitHub secret and revoke the npm token.
+The one-time bootstrap completed with `invariantcad@0.1.0` on 2026-07-22.
+The public registry artifact, provenance, owner, files, CLI, entry points,
+geometry kernels, and `latest` tag were independently verified. The temporary
+`NPM_TOKEN` GitHub environment secret was then deleted, and the release
+workflow no longer reads a registry token.
 
 Never commit an npm token or copy it into a workflow file, shell history, issue,
-release note, or CI log.
+release note, or CI log. The npm-side bootstrap token must also be revoked.
 
-After the first package exists, configure its npm trusted publisher with these
-case-sensitive values:
+Before the next release, configure the package's npm trusted publisher with
+these case-sensitive values:
 
 - provider: GitHub Actions;
 - organization or user: `shlokjain42`;
