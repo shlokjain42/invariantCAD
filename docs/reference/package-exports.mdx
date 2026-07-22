@@ -1,0 +1,73 @@
+---
+title: "Package exports and compatibility"
+description: "Supported import paths, ESM requirements, types, browser assets, and semver expectations."
+icon: "package-open"
+---
+
+## Export map
+
+```json
+{
+  ".": "./dist/index.js",
+  "./conformance": "./dist/conformance.js",
+  "./kernels/occt": "./dist/occt-kernel.js",
+  "./package.json": "./package.json"
+}
+```
+
+Each JavaScript entry has a matching declaration file. Declaration maps point
+back to source JSDoc for editors and source-aware tooling.
+
+## Supported imports
+
+```ts
+import { design, createEvaluator } from "invariantcad";
+import { createOcctKernel } from "invariantcad/kernels/occt";
+import { auditKernelShapeArtifactCodec } from "invariantcad/conformance";
+```
+
+Do not import `invariantcad/dist/...`, internal chunks, `src/...`, or vendored
+runtime files. They are deliberately hidden by the export map and can change
+without a public API decision.
+
+## ESM only
+
+The package defines `"type": "module"` and only an `import` condition. It does
+not ship a CommonJS wrapper. Use dynamic `import()` from a legacy CommonJS host
+if migration cannot happen immediately:
+
+```js
+const { design } = await import("invariantcad");
+```
+
+## Node and browser
+
+The supported Node floor is 20.19. The root module and bundled Manifold runtime
+also target modern browsers. The OpenCascade entry can run in the browser when
+its larger WASM asset is correctly served.
+
+Release CI verifies Node 20, 22, and 24 plus a production Vite build in
+Chromium.
+
+## Side effects and tree shaking
+
+The package declares `sideEffects: false`. Importing the OCCT subpath is
+separate so ordinary Manifold consumers need not execute exact-backend module
+initialization. WASM initialization occurs only when a kernel factory is called.
+
+## Type compatibility
+
+Published declarations are checked with `publint` and Are the Types Wrong under
+the ESM profile. The release gate also installs the packed tarball into a clean
+consumer instead of testing only repository-relative imports.
+
+## Semver before 1.0
+
+- Patch releases should repair behavior without changing frozen document
+  meaning.
+- Minor releases may evolve the TypeScript authoring surface during `0.x`.
+- Frozen document schemas and protocol versions remain independently
+  parseable according to their compatibility policy.
+
+Pin a minor line for production systems that cannot absorb pre-1.0 API changes,
+and read the changelog before upgrading.

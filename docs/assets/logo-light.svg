@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="190" height="42" viewBox="0 0 190 42" role="img" aria-label="InvariantCAD">
+  <g fill="none" stroke="#2563EB" stroke-width="2.2" stroke-linejoin="round">
+    <path d="M5 11 20 3l15 8-15 8z"/>
+    <path d="M5 11v17l15 9 15-9V11"/>
+    <path d="M20 19v18"/>
+  </g>
+  <text x="45" y="28" fill="#111827" font-family="Inter,Arial,sans-serif" font-size="20" font-weight="700">InvariantCAD</text>
+</svg>

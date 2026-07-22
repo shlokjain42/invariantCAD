@@ -2,7 +2,7 @@ import initializeManifold, {
   type Manifold as ManifoldSolid,
   type ManifoldToplevel,
   type Mat4 as ManifoldMat4,
-} from "manifold-3d";
+} from "./vendor/manifold-3d/manifold.js";
 import type { Mat4, Vec3 } from "./core/math.js";
 import type {
   GeometryKernel,

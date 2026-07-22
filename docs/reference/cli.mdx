@@ -1,0 +1,89 @@
+---
+title: "Command-line interface"
+description: "Validate, inspect, generate BOMs, and export InvariantCAD JSON documents."
+icon: "terminal"
+---
+
+The `invariantcad` binary operates on serialized design documents. It is useful
+for CI, build pipelines, and verifying documents produced elsewhere.
+
+## Validate
+
+```bash
+invariantcad validate model.invariantcad.json
+```
+
+Parses and validates the frozen document grammar without evaluating geometry.
+Success prints the document version and name.
+
+## Inspect
+
+```bash
+invariantcad inspect model.json \
+  --configuration manufacturing \
+  --kernel occt \
+  --parameters parameters.json
+```
+
+Prints JSON measurements for every selected output, including geometric
+properties, triangle count, principal inertia, radii of gyration, and physical
+properties where the output supplies density.
+
+## Bill of materials
+
+```bash
+invariantcad bom assembly.json \
+  --output machine \
+  --configuration compact
+```
+
+The selected output must be a part or assembly. Output JSON includes the BOM,
+mass-completeness fields, and non-fatal BOM diagnostics.
+
+## Export
+
+```bash
+invariantcad export model.json \
+  --output body \
+  --to body.step \
+  --kernel occt
+```
+
+Supported `--format` values:
+
+- `stl`
+- `stl-ascii`
+- `obj`
+- `step`
+- `brep`
+- `brep-binary`
+
+If `--format` is omitted, `.obj`, `.step`/`.stp`, and `.brep` extensions are
+recognized; other destinations default to binary STL. Exact formats default
+the kernel to OCCT, while mesh formats default to Manifold unless `--kernel` is
+explicit.
+
+## Parameter file
+
+`--parameters` points to a JSON object of finite base-unit values:
+
+```json
+{
+  "width": 120,
+  "draftAngle": 0.03490658503988659
+}
+```
+
+Lengths are millimetres and angles are radians.
+
+## Exit codes
+
+| Code | Meaning |
+| ---: | --- |
+| 0 | Command completed successfully |
+| 1 | Document, evaluation, BOM, or export operation failed |
+| 2 | Command-line usage or argument error |
+
+Diagnostics are written to stderr as `SEVERITY CODE path: message`. Machine
+integrations should prefer the TypeScript API when they need complete structured
+diagnostic details rather than parsing CLI text.

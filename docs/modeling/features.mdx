@@ -1,0 +1,133 @@
+---
+title: "Solid features"
+description: "Use extrude, revolve, Booleans, fillet, chamfer, shell, offset, and draft with explicit topology intent."
+icon: "combine"
+---
+
+## Extrude and revolve
+
+```ts
+const profile = cad.sketch("profile", plane.xy(), (sketch) =>
+  sketch.profile(
+    sketch.rectangle("outline", { width: mm(40), height: mm(20) }),
+  ),
+);
+
+const extrusion = cad.extrude("extrusion", profile, {
+  distance: mm(10),
+  symmetric: true,
+});
+
+const revolution = cad.revolve("revolution", profile, {
+  angle: deg(270),
+  segments: 96,
+});
+```
+
+Manifold additionally supports twisted and top-scaled extrusion:
+
+```ts
+const twisted = cad.extrude("twisted", profile, {
+  distance: mm(50),
+  twist: deg(90),
+  scaleTop: [scalar(0.75), scalar(0.75)],
+  divisions: 32,
+});
+```
+
+Check the [support matrix](/reference/support-matrix) before using these options
+with another kernel.
+
+## Booleans
+
+Boolean features have one target and one or more tools:
+
+```ts
+const joined = cad.union("joined", target, [toolA, toolB]);
+const cut = cad.subtract("cut", target, [holeA, holeB]);
+const common = cad.intersect("common", target, [clip]);
+```
+
+An empty tool array is rejected during authoring. The result is one solid; input
+solids remain feature dependencies and are not mutated.
+
+## Fillet and chamfer
+
+Edge treatments require an explicit edge selection:
+
+```ts
+const rim = topology.edges
+  .createdBy(extrusion, { role: "extrude.edge.end-rim" })
+  .exactly(4);
+
+const rounded = cad.fillet("rounded", extrusion, {
+  edges: rim,
+  radius: mm(2),
+});
+
+const beveled = cad.chamfer("beveled", extrusion, {
+  edges: rim,
+  distance: mm(1),
+});
+```
+
+The selection resolves against the direct input solid. A missing, ambiguous, or
+wrong-cardinality selection fails before the treatment is applied.
+
+## Shell and offset
+
+```ts
+const endCap = topology.faces
+  .createdBy(extrusion, { role: "extrude.face.end-cap" })
+  .select();
+
+const hollow = cad.shell("hollow", extrusion, {
+  openings: endCap,
+  thickness: mm(2),
+  direction: "inward",
+  tolerance: mm(1e-6),
+});
+
+const expanded = cad.offset("expanded", extrusion, {
+  distance: mm(1),
+  direction: "outward",
+  tolerance: mm(1e-6),
+});
+```
+
+Shell removes selected opening faces and offsets the remaining skin to create a
+constant wall. Whole-solid offset has no opening selection. Both use positive
+magnitudes plus an explicit direction.
+
+## Draft
+
+Draft is an atomic multi-face exact feature available through the matched owned
+OCCT facade:
+
+```ts
+const sides = topology.faces
+  .createdBy(extrusion, { role: "extrude.face.side" })
+  .atLeast(1);
+
+const drafted = cad.draft("drafted", extrusion, {
+  faces: sides,
+  angle: deg(2),
+  pullDirection: scalarVec3(0, 0, 1),
+  neutralPlane: {
+    origin: vec3(mm(0), mm(0), mm(0)),
+    normal: scalarVec3(0, 0, 1),
+  },
+});
+```
+
+Stock OCCT does not advertise draft. Capability checks reject the feature before
+input geometry is allocated on an unsupported backend.
+
+## Exact-history boundary
+
+Stock OCCT can construct most exact features, but its Boolean, edge-treatment,
+and solid-offset topology history is partial. The optional owned facade
+advertises complete bounded evolution only for the exact feature slices and ABI
+versions documented in the [OpenCascade guide](/evaluation/open-cascade).
+
+Construction success and complete topology evolution are distinct guarantees.

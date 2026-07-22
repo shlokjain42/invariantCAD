@@ -44,9 +44,13 @@ jobs:
         if: matrix.node == '24.x'
         run: pnpm coverage
 
-      - name: Enforce production advisory policy
+      - name: Enforce dependency advisory policy
         if: matrix.node == '24.x'
         run: pnpm audit:release
+
+      - name: Validate Mintlify site
+        if: matrix.node == '24.x'
+        run: pnpm docs:release-check
 
   browser:
     name: Browser smoke (Chromium)

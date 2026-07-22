@@ -1,0 +1,94 @@
+---
+title: "0.1 support matrix"
+description: "Feature-by-feature boundary for authoring, Manifold, stock OpenCascade, and the owned OCCT facade."
+icon: "table-2"
+---
+
+Legend: **Yes** is release-gated public behavior, **Partial** is usable with an
+explicitly documented weaker contract, and **No** is not advertised.
+
+## Modeling
+
+| Feature | Authoring | Manifold | Stock OCCT | Owned facade |
+| --- | --- | --- | --- | --- |
+| Box, cylinder/cone, sphere | Yes | Yes | Yes | Yes |
+| Planar sketches and holes | Yes | Yes | Yes | Yes |
+| Extrude, symmetric extrude | Yes | Yes | Yes | Yes |
+| Twist/top-scale extrude | Yes | Yes | No | No |
+| Revolve | Yes | Yes | Yes | Yes |
+| Ruled solid loft | Yes | No | Yes | Yes |
+| Polyline path sweep | Yes | No | Yes | Yes |
+| Circular-arc path sweep | Yes | No | Yes | Yes |
+| Composite line/arc sweep | Yes | No | Bounded | Stronger bounded refinements |
+| Boolean operations | Yes | Yes | Yes, partial history | Yes, complete bounded evolution |
+| Transform | Yes | Yes | Yes | Yes |
+| Fillet/chamfer | Yes | No | Yes, partial history | Yes, complete bounded evolution |
+| Shell/whole-solid offset | Yes | No | Yes, partial history | Yes, complete bounded evolution |
+| Draft | Yes | No | No | Yes |
+
+## Topology
+
+| Capability | Manifold | Stock OCCT | Owned facade |
+| --- | --- | --- | --- |
+| Face/edge/vertex snapshot | No | Yes | Yes |
+| Semantic roles and sketch source | No | Yes, feature-dependent | Yes, feature-dependent |
+| Geometry and adjacency queries | No | Yes | Yes |
+| Selection explanations | Snapshot-dependent | Yes | Yes |
+| Persistent signature protocol v2 | No | Yes | Yes |
+| Stored v1 compatibility profile | No | Yes | Yes |
+| Complete feature evolution | No | Partial | Selected feature slices |
+
+Construction and complete history are separate columns conceptually. A stock
+OCCT fillet may construct successfully while downstream semantic lineage is
+partial.
+
+## Product structure and analysis
+
+These evaluator-level features work with either kernel when all underlying
+geometry features are supported:
+
+- parameters and dimension-safe expressions
+- materials and density expressions
+- parts and fixed-placement nested assemblies
+- named configurations
+- instance suppression and part-material overrides
+- deterministic BOMs
+- geometric and physical mass properties
+- canonical documents, migration, validation, and hashing
+- design-impact and effective-feature hash reports
+
+## Exchange
+
+| Format | Manifold | OCCT |
+| --- | --- | --- |
+| Binary STL | Yes | Yes |
+| ASCII STL | Yes | Yes |
+| OBJ | Yes | Yes |
+| STEP | No | Yes |
+| Text BREP | No | Yes |
+| Binary BREP | No | Yes |
+
+## Runtime coverage
+
+| Environment | Release gate |
+| --- | --- |
+| Node.js 20.19 | Full package checks |
+| Node.js 22 | Full package checks |
+| Node.js 24 | Tests, coverage, package, and security gates |
+| Chromium production bundle | Manifold and stock OCCT smoke |
+| Firefox/Safari | Not yet release-gated |
+| Deno | Not claimed |
+
+## Explicitly not in 0.1
+
+- drawings, dimensions, PMI, and GD&T
+- sheet metal and flat patterns
+- assembly mates, joints, motion, interference, and contact
+- CAM, toolpaths, posts, and stock simulation
+- CAE/meshing/solver workflows
+- general surfacing, NURBS editing, healing, and feature recognition
+- variable fillets/chamfers and advanced shell modes
+- complete transparent cross-run native shape caching
+
+For the exact path-conditioning and topology-protocol boundaries behind this
+matrix, read the [complete guide](/reference/complete-guide).

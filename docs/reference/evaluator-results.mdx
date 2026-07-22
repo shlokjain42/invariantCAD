@@ -1,0 +1,88 @@
+---
+title: "Evaluator and result reference"
+description: "Reference for evaluator creation, evaluation options, output classes, ownership, and exports."
+icon: "square-play"
+---
+
+## Creation
+
+```ts
+createEvaluator(options?: CreateEvaluatorOptions): Promise<Evaluator>
+```
+
+`CreateEvaluatorOptions` accepts `kernel`, default-Manifold `manifold` options,
+and `sketchSolver`.
+
+## Evaluation
+
+```ts
+evaluator.evaluate(
+  document: DesignDocument,
+  options?: EvaluationOptions,
+): Promise<CadResult<EvaluatedDesign>>
+```
+
+See the [evaluator guide](/evaluation/evaluator) for option semantics.
+
+## EvaluatedDesign
+
+| Member | Type | Meaning |
+| --- | --- | --- |
+| `configurationId` | `string \| null` | Active named configuration, or `null` for the base design |
+| `outputNames` | `readonly string[]` | Evaluated output names in deterministic order |
+| `output(name)` | `EvaluatedOutput` | Fetch a live named output or throw for an unavailable name |
+| `dispose()` | `void` | Release all shapes owned by the evaluation |
+
+## EvaluatedSolid
+
+| Method | Returns | Notes |
+| --- | --- | --- |
+| `mesh(options?)` | `MeshData` | Fresh detached typed arrays |
+| `measure()` | `ShapeMeasurements` | Geometric measurements in document units |
+| `topology()` | `CadResult<KernelTopologySnapshot>` | Requires backend topology support |
+| `export("stl")` | `Uint8Array` | Binary STL |
+| `export("stl-ascii")` | `string` | ASCII STL |
+| `export("obj")` | `string` | Wavefront OBJ |
+| `export("step")` | `Uint8Array` | Requires native STEP export |
+| `export("brep")` | `Uint8Array` | Requires native text BREP export |
+| `export("brep-binary")` | `Uint8Array` | Requires native binary BREP export |
+
+## EvaluatedPart
+
+Extends `EvaluatedSolid` and adds part number, description, material identity,
+density source, `billOfMaterials()`, and `physicalMassProperties()`.
+
+## EvaluatedAssembly
+
+Provides:
+
+- `instances`: flattened evaluated part occurrences with stable paths and
+  transforms
+- `mesh(options?)`: merged placed occurrence mesh
+- `measure()`: aggregate geometric properties
+- `export(format)`: mesh formats and compatible aggregate output
+- `billOfMaterials()`: grouped deterministic BOM result
+- `physicalMassProperties()`: placed density-aware aggregate
+
+Exact native STEP/BREP assembly structure is not a separate 0.1 product-data
+model; an aggregate export follows the current evaluated geometry behavior.
+
+## Lifetime
+
+Every method that touches an output asserts its owning evaluation is live.
+Detached strings, byte arrays, typed arrays, plain measurement objects,
+diagnostics, and BOM reports remain ordinary JavaScript values after disposal.
+Output wrapper methods do not.
+
+```ts
+const bytes = output.export("stl");
+evaluated.dispose();
+
+// bytes is still owned by the caller.
+```
+
+## Errors
+
+Most evaluation failures return diagnostics. Direct `output(name)` misuse,
+post-disposal access, and unsupported direct `export()` formats throw. An
+unsupported export uses `CadError`, which carries its structured diagnostics.

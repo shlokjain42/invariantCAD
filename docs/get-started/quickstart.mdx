@@ -1,0 +1,165 @@
+---
+title: "Quickstart"
+description: "Author, evaluate, inspect, and export a parameterized mounting plate."
+icon: "rocket"
+---
+
+This walkthrough builds a plate with a parameterized rectangular outline and a
+circular hole, evaluates a wider variant, measures it, and exports a binary
+STL.
+
+## 1. Author the design
+
+```ts
+import {
+  createEvaluator,
+  design,
+  mm,
+  plane,
+  vec2,
+} from "invariantcad";
+
+const cad = design("mounting-plate", {
+  metadata: { description: "Parameterized plate with one mounting hole" },
+});
+
+const width = cad.parameter.length("width", mm(80), {
+  min: mm(20),
+  max: mm(200),
+  description: "Overall plate width",
+});
+const height = cad.parameter.length("height", mm(50), { min: mm(10) });
+const thickness = cad.parameter.length("thickness", mm(6), { min: mm(1) });
+const holeRadius = cad.parameter.length("holeRadius", mm(4), { min: mm(1) });
+
+const profile = cad.sketch("plate-profile", plane.xy(), (sketch) => {
+  const outline = sketch.rectangle("outline", { width, height });
+  const hole = sketch.circle("hole", {
+    center: vec2(width.mul(0.25), mm(0)),
+    radius: holeRadius,
+  });
+
+  return sketch.profile(outline, { holes: [hole.loop()] });
+});
+
+const solid = cad.extrude("plate-solid", profile, {
+  distance: thickness,
+  symmetric: true,
+});
+const part = cad.part("plate", solid, {
+  partNumber: "PLATE-001",
+  description: "Machined mounting plate",
+});
+
+cad.output("plate", part);
+const document = cad.build();
+```
+
+`build()` returns a deeply frozen current-version document. Builder references
+such as `profile`, `solid`, and `part` are authoring handles; the serialized
+document contains stable IDs and JSON data, not those class instances.
+
+## 2. Evaluate a variant
+
+```ts
+const evaluator = await createEvaluator();
+
+try {
+  const result = await evaluator.evaluate(document, {
+    parameters: {
+      width: 100, // base length unit is millimetres
+      holeRadius: 5,
+    },
+    outputs: ["plate"],
+  });
+
+  if (!result.ok) {
+    for (const diagnostic of result.diagnostics) {
+      console.error(diagnostic.code, diagnostic.path, diagnostic.message);
+    }
+    throw new Error("Evaluation failed");
+  }
+
+  try {
+    const plate = result.value.output("plate");
+    console.log(plate.measure());
+    const mesh = plate.mesh();
+    const stl = plate.export("stl");
+
+    console.log({
+      triangles: mesh.indices.length / 3,
+      stlBytes: stl.byteLength,
+    });
+  } finally {
+    result.value.dispose();
+  }
+} finally {
+  evaluator.dispose();
+}
+```
+
+Parameter override numbers are expressed in base units: millimetres for length,
+radians for angle, unitless values for scalar parameters, and kilograms per
+cubic millimetre for mass density.
+
+## 3. Save the document and STL
+
+```ts
+import { writeFile } from "node:fs/promises";
+import { stringifyDocument } from "invariantcad";
+
+await writeFile(
+  "mounting-plate.invariantcad.json",
+  stringifyDocument(document, { pretty: true }),
+);
+```
+
+Inside the successful evaluation block, save the exported bytes with:
+
+```ts
+await writeFile("mounting-plate.stl", plate.export("stl"));
+```
+
+`stringifyDocument()` canonicalizes values according to the document protocol.
+Use `parseDocument()` when loading untrusted text; do not cast parsed JSON to a
+`DesignDocument`.
+
+## 4. Switch to exact B-Rep
+
+The design document does not change when you change kernels:
+
+```ts
+import { createOcctKernel } from "invariantcad/kernels/occt";
+
+const exactEvaluator = await createEvaluator({
+  kernel: await createOcctKernel(),
+});
+```
+
+An exact evaluated output can export STEP or BREP:
+
+```ts
+const step = exactOutput.export("step");
+const binaryBrep = exactOutput.export("brep-binary");
+```
+
+Read [kernels](/evaluation/kernels) before assuming every feature or topology
+history guarantee is identical between Manifold, stock OCCT, and the optional
+owned facade.
+
+## What to learn next
+
+<CardGroup cols={2}>
+  <Card title="Expressions and parameters" icon="variable" href="/modeling/parameters-and-expressions">
+    Build dimension-safe formulas and understand evaluation overrides.
+  </Card>
+  <Card title="Sketches and constraints" icon="pen-tool" href="/modeling/sketches-and-constraints">
+    Author reusable profiles with explicit loops and holes.
+  </Card>
+  <Card title="Assemblies and BOMs" icon="boxes" href="/modeling/assemblies">
+    Define reusable parts, nested occurrences, materials, and quantities.
+  </Card>
+  <Card title="Diagnostics" icon="triangle-alert" href="/evaluation/diagnostics-and-limits">
+    Handle structured failures, cancellation, and resource limits.
+  </Card>
+</CardGroup>

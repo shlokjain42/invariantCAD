@@ -1,0 +1,8 @@
+dlmalloc 2.8.6
+
+This is a version (aka dlmalloc) of malloc/free/realloc written by Doug Lea
+and released to the public domain, as explained at
+http://creativecommons.org/publicdomain/zero/1.0/
+
+Emscripten modifications are covered by the separate Emscripten license
+distributed with this runtime.

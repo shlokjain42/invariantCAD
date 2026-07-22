@@ -1,4 +1,4 @@
-import initializeManifold from "manifold-3d";
+import initializeManifold from "../src/vendor/manifold-3d/manifold.js";
 import { describe, expect, it } from "vitest";
 import {
   createManifoldKernel,

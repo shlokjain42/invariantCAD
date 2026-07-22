@@ -1,0 +1,62 @@
+---
+title: "Contributing"
+description: "Set up the repository, choose a change boundary, test it, and contribute safely."
+icon: "git-pull-request"
+---
+
+InvariantCAD welcomes focused issues, documentation improvements, tests,
+protocol reviews, and implementation changes. Read the canonical
+[`CONTRIBUTING.md`](https://github.com/shlokjain42/invariantCAD/blob/main/CONTRIBUTING.md)
+before opening a pull request.
+
+## Local setup
+
+```bash
+git clone https://github.com/shlokjain42/invariantCAD.git
+cd invariantCAD
+corepack enable
+pnpm install --frozen-lockfile
+pnpm check
+pnpm test
+```
+
+Node.js 20.19 or newer is required. The lockfile records the tested toolchain.
+
+## Validation levels
+
+```bash
+pnpm check          # build + TypeScript
+pnpm test           # unit/integration suite
+pnpm test:browser   # production Vite bundle in Chromium
+pnpm lint:package   # package export/type lint
+pnpm test:package   # packed clean-consumer smoke
+pnpm release:check  # complete release gate
+```
+
+Run the smallest relevant loop while developing, then the proportional full
+gate before handing off a change.
+
+## Protocol changes
+
+Document, topology, kernel, cache, artifact, and native-facade protocols are
+versioned separately. A protocol change should include a precise invariant and
+failure semantics, hostile-input bounds, frozen compatibility tests,
+cancellation and cleanup tests, serialization impact, documentation, and a
+migration decision. Never silently widen a frozen document version.
+
+## Backend changes
+
+Construction tests are not enough for topology-aware features. Add tests for
+capability metadata, geometry, topology roles/source, complete versus partial
+history, failure rollback, resource ceilings, and disposal.
+
+## Documentation changes
+
+The Mintlify source lives in `/docs`. Every navigated page needs `title` and
+`description` frontmatter. Keep examples compilable, distinguish tested from
+planned behavior, and link to one canonical support matrix.
+
+## Security reports
+
+Do not open a normal issue for a vulnerability. Follow the
+[security policy](/project/security).

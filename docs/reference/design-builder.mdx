@@ -1,0 +1,88 @@
+---
+title: "DesignBuilder reference"
+description: "Method-by-method reference for the primary InvariantCAD authoring surface."
+icon: "hammer"
+---
+
+Create a builder with `design(name, options?)`. Every returned authoring handle
+is immutable and owned by that builder.
+
+## Document definitions
+
+| Method | Returns | Purpose |
+| --- | --- | --- |
+| `parameter.length` | `Parameter<"length">` | Length default, bounds, label, and description |
+| `parameter.angle` | `Parameter<"angle">` | Angle parameter |
+| `parameter.scalar` | `Parameter<"scalar">` | Unitless parameter |
+| `parameter.massDensity` | `Parameter<"massDensity">` | Density parameter in kg/mm³ base units |
+| `material` | `MaterialRef` | Named density-aware material definition |
+| `topologyReference` | `TopologyReferenceRef` | Document-owned detached persistent topology evidence |
+
+## Primitive and profile nodes
+
+| Method | Returns | Notes |
+| --- | --- | --- |
+| `box` | `SolidRef` | Positive 3D size; optional centering |
+| `cylinder` | `SolidRef` | Cylinder or cone/frustum with `radiusTop` |
+| `sphere` | `SolidRef` | Radius and optional tessellation segments |
+| `sketch` | `ProfileRef` | Principal plane callback returning one profile |
+| `polylinePath` | `PathRef` | Open ordered 3D polyline |
+| `circularArcPath` | `PathRef` | Exact three-point circular arc |
+| `compositePath` | `PathRef` | Ordered line/arc route |
+
+## Feature nodes
+
+| Method | Input | Key options |
+| --- | --- | --- |
+| `extrude` | profile | distance, symmetric, twist, top scale, divisions |
+| `revolve` | profile | angle, segments |
+| `loft` | ordered profiles | ruled interpolation |
+| `sweep` | profile + path | corrected-Frenet, right-corner |
+| `union` | target + tools | one or more tools |
+| `subtract` | target + tools | one or more tools |
+| `intersect` | target + tools | one or more tools |
+| `transform` | solid + operations | ordered transform list |
+| `translate` | solid | vector convenience wrapper |
+| `rotate` | solid | Euler angle-vector wrapper |
+| `scale` | solid | scalar-vector wrapper |
+| `mirror` | solid | mirror-plane normal wrapper |
+| `fillet` | solid | edge selection + radius |
+| `chamfer` | solid | edge selection + equal distance |
+| `shell` | solid | face openings + thickness/direction/tolerance |
+| `offset` | solid | whole-solid distance/direction/tolerance |
+| `draft` | solid | faces, angle, pull direction, neutral plane |
+
+Backend support is checked during evaluation, not authoring. A document may be
+valid while a selected kernel lacks one of its features.
+
+## Product structure
+
+| Method | Returns | Purpose |
+| --- | --- | --- |
+| `part` | `PartRef` | Wrap a solid with part/material metadata |
+| `assembly` | `AssemblyRef` | Define fixed instances of parts or assemblies |
+| `configuration` | configuration ID | Define parameter, suppression, and material overrides |
+| `output` | builder | Publish a solid, part, or assembly by output name |
+| `build` | current `DesignDocument` | Validate authoring closure and emit frozen JSON data |
+
+## ID rules
+
+All IDs use the shared stable ID grammar and must be unique in their namespace.
+Avoid generated array positions or user-facing labels that may change. Prefer
+IDs such as `housing-side-a`, `left-bearing-seat`, and `manufacturing-assembly`.
+
+## Programmer errors
+
+Methods throw `TypeError` or `RangeError` for invalid direct calls, including:
+
+- duplicate or malformed IDs
+- references from another builder
+- wrong-dimensional expressions
+- wrong topology kind
+- invalid option enum/literal values
+- empty required lists
+- non-positive tolerances
+- references targeting the wrong direct solid
+
+These failures indicate an invalid model definition or unvalidated UI input,
+not a geometry-kernel failure.

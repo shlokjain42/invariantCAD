@@ -1,3 +1,9 @@
+---
+title: "Kernel shape-artifact conformance"
+description: "Normative candidate and advertised codec audit, semantic witnesses, limits, cancellation, ownership, and report interpretation."
+icon: "shield-check"
+---
+
 # Kernel shape-artifact conformance
 
 InvariantCAD's shape-artifact protocol is stronger than native CAD import and
@@ -441,7 +447,7 @@ conjunction.
 Neither Manifold nor the stock or owned OCCT adapter currently advertises
 `shapeArtifacts`. This is intentional.
 
-For the lockfile-tested `manifold-3d` 3.5.1 runtime, the complete public
+For the bundled, digest-pinned `manifold-3d` 3.5.1 core runtime, the complete public
 `getMesh()` → `Mesh` → `Manifold` path is not an exact artifact boundary.
 `getMesh()` exposes Float32 positions while the native solid computes in double
 precision. The repository characterization translates a centered `1 × 2 × 3`

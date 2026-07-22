@@ -1,3 +1,9 @@
+---
+title: "Architecture and invariants"
+description: "Normative layers, ownership rules, protocol boundaries, coordinate conventions, and conformance requirements."
+icon: "network"
+---
+
 # InvariantCAD architecture
 
 InvariantCAD separates design intent from computation. A document must remain useful after any particular kernel, solver, renderer, or application has disappeared.

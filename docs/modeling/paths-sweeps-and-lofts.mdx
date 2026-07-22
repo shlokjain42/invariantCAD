@@ -1,0 +1,130 @@
+---
+title: "Paths, sweeps, and lofts"
+description: "Create exact bounded ruled lofts and line, circular-arc, or composite path sweeps."
+icon: "route"
+---
+
+Lofts and sweeps are exact OCCT features in 0.1. Their admitted grammar is
+intentionally narrower than a general-purpose surface modeler so each accepted
+case has explicit validation and volume checks.
+
+## Ruled solid loft
+
+```ts
+const lower = cad.sketch("lower", plane.xy(), (sketch) =>
+  sketch.profile(
+    sketch.rectangle("lower-outline", { width: mm(40), height: mm(30) }),
+  ),
+);
+
+const upper = cad.sketch(
+  "upper",
+  plane.xy(vec3(mm(0), mm(0), mm(50))),
+  (sketch) =>
+    sketch.profile(
+      sketch.rectangle("upper-outline", { width: mm(20), height: mm(15) }),
+    ),
+);
+
+const loft = cad.loft("loft", [lower, upper], { ruled: true });
+```
+
+The current document grammar requires at least two distinct, ordered,
+hole-free profiles on compatible parallel principal planes. Interpolation is
+ruled; smooth, guided, open, and holed lofts remain future contracts.
+
+## Polyline path
+
+```ts
+const path = cad.polylinePath("path", [
+  vec3(mm(0), mm(0), mm(0)),
+  vec3(mm(20), mm(0), mm(0)),
+  vec3(mm(20), mm(20), mm(0)),
+]);
+```
+
+Paths are first-class nodes, not sketch profiles. The polyline must be open and
+simple; repeated points and redundant collinear vertices are rejected.
+
+## Three-point circular arc
+
+```ts
+const arc = cad.circularArcPath("bend", {
+  start: vec3(mm(0), mm(0), mm(0)),
+  through: vec3(mm(7.071), mm(2.929), mm(0)),
+  end: vec3(mm(10), mm(10), mm(0)),
+});
+```
+
+`through` lies on the desired arc. It is not a Bézier control point. The three
+points must define one conditioned arc below a full turn.
+
+## Composite line/arc route
+
+```ts
+const route = cad.compositePath("route", {
+  start: vec3(mm(0), mm(0), mm(0)),
+  segments: [
+    { kind: "line", end: vec3(mm(5), mm(0), mm(0)) },
+    {
+      kind: "circularArc",
+      through: vec3(mm(8.535), mm(1.465), mm(0)),
+      end: vec3(mm(10), mm(5), mm(0)),
+    },
+    { kind: "line", end: vec3(mm(10), mm(10), mm(0)) },
+  ],
+});
+```
+
+A composite has at least two segments and at least one arc. Segments connect by
+construction because each begins at the previous end. Arc junctions must be
+forward G1 tangent; line-line junctions use right-corner semantics.
+
+## Sweep a profile
+
+The profile plane must be seated at the path start with its normal parallel to
+the initial tangent:
+
+```ts
+const section = cad.sketch("section", plane.yz(), (sketch) =>
+  sketch.profile(
+    sketch.rectangle("section-outline", { width: mm(2), height: mm(2) }),
+  ),
+);
+
+const swept = cad.sweep("swept", section, route, {
+  frame: "corrected-frenet",
+  transition: "right-corner",
+});
+```
+
+Those option values are currently the only admitted frame and transition
+contracts; omitting them selects the same defaults.
+
+## Clearance and conditioning
+
+InvariantCAD validates more than path syntax. It checks the full profile
+envelope against arc radius, remote path returns, adjacent curvature
+neighborhoods, native transfer floors, and numerical conditioning. Composite
+results are checked against an analytic transported-centroid volume oracle.
+
+The important user-facing rule is simple: the complete cross-section needs
+physical clearance around every bend and between remote path segments.
+Shrinking only a nominal width while leaving an off-center profile can still be
+invalid.
+
+For exact tolerances, major-arc restrictions, centered-profile stock-runtime
+behavior, and the owned-facade refinements, read the
+[complete guide](/reference/complete-guide#exact-path-sweeps).
+
+## Not yet supported
+
+- closed or full-circle path documents
+- Bézier, B-spline, and helix paths
+- guided or variable-section sweeps
+- arbitrary transition and frame modes
+- holed sweep profiles
+- general smooth surfacing
+
+Rejected input receives a structured diagnostic; it is not silently
+approximated with a different feature.

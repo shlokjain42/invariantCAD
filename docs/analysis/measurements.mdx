@@ -1,0 +1,114 @@
+---
+title: "Measurements and mass properties"
+description: "Read geometric measurements, density-aware physical properties, inertia, and radii of gyration."
+icon: "chart-no-axes-combined"
+---
+
+## Geometric measurements
+
+Every evaluated solid, part, and assembly exposes `measure()`:
+
+```ts
+const properties = output.measure();
+
+console.log(properties.volume);          // mm^3
+console.log(properties.surfaceArea);     // mm^2
+console.log(properties.centerOfMass);    // [x, y, z] in mm, or null
+console.log(properties.inertiaTensor);   // central volumetric inertia, mm^5
+console.log(properties.boundingBox);
+console.log(properties.genus);
+console.log(properties.tolerance);
+```
+
+The inertia tensor uses the standard mechanics sign convention
+`∫((r · r)I - rrᵀ) dV` about `centerOfMass`, expressed in world axes. It is a
+volumetric tensor until scaled by density.
+
+## Principal inertia
+
+```ts
+const principal = principalInertia(properties.inertiaTensor);
+
+console.log(principal.moments);
+console.log(principal.axes);
+console.log(principal.axisStatus, principal.degeneracy);
+```
+
+The result handles repeated or nearly repeated eigenvalues explicitly. In a
+sphere or symmetric cylinder, individual principal axes are not uniquely
+physical; consumers should inspect degeneracy/status rather than presenting an
+arbitrary axis as meaningful.
+
+## Axis queries
+
+```ts
+const inertia = momentOfInertiaAboutAxis(properties, {
+  point: [0, 0, 0],
+  direction: [0, 0, 1],
+});
+
+const radius = radiusOfGyrationAboutAxis(properties, {
+  point: [0, 0, 0],
+  direction: [0, 0, 1],
+});
+```
+
+Axis directions are normalized and validated. Parallel-axis translation is
+applied when the requested axis does not pass through the centroid.
+
+## Physical mass properties
+
+Parts and assemblies require authored mass density:
+
+```ts
+const aluminum = cad.material("aluminum", {
+  name: "Aluminum",
+  massDensity: kgPerCubicMeter(2700),
+});
+
+const part = cad.part("body-part", body, {
+  materialRef: aluminum,
+});
+```
+
+Then:
+
+```ts
+const physical = evaluatedPart.physicalMassProperties();
+if (!physical.ok) {
+  console.error(physical.diagnostics);
+} else {
+  console.log(physical.value.mass);            // kg
+  console.log(physical.value.centerOfMass);    // mm
+  console.log(physical.value.inertiaTensor);   // kg mm^2
+}
+```
+
+Density is stored in base unit kg/mm³. Helper constructors convert common
+engineering units without changing document semantics.
+
+## Assembly aggregation
+
+Assembly physical properties transform each occurrence's centroid and tensor,
+apply determinant volume scaling for affine placements, and combine them using
+the parallel-axis theorem. Mirrored occurrences remain positive mass; a
+nonuniform scale changes volume and inertia as geometry requires.
+
+Missing density is a diagnostic, not zero mass. A BOM may still report known
+mass and `massComplete: false` while aggregate physical properties fail.
+
+## Combining external properties
+
+`combinePhysicalMassProperties` combines already computed records after the
+caller has expressed them in the same world frame; it does not accept or apply
+placements itself. `physicalMassProperties` converts volumetric properties
+plus density into a physical record. These helpers are useful for integrations
+that combine InvariantCAD output with externally measured components.
+
+## Precision source
+
+OCCT measures exact native shapes and verifies certain sweep volumes against
+analytic profile/path oracles. Manifold provides native volume and surface-area
+measurements with mesh-based tensor integration. Check `tolerance` and backend
+representation when comparing results across kernels; equality of authored
+intent does not promise byte-identical floating-point output.

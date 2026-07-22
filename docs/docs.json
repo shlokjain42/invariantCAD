@@ -1,0 +1,229 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "aspen",
+  "name": "InvariantCAD",
+  "description": "Comprehensive, type-safe CAD-as-code for TypeScript.",
+  "colors": {
+    "primary": "#2563EB",
+    "light": "#60A5FA",
+    "dark": "#1D4ED8"
+  },
+  "logo": {
+    "light": "/assets/logo-light.svg",
+    "dark": "/assets/logo-dark.svg",
+    "href": "/"
+  },
+  "favicon": "/assets/favicon.svg",
+  "appearance": {
+    "default": "system"
+  },
+  "fonts": {
+    "family": "Inter",
+    "heading": {
+      "family": "Manrope",
+      "weight": 650
+    }
+  },
+  "icons": {
+    "library": "lucide"
+  },
+  "background": {
+    "decoration": "grid"
+  },
+  "styling": {
+    "eyebrows": "breadcrumbs",
+    "latex": true,
+    "codeblocks": "system"
+  },
+  "banner": {
+    "content": "InvariantCAD 0.1 is an early public foundation. Check the [support matrix](/reference/support-matrix) before committing to a backend.",
+    "dismissible": true,
+    "type": "info"
+  },
+  "navbar": {
+    "links": [
+      {
+        "type": "github",
+        "href": "https://github.com/shlokjain42/invariantCAD"
+      },
+      {
+        "label": "npm",
+        "href": "https://www.npmjs.com/package/invariantcad"
+      }
+    ],
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/shlokjain42/invariantCAD"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/shlokjain42/invariantCAD"
+    },
+    "links": [
+      {
+        "header": "Learn",
+        "items": [
+          {
+            "label": "Quickstart",
+            "href": "/get-started/quickstart"
+          },
+          {
+            "label": "Modeling",
+            "href": "/modeling/parameters-and-expressions"
+          },
+          {
+            "label": "Library reference",
+            "href": "/reference/public-surface"
+          }
+        ]
+      },
+      {
+        "header": "Project",
+        "items": [
+          {
+            "label": "Roadmap",
+            "href": "/roadmap"
+          },
+          {
+            "label": "Security",
+            "href": "/project/security"
+          },
+          {
+            "label": "Changelog",
+            "href": "https://github.com/shlokjain42/invariantCAD/blob/main/CHANGELOG.md"
+          }
+        ]
+      }
+    ]
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Guides",
+        "icon": "book-open",
+        "groups": [
+          {
+            "group": "Getting started",
+            "icon": "rocket",
+            "pages": [
+              "index",
+              "get-started/installation",
+              "get-started/quickstart",
+              "get-started/core-concepts"
+            ]
+          },
+          {
+            "group": "Modeling",
+            "icon": "box",
+            "pages": [
+              "modeling/parameters-and-expressions",
+              "modeling/sketches-and-constraints",
+              "modeling/primitives-and-transforms",
+              "modeling/features",
+              "modeling/paths-sweeps-and-lofts",
+              "modeling/topology-selection",
+              "modeling/persistent-topology",
+              "modeling/assemblies",
+              "modeling/configurations-and-bom"
+            ]
+          },
+          {
+            "group": "Evaluation",
+            "icon": "play",
+            "pages": [
+              "evaluation/evaluator",
+              "evaluation/kernels",
+              "evaluation/manifold",
+              "evaluation/open-cascade",
+              "evaluation/browser-and-workers",
+              "evaluation/diagnostics-and-limits"
+            ]
+          },
+          {
+            "group": "Analysis and interchange",
+            "icon": "chart-no-axes-combined",
+            "pages": [
+              "analysis/measurements",
+              "analysis/design-impact-and-hashes",
+              "interchange/import-export",
+              "interchange/documents-and-migrations"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Reference",
+        "icon": "braces",
+        "groups": [
+          {
+            "group": "Library reference",
+            "icon": "library",
+            "pages": [
+              "reference/public-surface",
+              "reference/export-index",
+              "reference/design-builder",
+              "reference/evaluator-results",
+              "reference/topology-language",
+              "reference/package-exports"
+            ]
+          },
+          {
+            "group": "Tools and formats",
+            "icon": "terminal",
+            "pages": [
+              "reference/cli",
+              "reference/support-matrix",
+              "reference/document-schema"
+            ]
+          },
+          {
+            "group": "Exhaustive guide",
+            "icon": "book-copy",
+            "pages": [
+              "reference/complete-guide"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Internals",
+        "icon": "binary",
+        "groups": [
+          {
+            "group": "Architecture",
+            "icon": "network",
+            "pages": [
+              "architecture"
+            ]
+          },
+          {
+            "group": "Conformance protocols",
+            "icon": "shield-check",
+            "pages": [
+              "persistent-topology-torture",
+              "shape-artifact-conformance"
+            ]
+          },
+          {
+            "group": "Project",
+            "icon": "folder-kanban",
+            "pages": [
+              "roadmap",
+              "project/security",
+              "project/contributing",
+              "releasing",
+              "releases/0.1.0"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "seo": {
+    "indexing": "all"
+  },
+  "search": {
+    "prompt": "Search InvariantCAD concepts, examples, types, and protocols"
+  }
+}

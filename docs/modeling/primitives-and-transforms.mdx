@@ -1,0 +1,99 @@
+---
+title: "Primitives and transforms"
+description: "Create boxes, cylinders, cones, spheres, and parameterized transform chains."
+icon: "cuboid"
+---
+
+## Primitives
+
+```ts
+const box = cad.box("box", {
+  size: vec3(mm(40), mm(20), mm(8)),
+  center: true,
+});
+
+const cylinder = cad.cylinder("cylinder", {
+  height: mm(30),
+  radius: mm(10),
+  center: true,
+  segments: 96,
+});
+
+const cone = cad.cylinder("cone", {
+  height: mm(30),
+  radius: mm(12),
+  radiusTop: mm(4),
+});
+
+const sphere = cad.sphere("sphere", {
+  radius: mm(10),
+  segments: 64,
+});
+```
+
+`segments` controls tessellation where a backend uses it. It does not turn an
+exact OCCT circle into a polygon; exact kernels can preserve analytic surfaces
+while using the value for mesh extraction where applicable.
+
+All size, height, and radius expressions must resolve to finite valid geometry.
+The evaluator rejects zero or negative dimensions before asking a kernel to
+construct the shape.
+
+## One transform
+
+```ts
+const moved = cad.translate(
+  "moved",
+  box,
+  vec3(mm(100), mm(0), mm(25)),
+);
+
+const turned = cad.rotate(
+  "turned",
+  moved,
+  angleVec3(deg(0), deg(0), deg(90)),
+);
+```
+
+Convenience methods are available for translation, Euler rotation, nonuniform
+scale, and mirror.
+
+## Ordered transform chain
+
+Use `cad.transform` when operation order must be explicit:
+
+```ts
+const placed = cad.transform("placed", box, [
+  tf.scale(scalarVec3(2, 1, 1)),
+  tf.rotate(angleVec3(deg(0), deg(0), deg(90))),
+  tf.translate(vec3(mm(100), mm(5), mm(0))),
+]);
+```
+
+Operations execute in authored order. Reordering scale, rotation, and
+translation generally changes the result and therefore changes effective
+feature hashes.
+
+## Mirror
+
+```ts
+const mirrored = cad.mirror(
+  "mirrored",
+  placed,
+  scalarVec3(1, 0, 0),
+);
+```
+
+The vector is the mirror-plane normal. It must resolve to a usable finite
+direction. A zero normal is invalid.
+
+## Topology through transforms
+
+Transforms create a new feature node, but semantic topology can retain origin
+and modification lineage when the selected backend provides it. Query for
+`modifiedBy(transform)` and combine it with the original feature source rather
+than using a post-transform coordinate alone.
+
+Nonuniform scale changes metric geometry and may change analytic surface kinds.
+Persistent matching therefore depends on compatible evidence and the declared
+topology protocol, not merely on the fact that a transform node exists.

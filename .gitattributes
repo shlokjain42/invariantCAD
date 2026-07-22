@@ -1,0 +1,9 @@
+# These files are copied byte-for-byte from reviewed upstream releases.
+# Preserve their original line endings and whitespace so the recorded hashes
+# remain reproducible; `cr-at-eol` keeps Git's whitespace checker CRLF-aware.
+src/vendor/manifold-3d/manifold.js -text
+src/vendor/manifold-3d/manifold.wasm -text
+src/vendor/manifold-3d/manifold.d.ts -text whitespace=cr-at-eol
+src/vendor/manifold-3d/LICENSE -text
+licenses/manifold-Emscripten-5.0.2.txt -text whitespace=-trailing-space,-blank-at-eof
+licenses/manifold-PhysX-BSD-3-Clause.txt -text whitespace=-trailing-space

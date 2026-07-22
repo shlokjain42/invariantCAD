@@ -1,0 +1,127 @@
+---
+title: "Sketches and constraints"
+description: "Author planar profiles with explicit entities, loops, holes, and the built-in constraint solver."
+icon: "pen-tool"
+---
+
+Sketches define planar profiles for extrusion, revolution, lofting, and sweeps.
+The callback receives a `SketchBuilder` and must return exactly one
+`sketch.profile(...)`.
+
+## Planes
+
+```ts
+const xy = plane.xy();
+const elevated = plane.xy(vec3(mm(0), mm(0), mm(30)));
+const yz = plane.yz();
+const xz = plane.xz();
+```
+
+Document 0.1 supports the three principal plane orientations with an optional
+parameterized origin.
+
+## A profile with holes
+
+```ts
+const profile = cad.sketch("flange-profile", plane.xy(), (sketch) => {
+  const outline = sketch.rectangle("outline", {
+    width: mm(80),
+    height: mm(50),
+  });
+  const left = sketch.circle("left-hole", {
+    center: vec2(mm(-25), mm(0)),
+    radius: mm(4),
+  });
+  const right = sketch.circle("right-hole", {
+    center: vec2(mm(25), mm(0)),
+    radius: mm(4),
+  });
+
+  return sketch.profile(outline, {
+    holes: [left.loop(), right.loop()],
+  });
+});
+```
+
+Profiles have one explicit outer loop and zero or more explicit hole loops. The
+evaluator does not infer which disconnected loop is outer from enumeration
+order.
+
+## Entities
+
+`SketchBuilder` supports:
+
+- `point(id, position)`
+- `line(id, start, end)`
+- `circle(id, { center, radius })`
+- `arc(id, { center, radius, startAngle, endAngle })`
+- `polyline(id, points, { closed })`
+- `rectangle(id, options)`
+- `regularPolygon(id, sides, radius, options)`
+
+Use `sketch.loop([...])` to assemble ordered lines and arcs. Reverse an edge use
+when the loop traversal runs opposite its authored direction. A loop must be
+closed and non-self-intersecting after solving.
+
+## Constraint example
+
+```ts
+const profile = cad.sketch("constrained-profile", plane.xy(), (sketch) => {
+  const a = sketch.point("a", vec2(mm(0), mm(0)));
+  const b = sketch.point("b", vec2(mm(40), mm(0)));
+  const c = sketch.point("c", vec2(mm(40), mm(20)));
+  const d = sketch.point("d", vec2(mm(0), mm(20)));
+
+  const bottom = sketch.line("bottom", a, b);
+  const right = sketch.line("right", b, c);
+  const top = sketch.line("top", c, d);
+  const left = sketch.line("left", d, a);
+
+  sketch
+    .fixed("anchor", a)
+    .horizontal("bottom-horizontal", bottom)
+    .horizontal("top-horizontal", top)
+    .vertical("right-vertical", right)
+    .vertical("left-vertical", left)
+    .length("width", bottom, mm(40))
+    .length("height", left, mm(20));
+
+  return sketch.profile(sketch.loop([bottom, right, top, left]));
+});
+```
+
+## Supported constraints
+
+| Category | Constraints |
+| --- | --- |
+| Position | coincident, fixed, midpoint |
+| Orientation | horizontal, vertical, parallel, perpendicular, angle |
+| Distance | point distance, X distance, Y distance, line length |
+| Equality | equal length, equal radius |
+| Curves | radius, diameter, line-circle tangent |
+
+The built-in solver is a permissively licensed reference implementation for
+0.1. It is replaceable through the sketch-solver protocol. Industrial conflict
+isolation, redundant-constraint explanations, drag solving, and large sparse
+systems remain roadmap items.
+
+## Tolerance and validity
+
+```ts
+cad.sketch("precision-profile", plane.xy(), buildProfile, {
+  tolerance: 1e-7,
+});
+```
+
+Tolerance is a positive finite number in millimetres. It affects sketch
+solution and profile validity checks; it is not permission to accept arbitrary
+gaps. Invalid loop order, zero-length edges, unresolved constraints,
+self-intersections, and holes outside the outer loop fail with structured
+diagnostics.
+
+## Stable entity IDs
+
+Entity IDs are later available as sketch-source topology provenance. If a
+fillet intends the extrusion side created by `outline.e1`, select that source
+explicitly rather than relying on geometric position. Preserve entity IDs when
+refactoring a sketch if downstream topology intent should remain stable.

@@ -14,6 +14,7 @@ export default defineConfig({
   splitting: true,
   treeshake: true,
   target: "es2022",
+  external: ["./vendor/manifold-3d/manifold.js"],
   banner: {
     js: "// SPDX-License-Identifier: Apache-2.0",
   },

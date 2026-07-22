@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="InvariantCAD">
+  <rect width="64" height="64" rx="12" fill="#1D4ED8"/>
+  <g fill="none" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round">
+    <path d="M10 20 32 8l22 12-22 12z"/>
+    <path d="M10 20v25l22 12 22-12V20"/>
+    <path d="M32 32v25"/>
+  </g>
+</svg>

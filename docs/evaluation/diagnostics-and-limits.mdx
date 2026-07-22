@@ -1,0 +1,103 @@
+---
+title: "Diagnostics and resource limits"
+description: "Handle structured failures and configure bounded document, topology, history, and artifact work."
+icon: "triangle-alert"
+---
+
+InvariantCAD distinguishes expected modeling failures from programmer mistakes.
+Evaluation, parsing, topology, mass, and BOM operations commonly return
+`CadResult`; invalid direct authoring calls can throw `TypeError` or
+`RangeError` immediately.
+
+## Diagnostic shape
+
+```ts
+interface DiagnosticLocation {
+  node?: string;
+  path?: string;
+  message: string;
+}
+
+interface Diagnostic {
+  code: DiagnosticCode;
+  severity: "info" | "warning" | "error";
+  message: string;
+  path?: string;
+  related?: readonly DiagnosticLocation[];
+  node?: string;
+  hints?: readonly string[];
+  details?: Readonly<Record<string, unknown>>;
+}
+```
+
+Branch on `code`, not message text. Messages are written for people and can be
+clarified without a protocol change. `path` uses document-oriented paths when a
+specific authored field is responsible. `related` identifies other document
+locations involved in the same failure, such as the other end of a conflicting
+reference.
+
+## Common code families
+
+| Family | Examples | Typical action |
+| --- | --- | --- |
+| Document | `IR_INVALID`, migration/validation errors | Reject or migrate the input before evaluation |
+| Parameters | unknown override, dependency cycle, bounds | Correct IDs/formulas or override values |
+| Kernel | `KERNEL_CAPABILITY_MISSING`, `KERNEL_ERROR` | Choose a compatible backend or inspect native failure details |
+| Topology | missing, ambiguous, fingerprint mismatch, limit exceeded | Refine selector/reference, recapture, or review limits |
+| Export | `EXPORT_UNSUPPORTED` | Use a supported format/kernel |
+| Physical data | `MASS_DENSITY_MISSING`, `MASS_PROPERTIES_INVALID` | Author valid density or correct geometry |
+| BOM | missing/duplicate part number, missing material | Fix manufacturing metadata; warnings may be non-fatal |
+| Cancellation | aborted operation | Stop the workflow or retry in a new scope |
+
+## Authoring exceptions
+
+These are programmer mistakes and throw immediately:
+
+- duplicate IDs
+- cross-design references
+- a face selection passed to a fillet
+- an empty Boolean tool array
+- a configuration with no overrides
+- non-positive tolerances
+- unsupported literal authoring option values
+
+Catch them at application input boundaries if users directly drive a builder.
+Do not catch and ignore them inside a model definition.
+
+## Document preflight limits
+
+Default validation bounds include:
+
+| Resource | Default |
+| --- | ---: |
+| Document bytes | 64 MiB |
+| Structural values | 1,000,000 |
+| Nesting depth | 128 |
+| Topology references | 10,000 |
+| Reference variants | 20,000 |
+| Stored adjacency links | 1,000,000 |
+| Stored evidence records | 1,000,000 |
+| Topology query nodes | 100,000 |
+
+Parsing captures an untrusted JSON-shaped input into a bounded plain copy while
+reading each source property at most once. Cycles, sparse arrays, exotic
+prototypes, stateful accessors, and work beyond the configured bounds fail
+before schema traversal.
+
+## Why limits are part of correctness
+
+A shape can be mathematically valid but operationally unsafe to materialize.
+InvariantCAD therefore also bounds topology snapshot normalization, persistent
+matching, exact native evolution reports, conformance witnesses, and artifact
+sizes. Raising a limit changes the accepted workload and should be reviewed
+like a resource-policy change.
+
+## Debugging workflow
+
+1. Preserve the full diagnostic object.
+2. Locate `path` and `node` in the serialized document.
+3. Check kernel capabilities before changing geometry.
+4. Use topology explanation functions for selector/reference failures.
+5. Reproduce with the smallest parameter/configuration context.
+6. Change a limit only after confirming the input is legitimate and bounded by
+   infrastructure elsewhere.

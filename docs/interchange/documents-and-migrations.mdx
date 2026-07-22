@@ -1,0 +1,107 @@
+---
+title: "Documents and migrations"
+description: "Serialize, parse, validate, clone, hash, and migrate versioned InvariantCAD documents."
+icon: "file-json"
+---
+
+## Serialize deterministically
+
+```ts
+const compact = stringifyDocument(document);
+const readable = stringifyDocument(document, { pretty: true });
+```
+
+Serialization canonicalizes topology query ordering and persistent-reference
+variants. Equivalent commutative topology expressions therefore produce the
+same document representation.
+
+## Parse untrusted text
+
+```ts
+const parsed = parseDocument(jsonText, {
+  limits: {
+    maxDocumentBytes: 8 * 1024 * 1024,
+    maxNestingDepth: 64,
+  },
+});
+
+if (!parsed.ok) {
+  console.error(parsed.diagnostics);
+  return;
+}
+
+const document = parsed.value;
+```
+
+`parseDocument` checks UTF-8 byte size before `JSON.parse`, captures a bounded
+plain snapshot, validates the matching frozen version schema, validates graph
+semantics, and deep-freezes the result.
+
+Use `parseDocumentValue(value)` when another parser already produced an unknown
+JavaScript value. It still performs the bounded snapshot and schema checks.
+
+## Do not cast
+
+```ts
+// Unsafe: bypasses every runtime invariant.
+const document = JSON.parse(text) as DesignDocument;
+```
+
+Type assertions provide no runtime safety and can feed cycles, wrong versions,
+invalid expressions, missing references, or resource bombs into code that
+expects a validated document.
+
+## Clone
+
+```ts
+const detached = cloneDocument(document);
+```
+
+Cloning serializes and reparses through the public protocol. It is appropriate
+when a detached frozen copy is needed; it is not a mutable editing API.
+
+## Migrate
+
+```ts
+const migrated = migrateDocument(oldValue);
+if (!migrated.ok) throw new Error(migrated.diagnostics[0]?.message);
+
+console.log(migrated.value.version); // current document version
+```
+
+Migration preserves admitted authored data from versions 1 through 6 and moves
+it to the current schema. It does not:
+
+- invent information a prior version could not express
+- recapture topology evidence
+- upgrade a stored persistent-reference protocol
+- rewrite kernel fingerprints
+- execute geometry
+
+Keep the original input when auditability requires proving exactly what was
+received before migration.
+
+## Hash a document
+
+```ts
+const semanticHash = await hashDocument(document);
+const fullHash = await hashDocument(document, { includeMetadata: true });
+```
+
+By default, root metadata is excluded so descriptive root changes do not alter
+the semantic document hash. Node metadata and every modeled field follow the
+protocol's canonical representation.
+
+## Schema identifiers
+
+The `schema` URI and integer `version` are protocol identifiers. Parsers do not
+dereference the URI over the network. Treat both as exact values, not as a URL
+from which runtime code should be downloaded.
+
+## Editing strategy
+
+InvariantCAD 0.1 exposes a builder for authoring and parsers for validated
+documents. It does not expose an in-place mutable document editor. To revise a
+stored document programmatically, use a reviewed transformation that produces
+a new value, then pass it through `parseDocumentValue` before persistence or
+evaluation.

@@ -1,0 +1,60 @@
+---
+title: "Security"
+description: "Supported releases, vulnerability reporting, trust boundaries, and dependency policy."
+icon: "shield-check"
+---
+
+## Report privately
+
+Use [GitHub private vulnerability reporting](https://github.com/shlokjain42/invariantCAD/security/advisories/new)
+for a suspected vulnerability. Do not disclose an unpatched issue in a public
+issue, discussion, pull request, or social post.
+
+Include the affected version and runtime, a minimal reproducer, impact,
+reachable trust boundary, whether untrusted input is required, and any proposed
+mitigation. The canonical response policy is
+[`SECURITY.md`](https://github.com/shlokjain42/invariantCAD/blob/main/SECURITY.md).
+
+## Supported line
+
+The current `0.1.x` line receives security fixes. Pre-release development
+commits and old `0.x` minor lines may require upgrading to the newest supported
+minor.
+
+## Threat boundaries
+
+InvariantCAD processes potentially hostile JSON documents, parameters,
+topology evidence and snapshots, native exchange or future artifact bytes,
+WebAssembly modules, custom module factories, and output metadata.
+
+Document parsing applies byte, structure, depth, query, reference, adjacency,
+and evidence limits before schema validation. Kernel/native boundaries apply
+capability checks, exact fingerprints, record ceilings, and ownership rollback
+where the protocol defines them.
+
+## WebAssembly is native-capability code
+
+Only load JavaScript glue and WASM from trusted, matched sources. A custom
+`moduleFactory` executes code with the privileges of the containing JavaScript
+realm. In Node.js, that can include filesystem and process access available to
+the application.
+
+Run untrusted or high-cost workloads in a worker, process, or container with
+host resource limits. An `AbortSignal` is cooperative and cannot preempt every
+same-thread synchronous native call.
+
+## Dependency policy
+
+Production releases require a zero-advisory package audit. The default Manifold
+geometry core is vendored as versioned, SHA-256-pinned upstream artifacts,
+avoiding its unrelated image/glTF dependency graph. `occt-wasm` is pinned
+exactly because its JavaScript and WASM form a matched runtime.
+
+Dependency alerts are not dismissed merely to make a badge green. Any future
+exception requires documented reachability, fail-closed CI, and a removal plan.
+
+## Security is not geometry certification
+
+Passing validation or conformance tests does not certify a model as safe for
+manufacturing, medical, structural, aerospace, or other high-consequence use.
+Applications must apply domain-specific verification and process controls.

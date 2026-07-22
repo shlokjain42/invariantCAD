@@ -1,3 +1,9 @@
+---
+title: "Maintainer release procedure"
+description: "Internal checklist for release validation, bootstrap publication, provenance, and post-release verification."
+icon: "package-check"
+---
+
 # Maintainer release procedure
 
 This is the release runbook for the public `invariantcad` npm package and its
@@ -29,7 +35,7 @@ publisher. The first release therefore needs a short-lived npm credential:
 1. create an npm account, verify its email address, and enable two-factor
    authentication;
 2. create a temporary granular access token that can publish the new public
-   package and satisfies npm's current 2FA policy;
+   package and has npm's non-interactive `bypass 2FA` capability;
 3. add it as the `NPM_TOKEN` secret in the GitHub `npm` environment;
 4. dispatch `.github/workflows/release.yml` against the release tag;
 5. verify the published package, provenance, owner, files, and `latest` tag;
@@ -66,8 +72,9 @@ After it succeeds, verify independently:
     npm pack invariantcad@0.1.0 --dry-run
 
 Install the registry artifact into an empty temporary project and exercise its
-ESM entry points and CLI. Only then publish the GitHub release using
-`docs/releases/<version>.md` as the release notes.
+ESM entry points and CLI. Only then publish the GitHub release using the body of
+`docs/releases/<version>.md` as the release notes; omit that Mintlify page's
+YAML frontmatter delimiters and fields.
 
 Published npm versions are immutable. If verification uncovers a defect, do
 not attempt to replace the version; fix it and publish a new patch version.

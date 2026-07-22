@@ -49,29 +49,23 @@ Applications must supply that matched JavaScript/WebAssembly pair explicitly.
 Its local bundle remains outside the supported release boundary until external
 legal, security, and release review is complete.
 
-## Reviewed transitive advisory
+## Dependency and vendored-runtime policy
 
-The 0.1.0 dependency graph installs sharp 0.34.5 through:
+Production releases must pass a zero-advisory audit across production and
+development dependencies. InvariantCAD does not carry a standing audit
+exception.
 
-    manifold-3d
-      -> @gltf-transform/functions
-      -> ndarray-pixels
-      -> sharp
+The default geometry backend uses only Manifold's standalone core JavaScript,
+WebAssembly, and type artifacts. Those upstream `manifold-3d@3.5.1` files are
+vendored because the complete upstream npm package installs an unrelated
+glTF/image toolchain that is neither imported nor exposed by InvariantCAD. The
+reviewed artifacts are pinned by byte length and SHA-256 and are verified before
+every build. Their npm integrity, identified upstream build run and commit,
+licenses, and individual digests are recorded in
+`src/vendor/manifold-3d/UPSTREAM.json`. The Manifold, embedded-component, and
+toolchain notices are shipped both package-wide and beside the staged runtime.
 
-GitHub advisory GHSA-f88m-g3jw-g9cj concerns malformed VIPS, TIFF, GIF, and
-EXIF image decoding in sharp versions before 0.35.0:
-
-https://github.com/advisories/GHSA-f88m-g3jw-g9cj
-
-InvariantCAD imports only Manifold's root geometry WebAssembly binding. It does
-not import or expose Manifold's glTF/image toolchain, and runtime tracing of the
-public evaluator does not load sharp or the affected image modules. The code is
-therefore installed but is not reachable through InvariantCAD's current public
-behavior.
-
-No compatible upstream release currently moves this path to sharp 0.35 or
-later. A dependency override in InvariantCAD would not protect npm consumers
-because package-manager overrides are controlled by the consuming root
-project. CI therefore permits only this exact reviewed dependency path and
-fails on any advisory, version, or path change. The exception will be removed
-when Manifold or its image-tooling dependencies publish a compatible fix.
+Vendoring moves update responsibility into this repository. A Manifold upgrade
+therefore requires an intentional provenance-manifest update plus the complete
+Node, package-consumer, and production-browser release gates. Security reports
+about the bundled runtime are welcome through the same private channel.

@@ -1,0 +1,87 @@
+---
+title: "Choosing a geometry kernel"
+description: "Compare the default Manifold mesh backend, stock OpenCascade, and the optional owned OCCT facade."
+icon: "cpu"
+---
+
+InvariantCAD documents are kernel-neutral, but geometry capabilities are not.
+Choose the backend based on representation, exchange, topology, performance,
+and deployment needs.
+
+## Comparison
+
+| | Manifold | Stock OCCT | Owned OCCT facade |
+| --- | --- | --- | --- |
+| Representation | Watertight triangle mesh | Exact B-Rep | Exact B-Rep |
+| Default | Yes | No | No |
+| Package source | Bundled core runtime | `occt-wasm@3.7.0` | Locally built matched runtime |
+| STL/OBJ | Yes | Yes, through tessellation | Yes, through tessellation |
+| STEP/BREP | No | Yes | Yes |
+| Exact topology snapshot | No | Yes | Yes |
+| Draft | No | No | Yes, bounded ABI contract |
+| Complete exact feature evolution | No | Partial | Selected Boolean/treatment/offset feature slices |
+| Browser release test | Chromium | Chromium | Repository/local conformance only |
+
+## Default Manifold
+
+```ts
+const evaluator = await createEvaluator();
+```
+
+Choose Manifold for fast, robust mesh-first workflows, ordinary parametric
+modeling, browser evaluation, and STL/OBJ output. It supports twist and top-scale
+extrusion, which the exact backend does not currently advertise.
+
+## Stock OpenCascade
+
+```ts
+const kernel = await createOcctKernel();
+const evaluator = await createEvaluator({ kernel });
+```
+
+Choose stock OCCT for analytic B-Rep geometry, topology snapshots, exact bounded
+lofts/sweeps, fillets/chamfers/shells/offsets, and STEP/BREP exchange. Stock
+history for several complex features remains partial.
+
+## Owned OCCT facade
+
+```ts
+const kernel = await createOcctKernel({
+  moduleFactory: ownedModuleFactory,
+  wasm: ownedWasmUrl,
+});
+```
+
+The facade is a matched extension built from pinned source and repository
+patches. The JavaScript factory and WASM binary must come from the same verified
+bundle. InvariantCAD probes its versioned ABI and advertises only the refinements
+that probe succeeds.
+
+It is not bundled with the npm package, not selected automatically, and not
+downloaded at runtime.
+
+## Capability preflight
+
+The evaluator treats capabilities as data contracts. Before executing a
+feature, it checks:
+
+- protocol version
+- primitive or feature name
+- exact composite-sweep refinements
+- native import/export format
+- topology evidence surfaces and signature fingerprint
+- exact indexed topology evolution when a stronger contract is required
+
+Malformed metadata fails separately from absent support. A kernel cannot obtain
+behavior merely by defining an unadvertised method.
+
+## Do not equate these guarantees
+
+- A B-Rep kernel is not automatically exact for every authored feature.
+- Construction support does not imply complete topology history.
+- STEP/BREP exchange does not imply safe backend-owned shape artifact caching.
+- A topology snapshot does not imply persistent signature support.
+- Successful tessellation does not make mesh coordinates analytically exact.
+
+Use the [support matrix](/reference/support-matrix) for the feature-level
+boundary and the [architecture](/architecture) for protocol rationale.

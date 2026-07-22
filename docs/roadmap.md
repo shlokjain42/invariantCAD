@@ -1,3 +1,9 @@
+---
+title: "Roadmap"
+description: "Delivered foundation, near-term exact modeling and persistence work, and criteria for InvariantCAD 1.0."
+icon: "map"
+---
+
 # InvariantCAD roadmap
 
 InvariantCAD's goal is one coherent TypeScript CAD system, not one monolithic geometry algorithm. Specialized kernels and solvers sit behind versioned protocols while the TypeScript API, document model, diagnostics, and design semantics remain stable.

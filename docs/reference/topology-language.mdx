@@ -1,0 +1,108 @@
+---
+title: "Topology language reference"
+description: "Complete query algebra, predicates, cardinality, persistent atoms, and explanation behavior."
+icon: "scan-line"
+---
+
+## Root namespaces
+
+| Root | Topology kind |
+| --- | --- |
+| `topology.faces` | face |
+| `topology.edges` | edge |
+| `topology.vertices` | vertex |
+
+All roots expose `all`, `createdBy`, `modifiedBy`, and `persistentReference`.
+
+## Predicates
+
+| Kind | Predicate | Arguments |
+| --- | --- | --- |
+| Face | `surface` | backend surface-kind string |
+| Face | `normal` | scalar direction, optional angular tolerance |
+| Face | `radius` | length, optional linear tolerance |
+| Face | `adjacentTo` | completed edge selection |
+| Edge | `curve` | backend curve-kind string |
+| Edge | `direction` | scalar direction, optional angular tolerance |
+| Edge | `radius` | length, optional linear tolerance |
+| Edge | `adjacentTo` | completed face or vertex selection |
+| Vertex | `position` | 3D length vector, optional linear tolerance |
+| Vertex | `adjacentTo` | completed edge selection |
+
+Surface and curve strings are kernel descriptor kinds. Prefer semantic
+origin/role filters for modeled intent when possible.
+
+## Origin options
+
+```ts
+createdBy(feature, {
+  role?: FaceTopologyRole | EdgeTopologyRole,
+  source?: {
+    sketch: ProfileRef,
+    entity: string,
+  },
+})
+```
+
+Vertices currently have no invented semantic corner roles; their origin lineage
+can still participate where the backend provides it.
+
+## Algebra
+
+Every `TopologyQuery<K>` supports:
+
+```ts
+query.and(other, ...more)
+query.or(other, ...more)
+query.not()
+```
+
+Operands must share topology kind. Canonicalization flattens nested equal
+operators, removes exact duplicates, and sorts their IR representation.
+
+## Completion/cardinality
+
+| Method | Required match count |
+| --- | --- |
+| `select()` | exactly 1 |
+| `exactly(n)` | exactly `n` |
+| `atLeast(n)` | `n` or more |
+| `between(min, max)` | inclusive bounded range |
+
+Counts are positive integers. There is no zero-match completed selection in the
+current feature authoring surface.
+
+## Persistent atom
+
+```ts
+topology.faces.persistentReference(faceReference)
+```
+
+The reference topology kind must match the root. The atom can compose through
+the full query algebra and adjacency. During feature authoring, every persistent
+reference must target that consuming feature's direct input solid.
+
+## Resolution outcomes
+
+Ordinary selection resolution returns keys only when cardinality is satisfied.
+Missing and ambiguous diagnostics include a frozen explanation report. Direct
+`explainTopologySelection` treats resolved/missing/ambiguous as report outcomes,
+while malformed inputs or nested persistent failures remain failed results.
+
+Persistent resolution distinguishes:
+
+- exact compatible unique match
+- missing match
+- ambiguous match
+- malformed evidence
+- incompatible protocol/fingerprint
+- exhausted operational limit
+- malformed kernel snapshot
+
+Logical operators never downgrade one of the latter failures to an empty set.
+
+## Key scope
+
+Resolved keys belong to the current evaluated topology snapshot. Do not
+serialize them, compare them across runs, or treat their string representation
+as an ordering/identity protocol.

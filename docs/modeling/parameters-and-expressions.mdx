@@ -1,0 +1,130 @@
+---
+title: "Parameters and expressions"
+description: "Create dimension-safe parameters, formulas, vectors, units, limits, and evaluation overrides."
+icon: "variable"
+---
+
+Parameters turn one design document into a family of evaluated variants.
+InvariantCAD stores formulas as immutable expression trees instead of executing
+arbitrary JavaScript during evaluation.
+
+## Supported dimensions
+
+| Dimension | Constructors | Base unit |
+| --- | --- | --- |
+| Length | `mm`, `cm`, `meters`, `inch` | millimetre |
+| Angle | `rad`, `deg` | radian |
+| Scalar | `scalar` | unitless |
+| Mass density | `kgPerCubicMillimeter`, `kgPerCubicMeter`, `gramsPerCubicCentimeter` | kg/mm³ |
+
+```ts
+const width = cad.parameter.length("width", mm(80), {
+  min: mm(20),
+  max: mm(200),
+  label: "Width",
+  description: "Overall body width",
+});
+
+const taper = cad.parameter.angle("taper", deg(3));
+const scale = cad.parameter.scalar("scale", scalar(1));
+const density = cad.parameter.massDensity(
+  "density",
+  kgPerCubicMeter(2700),
+);
+```
+
+Defaults and bounds may themselves reference parameters that belong to the same
+design. Evaluation resolves the complete dependency graph and reports cycles,
+missing values, non-finite results, and bound violations as diagnostics.
+
+## Arithmetic
+
+Every expression exposes immutable arithmetic methods:
+
+```ts
+const wall = cad.parameter.length("wall", mm(3));
+const clearance = cad.parameter.length("clearance", mm(0.25));
+const outside = cad.parameter.length("outside", mm(40));
+
+const inside = outside.sub(wall.mul(2)).sub(clearance.mul(2));
+const halfOutside = outside.div(2);
+const positiveOffset = clearance.abs();
+```
+
+- `add` and `sub` require the same dimension.
+- `mul` and `div` accept a scalar expression or finite number.
+- `neg` and `abs` preserve the dimension.
+- `expr.min`, `expr.max`, and trigonometric helpers construct additional
+  serializable operations.
+
+TypeScript prevents many dimension mistakes, while runtime validation protects
+documents received from untyped or hostile sources.
+
+## Vectors
+
+Use vector helpers to preserve component dimensions:
+
+```ts
+const size = vec3(width, mm(30), wall);
+const point = vec2(width.mul(0.25), mm(0));
+const scale3d = scalarVec3(scale, scalar(1), scalar(1));
+const rotation = angleVec3(deg(0), taper, deg(90));
+```
+
+`vec2` and `vec3` contain lengths. `scalarVec3` is used for scale and directions;
+`angleVec3` is used for Euler rotations.
+
+## Evaluation overrides
+
+Override values by parameter ID:
+
+```ts
+const result = await evaluator.evaluate(document, {
+  parameters: {
+    width: 125,
+    taper: Math.PI / 36,
+    density: 2.7e-6,
+  },
+});
+```
+
+Override numbers use base units, not the constructor originally used by the
+author. `width: 125` means 125 mm, even if the default was written as
+`inch(4.5)`.
+
+<Warning>
+  Do not pass `deg(5)` or `mm(20)` as evaluation override values. Overrides are
+  plain finite numbers because evaluation options are data, while expression
+  objects belong to authoring.
+</Warning>
+
+## Configuration overrides
+
+A named configuration can bind parameters inside the document:
+
+```ts
+const compact = cad.configuration("compact", (configuration) => {
+  configuration.parameter(width, mm(60));
+  configuration.parameter(wall, mm(2.5));
+});
+```
+
+At evaluation, select it by reference during authoring or by stable ID after
+serialization. Explicit evaluation overrides apply within the selected
+configuration context. See [configurations and BOMs](/modeling/configurations-and-bom).
+
+## Parameter ownership
+
+Parameters are bound to the `DesignBuilder` that created them. Cross-design use
+throws immediately:
+
+```ts
+const first = design("first");
+const foreignWidth = first.parameter.length("width", mm(10));
+
+const second = design("second");
+// second.box(...foreignWidth...) is rejected during authoring.
+```
+
+This restriction guarantees that every expression reference can be represented
+inside one closed document.

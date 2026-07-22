@@ -1,0 +1,102 @@
+---
+title: "InvariantCAD documentation"
+description: "Build deterministic parametric CAD models, assemblies, and exchange files with TypeScript."
+icon: "box"
+---
+
+# CAD-as-code that stays portable
+
+InvariantCAD is a TypeScript library for describing parametric designs as
+immutable, versioned JSON and evaluating them with replaceable geometry
+kernels. Use the fast bundled Manifold mesh runtime for everyday modeling or
+select the OpenCascade backend for exact B-Rep geometry and STEP/BREP exchange.
+
+<CardGroup cols={2}>
+  <Card title="Build your first model" icon="rocket" href="/get-started/quickstart">
+    Author a parameterized plate, evaluate it, inspect measurements, and export
+    an STL.
+  </Card>
+  <Card title="Understand the architecture" icon="network" href="/get-started/core-concepts">
+    Learn how builders, documents, evaluators, kernels, and owned results fit
+    together.
+  </Card>
+  <Card title="Choose a kernel" icon="cpu" href="/evaluation/kernels">
+    Compare Manifold, stock OpenCascade, and the optional owned OCCT facade.
+  </Card>
+  <Card title="Check feature support" icon="list-checks" href="/reference/support-matrix">
+    See the exact 0.1 capability boundary before selecting a workflow.
+  </Card>
+</CardGroup>
+
+## What you can build in 0.1
+
+- Parameterized primitives, sketches, extrusions, revolutions, and transforms
+- Mesh and exact Boolean operations
+- Exact bounded ruled lofts and line/arc path sweeps
+- Selector-driven fillets, chamfers, shells, offsets, and draft
+- Parts, materials, nested assemblies, named configurations, and BOMs
+- Semantic and persistent topology selections for faces, edges, and vertices
+- Volume, area, centroid, inertia, density-aware mass, and gyration analysis
+- Deterministic documents, migrations, impact reports, and feature hashes
+- STL, OBJ, STEP, and BREP exchange
+
+<Info>
+  InvariantCAD 0.1 is an early public foundation, not a claim that every CAD
+  domain is already implemented. Drawings, GD&T, mates, sheet metal, CAM, CAE,
+  and advanced surfacing remain on the [roadmap](/roadmap).
+</Info>
+
+## A deliberately split architecture
+
+InvariantCAD separates design intent from geometry execution:
+
+```text
+TypeScript authoring API
+        ↓ build()
+Frozen, versioned JSON document
+        ↓ evaluate()
+Validated evaluator and sketch solver
+        ↓
+GeometryKernel protocol
+   ↙                  ↘
+Manifold mesh       OpenCascade B-Rep
+        ↓
+Owned evaluated outputs
+```
+
+This split has practical consequences:
+
+1. A design document never contains a WASM pointer, native handle, or backend
+   object.
+2. The same validated document can be evaluated by different conforming
+   kernels.
+3. Serialization, review, hashing, migration, and build automation do not need
+   a geometry process.
+4. Native resources remain evaluation-scoped and must be disposed explicitly.
+
+## Pick a path
+
+<CardGroup cols={3}>
+  <Card title="New to InvariantCAD" icon="graduation-cap" href="/get-started/installation">
+    Install the package and confirm your runtime requirements.
+  </Card>
+  <Card title="Building exact CAD" icon="ruler" href="/evaluation/open-cascade">
+    Configure OCCT and understand stock versus owned-facade guarantees.
+  </Card>
+  <Card title="Integrating a pipeline" icon="workflow" href="/interchange/documents-and-migrations">
+    Store, migrate, validate, hash, evaluate, and export documents safely.
+  </Card>
+</CardGroup>
+
+## Package entry points
+
+| Import | Purpose |
+| --- | --- |
+| `invariantcad` | Authoring, documents, evaluation, topology, analysis, and the default Manifold kernel |
+| `invariantcad/kernels/occt` | OpenCascade kernel creation and OCCT-specific options |
+| `invariantcad/conformance` | Kernel and protocol conformance utilities for backend authors |
+| `invariantcad/package.json` | Package metadata |
+
+Continue with the [quickstart](/get-started/quickstart), or use the
+[complete 0.1 guide](/reference/complete-guide) when you want every current
+behavior and boundary in one page.

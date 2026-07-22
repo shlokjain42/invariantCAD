@@ -1,0 +1,112 @@
+---
+title: "OpenCascade backend"
+description: "Configure exact B-Rep evaluation, stock occt-wasm, custom binaries, and the owned facade."
+icon: "ruler"
+---
+
+`createOcctKernel()` adapts `occt-wasm@3.7.0` to InvariantCAD's exact geometry,
+topology, and exchange protocols.
+
+## Stock runtime
+
+```ts
+import { createEvaluator } from "invariantcad";
+import { createOcctKernel } from "invariantcad/kernels/occt";
+
+const kernel = await createOcctKernel();
+const evaluator = await createEvaluator({ kernel });
+```
+
+The stock module supports exact primitives, extrusion, revolution, bounded
+loft/sweep contracts, Booleans, transforms, fillets, chamfers, shells, offsets,
+topology snapshots, and STEP/BREP exchange. Draft and several complete-history
+refinements are not advertised.
+
+## Load a WASM source explicitly
+
+`wasm` accepts a URL, string URL/path, `ArrayBuffer`, or `Uint8Array`:
+
+```ts
+const kernel = await createOcctKernel({
+  wasm: new URL("/assets/occt-wasm.wasm", location.href),
+});
+```
+
+Bytes are copied where required so caller mutation cannot change an in-flight
+module initialization.
+
+## Tessellation and tolerance
+
+```ts
+const kernel = await createOcctKernel({
+  modelingTolerance: 1e-7,
+  tessellation: {
+    linearDeflection: 0.1,
+    angularDeflection: 0.3,
+    relative: false,
+  },
+});
+```
+
+Modeling tolerance is part of topology fingerprints and feature validation.
+Tessellation options affect `mesh()` and mesh exports, not the underlying B-Rep.
+Do not change tolerances merely to force an invalid model through a check.
+
+## Native history limits
+
+Owned facade operations can produce large indexed evolution reports. Bound
+materialization explicitly:
+
+```ts
+const kernel = await createOcctKernel({
+  maxExactBooleanHistoryRecords: 250_000,
+  maxExactEdgeTreatmentHistoryRecords: 250_000,
+  maxExactSolidOffsetHistoryRecords: 250_000,
+});
+```
+
+The defaults are 1,000,000 records per category. Limits apply across WASM and
+JavaScript transfer. Raise them only after measuring a legitimate workload.
+
+## Owned facade
+
+```ts
+const kernel = await createOcctKernel({
+  moduleFactory: createOwnedOcctModule,
+  wasm: ownedWasmBytes,
+  onOutput: (message) => logger.info(message),
+  onError: (message) => logger.error(message),
+});
+```
+
+The repository can build and verify a package-neutral facade bundle. The bundle
+contains matched JavaScript/WASM, SHA-256 digests, source and relinking
+instructions, ordered patches, notices, build provenance, and an SBOM.
+
+<Warning>
+  Never combine the owned JavaScript factory with stock WASM, or vice versa.
+  Facade capability probing is not a license to mix binaries from different
+  builds.
+</Warning>
+
+## Exact exchange
+
+```ts
+const output = evaluated.output("body");
+
+const step = output.export("step");
+const textBrep = output.export("brep");
+const binaryBrep = output.export("brep-binary");
+```
+
+These methods return bytes or text synchronously from a live evaluated output.
+Generic BREP exchange does not preserve InvariantCAD wrapper lineage, topology
+annotations, cached evaluator state, or durable artifact identity.
+
+## Licensing boundary
+
+`occt-wasm` is MIT-licensed glue around OpenCascade Technology, which is LGPL
+2.1 with the Open CASCADE exception. Distributors must preserve the applicable
+notices, source/relinking path, and replacement rights. Read
+[`THIRD_PARTY_NOTICES.md`](https://github.com/shlokjain42/invariantCAD/blob/main/THIRD_PARTY_NOTICES.md)
+before redistributing a runtime bundle.

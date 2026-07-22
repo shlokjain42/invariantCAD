@@ -1,0 +1,73 @@
+---
+title: "Manifold backend"
+description: "Use the bundled watertight mesh runtime in Node.js and browsers."
+icon: "triangle"
+---
+
+Manifold is the default InvariantCAD backend. InvariantCAD bundles the pinned
+standalone Manifold 3.5.1 core JavaScript and WebAssembly runtime, without its
+unrelated glTF/image toolchain.
+
+## Create directly
+
+```ts
+import { createEvaluator, createManifoldKernel } from "invariantcad";
+
+const kernel = await createManifoldKernel();
+const evaluator = await createEvaluator({ kernel });
+```
+
+Calling `createEvaluator()` without a `kernel` performs the same selection.
+
+## Custom WASM URL
+
+```ts
+const evaluator = await createEvaluator({
+  manifold: {
+    wasmUrl: new URL("/static/manifold.wasm", location.href).href,
+  },
+});
+```
+
+The runtime is initialized once per JavaScript realm. The first URL becomes the
+configured location. A later call with a different explicit URL fails because
+two incompatible global module instances would make ownership unclear.
+
+## Capabilities
+
+The 0.1 adapter supports:
+
+- box, cylinder/cone, and sphere primitives
+- extrude and revolve
+- union, subtraction, and intersection
+- translation, rotation, scale, and mirror
+- twist/top-scale extrusion
+- mesh extraction and mesh-derived measurements
+- binary/ASCII STL and OBJ through shared exporters
+
+It does not advertise exact B-Rep, native STEP/BREP, semantic topology
+snapshots, exact fillets/chamfers/shells/offsets, lofts, or path sweeps.
+
+## Precision model
+
+Manifold computes robust solids internally, but its public mesh carries
+Float32 vertex positions. Measurement methods call native Manifold volume,
+surface-area, bounding-box, and tolerance functions and combine those with
+bounded mesh integration for tensor properties.
+
+A public mesh round-trip is not a lossless native shape codec. InvariantCAD
+therefore does not advertise shape-artifact persistence for Manifold 3.5.1.
+
+## Resource ownership
+
+Each adapter shape wraps a native Manifold object. Feature intermediates and
+evaluated output shapes are deleted by the owning evaluation. Disposing the
+kernel releases any remaining live adapter shapes. The initialized Manifold
+module promise remains cached for the lifetime of the JavaScript realm.
+
+## Security and provenance
+
+The bundled runtime bytes are pinned by SHA-256, verified during every build,
+and shipped with Manifold and embedded-component license notices. This avoids
+installing Manifold's optional glTF/image dependency graph in consumers while
+preserving the exact tested core runtime. See [third-party notices](https://github.com/shlokjain42/invariantCAD/blob/main/THIRD_PARTY_NOTICES.md).

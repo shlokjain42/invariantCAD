@@ -1,0 +1,95 @@
+---
+title: "Design impact and feature hashes"
+description: "Analyze authored change reachability and compute kernel-independent effective feature hashes."
+icon: "git-compare-arrows"
+---
+
+InvariantCAD provides two kernel-free incremental-analysis tools. They answer
+different questions and should not be conflated.
+
+## Design impact
+
+`analyzeDesignImpact` propagates a declared set of changed authored IDs through
+the document graph and every current evaluation context:
+
+```ts
+const impact = analyzeDesignImpact(document, {
+  parameters: ["width"],
+  materials: ["aluminum"],
+});
+
+if (!impact.ok) throw new Error(impact.diagnostics[0]?.message);
+
+console.log(impact.value.nodes);
+console.log(impact.value.outputs);
+console.log(impact.value.configurations);
+```
+
+The report contains normalized seed inventory, impacted parameters, materials,
+configurations, nodes, and outputs. Every item includes structured reasons such
+as seed, parameter dependency, node dependency, material, configuration, or
+topology-reference reachability.
+
+Impact is existential across the base design and named configurations. It says
+an authored context can be affected; it does not execute geometry or prove the
+resulting shape changes.
+
+## Feature hashes
+
+`hashDesignFeatures` resolves one effective configuration and parameter context,
+then hashes the Merkle feature DAG:
+
+```ts
+const hashes = await hashDesignFeatures(document, {
+  configuration: "compact",
+  parameters: { width: 65 },
+});
+
+if (!hashes.ok) throw new Error(hashes.diagnostics[0]?.message);
+
+for (const node of hashes.value.nodes) {
+  console.log(node.node, node.hash, node.dependencies);
+}
+```
+
+Each entry includes:
+
+- node ID and kind
+- output kind
+- versioned SHA-256 feature hash
+- active direct dependencies in authored order
+- resolved direct parameter values
+- persistent topology references actually consumed by the node
+
+Configuration suppression and material overrides participate only where they
+affect the effective feature context.
+
+## What a feature hash proves
+
+A matching hash proves that the normalized effective feature intent admitted by
+hash protocol v1 is identical. It does not prove:
+
+- a kernel version is unchanged
+- two native shapes are geometrically identical
+- topology keys are reusable
+- a serialized shape artifact is safe to decode
+- an unmodeled external dependency is unchanged
+
+Use it as one input to a cache key, not as the complete cache key.
+
+## Document hash
+
+`hashDocument` computes SHA-256 over canonical document JSON, optionally
+excluding root metadata. It is broader than a feature hash and does not isolate
+which outputs depend on a change.
+
+## Shape artifact foundation
+
+The artifact-cache module defines versioned keys, integrity records, bounded
+stores, session modes, and capability inspection. No shipped 0.1 backend
+advertises a production shape-artifact codec, and the evaluator does not yet
+consume cross-run shape records.
+
+That conservative boundary is intentional: generic BREP or public mesh exchange
+does not preserve every evaluator-observable semantic required for transparent
+native reuse. See the [shape-artifact conformance specification](/shape-artifact-conformance).

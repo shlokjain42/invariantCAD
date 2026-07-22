@@ -23,6 +23,16 @@ No unreleased changes.
 - Added a production Vite/Chromium smoke test that exercises the package's
   default browser initialization for both Manifold and stock OpenCascade,
   including real geometry, topology, STL, and STEP assertions.
+- Bundled only Manifold 3.5.1's standalone core JavaScript/WebAssembly runtime,
+  pinned by npm integrity, an identified upstream build run/commit, byte
+  length, and SHA-256, with notices for embedded and toolchain components. This
+  removes the unrelated glTF/image stack and its sharp advisory from both npm
+  consumers and the repository dependency graph; the release audit now
+  requires zero production or development advisories.
+- Added a Mintlify-ready documentation site with structured learning,
+  modeling, topology, evaluation, analysis, interchange, reference, protocol,
+  and project navigation, and reduced the root README to a focused landing
+  page while preserving the exhaustive 0.1 guide under `docs/reference/`.
 - Added the public security policy, a fail-closed production advisory gate, a
   patched esbuild development-tool override, complete npm metadata, pinned CI
   actions, a provenance-capable release workflow, a documentation index, and

@@ -1,0 +1,96 @@
+---
+title: "Parts, materials, and assemblies"
+description: "Define reusable parts, density-aware materials, fixed occurrences, nested assemblies, and outputs."
+icon: "boxes"
+---
+
+## Parts
+
+A part wraps a solid with manufacturing identity and optional physical data:
+
+```ts
+const aluminum = cad.material("aluminum-6061", {
+  name: "6061-T6 Aluminum",
+  massDensity: kgPerCubicMeter(2700),
+  description: "General-purpose machined aluminum",
+  metadata: { standard: "ASTM B221" },
+});
+
+const bracket = cad.part("bracket", bracketSolid, {
+  partNumber: "INV-BRACKET-001",
+  description: "Parameterized mounting bracket",
+  materialRef: aluminum,
+  metadata: { finish: "clear anodize" },
+});
+```
+
+A material definition is document-owned and can be referenced by many parts.
+Alternatively, a part can provide a direct `massDensity` expression or a legacy
+descriptive `material` label. A label is not resolved against the material
+registry and does not supply density.
+
+## Fixed-placement assembly
+
+```ts
+const pair = cad.assembly("bracket-pair", (assembly) => {
+  assembly.instance("left", bracket);
+  assembly.instance("right", bracket, {
+    placement: [
+      tf.translate(vec3(mm(100), mm(0), mm(0))),
+      tf.rotate(angleVec3(deg(0), deg(0), deg(180))),
+    ],
+  });
+});
+```
+
+Instances reference part or assembly definitions; they do not duplicate their
+component nodes. Placement operations execute in order. An instance can be
+suppressed by default with `{ suppressed: true }`.
+
+## Nested assembly
+
+```ts
+const machine = cad.assembly("machine", (assembly) => {
+  assembly.instance("front-pair", pair);
+  assembly.instance("rear-pair", pair, {
+    placement: [tf.translate(vec3(mm(0), mm(200), mm(0)))],
+  });
+});
+
+cad.output("machine", machine);
+```
+
+Evaluation walks the occurrence tree, composes placement transforms, and
+preserves a stable instance path for each evaluated occurrence.
+
+## Evaluated occurrences
+
+An evaluated assembly provides occurrence data, aggregate measurements,
+physical mass properties when densities are resolvable, mesh/export views, and
+a deterministic bill of materials.
+
+```ts
+const output = result.value.output("machine");
+if (output instanceof EvaluatedAssembly) {
+  console.log(output.instances);
+  console.log(output.billOfMaterials());
+  console.log(output.measure());
+}
+```
+
+Assembly measurements apply every occurrence placement and aggregate component
+geometry. Shared definitions still contribute once per unsuppressed occurrence.
+
+## Current boundary
+
+Assemblies in 0.1 use fixed authored placements. There is no mate/joint solver,
+degrees-of-freedom analysis, motion study, contact, or interference engine yet.
+Those are planned as separate protocols rather than hidden behavior inside
+fixed transforms.
+
+## Ownership rules
+
+Parts, materials, assemblies, and components must belong to the same
+`DesignBuilder`. Instance IDs are unique within their containing assembly and
+are part of configuration suppression keys, so keep them stable across design
+revisions.

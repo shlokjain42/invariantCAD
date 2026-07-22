@@ -1,0 +1,108 @@
+---
+title: "Configurations and bills of materials"
+description: "Create named parameter, suppression, and material variants with deterministic nested BOM rollups."
+icon: "list-tree"
+---
+
+Configurations are definition-scoped named overrides stored inside the design
+document. They do not clone the feature graph.
+
+## Define a configuration
+
+```ts
+const steel = cad.material("steel-a36", {
+  name: "A36 Steel",
+  massDensity: kgPerCubicMeter(7850),
+});
+
+const compactSteelSingle = cad.configuration(
+  "compact-steel-single",
+  (configuration) => {
+    configuration.parameter(width, mm(60));
+    configuration.instanceSuppressed(pair, "right");
+    configuration.partMaterial(bracket, steel);
+  },
+  {
+    description: "One compact bracket manufactured from A36 steel",
+    metadata: { salesCode: "CSS-1" },
+  },
+);
+```
+
+A configuration must contain at least one override. Duplicate overrides inside
+one configuration are rejected during authoring.
+
+## Evaluate by configuration
+
+```ts
+const result = await evaluator.evaluate(document, {
+  configuration: compactSteelSingle,
+  outputs: ["pair"],
+});
+```
+
+After serialization, select by configuration ID:
+
+```ts
+const result = await evaluator.evaluate(parsedDocument, {
+  configuration: "compact-steel-single",
+});
+```
+
+`EvaluatedDesign.configurationId` records the active configuration or is
+`null` for the default document context.
+
+## Override categories
+
+| Override | Scope | Effect |
+| --- | --- | --- |
+| Parameter | Document parameter | Re-evaluates every dependent effective feature |
+| Instance suppression | One assembly definition and instance ID | Removes/adds that occurrence everywhere the definition is instantiated |
+| Part material | One part definition | Changes density/material identity for every occurrence of that part |
+
+Configuration overrides are definition-scoped. If the same subassembly is
+instanced twice, suppressing an instance inside that subassembly definition
+affects both placements. Per-occurrence effectivity is roadmap work.
+
+## Deterministic BOM
+
+```ts
+const output = result.value.output("pair");
+if (output instanceof EvaluatedAssembly) {
+  const bom = output.billOfMaterials();
+  if (!bom.ok) {
+    console.error(bom.diagnostics);
+  } else {
+    for (const item of bom.value.items) {
+      console.log(item.partNumber, item.quantity, item.totalMass);
+    }
+  }
+}
+```
+
+The BOM:
+
+- excludes suppressed occurrences
+- groups shared part definitions deterministically
+- rolls nested quantities through the occurrence tree
+- includes part number, description, material identity, density source,
+  occurrence IDs, and mass information when available
+- composes affine placement for physical-property aggregation
+
+Missing density does not invent a zero mass. Physical-property methods return a
+diagnostic result explaining which part or material prevented a complete
+rollup.
+
+## Runtime parameter overrides
+
+Explicit `EvaluationOptions.parameters` can further specialize the selected
+configuration. This is useful for one-off builds without adding a permanent
+named variant. Keep named release/manufacturing variants in the document when
+they need reviewable identity and repeatability.
+
+## Impact and caching contexts
+
+Each named configuration is an independent effective evaluation context for
+design-impact and feature-hash analysis. A material or suppression change may
+affect only some contexts. See
+[design impact and hashes](/analysis/design-impact-and-hashes).

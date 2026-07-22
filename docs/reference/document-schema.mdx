@@ -1,0 +1,83 @@
+---
+title: "Document schema and versioning"
+description: "Frozen JSON versions, schema identifiers, migrations, and the independent protocol version axes."
+icon: "braces"
+---
+
+The current authoring grammar is Document v6. Versions 1 through 6 remain
+exported as types and Zod schemas for exact parsing and migration.
+
+## Top-level shape
+
+```ts
+interface DesignDocumentV6 {
+  schema: string;
+  version: 6;
+  name: string;
+  units: { length: "mm"; angle: "rad"; mass?: "kg" };
+  parameters: Record<string, ParameterIR>;
+  materials?: Record<string, MaterialDefinitionIR>;
+  configurations?: Record<string, DesignConfigurationIR>;
+  topologyReferences?: Record<string, TopologyReferenceEntryIR>;
+  nodes: Record<string, NodeIR>;
+  outputs: Record<string, RefIR>;
+  metadata?: Record<string, JsonValue>;
+}
+```
+
+Use the exported TypeScript definition for exact field types; this sketch shows
+the stable top-level organization.
+
+## Frozen versions
+
+| Version | Principal addition |
+| ---: | --- |
+| 1 | Initial executable document grammar |
+| 2 | Document-owned persistent face/edge topology references |
+| 3 | Ruled-loft nodes and loft topology roles |
+| 4 | Path/sweep nodes and sweep topology roles |
+| 5 | Exact fillet/chamfer generated-face roles |
+| 6 | Persistent vertices, vertex position queries, and edge↔vertex adjacency |
+
+Each version freezes its admitted node kinds, role vocabulary, query grammar,
+wire representation, and schema URI. New parser code may validate an older
+version more defensively, but it must not reinterpret valid frozen bytes as a
+newer grammar.
+
+## Independent version axes
+
+Do not infer one version from another:
+
+- npm package semver
+- document version
+- geometry kernel protocol version
+- topology signature protocol version
+- topology descriptor fingerprint version
+- exact indexed-evolution protocol version
+- artifact-cache and semantic-observation versions
+- owned OCCT facade ABI
+
+For example, Document v6 can contain a stored persistent-reference protocol-v1
+variant whose kernel descriptor fingerprint is `@4` or `@5`. Migrating the
+document does not recapture it as protocol v2.
+
+## Schemas
+
+The root entry exports current and version-specific Zod schemas for documents,
+nodes, topology queries/selections, persistent references, and registry entries.
+Use version-specific schemas when implementing a protocol tool that must reject
+newer vocabulary rather than accepting the current union.
+
+## Migration contract
+
+`migrateDocument` validates the source version and emits v6. It preserves
+stored persistent evidence, fingerprints, IDs, metadata, nodes, and outputs
+admitted by the source. It cannot synthesize later feature roles or vertex
+evidence that did not exist.
+
+## Canonicalization
+
+`stringifyDocument` canonicalizes JSON object ordering and the commutative parts
+of topology query algebra. Persistent variants are normalized and sorted by
+protocol/fingerprint. This provides deterministic bytes for the same admitted
+document semantics; it does not canonicalize native geometry output.

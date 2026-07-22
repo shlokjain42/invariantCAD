@@ -1,0 +1,119 @@
+---
+title: "Import and export"
+description: "Export meshes and exact exchange formats, and understand the current native-import boundary."
+icon: "arrow-left-right"
+---
+
+## Mesh export
+
+All evaluated outputs can produce a mesh and shared mesh formats:
+
+```ts
+const mesh = output.mesh();
+
+const binaryStl = output.export("stl");       // Uint8Array
+const asciiStl = output.export("stl-ascii");  // string
+const obj = output.export("obj");             // string
+```
+
+`MeshData` contains flat typed arrays:
+
+```ts
+interface MeshData {
+  positions: Float32Array; // xyz triples
+  indices: Uint32Array;    // triangle vertex indices
+}
+```
+
+Each consecutive three indices forms one triangle. A reflected assembly
+placement reverses triangle winding during mesh transformation so outward
+orientation remains coherent.
+
+## Tessellation options
+
+Exact B-Rep output is tessellated on demand:
+
+```ts
+const mesh = output.mesh({
+  linearDeflection: 0.1,
+  angularDeflection: 0.3,
+  relative: false,
+});
+```
+
+Options affect the extracted mesh, not the exact native shape. Manifold already
+is a mesh representation and may ignore B-Rep-specific controls.
+
+## STEP and BREP
+
+Use OCCT:
+
+```ts
+const step = output.export("step");
+const brepText = output.export("brep");
+const brepBinary = output.export("brep-binary");
+```
+
+Unsupported native formats throw `CadError` with an `EXPORT_UNSUPPORTED`
+diagnostic because `export()` is a direct operation on a live output. Select a
+compatible kernel before evaluation.
+
+## Save in Node.js
+
+```ts
+import { writeFile } from "node:fs/promises";
+
+await writeFile("part.stl", output.export("stl"));
+await writeFile("part.step", output.export("step"));
+```
+
+## Send from a web server
+
+```ts
+const bytes = output.export("step");
+
+return new Response(bytes, {
+  headers: {
+    "Content-Type": "model/step",
+    "Content-Disposition": 'attachment; filename="part.step"',
+  },
+});
+```
+
+Dispose the evaluated design after the response body has copied or taken
+ownership of the returned detached bytes.
+
+## Browser download
+
+```ts
+const bytes = output.export("stl");
+const blob = new Blob([bytes], { type: "model/stl" });
+const url = URL.createObjectURL(blob);
+
+try {
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = "part.stl";
+  anchor.click();
+} finally {
+  URL.revokeObjectURL(url);
+}
+```
+
+## Native import status
+
+The kernel protocol defines exact native-import capability, but the current
+public authoring grammar does not expose an imported-shape feature node. This is
+therefore a backend protocol foundation, not a documented end-user 0.1 modeling
+workflow.
+
+Generic STEP/BREP import also would not create InvariantCAD feature lineage or
+stable authored topology roles automatically. A future import feature must
+specify those semantics explicitly.
+
+## Exchange is not artifact caching
+
+STL, OBJ, STEP, and BREP are interoperability formats. They do not preserve the
+complete evaluator wrapper state, topology evolution history, analytic
+overrides, or compatibility fingerprint needed for transparent feature-cache
+reuse. See [design impact and hashes](/analysis/design-impact-and-hashes).

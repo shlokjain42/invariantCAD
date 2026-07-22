@@ -1,0 +1,112 @@
+---
+title: "Browser and worker deployment"
+description: "Bundle both WebAssembly kernels with Vite, control asset URLs, and isolate long-running evaluation."
+icon: "globe"
+---
+
+InvariantCAD's release gate builds a production Vite application and exercises
+both public kernel entry points in Chromium. The test evaluates a `2 × 3 × 4`
+box, checks Manifold mesh/STL results, checks exact OCCT topology counts, and
+exports STEP.
+
+## Vite application
+
+```ts
+import { createEvaluator, design, mm, vec3 } from "invariantcad";
+
+const cad = design("browser-part");
+const body = cad.box("body", {
+  size: vec3(mm(20), mm(10), mm(4)),
+});
+cad.output("body", body);
+
+const evaluator = await createEvaluator();
+const result = await evaluator.evaluate(cad.build());
+```
+
+The bundled Manifold runtime uses `import.meta.url` to locate its sibling WASM.
+Set Vite's `assetsInlineLimit: 0` if you need a physical emitted asset rather
+than an inline representation.
+
+## Explicit asset URL
+
+CDN rewriting or a strict asset pipeline may require an explicit URL:
+
+```ts
+const evaluator = await createEvaluator({
+  manifold: {
+    wasmUrl: new URL("/wasm/manifold.wasm", window.location.origin).href,
+  },
+});
+```
+
+For OCCT:
+
+```ts
+import { createOcctKernel } from "invariantcad/kernels/occt";
+
+const kernel = await createOcctKernel({
+  wasm: new URL("/wasm/occt-wasm.wasm", window.location.origin),
+});
+```
+
+Serve WASM with `Content-Type: application/wasm`. Same-origin hosting avoids
+cross-origin credential and policy surprises; otherwise configure CORS
+explicitly.
+
+## Worker pattern
+
+Geometry can block the main thread. Put document parsing and evaluation in a
+dedicated module worker:
+
+```ts
+// geometry.worker.ts
+import { createEvaluator, parseDocumentValue } from "invariantcad";
+
+const evaluatorPromise = createEvaluator();
+
+self.onmessage = async (event) => {
+  const parsed = parseDocumentValue(event.data.document);
+  if (!parsed.ok) {
+    self.postMessage({ ok: false, diagnostics: parsed.diagnostics });
+    return;
+  }
+
+  const evaluator = await evaluatorPromise;
+  const result = await evaluator.evaluate(parsed.value, event.data.options);
+  if (!result.ok) {
+    self.postMessage({ ok: false, diagnostics: result.diagnostics });
+    return;
+  }
+
+  try {
+    const stl = result.value.output(event.data.output).export("stl");
+    self.postMessage({ ok: true, stl }, [stl.buffer]);
+  } finally {
+    result.value.dispose();
+  }
+};
+```
+
+Create it with
+`new Worker(new URL("./geometry.worker.ts", import.meta.url), { type: "module" })`
+in bundlers that support module-worker URLs.
+
+## Cancellation strategy
+
+Use `AbortSignal` for cooperative cancellation. If the host must enforce a hard
+deadline during a synchronous native call, terminate the worker and create a
+new one. Do not reuse objects transferred from a terminated realm.
+
+## Content Security Policy
+
+WebAssembly compilation may require `wasm-unsafe-eval` in `script-src`,
+depending on browser and deployment mode. Test the exact production policy;
+avoid broadly enabling `unsafe-eval`. Asset fetching also needs the relevant
+`connect-src` or `default-src` allowance.
+
+## Tested boundary
+
+The release suite currently guarantees Chromium production-bundle behavior.
+Other evergreen browsers are plausible but are not claimed as release-gated
+until executable coverage is added.

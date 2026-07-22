@@ -8,8 +8,8 @@
   },
   "archive": {
     "format": "ustar+gzip",
-    "size": 7163152,
-    "sha256": "c22cf0e4f6d8a61cfb59a8bf7fd7c37f559807a96656c3434a978806046329a1"
+    "size": 7165936,
+    "sha256": "3f5907cb6e858c72d1eac7aeb0e32c06eb12aba0e222acb7b977b36ac3d00d92"
   },
   "facade": {
     "marker": "invariantcad-facade@0.7.0+occt-wasm.3.7.0",
@@ -126,8 +126,8 @@
       "target": "THIRD_PARTY_NOTICES.md",
       "role": "third-party-notices",
       "mode": "0644",
-      "size": 3424,
-      "sha256": "65dbbafe1e5bb86b0d5249e00e9e41d121edd70e44d92037b839439cbb014838"
+      "size": 8579,
+      "sha256": "f10dd60d01fdbddb5ab829d626413c3943fcba7b8b34c9524acd0e5d49d0f088"
     },
     {
       "source": "licenses/LGPL-2.1.txt",

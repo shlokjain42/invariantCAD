@@ -1,3 +1,9 @@
+---
+title: "Persistent-topology torture contract"
+description: "Normative stable, missing, ambiguous, ownership, conditioning, and compatibility cases for durable topology evidence."
+icon: "fingerprint"
+---
+
 # Persistent-topology torture suite
 
 InvariantCAD's persistent-topology contract is fail-closed: a run passes when a

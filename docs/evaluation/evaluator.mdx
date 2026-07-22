@@ -1,0 +1,133 @@
+---
+title: "Evaluator"
+description: "Configure evaluation, choose outputs and variants, handle cancellation, and manage native ownership."
+icon: "play"
+---
+
+`createEvaluator()` creates the orchestration layer that validates documents,
+resolves expressions, solves sketches, calls a geometry kernel, and exposes
+owned outputs.
+
+## Create an evaluator
+
+```ts
+const evaluator = await createEvaluator();
+```
+
+The default uses the bundled Manifold kernel and built-in reference sketch
+solver. Both boundaries can be replaced:
+
+```ts
+const evaluator = await createEvaluator({
+  kernel: await createOcctKernel(),
+  sketchSolver: customSolver,
+});
+```
+
+If you supply a kernel or solver, the evaluator takes ownership of it and
+disposes it when `evaluator.dispose()` is called.
+
+## Evaluation options
+
+```ts
+const controller = new AbortController();
+
+const result = await evaluator.evaluate(document, {
+  configuration: "manufacturing",
+  parameters: { width: 120, thickness: 5 },
+  outputs: ["body", "assembly"],
+  signal: controller.signal,
+  allowEmpty: false,
+  topologySignatureLimits: {
+    maxCandidatePairs: 50_000,
+  },
+});
+```
+
+| Option | Meaning |
+| --- | --- |
+| `configuration` | Exact document-owned configuration ID; omission selects the base design |
+| `parameters` | Finite overrides in document base units |
+| `outputs` | Evaluate only the named output closure instead of every output |
+| `signal` | Cooperative cancellation signal |
+| `allowEmpty` | Permit an evaluation request with no selected outputs |
+| `topologySignatureLimits` | Bound persistent-reference matching work |
+
+Unknown output, parameter, or configuration IDs produce diagnostics. Duplicate
+output names in the option array are normalized rather than evaluated twice.
+
+## Result handling
+
+Evaluation returns a discriminated `CadResult`:
+
+```ts
+const result = await evaluator.evaluate(document);
+
+if (!result.ok) {
+  for (const diagnostic of result.diagnostics) {
+    console.error({
+      code: diagnostic.code,
+      severity: diagnostic.severity,
+      path: diagnostic.path,
+      message: diagnostic.message,
+      hints: diagnostic.hints,
+      details: diagnostic.details,
+    });
+  }
+  return;
+}
+
+try {
+  const body = result.value.output("body");
+  // Use body while the EvaluatedDesign is live.
+} finally {
+  result.value.dispose();
+}
+```
+
+Warnings may accompany a successful result. For example, a BOM can be valid
+while warning that a part number or material label is missing.
+
+## Output classes
+
+`EvaluatedDesign.output(name)` returns one of:
+
+- `EvaluatedSolid`
+- `EvaluatedPart`
+- `EvaluatedAssembly`
+
+Solids provide `mesh`, `measure`, `topology`, and `export`. Parts add material,
+physical mass, and single-item BOM behavior. Assemblies expose occurrences,
+aggregate geometry, physical properties, and nested BOM rollups.
+
+## Ownership and disposal
+
+An evaluation may allocate many native intermediate shapes. The successful
+`EvaluatedDesign` owns all shapes retained for its outputs. Dispose the design,
+not individual outputs.
+
+```ts
+result.value.dispose();
+result.value.dispose(); // safe no-op
+
+// body.measure() now throws because its owner is disposed.
+```
+
+Use `try/finally`; do not rely on garbage collection to release WASM memory.
+
+## Cancellation
+
+Pass an `AbortSignal` for long operations. The evaluator checks cancellation
+between bounded stages and forwards it to protocols that support asynchronous
+work. Some same-thread synchronous native WASM calls cannot be interrupted in
+the middle of one call; cancellation is observed at the next boundary.
+
+For hard latency isolation, run evaluation in a worker or separate process that
+the host can terminate. See [browser and workers](/evaluation/browser-and-workers).
+
+## Reuse
+
+An evaluator can process multiple documents and variants sequentially. Results
+remain independently owned and must each be disposed. Kernel runtime module
+initialization may be shared internally, but shape ownership is never shared
+implicitly across evaluated designs.

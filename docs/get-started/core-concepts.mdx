@@ -1,0 +1,139 @@
+---
+title: "Core concepts"
+description: "The mental model for builders, documents, references, evaluators, kernels, and owned results."
+icon: "waypoints"
+---
+
+## Design builder
+
+`design(name)` creates a `DesignBuilder`. It is an authoring scope that owns
+parameters, materials, feature references, assemblies, configurations,
+topology references, and outputs.
+
+Builder references are intentionally scoped. Passing a `SolidRef`, `PartRef`,
+`MaterialRef`, parameter, or topology reference from another builder throws at
+authoring time. This prevents a document from silently containing unresolved
+cross-document links.
+
+Each ID is explicit and stable:
+
+```ts
+const cad = design("gearbox");
+const width = cad.parameter.length("housing-width", mm(120));
+const housing = cad.box("housing-blank", { /* ... */ });
+cad.output("manufacturing-housing", housing);
+```
+
+The strings are not display labels alone. They participate in references,
+diagnostic paths, deterministic documents, and change analysis. Treat them like
+schema keys: descriptive, stable, and unique within their namespace.
+
+## Design document
+
+`cad.build()` emits the current `DesignDocument` version. A document is:
+
+- plain JSON-compatible data
+- deeply frozen after authoring or parsing
+- validated against size, depth, expression, graph, and reference limits
+- independent of a geometry backend
+- explicit about its schema URI and protocol version
+
+Documents can be reviewed in source control or produced by another service.
+Load unknown input through `parseDocument()` or `parseDocumentValue()` so the
+runtime validates it before evaluation.
+
+## Expressions
+
+Parameters and arithmetic produce immutable expression trees. Dimensions are
+tracked by TypeScript and checked again at runtime. Length plus length is valid;
+length plus angle is not. Multiplying or dividing by a scalar preserves the
+source dimension.
+
+Expressions are resolved only when a document is evaluated. A single document
+therefore describes a family of variants rather than one baked mesh.
+
+## Evaluator
+
+An `Evaluator` orchestrates:
+
+1. document validation and migration boundary checks
+2. configuration and parameter resolution
+3. sketch constraint solving
+4. dependency-ordered feature evaluation
+5. topology query resolution
+6. kernel calls and native ownership
+7. output, measurement, mass, and BOM views
+
+Failures return `CadResult` diagnostics. Expected modeling failures do not rely
+on parsing exception messages.
+
+## Geometry kernel
+
+The `GeometryKernel` protocol is the boundary between the evaluator and a
+geometry engine. A kernel advertises versioned capabilities before work begins.
+The evaluator checks the capability required by each operation instead of
+assuming a method happens to exist.
+
+InvariantCAD ships two public kernel choices:
+
+- **Manifold** for robust watertight mesh operations and the default experience
+- **OpenCascade** for exact B-Rep operations and native STEP/BREP exchange
+
+The optional owned OCCT facade extends the same backend with stronger bounded
+feature-history contracts. It is selected explicitly and never downloaded by
+the library.
+
+## Evaluated results
+
+A successful evaluation returns an `EvaluatedDesign`. It owns all native shapes
+created for that run. Outputs are views into that ownership scope:
+
+```ts
+const result = await evaluator.evaluate(document);
+if (result.ok) {
+  try {
+    const output = result.value.output("body");
+    output.measure();
+    output.mesh();
+    output.export("stl");
+  } finally {
+    result.value.dispose();
+  }
+}
+```
+
+Calling a result after disposal is an error. Disposing twice is safe. Dispose
+the evaluator separately when it is no longer needed.
+
+## Topology intent
+
+Transient face and edge indices are not durable design intent. InvariantCAD
+separates two kinds of topology selection:
+
+- **Semantic queries** select current topology using feature origin, roles,
+  geometry, adjacency, logical set operations, and cardinality.
+- **Persistent references** store bounded detached evidence and resolve it
+  against a later compatible topology snapshot.
+
+Both resolve to evaluation-scoped keys only after a unique match. Ambiguity is
+an explicit failure rather than an arbitrary first match.
+
+## Determinism versus geometry identity
+
+Deterministic serialization and feature hashing identify effective authored
+intent. They do not prove two kernels emitted byte-identical or geometrically
+identical native shapes. Likewise, persistent topology evidence identifies a
+unique compatible subshape; it is not a native shape cache.
+
+These layers are deliberately independent:
+
+| Layer | Answers |
+| --- | --- |
+| Document serialization | What was authored? |
+| Design impact | What authored contexts can a change affect? |
+| Feature hashes | Which effective feature intent is unchanged? |
+| Topology references | Which current face/edge/vertex matches stored intent? |
+| Shape artifact protocol | Can a backend-owned native representation be reused safely? |
+
+Read the [architecture](/architecture) for the full invariants and protocol
+boundaries.

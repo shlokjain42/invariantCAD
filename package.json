@@ -49,11 +49,17 @@
     "invariantcad": "./dist/cli.js"
   },
   "scripts": {
-    "build": "tsup && tsc -p tsconfig.build.json",
+    "build": "tsup && tsc -p tsconfig.build.json && node scripts/stage-manifold-runtime.mjs",
     "check": "pnpm build && tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:browser": "pnpm build && vite build --config tests/browser/vite.config.ts && playwright test --config tests/browser/playwright.config.ts",
+    "docs:generate": "node scripts/generate-docs-export-index.mjs",
+    "docs:check": "node scripts/generate-docs-export-index.mjs --check && node scripts/check-docs.mjs",
+    "docs:dev": "cd docs && pnpm dlx mint@4.2.728 dev",
+    "docs:validate": "cd docs && pnpm dlx mint@4.2.728 validate",
+    "docs:links": "cd docs && pnpm dlx mint@4.2.728 broken-links --check-anchors --check-redirects",
+    "docs:release-check": "pnpm docs:validate && pnpm docs:links",
     "coverage": "vitest run --coverage",
     "audit:release": "node scripts/check-production-audit.mjs",
     "lint:package": "pnpm build && publint && attw --pack . --profile esm-only",
@@ -68,8 +74,8 @@
     "test:occt-artifact-owned": "tsx scripts/test-owned-occt-artifact.ts",
     "test:occt-facade-bundle": "pnpm bundle:occt-facade && pnpm verify:occt-facade-bundle && pnpm pack --pack-destination .artifacts && node scripts/package-smoke.mjs --owned-facade-runtime-dir .artifacts/occt-facade-bundle/invariantcad-occt-facade-0.7.0/runtime && pnpm test:occt-persistence-public -- --runtime-dir .artifacts/occt-facade-bundle/invariantcad-occt-facade-0.7.0/runtime && pnpm test:occt-artifact-owned -- --runtime-dir .artifacts/occt-facade-bundle/invariantcad-occt-facade-0.7.0/runtime",
     "prepack": "pnpm build",
-    "verify": "pnpm check && pnpm test && pnpm lint:package && pnpm test:package",
-    "release:check": "pnpm verify && pnpm audit:release && pnpm test:browser"
+    "verify": "pnpm check && pnpm test && pnpm docs:check && pnpm lint:package && pnpm test:package",
+    "release:check": "pnpm verify && pnpm audit:release && pnpm docs:release-check && pnpm test:browser"
   },
   "engines": {
     "node": ">=20.19"
@@ -87,7 +93,6 @@
     "wasm"
   ],
   "dependencies": {
-    "manifold-3d": "^3.5.1",
     "occt-wasm": "3.7.0",
     "zod": "^4.4.3"
   },

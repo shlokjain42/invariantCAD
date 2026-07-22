@@ -1,0 +1,129 @@
+---
+title: "Installation"
+description: "Install InvariantCAD and prepare Node.js, browser, and package-manager environments."
+icon: "package-plus"
+---
+
+## Requirements
+
+- Node.js 20.19 or newer for server-side use and repository tooling
+- An ESM-capable project
+- A modern browser with WebAssembly for client-side evaluation
+- TypeScript is recommended but not required by consumers
+
+InvariantCAD is ESM-only. CommonJS `require("invariantcad")` is not a supported
+entry path.
+
+## Add the package
+
+<CodeGroup>
+
+```bash pnpm
+pnpm add invariantcad
+```
+
+```bash npm
+npm install invariantcad
+```
+
+```bash yarn
+yarn add invariantcad
+```
+
+```bash bun
+bun add invariantcad
+```
+
+</CodeGroup>
+
+The package includes the TypeScript declarations, declaration maps, bundled
+Manifold JavaScript/WebAssembly runtime, and the stock `occt-wasm` dependency.
+The optional InvariantCAD-owned OCCT facade is not downloaded implicitly and is
+not part of the 0.1 npm package.
+
+## Confirm ESM configuration
+
+For Node.js, use an ESM source file (`.mjs`) or mark the consuming package as
+ESM:
+
+```json package.json
+{
+  "type": "module"
+}
+```
+
+Then verify a default-kernel import:
+
+```ts
+import { createEvaluator, design, mm, vec3 } from "invariantcad";
+
+const cad = design("install-check");
+cad.output(
+  "box",
+  cad.box("box", { size: vec3(mm(1), mm(2), mm(3)) }),
+);
+
+const evaluator = await createEvaluator();
+const result = await evaluator.evaluate(cad.build());
+if (!result.ok) throw new Error(result.diagnostics[0]?.message);
+
+console.log(result.value.output("box").measure().volume); // 6
+result.value.dispose();
+evaluator.dispose();
+```
+
+## TypeScript settings
+
+InvariantCAD targets modern ESM and works best with a modern module resolver:
+
+```json tsconfig.json
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "skipLibCheck": false
+  }
+}
+```
+
+Bundler-based applications can use `module: "ESNext"` and
+`moduleResolution: "Bundler"` instead.
+
+## WebAssembly assets
+
+The default Manifold runtime is bundled with InvariantCAD. In a normal Vite or
+similar production build, the runtime resolves its sibling WASM asset through
+`import.meta.url`. If an environment rewrites asset URLs, pass the final URL:
+
+```ts
+const evaluator = await createEvaluator({
+  manifold: { wasmUrl: "/assets/manifold.wasm" },
+});
+```
+
+The Manifold module is initialized once per JavaScript realm. A later request
+cannot change the configured URL after initialization.
+
+OCCT has a larger separate runtime and additional initialization forms. Follow
+the [OpenCascade guide](/evaluation/open-cascade) for Node, browser, and custom
+facade setup.
+
+## Package-manager install scripts
+
+Some strict package-manager configurations block dependency build scripts. The
+stock OCCT and browser toolchains may require explicitly allowing their
+documented runtime preparation. Do not enable arbitrary install scripts
+globally; scope any exception to the package that requires it and keep the
+lockfile reviewed.
+
+<Warning>
+  Never copy a WASM file from an unrelated version. JavaScript glue and WASM
+  binaries are a matched pair. A mismatch can fail during initialization or,
+  for native facade extensions, violate the advertised ABI.
+</Warning>
+
+## Next step
+
+Build and export a parameterized model in the [quickstart](/get-started/quickstart).

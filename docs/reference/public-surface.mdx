@@ -1,0 +1,115 @@
+---
+title: "Public library surface"
+description: "A map of InvariantCAD's supported package entry points and public capability areas."
+icon: "library"
+---
+
+InvariantCAD intentionally exposes a small number of package entry points and a
+large typed surface within them. Import only through these declared exports;
+physical files under `dist/` are not public subpaths.
+
+## `invariantcad`
+
+The root entry point contains ordinary application APIs.
+
+### Results and diagnostics
+
+`CadResult`, `Diagnostic`, `DiagnosticCode`, `CadError`, `success`, `failure`,
+`diagnostic`, and `hasErrors` define structured operation outcomes.
+
+### Authoring
+
+`design`, `DesignBuilder`, model reference classes, `AssemblyBuilder`,
+`ConfigurationBuilder`, `plane`, and `tf` create immutable design documents.
+
+### Expressions and units
+
+`Expression`, `Parameter`, `mm`, `cm`, `meters`, `inch`, `rad`, `deg`, `scalar`,
+density constructors, vector constructors, `expr`, and expression conversion or
+inspection helpers create serializable formulas.
+
+### Sketching
+
+`SketchBuilder`, entity reference classes, `ProfileDefinition`, and sketch
+option types describe planar constrained profiles. `ReferenceSketchSolver` and
+the solver protocol support evaluation or backend replacement.
+
+### Documents
+
+Current and frozen document constants/types, node kinds, IR types, Zod schemas,
+`validateDocument`, parsing, canonical serialization, cloning, migration,
+document hashing, and resource limits form the versioned document boundary.
+
+### Evaluation
+
+`createEvaluator`, `Evaluator`, `EvaluatedDesign`, evaluated output classes,
+evaluation options, mesh/export formats, measurements, materials, BOMs, and
+physical-property types execute documents and expose owned results.
+
+### Geometry kernels
+
+`GeometryKernel` and its capability/protocol types support custom backends.
+`createManifoldKernel` and `ManifoldKernel` implement the bundled default.
+OpenCascade creation is intentionally exposed through its own package subpath.
+
+### Topology
+
+`topology`, topology query/selection classes, resolution/explanation helpers,
+semantic role constants, snapshot/descriptor protocols, persistent capture and
+resolution sessions, and topology limits cover current and durable selection
+intent.
+
+### Analysis and incremental foundations
+
+Mass-property helpers, design impact, feature hashes, artifact-cache records and
+stores, semantic shape observations, and capability inspection support build
+systems and backend conformance without claiming transparent cache reuse.
+
+### Exporters
+
+`exportBinaryStl`, `exportAsciiStl`, `exportObj`, and `exportMesh` can encode any
+compatible `MeshData`, including meshes produced outside an evaluated output.
+
+## `invariantcad/kernels/occt`
+
+This entry point exposes `createOcctKernel`, OCCT initialization options, custom
+module-factory types, and documented OCCT-specific diagnostics/refinements. It
+loads the larger exact backend only when imported.
+
+```ts
+import { createOcctKernel } from "invariantcad/kernels/occt";
+```
+
+## `invariantcad/conformance`
+
+Backend authors use this entry point for shape-artifact codec audits and
+semantic observation contracts. Candidate mode tests a codec without letting a
+kernel advertise it; advertised mode verifies the capability already exposed by
+the kernel.
+
+```ts
+import {
+  auditKernelShapeArtifactCodec,
+  observeKernelShapeSemantics,
+} from "invariantcad/conformance";
+```
+
+Application code normally does not need this entry point.
+
+## Versioned names
+
+Many exported IR, schema, topology, and protocol names carry `V1` through `V6`.
+Those exports exist so tools can read, validate, migrate, and preserve frozen
+historical documents. New authoring should use the unversioned current aliases
+unless it is intentionally targeting an older protocol.
+
+## Stability in 0.x
+
+Document versions are frozen independently of the semver stability of the
+TypeScript convenience API. Before 1.0, a minor package release may change
+public TypeScript APIs, but it must not reinterpret an already frozen document
+version. Read the changelog during every `0.x` upgrade.
+
+The generated [export index](/reference/export-index) inventories every named
+export from the three package entry points and is checked against source during
+CI.

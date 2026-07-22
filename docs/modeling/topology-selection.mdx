@@ -1,0 +1,145 @@
+---
+title: "Topology selection"
+description: "Select faces, edges, and vertices by semantic origin, geometry, adjacency, logic, and cardinality."
+icon: "scan-search"
+---
+
+Topology selections express feature intent as set queries. They never store a
+face index, edge enumeration position, OCCT handle, or transient kernel key.
+
+## Query roots
+
+```ts
+topology.faces
+topology.edges
+topology.vertices
+```
+
+Every query is typed by topology kind. A face query cannot accidentally be used
+where a fillet expects edges.
+
+## Origin and role
+
+```ts
+const endCap = topology.faces
+  .createdBy(extrusion, { role: "extrude.face.end-cap" })
+  .select();
+
+const sideFromSketchEdge = topology.faces
+  .createdBy(extrusion, {
+    role: "extrude.face.side",
+    source: { sketch: profile, entity: "outline.e1" },
+  })
+  .select();
+
+const carriedRim = topology.edges
+  .createdBy(extrusion, {
+    role: "extrude.edge.end-rim",
+    source: { sketch: profile, entity: "outline.e1" },
+  })
+  .and(topology.edges.modifiedBy(moved))
+  .select();
+```
+
+`createdBy` means the feature introduced the item. `modifiedBy` means it is in
+the feature's output lineage as a modified item. Roles identify semantic
+classes; the optional sketch source distinguishes members created from one
+authored entity.
+
+## Geometric predicates
+
+Faces support:
+
+```ts
+topology.faces.surface("plane");
+topology.faces.normal(scalarVec3(0, 0, 1), deg(0.1));
+topology.faces.radius(mm(10), mm(1e-6));
+```
+
+Edges support:
+
+```ts
+topology.edges.curve("line");
+topology.edges.direction(scalarVec3(1, 0, 0), deg(0.1));
+topology.edges.radius(mm(4), mm(1e-6));
+```
+
+Vertices support:
+
+```ts
+topology.vertices.position(
+  vec3(mm(0), mm(0), mm(0)),
+  mm(1e-6),
+);
+```
+
+Geometric predicates are useful filters, but semantic origin is usually more
+stable when it exists. Coordinates alone are especially fragile under
+parameter changes and transforms.
+
+## Logical composition
+
+```ts
+const query = topology.edges
+  .createdBy(extrusion, { role: "extrude.edge.end-rim" })
+  .and(topology.edges.curve("line"))
+  .and(topology.edges.direction(scalarVec3(1, 0, 0)).not());
+
+const eitherCap = topology.faces
+  .createdBy(extrusion, { role: "extrude.face.start-cap" })
+  .or(topology.faces.createdBy(extrusion, { role: "extrude.face.end-cap" }));
+```
+
+`and` and `or` flatten, deduplicate, and canonicalize their operands.
+`not()` negates a query inside the current topology universe.
+
+## Adjacency
+
+Adjacency crosses topology kinds through a completed selection:
+
+```ts
+const cap = topology.faces
+  .createdBy(extrusion, { role: "extrude.face.end-cap" })
+  .select();
+
+const capEdges = topology.edges.adjacentTo(cap).atLeast(1);
+const edgeFaces = topology.faces.adjacentTo(capEdges).atLeast(1);
+const edgeVertices = topology.vertices.adjacentTo(capEdges).atLeast(2);
+```
+
+The nested selection keeps its own cardinality requirement. A failure inside
+adjacency is not treated as an empty set.
+
+## Cardinality is required intent
+
+Finish a query with one of:
+
+```ts
+query.select();        // exactly one
+query.exactly(4);      // exactly four
+query.atLeast(2);      // two or more
+query.between(2, 8);   // inclusive range
+```
+
+There is no unbounded "take whatever matched" selection. Cardinality protects a
+model from silently applying a feature to a different number of subshapes after
+a parameter or upstream feature change.
+
+## Explain a selection
+
+`explainTopologySelection` evaluates the query against a detached topology
+snapshot and returns a frozen aggregate report. It records the outcome,
+topology kind, snapshot history, candidates considered and matched, required
+cardinality, and the resolved keys on success. Failure diagnostics carry
+additional bounded candidate summaries when the evaluator can provide them;
+the public explanation does not expose per-candidate or logical-branch traces.
+
+Use explanations for tooling and debugging; do not parse human-readable
+diagnostic messages to recover selector state.
+
+## Backend requirements
+
+The evaluator checks topology capability metadata before invoking the consuming
+feature. A backend that cannot provide the requested surface, curve, lineage,
+source, or adjacency evidence fails explicitly. It does not approximate a
+semantic query with enumeration order.
