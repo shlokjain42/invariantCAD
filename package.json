@@ -41,7 +41,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "coverage": "vitest run --coverage",
-    "lint:package": "publint && attw --pack . --profile esm-only",
+    "lint:package": "pnpm build && publint && attw --pack . --profile esm-only",
     "test:package": "pnpm pack --pack-destination .artifacts && node scripts/package-smoke.mjs",
     "example:bracket": "tsx examples/bracket.ts",
     "build:occt-facade": "./scripts/build-occt-facade.sh",
@@ -85,5 +85,5 @@
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"
   },
-  "packageManager": "pnpm@11.9.0"
+  "packageManager": "pnpm@10.34.5"
 }
