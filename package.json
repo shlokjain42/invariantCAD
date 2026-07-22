@@ -46,7 +46,7 @@
     "./package.json": "./package.json"
   },
   "bin": {
-    "invariantcad": "./dist/cli.js"
+    "invariantcad": "dist/cli.js"
   },
   "scripts": {
     "build": "tsup && tsc -p tsconfig.build.json && node scripts/stage-manifold-runtime.mjs",
@@ -62,7 +62,7 @@
     "docs:release-check": "pnpm docs:validate && pnpm docs:links",
     "coverage": "vitest run --coverage",
     "audit:release": "node scripts/check-production-audit.mjs",
-    "lint:package": "pnpm build && publint && attw --pack . --profile esm-only",
+    "lint:package": "pnpm build && node scripts/check-package-bin.mjs && publint && attw --pack . --profile esm-only",
     "test:package": "pnpm pack --pack-destination .artifacts && node scripts/package-smoke.mjs",
     "example:bracket": "tsx examples/bracket.ts",
     "build:occt-facade": "./scripts/build-occt-facade.sh",

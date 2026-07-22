@@ -2,7 +2,8 @@
 
 ## [Unreleased]
 
-No unreleased changes.
+- Normalized the npm CLI executable target to npm's canonical package-relative
+  form and added a release check for its path, shebang, and executable mode.
 
 ## [0.1.0] - 2026-07-22
 
