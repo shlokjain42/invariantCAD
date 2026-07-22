@@ -2,15 +2,28 @@
   "name": "invariantcad",
   "version": "0.1.0",
   "description": "Comprehensive, type-safe CAD-as-code for TypeScript",
+  "author": {
+    "name": "Shlok Jain",
+    "url": "https://github.com/shlokjain42"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shlokjain42/invariantCAD.git"
+  },
+  "homepage": "https://github.com/shlokjain42/invariantCAD#readme",
+  "bugs": {
+    "url": "https://github.com/shlokjain42/invariantCAD/issues"
+  },
   "type": "module",
   "license": "Apache-2.0",
   "sideEffects": false,
   "files": [
     "dist",
-    "docs/persistent-topology-torture.md",
-    "docs/shape-artifact-conformance.md",
+    "docs",
     "licenses",
     "README.md",
+    "CHANGELOG.md",
+    "SECURITY.md",
     "LICENSE",
     "THIRD_PARTY_NOTICES.md"
   ],
@@ -37,10 +50,12 @@
   },
   "scripts": {
     "build": "tsup && tsc -p tsconfig.build.json",
-    "check": "tsc --noEmit",
+    "check": "pnpm build && tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:browser": "pnpm build && vite build --config tests/browser/vite.config.ts && playwright test --config tests/browser/playwright.config.ts",
     "coverage": "vitest run --coverage",
+    "audit:release": "node scripts/check-production-audit.mjs",
     "lint:package": "pnpm build && publint && attw --pack . --profile esm-only",
     "test:package": "pnpm pack --pack-destination .artifacts && node scripts/package-smoke.mjs",
     "example:bracket": "tsx examples/bracket.ts",
@@ -53,7 +68,8 @@
     "test:occt-artifact-owned": "tsx scripts/test-owned-occt-artifact.ts",
     "test:occt-facade-bundle": "pnpm bundle:occt-facade && pnpm verify:occt-facade-bundle && pnpm pack --pack-destination .artifacts && node scripts/package-smoke.mjs --owned-facade-runtime-dir .artifacts/occt-facade-bundle/invariantcad-occt-facade-0.7.0/runtime && pnpm test:occt-persistence-public -- --runtime-dir .artifacts/occt-facade-bundle/invariantcad-occt-facade-0.7.0/runtime && pnpm test:occt-artifact-owned -- --runtime-dir .artifacts/occt-facade-bundle/invariantcad-occt-facade-0.7.0/runtime",
     "prepack": "pnpm build",
-    "verify": "pnpm check && pnpm test && pnpm lint:package && pnpm test:package"
+    "verify": "pnpm check && pnpm test && pnpm lint:package && pnpm test:package",
+    "release:check": "pnpm verify && pnpm audit:release && pnpm test:browser"
   },
   "engines": {
     "node": ">=20.19"
@@ -77,13 +93,20 @@
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.5",
+    "@playwright/test": "^1.61.1",
     "@types/node": "^26.1.1",
     "@vitest/coverage-v8": "^4.1.10",
     "publint": "^0.3.21",
     "tsup": "^8.5.1",
     "tsx": "^4.23.1",
     "typescript": "^7.0.2",
+    "vite": "^8.1.5",
     "vitest": "^4.1.10"
   },
-  "packageManager": "pnpm@10.34.5"
+  "packageManager": "pnpm@10.34.5",
+  "pnpm": {
+    "overrides": {
+      "esbuild": "0.28.1"
+    }
+  }
 }

@@ -1,7 +1,32 @@
 # Changelog
 
-## Unreleased
+## [Unreleased]
 
+No unreleased changes.
+
+## [0.1.0] - 2026-07-22
+
+### Release highlights
+
+- First public release of the immutable, versioned TypeScript CAD document and
+  authoring system.
+- Manifold mesh and OpenCascade exact B-Rep backends with explicit capability
+  negotiation and WebAssembly lifetime management.
+- Core mechanical modeling, semantic and persistent topology, deterministic
+  analysis/BOM/configuration workflows, interchange, CLI, and package-level
+  conformance gates.
+- Incremental feature identity and a bounded artifact/cache protocol foundation;
+  production shape codecs and evaluator cache consumption remain future work.
+
+### Detailed changes
+
+- Added a production Vite/Chromium smoke test that exercises the package's
+  default browser initialization for both Manifold and stock OpenCascade,
+  including real geometry, topology, STL, and STEP assertions.
+- Added the public security policy, a fail-closed production advisory gate, a
+  patched esbuild development-tool override, complete npm metadata, pinned CI
+  actions, a provenance-capable release workflow, a documentation index, and
+  the maintainer release runbook.
 - Added bounded incremental feature identity through `hashDesignFeatures(...)`, `FEATURE_HASH_PROTOCOL_VERSION`, and `DESIGN_FEATURE_HASH_REPORT_VERSION`. Feature-hash v1 detaches and validates one document, resolves the evaluator's selected-configuration/call-time/default parameter precedence, applies effective materials and instance suppression, canonicalizes commutative selector logic and consumed persistent-reference evidence, and returns sorted deeply frozen SHA-256 Merkle entries and output hashes. An isolated effective-intent change admitted by v1 invalidates its node and descendants without perturbing unrelated branches, and equivalent effective contexts may share hashes. `FeatureHashLimits` cap feature nodes, dependency links, and canonical bytes; `HashDesignFeaturesOptions.signal` returns structured `EVALUATION_ABORTED` cancellation. These are raw effective-intent identities, not B-Rep digests, geometric/topology proofs, kernel attestations, or sufficient cache keys by themselves.
 - Added kernel shape-artifact and cache protocol v1 as a strict but not-yet-integrated foundation. `KernelCapabilities.shapeArtifacts` must appear with both `encodeShapeArtifact(...)` and `decodeShapeArtifact(...)`; encoding returns detached caller-owned bytes without taking the source shape, while decoding borrows immutable input and returns a new caller-owned live shape under hard byte and cancellation contracts. `createKernelShapeArtifactCacheKey(...)` binds one solid feature-hash entry to evaluator-semantics, kernel ID, backend artifact protocol/format/version/compatibility fingerprint, and sketch-solver ID/`artifactCompatibilityFingerprint`, rather than reusing the weaker topology-signature fingerprint. Solver compatibility is opt-in and fail-closed; the built-in floating-point reference solver deliberately omits a fingerprint pending exact cross-runtime numeric conformance. Integrity-checked detached `ArtifactCacheRecordV1` values, exact metadata validation, bounded cancellable read/write/delete helpers, public pre-materialization `ArtifactCacheStoreLimitError`, prompt queue-safe session cancellation, async-safe event observation, concurrency-safe aggregate `ArtifactCacheSession` accounting, `ArtifactCacheStore`, and the copying `MemoryArtifactCacheStore` establish the storage boundary and new structured artifact-cache diagnostics. No shipped Manifold or OCCT backend advertises a codec and evaluation does not consume the store yet. Ordinary OCCT STEP/BREP exchange is insufficient because it reconstructs partial-history geometry without wrapper-level semantic lineage, history completeness, topology annotations, analytic volume overrides, or other evaluator-observable state.
 - Added the public framework-neutral `invariantcad/conformance` kernel shape-artifact audit boundary. `auditKernelShapeArtifactCodec(...)` separates an explicit, not-yet-advertised candidate codec from an already-advertised production codec, exact-matches kernel ID plus artifact protocol/format/version/fingerprint, and exercises caller-defined tagged semantic witnesses plus golden-first decode fixtures across fresh kernel instances. Every self case additionally uses a dedicated fresh producer and fresh consumers to encode and cross-instance decode a reviewed pre-witness source in both disposal orders before the audit calls status or witness code. That branch proves only the positive full-limit pre-witness round trip and ownership; reduced-limit, cancellation, and malformed-input checks run on ordinary observed paths. The harness directly checks live status, independent shape/byte ownership, mutation and disposal isolation, empty/truncated input, returned-byte ceilings, and pre-abort behavior without wrapping or mutating a kernel or manufacturing capability metadata. The source factory remains trusted, and native allocation bounds, hidden cleanup, process-global coldness, in-flight synchronous cancellation, and cross-process portability need backend-specific gates. Passing evidence is not certification, a cross-runtime proof, or a cache-eligibility token. No shipped backend advertises support because complete serialization, stable fresh-subshape restoration, and exact runtime/format/options/tolerance fingerprinting remain open.
@@ -84,7 +109,7 @@
 - Add reusable geometry-kernel conformance tests
 - Verify coverage, package metadata, declarations, tarball imports, real geometry, and the installed CLI
 
-## 0.1.0
+### Initial executable foundation
 
 - Initial versioned design IR and TypeScript authoring API
 - Dimensioned parameters and expressions
@@ -93,3 +118,6 @@
 - Primitives, extrude, revolve, booleans, and transforms
 - Parts and nested fixed-placement assemblies
 - Measurement, STL/OBJ export, canonical JSON, semantic hashes, CLI, and tests
+
+[Unreleased]: https://github.com/shlokjain42/invariantCAD/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/shlokjain42/invariantCAD/releases/tag/v0.1.0

@@ -4,7 +4,22 @@ Comprehensive, type-safe CAD-as-code for TypeScript.
 
 InvariantCAD represents a design as immutable, versioned JSON and evaluates it through replaceable geometry and sketch-solver backends. The public API never exposes WASM pointers or kernel-specific objects.
 
-> **Project status:** `0.1.0` is the released-foundation target. Current main adds named definition-scoped configurations and variant-aware BOMs, kernel-independent effective-feature Merkle hashes, a strict kernel-shape artifact/cache protocol foundation with a canonical semantic-observation audit surface, an exact OpenCascade B-Rep backend, analytic sketch-profile transfer, STEP/BREP exchange, bounded ruled solid lofts, explicit 3D polyline, circular-arc, and ordered line/arc composite paths with bounded exact solid sweeps, closed semantic face/edge roles through those bounded sweeps, sketch-boundary provenance, document-owned persistent face/edge/vertex selectors, exact selector-driven fillets and equal-distance chamfers, exact face-selected inward/outward shells, exact whole-solid inward/outward offsets, atomic semantic-face draft, and owned exact multi-input Boolean, fillet/chamfer, and shell/offset evolution when the matched InvariantCAD-owned OCCT facade is loaded. No shipped geometry backend advertises the artifact codec yet, the semantic observer confers no eligibility, and the evaluator does not consume a cross-run cache. Complete topology history outside those owned feature slices is still under active development; see the [support matrix](#support-matrix) and [roadmap](docs/roadmap.md).
+> **Project status:** `0.1.0` is the first public foundation release. It includes named definition-scoped configurations and variant-aware BOMs, kernel-independent effective-feature Merkle hashes, a strict kernel-shape artifact/cache protocol foundation with a canonical semantic-observation audit surface, an exact OpenCascade B-Rep backend, analytic sketch-profile transfer, STEP/BREP exchange, bounded ruled solid lofts, explicit 3D polyline, circular-arc, and ordered line/arc composite paths with bounded exact solid sweeps, closed semantic face/edge roles through those bounded sweeps, sketch-boundary provenance, document-owned persistent face/edge/vertex selectors, exact selector-driven fillets and equal-distance chamfers, exact face-selected inward/outward shells, exact whole-solid inward/outward offsets, atomic semantic-face draft, and owned exact multi-input Boolean, fillet/chamfer, and shell/offset evolution when the matched InvariantCAD-owned OCCT facade is loaded. No shipped geometry backend advertises the artifact codec yet, the semantic observer confers no eligibility, and the evaluator does not consume a cross-run cache. Complete topology history outside those owned feature slices is still under active development; see the [support matrix](#support-matrix) and [roadmap](docs/roadmap.md).
+
+## Documentation
+
+- [Complete documentation index](docs/README.md)
+- [Architecture and invariants](docs/architecture.md)
+- [Current capabilities and roadmap](docs/roadmap.md)
+- [Persistent-topology torture contract](docs/persistent-topology-torture.md)
+- [Shape-artifact conformance contract](docs/shape-artifact-conformance.md)
+- [Security policy](SECURITY.md)
+- [Detailed changelog](CHANGELOG.md)
+
+This README is the complete 0.1 user guide. The documentation index separates
+user workflows from protocol specifications, native build/relinking material,
+project policy, and release notes. The npm package also ships declarations and
+declaration maps with source JSDoc for editor-level API reference.
 
 ## Install
 
@@ -12,7 +27,10 @@ InvariantCAD represents a design as immutable, versioned JSON and evaluates it t
 pnpm add invariantcad
 ```
 
-Node.js 20.19 or newer is required. The core API is ESM and also targets modern browsers.
+Node.js 20.19 or newer is required. The core API is ESM and also targets modern
+browsers. Release CI executes a production Vite bundle in Chromium and loads
+both the Manifold and stock OpenCascade WebAssembly backends through their
+public package entry points.
 
 The npm package contains the TypeScript API and declares stock `occt-wasm` as a
 dependency; it does not contain the InvariantCAD-owned facade runtime or its
@@ -874,7 +892,21 @@ The CLI selects stock OCCT automatically for `.step` and `.brep` destinations. U
 
 ## Browser initialization
 
-Most Node.js users need no configuration. Browser bundlers that do not automatically resolve the Manifold WASM asset can supply its URL:
+Most Node.js users need no configuration. Modern browser bundlers such as Vite
+also resolve both kernels' package-relative WebAssembly assets automatically:
+
+```ts
+import { createEvaluator } from "invariantcad";
+import { createOcctKernel } from "invariantcad/kernels/occt";
+
+const manifoldEvaluator = await createEvaluator();
+const occtKernel = await createOcctKernel();
+```
+
+InvariantCAD's release gate executes that exact default initialization from a
+production Vite bundle in Chromium. A browser bundler that does not preserve
+the dependency packages' `new URL(..., import.meta.url)` asset resolution can
+instead supply the Manifold WASM URL explicitly:
 
 ```ts
 import wasmUrl from "manifold-3d/manifold.wasm?url";
@@ -883,7 +915,10 @@ import { createEvaluator } from "invariantcad";
 const evaluator = await createEvaluator({ manifold: { wasmUrl } });
 ```
 
-The `?url` syntax is bundler-specific; InvariantCAD itself only accepts a normal URL and does not couple its API to Vite.
+The `?url` syntax is bundler-specific; InvariantCAD itself only accepts a normal
+URL and does not couple its API to Vite. With strict dependency-isolating
+package managers such as pnpm or Yarn PnP, add `manifold-3d` as a direct
+application dependency before importing its asset subpath.
 
 The exact backend likewise accepts an explicit OCCT WASM location:
 
@@ -893,6 +928,11 @@ import { createOcctKernel } from "invariantcad/kernels/occt";
 
 const kernel = await createOcctKernel({ wasm: occtWasmUrl });
 ```
+
+Add `occt-wasm@3.7.0` as a direct application dependency when using that asset
+subpath under a strict dependency-isolating package manager. The default
+`createOcctKernel()` path does not require an application-level import from
+`occt-wasm`.
 
 That form still pairs the supplied binary with the stock `occt-wasm` JavaScript glue and therefore does not enable draft or exact Boolean, fillet/chamfer, or shell/offset topology evolution. Because InvariantCAD cannot recognize that overridden binary as the known default stock runtime, it also omits `topology.signatures` and `topology.signatureProfiles`; topology inspection still works, but the kernel makes no persistent-reference compatibility promise. Load the stronger guarantees with the generated JavaScript factory from the owned-facade build. A factory may locate its matched sibling WASM itself; pass `wasm` when the application or bundler needs an explicit binary URL:
 
@@ -946,7 +986,8 @@ The bundle also collects checksums, build provenance, an SBOM, source and
 relinking information, and applicable notices for review. Those materials are
 engineering compliance inputs, not legal certification. Public distribution
 remains pending external legal, release, and security review; until then,
-consumers must build the pinned recipe in [native/occt](native/occt/README.md)
+consumers must build the pinned recipe in
+[native/occt](https://github.com/shlokjain42/invariantCAD/tree/v0.1.0/native/occt)
 or obtain an equivalently reviewed matching pair through an explicit channel.
 
 ## Architecture

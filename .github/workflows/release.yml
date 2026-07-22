@@ -1,0 +1,56 @@
+name: Publish npm
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: Publish tagged package
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: npm
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
+
+      - name: Install Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24.x
+          package-manager-cache: false
+          registry-url: https://registry.npmjs.org
+
+      - name: Install npm with trusted-publishing support
+        run: npm install --global npm@11.18.0
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Verify tag matches package version
+        run: >-
+          node -e "const expected = 'v' + require('./package.json').version;
+          if (process.env.GITHUB_REF_NAME !== expected)
+          throw new Error('Expected tag ' + expected + ', received ' +
+          process.env.GITHUB_REF_NAME)"
+
+      - name: Run release acceptance suite
+        run: pnpm release:check
+
+      - name: Publish with npm provenance
+        run: npm publish --access public --provenance
+        env:
+          # Required only for the first publish, before npm can trust this
+          # workflow through OIDC. Delete the secret after bootstrap.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
