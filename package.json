@@ -120,13 +120,16 @@
     "publint": "^0.3.21",
     "tsup": "^8.5.1",
     "tsx": "^4.23.1",
-    "typescript": "^7.0.2",
+    "typescript": "^6.0.3",
     "vite": "^8.1.5",
     "vitest": "^4.1.10"
   },
   "packageManager": "pnpm@10.34.5",
   "pnpm": {
     "overrides": {
+      "@rolldown/binding-wasm32-wasi@1.1.5>@emnapi/core": "1.11.2",
+      "@rolldown/binding-wasm32-wasi@1.1.5>@emnapi/runtime": "1.11.2",
+      "cli-highlight@2.1.11>highlight.js": "11.11.1",
       "esbuild": "0.28.1"
     }
   }
