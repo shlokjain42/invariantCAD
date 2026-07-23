@@ -35,7 +35,7 @@
   shape-artifact candidate. An unexported disposable-operation coordinator
   enforces pre-abort, timeout/abort termination, exactly-once settlement, and
   awaited cleanup. The Chromium production-bundle gate transfers a copied
-  committed v2 fixture into a stock-runtime module worker, proves source-byte
+  committed v3 fixture into a stock-runtime module worker, proves source-byte
   immutability and transfer detachment, hard-terminates a started non-yielding
   worker, and decodes successfully in a fresh worker while returning only
   scalar evidence after native cleanup. A separate Node gate runs owned ABI 0.9
@@ -49,9 +49,10 @@
   Its evidence explicitly sets `certifiesCompatibility: false`: these checks do
   not authenticate build execution or a publisher, protect against a trusted
   host/module-hook chain or same-UID process, prove live/peak memory or a real
-  OCCT trap, establish durable native subshape identity or a reviewed
-  cross-platform matrix, or integrate the evaluator/cache, and no backend now
-  advertises `shapeArtifacts`.
+  OCCT trap, establish cross-edit/persistent assembly identity or shared-TShape
+  ancestry across distinct locations, establish a reviewed cross-platform
+  matrix, or integrate the evaluator/cache, and no backend now advertises
+  `shapeArtifacts`.
 - Extended the repository-private isolation gates through real
   `Evaluator.evaluate(...)` work without adding a public isolated-evaluation
   API. Fresh owned-ABI-0.9 Node children evaluate a deterministic two-box
@@ -76,7 +77,8 @@
   boundary. Ordinary public evaluation remains same-thread and cooperatively
   cancellable. These gates do not add cache integration, advertise
   `shapeArtifacts`, certify operational cancellation or compatibility, provide
-  durable artifact-local identity, or establish a cross-platform matrix.
+  cross-edit/persistent assembly identity or distinct-location
+  `IsPartner`/shared-TShape proof, or establish a cross-platform matrix.
 - Made `createOcctKernel` snapshot every caller-owned initialization option
   before its first asynchronous import, including cross-realm URL state and
   copied WASM bytes, so later caller mutation cannot make execution inputs and
@@ -87,11 +89,48 @@
   encoding uses a counting pass and one exact output allocation, while decoding
   enforces canonical finite binary64 values, closed tags and masks, sorted
   unique references, reciprocal topology, and exact EOF. The deterministic
-  `11,591`-byte v2 fixture preserves the v1 semantic witness, the former v1
-  fixture is retained as a negative corpus, and a read-only generator check is
-  part of ordinary verification. Production capability advertising remains
-  blocked by the separate native-allocation, cancellation, identity,
-  authenticated-build-provenance, and reviewed cross-platform proof gaps.
+  `11,591`-byte v2 fixture preserves the v1 semantic witness; v1 and v2 fixtures
+  are now retained as the negative corpus for current format v3, and a read-only
+  generator check is part of ordinary verification. Production capability
+  advertising remains blocked by the separate native-allocation, cancellation,
+  identity, authenticated-build-provenance, and reviewed cross-platform proof
+  gaps.
+- Advanced the repository-private OCCT candidate envelope to format v3 while
+  retaining bounded binary sidecar v2, and added native identity format v1.
+  Its 64-byte identity header carries canonical zero-based direct-child paths
+  to the first `IsSame` occurrence of each unique located solid, shell, wire,
+  face, edge, and vertex plus a complete rooted pre-order occurrence stream.
+  Each fixed 12-byte occurrence record binds shape type, composed orientation,
+  direct-child count, and the canonical `IsSame` class for those six indexed
+  kinds; compound, compsolid, and generic-shape nodes remain unindexed but their
+  exact structure, order, orientation, and multiplicity are recorded. Producer
+  paths are lexicographically sorted per kind, with the same permutation
+  applied to topology, native orientations, and occurrence class indices;
+  decode remaps paths onto the consumer's raw enumeration and rejects
+  multiplicity, order, orientation, `IsSame`-class membership, geometry,
+  incidence, or structure substitution before restoring semantic records onto
+  fresh keys. Closed
+  ceilings allow at most `100,000` paths, `1,000,000` path components, depth
+  `64`, child index `999,999`, `100,000` occurrences/traversal visits, and
+  `1,000,000` `IsSame` comparisons. The fingerprint binds
+  `nativeIdentity=serialized-first-issame-child-path-v1`,
+  `nativeOccurrenceManifest=complete-rooted-preorder-type-orientation-child-count-issame-class-v1`,
+  `nativeOccurrenceRecordBytes=12`, `nativeIdentityMaxOccurrences=100000`,
+  `nativeIdentityTraversalOccurrences=100000`, and the remaining
+  identity/version/limit declarations. The deterministic `13,735`-byte v3
+  golden has fixture witness
+  `invariantcad:kernel-shape-artifact-fixture:v1:sha256:8ecfa6ac89142f794c2d55a78e7121ce0805b8abcb5aa64230e7722d99c8c2be`;
+  v1 and v2 are retained only as negative rejection fixtures. A dedicated
+  duplicate-occurrence regression gate proves that a one-component artifact
+  rejects a substituted two-occurrence BREP transactionally. Stock
+  `occt-wasm` does not expose `IsPartner`, so v3 cannot attest shared underlying
+  TShape ancestry across distinct-location `IsSame` classes. Envelope,
+  sidecar-v2, and identity-v1 lengths and end-of-input are exact, but the stock
+  BREP reader tolerates a valid archive with suffix bytes; strict BREP
+  consumption is therefore an owned-ABI-0.7+ guarantee, not a stock candidate
+  guarantee. It also does not create cross-edit or persistent assembly
+  identity, advertise a public cache, certify compatibility, establish a
+  reviewed cross-platform matrix, or add hard cancellation.
 - Advanced the repository-private owned OCCT facade and compliance bundle to
   ABI 0.8 with a fixed 128 MiB per-operation ceiling over cumulative allocation
   requests observed at twelve reviewed linker-wrapped entry points. Reports
@@ -99,9 +138,9 @@
   new argument, and disposable-process tests cover write/read denial plus
   recovery. This is unadvertised defense-in-depth: direct C denial is fail-stop,
   and strict BinTools count/product preflight, work bounds, cancellation,
-  runtime-pair verification, durable identity, and reviewed cross-platform
-  goldens require separate gates; the exact pair gate is supplied independently
-  by the attested loader above.
+  runtime-pair verification, identity outside v3's bounded scope, and reviewed
+  cross-platform goldens require separate gates; the exact pair gate is supplied
+  independently by the attested loader above.
 - Advanced the repository-private owned OCCT facade and compliance bundle to
   ABI 0.9 with an exact parser for the owned writer's BinTools-v4 profile before
   `BinTools::Read`. Decode now validates canonical sections, finite geometry,

@@ -177,7 +177,15 @@ Persistent-topology fingerprints remain semantic descriptor contracts. An
 attested and a directly supplied instance of the same recognized facade retain
 the same topology descriptor fingerprints. The stronger exact pair identity is
 added only to the private artifact compatibility fingerprint, where byte-level
-runtime differences must fail exact matching.
+runtime differences must fail exact matching. Candidate format v3 also binds
+its envelope, bounded sidecar-v2,
+`nativeIdentity=serialized-first-issame-child-path-v1`,
+`nativeOccurrenceManifest=complete-rooted-preorder-type-orientation-child-count-issame-class-v1`,
+`nativeOccurrenceRecordBytes=12`, `nativeIdentityMaxOccurrences=100000`,
+`nativeIdentityTraversalOccurrences=100000`, the other
+path/traversal/comparison ceilings, and native-structure declarations into that
+fingerprint. Matching those fields identifies the declared private codec
+contract; it does not certify that contract across platforms.
 
 ## Failure reasons
 
@@ -221,12 +229,21 @@ facade marker matched the trusted manifest. Neither result proves:
   attacker, host, or WASM engine;
 - which native machine instructions ultimately executed;
 - process sandboxing, live/peak-memory bounds, prompt same-thread cancellation,
-  geometry correctness, durable symmetric-subshape identity, or cross-platform
-  artifact compatibility.
+  geometry correctness, public compound/compsolid identity classes,
+  distinct-location `IsPartner`/shared-TShape ancestry, cross-edit topology or
+  persistent assembly identity, or cross-platform artifact compatibility.
 
 This closes the exact owned JS/WASM and declared-release-manifest identity
 blocker for the repository-private artifact candidate. It does not advertise
 `KernelCapabilities.shapeArtifacts`, add public codec methods, or make artifact
-evidence a compatibility certificate. Isolation, attestation, semantic
-identity, cross-platform goldens, and evaluator/cache integration remain
-separate gates.
+evidence a compatibility certificate. Candidate v3 separately supplies the
+zero-based direct-child path to the first `IsSame` occurrence of every unique
+located solid/shell/wire/face/edge/vertex class plus a complete rooted pre-order
+occurrence stream. Its 64-byte header and fixed 12-byte records preserve every
+serialized node's type, composed orientation, direct-child count, multiplicity,
+order, and canonical class mapping; compound/compsolid/generic nodes are
+structural but unindexed. The duplicate-occurrence regression requires a
+one-component artifact to reject a substituted two-occurrence BREP
+transactionally. The loader does not expand this serialization-local scope or
+supply the missing `IsPartner` primitive. Public hard cancellation,
+cross-platform goldens, and evaluator/cache integration remain separate gates.

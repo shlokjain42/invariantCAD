@@ -333,6 +333,15 @@ try {
     maxArtifactBytes: 16 * 1024 * 1024,
   }) as typeof restored;
   assert.ok(restored);
+  const reencoded = consumerCodec.encodeShapeArtifact(restored, {
+    feature: "owned-artifact-round-trip",
+    maxArtifactBytes: 16 * 1024 * 1024,
+  });
+  assert.deepEqual(
+    reencoded,
+    artifact,
+    "The owned runtime must re-encode restored v3 artifact state byte-for-byte",
+  );
   assert.deepEqual(consumer.measure(restored), producer.measure(source));
   const restoredTopology = consumer.topology?.(restored);
   assert.ok(restoredTopology);
@@ -364,7 +373,7 @@ try {
   assert.equal(legacyReadCount, 0);
   assert.deepEqual(
     nativeAllocationTelemetry.map(({ operation }) => operation),
-    ["write", "read"],
+    ["write", "read", "write"],
   );
 } finally {
   if (restored !== undefined) consumer.disposeShape(restored);

@@ -87,6 +87,13 @@ function sha256(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+function sameBytes(first: Uint8Array, second: Uint8Array): boolean {
+  return (
+    first.byteLength === second.byteLength &&
+    first.every((byte, index) => byte === second[index])
+  );
+}
+
 async function readBoundedFile(
   path: string,
   maximumBytes: number,
@@ -231,7 +238,7 @@ function candidateCapabilities(
     codec === undefined ||
     codec.capabilities.protocolVersion !== 1 ||
     codec.capabilities.format !== "org.invariantcad.occt-shape-candidate" ||
-    codec.capabilities.formatVersion !== 2
+    codec.capabilities.formatVersion !== 3
   ) {
     throw new TypeError(
       "Owned OCCT process-gate candidate codec is unavailable or malformed",
@@ -242,7 +249,7 @@ function candidateCapabilities(
     evidence: Object.freeze({
       protocolVersion: 1,
       format: "org.invariantcad.occt-shape-candidate",
-      formatVersion: 2,
+      formatVersion: 3,
       compatibilityFingerprint:
         codec.capabilities.compatibilityFingerprint,
     }),
@@ -647,6 +654,15 @@ async function execute(
           feature: request.feature,
           maxArtifactBytes: request.maxArtifactBytes,
         });
+        const reencoded = candidate.codec.encodeShapeArtifact(shape, {
+          feature: request.feature,
+          maxArtifactBytes: request.maxArtifactBytes,
+        });
+        if (!sameBytes(reencoded, artifact)) {
+          throw new TypeError(
+            "Fresh owned OCCT consumer did not re-encode byte-identical artifact state",
+          );
+        }
       } else {
         throw new TypeError(
           "OCCT artifact fault operation unexpectedly reached artifact work",

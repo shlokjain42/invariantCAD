@@ -217,24 +217,50 @@ This is the current implementation frontier. The public protocol exists, but
 **no shipped backend advertises `shapeArtifacts` and the evaluator does not read
 or write cached shapes today**.
 
-- The repository-private OCCT candidate format v2 uses a versioned binary-BREP
-  envelope plus a bounded canonical binary topology/native-orientation/lineage/
-  history/volume sidecar. Its fixed 48-byte big-endian header declares exact
-  length and aggregate topology, adjacency, lineage, UTF-16BE string-byte, and
-  orientation limits. Encode counts before allocating one exact output; decode
-  preflights the header and totals, requires closed canonical values and exact
-  EOF, creates fresh evaluation keys, and accepts state only after exact native
-  structural verification. This closes the former JSON-intermediate sidecar
-  allocation gap. The private envelope also caps its compatibility fingerprint
-  at `2,048` UTF-8 bytes.
+- The repository-private OCCT candidate format v3 retains binary BREP and the
+  bounded canonical topology/native-orientation/lineage/history/volume sidecar
+  v2, then adds native identity v1. The sidecar's fixed 48-byte big-endian
+  header still declares exact topology, adjacency, lineage, UTF-16BE
+  string-byte, and orientation totals. The new identity section records, for
+  each unique located solid, shell, wire, face, edge, and vertex, the zero-based
+  direct-child path to its first `IsSame` occurrence. Its complete rooted
+  pre-order occurrence stream then records every serialized node in fixed
+  12-byte records containing shape type, composed orientation, direct-child
+  count, and canonical `IsSame` class index for those six kinds. Compound,
+  compsolid, and generic-shape nodes are structurally recorded but unindexed.
+  Producer paths are sorted canonically per kind, with topology, orientations,
+  and occurrence class indices jointly permuted; consumers map those paths onto
+  their fresh raw enumeration and reject multiplicity, order, orientation,
+  `IsSame`-class membership, or structure substitutions before exact semantic
+  restoration.
+  Encode counts before allocating exact sections; decode preflights every
+  header and total, requires closed canonical values and exact envelope,
+  sidecar-v2, and identity-v1 EOF, creates fresh evaluation keys, and accepts
+  state only after exact native verification. Stock `occt-wasm` can tolerate
+  suffix bytes after a valid native BREP archive, so strict EOF inside the BREP
+  section remains an owned-ABI-0.7+ guarantee rather than a stock guarantee.
+  The private envelope also caps its compatibility fingerprint at `2,048` UTF-8
+  bytes.
+- Native identity v1 has a 64-byte header and is bounded to `100,000` unique
+  paths, `1,000,000` aggregate first-path components, depth `64`, child index
+  `999,999`, `100,000` occurrence records/traversal visits, and `1,000,000`
+  `IsSame` comparisons. The compatibility fingerprint binds
+  `nativeIdentity=serialized-first-issame-child-path-v1`,
+  `nativeOccurrenceManifest=complete-rooted-preorder-type-orientation-child-count-issame-class-v1`,
+  `nativeOccurrenceRecordBytes=12`, `nativeIdentityMaxOccurrences=100000`,
+  `nativeIdentityTraversalOccurrences=100000`, every other identity ceiling,
+  the native structure contract, runtime/options, and owned-native
+  materialization declarations.
 - Direct state, corruption, ownership, and pinned asymmetric-box golden audits
-  pass on the reviewed runtime without certifying compatibility. The v2 golden
-  is `11,591` bytes with fixture witness
-  `invariantcad:kernel-shape-artifact-fixture:v1:sha256:221d1ea2265a26df1293e63d625d25e85eb8a86041bdea53a927269427e3d16a`;
+  pass on the reviewed runtime without certifying compatibility. The v3 golden
+  is `13,735` bytes with fixture witness
+  `invariantcad:kernel-shape-artifact-fixture:v1:sha256:8ecfa6ac89142f794c2d55a78e7121ce0805b8abcb5aa64230e7722d99c8c2be`;
   its semantic witness remains
   `invariantcad:kernel-shape-semantic:v1:sha256:40ae684e4a2fad512f54e1f1be4443acf7faf2f34fc6b281c7b816d8d3366cb2`.
-  V1 is retained only as a negative rejection fixture. Verify v2 with
-  `pnpm artifact:fixture:occt -- --check --version v2`. ABI 0.7 adds a capped
+  V1 and v2 are retained only as negative rejection fixtures. A dedicated
+  duplicate-occurrence regression replaces a single occurrence with two uses of
+  the same located TShape and requires transactional rejection. Verify v3 with
+  `pnpm artifact:fixture:occt -- --check --version v3`. ABI 0.7 adds a capped
   chunked BinTools-v4 writer, borrowed-input length checks, strict consumption,
   a post-read topology ceiling, report-owned decode, same-kernel one-shot
   transfer, and exact TypeScript rollback. ABI 0.8 additionally applies a
@@ -256,7 +282,7 @@ or write cached shapes today**.
   artifact-compatibility ceiling, not a general modeling limit.
 - An unexported one-shot disposable-operation coordinator now closes the
   host-side result/timeout/abort/termination races used by the isolation gates.
-  The Chromium production-bundle gate transfers a copy of the committed v2
+  The Chromium production-bundle gate transfers a copy of the committed v3
   fixture into a stock-runtime module worker, proves retained-input
   immutability and transfer detachment, accepts only its closed started/result
   protocol, and returns scalar evidence only after shape/kernel cleanup. The
@@ -308,9 +334,14 @@ or write cached shapes today**.
   verification does not authenticate the declared build execution or publisher
   and does not defend against a trusted host, same-process hook chain, or
   same-UID process. The injected trap is an orchestration fault, not a real OCCT
-  trap. Ordered evidence is not comprehensive durable identity for
-  indistinguishable symmetric topology, and one owned producer/consumer
-  scenario is not a reviewed cross-platform golden matrix.
+  trap. V3 verifies every serialized occurrence's multiplicity, order, type,
+  composed orientation, child count, and canonical `IsSame` class, independently
+  of raw TopExp order. Compound/compsolid/generic nodes are recorded structure,
+  not indexed public identities. Stock `occt-wasm` lacks `IsPartner`, so v3
+  cannot attest that distinct-location `IsSame` classes share one underlying
+  TShape. Serialized paths also are not cross-edit topology IDs or persistent
+  assembly identities. One owned producer/consumer scenario is not a reviewed
+  cross-platform golden matrix.
 - The evaluator gates prove forced containment only at repository-owned,
   one-shot realm boundaries. A killed realm cannot run language-level cleanup;
   process or worker destruction reclaims it instead. Ordinary public
@@ -318,10 +349,11 @@ or write cached shapes today**.
   isolated evaluator API or operational-cancellation certification has been
   added.
 - Production work therefore still requires a public operational isolation
-  boundary where hard cancellation is promised, comprehensive durable
-  artifact-local identity rather than enumeration order, and a reviewed
-  cross-platform owned-runtime golden matrix. Build/publisher provenance
-  remains an explicit non-claim rather than a cache-compatibility identity.
+  boundary where hard cancellation is promised and a reviewed cross-platform
+  owned-runtime golden matrix. Evaluator/cache integration remains separate;
+  cross-edit topology and persistent assembly identity are separate protocols,
+  not claims made by v3. Build/publisher provenance remains an explicit
+  non-claim rather than a cache-compatibility identity.
 - Only after that matrix passes will OCCT advertise the capability. Evaluator
   integration must then cover per-solid cache read/decode and encode/write,
   fresh ownership, corruption, cancellation, cleanup, eviction, concurrent

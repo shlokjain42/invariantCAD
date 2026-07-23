@@ -114,7 +114,7 @@ export interface OcctArtifactProcessRuntimeEvidence {
 export interface OcctArtifactProcessCapabilityEvidence {
   readonly protocolVersion: 1;
   readonly format: "org.invariantcad.occt-shape-candidate";
-  readonly formatVersion: 2;
+  readonly formatVersion: 3;
   readonly compatibilityFingerprint: string;
 }
 
@@ -587,7 +587,7 @@ function parseCapabilityEvidence(
     ]) ||
     value.protocolVersion !== 1 ||
     value.format !== "org.invariantcad.occt-shape-candidate" ||
-    value.formatVersion !== 2 ||
+    value.formatVersion !== 3 ||
     !boundedString(value.compatibilityFingerprint, 2_048)
   ) {
     throw new TypeError(
@@ -597,7 +597,7 @@ function parseCapabilityEvidence(
   return Object.freeze({
     protocolVersion: 1,
     format: "org.invariantcad.occt-shape-candidate",
-    formatVersion: 2,
+    formatVersion: 3,
     compatibilityFingerprint: value.compatibilityFingerprint,
   });
 }

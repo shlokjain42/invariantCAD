@@ -20,7 +20,7 @@ test("loads both WASM kernels and confines artifact/evaluator native work to dis
   expect(result.occt.stepBytes).toBeGreaterThan(100);
   expect(result.occt.crossRealmWasmUrlCaptured).toBe(true);
 
-  expect(result.artifactWorker.fixture.byteLength).toBe(11_591);
+  expect(result.artifactWorker.fixture.byteLength).toBe(13_735);
   expect(result.artifactWorker.fixture.sourceBytesPreserved).toBe(true);
   expect(result.artifactWorker.fixture.transferDetached).toBe(true);
   expect(result.artifactWorker.preAbort).toEqual({
@@ -63,9 +63,9 @@ test("loads both WASM kernels and confines artifact/evaluator native work to dis
   expect(recovery.vertices).toBe(8);
   expect(recovery.protocolVersion).toBe(1);
   expect(recovery.format).toBe("org.invariantcad.occt-shape-candidate");
-  expect(recovery.formatVersion).toBe(2);
+  expect(recovery.formatVersion).toBe(3);
   expect(recovery.compatibilityFingerprint).toContain(
-    "invariantcad-occt-shape-candidate@2",
+    "invariantcad-occt-shape-candidate@3",
   );
   expect(recovery.compatibilityFingerprint).toContain("runtime=stock");
   expect(recovery.inputBytesPreserved).toBe(true);

@@ -18,7 +18,7 @@ import {
   runDisposableWorkerOperation,
   type DisposableWorkerOperationHandle,
 } from "../../src/internal/disposable-worker-operation.js";
-import artifactFixtureBase64 from "../fixtures/occt-shape-candidate-v2-asymmetric-box.b64?raw";
+import artifactFixtureBase64 from "../fixtures/occt-shape-candidate-v3-asymmetric-box.b64?raw";
 import type {
   ArtifactWorkerEvidence,
   ArtifactWorkerRequest,
