@@ -7,7 +7,9 @@ icon: "globe"
 InvariantCAD's release gate builds a production Vite application and exercises
 both public kernel entry points in Chromium. The test evaluates a `2 × 3 × 4`
 box, checks Manifold mesh/STL results, checks exact OCCT topology counts, and
-exports STEP.
+exports STEP. It also exercises the repository-private OCCT artifact candidate
+inside disposable stock-runtime module workers; that test does not advertise a
+public codec.
 
 ## Vite application
 
@@ -49,6 +51,15 @@ const kernel = await createOcctKernel({
   wasm: new URL("/wasm/occt-wasm.wasm", window.location.origin),
 });
 ```
+
+`createOcctKernel` snapshots all caller-owned initialization options before its
+first asynchronous import. WASM `ArrayBuffer` and `Uint8Array` inputs are
+copied, including an exact typed-array view; a URL's href is captured with a
+cross-realm-safe brand check; and the factory, tolerance, tessellation options,
+callbacks, and normalized limits retain their call-time values. Mutating the
+options or a URL after calling the function therefore cannot change the later
+execution source or make an explicitly supplied source acquire a false stock
+runtime identity.
 
 Serve WASM with `Content-Type: application/wasm`. Same-origin hosting avoids
 cross-origin credential and policy surprises; otherwise configure CORS
@@ -98,6 +109,46 @@ Use `AbortSignal` for cooperative cancellation. If the host must enforce a hard
 deadline during a synchronous native call, terminate the worker and create a
 new one. Do not reuse objects transferred from a terminated realm.
 
+An internal one-shot coordinator used by the release gate rejects pre-abort
+without creating a worker, starts the deadline before worker startup, settles
+result/abort/timeout/startup races once, terminates every created worker exactly
+once, and awaits termination before returning. It is not exported as a library
+API; applications should implement the same ownership rule in their host
+framework.
+
+## Release-gated isolation evidence
+
+The production Chromium test loads the committed `11,591`-byte OCCT candidate
+v2 asymmetric-box fixture in the main realm, retains those source bytes, and
+transfers a distinct copied `ArrayBuffer` into a fresh module worker. It
+requires the transfer copy to detach and the retained source to remain
+byte-identical.
+
+The worker protocol has exact closed message shapes and phase ordering: one
+matching `started` event, then one `success` or `failure`. In the success path,
+the worker creates stock OCCT, confirms that `shapeArtifacts` and both public
+codec methods remain absent, decodes through the repository-private candidate,
+and captures only scalar volume, topology counts, candidate version,
+compatibility fingerprint, and input-immutability evidence. It disposes the
+live shape and kernel before posting that evidence; no native handle crosses
+the worker boundary.
+
+The timeout case acknowledges startup and then enters a deliberately
+non-yielding loop. The owner hard-terminates that worker at the deadline and
+subsequently creates a fresh worker that decodes the real fixture. This proves
+the production bundle's kill-and-recover orchestration for the tested stock
+runtime. It is not live/peak-memory measurement, a real OCCT-trap injection,
+general runtime/build attestation, trusted-host isolation, durable subshape
+identity, a cross-platform golden matrix, or evaluator/cache integration.
+
+The separate Node owned-runtime gate is repository tooling rather than browser
+deployment support. `pnpm test:occt-artifact-process` runs fresh ABI 0.9
+producer and consumer child processes, verifies release-input JS/WASM
+size/SHA-256 before using copied bytes as execution inputs, covers `SIGKILL`
+deadline/abort and injected-trap recovery, and explicitly reports
+`certifiesCompatibility: false`. The verified facade-bundle gate invokes it
+automatically.
+
 ## Content Security Policy
 
 WebAssembly compilation may require `wasm-unsafe-eval` in `script-src`,
@@ -107,6 +158,9 @@ avoid broadly enabling `unsafe-eval`. Asset fetching also needs the relevant
 
 ## Tested boundary
 
-The release suite currently guarantees Chromium production-bundle behavior.
-Other evergreen browsers are plausible but are not claimed as release-gated
-until executable coverage is added.
+The release suite currently guarantees Chromium production-bundle behavior for
+the public kernels and the stock-runtime module-worker scenario described
+above. Other evergreen browsers are plausible but are not claimed as
+release-gated until executable coverage is added. The private candidate remains
+unexported, `shapeArtifacts` remains absent, and these tests confer no
+production compatibility certification.

@@ -1,3 +1,4 @@
+import { runInNewContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
 import createStockOcctModule from "occt-wasm/dist/occt-wasm.js";
 import { kernelSupports } from "../src/kernel.js";
@@ -282,6 +283,148 @@ describe("OCCT module-factory and facade probing", () => {
     expect(MinimalRawKernel.disposed).toBe(1);
   });
 
+  it("snapshots caller-owned WASM sources before the first asynchronous import", async () => {
+    const arrayBuffer = new Uint8Array([1, 2, 3]).buffer;
+    const arrayBufferFactory = vi.fn<OcctModuleFactory>(
+      async () => minimalModule(false),
+    );
+    const arrayBufferKernelPromise = createOcctKernel({
+      moduleFactory: arrayBufferFactory,
+      wasm: arrayBuffer,
+    });
+    new Uint8Array(arrayBuffer).fill(9);
+    const arrayBufferKernel = await arrayBufferKernelPromise;
+    try {
+      const passed = arrayBufferFactory.mock.calls[0]![0] as OcctModuleOptions;
+      expect([...new Uint8Array(passed.wasmBinary!)]).toEqual([1, 2, 3]);
+    } finally {
+      arrayBufferKernel.dispose();
+    }
+
+    const backing = new Uint8Array([7, 4, 5, 8]);
+    const view = backing.subarray(1, 3);
+    const viewFactory = vi.fn<OcctModuleFactory>(
+      async () => minimalModule(false),
+    );
+    const viewKernelPromise = createOcctKernel({
+      moduleFactory: viewFactory,
+      wasm: view,
+    });
+    backing.fill(0);
+    const viewKernel = await viewKernelPromise;
+    try {
+      const passed = viewFactory.mock.calls[0]![0] as OcctModuleOptions;
+      expect([...new Uint8Array(passed.wasmBinary!)]).toEqual([4, 5]);
+    } finally {
+      viewKernel.dispose();
+    }
+
+    const location = new URL("https://example.test/runtime/first.wasm");
+    const locationFactory = vi.fn<OcctModuleFactory>(
+      async () => minimalModule(false),
+    );
+    const locationKernelPromise = createOcctKernel({
+      moduleFactory: locationFactory,
+      wasm: location,
+    });
+    location.pathname = "/runtime/changed.wasm";
+    const locationKernel = await locationKernelPromise;
+    try {
+      const passed = locationFactory.mock.calls[0]![0] as OcctModuleOptions;
+      expect(passed.locateFile?.("occt-wasm.wasm")).toBe(
+        "https://example.test/runtime/first.wasm",
+      );
+    } finally {
+      locationKernel.dispose();
+    }
+  });
+
+  it("snapshots cross-realm ArrayBuffer and Uint8Array sources", async () => {
+    const foreign = runInNewContext(`({
+      buffer: new Uint8Array([1, 2, 3]).buffer,
+      view: new Uint8Array([7, 4, 5, 8]).subarray(1, 3)
+    })`) as {
+      readonly buffer: ArrayBuffer;
+      readonly view: Uint8Array;
+    };
+    expect(foreign.buffer).not.toBeInstanceOf(ArrayBuffer);
+    expect(foreign.view).not.toBeInstanceOf(Uint8Array);
+
+    for (const [source, expected] of [
+      [foreign.buffer, [1, 2, 3]],
+      [foreign.view, [4, 5]],
+    ] as const) {
+      const factory = vi.fn<OcctModuleFactory>(
+        async () => minimalModule(false),
+      );
+      const kernel = await createOcctKernel({
+        moduleFactory: factory,
+        wasm: source,
+      });
+      try {
+        const passed = factory.mock.calls[0]![0] as OcctModuleOptions;
+        expect([...new Uint8Array(passed.wasmBinary!)]).toEqual(expected);
+      } finally {
+        kernel.dispose();
+      }
+    }
+  });
+
+  it("binds runtime identity and modeling options to their call-time snapshot", async () => {
+    const output = vi.fn();
+    const changedOutput = vi.fn();
+    const customFactory = vi.fn<OcctModuleFactory>(
+      async () => minimalModule(false),
+    );
+    const customOptions: {
+      moduleFactory?: OcctModuleFactory;
+      wasm?: Uint8Array;
+      modelingTolerance?: number;
+      onOutput?: (message: string) => void;
+    } = {
+      moduleFactory: customFactory,
+      wasm: new Uint8Array([3, 2, 1]),
+      modelingTolerance: 1e-6,
+      onOutput: output,
+    };
+    const customKernelPromise = createOcctKernel(customOptions);
+    delete customOptions.moduleFactory;
+    delete customOptions.wasm;
+    customOptions.modelingTolerance = 1e-3;
+    customOptions.onOutput = changedOutput;
+    const customKernel = await customKernelPromise;
+    try {
+      expect(customKernel.capabilities.topology?.signatures).toBeUndefined();
+      const passed = customFactory.mock.calls[0]![0] as OcctModuleOptions;
+      expect([...new Uint8Array(passed.wasmBinary!)]).toEqual([3, 2, 1]);
+      expect(passed.print).toBe(output);
+    } finally {
+      customKernel.dispose();
+    }
+
+    const ownedFactory = vi.fn<OcctModuleFactory>(
+      async () => minimalModule(true),
+    );
+    const ownedOptions: {
+      moduleFactory?: OcctModuleFactory;
+      modelingTolerance?: number;
+    } = {
+      moduleFactory: ownedFactory,
+      modelingTolerance: 1e-6,
+    };
+    const ownedKernelPromise = createOcctKernel(ownedOptions);
+    delete ownedOptions.moduleFactory;
+    ownedOptions.modelingTolerance = 1e-3;
+    const ownedKernel = await ownedKernelPromise;
+    try {
+      expect(
+        ownedKernel.capabilities.topology?.signatures?.fingerprint,
+      ).toContain("modelingTolerance=0.000001");
+    } finally {
+      ownedKernel.dispose();
+    }
+  });
+
   it("advertises draft only for the exact recognized facade", async () => {
     const kernel = await createOcctKernel({
       moduleFactory: async () => minimalModule(true),
@@ -320,7 +463,7 @@ describe("OCCT module-factory and facade probing", () => {
     expect(MinimalRawKernel.constructed).toBe(0);
   });
 
-  it("disposes the vendor wrapper if public-kernel construction fails", async () => {
+  it("rejects a failed option snapshot before constructing the vendor wrapper", async () => {
     MinimalRawKernel.constructed = 0;
     MinimalRawKernel.disposed = 0;
     const options: Record<string, unknown> = {
@@ -334,8 +477,8 @@ describe("OCCT module-factory and facade probing", () => {
     await expect(
       createOcctKernel(options as OcctKernelOptions),
     ).rejects.toThrow("tessellation getter failed");
-    expect(MinimalRawKernel.constructed).toBe(1);
-    expect(MinimalRawKernel.disposed).toBe(1);
+    expect(MinimalRawKernel.constructed).toBe(0);
+    expect(MinimalRawKernel.disposed).toBe(0);
   });
 });
 

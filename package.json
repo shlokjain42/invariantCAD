@@ -50,7 +50,8 @@
   },
   "scripts": {
     "build": "tsup && tsc -p tsconfig.build.json && node scripts/stage-manifold-runtime.mjs",
-    "check": "pnpm build && tsc --noEmit",
+    "check": "pnpm build && tsc --noEmit && pnpm check:occt-artifact-process",
+    "check:occt-artifact-process": "tsc -p tsconfig.occt-artifact-process.json",
     "lint": "pnpm lint:source && pnpm format:check",
     "lint:source": "oxlint --deny-warnings --report-unused-disable-directives src tests examples scripts tsup.config.ts vitest.config.ts",
     "format:check": "node scripts/check-source-format.mjs",
@@ -76,7 +77,8 @@
     "test:occt-draft-public": "tsx scripts/test-public-occt-draft.ts",
     "test:occt-persistence-public": "tsx scripts/test-public-occt-persistence.ts",
     "test:occt-artifact-owned": "tsx scripts/test-owned-occt-artifact.ts",
-    "test:occt-facade-bundle": "pnpm bundle:occt-facade && pnpm verify:occt-facade-bundle && pnpm pack --pack-destination .artifacts && node scripts/package-smoke.mjs --owned-facade-runtime-dir .artifacts/occt-facade-bundle/invariantcad-occt-facade-0.9.0/runtime && pnpm test:occt-persistence-public -- --runtime-dir .artifacts/occt-facade-bundle/invariantcad-occt-facade-0.9.0/runtime && pnpm test:occt-artifact-owned -- --runtime-dir .artifacts/occt-facade-bundle/invariantcad-occt-facade-0.9.0/runtime",
+    "test:occt-artifact-process": "tsx scripts/test-owned-occt-artifact-process.ts",
+    "test:occt-facade-bundle": "pnpm bundle:occt-facade && pnpm verify:occt-facade-bundle && pnpm pack --pack-destination .artifacts && node scripts/package-smoke.mjs --owned-facade-runtime-dir .artifacts/occt-facade-bundle/invariantcad-occt-facade-0.9.0/runtime && pnpm test:occt-persistence-public -- --runtime-dir .artifacts/occt-facade-bundle/invariantcad-occt-facade-0.9.0/runtime && pnpm test:occt-artifact-owned -- --runtime-dir .artifacts/occt-facade-bundle/invariantcad-occt-facade-0.9.0/runtime && pnpm test:occt-artifact-process -- --runtime-dir .artifacts/occt-facade-bundle/invariantcad-occt-facade-0.9.0/runtime",
     "prepack": "pnpm build",
     "verify": "pnpm check && pnpm lint && pnpm test && pnpm artifact:fixture:occt -- --version v2 --check && pnpm docs:check && pnpm lint:package && pnpm test:package",
     "release:check": "pnpm verify && pnpm audit:release && pnpm docs:release-check && pnpm test:browser"
