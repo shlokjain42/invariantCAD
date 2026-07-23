@@ -259,9 +259,15 @@ or write cached shapes today**.
   The Chromium production-bundle gate transfers a copy of the committed v2
   fixture into a stock-runtime module worker, proves retained-input
   immutability and transfer detachment, accepts only its closed started/result
-  protocol, and returns scalar evidence only after shape/kernel cleanup. It
-  hard-terminates a started non-yielding worker and proves decode recovery in a
-  fresh worker; live native handles never cross the realm boundary.
+  protocol, and returns scalar evidence only after shape/kernel cleanup. The
+  same production bundle also runs a real `Evaluator.evaluate(...)` over a
+  stock-OCCT box. Deadline and post-kernel-start abort cases complete the native
+  box first and then stall without yielding inside its wrapper; the host
+  requests termination and a fresh worker reproduces the successful evaluator's
+  detached scalar evidence exactly. Browser `Worker.terminate()` is not
+  awaitable, so this proves termination requests and fresh-worker recovery
+  rather than observed worker exit. Live native handles never cross the realm
+  boundary.
 - `pnpm test:occt-artifact-process` now runs the owned ABI 0.9 candidate as
   one-shot Node children and is included in `test:occt-facade-bundle`.
   Fresh producer A and consumer B agree on deterministic artifact, capability,
@@ -270,9 +276,22 @@ or write cached shapes today**.
   maintained reviewed pin, imports the exact verified JavaScript bytes through
   the Node module hook, and supplies a fresh verified WASM copy. The gate rejects
   a one-byte mutation in the manifest or either runtime file before supplied
-  JavaScript executes and covers post-start `SIGKILL` timeout/abort,
-  injected-trap discard, and fresh recovery. Its closed evidence explicitly
-  records `shapeArtifacts` as absent and `certifiesCompatibility: false`.
+  JavaScript executes. Additional children run the real evaluator over a fixed
+  two-box Boolean union. Their versioned protocol requires exact
+  `operation-started` then `kernel-operation-started` events; the latter is
+  emitted inside the evaluator-invoked Boolean wrapper before the real native
+  operation, so it proves entry rather than completion. The stall is placed only
+  after that Boolean has completed and emits a third exact
+  `non-yielding-stall-started` marker. Timeout requires that marker and abort
+  waits for it before sending `SIGKILL`; both await child close, and fresh
+  children reproduce identical detached measurements, topology, document hash,
+  and runtime evidence. Incomplete nonempty event prefixes are rejected, while
+  a pre-start attestation failure legitimately emits no event. Successful
+  evidence is emitted only after evaluated design and evaluator cleanup; an
+  injected cleanup failure cannot return success. The artifact path still
+  covers injected-trap discard and fresh recovery. Its closed evidence
+  explicitly records `shapeArtifacts` as absent and
+  `certifiesCompatibility: false`.
 - Public Node and browser attested loaders now close exact owned-runtime-pair
   identity under an independent canonical release-manifest pin. Executable
   authority stays private to the evaluated InvariantCAD internal module instance
@@ -292,11 +311,17 @@ or write cached shapes today**.
   trap. Ordered evidence is not comprehensive durable identity for
   indistinguishable symmetric topology, and one owned producer/consumer
   scenario is not a reviewed cross-platform golden matrix.
-- Production work therefore still requires prompt cancellation in the actual
-  evaluator operation, comprehensive durable artifact-local identity rather
-  than enumeration order, and a reviewed cross-platform owned-runtime golden
-  matrix. Build/publisher provenance remains an explicit non-claim rather than a
-  cache-compatibility identity.
+- The evaluator gates prove forced containment only at repository-owned,
+  one-shot realm boundaries. A killed realm cannot run language-level cleanup;
+  process or worker destruction reclaims it instead. Ordinary public
+  `Evaluator.evaluate(...)` remains same-thread and cooperative, and no public
+  isolated evaluator API or operational-cancellation certification has been
+  added.
+- Production work therefore still requires a public operational isolation
+  boundary where hard cancellation is promised, comprehensive durable
+  artifact-local identity rather than enumeration order, and a reviewed
+  cross-platform owned-runtime golden matrix. Build/publisher provenance
+  remains an explicit non-claim rather than a cache-compatibility identity.
 - Only after that matrix passes will OCCT advertise the capability. Evaluator
   integration must then cover per-solid cache read/decode and encode/write,
   fresh ownership, corruption, cancellation, cleanup, eviction, concurrent

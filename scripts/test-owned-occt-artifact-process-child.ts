@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { writeSync } from "node:fs";
 import {
   constants,
   open,
@@ -7,6 +8,14 @@ import {
 import { isAbsolute, resolve } from "node:path";
 import { inspectKernelShapeArtifactSupport } from "../src/artifact-cache.js";
 import { hashKernelShapeSemanticObservation } from "../src/conformance.js";
+import { design, tf } from "../src/design.js";
+import {
+  createEvaluator,
+  EvaluatedSolid,
+  type EvaluatedDesign,
+  type Evaluator,
+} from "../src/evaluator.js";
+import { mm, vec3 } from "../src/expressions.js";
 import { getOcctShapeArtifactCodecCandidate } from "../src/internal/occt-artifact-candidate.js";
 import type {
   GeometryKernel,
@@ -20,6 +29,7 @@ import {
   loadAttestedOcctRuntime,
   type AttestedOcctRuntime,
 } from "../src/occt-runtime-node.js";
+import { hashDocument } from "../src/serialization.js";
 import {
   observeKernelShapeSemantics,
   type KernelShapeSemanticObservationPlan,
@@ -27,7 +37,10 @@ import {
 import {
   OCCT_ARTIFACT_PROCESS_MAX_REQUEST_BYTES,
   OCCT_ARTIFACT_PROCESS_MAX_RESULT_BYTES,
+  OCCT_ARTIFACT_PROCESS_PROTOCOL_VERSION,
   encodeOcctArtifactProcessStartEvent,
+  encodeOcctEvaluatorKernelOperationStartEvent,
+  encodeOcctEvaluatorNonYieldingStallStartEvent,
   parseOcctArtifactProcessRequest,
   type OcctArtifactProcessArtifactEvidence,
   type OcctArtifactProcessCapabilityEvidence,
@@ -36,12 +49,20 @@ import {
   type OcctArtifactProcessRequest,
   type OcctArtifactProcessResult,
   type OcctArtifactProcessRuntimeEvidence,
+  type OcctEvaluatorProcessEvidence,
 } from "./occt-artifact-process-protocol.js";
 
 interface LoadedRuntime {
   readonly attestedRuntime: AttestedOcctRuntime;
   readonly evidence: OcctArtifactProcessRuntimeEvidence;
 }
+
+type OcctEvaluatorExecutionRequest = OcctArtifactProcessRequest & {
+  readonly operation:
+    | "evaluate"
+    | "stall-during-evaluate"
+    | "fail-cleanup-during-evaluate";
+};
 
 const maximumReleaseManifestBytes = 1024 * 1024;
 const maximumJavascriptBytes = 16 * 1024 * 1024;
@@ -294,14 +315,267 @@ function artifactEvidence(
   });
 }
 
+function writeKernelOperationStartEvent(
+  request: OcctEvaluatorExecutionRequest,
+): void {
+  writeExactStdoutEvent(
+    encodeOcctEvaluatorKernelOperationStartEvent(
+      request.requestId,
+      request.operation,
+      request.feature,
+    ),
+    "kernel-operation",
+  );
+}
+
+function writeNonYieldingStallStartEvent(
+  request: OcctEvaluatorExecutionRequest,
+): void {
+  writeExactStdoutEvent(
+    encodeOcctEvaluatorNonYieldingStallStartEvent(
+      request.requestId,
+      request.feature,
+    ),
+    "non-yielding-stall",
+  );
+}
+
+function writeExactStdoutEvent(
+  encoded: string,
+  label: string,
+): void {
+  const event = Buffer.from(encoded, "utf8");
+  let offset = 0;
+  while (offset < event.byteLength) {
+    const written = writeSync(
+      process.stdout.fd,
+      event,
+      offset,
+      event.byteLength - offset,
+    );
+    if (written <= 0) {
+      throw new Error(
+        `OCCT evaluator process could not emit its ${label} start event`,
+      );
+    }
+    offset += written;
+  }
+}
+
+function evaluatorFixture() {
+  const cad = design("owned-occt-evaluator-isolation-v1");
+  const first = cad.box("first", {
+    size: vec3(mm(10), mm(20), mm(30)),
+  });
+  const secondBase = cad.box("second-base", {
+    size: vec3(mm(10), mm(20), mm(30)),
+  });
+  const second = cad.transform("second", secondBase, [
+    tf.translate(vec3(mm(5), mm(5), mm(0))),
+  ]);
+  cad.output("result", cad.union("result", first, [second]));
+  return cad.build();
+}
+
+function isolatedEvaluatorKernel(
+  kernel: GeometryKernel,
+  request: OcctEvaluatorExecutionRequest,
+): {
+  readonly kernel: GeometryKernel;
+  readonly operationObserved: () => boolean;
+} {
+  let observed = false;
+  const wrapped = new Proxy(kernel, {
+    get(target, property) {
+      if (
+        property === "dispose" &&
+        request.operation === "fail-cleanup-during-evaluate"
+      ) {
+        return (): never => {
+          target.dispose();
+          throw new Error("Injected OCCT evaluator cleanup failure");
+        };
+      }
+      if (property === "boolean") {
+        return (
+          operation: "union" | "subtract" | "intersect",
+          targetShape: KernelShape,
+          tools: readonly KernelShape[],
+          context?: Parameters<NonNullable<GeometryKernel["boolean"]>>[3],
+        ): KernelShape => {
+          if (observed) {
+            throw new Error(
+              "OCCT evaluator isolation fixture invoked Boolean more than once",
+            );
+          }
+          if (
+            operation !== "union" ||
+            context?.feature !== request.feature ||
+            target.boolean === undefined
+          ) {
+            throw new Error(
+              "OCCT evaluator isolation fixture reached an unexpected kernel operation",
+            );
+          }
+          observed = true;
+          writeKernelOperationStartEvent(request);
+          const result = target.boolean(
+            operation,
+            targetShape,
+            tools,
+            context,
+          );
+          if (request.operation === "stall-during-evaluate") {
+            writeNonYieldingStallStartEvent(request);
+            const lock = new Int32Array(new SharedArrayBuffer(4));
+            Atomics.wait(lock, 0, 0);
+            throw new Error(
+              "Injected OCCT evaluator kernel stall unexpectedly returned",
+            );
+          }
+          return result;
+        };
+      }
+      const value: unknown = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as GeometryKernel;
+  return Object.freeze({
+    kernel: wrapped,
+    operationObserved: () => observed,
+  });
+}
+
+function copyMeasurements(
+  measurements: ReturnType<EvaluatedSolid["measure"]>,
+): OcctEvaluatorProcessEvidence["output"]["measurements"] {
+  const vec = (
+    value: readonly [number, number, number],
+  ): readonly [number, number, number] =>
+    Object.freeze([value[0], value[1], value[2]]);
+  return Object.freeze({
+    volume: measurements.volume,
+    surfaceArea: measurements.surfaceArea,
+    centerOfMass:
+      measurements.centerOfMass === null
+        ? null
+        : vec(measurements.centerOfMass),
+    inertiaTensor: Object.freeze([
+      vec(measurements.inertiaTensor[0]),
+      vec(measurements.inertiaTensor[1]),
+      vec(measurements.inertiaTensor[2]),
+    ]) as OcctEvaluatorProcessEvidence["output"]["measurements"]["inertiaTensor"],
+    boundingBox: Object.freeze({
+      min: vec(measurements.boundingBox.min),
+      max: vec(measurements.boundingBox.max),
+    }),
+    genus: measurements.genus,
+    tolerance: measurements.tolerance,
+  });
+}
+
+async function evaluateFixture(
+  request: OcctEvaluatorExecutionRequest,
+  kernel: GeometryKernel,
+  runtime: OcctArtifactProcessRuntimeEvidence,
+  owners: {
+    evaluator?: Evaluator;
+    evaluated?: EvaluatedDesign;
+  },
+): Promise<{
+  readonly evaluator: Evaluator;
+  readonly evaluated: EvaluatedDesign;
+  readonly evidence: Omit<
+    OcctEvaluatorProcessEvidence,
+    "cleanupCompletedBeforeResponse"
+  >;
+}> {
+  const fixture = evaluatorFixture();
+  const isolated = isolatedEvaluatorKernel(kernel, request);
+  const evaluator = await createEvaluator({ kernel: isolated.kernel });
+  owners.evaluator = evaluator;
+  const result = await evaluator.evaluate(fixture);
+  if (!result.ok) {
+    throw new Error(
+      `OCCT evaluator isolation fixture failed: ${JSON.stringify(
+        result.diagnostics,
+      )}`,
+    );
+  }
+  owners.evaluated = result.value;
+  const output = result.value.output("result");
+  if (!(output instanceof EvaluatedSolid)) {
+    throw new TypeError(
+      "OCCT evaluator isolation fixture did not produce a solid",
+    );
+  }
+  const topology = output.topology();
+  if (!topology.ok) {
+    throw new Error(
+      `OCCT evaluator isolation topology failed: ${JSON.stringify(
+        topology.diagnostics,
+      )}`,
+    );
+  }
+  if (!isolated.operationObserved()) {
+    throw new Error(
+      "OCCT evaluator isolation fixture did not invoke its wrapped Boolean",
+    );
+  }
+  if (result.value.configurationId !== null) {
+    throw new Error(
+      "OCCT evaluator isolation fixture selected an unexpected configuration",
+    );
+  }
+  const evidence = Object.freeze({
+    kind: "invariantcad-private-occt-evaluator-process-evidence" as const,
+    evidenceVersion: 1 as const,
+    operation: "evaluate" as const,
+    executionBoundary: "one-shot-node-child-process" as const,
+    evaluatorPath: "Evaluator.evaluate" as const,
+    fixture: "owned-occt-evaluator-isolation-v1" as const,
+    documentSha256: await hashDocument(fixture),
+    configurationId: null,
+    parameters: Object.freeze({}),
+    output: Object.freeze({
+      name: "result" as const,
+      kind: "solid" as const,
+      measurements: copyMeasurements(output.measure()),
+      topology: Object.freeze({
+        history: topology.value.history,
+        faces: topology.value.faces.length,
+        edges: topology.value.edges.length,
+        vertices: topology.value.vertices.length,
+      }),
+    }),
+    evaluatorKernelOperation: "boolean" as const,
+    evaluatorKernelOperationObserved: true as const,
+    runtime,
+    shapeArtifactsAbsent: true as const,
+    ordinaryEvaluatorRemainsCooperative: true as const,
+    certifiesOperationalCancellation: false as const,
+    certifiesCompatibility: false as const,
+  });
+  return Object.freeze({
+    evaluator,
+    evaluated: result.value,
+    evidence,
+  });
+}
+
 async function execute(
   request: OcctArtifactProcessRequest,
-): Promise<OcctArtifactProcessEvidence> {
+): Promise<OcctArtifactProcessEvidence | OcctEvaluatorProcessEvidence> {
   const runtime = await verifiedRuntime(request.runtimeDirectory);
   let kernel: GeometryKernel | undefined;
   let shape: KernelShape | undefined;
+  const evaluationOwners: {
+    evaluator?: Evaluator;
+    evaluated?: EvaluatedDesign;
+  } = {};
   let pending:
     | Omit<OcctArtifactProcessEvidence, "cleanupCompletedBeforeResponse">
+    | Omit<OcctEvaluatorProcessEvidence, "cleanupCompletedBeforeResponse">
     | undefined;
   let operationError: unknown;
   const cleanupErrors: unknown[] = [];
@@ -311,84 +585,125 @@ async function execute(
       onOutput: () => {},
       onError: () => {},
     });
-    const candidate = candidateCapabilities(kernel);
     await flushStartEvent(request.requestId);
-    if (request.operation === "stall-after-start") {
-      const lock = new Int32Array(new SharedArrayBuffer(4));
-      Atomics.wait(lock, 0, 0);
-      throw new Error("Injected OCCT artifact stall unexpectedly returned");
-    }
     if (request.operation === "trap") {
       throw new InjectedTrapError();
     }
 
-    let artifact: Uint8Array;
-    if (request.operation === "produce") {
-      if (kernel.box === undefined) {
-        throw new TypeError("Owned OCCT box primitive is unavailable");
-      }
-      shape = kernel.box([2, 3, 5], false, { feature: request.feature });
-      artifact = candidate.codec.encodeShapeArtifact(shape, {
-        feature: request.feature,
-        maxArtifactBytes: request.maxArtifactBytes,
-      });
+    if (
+      request.operation === "evaluate" ||
+      request.operation === "stall-during-evaluate" ||
+      request.operation === "fail-cleanup-during-evaluate"
+    ) {
       if (
-        !(artifact instanceof Uint8Array) ||
-        artifact.byteLength === 0 ||
-        artifact.byteLength > request.maxArtifactBytes
+        inspectKernelShapeArtifactSupport(kernel).status !== "absent" ||
+        kernel.capabilities.shapeArtifacts !== undefined ||
+        kernel.encodeShapeArtifact !== undefined ||
+        kernel.decodeShapeArtifact !== undefined
       ) {
         throw new TypeError(
-          "Owned OCCT candidate produced invalid artifact bytes",
+          "Owned OCCT evaluator process unexpectedly advertised shape artifacts",
         );
       }
-      await writeFile(request.outputArtifactPath, artifact, {
-        flag: "wx",
-        mode: 0o600,
-      });
-    } else if (request.operation === "consume") {
-      artifact = await readBoundedFile(
-        request.inputArtifactPath,
-        request.maxArtifactBytes,
-        "OCCT artifact process input",
+      const evaluated = await evaluateFixture(
+        request as OcctEvaluatorExecutionRequest,
+        kernel,
+        runtime.evidence,
+        evaluationOwners,
       );
-      shape = candidate.codec.decodeShapeArtifact(artifact, {
-        feature: request.feature,
-        maxArtifactBytes: request.maxArtifactBytes,
-      });
+      pending = evaluated.evidence;
     } else {
-      throw new TypeError(
-        "OCCT artifact fault operation unexpectedly reached artifact work",
-      );
+      const candidate = candidateCapabilities(kernel);
+      let artifact: Uint8Array;
+      if (request.operation === "produce") {
+        if (kernel.box === undefined) {
+          throw new TypeError("Owned OCCT box primitive is unavailable");
+        }
+        shape = kernel.box([2, 3, 5], false, { feature: request.feature });
+        artifact = candidate.codec.encodeShapeArtifact(shape, {
+          feature: request.feature,
+          maxArtifactBytes: request.maxArtifactBytes,
+        });
+        if (
+          !(artifact instanceof Uint8Array) ||
+          artifact.byteLength === 0 ||
+          artifact.byteLength > request.maxArtifactBytes
+        ) {
+          throw new TypeError(
+            "Owned OCCT candidate produced invalid artifact bytes",
+          );
+        }
+        await writeFile(request.outputArtifactPath, artifact, {
+          flag: "wx",
+          mode: 0o600,
+        });
+      } else if (request.operation === "consume") {
+        artifact = await readBoundedFile(
+          request.inputArtifactPath,
+          request.maxArtifactBytes,
+          "OCCT artifact process input",
+        );
+        shape = candidate.codec.decodeShapeArtifact(artifact, {
+          feature: request.feature,
+          maxArtifactBytes: request.maxArtifactBytes,
+        });
+      } else {
+        throw new TypeError(
+          "OCCT artifact fault operation unexpectedly reached artifact work",
+        );
+      }
+      const witness = await semanticWitness(kernel, shape);
+      pending = Object.freeze({
+        kind: "invariantcad-private-occt-artifact-process-evidence",
+        evidenceVersion: 1,
+        operation: request.operation,
+        executionBoundary: "one-shot-node-child-process",
+        advertisement: "unadvertised",
+        shapeArtifactsAbsent: true,
+        certifiesCompatibility: false,
+        runtime: runtime.evidence,
+        capabilities: candidate.evidence,
+        artifact: artifactEvidence(artifact),
+        semanticWitness: witness,
+      });
     }
-    const witness = await semanticWitness(kernel, shape);
-    pending = Object.freeze({
-      kind: "invariantcad-private-occt-artifact-process-evidence",
-      evidenceVersion: 1,
-      operation: request.operation,
-      executionBoundary: "one-shot-node-child-process",
-      advertisement: "unadvertised",
-      shapeArtifactsAbsent: true,
-      certifiesCompatibility: false,
-      runtime: runtime.evidence,
-      capabilities: candidate.evidence,
-      artifact: artifactEvidence(artifact),
-      semanticWitness: witness,
-    });
   } catch (error) {
     operationError = error;
   } finally {
-    if (shape !== undefined && kernel !== undefined) {
+    if (evaluationOwners.evaluated !== undefined) {
       try {
-        kernel.disposeShape(shape);
+        evaluationOwners.evaluated.dispose();
       } catch (error) {
         cleanupErrors.push(error);
       }
     }
-    if (kernel !== undefined) {
+    if (evaluationOwners.evaluator !== undefined) {
       try {
-        kernel.dispose();
+        evaluationOwners.evaluator.dispose();
       } catch (error) {
         cleanupErrors.push(error);
+        if (kernel !== undefined) {
+          try {
+            kernel.dispose();
+          } catch (fallbackError) {
+            cleanupErrors.push(fallbackError);
+          }
+        }
+      }
+    } else {
+      if (shape !== undefined && kernel !== undefined) {
+        try {
+          kernel.disposeShape(shape);
+        } catch (error) {
+          cleanupErrors.push(error);
+        }
+      }
+      if (kernel !== undefined) {
+        try {
+          kernel.dispose();
+        } catch (error) {
+          cleanupErrors.push(error);
+        }
       }
     }
   }
@@ -435,7 +750,7 @@ function errorResult(
         ? "INJECTED_TRAP"
         : "OPERATION_FAILED";
   return Object.freeze({
-    protocolVersion: 1,
+    protocolVersion: OCCT_ARTIFACT_PROCESS_PROTOCOL_VERSION,
     requestId: request.requestId,
     operation: request.operation,
     ok: false,
@@ -502,16 +817,20 @@ async function main(): Promise<void> {
   let result: OcctArtifactProcessResult;
   try {
     const evidence = await execute(request);
-    if (request.operation !== "produce" && request.operation !== "consume") {
+    if (
+      request.operation !== "produce" &&
+      request.operation !== "consume" &&
+      request.operation !== "evaluate"
+    ) {
       throw new TypeError("OCCT artifact fault operation unexpectedly succeeded");
     }
     result = Object.freeze({
-      protocolVersion: 1,
+      protocolVersion: OCCT_ARTIFACT_PROCESS_PROTOCOL_VERSION,
       requestId: request.requestId,
       operation: request.operation,
       ok: true,
       evidence,
-    });
+    } as OcctArtifactProcessResult);
   } catch (error) {
     result = errorResult(request, error);
   }
