@@ -108,6 +108,7 @@ import {
 } from "./internal/occt-facade.js";
 import { adoptOcctControlledPipeShell } from "./internal/occt-pipe-shell.js";
 import {
+  OCCT_ARTIFACT_MAX_NATIVE_REQUESTED_BYTES,
   OcctArtifactWriteError,
   readBoundedOcctArtifactBrep,
   writeBoundedOcctArtifactBrep,
@@ -333,7 +334,7 @@ function occtArtifactCandidateCompatibilityFingerprint(
   maxExactEdgeTreatmentHistoryRecords: number,
   maxExactSolidOffsetHistoryRecords: number,
   capabilities: KernelCapabilities,
-  boundedNativeIo: boolean,
+  artifactAbi: "0.7" | "0.8" | undefined,
 ): string | undefined {
   if (
     runtime === undefined ||
@@ -343,6 +344,7 @@ function occtArtifactCandidateCompatibilityFingerprint(
     return undefined;
   }
   try {
+    const boundedNativeIo = artifactAbi !== undefined;
     const linearDeflection = tessellation.linearDeflection;
     const angularDeflection = tessellation.angularDeflection;
     const relative = tessellation.relative;
@@ -384,9 +386,17 @@ function occtArtifactCandidateCompatibilityFingerprint(
         : "nativeArchive=occt-brep-binary",
       "topologySidecar=bounded-binary-artifact-local-index-v2",
       "nativeStructure=ordered-type-orientation-v1",
-      boundedNativeIo
-        ? "nativeMaterialization=facade-capped-output-bounded-input-snapshot-v1"
-        : "nativeMaterialization=unbounded-candidate-only",
+      ...(artifactAbi === "0.8"
+        ? [
+            `nativeRequestLimitBytes=${OCCT_ARTIFACT_MAX_NATIVE_REQUESTED_BYTES}`,
+            "nativeRequestAccounting=scoped-cumulative-reviewed-entrypoints-v1",
+          ]
+        : []),
+      artifactAbi === "0.8"
+        ? "nativeMaterialization=facade-capped-output-bounded-input-cumulative-native-requests-v2"
+        : boundedNativeIo
+          ? "nativeMaterialization=facade-capped-output-bounded-input-snapshot-v1"
+          : "nativeMaterialization=unbounded-candidate-only",
     ].join(";");
   } catch {
     return undefined;
@@ -901,7 +911,7 @@ class OcctKernel implements GeometryKernel {
         this.maxExactEdgeTreatmentHistoryRecords,
         this.maxExactSolidOffsetHistoryRecords,
         this.capabilities,
-        facade?.artifact !== undefined,
+        facade?.artifact === undefined ? undefined : facade.abi,
       );
     if (facade?.draft !== undefined) {
       this.draft = (shape, faces, resolved, context) =>
@@ -990,6 +1000,12 @@ class OcctKernel implements GeometryKernel {
         kernel: this.raw.getRawKernel(),
         shapeId: owned[OCCT_SHAPE] as number,
         maxOutputBytes: Math.min(maxBytes, TOPOLOGY_HASH_UPPER_BOUND),
+        ...(this.facade?.abi === "0.8"
+          ? {
+              maxNativeRequestedBytes:
+                OCCT_ARTIFACT_MAX_NATIVE_REQUESTED_BYTES,
+            }
+          : {}),
       });
     } catch (error) {
       if (
@@ -1021,6 +1037,12 @@ class OcctKernel implements GeometryKernel {
           input: state.brep,
           maxInputBytes: state.brep.byteLength,
           maxTopologyItems: MAX_ARTIFACT_NATIVE_TOPOLOGY_ITEMS,
+          ...(this.facade?.abi === "0.8"
+            ? {
+                maxNativeRequestedBytes:
+                  OCCT_ARTIFACT_MAX_NATIVE_REQUESTED_BYTES,
+              }
+            : {}),
         }) as ShapeHandle;
       }
       provisional = this.own(handle, undefined, {

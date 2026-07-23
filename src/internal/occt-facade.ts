@@ -29,6 +29,9 @@ export const OCCT_SOLID_OFFSET_FACADE_VERSION =
 export const OCCT_ARTIFACT_FACADE_VERSION =
   "invariantcad-facade@0.7.0+occt-wasm.3.7.0";
 
+export const OCCT_NATIVE_REQUEST_BUDGET_FACADE_VERSION =
+  "invariantcad-facade@0.8.0+occt-wasm.3.7.0";
+
 const DRAFT_FACADE_MARKERS = Object.freeze([
   "InvariantCadDraftReport",
   "InvariantCadTopologyKind",
@@ -218,13 +221,26 @@ export interface OcctArtifactFacadeProbe {
   readonly artifact: OcctArtifactFacadeModule;
 }
 
+export interface OcctNativeRequestBudgetFacadeProbe {
+  readonly abi: "0.8";
+  readonly version: typeof OCCT_NATIVE_REQUEST_BUDGET_FACADE_VERSION;
+  readonly module: OcctOwnedArtifactFacadeModule;
+  readonly draft: OcctDraftFacadeModule;
+  readonly pipeShell: OcctControlledPipeShellFacadeModule;
+  readonly boolean: OcctBooleanFacadeModule;
+  readonly edgeTreatment: OcctEdgeTreatmentFacadeModule;
+  readonly solidOffset: OcctSolidOffsetFacadeModule;
+  readonly artifact: OcctArtifactFacadeModule;
+}
+
 export type OcctFacadeProbe =
   | OcctDraftFacadeProbe
   | OcctControlledPipeShellFacadeProbe
   | OcctBooleanFacadeProbe
   | OcctEdgeTreatmentFacadeProbe
   | OcctSolidOffsetFacadeProbe
-  | OcctArtifactFacadeProbe;
+  | OcctArtifactFacadeProbe
+  | OcctNativeRequestBudgetFacadeProbe;
 
 /**
  * Kept under its original name so callers that catch the 0.2 probe error do
@@ -432,7 +448,7 @@ export function probeOcctFacade(module: unknown): OcctFacadeProbe | undefined {
     !isArtifact
   ) {
     facadeProtocolError(
-      `marker set is '${markers.join(",")}', expected exact ABI 0.2, 0.3, 0.4, 0.5, 0.6, or 0.7 markers`,
+      `marker set is '${markers.join(",")}', expected exact ABI 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, or 0.8 markers`,
     );
   }
 
@@ -458,18 +474,25 @@ export function probeOcctFacade(module: unknown): OcctFacadeProbe | undefined {
 
   const rawVersion = candidate.invariantcadFacadeVersion as () => unknown;
   const version = rawVersion();
-  const expectedVersion = isArtifact
-    ? OCCT_ARTIFACT_FACADE_VERSION
-    : isSolidOffset
-      ? OCCT_SOLID_OFFSET_FACADE_VERSION
-      : isEdgeTreatment
-        ? OCCT_EDGE_TREATMENT_FACADE_VERSION
-        : isBoolean
-          ? OCCT_BOOLEAN_FACADE_VERSION
-          : isControlledPipeShell
-            ? OCCT_CONTROLLED_PIPE_SHELL_FACADE_VERSION
-            : OCCT_DRAFT_FACADE_VERSION;
-  if (version !== expectedVersion) {
+  const expectedVersion = isSolidOffset
+    ? OCCT_SOLID_OFFSET_FACADE_VERSION
+    : isEdgeTreatment
+      ? OCCT_EDGE_TREATMENT_FACADE_VERSION
+      : isBoolean
+        ? OCCT_BOOLEAN_FACADE_VERSION
+        : isControlledPipeShell
+          ? OCCT_CONTROLLED_PIPE_SHELL_FACADE_VERSION
+          : OCCT_DRAFT_FACADE_VERSION;
+  if (
+    isArtifact &&
+    version !== OCCT_ARTIFACT_FACADE_VERSION &&
+    version !== OCCT_NATIVE_REQUEST_BUDGET_FACADE_VERSION
+  ) {
+    facadeProtocolError(
+      `version is '${String(version)}', expected '${OCCT_ARTIFACT_FACADE_VERSION}' or '${OCCT_NATIVE_REQUEST_BUDGET_FACADE_VERSION}'`,
+    );
+  }
+  if (!isArtifact && version !== expectedVersion) {
     facadeProtocolError(
       `version is '${String(version)}', expected '${expectedVersion}'`,
     );
@@ -477,6 +500,21 @@ export function probeOcctFacade(module: unknown): OcctFacadeProbe | undefined {
 
   if (isArtifact) {
     const artifactModule = module as unknown as OcctOwnedArtifactFacadeModule;
+    if (version === OCCT_NATIVE_REQUEST_BUDGET_FACADE_VERSION) {
+      return Object.freeze({
+        abi: "0.8" as const,
+        version: OCCT_NATIVE_REQUEST_BUDGET_FACADE_VERSION,
+        module: artifactModule,
+        draft: artifactModule as unknown as OcctDraftFacadeModule,
+        pipeShell:
+          artifactModule as unknown as OcctControlledPipeShellFacadeModule,
+        boolean: artifactModule as unknown as OcctBooleanFacadeModule,
+        edgeTreatment:
+          artifactModule as unknown as OcctEdgeTreatmentFacadeModule,
+        solidOffset: artifactModule as unknown as OcctSolidOffsetFacadeModule,
+        artifact: artifactModule as unknown as OcctArtifactFacadeModule,
+      });
+    }
     return Object.freeze({
       abi: "0.7" as const,
       version: OCCT_ARTIFACT_FACADE_VERSION,

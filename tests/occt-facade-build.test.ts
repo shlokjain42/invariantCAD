@@ -33,6 +33,10 @@ const artifactPatchUrl = new URL(
   "../native/occt/patches/0007-bounded-shape-artifacts.patch",
   import.meta.url,
 );
+const hardenedArtifactPatchUrl = new URL(
+  "../native/occt/patches/0008-hardened-shape-artifact-budgets.patch",
+  import.meta.url,
+);
 const smokeUrl = new URL("../scripts/test-occt-facade.mjs", import.meta.url);
 const packagerUrl = new URL(
   "../scripts/package-occt-facade-bundle.mjs",
@@ -177,6 +181,43 @@ describe("owned OCCT facade build boundary", () => {
     expect(artifactPatch).toContain("BinTools_FormatVersion_VERSION_4");
     expect(artifactPatch).toContain(
       "invariantcad-facade@0.7.0+occt-wasm.3.7.0",
+    );
+
+    const hardenedArtifactPatch = await readFile(
+      hardenedArtifactPatchUrl,
+      "utf8",
+    );
+    expect(hardenedArtifactPatch).toContain(
+      "invariantcad_allocation_budget.h",
+    );
+    expect(hardenedArtifactPatch).toContain(
+      "invariantcad_allocation_budget.cpp",
+    );
+    for (const allocatorSymbol of [
+      "_ZN8Standard8AllocateEm",
+      "_ZN8Standard15AllocateOptimalEm",
+      "_ZN8Standard10ReallocateEPvm",
+      "_ZN8Standard15AllocateAlignedEmm",
+      "_Znwm",
+      "_Znam",
+      "malloc",
+      "calloc",
+      "realloc",
+      "posix_memalign",
+      "aligned_alloc",
+      "memalign",
+    ]) {
+      expect(hardenedArtifactPatch).toContain(`--wrap=${allocatorSymbol}`);
+    }
+    expect(hardenedArtifactPatch).toContain("maxNativeRequestedBytes");
+    expect(hardenedArtifactPatch).toContain("nativeRequestedBytes");
+    expect(hardenedArtifactPatch).toContain("nativeAllocationCalls");
+    expect(hardenedArtifactPatch).toContain("nativeRequestLimitExceeded");
+    expect(hardenedArtifactPatch).toContain(
+      "NATIVE_REQUEST_LIMIT_EXCEEDED",
+    );
+    expect(hardenedArtifactPatch).toContain(
+      "invariantcad-facade@0.8.0+occt-wasm.3.7.0",
     );
 
     const releaseInput = JSON.parse(await readFile(releaseInputUrl, "utf8")) as {

@@ -1,6 +1,8 @@
 const INT32_MAX = 2_147_483_647;
 const UINT32_MAX = 4_294_967_295;
 
+export const OCCT_ARTIFACT_MAX_NATIVE_REQUESTED_BYTES = 128 * 1024 * 1024;
+
 export interface OcctArtifactRawKernel {
   release(resultId: number): void;
 }
@@ -11,6 +13,10 @@ export interface OcctArtifactWriteRawReport {
   readonly code: unknown;
   readonly message: unknown;
   readonly maxOutputBytes: unknown;
+  readonly maxNativeRequestedBytes?: unknown;
+  readonly nativeRequestedBytes?: unknown;
+  readonly nativeAllocationCalls?: unknown;
+  readonly nativeRequestLimitExceeded?: unknown;
   hasBytes(): unknown;
   byteCount(): unknown;
   copyBytes(): unknown;
@@ -27,13 +33,20 @@ export interface OcctArtifactReadRawReport {
   readonly consumedByteCount: unknown;
   readonly topologyItemCount: unknown;
   readonly maxTopologyItems: unknown;
+  readonly maxNativeRequestedBytes?: unknown;
+  readonly nativeRequestedBytes?: unknown;
+  readonly nativeAllocationCalls?: unknown;
+  readonly nativeRequestLimitExceeded?: unknown;
   hasResult(): unknown;
   transferCode(kernel: OcctArtifactRawKernel): unknown;
   takeResultId(kernel: OcctArtifactRawKernel): unknown;
   delete(): void;
 }
 
-/** Structural view of the bounded artifact additions in owned facade ABI 0.7. */
+/**
+ * Structural view of the bounded artifact additions in owned facade ABI
+ * 0.7/0.8.
+ */
 export interface OcctArtifactFacadeModule {
   readonly InvariantCadArtifactWriteReport: Function;
   readonly InvariantCadArtifactReadReport: Function;
@@ -41,12 +54,14 @@ export interface OcctArtifactFacadeModule {
     kernel: OcctArtifactRawKernel,
     shapeId: number,
     maxOutputBytes: number,
+    maxNativeRequestedBytes?: number,
   ): unknown;
   invariantcadReadArtifactBrep(
     kernel: OcctArtifactRawKernel,
     input: Uint8Array,
     maxInputBytes: number,
     maxTopologyItems: number,
+    maxNativeRequestedBytes?: number,
   ): unknown;
 }
 
@@ -58,6 +73,10 @@ export interface OcctArtifactWriteDiagnostics {
   readonly maxOutputBytes: number;
   readonly byteCount: number;
   readonly hasBytes: boolean;
+  readonly maxNativeRequestedBytes?: number;
+  readonly nativeRequestedBytes?: number;
+  readonly nativeAllocationCalls?: number;
+  readonly nativeRequestLimitExceeded?: boolean;
 }
 
 export interface OcctArtifactReadDiagnostics {
@@ -72,6 +91,17 @@ export interface OcctArtifactReadDiagnostics {
   readonly maxTopologyItems: number;
   readonly hasResult: boolean;
   readonly transferCode: string;
+  readonly maxNativeRequestedBytes?: number;
+  readonly nativeRequestedBytes?: number;
+  readonly nativeAllocationCalls?: number;
+  readonly nativeRequestLimitExceeded?: boolean;
+}
+
+interface OcctArtifactNativeRequestDiagnostics {
+  readonly maxNativeRequestedBytes: number;
+  readonly nativeRequestedBytes: number;
+  readonly nativeAllocationCalls: number;
+  readonly nativeRequestLimitExceeded: boolean;
 }
 
 export class OcctArtifactFacadeProtocolError extends Error {
@@ -204,13 +234,81 @@ function cleanupFailure(
   throw cleanup;
 }
 
+function copyNativeRequestDiagnostics(
+  report:
+    | OcctArtifactWriteRawReport
+    | OcctArtifactReadRawReport,
+  requestedLimit: number | undefined,
+  ok: boolean,
+  code: string,
+): OcctArtifactNativeRequestDiagnostics | undefined {
+  if (requestedLimit === undefined) return undefined;
+  const diagnostics: OcctArtifactNativeRequestDiagnostics = {
+    maxNativeRequestedBytes: readCount(
+      report.maxNativeRequestedBytes,
+      "report.maxNativeRequestedBytes",
+    ),
+    nativeRequestedBytes: readCount(
+      report.nativeRequestedBytes,
+      "report.nativeRequestedBytes",
+    ),
+    nativeAllocationCalls: readCount(
+      report.nativeAllocationCalls,
+      "report.nativeAllocationCalls",
+    ),
+    nativeRequestLimitExceeded: readBoolean(
+      report.nativeRequestLimitExceeded,
+      "report.nativeRequestLimitExceeded",
+    ),
+  };
+  if (diagnostics.maxNativeRequestedBytes !== requestedLimit) {
+    protocolError("report native request limit does not echo the request");
+  }
+  if (
+    diagnostics.nativeRequestedBytes > diagnostics.maxNativeRequestedBytes
+  ) {
+    protocolError("report native requested bytes exceed their limit");
+  }
+  if (ok && diagnostics.nativeRequestLimitExceeded) {
+    protocolError(
+      "successful artifact report must not exceed the native request limit",
+    );
+  }
+  if (
+    code === "NATIVE_REQUEST_LIMIT_EXCEEDED" &&
+    !diagnostics.nativeRequestLimitExceeded
+  ) {
+    protocolError(
+      "native request limit failure must set report.nativeRequestLimitExceeded",
+    );
+  }
+  if (
+    diagnostics.nativeRequestLimitExceeded &&
+    code !== "NATIVE_REQUEST_LIMIT_EXCEEDED"
+  ) {
+    protocolError(
+      "report.nativeRequestLimitExceeded requires a native request limit failure",
+    );
+  }
+  return diagnostics;
+}
+
 function copyWriteDiagnostics(
   report: OcctArtifactWriteRawReport,
+  maxNativeRequestedBytes: number | undefined,
 ): OcctArtifactWriteDiagnostics {
+  const ok = readBoolean(report.ok, "report.ok");
+  const code = readString(report.code, "report.code");
+  const nativeRequest = copyNativeRequestDiagnostics(
+    report,
+    maxNativeRequestedBytes,
+    ok,
+    code,
+  );
   return Object.freeze({
-    ok: readBoolean(report.ok, "report.ok"),
+    ok,
     stage: readString(report.stage, "report.stage"),
-    code: readString(report.code, "report.code"),
+    code,
     message: readString(report.message, "report.message"),
     maxOutputBytes: readCount(
       report.maxOutputBytes,
@@ -218,17 +316,27 @@ function copyWriteDiagnostics(
     ),
     byteCount: readCount(report.byteCount(), "report.byteCount()"),
     hasBytes: readBoolean(report.hasBytes(), "report.hasBytes()"),
+    ...(nativeRequest ?? {}),
   });
 }
 
 function copyReadDiagnostics(
   report: OcctArtifactReadRawReport,
   kernel: OcctArtifactRawKernel,
+  maxNativeRequestedBytes: number | undefined,
 ): OcctArtifactReadDiagnostics {
+  const ok = readBoolean(report.ok, "report.ok");
+  const code = readString(report.code, "report.code");
+  const nativeRequest = copyNativeRequestDiagnostics(
+    report,
+    maxNativeRequestedBytes,
+    ok,
+    code,
+  );
   return Object.freeze({
-    ok: readBoolean(report.ok, "report.ok"),
+    ok,
     stage: readString(report.stage, "report.stage"),
-    code: readString(report.code, "report.code"),
+    code,
     message: readString(report.message, "report.message"),
     inputByteCount: readCount(
       report.inputByteCount,
@@ -252,6 +360,7 @@ function copyReadDiagnostics(
       report.transferCode(kernel),
       "report.transferCode(kernel)",
     ),
+    ...(nativeRequest ?? {}),
   });
 }
 
@@ -260,6 +369,7 @@ export interface WriteBoundedOcctArtifactBrepOptions {
   readonly kernel: OcctArtifactRawKernel;
   readonly shapeId: number;
   readonly maxOutputBytes: number;
+  readonly maxNativeRequestedBytes?: number;
 }
 
 /** Copies a native-capped binary BREP into one detached caller-owned array. */
@@ -270,18 +380,35 @@ export function writeBoundedOcctArtifactBrep(
   assertKernel(options.kernel);
   assertUint32(options.shapeId, "shapeId");
   assertPositiveInt32(options.maxOutputBytes, "maxOutputBytes");
+  if (options.maxNativeRequestedBytes !== undefined) {
+    assertPositiveInt32(
+      options.maxNativeRequestedBytes,
+      "maxNativeRequestedBytes",
+    );
+  }
 
-  const rawReport = options.module.invariantcadWriteArtifactBrep(
-    options.kernel,
-    options.shapeId,
-    options.maxOutputBytes,
-  );
+  const rawReport =
+    options.maxNativeRequestedBytes === undefined
+      ? options.module.invariantcadWriteArtifactBrep(
+          options.kernel,
+          options.shapeId,
+          options.maxOutputBytes,
+        )
+      : options.module.invariantcadWriteArtifactBrep(
+          options.kernel,
+          options.shapeId,
+          options.maxOutputBytes,
+          options.maxNativeRequestedBytes,
+        );
   assertDeletableWriteReport(rawReport);
   let primary: unknown;
   let hasPrimary = false;
   let output: Uint8Array | undefined;
   try {
-    const diagnostics = copyWriteDiagnostics(rawReport);
+    const diagnostics = copyWriteDiagnostics(
+      rawReport,
+      options.maxNativeRequestedBytes,
+    );
     if (diagnostics.maxOutputBytes !== options.maxOutputBytes) {
       protocolError("report output limit does not echo the request");
     }
@@ -333,6 +460,7 @@ export interface ReadBoundedOcctArtifactBrepOptions {
   readonly input: Uint8Array;
   readonly maxInputBytes: number;
   readonly maxTopologyItems: number;
+  readonly maxNativeRequestedBytes?: number;
 }
 
 /**
@@ -349,6 +477,12 @@ export function readBoundedOcctArtifactBrep(
   }
   assertPositiveInt32(options.maxInputBytes, "maxInputBytes");
   assertPositiveInt32(options.maxTopologyItems, "maxTopologyItems");
+  if (options.maxNativeRequestedBytes !== undefined) {
+    assertPositiveInt32(
+      options.maxNativeRequestedBytes,
+      "maxNativeRequestedBytes",
+    );
+  }
   if (options.input.byteLength === 0) {
     throw new RangeError("input must not be empty");
   }
@@ -356,18 +490,31 @@ export function readBoundedOcctArtifactBrep(
     throw new RangeError("input exceeds maxInputBytes");
   }
 
-  const rawReport = options.module.invariantcadReadArtifactBrep(
-    options.kernel,
-    options.input,
-    options.maxInputBytes,
-    options.maxTopologyItems,
-  );
+  const rawReport =
+    options.maxNativeRequestedBytes === undefined
+      ? options.module.invariantcadReadArtifactBrep(
+          options.kernel,
+          options.input,
+          options.maxInputBytes,
+          options.maxTopologyItems,
+        )
+      : options.module.invariantcadReadArtifactBrep(
+          options.kernel,
+          options.input,
+          options.maxInputBytes,
+          options.maxTopologyItems,
+          options.maxNativeRequestedBytes,
+        );
   assertDeletableReadReport(rawReport);
   let transferred: number | undefined;
   let primary: unknown;
   let hasPrimary = false;
   try {
-    const diagnostics = copyReadDiagnostics(rawReport, options.kernel);
+    const diagnostics = copyReadDiagnostics(
+      rawReport,
+      options.kernel,
+      options.maxNativeRequestedBytes,
+    );
     if (
       diagnostics.inputByteCount !== options.input.byteLength ||
       diagnostics.maxInputBytes !== options.maxInputBytes ||

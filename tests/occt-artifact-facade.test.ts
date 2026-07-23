@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  OCCT_ARTIFACT_MAX_NATIVE_REQUESTED_BYTES,
   OcctArtifactFacadeProtocolError,
   OcctArtifactReadError,
   OcctArtifactWriteError,
@@ -8,6 +9,13 @@ import {
   type OcctArtifactReadRawReport,
   type OcctArtifactWriteRawReport,
 } from "../src/internal/occt-artifact-facade.js";
+
+const nativeRequestFields = Object.freeze({
+  maxNativeRequestedBytes: OCCT_ARTIFACT_MAX_NATIVE_REQUESTED_BYTES,
+  nativeRequestedBytes: 65_536,
+  nativeAllocationCalls: 12,
+  nativeRequestLimitExceeded: false,
+});
 
 function writeFixture(
   overrides: Partial<OcctArtifactWriteRawReport> = {},
@@ -113,6 +121,50 @@ describe("bounded OCCT artifact facade adapter", () => {
     expect(output[0]).toBe(1);
   });
 
+  it("keeps ABI 0.7 reports and native call arity independent of 0.8 fields", () => {
+    const fixture = writeFixture();
+    for (const field of Object.keys(nativeRequestFields)) {
+      Object.defineProperty(fixture.report, field, {
+        get: () => {
+          throw new Error(`unexpected ABI 0.8 field read: ${field}`);
+        },
+      });
+    }
+    const kernel = { release: vi.fn() };
+
+    expect(
+      writeBoundedOcctArtifactBrep({
+        module: fixture.module,
+        kernel,
+        shapeId: 9,
+        maxOutputBytes: 16,
+      }),
+    ).toEqual(new Uint8Array([1, 2, 3, 4]));
+    expect(fixture.invoke).toHaveBeenCalledWith(kernel, 9, 16);
+  });
+
+  it("passes and validates the trailing ABI 0.8 write budget", () => {
+    const fixture = writeFixture(nativeRequestFields);
+    const kernel = { release: vi.fn() };
+
+    expect(
+      writeBoundedOcctArtifactBrep({
+        module: fixture.module,
+        kernel,
+        shapeId: 9,
+        maxOutputBytes: 16,
+        maxNativeRequestedBytes: OCCT_ARTIFACT_MAX_NATIVE_REQUESTED_BYTES,
+      }),
+    ).toEqual(new Uint8Array([1, 2, 3, 4]));
+    expect(fixture.invoke).toHaveBeenCalledWith(
+      kernel,
+      9,
+      16,
+      OCCT_ARTIFACT_MAX_NATIVE_REQUESTED_BYTES,
+    );
+    expect(fixture.report.delete).toHaveBeenCalledOnce();
+  });
+
   it("preserves native write diagnostics and deletes failed reports", () => {
     const fixture = writeFixture({
       ok: false,
@@ -132,6 +184,47 @@ describe("bounded OCCT artifact facade adapter", () => {
         maxOutputBytes: 16,
       }),
     ).toThrow(OcctArtifactWriteError);
+    expect(fixture.report.copyBytes).not.toHaveBeenCalled();
+    expect(fixture.report.delete).toHaveBeenCalledOnce();
+  });
+
+  it("propagates ABI 0.8 native request diagnostics on write failure", () => {
+    const fixture = writeFixture({
+      ...nativeRequestFields,
+      ok: false,
+      stage: "serialization",
+      code: "NATIVE_REQUEST_LIMIT_EXCEEDED",
+      message: "native request budget exceeded",
+      nativeRequestedBytes: OCCT_ARTIFACT_MAX_NATIVE_REQUESTED_BYTES - 32,
+      nativeAllocationCalls: 19,
+      nativeRequestLimitExceeded: true,
+      hasBytes: vi.fn(() => false),
+      byteCount: vi.fn(() => 0),
+    });
+    let caught: unknown;
+
+    try {
+      writeBoundedOcctArtifactBrep({
+        module: fixture.module,
+        kernel: { release: vi.fn() },
+        shapeId: 9,
+        maxOutputBytes: 16,
+        maxNativeRequestedBytes: OCCT_ARTIFACT_MAX_NATIVE_REQUESTED_BYTES,
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(OcctArtifactWriteError);
+    expect((caught as OcctArtifactWriteError).diagnostics).toMatchObject({
+      maxNativeRequestedBytes: OCCT_ARTIFACT_MAX_NATIVE_REQUESTED_BYTES,
+      nativeRequestedBytes: OCCT_ARTIFACT_MAX_NATIVE_REQUESTED_BYTES - 32,
+      nativeAllocationCalls: 19,
+      nativeRequestLimitExceeded: true,
+    });
+    expect(Object.isFrozen((caught as OcctArtifactWriteError).diagnostics)).toBe(
+      true,
+    );
     expect(fixture.report.copyBytes).not.toHaveBeenCalled();
     expect(fixture.report.delete).toHaveBeenCalledOnce();
   });
@@ -199,6 +292,32 @@ describe("bounded OCCT artifact facade adapter", () => {
     expect(backing).toEqual(new Uint8Array([90, 1, 2, 3, 4, 91]));
   });
 
+  it("passes and validates the trailing ABI 0.8 read budget", () => {
+    const fixture = readFixture({ overrides: nativeRequestFields });
+    const kernel = { release: vi.fn() };
+    const input = new Uint8Array([1, 2, 3, 4]);
+
+    expect(
+      readBoundedOcctArtifactBrep({
+        module: fixture.module,
+        kernel,
+        input,
+        maxInputBytes: 16,
+        maxTopologyItems: 100,
+        maxNativeRequestedBytes: OCCT_ARTIFACT_MAX_NATIVE_REQUESTED_BYTES,
+      }),
+    ).toBe(41);
+    expect(fixture.invoke).toHaveBeenCalledWith(
+      kernel,
+      input,
+      16,
+      100,
+      OCCT_ARTIFACT_MAX_NATIVE_REQUESTED_BYTES,
+    );
+    expect(fixture.take).toHaveBeenCalledOnce();
+    expect(fixture.report.delete).toHaveBeenCalledOnce();
+  });
+
   it("does not transfer failed decode reports", () => {
     const fixture = readFixture({
       overrides: {
@@ -222,6 +341,75 @@ describe("bounded OCCT artifact facade adapter", () => {
         maxTopologyItems: 100,
       }),
     ).toThrow(OcctArtifactReadError);
+    expect(fixture.take).not.toHaveBeenCalled();
+    expect(fixture.report.delete).toHaveBeenCalledOnce();
+  });
+
+  it("propagates ABI 0.8 native request diagnostics on read failure", () => {
+    const fixture = readFixture({
+      overrides: {
+        ...nativeRequestFields,
+        ok: false,
+        stage: "deserialization",
+        code: "NATIVE_REQUEST_LIMIT_EXCEEDED",
+        message: "native request budget exceeded",
+        consumedByteCount: 0,
+        topologyItemCount: 0,
+        nativeRequestedBytes: 8_192,
+        nativeAllocationCalls: 3,
+        nativeRequestLimitExceeded: true,
+        hasResult: vi.fn(() => false),
+        transferCode: vi.fn(() => "NO_RESULT"),
+      },
+    });
+    let caught: unknown;
+
+    try {
+      readBoundedOcctArtifactBrep({
+        module: fixture.module,
+        kernel: { release: vi.fn() },
+        input: new Uint8Array(4),
+        maxInputBytes: 16,
+        maxTopologyItems: 100,
+        maxNativeRequestedBytes: OCCT_ARTIFACT_MAX_NATIVE_REQUESTED_BYTES,
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(OcctArtifactReadError);
+    expect((caught as OcctArtifactReadError).diagnostics).toMatchObject({
+      maxNativeRequestedBytes: OCCT_ARTIFACT_MAX_NATIVE_REQUESTED_BYTES,
+      nativeRequestedBytes: 8_192,
+      nativeAllocationCalls: 3,
+      nativeRequestLimitExceeded: true,
+    });
+    expect(fixture.take).not.toHaveBeenCalled();
+    expect(fixture.report.delete).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a read exceeded flag without the native request limit code", () => {
+    const fixture = readFixture({
+      overrides: {
+        ...nativeRequestFields,
+        ok: false,
+        code: "DESERIALIZATION_FAILED",
+        nativeRequestLimitExceeded: true,
+        hasResult: vi.fn(() => false),
+        transferCode: vi.fn(() => "NO_RESULT"),
+      },
+    });
+
+    expect(() =>
+      readBoundedOcctArtifactBrep({
+        module: fixture.module,
+        kernel: { release: vi.fn() },
+        input: new Uint8Array(4),
+        maxInputBytes: 16,
+        maxTopologyItems: 100,
+        maxNativeRequestedBytes: OCCT_ARTIFACT_MAX_NATIVE_REQUESTED_BYTES,
+      }),
+    ).toThrow(OcctArtifactFacadeProtocolError);
     expect(fixture.take).not.toHaveBeenCalled();
     expect(fixture.report.delete).toHaveBeenCalledOnce();
   });
@@ -290,6 +478,89 @@ describe("bounded OCCT artifact facade adapter", () => {
     }
     expect(caught).toBe(true);
     expect(kernel.release).toHaveBeenCalledExactlyOnceWith(41);
+  });
+
+  it.each<
+    readonly [string, Partial<OcctArtifactWriteRawReport>]
+  >([
+    [
+      "an unechoed cap",
+      {
+        ...nativeRequestFields,
+        maxNativeRequestedBytes:
+          OCCT_ARTIFACT_MAX_NATIVE_REQUESTED_BYTES - 1,
+      },
+    ],
+    [
+      "admitted bytes above the cap",
+      {
+        ...nativeRequestFields,
+        nativeRequestedBytes:
+          OCCT_ARTIFACT_MAX_NATIVE_REQUESTED_BYTES + 1,
+      },
+    ],
+    [
+      "a negative allocation-call count",
+      { ...nativeRequestFields, nativeAllocationCalls: -1 },
+    ],
+    [
+      "a non-boolean exceeded flag",
+      { ...nativeRequestFields, nativeRequestLimitExceeded: 1 },
+    ],
+    [
+      "a successful report with an exceeded flag",
+      { ...nativeRequestFields, nativeRequestLimitExceeded: true },
+    ],
+    [
+      "a limit failure without an exceeded flag",
+      {
+        ...nativeRequestFields,
+        ok: false,
+        code: "NATIVE_REQUEST_LIMIT_EXCEEDED",
+        hasBytes: vi.fn(() => false),
+        byteCount: vi.fn(() => 0),
+      },
+    ],
+    [
+      "a non-limit failure with an exceeded flag",
+      {
+        ...nativeRequestFields,
+        ok: false,
+        code: "SERIALIZATION_FAILED",
+        nativeRequestLimitExceeded: true,
+        hasBytes: vi.fn(() => false),
+        byteCount: vi.fn(() => 0),
+      },
+    ],
+  ])("rejects ABI 0.8 report protocol mismatch: %s", (_label, overrides) => {
+    const fixture = writeFixture(overrides);
+
+    expect(() =>
+      writeBoundedOcctArtifactBrep({
+        module: fixture.module,
+        kernel: { release: vi.fn() },
+        shapeId: 9,
+        maxOutputBytes: 16,
+        maxNativeRequestedBytes: OCCT_ARTIFACT_MAX_NATIVE_REQUESTED_BYTES,
+      }),
+    ).toThrow(OcctArtifactFacadeProtocolError);
+    expect(fixture.report.copyBytes).not.toHaveBeenCalled();
+    expect(fixture.report.delete).toHaveBeenCalledOnce();
+  });
+
+  it("rejects an invalid native request budget before native work", () => {
+    const fixture = writeFixture(nativeRequestFields);
+
+    expect(() =>
+      writeBoundedOcctArtifactBrep({
+        module: fixture.module,
+        kernel: { release: vi.fn() },
+        shapeId: 9,
+        maxOutputBytes: 16,
+        maxNativeRequestedBytes: 0,
+      }),
+    ).toThrow(RangeError);
+    expect(fixture.invoke).not.toHaveBeenCalled();
   });
 
   it("rejects invalid limits and incomplete modules before native work", () => {

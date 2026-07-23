@@ -39,15 +39,16 @@ type Descriptor = KernelFaceDescriptor | KernelEdgeDescriptor;
 const projectRoot = fileURLToPath(new URL("..", import.meta.url));
 
 function parseRuntimeDirectory(arguments_: readonly string[]): string {
-  if (arguments_.length === 0) {
+  const values = arguments_[0] === "--" ? arguments_.slice(1) : arguments_;
+  if (values.length === 0) {
     return resolve(projectRoot, ".artifacts/occt-facade");
   }
   if (
-    arguments_.length === 2 &&
-    arguments_[0] === "--runtime-dir" &&
-    arguments_[1] !== undefined
+    values.length === 2 &&
+    values[0] === "--runtime-dir" &&
+    values[1] !== undefined
   ) {
-    return resolve(arguments_[1]);
+    return resolve(values[1]);
   }
   throw new Error(
     "Usage: tsx scripts/test-public-occt-draft.ts [--runtime-dir DIRECTORY]",
@@ -1346,7 +1347,7 @@ const ownedModuleFactory: OcctModuleFactory = async (options) => {
   assert.equal(typeof candidate.invariantcadFacadeVersion, "function");
   assert.equal(
     (candidate.invariantcadFacadeVersion as () => unknown)(),
-    "invariantcad-facade@0.7.0+occt-wasm.3.7.0",
+    "invariantcad-facade@0.8.0+occt-wasm.3.7.0",
   );
   assert.equal(typeof candidate.InvariantCadSolidOffsetReport, "function");
   assert.equal(typeof candidate.invariantcadSolidOffsetAtomic, "function");
@@ -1376,13 +1377,13 @@ try {
   assert.deepEqual(kernel.capabilities.topology?.signatures, {
     protocolVersion: 2,
     fingerprint:
-      "invariantcad-topology-descriptor@6;occt-wasm@3.7.0;runtime=invariantcad-facade@0.7.0+occt-wasm.3.7.0;modelingTolerance=1e-7",
+      "invariantcad-topology-descriptor@6;occt-wasm@3.7.0;runtime=invariantcad-facade@0.8.0+occt-wasm.3.7.0;modelingTolerance=1e-7",
   });
   assert.deepEqual(kernel.capabilities.topology?.signatureProfiles, [
     {
       protocolVersion: 1,
       fingerprint:
-        "invariantcad-topology-descriptor@5;occt-wasm@3.7.0;runtime=invariantcad-facade@0.7.0+occt-wasm.3.7.0;modelingTolerance=1e-7",
+        "invariantcad-topology-descriptor@5;occt-wasm@3.7.0;runtime=invariantcad-facade@0.8.0+occt-wasm.3.7.0;modelingTolerance=1e-7",
     },
   ]);
   assertDirectDraft(kernel);

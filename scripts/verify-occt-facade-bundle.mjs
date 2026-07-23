@@ -8,10 +8,10 @@ import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
 const BUNDLE_NAME = "invariantcad-occt-facade";
-const BUNDLE_VERSION = "0.7.0";
+const BUNDLE_VERSION = "0.8.0";
 const BUNDLE_DIRECTORY = `${BUNDLE_NAME}-${BUNDLE_VERSION}`;
 const FACADE_MARKER =
-  "invariantcad-facade@0.7.0+occt-wasm.3.7.0";
+  "invariantcad-facade@0.8.0+occt-wasm.3.7.0";
 const DRAFT_FACADE_MARKER =
   "invariantcad-facade@0.2.0+occt-wasm.3.7.0";
 const CONTROLLED_PIPE_SHELL_FACADE_MARKER =
@@ -22,6 +22,8 @@ const EDGE_TREATMENT_FACADE_MARKER =
   "invariantcad-facade@0.5.0+occt-wasm.3.7.0";
 const SOLID_OFFSET_FACADE_MARKER =
   "invariantcad-facade@0.6.0+occt-wasm.3.7.0";
+const BOUNDED_ARTIFACT_FACADE_MARKER =
+  "invariantcad-facade@0.7.0+occt-wasm.3.7.0";
 const UPSTREAM_OCCT_WASM_VERSION = "3.7.0";
 const RELEASE_INPUT_URL = new URL(
   "../native/occt/bundle/release-input.json",
@@ -43,6 +45,7 @@ const PATCH_PATHS = Object.freeze([
   "source/native/occt/patches/0005-exact-edge-treatment-history.patch",
   "source/native/occt/patches/0006-exact-solid-offset-history.patch",
   "source/native/occt/patches/0007-bounded-shape-artifacts.patch",
+  "source/native/occt/patches/0008-hardened-shape-artifact-budgets.patch",
 ]);
 const LICENSE_PATHS = Object.freeze([
   "LICENSE",
@@ -403,10 +406,13 @@ async function collectDirectory(inputPath) {
   };
 }
 
-function readTarString(header, start, length, description) {
+function readTarString(header, start, length, description, allowFullField = false) {
   const field = header.subarray(start, start + length);
   const nulIndex = field.indexOf(0);
-  if (nulIndex === -1) fail(`${description} is not NUL-terminated`);
+  if (nulIndex === -1) {
+    if (!allowFullField) fail(`${description} is not NUL-terminated`);
+    return decodeUtf8(field, description);
+  }
   if (field.subarray(nulIndex + 1).some((byte) => byte !== 0)) {
     fail(`${description} has non-zero bytes after its NUL terminator`);
   }
@@ -542,7 +548,7 @@ function collectTarGz(inputPath, compressedBytes) {
     offset += paddedSize;
 
     const type = String.fromCharCode(header[156] ?? 0);
-    const name = readTarString(header, 0, 100, "tar entry name");
+    const name = readTarString(header, 0, 100, "tar entry name", true);
     const prefix = readTarString(header, 345, 155, "tar entry prefix");
     const archivePath = prefix === "" ? name : `${prefix}/${name}`;
 
@@ -756,6 +762,11 @@ function verifyRuntime(files, manifest, release, runtimePins) {
     "invariantcadSolidOffsetAtomic",
     "invariantcadWriteArtifactBrep",
     "invariantcadReadArtifactBrep",
+    "maxNativeRequestedBytes",
+    "nativeRequestedBytes",
+    "nativeAllocationCalls",
+    "nativeRequestLimitExceeded",
+    "NATIVE_REQUEST_LIMIT_EXCEEDED",
   ]) {
     if (!wasm.includes(Buffer.from(marker))) {
       fail(`runtime WASM does not contain the required facade ABI marker: ${marker}`);
@@ -909,6 +920,30 @@ function verifySourceInputs(files) {
         "InvariantCadArtifactWriteReport",
         "InvariantCadArtifactReadReport",
         "OUTPUT_LIMIT_EXCEEDED",
+        BOUNDED_ARTIFACT_FACADE_MARKER,
+      ],
+    ],
+    [
+      PATCH_PATHS[7],
+      [
+        "invariantcad_allocation_budget.h",
+        "maxNativeRequestedBytes",
+        "nativeRequestedBytes",
+        "nativeAllocationCalls",
+        "nativeRequestLimitExceeded",
+        "NATIVE_REQUEST_LIMIT_EXCEEDED",
+        "--wrap=_ZN8Standard8AllocateEm",
+        "--wrap=_ZN8Standard15AllocateOptimalEm",
+        "--wrap=_ZN8Standard10ReallocateEPvm",
+        "--wrap=_ZN8Standard15AllocateAlignedEmm",
+        "--wrap=_Znwm",
+        "--wrap=_Znam",
+        "--wrap=malloc",
+        "--wrap=calloc",
+        "--wrap=realloc",
+        "--wrap=posix_memalign",
+        "--wrap=aligned_alloc",
+        "--wrap=memalign",
         FACADE_MARKER,
       ],
     ],
@@ -1535,7 +1570,7 @@ export async function verifyOcctFacadeBundleWithTestRuntime(
 function usage() {
   return `Usage: node scripts/verify-occt-facade-bundle.mjs [--json] PATH
 
-Verify the complete InvariantCAD OCCT facade 0.7.0 compliance bundle at PATH.
+Verify the complete InvariantCAD OCCT facade 0.8.0 compliance bundle at PATH.
 PATH must be the versioned bundle directory or its deterministic .tar.gz archive.
 
 Options:

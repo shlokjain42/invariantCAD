@@ -1541,7 +1541,7 @@ const ownedModuleFactory: OcctModuleFactory = async (options) => {
   assert.equal(typeof marker, "function");
   assert.equal(
     (marker as () => unknown)(),
-    "invariantcad-facade@0.7.0+occt-wasm.3.7.0",
+    "invariantcad-facade@0.8.0+occt-wasm.3.7.0",
   );
   return module;
 };
@@ -1569,7 +1569,7 @@ try {
     protocolVersion: 2,
     fingerprint:
       "invariantcad-topology-descriptor@6;occt-wasm@3.7.0;" +
-      "runtime=invariantcad-facade@0.7.0+occt-wasm.3.7.0;" +
+      "runtime=invariantcad-facade@0.8.0+occt-wasm.3.7.0;" +
       "modelingTolerance=1e-7",
   });
   const signatureProfiles = kernel.capabilities.topology?.signatureProfiles;
@@ -1578,7 +1578,7 @@ try {
       protocolVersion: 1,
       fingerprint:
         "invariantcad-topology-descriptor@5;occt-wasm@3.7.0;" +
-        "runtime=invariantcad-facade@0.7.0+occt-wasm.3.7.0;" +
+        "runtime=invariantcad-facade@0.8.0+occt-wasm.3.7.0;" +
         "modelingTolerance=1e-7",
     },
   ]);

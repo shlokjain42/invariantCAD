@@ -5,6 +5,7 @@ import {
   OCCT_CONTROLLED_PIPE_SHELL_FACADE_VERSION,
   OCCT_DRAFT_FACADE_VERSION,
   OCCT_EDGE_TREATMENT_FACADE_VERSION,
+  OCCT_NATIVE_REQUEST_BUDGET_FACADE_VERSION,
   OCCT_SOLID_OFFSET_FACADE_VERSION,
   OcctFacadeProtocolError,
   probeOcctDraftFacade,
@@ -94,12 +95,12 @@ function solidOffsetModule() {
   };
 }
 
-function artifactModule() {
+function artifactModule(version: string = OCCT_ARTIFACT_FACADE_VERSION) {
   return {
     ...solidOffsetModule(),
     InvariantCadArtifactWriteReport: class {},
     InvariantCadArtifactReadReport: class {},
-    invariantcadFacadeVersion: vi.fn(() => OCCT_ARTIFACT_FACADE_VERSION),
+    invariantcadFacadeVersion: vi.fn(() => version),
     invariantcadWriteArtifactBrep: vi.fn(),
     invariantcadReadArtifactBrep: vi.fn(),
   };
@@ -229,6 +230,27 @@ describe("owned OCCT facade capability probe", () => {
     expect(probeOcctDraftFacade(module)).toBe(module);
   });
 
+  it("recognizes exact 0.8 as the native-request-budget artifact facade", () => {
+    const module = artifactModule(
+      OCCT_NATIVE_REQUEST_BUDGET_FACADE_VERSION,
+    );
+    const facade = probeOcctFacade(module);
+
+    expect(facade).toEqual({
+      abi: "0.8",
+      version: OCCT_NATIVE_REQUEST_BUDGET_FACADE_VERSION,
+      module,
+      draft: module,
+      pipeShell: module,
+      boolean: module,
+      edgeTreatment: module,
+      solidOffset: module,
+      artifact: module,
+    });
+    expect(Object.isFrozen(facade)).toBe(true);
+    expect(probeOcctDraftFacade(module)).toBe(module);
+  });
+
   it("fails closed for partial, extra, and unknown owned marker surfaces", () => {
     const partial = {
       invariantcadFacadeVersion: () =>
@@ -279,7 +301,7 @@ describe("owned OCCT facade capability probe", () => {
       invariantcadFutureCapability: vi.fn(),
     };
     expect(() => probeOcctFacade(extra)).toThrow(
-      "expected exact ABI 0.2, 0.3, 0.4, 0.5, 0.6, or 0.7",
+      "expected exact ABI 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, or 0.8",
     );
 
     const differentlyCasedUnknown = {
@@ -362,6 +384,14 @@ describe("owned OCCT facade capability probe", () => {
     );
     expect(() => probeOcctFacade(artifactMarkersSolidOffsetVersion)).toThrow(
       `expected '${OCCT_ARTIFACT_FACADE_VERSION}'`,
+    );
+
+    const artifactMarkersUnknownVersion = artifactModule();
+    artifactMarkersUnknownVersion.invariantcadFacadeVersion.mockReturnValue(
+      "invariantcad-facade@0.9.0+occt-wasm.3.7.0",
+    );
+    expect(() => probeOcctFacade(artifactMarkersUnknownVersion)).toThrow(
+      `'${OCCT_NATIVE_REQUEST_BUDGET_FACADE_VERSION}'`,
     );
 
     const wrongGlobal = controlledPipeShellModule();

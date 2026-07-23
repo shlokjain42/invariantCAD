@@ -24,6 +24,14 @@
   part of ordinary verification. Production capability advertising remains
   blocked by the separate native-allocation, cancellation, identity,
   attestation, and cross-process proof gaps.
+- Advanced the repository-private owned OCCT facade and compliance bundle to
+  ABI 0.8 with a fixed 128 MiB per-operation ceiling over cumulative allocation
+  requests observed at twelve reviewed linker-wrapped entry points. Reports
+  expose validated request/call telemetry, ABI 0.7 remains loadable without the
+  new argument, and disposable-process tests cover write/read denial plus
+  recovery. This is unadvertised defense-in-depth: direct C denial is fail-stop,
+  and strict BinTools count/product preflight, work bounds, cancellation,
+  runtime attestation, durable identity, and cross-process goldens remain open.
 
 ## [0.1.0] - 2026-07-22
 

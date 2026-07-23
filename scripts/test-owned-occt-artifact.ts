@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { access } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -10,6 +11,102 @@ import {
 } from "../src/occt-kernel.js";
 
 const projectRoot = fileURLToPath(new URL("..", import.meta.url));
+const expectedFacadeVersion = "invariantcad-facade@0.8.0+occt-wasm.3.7.0";
+const expectedNativeRequestLimit = 128 * 1024 * 1024;
+
+interface NativeAllocationTelemetry {
+  readonly operation: "read" | "write";
+  readonly maxNativeRequestedBytes: number;
+  readonly nativeRequestedBytes: number;
+  readonly nativeAllocationCalls: number;
+  readonly nativeRequestLimitExceeded: boolean;
+}
+
+function isObject(value: unknown): value is Record<PropertyKey, unknown> {
+  return (typeof value === "object" && value !== null) || typeof value === "function";
+}
+
+function nonNegativeSafeInteger(value: unknown, label: string): number {
+  if (
+    typeof value !== "number" ||
+    !Number.isSafeInteger(value) ||
+    value < 0
+  ) {
+    throw new TypeError(`${label} must be a non-negative safe integer`);
+  }
+  return value;
+}
+
+function captureNativeAllocationTelemetry(
+  operation: NativeAllocationTelemetry["operation"],
+  report: unknown,
+): NativeAllocationTelemetry {
+  assert.ok(isObject(report), `${operation} must return an object report`);
+  const maxNativeRequestedBytes = nonNegativeSafeInteger(
+    report.maxNativeRequestedBytes,
+    `${operation}.maxNativeRequestedBytes`,
+  );
+  const nativeRequestedBytes = nonNegativeSafeInteger(
+    report.nativeRequestedBytes,
+    `${operation}.nativeRequestedBytes`,
+  );
+  const nativeAllocationCalls = nonNegativeSafeInteger(
+    report.nativeAllocationCalls,
+    `${operation}.nativeAllocationCalls`,
+  );
+  assert.equal(
+    typeof report.nativeRequestLimitExceeded,
+    "boolean",
+    `${operation}.nativeRequestLimitExceeded must be boolean`,
+  );
+  assert.equal(maxNativeRequestedBytes, expectedNativeRequestLimit);
+  assert.ok(nativeRequestedBytes > 0, `${operation} observed no native requests`);
+  assert.ok(
+    nativeRequestedBytes <= maxNativeRequestedBytes,
+    `${operation} admitted native requests beyond its limit`,
+  );
+  assert.ok(nativeAllocationCalls > 0, `${operation} observed no native allocations`);
+  assert.equal(report.nativeRequestLimitExceeded, false);
+  return Object.freeze({
+    operation,
+    maxNativeRequestedBytes,
+    nativeRequestedBytes,
+    nativeAllocationCalls,
+    nativeRequestLimitExceeded: report.nativeRequestLimitExceeded,
+  });
+}
+
+function runTinyQuotaChild(directory: string): void {
+  const childPath = fileURLToPath(
+    new URL("./test-owned-occt-artifact-quota-child.ts", import.meta.url),
+  );
+  const child = spawnSync(
+    process.execPath,
+    ["--import", "tsx", childPath, "--runtime-dir", directory],
+    {
+      cwd: projectRoot,
+      encoding: "utf8",
+      timeout: 30_000,
+      maxBuffer: 1024 * 1024,
+    },
+  );
+  assert.equal(
+    child.error,
+    undefined,
+    child.error === undefined
+      ? undefined
+      : `tiny-quota child failed to start: ${child.error.message}`,
+  );
+  assert.equal(
+    child.status,
+    0,
+    `tiny-quota child failed with status ${String(child.status)} and signal ${String(child.signal)}\nstdout:\n${child.stdout}\nstderr:\n${child.stderr}`,
+  );
+  assert.match(
+    child.stdout,
+    /owned OCCT artifact tiny native request quotas denied and recovered/,
+  );
+}
 
 function runtimeDirectory(arguments_: readonly string[]): string {
   const values = arguments_[0] === "--" ? arguments_.slice(1) : arguments_;
@@ -38,6 +135,7 @@ const loaded = (await import(pathToFileURL(gluePath).href)) as {
 
 let legacyReadCount = 0;
 let legacyWriteCount = 0;
+const nativeAllocationTelemetry: NativeAllocationTelemetry[] = [];
 const moduleFactory: OcctModuleFactory = async (options) => {
   const module = await loaded.default(options);
   if (typeof module !== "object" || module === null) {
@@ -46,10 +144,49 @@ const moduleFactory: OcctModuleFactory = async (options) => {
   const candidate = module as Record<string, unknown>;
   assert.equal(
     (candidate.invariantcadFacadeVersion as () => unknown)(),
-    "invariantcad-facade@0.7.0+occt-wasm.3.7.0",
+    expectedFacadeVersion,
   );
   assert.equal(typeof candidate.invariantcadWriteArtifactBrep, "function");
   assert.equal(typeof candidate.invariantcadReadArtifactBrep, "function");
+
+  const writeArtifact = candidate.invariantcadWriteArtifactBrep as (
+    ...arguments_: unknown[]
+  ) => unknown;
+  const readArtifact = candidate.invariantcadReadArtifactBrep as (
+    ...arguments_: unknown[]
+  ) => unknown;
+  candidate.invariantcadWriteArtifactBrep = (...arguments_: unknown[]) => {
+    assert.equal(arguments_.length, 4);
+    assert.equal(arguments_[3], expectedNativeRequestLimit);
+    const report = Reflect.apply(writeArtifact, candidate, arguments_);
+    try {
+      nativeAllocationTelemetry.push(
+        captureNativeAllocationTelemetry("write", report),
+      );
+    } catch (error) {
+      if (isObject(report) && typeof report.delete === "function") {
+        report.delete();
+      }
+      throw error;
+    }
+    return report;
+  };
+  candidate.invariantcadReadArtifactBrep = (...arguments_: unknown[]) => {
+    assert.equal(arguments_.length, 5);
+    assert.equal(arguments_[4], expectedNativeRequestLimit);
+    const report = Reflect.apply(readArtifact, candidate, arguments_);
+    try {
+      nativeAllocationTelemetry.push(
+        captureNativeAllocationTelemetry("read", report),
+      );
+    } catch (error) {
+      if (isObject(report) && typeof report.delete === "function") {
+        report.delete();
+      }
+      throw error;
+    }
+    return report;
+  };
 
   const fileSystem = candidate.FS as {
     readFile(path: string, options?: unknown): unknown;
@@ -91,7 +228,15 @@ try {
   );
   assert.match(
     producerCodec.capabilities.compatibilityFingerprint,
-    /nativeMaterialization=facade-capped-output-bounded-input-snapshot-v1/,
+    /nativeRequestLimitBytes=134217728/,
+  );
+  assert.match(
+    producerCodec.capabilities.compatibilityFingerprint,
+    /nativeRequestAccounting=scoped-cumulative-reviewed-entrypoints-v1/,
+  );
+  assert.match(
+    producerCodec.capabilities.compatibilityFingerprint,
+    /nativeMaterialization=facade-capped-output-bounded-input-cumulative-native-requests-v2/,
   );
 
   source = producer.box?.([2, 3, 5], false, { feature: "owned-artifact-box" });
@@ -136,6 +281,10 @@ try {
   }
   assert.equal(legacyWriteCount, 0);
   assert.equal(legacyReadCount, 0);
+  assert.deepEqual(
+    nativeAllocationTelemetry.map(({ operation }) => operation),
+    ["write", "read"],
+  );
 } finally {
   if (restored !== undefined) consumer.disposeShape(restored);
   if (source !== undefined) producer.disposeShape(source);
@@ -143,4 +292,7 @@ try {
   producer.dispose();
 }
 
-process.stdout.write("owned bounded OCCT artifact candidate passed\n");
+runTinyQuotaChild(directory);
+process.stdout.write(
+  "owned bounded OCCT artifact candidate and isolated native quota denial passed\n",
+);
