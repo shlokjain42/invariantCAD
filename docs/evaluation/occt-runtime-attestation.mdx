@@ -1,0 +1,232 @@
+---
+title: "OCCT runtime attestation"
+description: "Verify an exact owned OCCT JavaScript/WASM pair and its declared build manifest before loading it in Node.js or a browser."
+icon: "badge-check"
+---
+
+InvariantCAD can load an owned OCCT facade as an opaque, attested runtime pair.
+The loader verifies three exact inputs before any supplied JavaScript executes:
+
+1. canonical `metadata/release.json` bytes against an independently trusted
+   SHA-256 pin;
+2. `runtime/occt-wasm.js` against the size and digest in that trusted manifest;
+3. `runtime/occt-wasm.wasm` against the size and digest in that trusted
+   manifest.
+
+The current reviewed ABI 0.9 release-manifest pin is exported as
+`INVARIANTCAD_OCCT_FACADE_0_9_0_RELEASE_MANIFEST_SHA256`. The matching
+`metadata/release.json` is in the package-neutral facade bundle, not in the
+`invariantcad` npm tarball.
+
+<Warning>
+  A digest downloaded beside an untrusted manifest is not an independent trust
+  anchor. Import the reviewed InvariantCAD constant, or embed a separately
+  reviewed manifest digest in your application or deployment configuration.
+</Warning>
+
+## Node.js
+
+Use the Node-specific loader with the ordinary OCCT kernel entry:
+
+```ts
+import { readFile } from "node:fs/promises";
+import { createOcctKernel } from "invariantcad/kernels/occt";
+import {
+  INVARIANTCAD_OCCT_FACADE_0_9_0_RELEASE_MANIFEST_SHA256,
+  loadAttestedOcctRuntime,
+} from "invariantcad/kernels/occt/node";
+
+const bundle = "/opt/invariantcad-occt-facade-0.9.0";
+const [releaseManifest, javascript, webassembly] = await Promise.all([
+  readFile(`${bundle}/metadata/release.json`),
+  readFile(`${bundle}/runtime/occt-wasm.js`),
+  readFile(`${bundle}/runtime/occt-wasm.wasm`),
+]);
+
+const attestedRuntime = await loadAttestedOcctRuntime({
+  releaseManifest,
+  expectedReleaseManifestSha256:
+    INVARIANTCAD_OCCT_FACADE_0_9_0_RELEASE_MANIFEST_SHA256,
+  javascript,
+  webassembly,
+});
+
+const kernel = await createOcctKernel({ attestedRuntime });
+```
+
+The Node loader does not write verified JavaScript to a temporary file. It
+installs one process-wide `node:module.register()` hook, transfers the verified
+snapshot to that hook, resolves one unpredictable private specifier to a
+synthetic `file:` URL, and returns the exact bytes from the hook's `load`
+callback. The synthetic file URL is required by the current Emscripten glue's
+Node initialization. The hook deletes its raw source entry after the one load.
+
+Node's evaluated module cache and the process-wide hook remain for the life of
+the process. A runtime pair can create multiple kernels; every kernel receives a
+fresh copy of the verified WASM master bytes. Disposing a kernel does not unload
+JavaScript or invalidate the pair. Use a disposable child process when hard
+code/runtime reclamation is required.
+
+Node's Permission Model must allow the loader-hook worker, for example with the
+appropriate `--allow-worker` policy. InvariantCAD supports Node 20.19, 22, and
+24 and exercises the loader on all three release-CI lines.
+
+## Browser and module workers
+
+Use the browser-specific entry from a window or module worker:
+
+```ts
+import { createOcctKernel } from "invariantcad/kernels/occt";
+import {
+  INVARIANTCAD_OCCT_FACADE_0_9_0_RELEASE_MANIFEST_SHA256,
+  loadAttestedOcctRuntime,
+} from "invariantcad/kernels/occt/browser";
+
+async function bytes(url: string): Promise<ArrayBuffer> {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch ${url}: ${response.status}`);
+  }
+  return response.arrayBuffer();
+}
+
+const root = "/occt/invariantcad-occt-facade-0.9.0";
+const [releaseManifest, javascript, webassembly] = await Promise.all([
+  bytes(`${root}/metadata/release.json`),
+  bytes(`${root}/runtime/occt-wasm.js`),
+  bytes(`${root}/runtime/occt-wasm.wasm`),
+]);
+
+const attestedRuntime = await loadAttestedOcctRuntime({
+  releaseManifest,
+  expectedReleaseManifestSha256:
+    INVARIANTCAD_OCCT_FACADE_0_9_0_RELEASE_MANIFEST_SHA256,
+  javascript,
+  webassembly,
+});
+
+const kernel = await createOcctKernel({ attestedRuntime });
+```
+
+The browser loader imports a Blob module created from the verified JavaScript
+snapshot, revokes its unique Blob URL after import settles, and supplies a fresh
+verified WASM copy through `wasmBinary`. It also installs a fail-closed
+`locateFile` sentinel so the glue cannot fetch an adjacent, unverified WASM
+file.
+
+The page's Content Security Policy must permit Blob module scripts:
+
+```http
+Content-Security-Policy: script-src 'self' blob:
+```
+
+Adapt the rest of that policy to the application. `script-src 'self'` without
+`blob:` blocks this loader. Depending on the browser and policy version,
+WebAssembly compilation may also require the narrowly scoped
+`'wasm-unsafe-eval'` source expression. URL revocation releases the object URL,
+not the realm's evaluated module cache. Terminate a Worker to reclaim that
+realm reliably.
+
+The loader accepts already acquired `ArrayBuffer` or `Uint8Array` values rather
+than fetching URLs itself. It copies the exact view of every caller-owned input
+before its first `await`, including cross-realm arrays and Node `Buffer`
+instances. `SharedArrayBuffer`-backed views are rejected because another agent
+could race a supposedly call-time snapshot. Hard caps are 1 MiB for the
+manifest, 16 MiB for JavaScript, and 512 MiB for WASM. An application reading an
+untrusted response should also impose network and streaming limits before
+materializing the complete response in memory.
+
+## Kernel integration
+
+`attestedRuntime` is mutually exclusive with raw `wasm` and `moduleFactory`
+overrides:
+
+```ts
+await createOcctKernel({
+  attestedRuntime,
+  // wasm: ...,          // invalid together
+  // moduleFactory: ..., // invalid together
+});
+```
+
+After the verified factory initializes, `createOcctKernel` requires the
+observed InvariantCAD facade marker to equal the marker in the trusted release
+manifest. A missing, partial, extended, unknown, or different facade fails
+before the high-level raw kernel wrapper is constructed.
+
+The opaque pair holds the factory and master WASM bytes in module-private
+state. The visible report is structurally cloneable, but copying it,
+constructing a lookalike, or presenting it to another evaluated InvariantCAD
+internal module instance does not reproduce that private executable authority.
+
+## Two identities
+
+`attestedRuntime.attestation` is deeply frozen and exposes two deliberately
+different identities:
+
+| Field | Meaning | Compatibility effect |
+| --- | --- | --- |
+| `runtimePairIdentity` | SHA-256 identity of the facade marker/ABI/upstream version plus exact JS and WASM sizes and digests | Bound into the repository-private shape-artifact candidate fingerprint |
+| `declaredBuildIdentity` | SHA-256 identity of the exact canonical `metadata/release.json` | Records the reviewed declared recipe without changing binary compatibility when only recipe metadata changes |
+
+The report also exposes the pinned runtime file records and explicit evidence
+flags. `buildExecutionObserved`, `buildExecutionAuthenticated`,
+`publisherAuthenticated`, and `certifiesCompatibility` are all `false`.
+
+Persistent-topology fingerprints remain semantic descriptor contracts. An
+attested and a directly supplied instance of the same recognized facade retain
+the same topology descriptor fingerprints. The stronger exact pair identity is
+added only to the private artifact compatibility fingerprint, where byte-level
+runtime differences must fail exact matching.
+
+## Failure reasons
+
+`OcctRuntimeAttestationError.reason` is one of these closed values:
+
+| Reason | Boundary |
+| --- | --- |
+| `invalid-trust-pin` | Expected manifest pin is not lowercase SHA-256 |
+| `invalid-input` | Input is unreadable, detached, or not a usable non-shared `ArrayBuffer`/`Uint8Array` |
+| `resource-limit` | Manifest, JavaScript, or WASM input is empty or exceeds its hard cap |
+| `cryptography-unavailable` | Web Crypto SHA-256 is unavailable or failed |
+| `release-manifest-digest-mismatch` | Manifest does not match the independent pin |
+| `invalid-release-manifest` | Trusted bytes are not exact canonical closed-schema v1 JSON |
+| `javascript-size-mismatch` / `webassembly-size-mismatch` | Runtime size differs from the trusted manifest |
+| `javascript-digest-mismatch` / `webassembly-digest-mismatch` | Runtime digest differs from the trusted manifest |
+| `loader-unavailable` | Browser Blob-module loader primitives are unavailable |
+| `module-hook-failed` | Node could not install or communicate with its module hook |
+| `module-import-failed` | Verified JavaScript could not be imported in this host |
+| `module-factory-missing` | The verified module has no default factory |
+| `facade-marker-mismatch` | Initialized module does not expose the trusted recognized facade |
+
+Both runtime files are size- and digest-verified before the JavaScript snapshot
+is imported. A mixed or one-byte-tampered pair therefore cannot execute one
+component before the other component is rejected.
+
+## Security boundary and non-claims
+
+Successful loader resolution proves that the trusted manifest and exact runtime
+snapshots matched, the verified JavaScript was imported, and that module
+exported a default factory. Successful subsequent
+`createOcctKernel({ attestedRuntime })` additionally proves that a fresh
+verified WASM copy was supplied to that factory and the initialized recognized
+facade marker matched the trusted manifest. Neither result proves:
+
+- that the declared build recipe actually ran;
+- who published the files, unless the independent trust channel establishes
+  that separately;
+- a signature, transparency-log entry, or SLSA level;
+- safety against a compromised JavaScript realm, Web Crypto implementation,
+  browser, service worker, extension, Node module-hook chain, same-process
+  attacker, host, or WASM engine;
+- which native machine instructions ultimately executed;
+- process sandboxing, live/peak-memory bounds, prompt same-thread cancellation,
+  geometry correctness, durable symmetric-subshape identity, or cross-platform
+  artifact compatibility.
+
+This closes the exact owned JS/WASM and declared-release-manifest identity
+blocker for the repository-private artifact candidate. It does not advertise
+`KernelCapabilities.shapeArtifacts`, add public codec methods, or make artifact
+evidence a compatibility certificate. Isolation, attestation, semantic
+identity, cross-platform goldens, and evaluator/cache integration remain
+separate gates.

@@ -68,7 +68,55 @@ const kernel = await createOcctKernel({
 The defaults are 1,000,000 records per category. Limits apply across WASM and
 JavaScript transfer. Raise them only after measuring a legitimate workload.
 
-## Owned facade
+## Attested owned facade
+
+For a reviewed bundle, prefer an environment-specific attested loader over
+pairing the files manually:
+
+```ts
+import { readFile } from "node:fs/promises";
+import { createOcctKernel } from "invariantcad/kernels/occt";
+import {
+  INVARIANTCAD_OCCT_FACADE_0_9_0_RELEASE_MANIFEST_SHA256,
+  loadAttestedOcctRuntime,
+} from "invariantcad/kernels/occt/node";
+
+const bundle = "/opt/invariantcad-occt-facade-0.9.0";
+const [releaseManifest, javascript, webassembly] = await Promise.all([
+  readFile(`${bundle}/metadata/release.json`),
+  readFile(`${bundle}/runtime/occt-wasm.js`),
+  readFile(`${bundle}/runtime/occt-wasm.wasm`),
+]);
+
+const attestedRuntime = await loadAttestedOcctRuntime({
+  releaseManifest,
+  expectedReleaseManifestSha256:
+    INVARIANTCAD_OCCT_FACADE_0_9_0_RELEASE_MANIFEST_SHA256,
+  javascript,
+  webassembly,
+});
+const kernel = await createOcctKernel({ attestedRuntime });
+```
+
+The loader copies each caller-owned input, verifies the exact canonical release
+manifest against an independently trusted SHA-256 pin, then verifies the
+JavaScript and WASM sizes and digests before importing JavaScript. Kernel
+creation supplies a fresh verified WASM copy and requires the initialized facade
+marker to match the trusted manifest. `attestedRuntime` is mutually exclusive
+with `wasm` and `moduleFactory`.
+
+The opaque pair can be reused to create kernels only through the evaluated
+InvariantCAD internal module instance that created it; cloning the visible
+report does not reproduce executable authority. Its exact runtime-pair identity
+strengthens only the repository-private artifact compatibility fingerprint; it
+does not change persistent-topology fingerprints or advertise `shapeArtifacts`.
+The separate declared-build identity records the manifest, but does not prove
+that recipe ran or authenticate a publisher. See
+[OCCT runtime attestation](/evaluation/occt-runtime-attestation) for the browser
+loader, Node module-hook lifecycle, CSP, failure reasons, and complete
+non-claims.
+
+## Direct custom or rebuilt facade
 
 ```ts
 const kernel = await createOcctKernel({
@@ -82,6 +130,10 @@ const kernel = await createOcctKernel({
 The repository can build and verify a package-neutral facade bundle. The bundle
 contains matched JavaScript/WASM, SHA-256 digests, source and relinking
 instructions, ordered patches, notices, build provenance, and an SBOM.
+
+Raw `moduleFactory` plus `wasm` overrides remain available for an intentionally
+trusted custom or rebuilt pair. They do not perform release-manifest
+attestation or acquire an attested runtime-pair identity.
 
 <Warning>
   Never combine the owned JavaScript factory with stock WASM, or vice versa.

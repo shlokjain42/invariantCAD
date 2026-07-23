@@ -6,8 +6,11 @@ import type {
 import { inspectKernelShapeArtifactSupport } from "../src/artifact-cache.js";
 import type { KernelShapeArtifactCodecCandidate } from "../src/conformance.js";
 import {
+  OCCT_SHAPE_ARTIFACT_CANDIDATE_ACCESS,
   getOcctShapeArtifactCodecCandidate,
+  type OcctShapeArtifactCandidateHost,
   type OcctShapeArtifactCapturedSidecarState,
+  type OcctShapeArtifactCapturedState,
 } from "../src/internal/occt-artifact-candidate.js";
 import {
   decodeOcctArtifactSidecarV2,
@@ -50,6 +53,56 @@ function codec(kernel: GeometryKernel): KernelShapeArtifactCodecCandidate {
     throw new Error("The stock OCCT runtime did not expose its artifact candidate");
   }
   return candidate;
+}
+
+function codecWithRuntimePairIdentity(
+  kernel: GeometryKernel,
+  runtimePairIdentity: string,
+): {
+  readonly codec: KernelShapeArtifactCodecCandidate;
+  readonly restoreCalls: () => number;
+} {
+  const host = (
+    kernel as GeometryKernel & {
+      readonly [OCCT_SHAPE_ARTIFACT_CANDIDATE_ACCESS]?:
+        OcctShapeArtifactCandidateHost;
+    }
+  )[OCCT_SHAPE_ARTIFACT_CANDIDATE_ACCESS];
+  if (host === undefined) {
+    throw new Error("The stock OCCT runtime did not expose its candidate host");
+  }
+  const compatibilityFingerprint = host.compatibilityFingerprint.replace(
+    ";modelingTolerance=",
+    `;runtimeAttestation=${runtimePairIdentity};modelingTolerance=`,
+  );
+  if (compatibilityFingerprint === host.compatibilityFingerprint) {
+    throw new Error("The OCCT candidate fingerprint shape changed");
+  }
+  let restoreCalls = 0;
+  const wrappedHost: OcctShapeArtifactCandidateHost = Object.freeze({
+    compatibilityFingerprint,
+    capture: host.capture,
+    encodeNative: host.encodeNative,
+    restore: (state: OcctShapeArtifactCapturedState) => {
+      restoreCalls += 1;
+      return host.restore(state);
+    },
+  });
+  const wrappedKernel = new Proxy(kernel, {
+    get(target, property, receiver) {
+      return property === OCCT_SHAPE_ARTIFACT_CANDIDATE_ACCESS
+        ? wrappedHost
+        : Reflect.get(target, property, receiver);
+    },
+  });
+  const candidate = getOcctShapeArtifactCodecCandidate(wrappedKernel);
+  if (candidate === undefined) {
+    throw new Error("The runtime-pair candidate codec was unavailable");
+  }
+  return {
+    codec: candidate,
+    restoreCalls: () => restoreCalls,
+  };
 }
 
 function box(kernel: GeometryKernel, feature = "role-box"): KernelShape {
@@ -1024,6 +1077,67 @@ describe("OCCT shape-artifact codec candidate", () => {
     } finally {
       if (source !== undefined) producer.disposeShape(source);
       incompatible.dispose();
+      producer.dispose();
+    }
+  });
+
+  it("rejects another attested runtime-pair identity before native restore", async () => {
+    const producer = await createOcctKernel();
+    const consumer = await createOcctKernel();
+    const firstPair =
+      `invariantcad-occt-runtime-pair@1:sha256:${"a".repeat(64)}`;
+    const secondPair =
+      `invariantcad-occt-runtime-pair@1:sha256:${"b".repeat(64)}`;
+    const producerCandidate = codecWithRuntimePairIdentity(
+      producer,
+      firstPair,
+    );
+    const compatibleCandidate = codecWithRuntimePairIdentity(
+      consumer,
+      firstPair,
+    );
+    const incompatibleCandidate = codecWithRuntimePairIdentity(
+      consumer,
+      secondPair,
+    );
+    let source: KernelShape | undefined;
+    let restored: KernelShape | undefined;
+    try {
+      expect(producerCandidate.codec.capabilities.compatibilityFingerprint).toBe(
+        compatibleCandidate.codec.capabilities.compatibilityFingerprint,
+      );
+      expect(
+        incompatibleCandidate.codec.capabilities.compatibilityFingerprint,
+      ).not.toBe(
+        producerCandidate.codec.capabilities.compatibilityFingerprint,
+      );
+      source = box(producer, "runtime-pair-fingerprint-box");
+      const artifact = await producerCandidate.codec.encodeShapeArtifact(
+        source,
+        ARTIFACT_CONTEXT,
+      );
+      const borrowed = artifact.slice();
+
+      await expectRejected(() =>
+        incompatibleCandidate.codec.decodeShapeArtifact(
+          artifact,
+          ARTIFACT_CONTEXT,
+        ),
+      );
+      expect(artifact).toEqual(borrowed);
+      expect(incompatibleCandidate.restoreCalls()).toBe(0);
+      expect(liveShapeCount(consumer)).toBe(0);
+
+      restored = await compatibleCandidate.codec.decodeShapeArtifact(
+        artifact,
+        ARTIFACT_CONTEXT,
+      );
+      expect(compatibleCandidate.restoreCalls()).toBe(1);
+      expect(consumer.status(restored)).toEqual({ ok: true, code: "VALID" });
+    } finally {
+      if (restored !== undefined) consumer.disposeShape(restored);
+      if (source !== undefined) producer.disposeShape(source);
+      consumer.dispose();
       producer.dispose();
     }
   });

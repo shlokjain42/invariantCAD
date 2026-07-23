@@ -145,12 +145,24 @@ import {
   type OcctShapeArtifactCapturedState,
   type OcctShapeArtifactNativeStructure,
 } from "./internal/occt-artifact-candidate.js";
+import {
+  assertAttestedFacadeMarker,
+  captureAttestedOcctRuntime,
+  type AttestedOcctRuntime,
+} from "./internal/occt-runtime-attestation.js";
 
 export {
   DEFAULT_OCCT_EXACT_BOOLEAN_HISTORY_RECORD_LIMIT,
   DEFAULT_OCCT_EXACT_EDGE_TREATMENT_HISTORY_RECORD_LIMIT,
   DEFAULT_OCCT_EXACT_SOLID_OFFSET_HISTORY_RECORD_LIMIT,
 };
+export {
+  INVARIANTCAD_OCCT_FACADE_0_9_0_RELEASE_MANIFEST_SHA256,
+  OcctRuntimeAttestationError,
+  type AttestedOcctRuntime,
+  type OcctRuntimeAttestation,
+  type OcctRuntimeAttestationFailureReason,
+} from "./internal/occt-runtime-attestation.js";
 
 const OCCT_SHAPE = Symbol("InvariantCAD.OcctShape");
 const TOPOLOGY_HASH_UPPER_BOUND = 2_147_483_647;
@@ -331,6 +343,7 @@ function artifactFloat64(value: number): string {
 
 function occtArtifactCandidateCompatibilityFingerprint(
   runtime: string | undefined,
+  runtimePairIdentity: string | undefined,
   modelingTolerance: number,
   tessellation: MeshOptions,
   maxExactBooleanHistoryRecords: number,
@@ -371,6 +384,9 @@ function occtArtifactCandidateCompatibilityFingerprint(
       "invariantcad-occt-shape-candidate@2",
       "occt-wasm@3.7.0",
       `runtime=${runtime}`,
+      ...(runtimePairIdentity === undefined
+        ? []
+        : [`runtimeAttestation=${runtimePairIdentity}`]),
       `modelingTolerance=f64:${artifactFloat64(modelingTolerance)}`,
       `linearDeflection=${
         linearDeflection === undefined
@@ -796,6 +812,12 @@ export interface OcctKernelOptions {
    * glue is used and a custom `wasm` source is passed to that stock factory.
    */
   readonly moduleFactory?: OcctModuleFactory;
+  /**
+   * Opaque verified JS/WASM pair returned by an environment-specific
+   * InvariantCAD attested loader. This cannot be combined with `wasm` or
+   * `moduleFactory`.
+   */
+  readonly attestedRuntime?: AttestedOcctRuntime;
   readonly tessellation?: MeshOptions;
   readonly modelingTolerance?: number;
   /**
@@ -886,6 +908,7 @@ class OcctKernel implements GeometryKernel {
     maxExactSolidOffsetHistoryRecords = exactSolidOffsetHistoryRecordLimit(
       options.maxExactSolidOffsetHistoryRecords,
     ),
+    runtimePairIdentity?: string,
   ) {
     this.raw = raw;
     this.facade = facade;
@@ -981,6 +1004,7 @@ class OcctKernel implements GeometryKernel {
     this.artifactCandidateCompatibilityFingerprint =
       occtArtifactCandidateCompatibilityFingerprint(
         topologySignatureRuntime,
+        runtimePairIdentity,
         this.modelingTolerance,
         this.tessellation,
         this.maxExactBooleanHistoryRecords,
@@ -5448,8 +5472,27 @@ export async function createOcctKernel(
   // Snapshot every caller-owned initialization input before the first await.
   // Runtime identity and its fingerprint must describe the same call-time
   // values that are eventually passed to Emscripten and the kernel wrapper.
-  const wasm = captureOcctWasmSource(options.wasm);
-  const moduleFactory = options.moduleFactory;
+  const wasmInput = options.wasm;
+  const moduleFactoryInput = options.moduleFactory;
+  const attestedRuntime = options.attestedRuntime;
+  if (
+    attestedRuntime !== undefined &&
+    (wasmInput !== undefined || moduleFactoryInput !== undefined)
+  ) {
+    throw new TypeError(
+      "attestedRuntime cannot be combined with wasm or moduleFactory",
+    );
+  }
+  const capturedAttestedRuntime =
+    attestedRuntime === undefined
+      ? undefined
+      : captureAttestedOcctRuntime(attestedRuntime);
+  const wasm =
+    capturedAttestedRuntime === undefined
+      ? captureOcctWasmSource(wasmInput)
+      : capturedAttestedRuntime.wasmBinary;
+  const moduleFactory =
+    capturedAttestedRuntime?.moduleFactory ?? moduleFactoryInput;
   const tessellation =
     options.tessellation === undefined
       ? undefined
@@ -5469,8 +5512,13 @@ export async function createOcctKernel(
       options.maxExactSolidOffsetHistoryRecords,
     );
   const capturedOptions: OcctKernelOptions = Object.freeze({
-    ...(wasm === undefined ? {} : { wasm }),
-    ...(moduleFactory === undefined ? {} : { moduleFactory }),
+    ...(capturedAttestedRuntime === undefined && wasm !== undefined
+      ? { wasm }
+      : {}),
+    ...(capturedAttestedRuntime === undefined && moduleFactory !== undefined
+      ? { moduleFactory }
+      : {}),
+    ...(attestedRuntime === undefined ? {} : { attestedRuntime }),
     ...(tessellation === undefined ? {} : { tessellation }),
     ...(modelingTolerance === undefined ? {} : { modelingTolerance }),
     maxExactBooleanHistoryRecords,
@@ -5503,8 +5551,32 @@ export async function createOcctKernel(
     moduleOptions.locateFile = (path) =>
       path.endsWith(".wasm") ? location : path;
   }
+  if (capturedAttestedRuntime !== undefined) {
+    moduleOptions.locateFile = (path) =>
+      path.endsWith(".wasm")
+        ? "about:blank#invariantcad-attested-occt-wasm"
+        : path;
+  }
   const module = await createModule(moduleOptions);
-  const facade = probeOcctFacade(module);
+  let facade: OcctFacadeProbe | undefined;
+  try {
+    facade = probeOcctFacade(module);
+  } catch (error) {
+    if (capturedAttestedRuntime !== undefined) {
+      assertAttestedFacadeMarker(
+        capturedAttestedRuntime.expectedFacadeMarker,
+        undefined,
+        error,
+      );
+    }
+    throw error;
+  }
+  if (capturedAttestedRuntime !== undefined) {
+    assertAttestedFacadeMarker(
+      capturedAttestedRuntime.expectedFacadeMarker,
+      facade?.version,
+    );
+  }
   const KernelConstructor = RawKernel as unknown as new (
     module: unknown,
   ) => RawOcctKernel;
@@ -5517,6 +5589,7 @@ export async function createOcctKernel(
       maxExactBooleanHistoryRecords,
       maxExactEdgeTreatmentHistoryRecords,
       maxExactSolidOffsetHistoryRecords,
+      capturedAttestedRuntime?.runtimePairIdentity,
     );
   } catch (error) {
     raw[Symbol.dispose]();

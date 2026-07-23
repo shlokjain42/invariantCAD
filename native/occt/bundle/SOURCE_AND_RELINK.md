@@ -11,6 +11,11 @@ every recipient's licensing obligations.
 - `runtime/occt-wasm.js` and `runtime/occt-wasm.wasm` are an inseparable
   generated pair. Verify them against `SHA256SUMS` and
   `metadata/release.json` before loading either file.
+- `metadata/release.json` is canonical closed-schema release metadata containing
+  the exact runtime sizes/digests and declared source recipe. InvariantCAD's
+  reviewed ABI 0.9 manifest digest is exported as
+  `INVARIANTCAD_OCCT_FACADE_0_9_0_RELEASE_MANIFEST_SHA256`; a replacement build
+  needs a separately reviewed digest rather than that old release pin.
 - `source/native/occt/upstream.lock.json` fixes the upstream `occt-wasm` and
   OCCT commits, compiler versions, builder platform, and builder image digest.
 - `source/native/occt/patches/` contains every InvariantCAD-owned change in the
@@ -179,9 +184,13 @@ Read reports expose the echoed preflight limits, observed work, maximum nesting
 and location-power magnitude, consumed bytes, preflight code/completion, and
 whether OCCT deserialization started, in addition to ABI 0.8's allocation
 telemetry. These controls are not live/peak-memory proof or prompt
-timer-driven cancellation for synchronous same-thread WASM. Nor do they attest
-the exact loaded runtime, prove compatibility across processes, or supply
-comprehensive durable identity for indistinguishable symmetric topology.
+timer-driven cancellation for synchronous same-thread WASM. The
+environment-specific InvariantCAD loaders can separately verify the exact
+JavaScript/WASM pair under an independently trusted canonical release-manifest
+pin and bind that pair identity into the private artifact fingerprint. That does
+not prove the declared build execution or publisher, attest the wider
+application/library/wrapper/host, prove compatibility across platforms, or
+supply comprehensive durable identity for indistinguishable symmetric topology.
 `shapeArtifacts` therefore remains private and unadvertised.
 
 ## Modify OCCT and relink
@@ -250,13 +259,20 @@ rebuilding and relinking the complete pair. To do that:
    counts/products, locations, geometry and representation tags, TShape
    hierarchy/reachability, work/depth/location-power envelopes, and trailing
    bytes; assert that every rejection has `deserializationStarted = false`; and
-   prove recovery in the same runtime after recoverable failures. These tests
-   establish exact preflight for the owned writer profile, not a live/peak-memory
-   bound, prompt same-thread cancellation, runtime attestation, cross-process
+   prove recovery in the same runtime after recoverable failures. Also run the
+   Node/browser attested-loader corpus and the fresh-process candidate gate
+   against a separately reviewed canonical manifest digest. These tests
+   establish exact preflight for the owned writer profile and exact runtime-pair
+   input identity, not a live/peak-memory bound, prompt same-thread cancellation,
+   authenticated build execution/publisher identity, cross-platform
    compatibility, or comprehensive durable symmetric-topology identity.
-7. Deploy both rebuilt runtime files together. InvariantCAD accepts an explicit
-   module factory and WebAssembly override and does not require release hashes
-   when an application intentionally supplies its own trusted build.
+7. Deploy both rebuilt runtime files and their updated canonical
+   `metadata/release.json` together. Review and pin that new manifest digest,
+   then load the pair through the environment-specific attested loader. The
+   official ABI 0.9 pin intentionally rejects replacement bytes. InvariantCAD
+   also accepts an explicit module factory and WebAssembly override when an
+   application deliberately chooses the raw trusted-build path without
+   attestation.
 
 The bundle contains the deterministic recipe and owned patches, but not a
 prelinked object-file kit. Preserve any additional relinkable material required
@@ -265,6 +281,10 @@ for the way you distribute the statically linked runtime.
 ## Integrity and authenticity boundary
 
 `SHA256SUMS` detects accidental or malicious byte changes only when the
-expected manifest is obtained through a trusted channel. The manifest and
-provenance in this bundle are unsigned. They do not authenticate a publisher,
-prove how the runtime was built, or replace source and license review.
+expected manifest is obtained through a trusted channel. The attested loader
+instead checks exact canonical `metadata/release.json` against an independently
+trusted SHA-256 pin, then checks the JavaScript/WASM pair against that manifest.
+Its `declaredBuildIdentity` records the exact manifest; it does not prove that
+the declared recipe ran. The manifest and provenance in this bundle are
+unsigned. They do not authenticate a publisher, prove how the runtime was
+built, or replace source and license review.

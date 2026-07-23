@@ -6,6 +6,8 @@ export default defineConfig({
     "src/cli.ts",
     "src/conformance.ts",
     "src/occt-kernel.ts",
+    "src/occt-runtime-browser.ts",
+    "src/occt-runtime-node.ts",
   ],
   format: ["esm"],
   dts: false,

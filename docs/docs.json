@@ -136,6 +136,7 @@
               "evaluation/kernels",
               "evaluation/manifold",
               "evaluation/open-cascade",
+              "evaluation/occt-runtime-attestation",
               "evaluation/browser-and-workers",
               "evaluation/diagnostics-and-limits"
             ]

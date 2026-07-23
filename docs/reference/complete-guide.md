@@ -119,7 +119,7 @@ if (result.ok) {
 evaluator.dispose();
 ```
 
-The backend is explicitly selected; a design document never contains OCCT handles or backend-specific objects. The default `createOcctKernel()` loads stock `occt-wasm` and supports the exact geometry features listed below except draft, but its Boolean, fillet/chamfer, and shell/offset topology history is partial. Draft, complete exact multi-input Boolean, fillet/chamfer, and shell/offset evolution, plus the stronger major multi-arc/eccentric-profile composite guarantees, are advertised only when `moduleFactory` loads the matched InvariantCAD-owned facade ABI 0.9 build. ABI 0.9 retains the complete ABI 0.6 modeling/history surface, ABI 0.7's bounded artifact transport, and ABI 0.8's private cumulative native allocation-request budget, then adds exact owned-profile BinTools-v4 structural preflight only for the repository-private candidate; it does not advertise a shape-artifact codec. `wasm` is an optional explicit binary override for environments where that factory cannot locate its sibling binary. The repository can turn that local build into a verified, package-neutral bundle, but applications must still supply its runtime explicitly. See [Browser initialization](#browser-initialization).
+The backend is explicitly selected; a design document never contains OCCT handles or backend-specific objects. The default `createOcctKernel()` loads stock `occt-wasm` and supports the exact geometry features listed below except draft, but its Boolean, fillet/chamfer, and shell/offset topology history is partial. Draft, complete exact multi-input Boolean, fillet/chamfer, and shell/offset evolution, plus the stronger major multi-arc/eccentric-profile composite guarantees, are advertised only when the matched InvariantCAD-owned facade ABI 0.9 build passes the exact facade probe. A caller can supply that pair directly through `moduleFactory` plus optional `wasm`, or preferably verify a reviewed bundle first with the Node/browser attested loader and pass its opaque `attestedRuntime`. ABI 0.9 retains the complete ABI 0.6 modeling/history surface, ABI 0.7's bounded artifact transport, and ABI 0.8's private cumulative native allocation-request budget, then adds exact owned-profile BinTools-v4 structural preflight only for the repository-private candidate; it does not advertise a shape-artifact codec. The repository can turn that local build into a verified, package-neutral bundle, but applications must still acquire and supply its runtime explicitly. See [Browser initialization](#browser-initialization) and [OCCT runtime attestation](/evaluation/occt-runtime-attestation).
 
 ### Exact path sweeps
 
@@ -846,7 +846,7 @@ The repository contains a private OCCT artifact candidate for conformance develo
 
 The deterministic stock-runtime v2 asymmetric-box golden is `11,591` bytes with fixture witness `invariantcad:kernel-shape-artifact-fixture:v1:sha256:221d1ea2265a26df1293e63d625d25e85eb8a86041bdea53a927269427e3d16a`; its semantic witness remains `invariantcad:kernel-shape-semantic:v1:sha256:40ae684e4a2fad512f54e1f1be4443acf7faf2f34fc6b281c7b816d8d3366cb2`. The committed v1 fixture is negative-only and must be rejected before native restoration. Run `pnpm artifact:fixture:occt -- --check --version v2` to reconstruct and verify the reviewed bytes without writing. Direct state/corruption/ownership tests and the candidate-mode audit remain finite non-certifying evidence. Owned facade ABI 0.8 retains ABI 0.7's capped chunked BinTools-v4 writer and bounded-input report-owned reader with one-shot same-kernel transfer, then adds a fixed 128 MiB cumulative native allocation-request limit and report telemetry around both calls. ABI 0.9 retains that boundary and adds exact structural parsing of the owned writer's BinTools-v4 profile before OCCT deserialization under `1,000,000` work units, `64` nesting levels, and location-power magnitude `1,000,000`. It validates canonical geometry, count products, representations, locations, and the backward-only TShape hierarchy/root/reachability. Bounded TShape metadata is charged to the native quota, while conservative squared aggregate geometry, representation, expanded-topology, wire, and face validation envelopes are charged to work. Global geometry-work squaring deliberately admits roughly fewer than `1,000` geometry work units under the shared cap, with other charges reducing it; this is a private artifact-compatibility limit, not a core modeling limit. Reports expose the echoed limits, used work, maximum depth/location power, consumed bytes, preflight code/completion, `deserializationStarted`, and native request/allocation telemetry. ABI 0.8 remains loadable without those fields; ABI 0.7 retains bounded transport without the request quota; stock and older owned runtimes retain unbounded native materialization, although their v2 semantic sidecar is bounded. The codec is reachable only through a package-private symbol hook, is absent from every exported package entry point and ordinary `GeometryKernel` surface, and does not advertise `shapeArtifacts`; native array order is used only to fail closed, not as durable topology identity.
 
-This is still a protocol foundation, not an operational evaluator cache. Neither Manifold nor the stock or owned OCCT adapters currently advertises `shapeArtifacts`, and the evaluator does not read, decode, write, or evict these records. The low-level functions and conformance audit do not call a codec automatically during evaluation. In the lockfile-tested Manifold 3.5.1 runtime, public Float32 Mesh reconstruction of a `1 × 2 × 3` box translated by `0.1` on X changes its X bounds from `[-0.4, 0.6]` to `[-0.4000000059604645, 0.6000000238418579]` and its volume from `6` to `6.000000178813934`; restoring the source tolerance with `setTolerance(...)` does not recover either loss. ABI 0.7 fixes pre-ceiling native output materialization and transactional transfer, ABI 0.8 adds private cumulative native allocation-request denial and telemetry, ABI 0.9 closes the exact owned-profile grammar/count/product preflight gap, and sidecar v2 closes intermediate JSON amplification. The 128 MiB cumulative-request counter and structural-work envelope are not a live/peak-memory proof. Same-thread synchronous WASM cannot provide prompt timer-driven cancellation in flight, enumeration is not comprehensive durable identity for indistinguishable symmetric topology, the runtime does not attest the exact loaded JavaScript/WASM/build pair, and the reviewed stock golden is not cross-process compatibility proof. Production still requires prompt cancellation outside the same-thread gap, comprehensive durable artifact-local identity, exact runtime/build attestation, reviewed owned-runtime cross-process goldens, and evaluator/cache integration.
+This is still a protocol foundation, not an operational evaluator cache. Neither Manifold nor the stock or owned OCCT adapters currently advertises `shapeArtifacts`, and the evaluator does not read, decode, write, or evict these records. The low-level functions and conformance audit do not call a codec automatically during evaluation. In the lockfile-tested Manifold 3.5.1 runtime, public Float32 Mesh reconstruction of a `1 × 2 × 3` box translated by `0.1` on X changes its X bounds from `[-0.4, 0.6]` to `[-0.4000000059604645, 0.6000000238418579]` and its volume from `6` to `6.000000178813934`; restoring the source tolerance with `setTolerance(...)` does not recover either loss. ABI 0.7 fixes pre-ceiling native output materialization and transactional transfer, ABI 0.8 adds private cumulative native allocation-request denial and telemetry, ABI 0.9 closes the exact owned-profile grammar/count/product preflight gap, and sidecar v2 closes intermediate JSON amplification. The Node/browser attested loaders now verify an exact owned JavaScript/WASM pair against an independently pinned canonical release manifest, and that pair identity is bound only into the private artifact compatibility fingerprint. The declared-build identity records the manifest but does not authenticate build execution or a publisher. The 128 MiB cumulative-request counter and structural-work envelope are not a live/peak-memory proof. Same-thread synchronous WASM cannot provide prompt timer-driven cancellation in flight, enumeration is not comprehensive durable identity for indistinguishable symmetric topology, and the reviewed stock golden is not cross-process compatibility proof. Production still requires prompt cancellation outside the same-thread gap, comprehensive durable artifact-local identity, reviewed owned-runtime cross-process goldens, and evaluator/cache integration.
 
 The current authoring API emits `DesignDocumentV6`. `parseDocument`, `parseDocumentValue`, `stringifyDocument`, `cloneDocument`, `hashDocument`, validation, and evaluation preserve a supplied v1, v2, v3, v4, v5, or v6 document. `migrateDocument` validates and upgrades v1–v5 to v6 and is idempotent for v6. V1 cannot contain a topology-reference registry or persistent selector atom; v2 can but retains the pre-loft role vocabulary; v3 adds loft roles but rejects sweep and edge-treatment roles; v4 adds the six sweep roles but rejects `fillet.face.blend` and `chamfer.face.bevel`; v5 adds exactly those two face roles while remaining face/edge-only; and v6 adds persistent vertices, vertex `position(...)`, and edge↔vertex adjacency without adding semantic vertex roles. V1–v5 remain frozen and directly evaluable. Migration never rewrites a stored protocol version, descriptor fingerprint, lineage, geometry, or adjacency record. The document schema version is independent of the npm package version, primary OCCT topology descriptor `@6`, protocol-v1 compatibility descriptor `@4`/`@5`, owned facade ABI 0.9, exact-evolution protocol v1, persistent-reference protocol v1/v2, feature-hash protocol v1, artifact-cache protocol v1, kernel-shape-artifact protocol v1, shape-artifact audit protocol v1, semantic-observation protocol v1, and artifact evaluator-semantics version. ABI 0.9 retains ABI 0.6's modeling/history surface, ABI 0.7's bounded artifact transport, and ABI 0.8's private cumulative native allocation-request budget, then adds exact owned-profile structural preflight only for the repository-private candidate.
 
@@ -934,7 +934,44 @@ subpath under a strict dependency-isolating package manager. The default
 `createOcctKernel()` path does not require an application-level import from
 `occt-wasm`.
 
-That form still pairs the supplied binary with the stock `occt-wasm` JavaScript glue and therefore does not enable draft or exact Boolean, fillet/chamfer, or shell/offset topology evolution. Because InvariantCAD cannot recognize that overridden binary as the known default stock runtime, it also omits `topology.signatures` and `topology.signatureProfiles`; topology inspection still works, but the kernel makes no persistent-reference compatibility promise. Load the stronger guarantees with the generated JavaScript factory from the owned-facade build. A factory may locate its matched sibling WASM itself; pass `wasm` when the application or bundler needs an explicit binary URL:
+That form still pairs the supplied binary with the stock `occt-wasm` JavaScript glue and therefore does not enable draft or exact Boolean, fillet/chamfer, or shell/offset topology evolution. Because InvariantCAD cannot recognize that overridden binary as the known default stock runtime, it also omits `topology.signatures` and `topology.signatureProfiles`; topology inspection still works, but the kernel makes no persistent-reference compatibility promise.
+
+For a reviewed owned-facade bundle in a browser, verify all three acquired files before kernel creation:
+
+```ts
+import { createOcctKernel } from "invariantcad/kernels/occt";
+import {
+  INVARIANTCAD_OCCT_FACADE_0_9_0_RELEASE_MANIFEST_SHA256,
+  loadAttestedOcctRuntime,
+} from "invariantcad/kernels/occt/browser";
+
+const attestedRuntime = await loadAttestedOcctRuntime({
+  releaseManifest,
+  expectedReleaseManifestSha256:
+    INVARIANTCAD_OCCT_FACADE_0_9_0_RELEASE_MANIFEST_SHA256,
+  javascript,
+  webassembly,
+});
+const kernel = await createOcctKernel({ attestedRuntime });
+```
+
+The loader snapshots the exact `ArrayBuffer`/`Uint8Array` views, verifies
+canonical `metadata/release.json` against the independently trusted SHA-256
+pin, then verifies both runtime files before importing the JavaScript through a
+short-lived Blob URL. `attestedRuntime` is mutually exclusive with `wasm` and
+`moduleFactory`, can be reused for fresh kernel instances only through the
+evaluated InvariantCAD internal module instance that created it, and requires
+`blob:` in the browser CSP. Cloning its visible report does not reproduce the
+executable authority. Node applications use
+`invariantcad/kernels/occt/node`, whose process-global module hook requires
+worker permission and leaves no temporary executable file. See
+[OCCT runtime attestation](/evaluation/occt-runtime-attestation) for complete
+acquisition examples and lifecycle/security boundaries.
+
+An intentionally trusted custom or rebuilt runtime can still use the direct
+generated JavaScript factory. A factory may locate its matched sibling WASM
+itself; pass `wasm` when the application or bundler needs an explicit binary
+URL:
 
 ```ts
 import ownedOcctModuleFactory from "./occt-facade/occt-wasm.js";
@@ -950,7 +987,19 @@ const kernel = await createOcctKernel({
 });
 ```
 
-The paths and `?url` syntax are application/bundler-specific. The three history-record values shown above are independent defaults; callers may lower one to constrain that operation family or raise it for exceptionally large exact graphs, up to the signed 32-bit facade ceiling. InvariantCAD passes each budget to its native operation and validates the returned count before indexed JavaScript copying. InvariantCAD probes the loaded module before advertising draft, the ABI 0.3 composite refinements retained by current ABI 0.9, exact Boolean evolution, exact fillet/chamfer evolution, or exact shell/offset evolution. A stock module remains usable for its other exact features, including shell/offset geometry with partial history, while a partial, mismatched, or unknown owned-facade marker fails closed instead of claiming guarantees it cannot prove.
+The paths and `?url` syntax are application/bundler-specific, and this raw
+override does not acquire an attested runtime-pair identity. The three
+history-record values shown above are independent defaults; callers may lower
+one to constrain that operation family or raise it for exceptionally large
+exact graphs, up to the signed 32-bit facade ceiling. InvariantCAD passes each
+budget to its native operation and validates the returned count before indexed
+JavaScript copying. InvariantCAD probes the loaded module before advertising
+draft, the ABI 0.3 composite refinements retained by current ABI 0.9, exact
+Boolean evolution, exact fillet/chamfer evolution, or exact shell/offset
+evolution. A stock module remains usable for its other exact features, including
+shell/offset geometry with partial history, while a partial, mismatched, or
+unknown owned-facade marker fails closed instead of claiming guarantees it
+cannot prove.
 
 The owned facade is not part of the `invariantcad` npm tarball and no separate
 facade package is currently published. This repository can package a local
@@ -967,10 +1016,12 @@ The unpacked runtime is under
 `.artifacts/occt-facade-bundle/invariantcad-occt-facade-0.9.0/runtime/`.
 Here `0.9.0` is the facade ABI/bundle version, not the npm package version,
 document schema version, or product-roadmap milestone.
-Its JavaScript and WASM files must be loaded as a matched pair using the
-`moduleFactory` and `wasm` options shown above. The archive is package-manager
-neutral: it is not an npm package, does not install itself, and is never found,
-downloaded, or extracted by `createOcctKernel`.
+Its JavaScript and WASM files must be loaded as a matched pair, preferably
+through the attested loader with a separately trusted manifest digest or
+deliberately through the raw `moduleFactory` and `wasm` options shown above for a
+custom build. The archive is package-manager neutral: it is not an npm package,
+does not install itself, and is never found, downloaded, or extracted by
+`createOcctKernel`.
 
 `pnpm test:occt-facade-bundle` also packs the npm library, installs that tarball
 in a fresh temporary consumer, and checks the owned ABI 0.9 runtime: the ABI 0.6

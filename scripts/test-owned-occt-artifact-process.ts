@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import {
   copyFile,
+  mkdir,
   mkdtemp,
   open,
   readFile,
@@ -26,7 +27,10 @@ const feature = "owned-artifact-process.asymmetric-box";
 function runtimeDirectory(arguments_: readonly string[]): string {
   const values = arguments_[0] === "--" ? arguments_.slice(1) : arguments_;
   if (values.length === 0) {
-    return resolve(projectRoot, ".artifacts/occt-facade");
+    return resolve(
+      projectRoot,
+      ".artifacts/occt-facade-bundle/invariantcad-occt-facade-0.9.0/runtime",
+    );
   }
   if (
     values.length === 2 &&
@@ -141,6 +145,25 @@ assert.equal(
   true,
 );
 assert.equal(
+  producerA.evidence.runtime.releaseManifest,
+  "metadata/release.json",
+);
+assert.equal(
+  producerA.evidence.runtime.releaseManifestSha256,
+  "3403826c60c891c132c2890e8a87d33f91883f98d53014483d7e90cd2006ab6c",
+);
+assert.match(
+  producerA.evidence.runtime.runtimePairIdentity,
+  /^invariantcad-occt-runtime-pair@1:sha256:[0-9a-f]{64}$/u,
+);
+assert.equal(
+  producerA.evidence.runtime.declaredBuildIdentity,
+  `invariantcad-occt-release-manifest@1:sha256:${producerA.evidence.runtime.releaseManifestSha256}`,
+);
+assert.equal(producerA.evidence.runtime.buildExecutionObserved, false);
+assert.equal(producerA.evidence.runtime.buildExecutionAuthenticated, false);
+assert.equal(producerA.evidence.runtime.publisherAuthenticated, false);
+assert.equal(
   producerA.evidence.runtime.facadeMarker,
   "invariantcad-facade@0.9.0+occt-wasm.3.7.0",
 );
@@ -176,6 +199,11 @@ assert.match(
   producerA.evidence.capabilities.compatibilityFingerprint,
   /nativeArchivePreflight=invariantcad-bintools-v4-owned-profile@1/,
 );
+assert.ok(
+  producerA.evidence.capabilities.compatibilityFingerprint.includes(
+    `runtimeAttestation=${producerA.evidence.runtime.runtimePairIdentity}`,
+  ),
+);
 
 const borrowedArtifact = producerA.artifact;
 const beforeConsume = borrowedArtifact.slice();
@@ -205,16 +233,47 @@ assert.deepEqual(consumerB.evidence.artifact, producerA.evidence.artifact);
 assert.equal(consumerB.evidence.shapeArtifactsAbsent, true);
 assert.equal(consumerB.evidence.certifiesCompatibility, false);
 
-const tamperedRuntime = await mkdtemp(
-  join(tmpdir(), "invariantcad-tampered-occt-runtime-"),
+const tamperedBundle = await mkdtemp(
+  join(tmpdir(), "invariantcad-tampered-occt-bundle-"),
 );
 try {
+  const tamperedRuntime = join(tamperedBundle, "runtime");
+  const tamperedMetadata = join(tamperedBundle, "metadata");
+  await Promise.all([
+    mkdir(tamperedRuntime),
+    mkdir(tamperedMetadata),
+  ]);
   const javascriptPath = join(tamperedRuntime, "occt-wasm.js");
   const webAssemblyPath = join(tamperedRuntime, "occt-wasm.wasm");
+  const releaseManifestPath = join(tamperedMetadata, "release.json");
   await Promise.all([
     copyFile(resolve(directory, "occt-wasm.js"), javascriptPath),
     copyFile(resolve(directory, "occt-wasm.wasm"), webAssemblyPath),
+    copyFile(
+      resolve(directory, "../metadata/release.json"),
+      releaseManifestPath,
+    ),
   ]);
+  await mutateFirstByte(releaseManifestPath);
+  await assert.rejects(
+    runOcctArtifactProcess({
+      operation: "produce",
+      runtimeDirectory: tamperedRuntime,
+      feature,
+      maxArtifactBytes: maximumArtifactBytes,
+      timeoutMs: normalTimeoutMs,
+    }),
+    (error: unknown) =>
+      error instanceof OcctArtifactProcessChildError &&
+      error.childError.code === "OPERATION_FAILED" &&
+      error.message.includes("independently trusted SHA-256 pin"),
+    "A one-byte release-manifest mutation must fail before execution",
+  );
+
+  await copyFile(
+    resolve(directory, "../metadata/release.json"),
+    releaseManifestPath,
+  );
   await mutateFirstByte(javascriptPath);
   await assert.rejects(
     runOcctArtifactProcess({
@@ -227,7 +286,7 @@ try {
     (error: unknown) =>
       error instanceof OcctArtifactProcessChildError &&
       error.childError.code === "OPERATION_FAILED" &&
-      error.message.includes("do not match trusted release input"),
+      error.message.includes("does not match the trusted release manifest"),
     "A one-byte JavaScript mutation must fail before execution",
   );
 
@@ -244,11 +303,11 @@ try {
     (error: unknown) =>
       error instanceof OcctArtifactProcessChildError &&
       error.childError.code === "OPERATION_FAILED" &&
-      error.message.includes("do not match trusted release input"),
+      error.message.includes("does not match the trusted release manifest"),
     "A one-byte WebAssembly mutation must fail before execution",
   );
 } finally {
-  await rm(tamperedRuntime, { recursive: true, force: true });
+  await rm(tamperedBundle, { recursive: true, force: true });
 }
 
 const stallStarted = performance.now();

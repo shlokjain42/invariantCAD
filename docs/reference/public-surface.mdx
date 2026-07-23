@@ -73,12 +73,38 @@ compatible `MeshData`, including meshes produced outside an evaluated output.
 ## `invariantcad/kernels/occt`
 
 This entry point exposes `createOcctKernel`, OCCT initialization options, custom
-module-factory types, and documented OCCT-specific diagnostics/refinements. It
-loads the larger exact backend only when imported.
+module-factory types, attested-runtime integration types, and documented
+OCCT-specific diagnostics/refinements. It loads the larger exact backend only
+when imported.
 
 ```ts
 import { createOcctKernel } from "invariantcad/kernels/occt";
 ```
+
+## `invariantcad/kernels/occt/browser`
+
+This entry point verifies exact owned-facade release-manifest, JavaScript, and
+WASM bytes, then imports the verified JavaScript through a Blob module URL in a
+browser or module worker.
+
+```ts
+import { loadAttestedOcctRuntime } from "invariantcad/kernels/occt/browser";
+```
+
+## `invariantcad/kernels/occt/node`
+
+This entry point exposes the same attested-runtime protocol through Node's
+module-hook loader. The returned opaque runtime is consumed by
+`createOcctKernel`.
+
+```ts
+import { loadAttestedOcctRuntime } from "invariantcad/kernels/occt/node";
+```
+
+Both loaders require caller-acquired bytes and an independently trusted
+release-manifest digest. See
+[OCCT runtime attestation](/evaluation/occt-runtime-attestation) for their
+security boundary and environment requirements.
 
 ## `invariantcad/conformance`
 
@@ -111,5 +137,5 @@ public TypeScript APIs, but it must not reinterpret an already frozen document
 version. Read the changelog during every `0.x` upgrade.
 
 The generated [export index](/reference/export-index) inventories every named
-export from the three package entry points and is checked against source during
-CI.
+export from the five JavaScript package entry points and is checked against
+source during CI.

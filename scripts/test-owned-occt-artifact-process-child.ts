@@ -2,11 +2,9 @@ import { createHash } from "node:crypto";
 import {
   constants,
   open,
-  rm,
   writeFile,
 } from "node:fs/promises";
-import { dirname, isAbsolute, join, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { isAbsolute, resolve } from "node:path";
 import { inspectKernelShapeArtifactSupport } from "../src/artifact-cache.js";
 import { hashKernelShapeSemanticObservation } from "../src/conformance.js";
 import { getOcctShapeArtifactCodecCandidate } from "../src/internal/occt-artifact-candidate.js";
@@ -16,8 +14,12 @@ import type {
 } from "../src/kernel.js";
 import {
   createOcctKernel,
-  type OcctModuleFactory,
 } from "../src/occt-kernel.js";
+import {
+  INVARIANTCAD_OCCT_FACADE_0_9_0_RELEASE_MANIFEST_SHA256,
+  loadAttestedOcctRuntime,
+  type AttestedOcctRuntime,
+} from "../src/occt-runtime-node.js";
 import {
   observeKernelShapeSemantics,
   type KernelShapeSemanticObservationPlan,
@@ -36,36 +38,15 @@ import {
   type OcctArtifactProcessRuntimeEvidence,
 } from "./occt-artifact-process-protocol.js";
 
-interface RuntimePin {
-  readonly fileName: "occt-wasm.js" | "occt-wasm.wasm";
-  readonly size: number;
-  readonly sha256: string;
-}
-
-interface TrustedReleaseInput {
-  readonly facadeMarker: string;
-  readonly javascript: RuntimePin;
-  readonly webAssembly: RuntimePin;
-}
-
 interface LoadedRuntime {
-  readonly moduleFactory: OcctModuleFactory;
-  readonly wasm: Uint8Array;
+  readonly attestedRuntime: AttestedOcctRuntime;
   readonly evidence: OcctArtifactProcessRuntimeEvidence;
-  readonly assertUsed: () => void;
-  readonly cleanup: () => Promise<void>;
 }
 
-const projectRoot = fileURLToPath(new URL("..", import.meta.url));
-const releaseInputPath = resolve(
-  projectRoot,
-  "native/occt/bundle/release-input.json",
-);
-const maximumReleaseInputBytes = 256 * 1024;
-const maximumJavascriptBytes = 4 * 1024 * 1024;
-const maximumWebAssemblyBytes = 256 * 1024 * 1024;
+const maximumReleaseManifestBytes = 1024 * 1024;
+const maximumJavascriptBytes = 16 * 1024 * 1024;
+const maximumWebAssemblyBytes = 512 * 1024 * 1024;
 const maximumObservationBytes = 16 * 1024 * 1024;
-const sha256Pattern = /^[0-9a-f]{64}$/u;
 
 class InjectedTrapError extends WebAssembly.RuntimeError {
   constructor() {
@@ -81,107 +62,8 @@ class OcctArtifactProcessCleanupError extends AggregateError {
   }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function exactKeys(
-  value: Record<string, unknown>,
-  expected: readonly string[],
-): boolean {
-  const actual = Object.keys(value).sort();
-  const wanted = [...expected].sort();
-  return (
-    actual.length === wanted.length &&
-    actual.every((key, index) => key === wanted[index])
-  );
-}
-
 function sha256(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
-}
-
-function runtimePin(
-  value: unknown,
-  fileName: RuntimePin["fileName"],
-  mediaType: "text/javascript" | "application/wasm",
-  maximumBytes: number,
-): RuntimePin {
-  if (
-    !isRecord(value) ||
-    !exactKeys(value, ["source", "target", "mediaType", "size", "sha256"]) ||
-    value.source !== fileName ||
-    value.target !== `runtime/${fileName}` ||
-    value.mediaType !== mediaType ||
-    typeof value.size !== "number" ||
-    !Number.isSafeInteger(value.size) ||
-    value.size <= 0 ||
-    value.size > maximumBytes ||
-    typeof value.sha256 !== "string" ||
-    !sha256Pattern.test(value.sha256)
-  ) {
-    throw new TypeError(`Trusted ${fileName} release input is malformed`);
-  }
-  return Object.freeze({
-    fileName,
-    size: value.size,
-    sha256: value.sha256,
-  });
-}
-
-function trustedReleaseInput(value: unknown): TrustedReleaseInput {
-  if (
-    !isRecord(value) ||
-    !exactKeys(value, [
-      "schemaVersion",
-      "bundle",
-      "archive",
-      "facade",
-      "runtime",
-      "inputs",
-    ]) ||
-    value.schemaVersion !== 1 ||
-    !isRecord(value.facade) ||
-    !exactKeys(value.facade, [
-      "marker",
-      "abiVersion",
-      "upstreamOcctWasmVersion",
-    ]) ||
-    typeof value.facade.marker !== "string" ||
-    value.facade.marker.length === 0 ||
-    value.facade.abiVersion !== "0.9.0" ||
-    value.facade.upstreamOcctWasmVersion !== "3.7.0" ||
-    !Array.isArray(value.runtime) ||
-    value.runtime.length !== 2
-  ) {
-    throw new TypeError("Trusted OCCT facade release input is malformed");
-  }
-  const entries = new Map<string, unknown>();
-  for (const entry of value.runtime) {
-    if (
-      !isRecord(entry) ||
-      typeof entry.source !== "string" ||
-      entries.has(entry.source)
-    ) {
-      throw new TypeError("Trusted OCCT facade runtime inventory is malformed");
-    }
-    entries.set(entry.source, entry);
-  }
-  return Object.freeze({
-    facadeMarker: value.facade.marker,
-    javascript: runtimePin(
-      entries.get("occt-wasm.js"),
-      "occt-wasm.js",
-      "text/javascript",
-      maximumJavascriptBytes,
-    ),
-    webAssembly: runtimePin(
-      entries.get("occt-wasm.wasm"),
-      "occt-wasm.wasm",
-      "application/wasm",
-      maximumWebAssemblyBytes,
-    ),
-  });
 }
 
 async function readBoundedFile(
@@ -245,137 +127,64 @@ async function parseJsonFile(
 
 async function verifiedRuntime(
   runtimeDirectory: string,
-  scratchDirectory: string,
 ): Promise<LoadedRuntime> {
-  const releaseInput = trustedReleaseInput(
-    await parseJsonFile(
-      releaseInputPath,
-      maximumReleaseInputBytes,
-      "Trusted OCCT facade release input",
-    ),
-  );
-  const javascriptPath = resolve(
+  const releaseManifestPath = resolve(
     runtimeDirectory,
-    releaseInput.javascript.fileName,
+    "../metadata/release.json",
   );
-  const webAssemblyPath = resolve(
-    runtimeDirectory,
-    releaseInput.webAssembly.fileName,
-  );
+  const javascriptPath = resolve(runtimeDirectory, "occt-wasm.js");
+  const webAssemblyPath = resolve(runtimeDirectory, "occt-wasm.wasm");
   // Each runtime file is read exactly once. Only these verified buffers become
   // execution inputs below.
-  const [javascript, webAssembly] = await Promise.all([
+  const [releaseManifest, javascript, webAssembly] = await Promise.all([
+    readBoundedFile(
+      releaseManifestPath,
+      maximumReleaseManifestBytes,
+      "Owned OCCT release manifest",
+    ),
     readBoundedFile(
       javascriptPath,
-      releaseInput.javascript.size,
+      maximumJavascriptBytes,
       "Owned OCCT JavaScript runtime",
     ),
     readBoundedFile(
       webAssemblyPath,
-      releaseInput.webAssembly.size,
+      maximumWebAssemblyBytes,
       "Owned OCCT WebAssembly runtime",
     ),
   ]);
-  if (
-    javascript.byteLength !== releaseInput.javascript.size ||
-    sha256(javascript) !== releaseInput.javascript.sha256 ||
-    webAssembly.byteLength !== releaseInput.webAssembly.size ||
-    sha256(webAssembly) !== releaseInput.webAssembly.sha256
-  ) {
-    throw new TypeError(
-      "Owned OCCT runtime bytes do not match trusted release input",
-    );
-  }
-
-  const privateJavascriptPath = join(
-    scratchDirectory,
-    "verified-occt-wasm.mjs",
-  );
-  try {
-    await writeFile(privateJavascriptPath, javascript, {
-      flag: "wx",
-      mode: 0o600,
-    });
-    const imported = await import(pathToFileURL(privateJavascriptPath).href) as {
-      readonly default?: unknown;
-    };
-    if (typeof imported.default !== "function") {
-      throw new TypeError(
-        "Verified owned OCCT JavaScript did not export a module factory",
-      );
-    }
-    const verifiedFactory = imported.default as OcctModuleFactory;
-    let factoryCalls = 0;
-    let verifiedWasmWasPassed = false;
-    const moduleFactory: OcctModuleFactory = async (options) => {
-      factoryCalls += 1;
-      if (
-        factoryCalls !== 1 ||
-        options === undefined ||
-        !(options.wasmBinary instanceof ArrayBuffer)
-      ) {
-        throw new TypeError(
-          "Owned OCCT module factory did not receive one wasmBinary input",
-        );
-      }
-      const passedWasm = new Uint8Array(options.wasmBinary);
-      if (
-        passedWasm.byteLength !== releaseInput.webAssembly.size ||
-        sha256(passedWasm) !== releaseInput.webAssembly.sha256
-      ) {
-        throw new TypeError(
-          "Owned OCCT module factory received unverified WebAssembly bytes",
-        );
-      }
-      verifiedWasmWasPassed = true;
-      const module = await verifiedFactory(options);
-      if (
-        !isRecord(module) ||
-        typeof module.invariantcadFacadeVersion !== "function" ||
-        Reflect.apply(
-          module.invariantcadFacadeVersion as (...arguments_: unknown[]) => unknown,
-          module,
-          [],
-        ) !== releaseInput.facadeMarker
-      ) {
-        throw new TypeError(
-          "Owned OCCT facade marker does not match trusted release input",
-        );
-      }
-      return module;
-    };
-    const evidence: OcctArtifactProcessRuntimeEvidence = Object.freeze({
-      releaseInput: "native/occt/bundle/release-input.json",
-      facadeMarker: releaseInput.facadeMarker,
+  const attestedRuntime = await loadAttestedOcctRuntime({
+    releaseManifest,
+    expectedReleaseManifestSha256:
+      INVARIANTCAD_OCCT_FACADE_0_9_0_RELEASE_MANIFEST_SHA256,
+    javascript,
+    webassembly: webAssembly,
+  });
+  const attestation = attestedRuntime.attestation;
+  return Object.freeze({
+    attestedRuntime,
+    evidence: Object.freeze({
+      releaseManifest: "metadata/release.json",
+      releaseManifestSha256: attestation.releaseManifestSha256,
+      runtimePairIdentity: attestation.runtimePairIdentity,
+      declaredBuildIdentity: attestation.declaredBuildIdentity,
+      facadeMarker: attestation.facade.marker,
       javascript: Object.freeze({
         fileName: "occt-wasm.js",
-        byteLength: releaseInput.javascript.size,
-        sha256: releaseInput.javascript.sha256,
+        byteLength: attestation.javascript.size,
+        sha256: attestation.javascript.sha256,
       }),
       webAssembly: Object.freeze({
         fileName: "occt-wasm.wasm",
-        byteLength: releaseInput.webAssembly.size,
-        sha256: releaseInput.webAssembly.sha256,
+        byteLength: attestation.webassembly.size,
+        sha256: attestation.webassembly.sha256,
       }),
       verifiedBytesWereExecutionInputs: true,
-    });
-    return Object.freeze({
-      moduleFactory,
-      wasm: Uint8Array.from(webAssembly),
-      evidence,
-      assertUsed: () => {
-        if (factoryCalls !== 1 || !verifiedWasmWasPassed) {
-          throw new TypeError(
-            "Verified owned OCCT runtime inputs were not executed exactly once",
-          );
-        }
-      },
-      cleanup: () => rm(privateJavascriptPath, { force: true }),
-    });
-  } catch (error) {
-    await rm(privateJavascriptPath, { force: true });
-    throw error;
-  }
+      buildExecutionObserved: false,
+      buildExecutionAuthenticated: false,
+      publisherAuthenticated: false,
+    }),
+  });
 }
 
 function candidateCapabilities(
@@ -487,12 +296,8 @@ function artifactEvidence(
 
 async function execute(
   request: OcctArtifactProcessRequest,
-  scratchDirectory: string,
 ): Promise<OcctArtifactProcessEvidence> {
-  const runtime = await verifiedRuntime(
-    request.runtimeDirectory,
-    scratchDirectory,
-  );
+  const runtime = await verifiedRuntime(request.runtimeDirectory);
   let kernel: GeometryKernel | undefined;
   let shape: KernelShape | undefined;
   let pending:
@@ -502,12 +307,10 @@ async function execute(
   const cleanupErrors: unknown[] = [];
   try {
     kernel = await createOcctKernel({
-      moduleFactory: runtime.moduleFactory,
-      wasm: runtime.wasm,
+      attestedRuntime: runtime.attestedRuntime,
       onOutput: () => {},
       onError: () => {},
     });
-    runtime.assertUsed();
     const candidate = candidateCapabilities(kernel);
     await flushStartEvent(request.requestId);
     if (request.operation === "stall-after-start") {
@@ -587,11 +390,6 @@ async function execute(
       } catch (error) {
         cleanupErrors.push(error);
       }
-    }
-    try {
-      await runtime.cleanup();
-    } catch (error) {
-      cleanupErrors.push(error);
     }
   }
   if (cleanupErrors.length > 0) {
@@ -703,7 +501,7 @@ async function main(): Promise<void> {
   );
   let result: OcctArtifactProcessResult;
   try {
-    const evidence = await execute(request, dirname(paths.requestPath));
+    const evidence = await execute(request);
     if (request.operation !== "produce" && request.operation !== "consume") {
       throw new TypeError("OCCT artifact fault operation unexpectedly succeeded");
     }

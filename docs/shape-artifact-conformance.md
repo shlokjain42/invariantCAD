@@ -551,11 +551,14 @@ that detached artifact in another one-shot child, preserves the parent-owned
 input, and reproduces the producer's artifact, capability, runtime-input, and
 semantic evidence. A second fresh producer must produce identical bytes and
 evidence. Before kernel creation, each child bounds and reads the supplied
-`occt-wasm.js` and `occt-wasm.wasm` once, checks their exact byte lengths and
-SHA-256 digests against `native/occt/bundle/release-input.json`, imports a
-private temporary `.mjs` copied from the verified JavaScript buffer, and passes
-a copy of the verified WebAssembly buffer as `wasmBinary`. A one-byte mutation
-in either file is rejected before that file can execute.
+canonical `metadata/release.json`, `occt-wasm.js`, and `occt-wasm.wasm` once.
+The public Node attested loader checks the manifest against the independently
+maintained reviewed SHA-256 pin, checks both runtime sizes and digests against
+that trusted manifest, imports the verified JavaScript snapshot through one
+process-global `node:module.register()` hook, and passes a fresh verified
+WebAssembly copy as `wasmBinary`. No temporary executable JavaScript file is
+created. A one-byte mutation to the manifest or either runtime file is rejected
+before supplied JavaScript executes.
 
 The parent uses a closed versioned request/start/result protocol with exact
 request IDs and bounded request, stdout/stderr, result, and artifact files. A
@@ -572,12 +575,15 @@ pnpm test:occt-artifact-process
 The verified facade-bundle gate invokes the same command against its packaged
 runtime automatically. Every successful result records one-shot cleanup before
 response, `shapeArtifactsAbsent: true`, and `certifiesCompatibility: false`.
-The checked JS/WASM copies are proved execution inputs, but that fact is not
-general loaded-runtime or build attestation and does not defend the temporary
-files from a trusted host or another process under the same UID. The injected
-trap is not a real OCCT trap fault injection. These gates do not measure live
-or peak memory, establish durable native subshape identity, create a reviewed
-cross-platform golden matrix, or integrate the evaluator/cache path.
+It also records the exact runtime-pair identity and separate declared-build
+identity while setting build-execution, publisher-authentication, and
+compatibility claims to false. The verified JS/WASM snapshots are the loader
+and kernel inputs, but this does not prove that the declared recipe ran, defend
+the Node module-hook chain or host from same-process/same-UID interference, or
+attest the wider application, library, wrapper, or JavaScript engine. The
+injected trap is not a real OCCT trap fault injection. These gates do not
+measure live or peak memory, establish durable native subshape identity, create
+a reviewed cross-platform golden matrix, or integrate the evaluator/cache path.
 
 Owned facade ABI 0.7 closes a specific, previously open part of the candidate
 transport boundary:
@@ -670,30 +676,37 @@ gap. The hook remains candidate-only because:
 - ordered topology evidence is useful for fail-closed comparison in the pinned
   runtime, but it is not comprehensive durable identity for indistinguishable
   symmetric subshapes;
-- release-input checks prove that copied JS/WASM bytes were execution inputs,
-  but the candidate fingerprint still does not attest the complete loaded
-  runtime, OCCT build, toolchain, or serialization flags; and
+- the attested loader now verifies the exact owned JavaScript/WASM pair against
+  an independently pinned canonical release manifest, and the candidate
+  fingerprint binds that pair identity. The separate declared-build identity
+  records source/toolchain metadata but does not prove the build execution or
+  authenticate a publisher, host, wrapper, or wider application; and
 - one owned fresh-process producer/consumer scenario plus one committed
   stock-runtime golden is not a reviewed cross-platform compatibility matrix.
 
 Production promotion therefore still requires prompt cancellation in the
 operational evaluator path, comprehensive durable artifact-local native
-subshape identity, exact loaded-runtime/build attestation, reviewed
-cross-platform owned-runtime goldens, and evaluator/cache integration. The
-compatibility fingerprint must bind the native
-binary/WASM and JavaScript pair, wrapper, envelope and sidecar revisions,
-identity scheme, relevant tolerance and serialization options, and every other
-input that can change the result.
+subshape identity, reviewed cross-platform owned-runtime goldens, and
+evaluator/cache integration. The private compatibility fingerprint now binds
+the exact native WASM/JavaScript pair identity alongside versioned declarations
+for the adapter contract, envelope and sidecar revisions, identity scheme,
+relevant tolerance and serialization options, and other result-changing inputs.
+Those declarations are compatibility fields, not cryptographic hashes or
+attestation of the InvariantCAD wrapper/library code. Build execution and
+publisher provenance likewise remain explicit non-claims rather than
+compatibility identities.
 
 ABI 0.7 resolves the candidate's former full-output-materialization and
 successful-result ownership gaps, ABI 0.8 adds a private cumulative-request
 quota, sidecar v2 resolves the JSON materialization gap, and ABI 0.9 adds exact
 owned-profile native archive preflight plus structural-work limits. The new
 disposable gates add hard realm termination, fresh recovery, and a bounded
-owned-process handoff. None provides live/peak-memory proof, operational
-evaluator cancellation, comprehensive durable symmetric-topology identity,
-general runtime/build attestation, or a reviewed cross-platform compatibility
-proof.
+owned-process handoff. The attested loader additionally closes exact owned
+runtime-pair and declared-manifest identity under an independent pin. None of
+these controls provides live/peak-memory proof, operational evaluator
+cancellation, comprehensive durable symmetric-topology identity, authenticated
+build execution or publisher provenance, wider host/application attestation, or
+a reviewed cross-platform compatibility proof.
 Advertising an ordinary native exchange function under the stronger
 shape-artifact capability would therefore remain incorrect, even when it can
 reconstruct a geometrically valid solid.

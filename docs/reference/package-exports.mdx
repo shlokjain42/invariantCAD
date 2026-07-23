@@ -11,6 +11,8 @@ icon: "package-open"
   ".": "./dist/index.js",
   "./conformance": "./dist/conformance.js",
   "./kernels/occt": "./dist/occt-kernel.js",
+  "./kernels/occt/browser": "./dist/occt-runtime-browser.js",
+  "./kernels/occt/node": "./dist/occt-runtime-node.js",
   "./package.json": "./package.json"
 }
 ```
@@ -24,6 +26,8 @@ back to source JSDoc for editors and source-aware tooling.
 import { design, createEvaluator } from "invariantcad";
 import { createOcctKernel } from "invariantcad/kernels/occt";
 import { auditKernelShapeArtifactCodec } from "invariantcad/conformance";
+import { loadAttestedOcctRuntime as loadInBrowser } from "invariantcad/kernels/occt/browser";
+import { loadAttestedOcctRuntime as loadInNode } from "invariantcad/kernels/occt/node";
 ```
 
 Do not import `invariantcad/dist/...`, internal chunks, `src/...`, or vendored
@@ -43,17 +47,26 @@ const { design } = await import("invariantcad");
 ## Node and browser
 
 The supported Node floor is 20.19. The root module and bundled Manifold runtime
-also target modern browsers. The OpenCascade entry can run in the browser when
-its larger WASM asset is correctly served.
+also target modern browsers. The OpenCascade kernel entry can run in both
+environments when its larger WASM asset is correctly served.
+
+Exact owned-runtime verification has separate environment entry points. Import
+`invariantcad/kernels/occt/node` only in Node.js and
+`invariantcad/kernels/occt/browser` only in a browser or module worker. Both
+return the same opaque runtime type consumed by `createOcctKernel`. See
+[OCCT runtime attestation](/evaluation/occt-runtime-attestation) for byte
+acquisition, trust-pin, CSP, permission-model, lifetime, and non-claim details.
 
 Release CI verifies Node 20, 22, and 24 plus a production Vite build in
 Chromium.
 
 ## Side effects and tree shaking
 
-The package declares `sideEffects: false`. Importing the OCCT subpath is
+The package declares `sideEffects: false`. Importing the OCCT subpaths is
 separate so ordinary Manifold consumers need not execute exact-backend module
 initialization. WASM initialization occurs only when a kernel factory is called.
+The Node attestation loader installs its process-wide module hook only when
+`loadAttestedOcctRuntime` is called.
 
 ## Type compatibility
 

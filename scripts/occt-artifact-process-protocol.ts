@@ -60,17 +60,22 @@ export interface OcctArtifactProcessRuntimeFileEvidence {
 }
 
 export interface OcctArtifactProcessRuntimeEvidence {
-  readonly releaseInput: "native/occt/bundle/release-input.json";
+  readonly releaseManifest: "metadata/release.json";
+  readonly releaseManifestSha256: string;
+  readonly runtimePairIdentity: string;
+  readonly declaredBuildIdentity: string;
   readonly facadeMarker: string;
   readonly javascript: OcctArtifactProcessRuntimeFileEvidence;
   readonly webAssembly: OcctArtifactProcessRuntimeFileEvidence;
   /**
-   * The child imported a private copy made from the verified JavaScript bytes
-   * and passed the verified WebAssembly bytes through `wasmBinary`.
-   *
-   * This records execution inputs; it is deliberately not runtime attestation.
+   * The child executed the verified JavaScript snapshot through the Node
+   * module-hook loader and passed a fresh copy of the verified WebAssembly
+   * snapshot through `wasmBinary`.
    */
   readonly verifiedBytesWereExecutionInputs: true;
+  readonly buildExecutionObserved: false;
+  readonly buildExecutionAuthenticated: false;
+  readonly publisherAuthenticated: false;
 }
 
 export interface OcctArtifactProcessCapabilityEvidence {
@@ -297,20 +302,44 @@ function parseRuntimeEvidence(
   if (
     !isRecord(value) ||
     !exactKeys(value, [
-      "releaseInput",
+      "releaseManifest",
+      "releaseManifestSha256",
+      "runtimePairIdentity",
+      "declaredBuildIdentity",
       "facadeMarker",
       "javascript",
       "webAssembly",
       "verifiedBytesWereExecutionInputs",
+      "buildExecutionObserved",
+      "buildExecutionAuthenticated",
+      "publisherAuthenticated",
     ]) ||
-    value.releaseInput !== "native/occt/bundle/release-input.json" ||
+    value.releaseManifest !== "metadata/release.json" ||
+    typeof value.releaseManifestSha256 !== "string" ||
+    !sha256Pattern.test(value.releaseManifestSha256) ||
+    typeof value.runtimePairIdentity !== "string" ||
+    !/^invariantcad-occt-runtime-pair@1:sha256:[0-9a-f]{64}$/u.test(
+      value.runtimePairIdentity,
+    ) ||
+    typeof value.declaredBuildIdentity !== "string" ||
+    !/^invariantcad-occt-release-manifest@1:sha256:[0-9a-f]{64}$/u.test(
+      value.declaredBuildIdentity,
+    ) ||
+    value.declaredBuildIdentity !==
+      `invariantcad-occt-release-manifest@1:sha256:${value.releaseManifestSha256}` ||
     !boundedString(value.facadeMarker, 1_024) ||
-    value.verifiedBytesWereExecutionInputs !== true
+    value.verifiedBytesWereExecutionInputs !== true ||
+    value.buildExecutionObserved !== false ||
+    value.buildExecutionAuthenticated !== false ||
+    value.publisherAuthenticated !== false
   ) {
     throw new TypeError("OCCT artifact process runtime evidence is malformed");
   }
   return Object.freeze({
-    releaseInput: "native/occt/bundle/release-input.json",
+    releaseManifest: "metadata/release.json",
+    releaseManifestSha256: value.releaseManifestSha256,
+    runtimePairIdentity: value.runtimePairIdentity,
+    declaredBuildIdentity: value.declaredBuildIdentity,
     facadeMarker: value.facadeMarker,
     javascript: parseRuntimeFileEvidence(value.javascript, "occt-wasm.js"),
     webAssembly: parseRuntimeFileEvidence(
@@ -318,6 +347,9 @@ function parseRuntimeEvidence(
       "occt-wasm.wasm",
     ),
     verifiedBytesWereExecutionInputs: true,
+    buildExecutionObserved: false,
+    buildExecutionAuthenticated: false,
+    publisherAuthenticated: false,
   });
 }
 

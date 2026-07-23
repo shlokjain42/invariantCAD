@@ -266,24 +266,37 @@ or write cached shapes today**.
   one-shot Node children and is included in `test:occt-facade-bundle`.
   Fresh producer A and consumer B agree on deterministic artifact, capability,
   runtime-input, and semantic evidence while preserving the parent-owned input.
-  Each child exact-checks the release-input JS/WASM size and SHA-256, imports a
-  private copy of those verified JavaScript bytes, and supplies a copy of the
-  verified WASM as `wasmBinary`. The gate rejects a one-byte mutation in either
-  runtime file before execution and covers post-start `SIGKILL` timeout/abort,
+  Each child verifies packaged `metadata/release.json` against the independently
+  maintained reviewed pin, imports the exact verified JavaScript bytes through
+  the Node module hook, and supplies a fresh verified WASM copy. The gate rejects
+  a one-byte mutation in the manifest or either runtime file before supplied
+  JavaScript executes and covers post-start `SIGKILL` timeout/abort,
   injected-trap discard, and fresh recovery. Its closed evidence explicitly
   records `shapeArtifacts` as absent and `certifiesCompatibility: false`.
+- Public Node and browser attested loaders now close exact owned-runtime-pair
+  identity under an independent canonical release-manifest pin. Executable
+  authority stays private to the evaluated InvariantCAD internal module instance
+  that created it; cloning the visible report does not reproduce it.
+  `createOcctKernel` checks the initialized facade marker, supplies a fresh
+  verified WASM copy, and binds the exact pair identity only into the private
+  artifact fingerprint. Node uses one process-global module hook without
+  temporary executable files; browser uses a revocable Blob module URL and
+  requires a compatible CSP. The separate declared-build identity records the
+  manifest while leaving build execution, publisher authentication, and
+  compatibility certification false.
 - Promotion remains blocked because the cumulative 128 MiB request budget and
-  structural-work meter are not live/peak-memory proof. Executing files whose
-  release-input sizes and hashes were checked is not general runtime/build
-  attestation and does not defend against a trusted host or same-UID process.
-  The injected trap is an orchestration fault, not a real OCCT trap. Ordered
-  evidence is not comprehensive durable identity for indistinguishable
-  symmetric topology, and one owned producer/consumer scenario is not a
-  reviewed cross-platform golden matrix.
+  structural-work meter are not live/peak-memory proof. Exact runtime-pair
+  verification does not authenticate the declared build execution or publisher
+  and does not defend against a trusted host, same-process hook chain, or
+  same-UID process. The injected trap is an orchestration fault, not a real OCCT
+  trap. Ordered evidence is not comprehensive durable identity for
+  indistinguishable symmetric topology, and one owned producer/consumer
+  scenario is not a reviewed cross-platform golden matrix.
 - Production work therefore still requires prompt cancellation in the actual
   evaluator operation, comprehensive durable artifact-local identity rather
-  than enumeration order, exact loaded JS/WASM/build attestation, and a
-  reviewed cross-platform owned-runtime golden matrix.
+  than enumeration order, and a reviewed cross-platform owned-runtime golden
+  matrix. Build/publisher provenance remains an explicit non-claim rather than a
+  cache-compatibility identity.
 - Only after that matrix passes will OCCT advertise the capability. Evaluator
   integration must then cover per-solid cache read/decode and encode/write,
   fresh ownership, corruption, cancellation, cleanup, eviction, concurrent
