@@ -32,6 +32,24 @@
   recovery. This is unadvertised defense-in-depth: direct C denial is fail-stop,
   and strict BinTools count/product preflight, work bounds, cancellation,
   runtime attestation, durable identity, and cross-process goldens remain open.
+- Advanced the repository-private owned OCCT facade and compliance bundle to
+  ABI 0.9 with an exact parser for the owned writer's BinTools-v4 profile before
+  `BinTools::Read`. Decode now validates canonical sections, finite geometry,
+  counts and products, table and representation references, locations, the
+  TShape hierarchy, complete reachability, and exact EOF under fixed limits of
+  `1,000,000` structural work units, `64` nesting levels, and location-power
+  magnitude `1,000,000`. Conservative squared geometry, representation, and
+  topology-validation envelopes plus bounded TShape metadata are charged before
+  deserialization; global geometry squaring deliberately admits roughly fewer
+  than `1,000` geometry work units under the shared cap, and the metadata
+  allocation is also charged to ABI 0.8's retained 128 MiB cumulative native
+  request budget. This is a private artifact-compatibility ceiling, not a core
+  modeling limit. Reports expose preflight limit/usage, depth, location-power,
+  consumed-byte, completion/code, and deserialization-start telemetry. The
+  private candidate still does not advertise `shapeArtifacts`; these controls
+  are not live/peak-memory accounting, prompt same-thread cancellation, exact
+  runtime attestation, cross-process compatibility proof, or comprehensive
+  durable identity for symmetric topology.
 
 ## [0.1.0] - 2026-07-22
 

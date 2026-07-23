@@ -25,7 +25,7 @@ const verifierPath = join(repoRoot, "scripts/verify-occt-facade-bundle.mjs");
 const packagerPath = join(repoRoot, "scripts/package-occt-facade-bundle.mjs");
 const descriptorPath = join(repoRoot, "native/occt/bundle/release-input.json");
 const lockPath = join(repoRoot, "native/occt/upstream.lock.json");
-const bundleVersion = "0.8.0";
+const bundleVersion = "0.9.0";
 const bundleName = `invariantcad-occt-facade-${bundleVersion}`;
 const facadeMarker = `invariantcad-facade@${bundleVersion}+occt-wasm.3.7.0`;
 const pipeShellPatchSource =
@@ -34,6 +34,9 @@ const pipeShellPatchTarget = `source/${pipeShellPatchSource}`;
 const hardenedArtifactPatchSource =
   "native/occt/patches/0008-hardened-shape-artifact-budgets.patch";
 const hardenedArtifactPatchTarget = `source/${hardenedArtifactPatchSource}`;
+const artifactPreflightPatchSource =
+  "native/occt/patches/0009-bintools-v4-structural-preflight.patch";
+const artifactPreflightPatchTarget = `source/${artifactPreflightPatchSource}`;
 const temporaryRoots: string[] = [];
 
 interface LockedEntry {
@@ -181,6 +184,24 @@ function syntheticWasm(): Buffer {
         "nativeAllocationCalls",
         "nativeRequestLimitExceeded",
         "NATIVE_REQUEST_LIMIT_EXCEEDED",
+        "maxPreflightWorkUnits",
+        "preflightWorkUnits",
+        "maxPreflightNestingDepth",
+        "preflightMaximumDepth",
+        "maxPreflightLocationPower",
+        "preflightMaximumLocationPower",
+        "preflightConsumedByteCount",
+        "preflightCode",
+        "archivePreflightComplete",
+        "deserializationStarted",
+        "INVALID_PREFLIGHT_WORK_LIMIT",
+        "INVALID_PREFLIGHT_NESTING_LIMIT",
+        "INVALID_PREFLIGHT_LOCATION_POWER_LIMIT",
+        "WORK_LIMIT_EXCEEDED",
+        "NESTING_LIMIT_EXCEEDED",
+        "LOCATION_POWER_LIMIT_EXCEEDED",
+        "PROFILE_MISMATCH",
+        "TRAILING_INPUT",
       ].join("\0"),
     ),
   ]);
@@ -210,10 +231,22 @@ async function makeFixtureReleaseInput(): Promise<ReleaseInput> {
     size: hardenedArtifactPatchBytes.length,
     sha256: sha256(hardenedArtifactPatchBytes),
   };
+  const artifactPreflightPatchBytes = await readFile(
+    join(repoRoot, artifactPreflightPatchSource),
+  );
+  const artifactPreflightPatch: LockedEntry = {
+    source: artifactPreflightPatchSource,
+    target: artifactPreflightPatchTarget,
+    role: "source-patch",
+    mode: "0644",
+    size: artifactPreflightPatchBytes.length,
+    sha256: sha256(artifactPreflightPatchBytes),
+  };
   const inputs = current.inputs.filter(
     (entry) =>
       entry.target !== pipeShellPatchTarget &&
-      entry.target !== hardenedArtifactPatchTarget,
+      entry.target !== hardenedArtifactPatchTarget &&
+      entry.target !== artifactPreflightPatchTarget,
   );
   const nextPatchIndex = inputs.findIndex(
     (entry) =>
@@ -233,6 +266,7 @@ async function makeFixtureReleaseInput(): Promise<ReleaseInput> {
     throw new Error("Fixture release input lacks the bounded artifact patch");
   }
   inputs.splice(boundedArtifactPatchIndex + 1, 0, hardenedArtifactPatch);
+  inputs.splice(boundedArtifactPatchIndex + 2, 0, artifactPreflightPatch);
   return {
     ...current,
     bundle: { ...current.bundle, version: bundleVersion },
@@ -701,8 +735,8 @@ describe("OCCT facade compliance bundle verification", () => {
   it("accepts the same fixture as an exactly normalized ustar/gzip archive", async () => {
     const fixture = await makeFixture();
     expect(
-      Buffer.byteLength(`${bundleName}/${hardenedArtifactPatchTarget}`),
-    ).toBe(100);
+      Buffer.byteLength(`${bundleName}/${artifactPreflightPatchTarget}`),
+    ).toBe(101);
     const { archive } = await makeNormalizedArchive(fixture);
     const verifier = await loadVerifier();
     await expect(
@@ -1091,7 +1125,7 @@ describe("OCCT facade compliance bundle verification", () => {
         descriptor.inputs?.some(
           (entry: LockedEntry) =>
             entry.target ===
-            "source/native/occt/patches/0008-hardened-shape-artifact-budgets.patch",
+            "source/native/occt/patches/0009-bintools-v4-structural-preflight.patch",
         ) &&
         descriptor.runtime.every((entry) => {
           const path = join(runtimeDirectory, entry.source);

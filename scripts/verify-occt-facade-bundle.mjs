@@ -8,10 +8,10 @@ import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
 const BUNDLE_NAME = "invariantcad-occt-facade";
-const BUNDLE_VERSION = "0.8.0";
+const BUNDLE_VERSION = "0.9.0";
 const BUNDLE_DIRECTORY = `${BUNDLE_NAME}-${BUNDLE_VERSION}`;
 const FACADE_MARKER =
-  "invariantcad-facade@0.8.0+occt-wasm.3.7.0";
+  "invariantcad-facade@0.9.0+occt-wasm.3.7.0";
 const DRAFT_FACADE_MARKER =
   "invariantcad-facade@0.2.0+occt-wasm.3.7.0";
 const CONTROLLED_PIPE_SHELL_FACADE_MARKER =
@@ -24,6 +24,8 @@ const SOLID_OFFSET_FACADE_MARKER =
   "invariantcad-facade@0.6.0+occt-wasm.3.7.0";
 const BOUNDED_ARTIFACT_FACADE_MARKER =
   "invariantcad-facade@0.7.0+occt-wasm.3.7.0";
+const HARDENED_ARTIFACT_FACADE_MARKER =
+  "invariantcad-facade@0.8.0+occt-wasm.3.7.0";
 const UPSTREAM_OCCT_WASM_VERSION = "3.7.0";
 const RELEASE_INPUT_URL = new URL(
   "../native/occt/bundle/release-input.json",
@@ -46,6 +48,7 @@ const PATCH_PATHS = Object.freeze([
   "source/native/occt/patches/0006-exact-solid-offset-history.patch",
   "source/native/occt/patches/0007-bounded-shape-artifacts.patch",
   "source/native/occt/patches/0008-hardened-shape-artifact-budgets.patch",
+  "source/native/occt/patches/0009-bintools-v4-structural-preflight.patch",
 ]);
 const LICENSE_PATHS = Object.freeze([
   "LICENSE",
@@ -767,6 +770,24 @@ function verifyRuntime(files, manifest, release, runtimePins) {
     "nativeAllocationCalls",
     "nativeRequestLimitExceeded",
     "NATIVE_REQUEST_LIMIT_EXCEEDED",
+    "maxPreflightWorkUnits",
+    "preflightWorkUnits",
+    "maxPreflightNestingDepth",
+    "preflightMaximumDepth",
+    "maxPreflightLocationPower",
+    "preflightMaximumLocationPower",
+    "preflightConsumedByteCount",
+    "preflightCode",
+    "archivePreflightComplete",
+    "deserializationStarted",
+    "INVALID_PREFLIGHT_WORK_LIMIT",
+    "INVALID_PREFLIGHT_NESTING_LIMIT",
+    "INVALID_PREFLIGHT_LOCATION_POWER_LIMIT",
+    "WORK_LIMIT_EXCEEDED",
+    "NESTING_LIMIT_EXCEEDED",
+    "LOCATION_POWER_LIMIT_EXCEEDED",
+    "PROFILE_MISMATCH",
+    "TRAILING_INPUT",
   ]) {
     if (!wasm.includes(Buffer.from(marker))) {
       fail(`runtime WASM does not contain the required facade ABI marker: ${marker}`);
@@ -944,6 +965,34 @@ function verifySourceInputs(files) {
         "--wrap=posix_memalign",
         "--wrap=aligned_alloc",
         "--wrap=memalign",
+        HARDENED_ARTIFACT_FACADE_MARKER,
+      ],
+    ],
+    [
+      PATCH_PATHS[8],
+      [
+        "invariantcad_bintools_v4_preflight.h",
+        "invariantcad_bintools_v4_preflight.cpp",
+        "Open CASCADE Topology V4",
+        "invariantcadPreflightBinToolsV4",
+        "maxPreflightWorkUnits",
+        "preflightWorkUnits",
+        "maxPreflightNestingDepth",
+        "preflightMaximumDepth",
+        "maxPreflightLocationPower",
+        "preflightMaximumLocationPower",
+        "preflightConsumedByteCount",
+        "preflightCode",
+        "archivePreflightComplete",
+        "deserializationStarted",
+        "WORK_LIMIT_EXCEEDED",
+        "NESTING_LIMIT_EXCEEDED",
+        "LOCATION_POWER_LIMIT_EXCEEDED",
+        "PROFILE_MISMATCH",
+        "TRAILING_INPUT",
+        "ShapeMetrics",
+        "expandedOccurrences",
+        "Owned writer location table contains no duplicate chains",
         FACADE_MARKER,
       ],
     ],
@@ -1570,7 +1619,7 @@ export async function verifyOcctFacadeBundleWithTestRuntime(
 function usage() {
   return `Usage: node scripts/verify-occt-facade-bundle.mjs [--json] PATH
 
-Verify the complete InvariantCAD OCCT facade 0.8.0 compliance bundle at PATH.
+Verify the complete InvariantCAD OCCT facade 0.9.0 compliance bundle at PATH.
 PATH must be the versioned bundle directory or its deterministic .tar.gz archive.
 
 Options:

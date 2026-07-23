@@ -482,7 +482,8 @@ history tags, and optional-volume presence. Strings are length-prefixed UTF-16BE
 code units rather than UTF-8 conversions, so every JavaScript string, including
 unpaired surrogates, round-trips without replacement. Numeric geometry is finite
 big-endian binary64 with `-0` normalized to `+0`; tags and optional-field masks
-are closed.
+are closed. The enclosing private candidate rejects a compatibility fingerprint
+longer than `2,048` UTF-8 bytes before allocating its envelope.
 
 Encode detaches and canonicalizes the semantic graph, sorts and deduplicates
 lineage, replaces ephemeral keys with sorted artifact-local indices, performs a
@@ -560,40 +561,68 @@ unchecked OCCT callers, so callers must isolate candidate work and discard that
 runtime after a trap. This is cumulative-request defense-in-depth, not
 live/peak-memory accounting or hostile-input safety.
 
+Owned facade ABI 0.9 retains ABI 0.8's fixed 128 MiB cumulative native request
+budget and adds three reader-only limits: `1,000,000` structural work units,
+`64` structural nesting levels, and location-power magnitude `1,000,000`.
+After the admitted input's single snapshot, but before `BinTools::Read`, an
+exact parser for the owned writer's BinTools-v4 profile checks canonical
+sections and counts, finite geometry, spline degree/knot/multiplicity/pole
+relationships, bounded count products, closed table and representation tags,
+in-range references, and exact EOF. It also checks canonical elementary and
+composite locations with backward references and bounded nonzero powers, then
+the backward-only TShape child hierarchy, canonical root, nesting, and complete
+record reachability.
+
+The shared work counter meters table entries, nested geometry, products,
+location terms, representations, expanded subshape occurrences, and
+conservative squared aggregate geometry, representation, expanded-topology,
+wire, and face validation envelopes. Global geometry-work squaring means the
+`1,000,000` cap deliberately admits roughly fewer than `1,000` aggregate
+geometry work units, with all other charges reducing that ceiling. This is a
+private artifact-compatibility bound, not a core CAD authoring or modeling
+limit. The parser's one bounded TShape metrics table is charged to the same
+128 MiB cumulative native request budget.
+
+Read reports echo every preflight limit and expose work used, maximum structural
+depth and location-power magnitude, consumed bytes, the preflight code and
+completion bit, and `deserializationStarted`, alongside native request and
+allocation telemetry. A preflight rejection leaves that last field false and
+cannot expose a native result. ABI 0.8 remains loadable without the three new
+arguments or fields.
+
 These tests prove bounded retained native output, a pre-snapshot input-byte
 gate, pinned v4/no-triangulation serialization, exact archive consumption, a
 post-read topology ceiling, and transactional report ownership for the reviewed
-owned ABI 0.8 candidate path, plus deterministic request-limit reporting. They
-do not promote that path into a production codec. Owned ABI 0.7 retains bounded
-transport without the private native-request quota; stock OCCT and owned ABI
-0.2 through 0.6 retain the earlier unbounded research path, and no shipped
-backend advertises
+owned ABI 0.9 candidate path, deterministic request-limit reporting, and exact
+structural rejection before OCCT deserialization for the owned writer profile.
+They do not promote that path into a production codec. Owned ABI 0.8 retains
+the native request quota without structural preflight; ABI 0.7 retains bounded
+transport without the quota; stock OCCT and owned ABI 0.2 through 0.6 retain the
+earlier unbounded research path; and no shipped backend advertises
 `KernelCapabilities.shapeArtifacts`.
 
-Binary sidecar v2 closes the former JSON-intermediate allocation blocker. The
-hook remains candidate-only for five independent reasons:
+Binary sidecar v2 closes the former JSON-intermediate allocation blocker, and
+ABI 0.9 closes the exact owned-profile BinTools grammar/count/product preflight
+gap. The hook remains candidate-only because:
 
-- an admitted binary BREP can declare large table, pole, knot, or related
-  geometry counts. Count/product overflow can occur before a wrapped allocation
-  request is visible, other paths may bypass those wrappers, and bounded
-  cumulative requests do not bound native work, live bytes, or peak memory;
+- the 128 MiB budget measures cumulative requests, not live bytes, peak memory,
+  or every physical WebAssembly-memory effect; the structural-work envelope is
+  deliberately conservative but is not a live/peak-memory proof;
 - synchronous same-thread WASM does not yield for an ordinary timer-driven
   `AbortSignal`, so entry checks do not provide prompt in-flight cancellation;
 - ordered topology evidence is useful for fail-closed comparison in the pinned
-  runtime, but it is not durable identity for indistinguishable symmetric
-  subshapes;
+  runtime, but it is not comprehensive durable identity for indistinguishable
+  symmetric subshapes;
 - the candidate fingerprint binds revision labels and options, not an
   in-process attestation of the exact loaded JavaScript/WASM pair, OCCT build,
-  toolchain, and serialization flags; and
-- the one committed stock-runtime golden does not prove exact restoration by
-  the owned facade across fresh processes, platforms, or reviewed release
-  builds.
+  toolchain, and serialization flags, while the one committed stock-runtime
+  golden does not prove exact restoration by the owned facade across fresh
+  processes, platforms, or reviewed release builds.
 
-Production promotion therefore still requires strict BinTools grammar, count,
-and product preflight plus reviewed hard memory and work quotas, prompt
-cancellation outside the same-thread synchronous gap, durable artifact-local
-native subshape identity, exact loaded-runtime/build attestation, and reviewed
-cross-process goldens. The
+Production promotion therefore still requires prompt cancellation outside the
+same-thread synchronous gap, comprehensive durable artifact-local native
+subshape identity, exact loaded-runtime/build attestation, reviewed
+cross-process goldens, and evaluator/cache integration. The
 compatibility fingerprint must bind the native
 binary/WASM and JavaScript pair, wrapper, envelope and sidecar revisions,
 identity scheme, relevant tolerance and serialization options, and every other
@@ -601,9 +630,11 @@ input that can change the result.
 
 ABI 0.7 resolves the candidate's former full-output-materialization and
 successful-result ownership gaps, ABI 0.8 adds a private cumulative-request
-quota, and sidecar v2 resolves the JSON materialization gap. None provides
-strict native archive preflight or resolves the remaining work, cancellation,
-identity, attestation, or compatibility-proof gaps.
+quota, sidecar v2 resolves the JSON materialization gap, and ABI 0.9 adds exact
+owned-profile native archive preflight plus structural-work limits. None
+provides live/peak-memory proof, prompt same-thread cancellation, comprehensive
+durable symmetric-topology identity, runtime attestation, or cross-process
+compatibility proof.
 Advertising an ordinary native exchange function under the stronger
 shape-artifact capability would therefore remain incorrect, even when it can
 reconstruct a geometrically valid solid.

@@ -5,9 +5,12 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import type { OcctModuleFactory } from "../src/occt-kernel.js";
 
 const projectRoot = fileURLToPath(new URL("..", import.meta.url));
-const expectedFacadeVersion = "invariantcad-facade@0.8.0+occt-wasm.3.7.0";
+const expectedFacadeVersion = "invariantcad-facade@0.9.0+occt-wasm.3.7.0";
 const tinyNativeRequestLimit = 1;
 const recoveryNativeRequestLimit = 128 * 1024 * 1024;
+const preflightWorkLimit = 1_000_000;
+const preflightNestingDepthLimit = 64;
+const preflightLocationPowerLimit = 1_000_000;
 
 interface ArtifactWriteReport {
   readonly ok: unknown;
@@ -32,6 +35,16 @@ interface ArtifactReadReport {
   readonly nativeRequestedBytes: unknown;
   readonly nativeAllocationCalls: unknown;
   readonly nativeRequestLimitExceeded: unknown;
+  readonly maxPreflightWorkUnits: unknown;
+  readonly preflightWorkUnits: unknown;
+  readonly maxPreflightNestingDepth: unknown;
+  readonly preflightMaximumDepth: unknown;
+  readonly maxPreflightLocationPower: unknown;
+  readonly preflightMaximumLocationPower: unknown;
+  readonly preflightConsumedByteCount: unknown;
+  readonly preflightCode: unknown;
+  readonly archivePreflightComplete: unknown;
+  readonly deserializationStarted: unknown;
   hasResult(): unknown;
   transferCode(kernel: RawKernel): unknown;
   takeResultId(kernel: RawKernel): unknown;
@@ -60,6 +73,9 @@ interface OwnedArtifactModule {
     maxInputBytes: number,
     maxTopologyItems: number,
     maxNativeRequestedBytes: number,
+    maxPreflightWorkUnits: number,
+    maxPreflightNestingDepth: number,
+    maxPreflightLocationPower: number,
   ): unknown;
 }
 
@@ -111,6 +127,56 @@ function assertNativeRequestDenial(
   assert.equal(typeof report.nativeAllocationCalls, "number");
   assert.ok(Number.isSafeInteger(report.nativeAllocationCalls));
   assert.ok(report.nativeAllocationCalls > 0);
+}
+
+function assertPreflightLimits(report: ArtifactReadReport): void {
+  assert.equal(report.maxPreflightWorkUnits, preflightWorkLimit);
+  assert.equal(
+    report.maxPreflightNestingDepth,
+    preflightNestingDepthLimit,
+  );
+  assert.equal(
+    report.maxPreflightLocationPower,
+    preflightLocationPowerLimit,
+  );
+}
+
+function assertPreflightNotRun(report: ArtifactReadReport): void {
+  assertPreflightLimits(report);
+  assert.equal(report.preflightWorkUnits, 0);
+  assert.equal(report.preflightMaximumDepth, 0);
+  assert.equal(report.preflightMaximumLocationPower, 0);
+  assert.equal(report.preflightConsumedByteCount, 0);
+  assert.equal(report.preflightCode, "NOT_RUN");
+  assert.equal(report.archivePreflightComplete, false);
+  assert.equal(report.deserializationStarted, false);
+}
+
+function assertSuccessfulPreflight(
+  report: ArtifactReadReport,
+  inputByteCount: number,
+): void {
+  assertPreflightLimits(report);
+  assert.equal(typeof report.preflightWorkUnits, "number");
+  assert.ok(Number.isSafeInteger(report.preflightWorkUnits));
+  assert.ok(report.preflightWorkUnits > 0);
+  assert.ok(report.preflightWorkUnits <= preflightWorkLimit);
+  assert.equal(typeof report.preflightMaximumDepth, "number");
+  assert.ok(Number.isSafeInteger(report.preflightMaximumDepth));
+  assert.ok(report.preflightMaximumDepth > 0);
+  assert.ok(
+    report.preflightMaximumDepth <= preflightNestingDepthLimit,
+  );
+  assert.equal(typeof report.preflightMaximumLocationPower, "number");
+  assert.ok(Number.isSafeInteger(report.preflightMaximumLocationPower));
+  assert.ok(report.preflightMaximumLocationPower >= 0);
+  assert.ok(
+    report.preflightMaximumLocationPower <= preflightLocationPowerLimit,
+  );
+  assert.equal(report.preflightConsumedByteCount, inputByteCount);
+  assert.equal(report.preflightCode, "OK");
+  assert.equal(report.archivePreflightComplete, true);
+  assert.equal(report.deserializationStarted, true);
 }
 
 const directory = runtimeDirectory(process.argv.slice(2));
@@ -174,11 +240,15 @@ try {
     copied.byteLength,
     100,
     tinyNativeRequestLimit,
+    preflightWorkLimit,
+    preflightNestingDepthLimit,
+    preflightLocationPowerLimit,
   );
   assertReadReport(rawDeniedRead);
   reports.push(rawDeniedRead);
   assertNativeRequestDenial(rawDeniedRead);
   assert.equal(rawDeniedRead.stage, "copy");
+  assertPreflightNotRun(rawDeniedRead);
   assert.equal(rawDeniedRead.hasResult(), false);
   assert.equal(rawDeniedRead.transferCode(kernel), "NO_RESULT");
 
@@ -188,11 +258,15 @@ try {
     copied.byteLength,
     100,
     recoveryNativeRequestLimit,
+    preflightWorkLimit,
+    preflightNestingDepthLimit,
+    preflightLocationPowerLimit,
   );
   assertReadReport(rawRecoveredRead);
   reports.push(rawRecoveredRead);
   assert.equal(rawRecoveredRead.ok, true);
   assert.equal(rawRecoveredRead.nativeRequestLimitExceeded, false);
+  assertSuccessfulPreflight(rawRecoveredRead, copied.byteLength);
   assert.equal(rawRecoveredRead.hasResult(), true);
   assert.equal(rawRecoveredRead.transferCode(kernel), "READY");
   const rawRestored = rawRecoveredRead.takeResultId(kernel);

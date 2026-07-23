@@ -32,6 +32,9 @@ export const OCCT_ARTIFACT_FACADE_VERSION =
 export const OCCT_NATIVE_REQUEST_BUDGET_FACADE_VERSION =
   "invariantcad-facade@0.8.0+occt-wasm.3.7.0";
 
+export const OCCT_BINTOOLS_PREFLIGHT_FACADE_VERSION =
+  "invariantcad-facade@0.9.0+occt-wasm.3.7.0";
+
 const DRAFT_FACADE_MARKERS = Object.freeze([
   "InvariantCadDraftReport",
   "InvariantCadTopologyKind",
@@ -233,6 +236,18 @@ export interface OcctNativeRequestBudgetFacadeProbe {
   readonly artifact: OcctArtifactFacadeModule;
 }
 
+export interface OcctBinToolsPreflightFacadeProbe {
+  readonly abi: "0.9";
+  readonly version: typeof OCCT_BINTOOLS_PREFLIGHT_FACADE_VERSION;
+  readonly module: OcctOwnedArtifactFacadeModule;
+  readonly draft: OcctDraftFacadeModule;
+  readonly pipeShell: OcctControlledPipeShellFacadeModule;
+  readonly boolean: OcctBooleanFacadeModule;
+  readonly edgeTreatment: OcctEdgeTreatmentFacadeModule;
+  readonly solidOffset: OcctSolidOffsetFacadeModule;
+  readonly artifact: OcctArtifactFacadeModule;
+}
+
 export type OcctFacadeProbe =
   | OcctDraftFacadeProbe
   | OcctControlledPipeShellFacadeProbe
@@ -240,7 +255,8 @@ export type OcctFacadeProbe =
   | OcctEdgeTreatmentFacadeProbe
   | OcctSolidOffsetFacadeProbe
   | OcctArtifactFacadeProbe
-  | OcctNativeRequestBudgetFacadeProbe;
+  | OcctNativeRequestBudgetFacadeProbe
+  | OcctBinToolsPreflightFacadeProbe;
 
 /**
  * Kept under its original name so callers that catch the 0.2 probe error do
@@ -448,7 +464,7 @@ export function probeOcctFacade(module: unknown): OcctFacadeProbe | undefined {
     !isArtifact
   ) {
     facadeProtocolError(
-      `marker set is '${markers.join(",")}', expected exact ABI 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, or 0.8 markers`,
+      `marker set is '${markers.join(",")}', expected exact ABI 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, or 0.9 markers`,
     );
   }
 
@@ -486,10 +502,11 @@ export function probeOcctFacade(module: unknown): OcctFacadeProbe | undefined {
   if (
     isArtifact &&
     version !== OCCT_ARTIFACT_FACADE_VERSION &&
-    version !== OCCT_NATIVE_REQUEST_BUDGET_FACADE_VERSION
+    version !== OCCT_NATIVE_REQUEST_BUDGET_FACADE_VERSION &&
+    version !== OCCT_BINTOOLS_PREFLIGHT_FACADE_VERSION
   ) {
     facadeProtocolError(
-      `version is '${String(version)}', expected '${OCCT_ARTIFACT_FACADE_VERSION}' or '${OCCT_NATIVE_REQUEST_BUDGET_FACADE_VERSION}'`,
+      `version is '${String(version)}', expected '${OCCT_ARTIFACT_FACADE_VERSION}', '${OCCT_NATIVE_REQUEST_BUDGET_FACADE_VERSION}', or '${OCCT_BINTOOLS_PREFLIGHT_FACADE_VERSION}'`,
     );
   }
   if (!isArtifact && version !== expectedVersion) {
@@ -500,6 +517,21 @@ export function probeOcctFacade(module: unknown): OcctFacadeProbe | undefined {
 
   if (isArtifact) {
     const artifactModule = module as unknown as OcctOwnedArtifactFacadeModule;
+    if (version === OCCT_BINTOOLS_PREFLIGHT_FACADE_VERSION) {
+      return Object.freeze({
+        abi: "0.9" as const,
+        version: OCCT_BINTOOLS_PREFLIGHT_FACADE_VERSION,
+        module: artifactModule,
+        draft: artifactModule as unknown as OcctDraftFacadeModule,
+        pipeShell:
+          artifactModule as unknown as OcctControlledPipeShellFacadeModule,
+        boolean: artifactModule as unknown as OcctBooleanFacadeModule,
+        edgeTreatment:
+          artifactModule as unknown as OcctEdgeTreatmentFacadeModule,
+        solidOffset: artifactModule as unknown as OcctSolidOffsetFacadeModule,
+        artifact: artifactModule as unknown as OcctArtifactFacadeModule,
+      });
+    }
     if (version === OCCT_NATIVE_REQUEST_BUDGET_FACADE_VERSION) {
       return Object.freeze({
         abi: "0.8" as const,
