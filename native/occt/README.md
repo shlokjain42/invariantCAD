@@ -557,27 +557,61 @@ telemetry. A structural rejection reports the `preflight` stage, leaves
 loadable through its older reader signature, but it has no structural
 preflight telemetry.
 
-Candidate format v2 also replaces the former JSON semantic state with a bounded
-binary sidecar. Its fixed 48-byte big-endian header declares exact sidecar
-length and aggregate face, edge, vertex, adjacency, lineage, UTF-16BE
-string-byte, and native-orientation totals. The TypeScript encoder detaches and
-canonicalizes once, counts the complete representation before allocating, and
-writes one exact-size buffer. The decoder preflights the header, totals, and
-minimum representation before topology-table allocation, accepts only closed
-tags/masks and finite canonical binary64 values, charges nested collections
-against the declared totals, and requires exact EOF. UTF-16BE code units retain
-arbitrary JavaScript strings without replacement. This bounded sidecar is used
-with the ABI 0.7/0.8/0.9 native paths and the stock/legacy research path; it does
-not make their native materialization behavior equivalent.
+Candidate format v3 retains the bounded binary semantic sidecar introduced by
+v2 and adds a separate native-identity-v1 section. The sidecar's fixed 48-byte
+big-endian header declares exact sidecar length and aggregate face, edge,
+vertex, adjacency, lineage, UTF-16BE string-byte, and native-orientation totals.
+The TypeScript encoder detaches and canonicalizes once, counts the complete
+representation before allocating, and writes exact-size sections. The decoder
+preflights headers, totals, and minimum representations before topology-table
+allocation, accepts only closed tags/masks and finite canonical binary64 values,
+charges nested collections against declared totals, and requires exact EOF.
+UTF-16BE code units retain arbitrary JavaScript strings without replacement.
+This bounded sidecar is used with the ABI 0.7/0.8/0.9 native paths and the
+stock/legacy research path; it does not make their native materialization
+behavior equivalent. The envelope, sidecar v2, and identity v1 have exact
+section boundaries and EOF, but stock `occt-wasm` can accept suffix bytes after
+a valid BREP archive. Strict BREP-section consumption is an owned-ABI-0.7+
+transport guarantee; stock canonical re-encoding may discard the suffix.
 
-The reviewed deterministic stock-runtime v2 asymmetric-box fixture is `11,591`
+Native identity v1 records the zero-based direct-child path to the first
+`IsSame` occurrence of each unique located solid, shell, wire, face, edge, and
+vertex. Its complete rooted pre-order stream records every serialized
+occurrence in fixed 12-byte records containing shape type, composed orientation,
+direct-child count, and canonical `IsSame` class index for those six kinds.
+Compound, compsolid, and generic-shape nodes are structurally recorded but
+unindexed. The 64-byte identity header records exact length, aggregate
+first-path components, six unique-class counts, occurrence count, and record
+width.
+
+The producer sorts first paths canonically per kind and applies the same
+permutation to orientations, face/edge/vertex topology, and occurrence class
+indices. The consumer remaps stored paths onto its raw enumeration, compares
+the complete occurrence manifest by canonical class path, and then exact-checks
+geometry and incidence. Multiplicity, order, orientation, `IsSame`-class
+membership, shape type, child count, geometry, incidence, or root-structure
+substitution fails closed.
+Limits are `100,000` unique paths, `1,000,000` aggregate first-path components,
+depth `64`, child index `999,999`, `100,000` stored occurrences/traversal
+visits, and `1,000,000` candidate `IsSame` comparisons. The private fingerprint
+binds `nativeIdentity=serialized-first-issame-child-path-v1`,
+`nativeOccurrenceManifest=complete-rooted-preorder-type-orientation-child-count-issame-class-v1`,
+`nativeOccurrenceRecordBytes=12`, `nativeIdentityMaxOccurrences=100000`,
+`nativeIdentityTraversalOccurrences=100000`, every other ceiling, and the
+native-structure declaration.
+
+The reviewed deterministic stock-runtime v3 asymmetric-box fixture is `13,735`
 bytes with fixture witness
-`invariantcad:kernel-shape-artifact-fixture:v1:sha256:221d1ea2265a26df1293e63d625d25e85eb8a86041bdea53a927269427e3d16a`.
+`invariantcad:kernel-shape-artifact-fixture:v1:sha256:8ecfa6ac89142f794c2d55a78e7121ce0805b8abcb5aa64230e7722d99c8c2be`.
 Its semantic witness remains
 `invariantcad:kernel-shape-semantic:v1:sha256:40ae684e4a2fad512f54e1f1be4443acf7faf2f34fc6b281c7b816d8d3366cb2`.
-The v1 fixture is retained only to prove fail-closed rejection before native
-restore. Verify the current fixture without writing with
-`pnpm artifact:fixture:occt -- --check --version v2`.
+The v1 and v2 fixtures are retained only to prove fail-closed rejection before
+native restore. Verify the current fixture without writing with
+`pnpm artifact:fixture:occt -- --check --version v3`.
+A dedicated duplicate-occurrence regression substitutes two occurrences of the
+same located TShape for a single-component artifact and requires transactional
+rejection; adjacent adversarial cases reject changed later-occurrence
+orientation or `IsSame`-class membership.
 
 ABI 0.9 still does not advertise `KernelCapabilities.shapeArtifacts`. The
 owned-profile parser closes the previously documented BinTools grammar/count/
@@ -587,18 +621,24 @@ all WebAssembly growth. The structural work envelope is conservative and
 bounded; it is not a live/peak-memory proof. Synchronous same-thread WASM also
 has an in-flight cancellation gap, so an ordinary timer-driven `AbortSignal`
 does not provide prompt cancellation during native work. Ordered native
-evidence is not a comprehensive durable identity scheme for indistinguishable
-symmetric topology, and the stock fixture is not cross-process compatibility
-proof. The attested loaders now verify the exact owned JavaScript/WASM pair
-under an independent canonical release-manifest pin, and the private candidate
-fingerprint binds that pair identity. The separate declared-build identity does
-not prove that recipe ran, authenticate a publisher, or attest the wider
-library/wrapper/host. Binary sidecar v2, ABI 0.9, and exact pair verification
-materially narrow the candidate boundary, but production promotion still
-requires prompt cancellation outside the same-thread gap, comprehensive durable
-artifact-local identity, reviewed owned-runtime cross-process goldens, and the
-remaining evaluator/cache integration and release gates. The codec remains
-reachable only through repository-private test plumbing.
+evidence is no longer the ordering authority for v3's canonical unique classes,
+and the complete occurrence manifest preserves every serialized node's
+multiplicity, order, type, composed orientation, child count, and class mapping.
+Compound/compsolid/generic nodes remain structural occurrences, not indexed
+public identities. Stock `occt-wasm` has no `IsPartner`, so v3 cannot attest
+that distinct-location `IsSame` classes share one underlying TShape, and its
+serialized paths do not persist across model edits or define assembly identity.
+The stock fixture is not cross-process compatibility proof. The attested
+loaders now verify the exact owned JavaScript/WASM pair under an independent
+canonical release-manifest pin, and the private candidate fingerprint binds
+that pair identity. The separate declared-build identity does not prove that
+recipe ran, authenticate a publisher, or attest the wider
+library/wrapper/host. Format v3, binary sidecar v2, ABI 0.9, and exact pair
+verification materially narrow the candidate boundary, but production promotion
+still requires a public boundary where hard cancellation is promised, reviewed
+owned-runtime cross-process goldens, and the remaining evaluator/cache
+integration and release gates. The codec remains reachable only through
+repository-private test plumbing.
 
 The generated pair and its local package-neutral bundle remain ignored build
 artifacts and are not included in the `invariantcad` npm tarball. Until an

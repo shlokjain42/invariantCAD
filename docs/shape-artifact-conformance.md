@@ -469,11 +469,11 @@ key-neutral semantic evidence rather than persisting those ephemeral keys.
 
 The repository now has a private OCCT candidate hook for developing that stronger
 boundary. It is not a package export, is not installed as the production
-kernel's codec, and does not add `KernelCapabilities.shapeArtifacts`. Format v2
-combines a binary BREP archive with a bounded canonical binary sidecar for
-key-neutral face/edge/vertex structure and incidence, ordered root/subshape
-type-orientation evidence, wrapper lineage, complete/partial history, and
-analytic volume overrides.
+kernel's codec, and does not add `KernelCapabilities.shapeArtifacts`. Format v3
+combines a binary BREP archive with bounded canonical sidecar v2 and a separate
+native-identity-v1 section. The sidecar retains key-neutral face/edge/vertex
+structure and incidence, root/subshape type-orientation evidence, wrapper
+lineage, complete/partial history, and analytic volume overrides.
 
 The sidecar has a fixed 48-byte big-endian header. It declares its exact byte
 length, face/edge/vertex counts, aggregate adjacency links, aggregate lineage
@@ -486,34 +486,74 @@ are closed. The enclosing private candidate rejects a compatibility fingerprint
 longer than `2,048` UTF-8 bytes before allocating its envelope.
 
 Encode detaches and canonicalizes the semantic graph, sorts and deduplicates
-lineage, replaces ephemeral keys with sorted artifact-local indices, performs a
-complete counting pass, and only then allocates and writes the exact output
-buffer. Decode rejects an invalid header, excessive declared aggregate, or
-impossible minimum representation before allocating topology tables. Nested
+lineage, performs a complete counting pass, and only then allocates and writes
+exact sections. Decode rejects an invalid header, excessive declared aggregate,
+or impossible minimum representation before allocating topology tables. Nested
 reads charge the same lineage, adjacency, UTF-16 byte, and orientation totals;
 indices must be sorted, unique, and in range; canonical lineage order is strict;
 and exact end-of-input is mandatory. There is no JSON parse/object/re-encode
-canonicality pass. Decode then imports a new native root, generates fresh
-evaluation-scoped topology keys, and accepts the sidecar only if the new root
-type, orientations, counts, and arrays exactly match the recorded ordered
-structural evidence. A mismatch rejects the artifact and disposes the partial
-shape. Array positions are therefore fail-closed artifact-local verification
-coordinates, never serialized public keys or a claim that native enumeration is
-durable identity.
+canonicality pass.
+
+Native identity v1 represents each unique located solid, shell, wire, face,
+edge, and vertex by the zero-based direct-child sequence from the serialized
+root to its first `IsSame` occurrence. A complete rooted direct-child pre-order
+stream additionally records every serialized occurrence. Each fixed 12-byte
+record contains shape type, composed orientation, direct-child count, and the
+canonical `IsSame` class index for those six indexed kinds. Compound,
+compsolid, and generic-shape occurrences use no class index, but their exact
+structure, order, orientation, and multiplicity remain in the stream. The fixed
+64-byte identity header declares exact identity length, aggregate first-path
+components, six per-kind unique-class counts, occurrence count, and occurrence
+record width.
+
+The codec admits at most `100,000` unique paths, `1,000,000` aggregate
+first-path components, depth `64`, and child index `999,999`; capture and the
+stored manifest are both capped at `100,000` occurrences, and candidate
+classification is capped at `1,000,000` `IsSame` comparisons. The compatibility
+fingerprint binds
+`nativeIdentity=serialized-first-issame-child-path-v1`,
+`nativeOccurrenceManifest=complete-rooted-preorder-type-orientation-child-count-issame-class-v1`,
+`nativeOccurrenceRecordBytes=12`, `nativeIdentityMaxOccurrences=100000`,
+`nativeIdentityTraversalOccurrences=100000`, all other version/limit
+declarations, and the native-structure contract.
+
+The producer lexicographically sorts paths within each kind and jointly
+permutes the corresponding native orientations and face/edge/vertex topology
+records, and remaps every occurrence class index through the same permutation.
+Sidecar incidence is then encoded against that canonical order, so producer
+TopExp enumeration cannot change the bytes. Decode imports a new native root,
+captures its raw path order, maps stored paths to fresh indices, and
+exact-compares occurrence count plus every record's type, composed orientation,
+child count, and class path. It also exact-compares identified face/edge/vertex
+geometry and incidence. Only then does it attach the stored semantic evidence
+to fresh evaluation-scoped keys. A multiplicity, order, orientation,
+`IsSame`-class membership, shape type, child count, geometry, incidence, or
+root-structure mismatch rejects the artifact and disposes the partial shape.
+
+Within one serialized artifact this proves unique located `IsSame` classes for
+solid, shell, wire, face, edge, and vertex and preserves every occurrence's
+rooted structure, order, type, composed orientation, multiplicity, and class
+membership. Compound, compsolid, and generic-shape nodes are structurally
+recorded but are not indexed public identity classes. Stock `occt-wasm` does
+not expose `IsPartner`, so v3 cannot attest that distinct-location `IsSame`
+classes share one underlying TShape rather than independent TShapes. The paths
+remain coordinates in the exact serialized child hierarchy, never public
+topology keys, cross-edit identities, persistent assembly identities, or
+persistent-topology references.
 
 The repository gate combines direct cold/warm, state, corruption, byte,
 ownership, alternate-valid-BREP, and downstream-selection cases with one
-committed deterministic stock-runtime v2 asymmetric-box artifact. It is
-`11,591` bytes and has fixture witness
-`invariantcad:kernel-shape-artifact-fixture:v1:sha256:221d1ea2265a26df1293e63d625d25e85eb8a86041bdea53a927269427e3d16a`.
+committed deterministic stock-runtime v3 asymmetric-box artifact. It is
+`13,735` bytes and has fixture witness
+`invariantcad:kernel-shape-artifact-fixture:v1:sha256:8ecfa6ac89142f794c2d55a78e7121ce0805b8abcb5aa64230e7722d99c8c2be`.
 The byte-format revision leaves the independent semantic witness unchanged at
 `invariantcad:kernel-shape-semantic:v1:sha256:40ae684e4a2fad512f54e1f1be4443acf7faf2f34fc6b281c7b816d8d3366cb2`.
-The former v1 fixture remains committed only as a negative fail-closed corpus:
-the v2 decoder must reject it before native restoration. Verify the reviewed v2
-fixture without writing by running:
+The former v1 and v2 fixtures remain committed only as a negative fail-closed
+corpus: the v3 decoder must reject both before native restoration. Verify the
+reviewed v3 fixture without writing by running:
 
 ```bash
-pnpm artifact:fixture:occt -- --check --version v2
+pnpm artifact:fixture:occt -- --check --version v3
 ```
 
 The generator creates cold shapes in fresh kernels, requires two current
@@ -522,7 +562,14 @@ witnesses, validates canonical base64, and then prints the byte count,
 fingerprint, and both witnesses. This remains one stock-runtime in-process
 golden, not an owned-facade, cross-platform, or cross-process compatibility
 matrix, and the general audit correctly continues to classify it as
-non-certifying.
+non-certifying. A focused symmetric-box case reverses producer TopExp
+enumeration and still requires byte-identical output, then reverses consumer
+enumeration and requires exact semantic restoration with fresh keys. This is
+evidence for the stated path-remapping contract, not a claim about every OCCT
+shape or platform. A separate duplicate-occurrence regression substitutes a
+two-occurrence BREP for a one-component artifact and requires rejection without
+leaked wrapper or native ownership; adversarial cases also reject changed
+later-occurrence orientation and `IsSame`-class membership.
 
 The Chromium production-bundle gate adds a repository-private disposable-realm
 check around that committed stock fixture. The main realm retains the source
@@ -701,8 +748,14 @@ earlier unbounded research path; and no shipped backend advertises
 
 Binary sidecar v2 closes the former JSON-intermediate allocation blocker, and
 ABI 0.9 closes the exact owned-profile BinTools grammar/count/product preflight
-gap. The hook remains candidate-only because:
+gap. Candidate format v3 additionally removes producer/consumer raw enumeration
+order for its canonical unique classes and verifies the complete rooted
+occurrence manifest. The hook remains candidate-only because:
 
+- envelope, sidecar-v2, and identity-v1 section boundaries and EOF are exact,
+  but stock `occt-wasm` accepts suffix bytes after a valid BREP archive;
+  strict consumption inside the BREP section is guaranteed only by owned ABI
+  0.7 and later, and stock canonical re-encoding may discard such a suffix;
 - the 128 MiB budget measures cumulative requests, not live bytes, peak memory,
   or every physical WebAssembly-memory effect; the structural-work envelope is
   deliberately conservative but is not a live/peak-memory proof;
@@ -711,9 +764,13 @@ gap. The hook remains candidate-only because:
   `Evaluator.evaluate(...)` remains same-thread and does not yield from
   synchronous WASM to an ordinary timer-driven `AbortSignal`; no public isolated
   evaluator API has been added;
-- ordered topology evidence is useful for fail-closed comparison in the pinned
-  runtime, but it is not comprehensive durable identity for indistinguishable
-  symmetric subshapes;
+- every serialized occurrence is checked for multiplicity, order, type,
+  composed orientation, direct-child count, and canonical `IsSame` class.
+  Compound/compsolid/generic nodes remain unindexed structural occurrences;
+  stock `occt-wasm` cannot attest shared TShape ancestry across
+  distinct-location classes because it does not expose `IsPartner`, and
+  serialization-local paths do not persist across model edits or define
+  assembly identity;
 - the attested loader now verifies the exact owned JavaScript/WASM pair against
   an independently pinned canonical release manifest, and the candidate
   fingerprint binds that pair identity. The separate declared-build identity
@@ -723,30 +780,35 @@ gap. The hook remains candidate-only because:
   stock-runtime golden is not a reviewed cross-platform compatibility matrix.
 
 Production promotion therefore still requires a public operational isolation
-boundary wherever hard cancellation is promised, comprehensive durable
-artifact-local native subshape identity, reviewed cross-platform owned-runtime
-goldens, and evaluator/cache integration. The private compatibility fingerprint
-now binds the exact native WASM/JavaScript pair identity alongside versioned
-declarations for the adapter contract, envelope and sidecar revisions, identity
-scheme, relevant tolerance and serialization options, and other result-changing
-inputs. Those declarations are compatibility fields, not cryptographic hashes
-or attestation of the InvariantCAD wrapper/library code. Build execution and
-publisher provenance likewise remain explicit non-claims rather than
-compatibility identities.
+boundary wherever hard cancellation is promised, reviewed cross-platform
+owned-runtime goldens, and evaluator/cache integration. Cross-edit topology and
+persistent assembly identity remain separate protocols rather than v3 claims.
+The private compatibility fingerprint now binds the exact native
+WASM/JavaScript pair identity alongside versioned declarations for the adapter
+contract, envelope-v3, sidecar-v2, identity-v1 first paths, the complete
+occurrence-manifest schema, 12-byte record width, every identity resource
+ceiling, relevant tolerance and serialization options, and other
+result-changing inputs. Those declarations are compatibility fields, not
+cryptographic hashes or attestation of the InvariantCAD wrapper/library code.
+Build execution and publisher provenance likewise remain explicit non-claims
+rather than compatibility identities.
 
 ABI 0.7 resolves the candidate's former full-output-materialization and
 successful-result ownership gaps, ABI 0.8 adds a private cumulative-request
 quota, sidecar v2 resolves the JSON materialization gap, and ABI 0.9 adds exact
-owned-profile native archive preflight plus structural-work limits. The new
-disposable gates add forced-realm containment around real evaluator work, fresh
-recovery, and a bounded owned-process handoff. A killed realm cannot perform
-language-level cleanup; realm destruction is the containment mechanism. The
-attested loader additionally closes exact owned runtime-pair and
+owned-profile native archive preflight plus structural-work limits. Candidate
+v3 adds canonical unique-class paths, complete occurrence-manifest verification,
+and raw-order remapping. The new disposable gates add forced-realm containment
+around real evaluator work, fresh recovery, and a bounded owned-process handoff.
+A killed realm cannot perform language-level cleanup; realm destruction is the
+containment mechanism. The attested loader additionally closes exact owned runtime-pair and
 declared-manifest identity under an independent pin. None of these controls
-provides live/peak-memory proof, operational-cancellation certification,
-comprehensive durable symmetric-topology identity, authenticated build
-execution or publisher provenance, wider host/application attestation, or a
-reviewed cross-platform compatibility proof.
+provides live/peak-memory proof, hard cancellation in the public evaluator,
+operational-cancellation or compatibility certification, public
+compound/compsolid identity classes, distinct-location `IsPartner`/shared-TShape
+proof, cross-edit topology persistence, persistent assembly identity,
+authenticated build execution or publisher provenance, wider host/application
+attestation, or a reviewed cross-platform compatibility proof.
 Advertising an ordinary native exchange function under the stronger
 shape-artifact capability would therefore remain incorrect, even when it can
 reconstruct a geometrically valid solid.

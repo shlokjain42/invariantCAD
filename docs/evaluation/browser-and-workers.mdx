@@ -163,11 +163,23 @@ ownership and acknowledgement rule in their host framework.
 
 ## Release-gated isolation evidence
 
-The production Chromium test loads the committed `11,591`-byte OCCT candidate
-v2 asymmetric-box fixture in the main realm, retains those source bytes, and
+The production Chromium test loads the committed `13,735`-byte OCCT candidate
+v3 asymmetric-box fixture in the main realm, retains those source bytes, and
 transfers a distinct copied `ArrayBuffer` into a fresh module worker. It
 requires the transfer copy to detach and the retained source to remain
 byte-identical.
+
+V3 retains bounded semantic sidecar v2 and adds native identity v1. Its 64-byte
+header carries canonical first-`IsSame` direct-child paths plus a complete
+rooted pre-order occurrence manifest. Every fixed 12-byte occurrence record
+contains shape type, composed orientation, direct-child count, and the
+canonical `IsSame` class for solid/shell/wire/face/edge/vertex; compound,
+compsolid, and generic-shape nodes are structurally recorded but unindexed.
+This removes producer/consumer raw enumeration order and detects occurrence
+multiplicity, order, orientation, and `IsSame`-class membership substitution. A
+separate critical duplicate-occurrence regression substitutes two uses of one
+located TShape for a single occurrence and requires transactional rejection.
+The worker exercises decode and scalar observation of the current fixture.
 
 The worker protocol has exact closed message shapes and phase ordering.
 Artifact decode admits one matching `started` event, then one `success` or
@@ -194,9 +206,11 @@ Neither normal cleanup nor a message from the killed realm is expected after
 termination: a killed realm cannot execute language-level `finally` blocks, so
 destroying that complete realm is the containment mechanism. The worker cases
 are not themselves runtime attestation, live/peak-memory measurement, a real
-OCCT-trap injection, trusted-host isolation, durable subshape identity, a
-cross-platform golden matrix, evaluator/cache integration, compatibility
-certification, or operational-cancellation certification.
+OCCT-trap injection, trusted-host isolation, cross-edit/persistent assembly
+identity, distinct-location `IsPartner`/shared-TShape proof, a cross-platform
+golden matrix, evaluator/cache integration, compatibility certification, or
+operational-cancellation certification. The v3 paths remain coordinates in the
+exact serialized child hierarchy.
 
 The separate Node owned-runtime gate is repository tooling rather than browser
 deployment support. `pnpm test:occt-artifact-process` runs fresh ABI 0.9
@@ -244,5 +258,8 @@ added. The private candidate remains unexported, `shapeArtifacts` remains
 absent, and these tests confer no production compatibility or operational
 cancellation certification. Ordinary public `Evaluator.evaluate(...)` remains
 same-thread and cooperatively cancellable; no public isolated evaluator API,
-cache integration, durable artifact-local identity, or cross-platform matrix
-has been added.
+cache integration, compatibility certification, public compound/compsolid
+identity class, or cross-platform matrix has been added. These workers also do
+not turn repository-private process/realm termination into hard cancellation
+in the public evaluator API or make serialization-local paths persistent across
+model edits or assemblies.

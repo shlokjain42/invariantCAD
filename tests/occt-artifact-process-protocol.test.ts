@@ -55,9 +55,9 @@ function validArtifactResult(): Record<string, unknown> {
       capabilities: {
         protocolVersion: 1,
         format: "org.invariantcad.occt-shape-candidate",
-        formatVersion: 2,
+        formatVersion: 3,
         compatibilityFingerprint:
-          "invariantcad-occt-shape-candidate@2;runtimeAttestation=test",
+          "invariantcad-occt-shape-candidate@3;runtimeAttestation=test",
       },
       artifact: {
         byteLength: 1,

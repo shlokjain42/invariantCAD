@@ -1,6 +1,7 @@
 import { TransitionMode } from "occt-wasm";
 import type {
   OcctKernel as RawOcctKernel,
+  ShapeOrientation,
   ShapeHandle,
   Vec3 as OcctVec3,
 } from "occt-wasm";
@@ -141,10 +142,21 @@ import {
   OCCT_SHAPE_ARTIFACT_CANDIDATE_ACCESS,
   remapOcctShapeArtifactTopology,
   type OcctShapeArtifactCandidateHost,
-  type OcctShapeArtifactCapturedSidecarState,
+  type OcctShapeArtifactCapturedCandidateState,
   type OcctShapeArtifactCapturedState,
   type OcctShapeArtifactNativeStructure,
 } from "./internal/occt-artifact-candidate.js";
+import {
+  OCCT_ARTIFACT_NATIVE_IDENTITY_V1_OCCURRENCE_BYTES,
+  OCCT_ARTIFACT_NATIVE_IDENTITY_V1_MAX_CHILD_INDEX,
+  OCCT_ARTIFACT_NATIVE_IDENTITY_V1_MAX_OCCURRENCES,
+  OCCT_ARTIFACT_NATIVE_IDENTITY_V1_MAX_PATHS,
+  OCCT_ARTIFACT_NATIVE_IDENTITY_V1_MAX_PATH_COMPONENTS,
+  OCCT_ARTIFACT_NATIVE_IDENTITY_V1_MAX_PATH_DEPTH,
+  type OcctShapeArtifactNativeIdentityV1,
+  type OcctShapeArtifactNativeOccurrenceV1,
+  type OcctShapeArtifactNativePath,
+} from "./internal/occt-artifact-identity-v1.js";
 import {
   assertAttestedFacadeMarker,
   captureAttestedOcctRuntime,
@@ -167,7 +179,16 @@ export {
 const OCCT_SHAPE = Symbol("InvariantCAD.OcctShape");
 const TOPOLOGY_HASH_UPPER_BOUND = 2_147_483_647;
 const MAX_ARTIFACT_NATIVE_TOPOLOGY_ITEMS = 400_000;
+const MAX_ARTIFACT_NATIVE_IDENTITY_TRAVERSAL_OCCURRENCES =
+  OCCT_ARTIFACT_NATIVE_IDENTITY_V1_MAX_OCCURRENCES;
+const MAX_ARTIFACT_NATIVE_IDENTITY_COMPARISONS = 1_000_000;
 let nextTopologyNamespace = 1;
+
+function checkArtifactCandidateSignal(signal: AbortSignal | undefined): void {
+  if (signal?.aborted === true) {
+    throw new DOMException("OCCT shape-artifact operation was aborted", "AbortError");
+  }
+}
 
 function exactBooleanHistoryRecordLimit(value: number | undefined): number {
   const limit = value ?? DEFAULT_OCCT_EXACT_BOOLEAN_HISTORY_RECORD_LIMIT;
@@ -381,7 +402,7 @@ function occtArtifactCandidateCompatibilityFingerprint(
       return undefined;
     }
     return [
-      "invariantcad-occt-shape-candidate@2",
+      "invariantcad-occt-shape-candidate@3",
       "occt-wasm@3.7.0",
       `runtime=${runtime}`,
       ...(runtimePairIdentity === undefined
@@ -407,7 +428,17 @@ function occtArtifactCandidateCompatibilityFingerprint(
         ? "nativeArchive=occt-brep-binary-v4;triangulation=false;normals=false"
         : "nativeArchive=occt-brep-binary",
       "topologySidecar=bounded-binary-artifact-local-index-v2",
-      "nativeStructure=ordered-type-orientation-v1",
+      "nativeIdentity=serialized-first-issame-child-path-v1",
+      "nativeOccurrenceManifest=complete-rooted-preorder-type-orientation-child-count-issame-class-v1",
+      `nativeOccurrenceRecordBytes=${OCCT_ARTIFACT_NATIVE_IDENTITY_V1_OCCURRENCE_BYTES}`,
+      `nativeIdentityMaxPaths=${OCCT_ARTIFACT_NATIVE_IDENTITY_V1_MAX_PATHS}`,
+      `nativeIdentityMaxPathComponents=${OCCT_ARTIFACT_NATIVE_IDENTITY_V1_MAX_PATH_COMPONENTS}`,
+      `nativeIdentityMaxPathDepth=${OCCT_ARTIFACT_NATIVE_IDENTITY_V1_MAX_PATH_DEPTH}`,
+      `nativeIdentityMaxChildIndex=${OCCT_ARTIFACT_NATIVE_IDENTITY_V1_MAX_CHILD_INDEX}`,
+      `nativeIdentityMaxOccurrences=${OCCT_ARTIFACT_NATIVE_IDENTITY_V1_MAX_OCCURRENCES}`,
+      `nativeIdentityTraversalOccurrences=${MAX_ARTIFACT_NATIVE_IDENTITY_TRAVERSAL_OCCURRENCES}`,
+      `nativeIdentityComparisons=${MAX_ARTIFACT_NATIVE_IDENTITY_COMPARISONS}`,
+      "nativeStructure=artifact-path-type-orientation-v2",
       ...(hasNativeRequestBudget
         ? [
             `nativeRequestLimitBytes=${OCCT_ARTIFACT_MAX_NATIVE_REQUESTED_BYTES}`,
@@ -1034,12 +1065,17 @@ class OcctKernel implements GeometryKernel {
       ? undefined
       : Object.freeze({
           compatibilityFingerprint,
-          capture: (shape: KernelShape) =>
-            this.captureShapeArtifactCandidate(shape),
-          encodeNative: (shape: KernelShape, maxBytes: number) =>
-            this.encodeShapeArtifactCandidateNative(shape, maxBytes),
-          restore: (state: OcctShapeArtifactCapturedState) =>
-            this.restoreShapeArtifactCandidate(state),
+          capture: (shape: KernelShape, signal?: AbortSignal) =>
+            this.captureShapeArtifactCandidate(shape, signal),
+          encodeNative: (
+            shape: KernelShape,
+            maxBytes: number,
+            signal?: AbortSignal,
+          ) => this.encodeShapeArtifactCandidateNative(shape, maxBytes, signal),
+          restore: (
+            state: OcctShapeArtifactCapturedState,
+            signal?: AbortSignal,
+          ) => this.restoreShapeArtifactCandidate(state, signal),
         });
   }
 
@@ -1061,18 +1097,25 @@ class OcctKernel implements GeometryKernel {
 
   private captureShapeArtifactCandidate(
     shape: KernelShape,
-  ): OcctShapeArtifactCapturedSidecarState {
+    signal?: AbortSignal,
+  ): OcctShapeArtifactCapturedCandidateState {
+    checkArtifactCandidateSignal(signal);
     const owned = this.shape(shape);
+    this.preflightShapeArtifactNativeIdentity(owned, signal);
     const topology = this.topology(owned);
-    const nativeStructure = this.captureShapeArtifactNativeStructure(
+    checkArtifactCandidateSignal(signal);
+    const native = this.captureShapeArtifactNativeState(
       owned,
       topology,
+      signal,
     );
+    checkArtifactCandidateSignal(signal);
     return Object.freeze({
       lineage: owned.lineage,
       history: owned.history,
       topology,
-      nativeStructure,
+      nativeStructure: native.structure,
+      nativeIdentity: native.identity,
       ...(owned.volumeOverride === undefined
         ? {}
         : { volumeOverride: owned.volumeOverride }),
@@ -1082,20 +1125,23 @@ class OcctKernel implements GeometryKernel {
   private encodeShapeArtifactCandidateNative(
     shape: KernelShape,
     maxBytes: number,
+    signal?: AbortSignal,
   ): Uint8Array {
+    checkArtifactCandidateSignal(signal);
     const owned = this.shape(shape);
     if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
       throw new RangeError("OCCT candidate native byte limit is invalid");
     }
     if (this.facade?.artifact === undefined) {
       const brep = this.raw.toBREPBinary(owned[OCCT_SHAPE]).slice();
+      checkArtifactCandidateSignal(signal);
       if (brep.byteLength > maxBytes) {
         throw new RangeError("OCCT candidate artifact exceeds maxArtifactBytes");
       }
       return brep;
     }
     try {
-      return writeBoundedOcctArtifactBrep({
+      const brep = writeBoundedOcctArtifactBrep({
         module: this.facade.artifact,
         kernel: this.raw.getRawKernel(),
         shapeId: owned[OCCT_SHAPE] as number,
@@ -1107,6 +1153,8 @@ class OcctKernel implements GeometryKernel {
             }
           : {}),
       });
+      checkArtifactCandidateSignal(signal);
+      return brep;
     } catch (error) {
       if (
         error instanceof OcctArtifactWriteError &&
@@ -1120,8 +1168,10 @@ class OcctKernel implements GeometryKernel {
 
   private restoreShapeArtifactCandidate(
     state: OcctShapeArtifactCapturedState,
+    signal?: AbortSignal,
   ): OcctShape {
     this.assertKernelLive();
+    checkArtifactCandidateSignal(signal);
     let handle: ShapeHandle | undefined;
     let provisional: OcctShape | undefined;
     try {
@@ -1155,6 +1205,7 @@ class OcctKernel implements GeometryKernel {
             : {}),
         }) as ShapeHandle;
       }
+      checkArtifactCandidateSignal(signal);
       provisional = this.own(handle, undefined, {
         inherited: state.lineage,
         history: state.history,
@@ -1174,17 +1225,25 @@ class OcctKernel implements GeometryKernel {
           );
         }
       }
+      checkArtifactCandidateSignal(signal);
+      this.preflightShapeArtifactNativeIdentity(provisional, signal);
       const freshTopology = this.topology(provisional);
-      const freshNativeStructure = this.captureShapeArtifactNativeStructure(
+      checkArtifactCandidateSignal(signal);
+      const freshNative = this.captureShapeArtifactNativeState(
         provisional,
         freshTopology,
+        signal,
       );
       provisional.topologySnapshot = remapOcctShapeArtifactTopology(
         state.topology,
         freshTopology,
         state.nativeStructure,
-        freshNativeStructure,
+        freshNative.structure,
+        state.nativeIdentity,
+        freshNative.identity,
+        signal,
       );
+      checkArtifactCandidateSignal(signal);
       return provisional;
     } catch (error) {
       try {
@@ -1203,52 +1262,263 @@ class OcctKernel implements GeometryKernel {
     }
   }
 
-  private captureShapeArtifactNativeStructure(
+  private captureShapeArtifactNativeState(
     shape: OcctShape,
     topology: KernelTopologySnapshot,
-  ): OcctShapeArtifactNativeStructure {
+    signal?: AbortSignal,
+  ): {
+    readonly structure: OcctShapeArtifactNativeStructure;
+    readonly identity: OcctShapeArtifactNativeIdentityV1;
+  } {
     const root = shape[OCCT_SHAPE];
-    const subshapeOrientations = (
-      kind: "solid" | "shell" | "wire",
-    ): OcctShapeArtifactNativeStructure[
-      | "solidOrientations"
-      | "shellOrientations"
-      | "wireOrientations"
-    ] => {
-      const handles = this.raw.getSubShapes(root, kind);
-      try {
-        return Object.freeze(
-          handles.map((handle) => this.raw.shapeOrientation(handle)),
-        );
-      } finally {
-        this.releaseHandles(handles);
-      }
-    };
-    const retainedOrientations = (
+    type NativeKind = "solid" | "shell" | "wire" | "face" | "edge" | "vertex";
+    interface NativeGroup {
+      readonly kind: NativeKind;
+      readonly handles: readonly ShapeHandle[];
+      readonly release: boolean;
+      readonly paths: (OcctShapeArtifactNativePath | undefined)[];
+      readonly orientations: (ShapeOrientation | undefined)[];
+      readonly buckets: ReadonlyMap<number, readonly number[]>;
+    }
+    const retainedHandles = (
       descriptors: readonly TopologyDescriptor[],
       expected: "face" | "edge" | "vertex",
-    ) =>
-      Object.freeze(
-        descriptors.map((descriptor) => {
-          const retained = shape.topologyHandles.get(descriptor.key);
-          if (retained?.topology !== expected) {
+    ): readonly ShapeHandle[] =>
+      descriptors.map((descriptor) => {
+        const retained = shape.topologyHandles.get(descriptor.key);
+        if (retained?.topology !== expected) {
+          throw new Error(
+            "OCCT topology snapshot lost a retained subshape handle",
+          );
+        }
+        return retained.handle;
+      });
+    const temporary: ShapeHandle[][] = [];
+    const group = (
+      kind: NativeKind,
+      handles: readonly ShapeHandle[],
+      release: boolean,
+    ): NativeGroup => {
+      if (release) temporary.push(handles as ShapeHandle[]);
+      const mutableBuckets = new Map<number, number[]>();
+      handles.forEach((handle, index) => {
+        const hash = this.raw.hashCode(handle, TOPOLOGY_HASH_UPPER_BOUND);
+        const bucket = mutableBuckets.get(hash);
+        if (bucket === undefined) mutableBuckets.set(hash, [index]);
+        else bucket.push(index);
+      });
+      return {
+        kind,
+        handles,
+        release,
+        paths: Array.from({ length: handles.length }),
+        orientations: Array.from({ length: handles.length }),
+        buckets: mutableBuckets,
+      };
+    };
+    let groups: readonly NativeGroup[] = [];
+    try {
+      checkArtifactCandidateSignal(signal);
+      groups = [
+        group("solid", this.raw.getSubShapes(root, "solid"), true),
+        group("shell", this.raw.getSubShapes(root, "shell"), true),
+        group("wire", this.raw.getSubShapes(root, "wire"), true),
+        group("face", retainedHandles(topology.faces, "face"), false),
+        group("edge", retainedHandles(topology.edges, "edge"), false),
+        group("vertex", retainedHandles(topology.vertices, "vertex"), false),
+      ];
+      checkArtifactCandidateSignal(signal);
+      const byKind = new Map(groups.map((item) => [item.kind, item]));
+      let remaining = groups.reduce(
+        (total, item) => total + item.handles.length,
+        0,
+      );
+      if (remaining > OCCT_ARTIFACT_NATIVE_IDENTITY_V1_MAX_PATHS) {
+        throw new RangeError(
+          "OCCT native identity contains too many unique subshapes",
+        );
+      }
+      let traversalOccurrences = 0;
+      let identityComparisons = 0;
+      let pathComponents = 0;
+      const occurrences: OcctShapeArtifactNativeOccurrenceV1[] = [];
+      const path: number[] = [];
+      const walk = (handle: ShapeHandle): void => {
+        traversalOccurrences += 1;
+        if ((traversalOccurrences & 0x3ff) === 0) {
+          checkArtifactCandidateSignal(signal);
+        }
+        if (
+          traversalOccurrences >
+          MAX_ARTIFACT_NATIVE_IDENTITY_TRAVERSAL_OCCURRENCES
+        ) {
+          throw new RangeError(
+            "OCCT native identity traversal exceeded its occurrence limit",
+          );
+        }
+        const kind = this.raw.getShapeType(handle);
+        const current = byKind.get(kind as NativeKind);
+        let identityIndex: number | null = null;
+        if (current !== undefined) {
+          const hash = this.raw.hashCode(handle, TOPOLOGY_HASH_UPPER_BOUND);
+          for (const candidate of current.buckets.get(hash) ?? []) {
+            identityComparisons += 1;
+            if ((identityComparisons & 0x3ff) === 0) {
+              checkArtifactCandidateSignal(signal);
+            }
+            if (
+              identityComparisons >
+              MAX_ARTIFACT_NATIVE_IDENTITY_COMPARISONS
+            ) {
+              throw new RangeError(
+                "OCCT native identity traversal exceeded its comparison limit",
+              );
+            }
+            if (this.raw.isSame(handle, current.handles[candidate]!)) {
+              identityIndex = candidate;
+              if (current.paths[candidate] === undefined) {
+                const captured = Object.freeze([...path]);
+                pathComponents += captured.length;
+                if (
+                  pathComponents >
+                  OCCT_ARTIFACT_NATIVE_IDENTITY_V1_MAX_PATH_COMPONENTS
+                ) {
+                  throw new RangeError(
+                    "OCCT native identity traversal produced too many path components",
+                  );
+                }
+                current.paths[candidate] = captured;
+                current.orientations[candidate] =
+                  this.raw.shapeOrientation(handle);
+                remaining -= 1;
+              }
+              break;
+            }
+          }
+          if (identityIndex === null) {
             throw new Error(
-              "OCCT topology snapshot lost a retained subshape handle",
+              `OCCT native identity traversal could not classify a ${kind} occurrence`,
             );
           }
-          return this.raw.shapeOrientation(retained.handle);
+        }
+        const children = this.raw.iterShapes(handle);
+        try {
+          if (
+            children.length >
+            OCCT_ARTIFACT_NATIVE_IDENTITY_V1_MAX_CHILD_INDEX + 1
+          ) {
+            throw new RangeError(
+              "OCCT native identity child count exceeds its format limit",
+            );
+          }
+          if (
+            children.length > 0 &&
+            path.length >= OCCT_ARTIFACT_NATIVE_IDENTITY_V1_MAX_PATH_DEPTH
+          ) {
+            throw new RangeError(
+              "OCCT native identity traversal exceeded its depth limit",
+            );
+          }
+          occurrences.push(
+            Object.freeze({
+              shapeType: kind,
+              orientation: this.raw.shapeOrientation(handle),
+              childCount: children.length,
+              identityIndex,
+            }),
+          );
+          for (let index = 0; index < children.length; index += 1) {
+            path.push(index);
+            try {
+              walk(children[index]!);
+            } finally {
+              path.pop();
+            }
+          }
+        } finally {
+          this.releaseHandles(children);
+        }
+      };
+      walk(root);
+      checkArtifactCandidateSignal(signal);
+      if (
+        remaining !== 0 ||
+        groups.some(
+          (item) =>
+            item.paths.some((path) => path === undefined) ||
+            item.orientations.some((orientation) => orientation === undefined),
+        )
+      ) {
+        throw new Error(
+          "OCCT native identity traversal did not reach every retained subshape",
+        );
+      }
+      const paths = (kind: NativeKind): readonly OcctShapeArtifactNativePath[] =>
+        Object.freeze(
+          byKind.get(kind)!.paths as readonly OcctShapeArtifactNativePath[],
+        );
+      const orientations = (kind: NativeKind): readonly ShapeOrientation[] =>
+        Object.freeze(
+          byKind.get(kind)!.orientations as readonly ShapeOrientation[],
+        );
+      return Object.freeze({
+        structure: Object.freeze({
+          rootType: this.raw.getShapeType(root),
+          rootOrientation: this.raw.shapeOrientation(root),
+          solidOrientations: orientations("solid"),
+          shellOrientations: orientations("shell"),
+          wireOrientations: orientations("wire"),
+          faceOrientations: orientations("face"),
+          edgeOrientations: orientations("edge"),
+          vertexOrientations: orientations("vertex"),
         }),
-      );
-    return Object.freeze({
-      rootType: this.raw.getShapeType(root),
-      rootOrientation: this.raw.shapeOrientation(root),
-      solidOrientations: subshapeOrientations("solid"),
-      shellOrientations: subshapeOrientations("shell"),
-      wireOrientations: subshapeOrientations("wire"),
-      faceOrientations: retainedOrientations(topology.faces, "face"),
-      edgeOrientations: retainedOrientations(topology.edges, "edge"),
-      vertexOrientations: retainedOrientations(topology.vertices, "vertex"),
-    });
+        identity: Object.freeze({
+          solidPaths: paths("solid"),
+          shellPaths: paths("shell"),
+          wirePaths: paths("wire"),
+          facePaths: paths("face"),
+          edgePaths: paths("edge"),
+          vertexPaths: paths("vertex"),
+          occurrences: Object.freeze(occurrences),
+        }),
+      });
+    } finally {
+      for (let index = temporary.length - 1; index >= 0; index -= 1) {
+        this.releaseHandles(temporary[index]!);
+      }
+    }
+  }
+
+  private preflightShapeArtifactNativeIdentity(
+    shape: OcctShape,
+    signal?: AbortSignal,
+  ): void {
+    const root = shape[OCCT_SHAPE];
+    const kinds = [
+      "solid",
+      "shell",
+      "wire",
+      "face",
+      "edge",
+      "vertex",
+    ] as const;
+    let total = 0;
+    for (const kind of kinds) {
+      checkArtifactCandidateSignal(signal);
+      const count = this.raw.subShapeCount(root, kind);
+      if (!Number.isSafeInteger(count) || count < 0) {
+        throw new Error(
+          `OCCT native identity ${kind} preflight returned an invalid count`,
+        );
+      }
+      total += count;
+      if (total > OCCT_ARTIFACT_NATIVE_IDENTITY_V1_MAX_PATHS) {
+        throw new RangeError(
+          "OCCT native identity contains too many unique subshapes",
+        );
+      }
+    }
+    checkArtifactCandidateSignal(signal);
   }
 
   private own(

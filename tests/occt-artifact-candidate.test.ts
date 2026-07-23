@@ -16,6 +16,7 @@ import {
   decodeOcctArtifactSidecarV2,
   encodeOcctArtifactSidecarV2,
 } from "../src/internal/occt-artifact-sidecar-v2.js";
+import { OCCT_ARTIFACT_NATIVE_IDENTITY_V1_MAX_PATHS } from "../src/internal/occt-artifact-identity-v1.js";
 import type {
   GeometryKernel,
   KernelShape,
@@ -83,9 +84,12 @@ function codecWithRuntimePairIdentity(
     compatibilityFingerprint,
     capture: host.capture,
     encodeNative: host.encodeNative,
-    restore: (state: OcctShapeArtifactCapturedState) => {
+    restore: (
+      state: OcctShapeArtifactCapturedState,
+      signal?: AbortSignal,
+    ) => {
       restoreCalls += 1;
-      return host.restore(state);
+      return host.restore(state, signal);
     },
   });
   const wrappedKernel = new Proxy(kernel, {
@@ -176,28 +180,34 @@ interface CandidateEnvelopeSections {
   readonly fingerprintLength: number;
   readonly stateOffset: number;
   readonly stateLength: number;
+  readonly identityOffset: number;
+  readonly identityLength: number;
   readonly brepOffset: number;
   readonly brepLength: number;
 }
 
 function envelopeSections(artifact: Uint8Array): CandidateEnvelopeSections {
-  // Candidate format v2 uses a fixed 40-byte big-endian header. Keeping this
+  // Candidate format v3 uses a fixed 44-byte big-endian header. Keeping this
   // parser here makes corruption cases target declared sections, not lucky
   // byte positions inside one fixture.
-  expect(artifact.byteLength).toBeGreaterThanOrEqual(40);
-  const header = new DataView(artifact.buffer, artifact.byteOffset, 40);
-  expect(header.getUint32(20, false)).toBe(40);
+  expect(artifact.byteLength).toBeGreaterThanOrEqual(44);
+  const header = new DataView(artifact.buffer, artifact.byteOffset, 44);
+  expect(header.getUint32(20, false)).toBe(44);
   const fingerprintLength = header.getUint32(24, false);
   const stateLength = header.getUint32(28, false);
-  const brepLength = header.getUint32(32, false);
-  const fingerprintOffset = 40;
+  const identityLength = header.getUint32(32, false);
+  const brepLength = header.getUint32(36, false);
+  const fingerprintOffset = 44;
   const stateOffset = fingerprintOffset + fingerprintLength;
+  const identityOffset = stateOffset + stateLength;
   return {
     fingerprintOffset,
     fingerprintLength,
     stateOffset,
     stateLength,
-    brepOffset: stateOffset + stateLength,
+    identityOffset,
+    identityLength,
+    brepOffset: identityOffset + identityLength,
     brepLength,
   };
 }
@@ -239,7 +249,7 @@ function rewriteSidecarState(
   rewritten.set(encodedState, sections.stateOffset);
   rewritten.set(
     artifact.subarray(
-      sections.brepOffset,
+      sections.identityOffset,
       sections.brepOffset + sections.brepLength,
     ),
     sections.stateOffset + encodedState.byteLength,
@@ -250,7 +260,7 @@ function rewriteSidecarState(
     rewritten.byteLength,
   );
   header.setUint32(28, encodedState.byteLength, false);
-  header.setUint32(36, rewritten.byteLength, false);
+  header.setUint32(40, rewritten.byteLength, false);
   return rewritten;
 }
 
@@ -282,8 +292,8 @@ function replaceBrepSection(
     rewritten.byteOffset,
     rewritten.byteLength,
   );
-  header.setUint32(32, brep.byteLength, false);
-  header.setUint32(36, rewritten.byteLength, false);
+  header.setUint32(36, brep.byteLength, false);
+  header.setUint32(40, rewritten.byteLength, false);
   return rewritten;
 }
 
@@ -310,6 +320,16 @@ function rawOcctShapeHandle(shape: KernelShape): ShapeHandle {
     if (typeof value === "number") return value as ShapeHandle;
   }
   throw new TypeError("OCCT test could not inspect the raw shape handle");
+}
+
+function reverseRawSubshapeEnumeration(kernel: GeometryKernel): () => void {
+  const raw = rawOcctKernel(kernel);
+  const original = raw.getSubShapes.bind(raw);
+  raw.getSubShapes = ((...args: Parameters<typeof original>) =>
+    original(...args).reverse()) as typeof raw.getSubShapes;
+  return () => {
+    raw.getSubShapes = original;
+  };
 }
 
 async function expectRejected(
@@ -420,6 +440,68 @@ describe("OCCT shape-artifact codec candidate", () => {
       if (source !== undefined) producer.disposeShape(source);
       consumer.dispose();
       producer.dispose();
+    }
+  });
+
+  it("emits identical bytes and remaps a symmetric solid when TopExp enumeration reverses", async () => {
+    const normalProducer = await createOcctKernel();
+    const reversedProducer = await createOcctKernel();
+    const reversedConsumer = await createOcctKernel();
+    const restoreProducerEnumeration =
+      reverseRawSubshapeEnumeration(reversedProducer);
+    const restoreConsumerEnumeration =
+      reverseRawSubshapeEnumeration(reversedConsumer);
+    let normalSource: KernelShape | undefined;
+    let reversedSource: KernelShape | undefined;
+    let decoded: KernelShape | undefined;
+    try {
+      if (
+        normalProducer.box === undefined ||
+        reversedProducer.box === undefined
+      ) {
+        throw new Error("OCCT box support is unavailable");
+      }
+      normalSource = normalProducer.box([5, 5, 5], false, {
+        feature: "symmetric-identity-box",
+      });
+      reversedSource = reversedProducer.box([5, 5, 5], false, {
+        feature: "symmetric-identity-box",
+      });
+      const normalArtifact = await codec(normalProducer).encodeShapeArtifact(
+        normalSource,
+        ARTIFACT_CONTEXT,
+      );
+      const reversedArtifact = await codec(reversedProducer).encodeShapeArtifact(
+        reversedSource,
+        ARTIFACT_CONTEXT,
+      );
+      expect(reversedArtifact).toEqual(normalArtifact);
+
+      decoded = await codec(reversedConsumer).decodeShapeArtifact(
+        normalArtifact,
+        ARTIFACT_CONTEXT,
+      );
+      const plan = observationPlan(normalProducer);
+      expect(await observe(reversedConsumer, decoded, plan)).toEqual(
+        await observe(normalProducer, normalSource, plan),
+      );
+      expectFreshTopologyKeys(
+        topology(normalProducer, normalSource),
+        topology(reversedConsumer, decoded),
+      );
+    } finally {
+      restoreConsumerEnumeration();
+      restoreProducerEnumeration();
+      if (decoded !== undefined) reversedConsumer.disposeShape(decoded);
+      if (reversedSource !== undefined) {
+        reversedProducer.disposeShape(reversedSource);
+      }
+      if (normalSource !== undefined) {
+        normalProducer.disposeShape(normalSource);
+      }
+      reversedConsumer.dispose();
+      reversedProducer.dispose();
+      normalProducer.dispose();
     }
   });
 
@@ -705,6 +787,99 @@ describe("OCCT shape-artifact codec candidate", () => {
     }
   });
 
+  it("preflights unique identity counts before materializing topology handle arrays", async () => {
+    const kernel = await createOcctKernel();
+    let source: KernelShape | undefined;
+    try {
+      source = box(kernel, "identity-preflight-box");
+      const raw = rawOcctKernel(kernel);
+      const originalSubShapeCount = raw.subShapeCount;
+      const originalGetSubShapes = raw.getSubShapes;
+      let materializationCalls = 0;
+      raw.subShapeCount = ((shape, kind) =>
+        kind === "solid"
+          ? OCCT_ARTIFACT_NATIVE_IDENTITY_V1_MAX_PATHS + 1
+          : originalSubShapeCount.call(raw, shape, kind)) as typeof raw.subShapeCount;
+      raw.getSubShapes = ((shape, kind) => {
+        materializationCalls += 1;
+        return originalGetSubShapes.call(raw, shape, kind);
+      }) as typeof raw.getSubShapes;
+      try {
+        const error = await expectRejected(() =>
+          codec(kernel).encodeShapeArtifact(source!, ARTIFACT_CONTEXT),
+        );
+        expect(error).toBeInstanceOf(RangeError);
+        expect(error).toMatchObject({
+          message: expect.stringMatching(/too many unique subshapes/),
+        });
+        expect(materializationCalls).toBe(0);
+      } finally {
+        raw.getSubShapes = originalGetSubShapes;
+        raw.subShapeCount = originalSubShapeCount;
+      }
+      expect(kernel.status(source)).toEqual({ ok: true, code: "VALID" });
+    } finally {
+      if (source !== undefined) kernel.disposeShape(source);
+      kernel.dispose();
+    }
+  });
+
+  it("snapshots hostile Uint8Array subclasses before section parsing", async () => {
+    const producer = await createOcctKernel();
+    const consumer = await createOcctKernel();
+    let source: KernelShape | undefined;
+    let decoded: KernelShape | undefined;
+    try {
+      source = box(producer, "hostile-artifact-array-box");
+      const artifact = await codec(producer).encodeShapeArtifact(
+        source,
+        ARTIFACT_CONTEXT,
+      );
+      if (typeof SharedArrayBuffer === "undefined") return;
+      const sharedBytes = new Uint8Array(
+        new SharedArrayBuffer(artifact.byteLength),
+      );
+      sharedBytes.set(artifact);
+      let attackerMethodCalls = 0;
+      class HostileArtifactArray extends Uint8Array {
+        override subarray(
+          begin?: number,
+          end?: number,
+        ): Uint8Array<ArrayBuffer> {
+          attackerMethodCalls += 1;
+          return sharedBytes.subarray(
+            begin,
+            end,
+          ) as unknown as Uint8Array<ArrayBuffer>;
+        }
+
+        override slice(
+          start?: number,
+          end?: number,
+        ): Uint8Array<ArrayBuffer> {
+          attackerMethodCalls += 1;
+          return sharedBytes.slice(
+            start,
+            end,
+          ) as unknown as Uint8Array<ArrayBuffer>;
+        }
+      }
+      const hostile = new HostileArtifactArray(artifact);
+      decoded = await codec(consumer).decodeShapeArtifact(
+        hostile,
+        ARTIFACT_CONTEXT,
+      );
+      expect(attackerMethodCalls).toBe(0);
+      expect(consumer.measure(decoded)).toEqual(producer.measure(source));
+      expect(new Uint8Array(hostile.buffer)).toEqual(artifact);
+    } finally {
+      if (decoded !== undefined) consumer.disposeShape(decoded);
+      if (source !== undefined) producer.disposeShape(source);
+      consumer.dispose();
+      producer.dispose();
+    }
+  });
+
   it("copies borrowed input and keeps source and decoded ownership independent", async () => {
     const producer = await createOcctKernel();
     const consumer = await createOcctKernel();
@@ -777,6 +952,7 @@ describe("OCCT shape-artifact codec candidate", () => {
       const sections = envelopeSections(artifact);
       expect(sections.fingerprintLength).toBeGreaterThan(0);
       expect(sections.stateLength).toBeGreaterThan(0);
+      expect(sections.identityLength).toBeGreaterThan(0);
       expect(sections.brepLength).toBeGreaterThan(0);
       expect(sections.brepOffset + sections.brepLength).toBe(
         artifact.byteLength,
@@ -792,6 +968,8 @@ describe("OCCT shape-artifact codec candidate", () => {
         badFingerprint[sections.fingerprintOffset]! ^ 1;
       const badState = artifact.slice();
       badState[sections.stateOffset] = 0xff;
+      const badIdentity = artifact.slice();
+      badIdentity[sections.identityOffset] = 0xff;
       const badStateLength = withIncrementedUint32(
         artifact,
         sections.stateOffset + 12,
@@ -806,10 +984,12 @@ describe("OCCT shape-artifact codec candidate", () => {
       const malformed = [
         ["magic", badMagic],
         ["declared state length", withIncrementedUint32(artifact, 28)],
-        ["declared BREP length", withIncrementedUint32(artifact, 32)],
+        ["declared identity length", withIncrementedUint32(artifact, 32)],
+        ["declared BREP length", withIncrementedUint32(artifact, 36)],
         ["trailing bytes", trailing],
         ["fingerprint", badFingerprint],
         ["state", badState],
+        ["identity", badIdentity],
         ["inner state length", badStateLength],
         ["BREP", badBrep],
         ["post-adoption topology mismatch", topologyMismatch],
@@ -825,6 +1005,19 @@ describe("OCCT shape-artifact codec candidate", () => {
         );
         expect(payload, `${label} input mutation`).toEqual(borrowedCopy);
         expect(liveShapeCount(consumer), `${label} leaked a shape`).toBe(0);
+      }
+      if (typeof SharedArrayBuffer !== "undefined") {
+        const shared = new Uint8Array(
+          new SharedArrayBuffer(artifact.byteLength),
+        );
+        shared.set(artifact);
+        const error = await expectRejected(() =>
+          consumerCodec.decodeShapeArtifact(shared, ARTIFACT_CONTEXT),
+        );
+        expect(error).toMatchObject({
+          message: expect.stringMatching(/SharedArrayBuffer/),
+        });
+        expect(liveShapeCount(consumer)).toBe(0);
       }
       expect(producer.status(source)).toEqual({ ok: true, code: "VALID" });
 
@@ -903,6 +1096,60 @@ describe("OCCT shape-artifact codec candidate", () => {
       if (source !== undefined) producer.disposeShape(source);
       consumer.dispose();
       alternate.dispose();
+      producer.dispose();
+    }
+  });
+
+  it("does not claim strict BREP-section EOF for the stock runtime", async () => {
+    const producer = await createOcctKernel();
+    const consumer = await createOcctKernel();
+    let source: KernelShape | undefined;
+    let decoded: KernelShape | undefined;
+    try {
+      source = box(producer, "stock-brep-eof-box");
+      const producerCodec = codec(producer);
+      const consumerCodec = codec(consumer);
+      const artifact = await producerCodec.encodeShapeArtifact(
+        source,
+        ARTIFACT_CONTEXT,
+      );
+      const sections = envelopeSections(artifact);
+      const brepWithSuffix = new Uint8Array(sections.brepLength + 1);
+      brepWithSuffix.set(
+        artifact.subarray(
+          sections.brepOffset,
+          sections.brepOffset + sections.brepLength,
+        ),
+      );
+      brepWithSuffix[brepWithSuffix.byteLength - 1] = 0xa5;
+      const suffixedArtifact = replaceBrepSection(artifact, brepWithSuffix);
+      const borrowed = suffixedArtifact.slice();
+
+      decoded = await consumerCodec.decodeShapeArtifact(
+        suffixedArtifact,
+        ARTIFACT_CONTEXT,
+      );
+      expect(suffixedArtifact).toEqual(borrowed);
+      expect(await observe(consumer, decoded)).toEqual(
+        await observe(producer, source),
+      );
+
+      const canonical = await consumerCodec.encodeShapeArtifact(
+        decoded,
+        ARTIFACT_CONTEXT,
+      );
+      expect(canonical).not.toEqual(suffixedArtifact);
+      const canonicalSections = envelopeSections(canonical);
+      expect(
+        canonical.subarray(
+          canonicalSections.brepOffset,
+          canonicalSections.brepOffset + canonicalSections.brepLength,
+        ),
+      ).not.toEqual(brepWithSuffix);
+    } finally {
+      if (decoded !== undefined) consumer.disposeShape(decoded);
+      if (source !== undefined) producer.disposeShape(source);
+      consumer.dispose();
       producer.dispose();
     }
   });
