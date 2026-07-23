@@ -52,6 +52,31 @@
   OCCT trap, establish durable native subshape identity or a reviewed
   cross-platform matrix, or integrate the evaluator/cache, and no backend now
   advertises `shapeArtifacts`.
+- Extended the repository-private isolation gates through real
+  `Evaluator.evaluate(...)` work without adding a public isolated-evaluation
+  API. Fresh owned-ABI-0.9 Node children evaluate a deterministic two-box
+  Boolean union and must emit the exact `operation-started` then
+  `kernel-operation-started` sequence. The second marker is emitted immediately
+  before the wrapped native Boolean, proving entry rather than completion; the
+  injected non-yielding stall is placed only after that Boolean returns and
+  emits a third exact `non-yielding-stall-started` marker. Timeout requires that
+  marker, while abort waits for it before sending `SIGKILL`; both wait for child
+  close and are followed by a fresh evaluation with identical detached
+  measurement, topology, document, and runtime evidence. Incomplete nonempty
+  stdout event prefixes are rejected, while a failure before operation start
+  legitimately emits no event. Successful evidence is written only after
+  evaluated-design and evaluator cleanup, and an injected cleanup failure cannot
+  produce success. The Chromium production-bundle gate likewise runs the real
+  evaluator on stock OCCT, completes a native box before stalling inside its
+  wrapper, requests worker termination for both deadline and post-start abort,
+  and recovers identical scalar evidence in a fresh worker. Browser
+  `Worker.terminate()` has no completion promise, so this proves the termination
+  request and fresh-worker recovery, not observed worker exit. A killed realm
+  cannot run language-level cleanup; destroying the realm is the containment
+  boundary. Ordinary public evaluation remains same-thread and cooperatively
+  cancellable. These gates do not add cache integration, advertise
+  `shapeArtifacts`, certify operational cancellation or compatibility, provide
+  durable artifact-local identity, or establish a cross-platform matrix.
 - Made `createOcctKernel` snapshot every caller-owned initialization option
   before its first asynchronous import, including cross-realm URL state and
   copied WASM bytes, so later caller mutation cannot make execution inputs and

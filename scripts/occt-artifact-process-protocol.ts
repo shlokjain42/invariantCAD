@@ -1,7 +1,8 @@
 import { isAbsolute } from "node:path";
 
-export const OCCT_ARTIFACT_PROCESS_PROTOCOL_VERSION = 1 as const;
+export const OCCT_ARTIFACT_PROCESS_PROTOCOL_VERSION = 2 as const;
 export const OCCT_ARTIFACT_PROCESS_EVIDENCE_VERSION = 1 as const;
+export const OCCT_EVALUATOR_PROCESS_EVIDENCE_VERSION = 1 as const;
 export const OCCT_ARTIFACT_PROCESS_MAX_ARTIFACT_BYTES =
   64 * 1024 * 1024;
 export const OCCT_ARTIFACT_PROCESS_MAX_REQUEST_BYTES = 16 * 1024;
@@ -13,7 +14,9 @@ export const OCCT_ARTIFACT_PROCESS_MAX_TIMEOUT_MS = 300_000;
 export type OcctArtifactProcessOperation =
   | "produce"
   | "consume"
-  | "stall-after-start"
+  | "evaluate"
+  | "stall-during-evaluate"
+  | "fail-cleanup-during-evaluate"
   | "trap";
 
 interface OcctArtifactProcessRequestBase {
@@ -39,18 +42,48 @@ export interface OcctArtifactProcessConsumeRequest
 
 export interface OcctArtifactProcessFaultRequest
   extends OcctArtifactProcessRequestBase {
-  readonly operation: "stall-after-start" | "trap";
+  readonly operation:
+    | "stall-during-evaluate"
+    | "fail-cleanup-during-evaluate"
+    | "trap";
+}
+
+export interface OcctEvaluatorProcessRequest
+  extends OcctArtifactProcessRequestBase {
+  readonly operation: "evaluate";
 }
 
 export type OcctArtifactProcessRequest =
   | OcctArtifactProcessProduceRequest
   | OcctArtifactProcessConsumeRequest
+  | OcctEvaluatorProcessRequest
   | OcctArtifactProcessFaultRequest;
 
 export interface OcctArtifactProcessStartEvent {
   readonly protocolVersion: typeof OCCT_ARTIFACT_PROCESS_PROTOCOL_VERSION;
   readonly requestId: string;
   readonly event: "operation-started";
+}
+
+export interface OcctEvaluatorKernelOperationStartEvent {
+  readonly protocolVersion: typeof OCCT_ARTIFACT_PROCESS_PROTOCOL_VERSION;
+  readonly requestId: string;
+  readonly event: "kernel-operation-started";
+  readonly operation:
+    | "evaluate"
+    | "stall-during-evaluate"
+    | "fail-cleanup-during-evaluate";
+  readonly feature: string;
+  readonly kernelOperation: "boolean";
+}
+
+export interface OcctEvaluatorNonYieldingStallStartEvent {
+  readonly protocolVersion: typeof OCCT_ARTIFACT_PROCESS_PROTOCOL_VERSION;
+  readonly requestId: string;
+  readonly event: "non-yielding-stall-started";
+  readonly operation: "stall-during-evaluate";
+  readonly feature: string;
+  readonly kernelOperation: "boolean";
 }
 
 export interface OcctArtifactProcessRuntimeFileEvidence {
@@ -105,12 +138,70 @@ export interface OcctArtifactProcessEvidence {
   readonly cleanupCompletedBeforeResponse: true;
 }
 
+export interface OcctEvaluatorProcessMeasurementEvidence {
+  readonly volume: number;
+  readonly surfaceArea: number;
+  readonly centerOfMass: readonly [number, number, number] | null;
+  readonly inertiaTensor: readonly [
+    readonly [number, number, number],
+    readonly [number, number, number],
+    readonly [number, number, number],
+  ];
+  readonly boundingBox: {
+    readonly min: readonly [number, number, number];
+    readonly max: readonly [number, number, number];
+  };
+  readonly genus: number;
+  readonly tolerance: number;
+}
+
+export interface OcctEvaluatorProcessTopologyEvidence {
+  readonly history: "none" | "partial" | "complete";
+  readonly faces: number;
+  readonly edges: number;
+  readonly vertices: number;
+}
+
+export interface OcctEvaluatorProcessEvidence {
+  readonly kind: "invariantcad-private-occt-evaluator-process-evidence";
+  readonly evidenceVersion: typeof OCCT_EVALUATOR_PROCESS_EVIDENCE_VERSION;
+  readonly operation: "evaluate";
+  readonly executionBoundary: "one-shot-node-child-process";
+  readonly evaluatorPath: "Evaluator.evaluate";
+  readonly fixture: "owned-occt-evaluator-isolation-v1";
+  readonly documentSha256: string;
+  readonly configurationId: null;
+  readonly parameters: Readonly<Record<string, never>>;
+  readonly output: {
+    readonly name: "result";
+    readonly kind: "solid";
+    readonly measurements: OcctEvaluatorProcessMeasurementEvidence;
+    readonly topology: OcctEvaluatorProcessTopologyEvidence;
+  };
+  readonly evaluatorKernelOperation: "boolean";
+  readonly evaluatorKernelOperationObserved: true;
+  readonly runtime: OcctArtifactProcessRuntimeEvidence;
+  readonly shapeArtifactsAbsent: true;
+  readonly ordinaryEvaluatorRemainsCooperative: true;
+  readonly certifiesOperationalCancellation: false;
+  readonly certifiesCompatibility: false;
+  readonly cleanupCompletedBeforeResponse: true;
+}
+
 export interface OcctArtifactProcessSuccess {
   readonly protocolVersion: typeof OCCT_ARTIFACT_PROCESS_PROTOCOL_VERSION;
   readonly requestId: string;
   readonly operation: "produce" | "consume";
   readonly ok: true;
   readonly evidence: OcctArtifactProcessEvidence;
+}
+
+export interface OcctEvaluatorProcessSuccess {
+  readonly protocolVersion: typeof OCCT_ARTIFACT_PROCESS_PROTOCOL_VERSION;
+  readonly requestId: string;
+  readonly operation: "evaluate";
+  readonly ok: true;
+  readonly evidence: OcctEvaluatorProcessEvidence;
 }
 
 export type OcctArtifactProcessErrorCode =
@@ -132,6 +223,7 @@ export interface OcctArtifactProcessFailure {
 
 export type OcctArtifactProcessResult =
   | OcctArtifactProcessSuccess
+  | OcctEvaluatorProcessSuccess
   | OcctArtifactProcessFailure;
 
 const requestIdPattern = /^[0-9a-f]{32}$/u;
@@ -196,7 +288,9 @@ function validRequestBase(
     requestIdPattern.test(value.requestId) &&
     (value.operation === "produce" ||
       value.operation === "consume" ||
-      value.operation === "stall-after-start" ||
+      value.operation === "evaluate" ||
+      value.operation === "stall-during-evaluate" ||
+      value.operation === "fail-cleanup-during-evaluate" ||
       value.operation === "trap") &&
     absolutePath(value.runtimeDirectory) &&
     boundedString(value.feature, 256) &&
@@ -272,6 +366,133 @@ export function parseOcctArtifactProcessStartEvent(
     protocolVersion: OCCT_ARTIFACT_PROCESS_PROTOCOL_VERSION,
     requestId: value.requestId,
     event: "operation-started",
+  });
+}
+
+export function encodeOcctEvaluatorKernelOperationStartEvent(
+  requestId: string,
+  operation:
+    | "evaluate"
+    | "stall-during-evaluate"
+    | "fail-cleanup-during-evaluate",
+  feature: string,
+): string {
+  if (!requestIdPattern.test(requestId)) {
+    throw new TypeError("OCCT artifact process request ID is malformed");
+  }
+  if (
+    (operation !== "evaluate" &&
+      operation !== "stall-during-evaluate" &&
+      operation !== "fail-cleanup-during-evaluate") ||
+    !boundedString(feature, 256)
+  ) {
+    throw new TypeError(
+      "OCCT evaluator kernel-operation start event is malformed",
+    );
+  }
+  const event: OcctEvaluatorKernelOperationStartEvent = {
+    protocolVersion: OCCT_ARTIFACT_PROCESS_PROTOCOL_VERSION,
+    requestId,
+    event: "kernel-operation-started",
+    operation,
+    feature,
+    kernelOperation: "boolean",
+  };
+  return `${JSON.stringify(event)}\n`;
+}
+
+export function parseOcctEvaluatorKernelOperationStartEvent(
+  value: unknown,
+): OcctEvaluatorKernelOperationStartEvent {
+  if (
+    !isRecord(value) ||
+    !exactKeys(value, [
+      "protocolVersion",
+      "requestId",
+      "event",
+      "operation",
+      "feature",
+      "kernelOperation",
+    ]) ||
+    value.protocolVersion !== OCCT_ARTIFACT_PROCESS_PROTOCOL_VERSION ||
+    typeof value.requestId !== "string" ||
+    !requestIdPattern.test(value.requestId) ||
+    value.event !== "kernel-operation-started" ||
+    (value.operation !== "evaluate" &&
+      value.operation !== "stall-during-evaluate" &&
+      value.operation !== "fail-cleanup-during-evaluate") ||
+    !boundedString(value.feature, 256) ||
+    value.kernelOperation !== "boolean"
+  ) {
+    throw new TypeError(
+      "OCCT evaluator kernel-operation start event is malformed",
+    );
+  }
+  return Object.freeze({
+    protocolVersion: OCCT_ARTIFACT_PROCESS_PROTOCOL_VERSION,
+    requestId: value.requestId,
+    event: "kernel-operation-started",
+    operation: value.operation,
+    feature: value.feature,
+    kernelOperation: "boolean",
+  });
+}
+
+export function encodeOcctEvaluatorNonYieldingStallStartEvent(
+  requestId: string,
+  feature: string,
+): string {
+  if (
+    !requestIdPattern.test(requestId) ||
+    !boundedString(feature, 256)
+  ) {
+    throw new TypeError(
+      "OCCT evaluator non-yielding-stall start event is malformed",
+    );
+  }
+  const event: OcctEvaluatorNonYieldingStallStartEvent = {
+    protocolVersion: OCCT_ARTIFACT_PROCESS_PROTOCOL_VERSION,
+    requestId,
+    event: "non-yielding-stall-started",
+    operation: "stall-during-evaluate",
+    feature,
+    kernelOperation: "boolean",
+  };
+  return `${JSON.stringify(event)}\n`;
+}
+
+export function parseOcctEvaluatorNonYieldingStallStartEvent(
+  value: unknown,
+): OcctEvaluatorNonYieldingStallStartEvent {
+  if (
+    !isRecord(value) ||
+    !exactKeys(value, [
+      "protocolVersion",
+      "requestId",
+      "event",
+      "operation",
+      "feature",
+      "kernelOperation",
+    ]) ||
+    value.protocolVersion !== OCCT_ARTIFACT_PROCESS_PROTOCOL_VERSION ||
+    typeof value.requestId !== "string" ||
+    !requestIdPattern.test(value.requestId) ||
+    value.event !== "non-yielding-stall-started" ||
+    value.operation !== "stall-during-evaluate" ||
+    !boundedString(value.feature, 256) ||
+    value.kernelOperation !== "boolean"
+  ) {
+    throw new TypeError(
+      "OCCT evaluator non-yielding-stall start event is malformed",
+    );
+  }
+  return Object.freeze({
+    protocolVersion: OCCT_ARTIFACT_PROCESS_PROTOCOL_VERSION,
+    requestId: value.requestId,
+    event: "non-yielding-stall-started",
+    operation: "stall-during-evaluate",
+    feature: value.feature,
+    kernelOperation: "boolean",
   });
 }
 
@@ -448,6 +669,198 @@ function parseEvidence(value: unknown): OcctArtifactProcessEvidence {
   });
 }
 
+function finiteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function nonNegativeSafeInteger(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0
+  );
+}
+
+function parseFiniteVec3(
+  value: unknown,
+  label: string,
+): readonly [number, number, number] {
+  if (
+    !Array.isArray(value) ||
+    value.length !== 3 ||
+    !exactKeys(value as unknown as Record<string, unknown>, ["0", "1", "2"]) ||
+    !value.every(finiteNumber)
+  ) {
+    throw new TypeError(`OCCT evaluator process ${label} is malformed`);
+  }
+  return Object.freeze([value[0]!, value[1]!, value[2]!]);
+}
+
+function parseMeasurementEvidence(
+  value: unknown,
+): OcctEvaluatorProcessMeasurementEvidence {
+  if (
+    !isRecord(value) ||
+    !exactKeys(value, [
+      "volume",
+      "surfaceArea",
+      "centerOfMass",
+      "inertiaTensor",
+      "boundingBox",
+      "genus",
+      "tolerance",
+    ]) ||
+    !finiteNumber(value.volume) ||
+    value.volume < 0 ||
+    !finiteNumber(value.surfaceArea) ||
+    value.surfaceArea < 0 ||
+    !nonNegativeSafeInteger(value.genus) ||
+    !finiteNumber(value.tolerance) ||
+    value.tolerance < 0 ||
+    !Array.isArray(value.inertiaTensor) ||
+    value.inertiaTensor.length !== 3 ||
+    !exactKeys(
+      value.inertiaTensor as unknown as Record<string, unknown>,
+      ["0", "1", "2"],
+    ) ||
+    !isRecord(value.boundingBox) ||
+    !exactKeys(value.boundingBox, ["min", "max"])
+  ) {
+    throw new TypeError(
+      "OCCT evaluator process measurement evidence is malformed",
+    );
+  }
+  const centerOfMass =
+    value.centerOfMass === null
+      ? null
+      : parseFiniteVec3(value.centerOfMass, "center of mass");
+  const inertiaTensor = Object.freeze([
+    parseFiniteVec3(value.inertiaTensor[0], "inertia tensor"),
+    parseFiniteVec3(value.inertiaTensor[1], "inertia tensor"),
+    parseFiniteVec3(value.inertiaTensor[2], "inertia tensor"),
+  ]) as OcctEvaluatorProcessMeasurementEvidence["inertiaTensor"];
+  const boundingBox = Object.freeze({
+    min: parseFiniteVec3(value.boundingBox.min, "bounding-box minimum"),
+    max: parseFiniteVec3(value.boundingBox.max, "bounding-box maximum"),
+  });
+  return Object.freeze({
+    volume: value.volume,
+    surfaceArea: value.surfaceArea,
+    centerOfMass,
+    inertiaTensor,
+    boundingBox,
+    genus: value.genus,
+    tolerance: value.tolerance,
+  });
+}
+
+function parseTopologyEvidence(
+  value: unknown,
+): OcctEvaluatorProcessTopologyEvidence {
+  if (
+    !isRecord(value) ||
+    !exactKeys(value, ["history", "faces", "edges", "vertices"]) ||
+    (value.history !== "none" &&
+      value.history !== "partial" &&
+      value.history !== "complete") ||
+    !nonNegativeSafeInteger(value.faces) ||
+    !nonNegativeSafeInteger(value.edges) ||
+    !nonNegativeSafeInteger(value.vertices)
+  ) {
+    throw new TypeError(
+      "OCCT evaluator process topology evidence is malformed",
+    );
+  }
+  return Object.freeze({
+    history: value.history,
+    faces: value.faces,
+    edges: value.edges,
+    vertices: value.vertices,
+  });
+}
+
+function parseEvaluatorEvidence(
+  value: unknown,
+): OcctEvaluatorProcessEvidence {
+  if (
+    !isRecord(value) ||
+    !exactKeys(value, [
+      "kind",
+      "evidenceVersion",
+      "operation",
+      "executionBoundary",
+      "evaluatorPath",
+      "fixture",
+      "documentSha256",
+      "configurationId",
+      "parameters",
+      "output",
+      "evaluatorKernelOperation",
+      "evaluatorKernelOperationObserved",
+      "runtime",
+      "shapeArtifactsAbsent",
+      "ordinaryEvaluatorRemainsCooperative",
+      "certifiesOperationalCancellation",
+      "certifiesCompatibility",
+      "cleanupCompletedBeforeResponse",
+    ]) ||
+    value.kind !== "invariantcad-private-occt-evaluator-process-evidence" ||
+    value.evidenceVersion !== OCCT_EVALUATOR_PROCESS_EVIDENCE_VERSION ||
+    value.operation !== "evaluate" ||
+    value.executionBoundary !== "one-shot-node-child-process" ||
+    value.evaluatorPath !== "Evaluator.evaluate" ||
+    value.fixture !== "owned-occt-evaluator-isolation-v1" ||
+    typeof value.documentSha256 !== "string" ||
+    !sha256Pattern.test(value.documentSha256) ||
+    value.configurationId !== null ||
+    !isRecord(value.parameters) ||
+    !exactKeys(value.parameters, []) ||
+    !isRecord(value.output) ||
+    !exactKeys(value.output, [
+      "name",
+      "kind",
+      "measurements",
+      "topology",
+    ]) ||
+    value.output.name !== "result" ||
+    value.output.kind !== "solid" ||
+    value.evaluatorKernelOperation !== "boolean" ||
+    value.evaluatorKernelOperationObserved !== true ||
+    value.shapeArtifactsAbsent !== true ||
+    value.ordinaryEvaluatorRemainsCooperative !== true ||
+    value.certifiesOperationalCancellation !== false ||
+    value.certifiesCompatibility !== false ||
+    value.cleanupCompletedBeforeResponse !== true
+  ) {
+    throw new TypeError("OCCT evaluator process evidence is malformed");
+  }
+  return Object.freeze({
+    kind: "invariantcad-private-occt-evaluator-process-evidence",
+    evidenceVersion: OCCT_EVALUATOR_PROCESS_EVIDENCE_VERSION,
+    operation: "evaluate",
+    executionBoundary: "one-shot-node-child-process",
+    evaluatorPath: "Evaluator.evaluate",
+    fixture: "owned-occt-evaluator-isolation-v1",
+    documentSha256: value.documentSha256,
+    configurationId: null,
+    parameters: Object.freeze({}),
+    output: Object.freeze({
+      name: "result",
+      kind: "solid",
+      measurements: parseMeasurementEvidence(value.output.measurements),
+      topology: parseTopologyEvidence(value.output.topology),
+    }),
+    evaluatorKernelOperation: "boolean",
+    evaluatorKernelOperationObserved: true,
+    runtime: parseRuntimeEvidence(value.runtime),
+    shapeArtifactsAbsent: true,
+    ordinaryEvaluatorRemainsCooperative: true,
+    certifiesOperationalCancellation: false,
+    certifiesCompatibility: false,
+    cleanupCompletedBeforeResponse: true,
+  });
+}
+
 function parseFailureError(
   value: unknown,
 ): OcctArtifactProcessFailure["error"] {
@@ -479,7 +892,9 @@ export function parseOcctArtifactProcessResult(
     !requestIdPattern.test(value.requestId) ||
     (value.operation !== "produce" &&
       value.operation !== "consume" &&
-      value.operation !== "stall-after-start" &&
+      value.operation !== "evaluate" &&
+      value.operation !== "stall-during-evaluate" &&
+      value.operation !== "fail-cleanup-during-evaluate" &&
       value.operation !== "trap") ||
     typeof value.ok !== "boolean"
   ) {
@@ -494,11 +909,16 @@ export function parseOcctArtifactProcessResult(
         "ok",
         "evidence",
       ]) ||
-      (value.operation !== "produce" && value.operation !== "consume")
+      (value.operation !== "produce" &&
+        value.operation !== "consume" &&
+        value.operation !== "evaluate")
     ) {
       throw new TypeError("OCCT artifact process success is malformed");
     }
-    const evidence = parseEvidence(value.evidence);
+    const evidence =
+      value.operation === "evaluate"
+        ? parseEvaluatorEvidence(value.evidence)
+        : parseEvidence(value.evidence);
     if (evidence.operation !== value.operation) {
       throw new TypeError(
         "OCCT artifact process success operation is inconsistent",
@@ -510,7 +930,7 @@ export function parseOcctArtifactProcessResult(
       operation: value.operation,
       ok: true,
       evidence,
-    });
+    } as OcctArtifactProcessSuccess | OcctEvaluatorProcessSuccess);
   }
   if (
     !exactKeys(value, [

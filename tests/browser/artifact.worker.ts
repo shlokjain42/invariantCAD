@@ -1,9 +1,22 @@
 import { getOcctShapeArtifactCodecCandidate } from "../../src/internal/occt-artifact-candidate.js";
-import type { KernelShape } from "../../src/kernel.js";
+import {
+  createEvaluator,
+  design,
+  EvaluatedSolid,
+  mm,
+  type EvaluatedDesign,
+  type Evaluator,
+  vec3,
+} from "../../src/index.js";
+import type {
+  GeometryKernel,
+  KernelShape,
+} from "../../src/kernel.js";
 import { createOcctKernel } from "../../src/occt-kernel.js";
 
 const MAX_ARTIFACT_BYTES = 64 * 1024 * 1024;
 const FIXTURE_FEATURE = "fixture.asymmetric-role-box";
+const EVALUATOR_OUTPUT = "isolated-box";
 
 export interface ArtifactWorkerEvidence {
   readonly volume: number;
@@ -17,13 +30,26 @@ export interface ArtifactWorkerEvidence {
   readonly inputBytesPreserved: true;
 }
 
+export interface EvaluatorWorkerEvidence {
+  readonly volume: number;
+  readonly faces: number;
+  readonly edges: number;
+  readonly vertices: number;
+  readonly outputCount: number;
+  readonly diagnosticCount: number;
+  readonly cleanupCompletedBeforeResponse: true;
+}
+
 export type ArtifactWorkerRequest =
   | {
       readonly kind: "decode";
       readonly artifact: ArrayBuffer;
     }
   | {
-      readonly kind: "hang";
+      readonly kind: "evaluate";
+    }
+  | {
+      readonly kind: "evaluate-stall";
     };
 
 export type ArtifactWorkerResponse =
@@ -32,11 +58,23 @@ export type ArtifactWorkerResponse =
       readonly operation: ArtifactWorkerRequest["kind"];
     }
   | {
+      readonly kind: "kernel-operation-started";
+      readonly operation: "evaluate-stall";
+      readonly kernelOperation: "box";
+    }
+  | {
       readonly kind: "success";
+      readonly operation: "decode";
       readonly evidence: ArtifactWorkerEvidence;
     }
   | {
+      readonly kind: "success";
+      readonly operation: "evaluate";
+      readonly evidence: EvaluatorWorkerEvidence;
+    }
+  | {
       readonly kind: "failure";
+      readonly operation: ArtifactWorkerRequest["kind"];
       readonly error: {
         readonly name: string;
         readonly message: string;
@@ -121,26 +159,157 @@ async function decodeArtifact(
   }
 }
 
-function hangWithoutYielding(): never {
+function evaluatorDocument() {
+  const cad = design("browser-worker-evaluator-isolation");
+  const box = cad.box(EVALUATOR_OUTPUT, {
+    size: vec3(mm(2), mm(3), mm(7)),
+  });
+  cad.output(EVALUATOR_OUTPUT, box);
+  return cad.build();
+}
+
+function stallInsideKernelBox(_nativeResult: KernelShape): never {
+  scope.postMessage({
+    kind: "kernel-operation-started",
+    operation: "evaluate-stall",
+    kernelOperation: "box",
+  });
   const sentinel = { running: true };
   while (sentinel.running) {
-    // Deliberately occupy this disposable realm until its owner terminates it.
+    // Deliberately occupy this kernel call until the owner terminates its realm.
   }
-  throw new Error("Unreachable non-yielding worker sentinel");
+  throw new Error("Unreachable non-yielding kernel sentinel");
+}
+
+function stallOnBox(delegate: GeometryKernel): GeometryKernel {
+  return new Proxy(delegate, {
+    get(target, property) {
+      if (property === "box") {
+        return (
+          ...arguments_: Parameters<
+            NonNullable<GeometryKernel["box"]>
+          >
+        ): KernelShape => {
+          const box = target.box;
+          if (box === undefined) {
+            throw new TypeError("Stock OCCT box primitive is unavailable");
+          }
+          const nativeResult = Reflect.apply(
+            box,
+            target,
+            arguments_,
+          ) as KernelShape;
+          return stallInsideKernelBox(nativeResult);
+        };
+      }
+      const value: unknown = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
+
+async function evaluateDocument(
+  stall: boolean,
+): Promise<EvaluatorWorkerEvidence> {
+  const delegate = await createOcctKernel();
+  let evaluator: Evaluator | undefined;
+  let evaluated: EvaluatedDesign | undefined;
+  let evidence:
+    | Omit<EvaluatorWorkerEvidence, "cleanupCompletedBeforeResponse">
+    | undefined;
+  try {
+    evaluator = await createEvaluator({
+      kernel: stall ? stallOnBox(delegate) : delegate,
+    });
+    const result = await evaluator.evaluate(evaluatorDocument());
+    if (!result.ok) {
+      throw new Error(
+        result.diagnostics
+          .map((item) => `${item.code}: ${item.message}`)
+          .join("\n"),
+      );
+    }
+    evaluated = result.value;
+    const output = evaluated.output(EVALUATOR_OUTPUT);
+    if (!(output instanceof EvaluatedSolid)) {
+      throw new TypeError("Expected the isolated evaluator output to be a solid");
+    }
+    const topology = output.topology();
+    if (!topology.ok) {
+      throw new Error(
+        topology.diagnostics
+          .map((item) => `${item.code}: ${item.message}`)
+          .join("\n"),
+      );
+    }
+    evidence = {
+      volume: output.measure().volume,
+      faces: topology.value.faces.length,
+      edges: topology.value.edges.length,
+      vertices: topology.value.vertices.length,
+      outputCount: evaluated.outputNames.length,
+      diagnosticCount: evaluated.diagnostics.length,
+    };
+  } finally {
+    try {
+      evaluated?.dispose();
+    } finally {
+      if (evaluator === undefined) delegate.dispose();
+      else evaluator.dispose();
+    }
+  }
+  if (evidence === undefined) {
+    throw new Error("Evaluator completed without detached evidence");
+  }
+  // No live EvaluatedDesign, output, shape, evaluator, or kernel survives to
+  // this response. The message contains only bounded structured-clone scalars.
+  return {
+    ...evidence,
+    cleanupCompletedBeforeResponse: true,
+  };
 }
 
 scope.onmessage = (event): void => {
   const request = event.data;
   scope.postMessage({ kind: "started", operation: request.kind });
-  if (request.kind === "hang") hangWithoutYielding();
-
-  void decodeArtifact(request.artifact).then(
+  const operation =
+    request.kind === "decode"
+      ? decodeArtifact(request.artifact)
+      : evaluateDocument(request.kind === "evaluate-stall");
+  void operation.then(
     (evidence) => {
-      // decodeArtifact has already disposed every native owner at this point.
-      scope.postMessage({ kind: "success", evidence });
+      if (request.kind === "evaluate-stall") {
+        scope.postMessage({
+          kind: "failure",
+          operation: "evaluate-stall",
+          error: {
+            name: "Error",
+            message: "A stalled evaluator operation unexpectedly completed",
+          },
+        });
+        return;
+      }
+      // The operation has already disposed every native owner at this point.
+      if (request.kind === "decode") {
+        scope.postMessage({
+          kind: "success",
+          operation: "decode",
+          evidence: evidence as ArtifactWorkerEvidence,
+        });
+      } else {
+        scope.postMessage({
+          kind: "success",
+          operation: "evaluate",
+          evidence: evidence as EvaluatorWorkerEvidence,
+        });
+      }
     },
     (error: unknown) => {
-      scope.postMessage({ kind: "failure", error: errorEvidence(error) });
+      scope.postMessage({
+        kind: "failure",
+        operation: request.kind,
+        error: errorEvidence(error),
+      });
     },
   );
 };

@@ -23,6 +23,7 @@ import type {
   ArtifactWorkerEvidence,
   ArtifactWorkerRequest,
   ArtifactWorkerResponse,
+  EvaluatorWorkerEvidence,
 } from "./artifact.worker.js";
 
 export interface BrowserSmokeResult {
@@ -53,10 +54,23 @@ export interface BrowserSmokeResult {
       readonly name: string;
       readonly timeoutMs: number;
       readonly started: boolean;
+      readonly kernelOperationStarted: boolean;
+      readonly kernelOperation: "box";
+    };
+    readonly abort: {
+      readonly name: string;
+      readonly started: boolean;
+      readonly kernelOperationStarted: boolean;
+      readonly kernelOperation: "box";
+    };
+    readonly evaluator: {
+      readonly completed: EvaluatorWorkerEvidence;
+      readonly recovery: EvaluatorWorkerEvidence;
+      readonly recoveryMatches: boolean;
     };
     readonly recovery: ArtifactWorkerEvidence;
     readonly workersCreated: number;
-    readonly workersTerminated: number;
+    readonly workerTerminationRequests: number;
   };
   readonly runtimeAttestation: {
     readonly runtimePairIdentity: string;
@@ -487,15 +501,36 @@ function parseArtifactWorkerResponse(
   if (value.kind === "started") {
     if (
       !hasExactKeys(value, ["kind", "operation"]) ||
-      (value.operation !== "decode" && value.operation !== "hang")
+      (value.operation !== "decode" &&
+        value.operation !== "evaluate" &&
+        value.operation !== "evaluate-stall")
     ) {
       throw new TypeError("Artifact worker returned a malformed start event");
     }
     return value as unknown as ArtifactWorkerResponse;
   }
+  if (value.kind === "kernel-operation-started") {
+    if (
+      !hasExactKeys(value, [
+        "kind",
+        "operation",
+        "kernelOperation",
+      ]) ||
+      value.operation !== "evaluate-stall" ||
+      value.kernelOperation !== "box"
+    ) {
+      throw new TypeError(
+        "Artifact worker returned a malformed kernel-operation event",
+      );
+    }
+    return value as unknown as ArtifactWorkerResponse;
+  }
   if (value.kind === "failure") {
     if (
-      !hasExactKeys(value, ["kind", "error"]) ||
+      !hasExactKeys(value, ["kind", "operation", "error"]) ||
+      (value.operation !== "decode" &&
+        value.operation !== "evaluate" &&
+        value.operation !== "evaluate-stall") ||
       !isRecord(value.error) ||
       !hasExactKeys(value.error, ["name", "message"]) ||
       typeof value.error.name !== "string" ||
@@ -510,8 +545,50 @@ function parseArtifactWorkerResponse(
   if (value.kind === "success") {
     const evidence = value.evidence;
     if (
-      !hasExactKeys(value, ["kind", "evidence"]) ||
-      !isRecord(evidence) ||
+      !hasExactKeys(value, ["kind", "operation", "evidence"]) ||
+      (value.operation !== "decode" && value.operation !== "evaluate") ||
+      !isRecord(evidence)
+    ) {
+      throw new TypeError("Artifact worker returned malformed success evidence");
+    }
+    if (value.operation === "evaluate") {
+      if (
+        !hasExactKeys(evidence, [
+          "volume",
+          "faces",
+          "edges",
+          "vertices",
+          "outputCount",
+          "diagnosticCount",
+          "cleanupCompletedBeforeResponse",
+        ]) ||
+        typeof evidence.volume !== "number" ||
+        !Number.isFinite(evidence.volume) ||
+        evidence.volume < 0 ||
+        typeof evidence.faces !== "number" ||
+        !Number.isSafeInteger(evidence.faces) ||
+        evidence.faces < 0 ||
+        typeof evidence.edges !== "number" ||
+        !Number.isSafeInteger(evidence.edges) ||
+        evidence.edges < 0 ||
+        typeof evidence.vertices !== "number" ||
+        !Number.isSafeInteger(evidence.vertices) ||
+        evidence.vertices < 0 ||
+        typeof evidence.outputCount !== "number" ||
+        !Number.isSafeInteger(evidence.outputCount) ||
+        evidence.outputCount < 0 ||
+        typeof evidence.diagnosticCount !== "number" ||
+        !Number.isSafeInteger(evidence.diagnosticCount) ||
+        evidence.diagnosticCount < 0 ||
+        evidence.cleanupCompletedBeforeResponse !== true
+      ) {
+        throw new TypeError(
+          "Artifact worker returned malformed evaluator evidence",
+        );
+      }
+      return value as unknown as ArtifactWorkerResponse;
+    }
+    if (
       !hasExactKeys(evidence, [
         "volume",
         "faces",
@@ -525,12 +602,16 @@ function parseArtifactWorkerResponse(
       ]) ||
       typeof evidence.volume !== "number" ||
       !Number.isFinite(evidence.volume) ||
+      evidence.volume < 0 ||
       typeof evidence.faces !== "number" ||
       !Number.isSafeInteger(evidence.faces) ||
+      evidence.faces < 0 ||
       typeof evidence.edges !== "number" ||
       !Number.isSafeInteger(evidence.edges) ||
+      evidence.edges < 0 ||
       typeof evidence.vertices !== "number" ||
       !Number.isSafeInteger(evidence.vertices) ||
+      evidence.vertices < 0 ||
       typeof evidence.protocolVersion !== "number" ||
       !Number.isSafeInteger(evidence.protocolVersion) ||
       typeof evidence.format !== "string" ||
@@ -546,19 +627,33 @@ function parseArtifactWorkerResponse(
   throw new TypeError("Artifact worker returned an unknown response");
 }
 
+type ArtifactWorkerResult =
+  | {
+      readonly operation: "decode";
+      readonly evidence: ArtifactWorkerEvidence;
+    }
+  | {
+      readonly operation: "evaluate";
+      readonly evidence: EvaluatorWorkerEvidence;
+    };
+
 function startArtifactWorker(
   request: ArtifactWorkerRequest,
   transfer: readonly Transferable[],
   onStarted: (() => void) | undefined,
+  onKernelOperationStarted: (() => void) | undefined,
   onPosted: (() => void) | undefined,
-): DisposableWorkerOperationHandle<ArtifactWorkerEvidence> {
+): DisposableWorkerOperationHandle<ArtifactWorkerResult> {
   const worker = new Worker(
     new URL("./artifact.worker.ts", import.meta.url),
     { type: "module" },
   );
-  const result = new Promise<ArtifactWorkerEvidence>((resolve, reject) => {
-    let phase: "awaiting-start" | "awaiting-result" | "settled" =
-      "awaiting-start";
+  const result = new Promise<ArtifactWorkerResult>((resolve, reject) => {
+    let phase:
+      | "awaiting-start"
+      | "awaiting-result"
+      | "kernel-operation-started"
+      | "settled" = "awaiting-start";
     const rejectOnce = (error: unknown): void => {
       if (phase === "settled") return;
       phase = "settled";
@@ -581,11 +676,42 @@ function startArtifactWorker(
           return;
         }
         phase = "awaiting-result";
-        onStarted?.();
+        try {
+          onStarted?.();
+        } catch (error) {
+          rejectOnce(error);
+        }
         return;
       }
-      if (phase !== "awaiting-result") {
+      if (response.kind === "kernel-operation-started") {
+        if (
+          phase !== "awaiting-result" ||
+          request.kind !== "evaluate-stall"
+        ) {
+          rejectOnce(
+            new Error(
+              "Artifact worker kernel-operation event was inconsistent",
+            ),
+          );
+          return;
+        }
+        phase = "kernel-operation-started";
+        try {
+          onKernelOperationStarted?.();
+        } catch (error) {
+          rejectOnce(error);
+        }
+        return;
+      }
+      if (
+        phase !== "awaiting-result" &&
+        phase !== "kernel-operation-started"
+      ) {
         rejectOnce(new Error("Artifact worker returned a result before starting"));
+        return;
+      }
+      if (response.operation !== request.kind) {
+        rejectOnce(new Error("Artifact worker result operation was inconsistent"));
         return;
       }
       phase = "settled";
@@ -593,7 +719,10 @@ function startArtifactWorker(
         reject(workerFailure(response.error));
         return;
       }
-      resolve(response.evidence);
+      resolve({
+        operation: response.operation,
+        evidence: response.evidence,
+      } as ArtifactWorkerResult);
     });
     worker.addEventListener("error", (event) => {
       event.preventDefault();
@@ -622,29 +751,31 @@ async function runArtifactWorkerGate(): Promise<
 > {
   const fixture = decodeFixtureBase64(artifactFixtureBase64);
   const fixtureSnapshot = fixture.slice();
-  const workerCounts = { created: 0, terminated: 0 };
+  const workerCounts = { created: 0, terminationRequests: 0 };
   const readWorkerCounts = (): {
     readonly created: number;
-    readonly terminated: number;
+    readonly terminationRequests: number;
   } => ({ ...workerCounts });
 
   const start = (
     request: ArtifactWorkerRequest,
     transfer: readonly Transferable[] = [],
     onStarted?: () => void,
+    onKernelOperationStarted?: () => void,
     onPosted?: () => void,
-  ): DisposableWorkerOperationHandle<ArtifactWorkerEvidence> => {
+  ): DisposableWorkerOperationHandle<ArtifactWorkerResult> => {
     workerCounts.created += 1;
     const handle = startArtifactWorker(
       request,
       transfer,
       onStarted,
+      onKernelOperationStarted,
       onPosted,
     );
     return {
       result: handle.result,
       terminate: () => {
-        workerCounts.terminated += 1;
+        workerCounts.terminationRequests += 1;
         return handle.terminate();
       },
     };
@@ -655,7 +786,7 @@ async function runArtifactWorkerGate(): Promise<
   let preAbortError: unknown;
   try {
     await runDisposableWorkerOperation(
-      () => start({ kind: "hang" }),
+      () => start({ kind: "evaluate-stall" }),
       { timeoutMs: 5_000, signal: preAbortController.signal },
     );
   } catch (error) {
@@ -671,17 +802,38 @@ async function runArtifactWorkerGate(): Promise<
     );
   }
 
-  const hangTimeoutMs = 5_000;
+  const completedResult = await runDisposableWorkerOperation(
+    () => start({ kind: "evaluate" }),
+    { timeoutMs: 60_000 },
+  );
+  if (completedResult.operation !== "evaluate") {
+    throw new Error("Evaluator worker returned the wrong operation");
+  }
+  const completedCounts = readWorkerCounts();
+  if (
+    completedCounts.created !== 1 ||
+    completedCounts.terminationRequests !== 1
+  ) {
+    throw new Error(
+      "The completed evaluator worker must receive one termination request",
+    );
+  }
+
+  const hangTimeoutMs = 10_000;
   let hangStarted = false;
+  let hangKernelOperationStarted = false;
   let timeoutError: unknown;
   try {
     await runDisposableWorkerOperation(
       () =>
         start(
-          { kind: "hang" },
+          { kind: "evaluate-stall" },
           [],
           () => {
             hangStarted = true;
+          },
+          () => {
+            hangKernelOperationStarted = true;
           },
         ),
       { timeoutMs: hangTimeoutMs },
@@ -689,30 +841,99 @@ async function runArtifactWorkerGate(): Promise<
   } catch (error) {
     timeoutError = error;
   }
+  const timeoutCounts = readWorkerCounts();
   if (
     !(timeoutError instanceof DisposableWorkerOperationTimeoutError) ||
     timeoutError.timeoutMs !== hangTimeoutMs ||
-    !hangStarted
+    !hangStarted ||
+    !hangKernelOperationStarted ||
+    timeoutCounts.created !== 2 ||
+    timeoutCounts.terminationRequests !== 2
   ) {
     throw new Error(
-      "A started non-yielding artifact worker must be terminated by its deadline",
+      "A non-yielding evaluator kernel call must receive a deadline termination request",
+    );
+  }
+
+  const abortController = new AbortController();
+  let abortStarted = false;
+  let abortKernelOperationStarted = false;
+  let abortError: unknown;
+  try {
+    await runDisposableWorkerOperation(
+      () =>
+        start(
+          { kind: "evaluate-stall" },
+          [],
+          () => {
+            abortStarted = true;
+          },
+          () => {
+            abortKernelOperationStarted = true;
+            abortController.abort();
+          },
+        ),
+      { timeoutMs: 60_000, signal: abortController.signal },
+    );
+  } catch (error) {
+    abortError = error;
+  }
+  const abortCounts = readWorkerCounts();
+  if (
+    !(abortError instanceof DOMException) ||
+    abortError.name !== "AbortError" ||
+    !abortStarted ||
+    !abortKernelOperationStarted ||
+    abortCounts.created !== 3 ||
+    abortCounts.terminationRequests !== 3
+  ) {
+    throw new Error(
+      "An aborted non-yielding evaluator kernel call must request worker termination",
+    );
+  }
+
+  const evaluatorRecoveryResult = await runDisposableWorkerOperation(
+    () => start({ kind: "evaluate" }),
+    { timeoutMs: 60_000 },
+  );
+  const evaluatorRecoveryCounts = readWorkerCounts();
+  if (
+    evaluatorRecoveryResult.operation !== "evaluate" ||
+    evaluatorRecoveryCounts.created !== 4 ||
+    evaluatorRecoveryCounts.terminationRequests !== 4
+  ) {
+    throw new Error(
+      "A fresh evaluator worker must recover after forced termination",
+    );
+  }
+  const recoveryMatches =
+    JSON.stringify(evaluatorRecoveryResult.evidence) ===
+    JSON.stringify(completedResult.evidence);
+  if (!recoveryMatches) {
+    throw new Error(
+      "Fresh evaluator recovery returned different detached evidence",
     );
   }
 
   const transferableFixture = copyToArrayBuffer(fixture);
   let transferDetached = false;
-  const recovery = await runDisposableWorkerOperation(
+  const artifactResult = await runDisposableWorkerOperation(
     () =>
       start(
         { kind: "decode", artifact: transferableFixture },
         [transferableFixture],
         undefined,
+        undefined,
         () => {
           transferDetached = transferableFixture.byteLength === 0;
         },
-      ),
+    ),
     { timeoutMs: 60_000 },
   );
+  if (artifactResult.operation !== "decode") {
+    throw new Error("Artifact worker returned the wrong operation");
+  }
+  const recovery = artifactResult.evidence;
   const sourceBytesPreserved = sameBytes(fixture, fixtureSnapshot);
   if (!sourceBytesPreserved) {
     throw new Error("Transferring the fixture copy mutated its retained source");
@@ -722,10 +943,12 @@ async function runArtifactWorkerGate(): Promise<
   }
   const finalWorkerCounts = readWorkerCounts();
   if (
-    finalWorkerCounts.created !== 2 ||
-    finalWorkerCounts.terminated !== 2
+    finalWorkerCounts.created !== 5 ||
+    finalWorkerCounts.terminationRequests !== 5
   ) {
-    throw new Error("Every created artifact worker must be terminated exactly once");
+    throw new Error(
+      "Every created artifact worker must receive one termination request",
+    );
   }
 
   return {
@@ -742,10 +965,23 @@ async function runArtifactWorkerGate(): Promise<
       name: timeoutError.name,
       timeoutMs: timeoutError.timeoutMs,
       started: hangStarted,
+      kernelOperationStarted: hangKernelOperationStarted,
+      kernelOperation: "box",
+    },
+    abort: {
+      name: abortError.name,
+      started: abortStarted,
+      kernelOperationStarted: abortKernelOperationStarted,
+      kernelOperation: "box",
+    },
+    evaluator: {
+      completed: completedResult.evidence,
+      recovery: evaluatorRecoveryResult.evidence,
+      recoveryMatches,
     },
     recovery,
     workersCreated: finalWorkerCounts.created,
-    workersTerminated: finalWorkerCounts.terminated,
+    workerTerminationRequests: finalWorkerCounts.terminationRequests,
   };
 }
 

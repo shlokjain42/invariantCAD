@@ -533,17 +533,29 @@ copy to detach. Its exact-key response protocol admits one matching
 that `shapeArtifacts`, `encodeShapeArtifact`, and `decodeShapeArtifact` are
 absent from the public kernel, uses the private candidate to decode, and returns
 only scalar volume, topology-count, candidate-version, fingerprint, and
-input-immutability evidence after disposing the decoded shape and kernel. A
-started non-yielding worker is hard-terminated at its deadline; a new worker
-then decodes the fixture successfully. No live OCCT handle or object from
-either realm crosses this protocol.
+input-immutability evidence after disposing the decoded shape and kernel.
+
+The same production bundle also exercises actual evaluator work in fresh
+stock-OCCT workers. A successful worker runs `Evaluator.evaluate(...)` over a
+fixed `2 × 3 × 7` box, detaches its volume, topology counts, output count, and
+diagnostic count, and responds only after disposing the `EvaluatedDesign` and
+evaluator. The deadline and post-start abort cases acknowledge both worker
+start and entry into the wrapped box operation. That wrapper first completes
+the real native box and only then enters a non-yielding stall. The host requests
+termination, and a new worker must reproduce the successful evaluator's scalar
+evidence exactly. Browser `Worker.terminate()` returns `void`, so the gate
+cannot await or claim observed worker exit; it proves an exact termination
+request and deterministic recovery in a fresh realm. No live OCCT handle or
+object crosses either worker protocol.
 
 An unexported host-neutral coordinator owns those one-shot realm operations. It
 rejects pre-abort without creating a worker, starts the deadline before calling
 the factory, settles result/factory failure/abort/timeout races once, requests
-termination exactly once, and waits for termination before returning. It is
-internal release-test orchestration, not a public codec, evaluator, or worker
-API.
+termination exactly once, and waits for the adapter's termination operation
+before returning. The Node adapter resolves that operation only after child
+close; the browser adapter can only issue the non-awaitable
+`Worker.terminate()` request. It is internal release-test orchestration, not a
+public codec, evaluator, or worker API.
 
 The owned ABI 0.9 process gate extends the evidence to fresh Node processes.
 Producer A creates the asymmetric box and writes an artifact; consumer B reads
@@ -572,6 +584,29 @@ recovery. Run this matrix with:
 pnpm test:occt-artifact-process
 ```
 
+The same one-shot process protocol has a repository-private evaluator
+operation. Fresh owned-ABI-0.9 children run `Evaluator.evaluate(...)` over a
+deterministic two-box Boolean union. Standard output must contain the exact
+`operation-started` event followed by `kernel-operation-started` for the
+evaluator-invoked Boolean before successful evidence. The second event is
+emitted immediately before the real native call, so it proves entry rather than
+completion. The wrapper emits a third exact `non-yielding-stall-started` event
+only after that call returns and immediately before blocking. Timeout requires
+that third event and abort waits for it, so both exercise the deliberate blocked
+evaluator operation rather than an idle child or a pre-native race. Both send
+`SIGKILL`, await child close, and are followed by a fresh evaluation whose
+detached document hash, configuration, parameters, measurements, complete
+topology counts, and runtime evidence exactly match the baseline. The parent
+rejects an incomplete nonempty stdout event prefix; a runtime-attestation
+failure before operation start legitimately produces no event.
+
+Successful evaluator evidence is assembled from copied scalar data and written
+only after the evaluated design and evaluator have been disposed. A
+deliberately failing cleanup path must produce `CLEANUP_FAILED`, never
+successful evidence. Forced termination is different: a killed child cannot
+execute its language-level `finally` cleanup, so destruction of the entire
+one-shot process is the containment and reclamation boundary.
+
 The verified facade-bundle gate invokes the same command against its packaged
 runtime automatically. Every successful result records one-shot cleanup before
 response, `shapeArtifactsAbsent: true`, and `certifiesCompatibility: false`.
@@ -583,7 +618,9 @@ the Node module-hook chain or host from same-process/same-UID interference, or
 attest the wider application, library, wrapper, or JavaScript engine. The
 injected trap is not a real OCCT trap fault injection. These gates do not
 measure live or peak memory, establish durable native subshape identity, create
-a reviewed cross-platform golden matrix, or integrate the evaluator/cache path.
+a reviewed cross-platform golden matrix, or integrate the evaluator/cache
+path. Evaluator evidence also sets
+`certifiesOperationalCancellation: false`.
 
 Owned facade ABI 0.7 closes a specific, previously open part of the candidate
 transport boundary:
@@ -669,10 +706,11 @@ gap. The hook remains candidate-only because:
 - the 128 MiB budget measures cumulative requests, not live bytes, peak memory,
   or every physical WebAssembly-memory effect; the structural-work envelope is
   deliberately conservative but is not a live/peak-memory proof;
-- the disposable gates can terminate their isolated realm, but synchronous
-  same-thread WASM still does not yield for an ordinary timer-driven
-  `AbortSignal`, and the evaluator does not run its ordinary operations through
-  that isolation boundary;
+- the disposable gates now run real evaluator-invoked native operations, but
+  only through repository-private one-shot realms. Ordinary public
+  `Evaluator.evaluate(...)` remains same-thread and does not yield from
+  synchronous WASM to an ordinary timer-driven `AbortSignal`; no public isolated
+  evaluator API has been added;
 - ordered topology evidence is useful for fail-closed comparison in the pinned
   runtime, but it is not comprehensive durable identity for indistinguishable
   symmetric subshapes;
@@ -684,15 +722,15 @@ gap. The hook remains candidate-only because:
 - one owned fresh-process producer/consumer scenario plus one committed
   stock-runtime golden is not a reviewed cross-platform compatibility matrix.
 
-Production promotion therefore still requires prompt cancellation in the
-operational evaluator path, comprehensive durable artifact-local native
-subshape identity, reviewed cross-platform owned-runtime goldens, and
-evaluator/cache integration. The private compatibility fingerprint now binds
-the exact native WASM/JavaScript pair identity alongside versioned declarations
-for the adapter contract, envelope and sidecar revisions, identity scheme,
-relevant tolerance and serialization options, and other result-changing inputs.
-Those declarations are compatibility fields, not cryptographic hashes or
-attestation of the InvariantCAD wrapper/library code. Build execution and
+Production promotion therefore still requires a public operational isolation
+boundary wherever hard cancellation is promised, comprehensive durable
+artifact-local native subshape identity, reviewed cross-platform owned-runtime
+goldens, and evaluator/cache integration. The private compatibility fingerprint
+now binds the exact native WASM/JavaScript pair identity alongside versioned
+declarations for the adapter contract, envelope and sidecar revisions, identity
+scheme, relevant tolerance and serialization options, and other result-changing
+inputs. Those declarations are compatibility fields, not cryptographic hashes
+or attestation of the InvariantCAD wrapper/library code. Build execution and
 publisher provenance likewise remain explicit non-claims rather than
 compatibility identities.
 
@@ -700,13 +738,15 @@ ABI 0.7 resolves the candidate's former full-output-materialization and
 successful-result ownership gaps, ABI 0.8 adds a private cumulative-request
 quota, sidecar v2 resolves the JSON materialization gap, and ABI 0.9 adds exact
 owned-profile native archive preflight plus structural-work limits. The new
-disposable gates add hard realm termination, fresh recovery, and a bounded
-owned-process handoff. The attested loader additionally closes exact owned
-runtime-pair and declared-manifest identity under an independent pin. None of
-these controls provides live/peak-memory proof, operational evaluator
-cancellation, comprehensive durable symmetric-topology identity, authenticated
-build execution or publisher provenance, wider host/application attestation, or
-a reviewed cross-platform compatibility proof.
+disposable gates add forced-realm containment around real evaluator work, fresh
+recovery, and a bounded owned-process handoff. A killed realm cannot perform
+language-level cleanup; realm destruction is the containment mechanism. The
+attested loader additionally closes exact owned runtime-pair and
+declared-manifest identity under an independent pin. None of these controls
+provides live/peak-memory proof, operational-cancellation certification,
+comprehensive durable symmetric-topology identity, authenticated build
+execution or publisher provenance, wider host/application attestation, or a
+reviewed cross-platform compatibility proof.
 Advertising an ordinary native exchange function under the stronger
 shape-artifact capability would therefore remain incorrect, even when it can
 reconstruct a geometrically valid solid.

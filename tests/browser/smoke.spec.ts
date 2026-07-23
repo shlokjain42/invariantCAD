@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import type { BrowserSmokeResult } from "./app.js";
 
-test("loads both WASM kernels and confines artifact live shapes to disposable module workers", async ({
+test("loads both WASM kernels and confines artifact/evaluator native work to disposable module workers", async ({
   page,
 }) => {
   await page.goto("/");
@@ -29,11 +29,32 @@ test("loads both WASM kernels and confines artifact live shapes to disposable mo
   });
   expect(result.artifactWorker.timeout).toEqual({
     name: "DisposableWorkerOperationTimeoutError",
-    timeoutMs: 5_000,
+    timeoutMs: 10_000,
     started: true,
+    kernelOperationStarted: true,
+    kernelOperation: "box",
   });
-  expect(result.artifactWorker.workersCreated).toBe(2);
-  expect(result.artifactWorker.workersTerminated).toBe(2);
+  expect(result.artifactWorker.abort).toEqual({
+    name: "AbortError",
+    started: true,
+    kernelOperationStarted: true,
+    kernelOperation: "box",
+  });
+  expect(result.artifactWorker.workersCreated).toBe(5);
+  expect(result.artifactWorker.workerTerminationRequests).toBe(5);
+
+  const completed = result.artifactWorker.evaluator.completed;
+  expect(completed).toEqual({
+    volume: 42,
+    faces: 6,
+    edges: 12,
+    vertices: 8,
+    outputCount: 1,
+    diagnosticCount: 0,
+    cleanupCompletedBeforeResponse: true,
+  });
+  expect(result.artifactWorker.evaluator.recovery).toEqual(completed);
+  expect(result.artifactWorker.evaluator.recoveryMatches).toBe(true);
 
   const recovery = result.artifactWorker.recovery;
   expect(recovery.volume).toBeCloseTo(30, 10);

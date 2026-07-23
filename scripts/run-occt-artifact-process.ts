@@ -16,13 +16,17 @@ import {
   OCCT_ARTIFACT_PROCESS_MAX_REQUEST_BYTES,
   OCCT_ARTIFACT_PROCESS_MAX_RESULT_BYTES,
   OCCT_ARTIFACT_PROCESS_MAX_TIMEOUT_MS,
+  OCCT_ARTIFACT_PROCESS_PROTOCOL_VERSION,
   OCCT_ARTIFACT_PROCESS_STARTUP_TIMEOUT_MS,
   encodeOcctArtifactProcessStartEvent,
+  encodeOcctEvaluatorKernelOperationStartEvent,
+  encodeOcctEvaluatorNonYieldingStallStartEvent,
   parseOcctArtifactProcessResult,
   type OcctArtifactProcessEvidence,
   type OcctArtifactProcessFailure,
   type OcctArtifactProcessOperation,
   type OcctArtifactProcessRequest,
+  type OcctEvaluatorProcessEvidence,
 } from "./occt-artifact-process-protocol.js";
 
 interface RunOcctArtifactProcessBase {
@@ -34,6 +38,10 @@ interface RunOcctArtifactProcessBase {
   readonly signal?: AbortSignal;
   /** Repository-test lifecycle hook; called after the closed start event. */
   readonly onStarted?: () => void;
+  /** Called after evaluator control enters its wrapped native Boolean method. */
+  readonly onKernelOperationStarted?: () => void;
+  /** Called after the test-only native Boolean returns and before its stall. */
+  readonly onNonYieldingStallStarted?: () => void;
 }
 
 export interface RunOcctArtifactProcessProduceOptions
@@ -50,12 +58,21 @@ export interface RunOcctArtifactProcessConsumeOptions
 
 export interface RunOcctArtifactProcessFaultOptions
   extends RunOcctArtifactProcessBase {
-  readonly operation: "stall-after-start" | "trap";
+  readonly operation:
+    | "stall-during-evaluate"
+    | "fail-cleanup-during-evaluate"
+    | "trap";
+}
+
+export interface RunOcctEvaluatorProcessOptions
+  extends RunOcctArtifactProcessBase {
+  readonly operation: "evaluate";
 }
 
 export type RunOcctArtifactProcessOptions =
   | RunOcctArtifactProcessProduceOptions
   | RunOcctArtifactProcessConsumeOptions
+  | RunOcctEvaluatorProcessOptions
   | RunOcctArtifactProcessFaultOptions;
 
 export interface OcctArtifactProcessProduceOutput {
@@ -67,9 +84,14 @@ export interface OcctArtifactProcessConsumeOutput {
   readonly evidence: OcctArtifactProcessEvidence;
 }
 
+export interface OcctEvaluatorProcessOutput {
+  readonly evidence: OcctEvaluatorProcessEvidence;
+}
+
 export type OcctArtifactProcessOutput =
   | OcctArtifactProcessProduceOutput
-  | OcctArtifactProcessConsumeOutput;
+  | OcctArtifactProcessConsumeOutput
+  | OcctEvaluatorProcessOutput;
 
 export class OcctArtifactProcessProtocolError extends Error {
   constructor(message: string) {
@@ -110,6 +132,8 @@ interface CapturedOptions {
   readonly timeoutMs: number;
   readonly signal?: AbortSignal;
   readonly onStarted?: () => void;
+  readonly onKernelOperationStarted?: () => void;
+  readonly onNonYieldingStallStarted?: () => void;
   readonly artifact?: Uint8Array;
 }
 
@@ -127,6 +151,14 @@ interface ChildCompletion {
   readonly signal: NodeJS.Signals | null;
   readonly stderr: string;
   readonly started: boolean;
+  readonly kernelOperationStarted: boolean;
+  readonly nonYieldingStallStarted: boolean;
+  readonly stdoutPhase:
+    | "none"
+    | "operation-started"
+    | "kernel-operation-started"
+    | "non-yielding-stall-started"
+    | "partial";
   readonly operationDeadline: number | undefined;
   readonly killReason: KillReason | undefined;
   readonly spawnError: Error | undefined;
@@ -203,7 +235,9 @@ function captureOptions(
   if (
     operation !== "produce" &&
     operation !== "consume" &&
-    operation !== "stall-after-start" &&
+    operation !== "evaluate" &&
+    operation !== "stall-during-evaluate" &&
+    operation !== "fail-cleanup-during-evaluate" &&
     operation !== "trap"
   ) {
     throw new TypeError("Disposable OCCT artifact process operation is invalid");
@@ -237,6 +271,21 @@ function captureOptions(
   if (onStarted !== undefined && typeof onStarted !== "function") {
     throw new TypeError("onStarted must be a function");
   }
+  const onKernelOperationStarted = options.onKernelOperationStarted;
+  if (
+    onKernelOperationStarted !== undefined &&
+    typeof onKernelOperationStarted !== "function"
+  ) {
+    throw new TypeError("onKernelOperationStarted must be a function");
+  }
+  const onNonYieldingStallStarted =
+    options.onNonYieldingStallStarted;
+  if (
+    onNonYieldingStallStarted !== undefined &&
+    typeof onNonYieldingStallStarted !== "function"
+  ) {
+    throw new TypeError("onNonYieldingStallStarted must be a function");
+  }
   if (signal !== undefined && signalAborted(signal)) throw abortError();
   if (operation === "consume") {
     const artifact = options.artifact;
@@ -257,6 +306,12 @@ function captureOptions(
       timeoutMs,
       ...(signal === undefined ? {} : { signal }),
       ...(onStarted === undefined ? {} : { onStarted }),
+      ...(onKernelOperationStarted === undefined
+        ? {}
+        : { onKernelOperationStarted }),
+      ...(onNonYieldingStallStarted === undefined
+        ? {}
+        : { onNonYieldingStallStarted }),
       // Snapshot before the first await; the caller keeps its original bytes.
       artifact: artifact.slice(),
     });
@@ -274,6 +329,12 @@ function captureOptions(
     timeoutMs,
     ...(signal === undefined ? {} : { signal }),
     ...(onStarted === undefined ? {} : { onStarted }),
+    ...(onKernelOperationStarted === undefined
+      ? {}
+      : { onKernelOperationStarted }),
+    ...(onNonYieldingStallStarted === undefined
+      ? {}
+      : { onNonYieldingStallStarted }),
   });
 }
 
@@ -356,15 +417,52 @@ async function executeChild(
   timeoutMs: number,
   signal: AbortSignal | undefined,
   onStarted: (() => void) | undefined,
+  onKernelOperationStarted: (() => void) | undefined,
+  onNonYieldingStallStarted: (() => void) | undefined,
 ): Promise<ChildCompletion> {
   if (signal !== undefined && signalAborted(signal)) throw abortError();
-  const expectedStart = Buffer.from(
+  const expectedOperationStart = Buffer.from(
     encodeOcctArtifactProcessStartEvent(request.requestId),
     "utf8",
   );
+  const expectsKernelOperation =
+    request.operation === "evaluate" ||
+    request.operation === "stall-during-evaluate" ||
+    request.operation === "fail-cleanup-during-evaluate";
+  const expectedKernelOperationStart = expectsKernelOperation
+    ? Buffer.from(
+        encodeOcctEvaluatorKernelOperationStartEvent(
+          request.requestId,
+          request.operation,
+          request.feature,
+        ),
+        "utf8",
+      )
+    : Buffer.alloc(0);
+  const expectsNonYieldingStall =
+    request.operation === "stall-during-evaluate";
+  const expectedNonYieldingStallStart = expectsNonYieldingStall
+    ? Buffer.from(
+        encodeOcctEvaluatorNonYieldingStallStartEvent(
+          request.requestId,
+          request.feature,
+        ),
+        "utf8",
+      )
+    : Buffer.alloc(0);
+  const kernelOperationBoundary =
+    expectedOperationStart.byteLength +
+    expectedKernelOperationStart.byteLength;
+  const expectedStdout = Buffer.concat([
+    expectedOperationStart,
+    expectedKernelOperationStart,
+    expectedNonYieldingStallStart,
+  ]);
   let stdout = new Uint8Array();
   let stderr = new Uint8Array();
   let started = false;
+  let kernelOperationStarted = false;
+  let nonYieldingStallStarted = false;
   let operationDeadline: number | undefined;
   let killReason: KillReason | undefined;
   let spawnError: Error | undefined;
@@ -432,8 +530,8 @@ async function executeChild(
     try {
       stdout = boundedOutput(stdout, chunk, "stdout");
       if (
-        stdout.byteLength > expectedStart.byteLength ||
-        !expectedStart
+        stdout.byteLength > expectedStdout.byteLength ||
+        !expectedStdout
           .subarray(0, stdout.byteLength)
           .equals(Buffer.from(stdout))
       ) {
@@ -444,7 +542,7 @@ async function executeChild(
         });
         return;
       }
-      if (stdout.byteLength === expectedStart.byteLength && !started) {
+      if (stdout.byteLength >= expectedOperationStart.byteLength && !started) {
         started = true;
         operationDeadline = performance.now() + timeoutMs;
         if (startupTimer !== undefined) clearTimeout(startupTimer);
@@ -467,6 +565,42 @@ async function executeChild(
               error instanceof Error
                 ? `Disposable OCCT artifact process onStarted hook failed: ${error.message}`
                 : "Disposable OCCT artifact process onStarted hook failed",
+          });
+        }
+      }
+      if (
+        expectsKernelOperation &&
+        stdout.byteLength >= kernelOperationBoundary &&
+        !kernelOperationStarted
+      ) {
+        kernelOperationStarted = true;
+        try {
+          onKernelOperationStarted?.();
+        } catch (error) {
+          kill({
+            kind: "protocol",
+            message:
+              error instanceof Error
+                ? `Disposable OCCT evaluator process onKernelOperationStarted hook failed: ${error.message}`
+                : "Disposable OCCT evaluator process onKernelOperationStarted hook failed",
+          });
+        }
+      }
+      if (
+        expectsNonYieldingStall &&
+        stdout.byteLength === expectedStdout.byteLength &&
+        !nonYieldingStallStarted
+      ) {
+        nonYieldingStallStarted = true;
+        try {
+          onNonYieldingStallStarted?.();
+        } catch (error) {
+          kill({
+            kind: "protocol",
+            message:
+              error instanceof Error
+                ? `Disposable OCCT evaluator process onNonYieldingStallStarted hook failed: ${error.message}`
+                : "Disposable OCCT evaluator process onNonYieldingStallStarted hook failed",
           });
         }
       }
@@ -530,11 +664,26 @@ async function executeChild(
       }
     }
   }
+  const stdoutPhase =
+    stdout.byteLength === 0
+      ? "none"
+      : stdout.byteLength === expectedOperationStart.byteLength
+        ? "operation-started"
+        : expectsKernelOperation &&
+            stdout.byteLength === kernelOperationBoundary
+          ? "kernel-operation-started"
+          : expectsNonYieldingStall &&
+              stdout.byteLength === expectedStdout.byteLength
+            ? "non-yielding-stall-started"
+            : "partial";
   return Object.freeze({
     status: completion.status,
     signal: completion.signal,
     stderr: new TextDecoder().decode(stderr),
     started,
+    kernelOperationStarted,
+    nonYieldingStallStarted,
+    stdoutPhase,
     operationDeadline,
     killReason,
     spawnError,
@@ -577,6 +726,9 @@ export function runOcctArtifactProcess(
   options: RunOcctArtifactProcessConsumeOptions,
 ): Promise<OcctArtifactProcessConsumeOutput>;
 export function runOcctArtifactProcess(
+  options: RunOcctEvaluatorProcessOptions,
+): Promise<OcctEvaluatorProcessOutput>;
+export function runOcctArtifactProcess(
   options: RunOcctArtifactProcessFaultOptions,
 ): Promise<never>;
 export async function runOcctArtifactProcess(
@@ -601,7 +753,7 @@ export async function runOcctArtifactProcess(
     const request: OcctArtifactProcessRequest =
       captured.operation === "produce"
         ? {
-            protocolVersion: 1,
+            protocolVersion: OCCT_ARTIFACT_PROCESS_PROTOCOL_VERSION,
             requestId,
             operation: "produce",
             runtimeDirectory: captured.runtimeDirectory,
@@ -611,7 +763,7 @@ export async function runOcctArtifactProcess(
           }
         : captured.operation === "consume"
           ? {
-              protocolVersion: 1,
+              protocolVersion: OCCT_ARTIFACT_PROCESS_PROTOCOL_VERSION,
               requestId,
               operation: "consume",
               runtimeDirectory: captured.runtimeDirectory,
@@ -620,7 +772,7 @@ export async function runOcctArtifactProcess(
               inputArtifactPath,
             }
           : {
-              protocolVersion: 1,
+              protocolVersion: OCCT_ARTIFACT_PROCESS_PROTOCOL_VERSION,
               requestId,
               operation: captured.operation,
               runtimeDirectory: captured.runtimeDirectory,
@@ -651,6 +803,8 @@ export async function runOcctArtifactProcess(
       captured.timeoutMs,
       captured.signal,
       captured.onStarted,
+      captured.onKernelOperationStarted,
+      captured.onNonYieldingStallStarted,
     );
     if (completion.killReason?.kind === "abort") throw abortError();
     if (completion.killReason?.kind === "timeout") {
@@ -736,6 +890,14 @@ export async function runOcctArtifactProcess(
       );
     }
     if (!result.ok) {
+      if (completion.stdoutPhase === "partial") {
+        throw new OcctArtifactProcessProtocolError(
+          childFailureMessage(
+            completion,
+            "Disposable OCCT artifact process failure ended with an incomplete stdout event",
+          ),
+        );
+      }
       if (completion.status === 0 || completion.signal !== null) {
         throw new OcctArtifactProcessProtocolError(
           childFailureMessage(
@@ -749,7 +911,11 @@ export async function runOcctArtifactProcess(
     if (
       completion.status !== 0 ||
       completion.signal !== null ||
-      !completion.started
+      !completion.started ||
+      ((captured.operation === "evaluate" ||
+        captured.operation === "stall-during-evaluate" ||
+        captured.operation === "fail-cleanup-during-evaluate") &&
+        !completion.kernelOperationStarted)
     ) {
       throw new OcctArtifactProcessProtocolError(
         childFailureMessage(
@@ -758,7 +924,7 @@ export async function runOcctArtifactProcess(
         ),
       );
     }
-    if (captured.operation === "produce") {
+    if (captured.operation === "produce" && result.operation === "produce") {
       const artifact = await readBoundedFile(
         outputArtifactPath,
         captured.maxArtifactBytes,
@@ -779,7 +945,11 @@ export async function runOcctArtifactProcess(
         artifact,
       });
     }
-    if (captured.operation === "consume" && captured.artifact !== undefined) {
+    if (
+      captured.operation === "consume" &&
+      captured.artifact !== undefined &&
+      result.operation === "consume"
+    ) {
       if (
         captured.artifact.byteLength !== result.evidence.artifact.byteLength ||
         sha256(captured.artifact) !== result.evidence.artifact.sha256
@@ -788,6 +958,10 @@ export async function runOcctArtifactProcess(
           "Disposable OCCT artifact process input evidence did not match its snapshot",
         );
       }
+      assertParentPhaseActive();
+      return Object.freeze({ evidence: result.evidence });
+    }
+    if (captured.operation === "evaluate" && result.operation === "evaluate") {
       assertParentPhaseActive();
       return Object.freeze({ evidence: result.evidence });
     }

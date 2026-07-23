@@ -21,8 +21,9 @@ import {
 const projectRoot = fileURLToPath(new URL("..", import.meta.url));
 const maximumArtifactBytes = 16 * 1024 * 1024;
 const normalTimeoutMs = 30_000;
-const stallTimeoutMs = 250;
+const stallTimeoutMs = 1_000;
 const feature = "owned-artifact-process.asymmetric-box";
+const evaluatorFeature = "result";
 
 function runtimeDirectory(arguments_: readonly string[]): string {
   const values = arguments_[0] === "--" ? arguments_.slice(1) : arguments_;
@@ -82,6 +83,20 @@ await assert.rejects(
   (error: unknown) =>
     error instanceof DOMException && error.name === "AbortError",
   "A pre-aborted request must fail before spawning or inspecting a runtime",
+);
+
+await assert.rejects(
+  runOcctArtifactProcess({
+    operation: "evaluate",
+    runtimeDirectory: resolve(projectRoot, ".definitely-missing-runtime"),
+    feature: evaluatorFeature,
+    maxArtifactBytes: maximumArtifactBytes,
+    timeoutMs: normalTimeoutMs,
+    signal: preAborted.signal,
+  }),
+  (error: unknown) =>
+    error instanceof DOMException && error.name === "AbortError",
+  "A pre-aborted evaluator request must fail before spawning or inspecting a runtime",
 );
 
 await assert.rejects(
@@ -205,6 +220,70 @@ assert.ok(
   ),
 );
 
+const evaluationA = await runOcctArtifactProcess({
+  operation: "evaluate",
+  runtimeDirectory: directory,
+  feature: evaluatorFeature,
+  maxArtifactBytes: maximumArtifactBytes,
+  timeoutMs: normalTimeoutMs,
+});
+const evaluationB = await runOcctArtifactProcess({
+  operation: "evaluate",
+  runtimeDirectory: directory,
+  feature: evaluatorFeature,
+  maxArtifactBytes: maximumArtifactBytes,
+  timeoutMs: normalTimeoutMs,
+});
+assert.deepEqual(
+  evaluationA.evidence,
+  evaluationB.evidence,
+  "Fresh verified evaluator processes must emit identical detached evidence",
+);
+assert.equal(evaluationA.evidence.operation, "evaluate");
+assert.equal(evaluationA.evidence.evaluatorPath, "Evaluator.evaluate");
+assert.equal(
+  evaluationA.evidence.fixture,
+  "owned-occt-evaluator-isolation-v1",
+);
+assert.equal(
+  evaluationA.evidence.documentSha256,
+  "db15aae91480395965c78682736b16534443d589424c77ec02837d3ccf767dcd",
+);
+assert.equal(evaluationA.evidence.configurationId, null);
+assert.deepEqual(evaluationA.evidence.parameters, {});
+assert.equal(evaluationA.evidence.output.name, "result");
+assert.equal(evaluationA.evidence.output.kind, "solid");
+assert.equal(evaluationA.evidence.output.measurements.volume, 9_750);
+assert.equal(
+  evaluationA.evidence.output.measurements.surfaceArea,
+  3_050,
+);
+assert.deepEqual(evaluationA.evidence.output.measurements.centerOfMass, [
+  7.5,
+  12.5,
+  15,
+]);
+assert.deepEqual(evaluationA.evidence.output.measurements.boundingBox, {
+  min: [0, 0, 0],
+  max: [15, 25, 30],
+});
+assert.equal(evaluationA.evidence.output.measurements.genus, 0);
+assert.equal(evaluationA.evidence.output.measurements.tolerance, 1e-7);
+assert.deepEqual(evaluationA.evidence.output.topology, {
+  history: "complete",
+  faces: 14,
+  edges: 32,
+  vertices: 20,
+});
+assert.equal(evaluationA.evidence.evaluatorKernelOperation, "boolean");
+assert.equal(evaluationA.evidence.evaluatorKernelOperationObserved, true);
+assert.equal(evaluationA.evidence.shapeArtifactsAbsent, true);
+assert.equal(evaluationA.evidence.ordinaryEvaluatorRemainsCooperative, true);
+assert.equal(evaluationA.evidence.certifiesOperationalCancellation, false);
+assert.equal(evaluationA.evidence.certifiesCompatibility, false);
+assert.equal(evaluationA.evidence.cleanupCompletedBeforeResponse, true);
+assert.deepEqual(evaluationA.evidence.runtime, producerA.evidence.runtime);
+
 const borrowedArtifact = producerA.artifact;
 const beforeConsume = borrowedArtifact.slice();
 const consumerB = await runOcctArtifactProcess({
@@ -310,14 +389,21 @@ try {
   await rm(tamperedBundle, { recursive: true, force: true });
 }
 
-const stallStarted = performance.now();
+let timeoutKernelOperationStartedAt: number | undefined;
+let timeoutNonYieldingStallStartedAt: number | undefined;
 await assert.rejects(
   runOcctArtifactProcess({
-    operation: "stall-after-start",
+    operation: "stall-during-evaluate",
     runtimeDirectory: directory,
-    feature,
+    feature: evaluatorFeature,
     maxArtifactBytes: maximumArtifactBytes,
     timeoutMs: stallTimeoutMs,
+    onKernelOperationStarted: () => {
+      timeoutKernelOperationStartedAt = performance.now();
+    },
+    onNonYieldingStallStarted: () => {
+      timeoutNonYieldingStallStartedAt = performance.now();
+    },
   }),
   (error: unknown) =>
     error instanceof OcctArtifactProcessTimeoutError &&
@@ -325,10 +411,57 @@ await assert.rejects(
     error.timeoutMs === stallTimeoutMs,
   "A synchronous post-start stall must be killed at the operation deadline",
 );
-const stallElapsedMs = performance.now() - stallStarted;
+assert.notEqual(
+  timeoutKernelOperationStartedAt,
+  undefined,
+  "The operation deadline must expire after the evaluator entered its native Boolean path",
+);
+assert.notEqual(
+  timeoutNonYieldingStallStartedAt,
+  undefined,
+  "The operation deadline must expire after the native Boolean returned and the non-yielding stall began",
+);
+const timeoutStallEntry = timeoutNonYieldingStallStartedAt;
+if (timeoutStallEntry === undefined) {
+  throw new Error("The evaluator stall-entry timestamp is unavailable");
+}
+const stallElapsedMs = performance.now() - timeoutStallEntry;
 assert.ok(
-  stallElapsedMs < 30_000,
-  `Stalled child was not terminated promptly (${stallElapsedMs} ms)`,
+  stallElapsedMs < 5_000,
+  `Stalled child was not terminated promptly after the deliberate stall began (${stallElapsedMs} ms)`,
+);
+
+const recoveredAfterTimeout = await runOcctArtifactProcess({
+  operation: "evaluate",
+  runtimeDirectory: directory,
+  feature: evaluatorFeature,
+  maxArtifactBytes: maximumArtifactBytes,
+  timeoutMs: normalTimeoutMs,
+});
+assert.deepEqual(recoveredAfterTimeout.evidence, evaluationA.evidence);
+
+let cleanupKernelOperationStarted = false;
+await assert.rejects(
+  runOcctArtifactProcess({
+    operation: "fail-cleanup-during-evaluate",
+    runtimeDirectory: directory,
+    feature: evaluatorFeature,
+    maxArtifactBytes: maximumArtifactBytes,
+    timeoutMs: normalTimeoutMs,
+    onKernelOperationStarted: () => {
+      cleanupKernelOperationStarted = true;
+    },
+  }),
+  (error: unknown) =>
+    error instanceof OcctArtifactProcessChildError &&
+    error.childError.code === "CLEANUP_FAILED" &&
+    error.message.includes("cleanup failed"),
+  "A cleanup failure after evaluation must never produce successful evidence",
+);
+assert.equal(
+  cleanupKernelOperationStarted,
+  true,
+  "The injected cleanup failure must happen after the evaluator entered its native Boolean path",
 );
 
 await assert.rejects(
@@ -358,23 +491,35 @@ Object.defineProperties(abortController.signal, {
     },
   },
 });
-let resolveAbortStarted = (): void => {};
-let rejectAbortStarted = (_error: unknown): void => {};
-const abortStarted = new Promise<void>((resolveStarted, rejectStarted) => {
-  resolveAbortStarted = resolveStarted;
-  rejectAbortStarted = rejectStarted;
-});
+let abortKernelOperationStarted = false;
+let resolveNonYieldingStallStarted = (): void => {};
+let rejectNonYieldingStallStarted = (_error: unknown): void => {};
+const nonYieldingStallStarted = new Promise<void>(
+  (resolveStarted, rejectStarted) => {
+    resolveNonYieldingStallStarted = resolveStarted;
+    rejectNonYieldingStallStarted = rejectStarted;
+  },
+);
 const abortedOperation = runOcctArtifactProcess({
-  operation: "stall-after-start",
+  operation: "stall-during-evaluate",
   runtimeDirectory: directory,
-  feature,
+  feature: evaluatorFeature,
   maxArtifactBytes: maximumArtifactBytes,
   timeoutMs: normalTimeoutMs,
   signal: abortController.signal,
-  onStarted: resolveAbortStarted,
+  onKernelOperationStarted: () => {
+    abortKernelOperationStarted = true;
+  },
+  onNonYieldingStallStarted: resolveNonYieldingStallStarted,
 });
-void abortedOperation.catch(rejectAbortStarted);
-await abortStarted;
+void abortedOperation.catch(rejectNonYieldingStallStarted);
+await nonYieldingStallStarted;
+assert.equal(
+  abortKernelOperationStarted,
+  true,
+  "The evaluator must enter its native Boolean path before the post-stall abort",
+);
+const abortStartedAt = performance.now();
 abortController.abort();
 await assert.rejects(
   abortedOperation,
@@ -382,6 +527,20 @@ await assert.rejects(
     error instanceof DOMException && error.name === "AbortError",
   "A post-start abort must kill and await the disposable child",
 );
+const abortElapsedMs = performance.now() - abortStartedAt;
+assert.ok(
+  abortElapsedMs < 5_000,
+  `Aborted evaluator child was not terminated promptly (${abortElapsedMs} ms)`,
+);
+
+const recoveredEvaluator = await runOcctArtifactProcess({
+  operation: "evaluate",
+  runtimeDirectory: directory,
+  feature: evaluatorFeature,
+  maxArtifactBytes: maximumArtifactBytes,
+  timeoutMs: normalTimeoutMs,
+});
+assert.deepEqual(recoveredEvaluator.evidence, evaluationA.evidence);
 
 const recovered = await runOcctArtifactProcess({
   operation: "consume",
@@ -405,5 +564,5 @@ assert.equal(recovered.evidence.certifiesCompatibility, false);
 assert.ok(sameBytes(borrowedArtifact, beforeConsume));
 
 process.stdout.write(
-  "owned OCCT artifact one-shot process timeout, trap, recovery, and cross-process evidence passed\n",
+  "owned OCCT artifact/evaluator one-shot process isolation, cleanup, recovery, and cross-process evidence passed\n",
 );
