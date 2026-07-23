@@ -254,16 +254,36 @@ or write cached shapes today**.
   squaring deliberately admits roughly fewer than `1,000` geometry work units
   under the shared cap, with other charges lowering it; this is a private
   artifact-compatibility ceiling, not a general modeling limit.
+- An unexported one-shot disposable-operation coordinator now closes the
+  host-side result/timeout/abort/termination races used by the isolation gates.
+  The Chromium production-bundle gate transfers a copy of the committed v2
+  fixture into a stock-runtime module worker, proves retained-input
+  immutability and transfer detachment, accepts only its closed started/result
+  protocol, and returns scalar evidence only after shape/kernel cleanup. It
+  hard-terminates a started non-yielding worker and proves decode recovery in a
+  fresh worker; live native handles never cross the realm boundary.
+- `pnpm test:occt-artifact-process` now runs the owned ABI 0.9 candidate as
+  one-shot Node children and is included in `test:occt-facade-bundle`.
+  Fresh producer A and consumer B agree on deterministic artifact, capability,
+  runtime-input, and semantic evidence while preserving the parent-owned input.
+  Each child exact-checks the release-input JS/WASM size and SHA-256, imports a
+  private copy of those verified JavaScript bytes, and supplies a copy of the
+  verified WASM as `wasmBinary`. The gate rejects a one-byte mutation in either
+  runtime file before execution and covers post-start `SIGKILL` timeout/abort,
+  injected-trap discard, and fresh recovery. Its closed evidence explicitly
+  records `shapeArtifacts` as absent and `certifiesCompatibility: false`.
 - Promotion remains blocked because the cumulative 128 MiB request budget and
-  structural-work meter are not live/peak-memory proof. Same-thread synchronous
-  WASM still cannot provide prompt timer-driven cancellation, ordered evidence
-  is not comprehensive durable identity for indistinguishable symmetric
-  topology, the loaded runtime is not exactly attested, and the in-process
-  stock golden is not cross-process compatibility proof.
-- Production work therefore still requires promptly cancellable native
-  operations, comprehensive durable artifact-local identity rather than
-  enumeration order, exact loaded JS/WASM/build attestation, and a reviewed
-  cross-process golden matrix.
+  structural-work meter are not live/peak-memory proof. Executing files whose
+  release-input sizes and hashes were checked is not general runtime/build
+  attestation and does not defend against a trusted host or same-UID process.
+  The injected trap is an orchestration fault, not a real OCCT trap. Ordered
+  evidence is not comprehensive durable identity for indistinguishable
+  symmetric topology, and one owned producer/consumer scenario is not a
+  reviewed cross-platform golden matrix.
+- Production work therefore still requires prompt cancellation in the actual
+  evaluator operation, comprehensive durable artifact-local identity rather
+  than enumeration order, exact loaded JS/WASM/build attestation, and a
+  reviewed cross-platform owned-runtime golden matrix.
 - Only after that matrix passes will OCCT advertise the capability. Evaluator
   integration must then cover per-solid cache read/decode and encode/write,
   fresh ownership, corruption, cancellation, cleanup, eviction, concurrent

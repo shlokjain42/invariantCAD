@@ -466,6 +466,65 @@ function arrayBufferCopy(value: Uint8Array): ArrayBuffer {
   return buffer;
 }
 
+const arrayBufferByteLengthGetter = Object.getOwnPropertyDescriptor(
+  ArrayBuffer.prototype,
+  "byteLength",
+)?.get;
+const typedArrayNameGetter = Object.getOwnPropertyDescriptor(
+  Object.getPrototypeOf(Uint8Array.prototype) as object,
+  Symbol.toStringTag,
+)?.get;
+const urlHrefGetter = Object.getOwnPropertyDescriptor(
+  URL.prototype,
+  "href",
+)?.get;
+
+function hasArrayBufferBrand(value: unknown): value is ArrayBuffer {
+  if (arrayBufferByteLengthGetter === undefined) return false;
+  try {
+    Reflect.apply(arrayBufferByteLengthGetter, value, []);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function hasUint8ArrayBrand(value: unknown): value is Uint8Array {
+  if (!ArrayBuffer.isView(value) || typedArrayNameGetter === undefined) {
+    return false;
+  }
+  try {
+    return Reflect.apply(typedArrayNameGetter, value, []) === "Uint8Array";
+  } catch {
+    return false;
+  }
+}
+
+function urlHref(value: unknown): string | undefined {
+  if (urlHrefGetter === undefined) return undefined;
+  try {
+    const href: unknown = Reflect.apply(urlHrefGetter, value, []);
+    return typeof href === "string" ? href : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function captureOcctWasmSource(
+  value: OcctWasmSource | undefined,
+): ArrayBuffer | string | undefined {
+  if (hasArrayBufferBrand(value)) {
+    return arrayBufferCopy(new Uint8Array(value));
+  }
+  if (hasUint8ArrayBrand(value)) return arrayBufferCopy(value);
+  if (typeof value === "string" || value === undefined) return value;
+  const href = urlHref(value);
+  if (href !== undefined) return href;
+  throw new TypeError(
+    "OCCT wasm must be a string, URL, ArrayBuffer, or Uint8Array",
+  );
+}
+
 function pointOnPlane(point: Vec2, plane: NumericPlane): OcctVec3 {
   const { u, v } = numericPlaneBasis(plane);
   return {
@@ -5386,6 +5445,18 @@ class OcctKernel implements GeometryKernel {
 export async function createOcctKernel(
   options: OcctKernelOptions = {},
 ): Promise<GeometryKernel> {
+  // Snapshot every caller-owned initialization input before the first await.
+  // Runtime identity and its fingerprint must describe the same call-time
+  // values that are eventually passed to Emscripten and the kernel wrapper.
+  const wasm = captureOcctWasmSource(options.wasm);
+  const moduleFactory = options.moduleFactory;
+  const tessellation =
+    options.tessellation === undefined
+      ? undefined
+      : Object.freeze({ ...options.tessellation });
+  const modelingTolerance = options.modelingTolerance;
+  const onOutput = options.onOutput;
+  const onError = options.onError;
   const maxExactBooleanHistoryRecords = exactBooleanHistoryRecordLimit(
     options.maxExactBooleanHistoryRecords,
   );
@@ -5397,13 +5468,24 @@ export async function createOcctKernel(
     exactSolidOffsetHistoryRecordLimit(
       options.maxExactSolidOffsetHistoryRecords,
     );
+  const capturedOptions: OcctKernelOptions = Object.freeze({
+    ...(wasm === undefined ? {} : { wasm }),
+    ...(moduleFactory === undefined ? {} : { moduleFactory }),
+    ...(tessellation === undefined ? {} : { tessellation }),
+    ...(modelingTolerance === undefined ? {} : { modelingTolerance }),
+    maxExactBooleanHistoryRecords,
+    maxExactEdgeTreatmentHistoryRecords,
+    maxExactSolidOffsetHistoryRecords,
+    ...(onOutput === undefined ? {} : { onOutput }),
+    ...(onError === undefined ? {} : { onError }),
+  });
   const [{ OcctKernel: RawKernel }, createModule] = await Promise.all([
     import("occt-wasm"),
-    options.moduleFactory === undefined
+    moduleFactory === undefined
       ? import("occt-wasm/dist/occt-wasm.js").then(
           ({ default: stockFactory }) => stockFactory as OcctModuleFactory,
         )
-      : Promise.resolve(options.moduleFactory),
+      : Promise.resolve(moduleFactory),
   ]);
   const moduleOptions: {
     wasmBinary?: ArrayBuffer;
@@ -5411,16 +5493,13 @@ export async function createOcctKernel(
     print: (message: string) => void;
     printErr?: (message: string) => void;
   } = {
-    print: options.onOutput ?? (() => {}),
-    ...(options.onError === undefined ? {} : { printErr: options.onError }),
+    print: onOutput ?? (() => {}),
+    ...(onError === undefined ? {} : { printErr: onError }),
   };
-  if (options.wasm instanceof ArrayBuffer) {
-    moduleOptions.wasmBinary = options.wasm;
-  } else if (options.wasm instanceof Uint8Array) {
-    moduleOptions.wasmBinary = arrayBufferCopy(options.wasm);
-  } else if (options.wasm !== undefined) {
-    const location =
-      options.wasm instanceof URL ? options.wasm.href : options.wasm;
+  if (wasm instanceof ArrayBuffer) {
+    moduleOptions.wasmBinary = wasm;
+  } else if (wasm !== undefined) {
+    const location = wasm;
     moduleOptions.locateFile = (path) =>
       path.endsWith(".wasm") ? location : path;
   }
@@ -5434,7 +5513,7 @@ export async function createOcctKernel(
     return new OcctKernel(
       raw,
       facade,
-      options,
+      capturedOptions,
       maxExactBooleanHistoryRecords,
       maxExactEdgeTreatmentHistoryRecords,
       maxExactSolidOffsetHistoryRecords,

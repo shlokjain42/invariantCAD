@@ -13,6 +13,29 @@
   request template, and expanded contributor guidance for the public project.
 - Added TS7-compatible source correctness linting and deterministic format
   hygiene checks to the ordinary verification and release gates.
+- Added repository-private one-shot isolation evidence for the unadvertised OCCT
+  shape-artifact candidate. An unexported disposable-operation coordinator
+  enforces pre-abort, timeout/abort termination, exactly-once settlement, and
+  awaited cleanup. The Chromium production-bundle gate transfers a copied
+  committed v2 fixture into a stock-runtime module worker, proves source-byte
+  immutability and transfer detachment, hard-terminates a started non-yielding
+  worker, and decodes successfully in a fresh worker while returning only
+  scalar evidence after native cleanup. A separate Node gate runs owned ABI 0.9
+  producer A and consumer B in one-shot child processes, exact-checks the
+  release-input JS/WASM sizes and SHA-256 digests, executes private copied
+  JavaScript plus the verified `wasmBinary`, checks deterministic artifact and
+  evidence, rejects one-byte runtime tampering, and proves post-start
+  `SIGKILL` timeout/abort, injected-trap discard, and fresh recovery. It runs as
+  `pnpm test:occt-artifact-process` and is included in the facade-bundle gate.
+  Its evidence explicitly sets `certifiesCompatibility: false`: these checks
+  are not general runtime/build attestation, trusted-host or same-UID
+  protection, live/peak-memory proof, a real OCCT-trap injection, durable native
+  subshape identity, a reviewed cross-platform golden matrix, or evaluator/cache
+  integration, and no backend now advertises `shapeArtifacts`.
+- Made `createOcctKernel` snapshot every caller-owned initialization option
+  before its first asynchronous import, including cross-realm URL state and
+  copied WASM bytes, so later caller mutation cannot make execution inputs and
+  the selected stock/custom runtime identity disagree.
 - Replaced the repository-private OCCT candidate's canonical-JSON state with a
   bounded binary sidecar v2. Its 48-byte big-endian header preflights exact
   topology, adjacency, lineage, UTF-16BE string, and native-orientation totals;
@@ -23,7 +46,7 @@
   fixture is retained as a negative corpus, and a read-only generator check is
   part of ordinary verification. Production capability advertising remains
   blocked by the separate native-allocation, cancellation, identity,
-  attestation, and cross-process proof gaps.
+  attestation, and reviewed cross-platform proof gaps.
 - Advanced the repository-private owned OCCT facade and compliance bundle to
   ABI 0.8 with a fixed 128 MiB per-operation ceiling over cumulative allocation
   requests observed at twelve reviewed linker-wrapped entry points. Reports
@@ -31,7 +54,8 @@
   new argument, and disposable-process tests cover write/read denial plus
   recovery. This is unadvertised defense-in-depth: direct C denial is fail-stop,
   and strict BinTools count/product preflight, work bounds, cancellation,
-  runtime attestation, durable identity, and cross-process goldens remain open.
+  runtime attestation, durable identity, and reviewed cross-platform goldens
+  remain open.
 - Advanced the repository-private owned OCCT facade and compliance bundle to
   ABI 0.9 with an exact parser for the owned writer's BinTools-v4 profile before
   `BinTools::Read`. Decode now validates canonical sections, finite geometry,
@@ -48,8 +72,8 @@
   consumed-byte, completion/code, and deserialization-start telemetry. The
   private candidate still does not advertise `shapeArtifacts`; these controls
   are not live/peak-memory accounting, prompt same-thread cancellation, exact
-  runtime attestation, cross-process compatibility proof, or comprehensive
-  durable identity for symmetric topology.
+  runtime attestation, reviewed cross-platform compatibility proof, or
+  comprehensive durable identity for symmetric topology.
 
 ## [0.1.0] - 2026-07-22
 

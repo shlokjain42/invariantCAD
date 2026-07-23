@@ -524,6 +524,61 @@ golden, not an owned-facade, cross-platform, or cross-process compatibility
 matrix, and the general audit correctly continues to classify it as
 non-certifying.
 
+The Chromium production-bundle gate adds a repository-private disposable-realm
+check around that committed stock fixture. The main realm retains the source
+bytes and transfers a distinct copied `ArrayBuffer` into a fresh module worker;
+the gate requires the retained bytes to remain unchanged and the transferred
+copy to detach. Its exact-key response protocol admits one matching
+`started` event followed by one `success` or `failure`. The worker confirms
+that `shapeArtifacts`, `encodeShapeArtifact`, and `decodeShapeArtifact` are
+absent from the public kernel, uses the private candidate to decode, and returns
+only scalar volume, topology-count, candidate-version, fingerprint, and
+input-immutability evidence after disposing the decoded shape and kernel. A
+started non-yielding worker is hard-terminated at its deadline; a new worker
+then decodes the fixture successfully. No live OCCT handle or object from
+either realm crosses this protocol.
+
+An unexported host-neutral coordinator owns those one-shot realm operations. It
+rejects pre-abort without creating a worker, starts the deadline before calling
+the factory, settles result/factory failure/abort/timeout races once, requests
+termination exactly once, and waits for termination before returning. It is
+internal release-test orchestration, not a public codec, evaluator, or worker
+API.
+
+The owned ABI 0.9 process gate extends the evidence to fresh Node processes.
+Producer A creates the asymmetric box and writes an artifact; consumer B reads
+that detached artifact in another one-shot child, preserves the parent-owned
+input, and reproduces the producer's artifact, capability, runtime-input, and
+semantic evidence. A second fresh producer must produce identical bytes and
+evidence. Before kernel creation, each child bounds and reads the supplied
+`occt-wasm.js` and `occt-wasm.wasm` once, checks their exact byte lengths and
+SHA-256 digests against `native/occt/bundle/release-input.json`, imports a
+private temporary `.mjs` copied from the verified JavaScript buffer, and passes
+a copy of the verified WebAssembly buffer as `wasmBinary`. A one-byte mutation
+in either file is rejected before that file can execute.
+
+The parent uses a closed versioned request/start/result protocol with exact
+request IDs and bounded request, stdout/stderr, result, and artifact files. A
+pre-aborted signal starts no child. Once the child acknowledges operation
+start, deadline or abort sends `SIGKILL` and the parent waits for exit before
+settling. A deliberately non-yielding post-start stall proves that path; an
+injected trap proves process discard, and a fresh consumer proves subsequent
+recovery. Run this matrix with:
+
+```bash
+pnpm test:occt-artifact-process
+```
+
+The verified facade-bundle gate invokes the same command against its packaged
+runtime automatically. Every successful result records one-shot cleanup before
+response, `shapeArtifactsAbsent: true`, and `certifiesCompatibility: false`.
+The checked JS/WASM copies are proved execution inputs, but that fact is not
+general loaded-runtime or build attestation and does not defend the temporary
+files from a trusted host or another process under the same UID. The injected
+trap is not a real OCCT trap fault injection. These gates do not measure live
+or peak memory, establish durable native subshape identity, create a reviewed
+cross-platform golden matrix, or integrate the evaluator/cache path.
+
 Owned facade ABI 0.7 closes a specific, previously open part of the candidate
 transport boundary:
 
@@ -608,21 +663,23 @@ gap. The hook remains candidate-only because:
 - the 128 MiB budget measures cumulative requests, not live bytes, peak memory,
   or every physical WebAssembly-memory effect; the structural-work envelope is
   deliberately conservative but is not a live/peak-memory proof;
-- synchronous same-thread WASM does not yield for an ordinary timer-driven
-  `AbortSignal`, so entry checks do not provide prompt in-flight cancellation;
+- the disposable gates can terminate their isolated realm, but synchronous
+  same-thread WASM still does not yield for an ordinary timer-driven
+  `AbortSignal`, and the evaluator does not run its ordinary operations through
+  that isolation boundary;
 - ordered topology evidence is useful for fail-closed comparison in the pinned
   runtime, but it is not comprehensive durable identity for indistinguishable
   symmetric subshapes;
-- the candidate fingerprint binds revision labels and options, not an
-  in-process attestation of the exact loaded JavaScript/WASM pair, OCCT build,
-  toolchain, and serialization flags, while the one committed stock-runtime
-  golden does not prove exact restoration by the owned facade across fresh
-  processes, platforms, or reviewed release builds.
+- release-input checks prove that copied JS/WASM bytes were execution inputs,
+  but the candidate fingerprint still does not attest the complete loaded
+  runtime, OCCT build, toolchain, or serialization flags; and
+- one owned fresh-process producer/consumer scenario plus one committed
+  stock-runtime golden is not a reviewed cross-platform compatibility matrix.
 
-Production promotion therefore still requires prompt cancellation outside the
-same-thread synchronous gap, comprehensive durable artifact-local native
+Production promotion therefore still requires prompt cancellation in the
+operational evaluator path, comprehensive durable artifact-local native
 subshape identity, exact loaded-runtime/build attestation, reviewed
-cross-process goldens, and evaluator/cache integration. The
+cross-platform owned-runtime goldens, and evaluator/cache integration. The
 compatibility fingerprint must bind the native
 binary/WASM and JavaScript pair, wrapper, envelope and sidecar revisions,
 identity scheme, relevant tolerance and serialization options, and every other
@@ -631,10 +688,12 @@ input that can change the result.
 ABI 0.7 resolves the candidate's former full-output-materialization and
 successful-result ownership gaps, ABI 0.8 adds a private cumulative-request
 quota, sidecar v2 resolves the JSON materialization gap, and ABI 0.9 adds exact
-owned-profile native archive preflight plus structural-work limits. None
-provides live/peak-memory proof, prompt same-thread cancellation, comprehensive
-durable symmetric-topology identity, runtime attestation, or cross-process
-compatibility proof.
+owned-profile native archive preflight plus structural-work limits. The new
+disposable gates add hard realm termination, fresh recovery, and a bounded
+owned-process handoff. None provides live/peak-memory proof, operational
+evaluator cancellation, comprehensive durable symmetric-topology identity,
+general runtime/build attestation, or a reviewed cross-platform compatibility
+proof.
 Advertising an ordinary native exchange function under the stronger
 shape-artifact capability would therefore remain incorrect, even when it can
 reconstruct a geometrically valid solid.

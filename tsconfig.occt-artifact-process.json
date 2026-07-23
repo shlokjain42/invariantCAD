@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "types": ["node"]
+  },
+  "include": [
+    "src/types/occt-wasm-module.d.ts",
+    "scripts/occt-artifact-process-protocol.ts",
+    "scripts/run-occt-artifact-process.ts",
+    "scripts/test-owned-occt-artifact-process-child.ts",
+    "scripts/test-owned-occt-artifact-process.ts"
+  ]
+}
