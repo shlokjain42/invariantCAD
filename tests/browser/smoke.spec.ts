@@ -51,6 +51,16 @@ test("loads both WASM kernels and confines artifact/evaluator native work to dis
     vertices: 8,
     outputCount: 1,
     diagnosticCount: 0,
+    cacheColdNativeBoxCalls: 1,
+    cacheWarmNativeBoxCalls: 0,
+    cacheEntries: 1,
+    cacheColdEvents: "miss,write",
+    cacheWarmEvents: "hit",
+    cacheMeasurementsMatch: true,
+    shapeArtifactsAbsent: true,
+    trustedStoreOnly: true,
+    certifiesCompatibility: false,
+    certifiesOperationalCancellation: false,
     cleanupCompletedBeforeResponse: true,
   });
   expect(result.artifactWorker.evaluator.recovery).toEqual(completed);

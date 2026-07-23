@@ -2,6 +2,62 @@
 
 ## [Unreleased]
 
+- Added the first repository-private evaluator consumption of the unadvertised
+  OCCT shape-artifact candidate. An unexported, explicit-`trusted` binding
+  caches only requested solid outputs whose referenced feature is directly a
+  box; it snapshots the document and effective options, validates capability
+  and dimensions before store access, creates a fresh cache session per
+  evaluation, rejects overlapping evaluation/disposal, and applies identical
+  ownership, status, measurement, topology, empty-result, and cleanup checks to
+  modeled and decoded shapes. Read-write corruption is evicted and recomputed;
+  read-only poison, failed eviction, store/codec/write failure, and cancellation
+  fail strictly. Dependency-bearing features remain uncached until a versioned
+  diagnostic/topology-policy transcript can preserve warm-path observability.
+  No public evaluator option, kernel method, root export, or `shapeArtifacts`
+  capability was added.
+- Hardened artifact keys and records with canonical UTF-8 metadata limits:
+  `1,024` bytes for node IDs, `256` for identities, `2,048` for solver/codec
+  fingerprints, and `16,384` for aggregate canonical key material. Record
+  creation copies a non-shared payload before its first await and rejects
+  `SharedArrayBuffer` backing. A package-private atomic encode/write transaction
+  now gives the codec the exact race-free remaining budget, conservatively
+  accounts work, hashes once, and publishes one record. Zero or positive
+  insufficient codec ceilings and trusted-store aggregate refusals now retain
+  configured cumulative `ARTIFACT_CACHE_LIMIT_EXCEEDED` diagnostics. Fixed
+  hash/key widths are checked before slicing, hostile record field
+  dereferencing is capped, and evaluator feature-hash lookup is indexed once
+  instead of scanning per direct output. SHA-256 remains
+  corruption/misrouting detection rather than authenticity against a store that
+  can replace both artifact and digest.
+- Made the private evaluator entry point and cache-session coordinator
+  runtime-private with ECMAScript `#` methods and state, guarded session
+  construction, and a frozen public session projection. Packed-package checks
+  now reject the two internal subpaths, require the public prototypes to omit
+  all coordinator methods, and verify the new public byte-ceiling constants.
+  This closes a JavaScript-level bypass that TypeScript's erased `private`
+  modifier alone could not enforce.
+- Extended the Chromium production-bundle evidence with the private direct-box
+  evaluator path. The cold run records `miss,write`, performs one native box,
+  and persists one entry; the warm run records `hit`, decodes with zero
+  additional box calls, and must reproduce measurements, complete topology
+  counts, outputs, and diagnostics exactly. Public capability and codec methods
+  remain absent, the store is explicitly trusted, evidence retains
+  `certifiesCompatibility: false` and
+  `certifiesOperationalCancellation: false`, and cleanup precedes the detached
+  response.
+- Advanced the owned fresh-process protocol to v3 with `cache-produce` and
+  `cache-consume`. Two independent verified ABI-0.9 producers must emit
+  byte-identical records and detached evidence after one direct-box native call
+  and `miss,write`; a compatible read-only consumer must `hit`, decode, perform
+  zero native box calls, and reproduce complete measurements/topology. A
+  different solver fingerprint must derive another key, miss, and model once
+  without invoking either codec direction. The parent transports one bounded
+  binary record with versioned magic, a closed canonical-JSON header, fatal
+  UTF-8, exact length/EOF, record/key/integrity validation, and SHA-256.
+  Tampered payload, forged key/metadata, shared or hostile views, abort, and
+  injected failure are followed by fresh recovery. Evidence explicitly names
+  the trusted parent-mediated boundary, sets record authentication false, and
+  retains compatibility and operational-cancellation non-claims.
 - Normalized the npm CLI executable target to npm's canonical package-relative
   form and added a release check for its path, shebang, and executable mode.
 - Replaced token-based release authentication with npm Trusted Publishing and
@@ -51,8 +107,8 @@
   host/module-hook chain or same-UID process, prove live/peak memory or a real
   OCCT trap, establish cross-edit/persistent assembly identity or shared-TShape
   ancestry across distinct locations, establish a reviewed cross-platform
-  matrix, or integrate the evaluator/cache, and no backend now advertises
-  `shapeArtifacts`.
+  matrix, or expose a public/production evaluator cache, and no backend now
+  advertises `shapeArtifacts`.
 - Extended the repository-private isolation gates through real
   `Evaluator.evaluate(...)` work without adding a public isolated-evaluation
   API. Fresh owned-ABI-0.9 Node children evaluate a deterministic two-box
@@ -75,7 +131,7 @@
   request and fresh-worker recovery, not observed worker exit. A killed realm
   cannot run language-level cleanup; destroying the realm is the containment
   boundary. Ordinary public evaluation remains same-thread and cooperatively
-  cancellable. These gates do not add cache integration, advertise
+  cancellable. These gates do not add public cache configuration, advertise
   `shapeArtifacts`, certify operational cancellation or compatibility, provide
   cross-edit/persistent assembly identity or distinct-location
   `IsPartner`/shared-TShape proof, or establish a cross-platform matrix.

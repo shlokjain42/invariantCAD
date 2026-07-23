@@ -16,6 +16,7 @@ import {
   assertValidKernelTopologySnapshot,
   detachKernelTopologySnapshot,
 } from "./topology-snapshot.js";
+import { throwOcctArtifactLimitRefusal } from "./occt-artifact-limit.js";
 import type {
   OcctShapeArtifactCapturedSidecarState,
   OcctShapeArtifactNativeStructure,
@@ -629,7 +630,11 @@ function prepareSidecar(
     "Shape-artifact sidecar minimum",
   );
   if (conservativeMinimum > maximum) {
-    throw new RangeError("Shape-artifact sidecar exceeds maxBytes");
+    throwOcctArtifactLimitRefusal(
+      maximum,
+      conservativeMinimum,
+      "Shape-artifact sidecar exceeds maxBytes",
+    );
   }
   assertBudget(
     rawLineageRecords,
@@ -812,7 +817,11 @@ abstract class SidecarWriter {
   private advance(bytes: number): void {
     const next = checkedAdd(this.offset, bytes, "Shape-artifact sidecar");
     if (next > this.maximum) {
-      throw new RangeError("Shape-artifact sidecar exceeds maxBytes");
+      throwOcctArtifactLimitRefusal(
+        this.maximum,
+        next,
+        "Shape-artifact sidecar exceeds maxBytes",
+      );
     }
     this.offset = next;
   }
@@ -1079,14 +1088,22 @@ export function encodeOcctArtifactSidecarV2(
   const effectiveMaximum = Math.min(maximum, OCCT_ARTIFACT_SIDECAR_V2_MAX_BYTES);
   checkAbort(signal);
   if (effectiveMaximum < OCCT_ARTIFACT_SIDECAR_V2_MIN_BYTES) {
-    throw new RangeError("Shape-artifact sidecar exceeds maxBytes");
+    throwOcctArtifactLimitRefusal(
+      effectiveMaximum,
+      OCCT_ARTIFACT_SIDECAR_V2_MIN_BYTES,
+      "Shape-artifact sidecar exceeds maxBytes",
+    );
   }
   const prepared = prepareSidecar(state, effectiveMaximum, signal);
   const counter = new CountingWriter(signal, effectiveMaximum);
   writePreparedSidecar(counter, prepared, 0, signal);
   const totalBytes = counter.offset;
   if (totalBytes > effectiveMaximum) {
-    throw new RangeError("Shape-artifact sidecar exceeds maxBytes");
+    throwOcctArtifactLimitRefusal(
+      effectiveMaximum,
+      totalBytes,
+      "Shape-artifact sidecar exceeds maxBytes",
+    );
   }
   checkAbort(signal);
   const writer = new BufferWriter(totalBytes, signal);

@@ -1,6 +1,8 @@
 import { deepFreeze } from "../core/json.js";
+import { isCanonicalUtf8StringWithin } from "../core/utf8.js";
 import type { ShapeOrientation, ShapeType } from "occt-wasm";
 import {
+  KERNEL_SHAPE_ARTIFACT_MAX_COMPATIBILITY_FINGERPRINT_BYTES,
   KERNEL_SHAPE_ARTIFACT_PROTOCOL_VERSION,
   type GeometryKernel,
   type KernelShape,
@@ -32,6 +34,10 @@ import {
   type OcctShapeArtifactNativeOccurrenceV1,
   type OcctShapeArtifactNativePath,
 } from "./occt-artifact-identity-v1.js";
+import {
+  occtArtifactLimitRefusal,
+  throwOcctArtifactLimitRefusal,
+} from "./occt-artifact-limit.js";
 
 export const OCCT_SHAPE_ARTIFACT_CANDIDATE_ACCESS = Symbol(
   "InvariantCAD.OcctShapeArtifactCandidateAccess",
@@ -112,10 +118,18 @@ export interface OcctShapeArtifactCodecCandidate {
   ): KernelShape;
 }
 
+export function occtShapeArtifactCandidateLimitActual(
+  error: unknown,
+  maxArtifactBytes: number,
+): number | undefined {
+  return occtArtifactLimitRefusal(error, maxArtifactBytes)?.actual;
+}
+
 const ENVELOPE_VERSION = 3;
 const HEADER_BYTES = 44;
 const MAX_UINT32 = 0xffff_ffff;
-const MAX_FINGERPRINT_BYTES = 2_048;
+const MAX_FINGERPRINT_BYTES =
+  KERNEL_SHAPE_ARTIFACT_MAX_COMPATIBILITY_FINGERPRINT_BYTES;
 const MAX_STATE_BYTES = 16 * 1024 * 1024;
 const MAX_TOPOLOGY_ITEMS = 100_000;
 const MAX_ADJACENCY_LINKS = 1_000_000;
@@ -1089,28 +1103,33 @@ function encodeEnvelope(
   const signal = capturedSignal(context);
   const maximum = artifactLimit(context);
   checkAbort(signal);
-  const fingerprint = textEncoder.encode(host.compatibilityFingerprint);
   if (
-    fingerprint.byteLength === 0 ||
-    fingerprint.byteLength > MAX_FINGERPRINT_BYTES
+    !isCanonicalUtf8StringWithin(
+      host.compatibilityFingerprint,
+      MAX_FINGERPRINT_BYTES,
+    )
   ) {
     throw new TypeError("OCCT candidate compatibility fingerprint is malformed");
   }
+  const fingerprint = textEncoder.encode(host.compatibilityFingerprint);
   const fixedMinimum = checkedLength(
     HEADER_BYTES,
     fingerprint.byteLength,
     "Artifact envelope",
   );
-  if (
-    checkedLength(
-      fixedMinimum,
-      OCCT_ARTIFACT_SIDECAR_V2_MIN_BYTES +
-        OCCT_ARTIFACT_NATIVE_IDENTITY_V1_HEADER_BYTES +
-        1,
-      "Artifact envelope",
-    ) > maximum
-  ) {
-    throw new RangeError("OCCT candidate artifact exceeds maxArtifactBytes");
+  const envelopeMinimum = checkedLength(
+    fixedMinimum,
+    OCCT_ARTIFACT_SIDECAR_V2_MIN_BYTES +
+      OCCT_ARTIFACT_NATIVE_IDENTITY_V1_HEADER_BYTES +
+      1,
+    "Artifact envelope",
+  );
+  if (envelopeMinimum > maximum) {
+    throwOcctArtifactLimitRefusal(
+      maximum,
+      envelopeMinimum,
+      "OCCT candidate artifact exceeds maxArtifactBytes",
+    );
   }
   let captured: OcctShapeArtifactCapturedCandidateState;
   try {
@@ -1123,17 +1142,39 @@ function encodeEnvelope(
     throw error;
   }
   checkAbort(signal);
-  const stateMaximum = Math.min(
-    MAX_STATE_BYTES,
+  const stateBudget =
     maximum -
-      fixedMinimum -
-      OCCT_ARTIFACT_NATIVE_IDENTITY_V1_HEADER_BYTES -
-      1,
-  );
-  const state = encodeOcctArtifactSidecarV2(captured, {
-    maxBytes: stateMaximum,
-    ...(signal === undefined ? {} : { signal }),
-  });
+    fixedMinimum -
+    OCCT_ARTIFACT_NATIVE_IDENTITY_V1_HEADER_BYTES -
+    1;
+  const stateMaximum = Math.min(MAX_STATE_BYTES, stateBudget);
+  let state: Uint8Array;
+  try {
+    state = encodeOcctArtifactSidecarV2(captured, {
+      maxBytes: stateMaximum,
+      ...(signal === undefined ? {} : { signal }),
+    });
+  } catch (error) {
+    checkAbort(signal);
+    const refusal = occtArtifactLimitRefusal(error, stateMaximum);
+    if (refusal !== undefined && stateMaximum === stateBudget) {
+      const required = checkedLength(
+        checkedLength(
+          fixedMinimum,
+          refusal.actual,
+          "Artifact envelope",
+        ),
+        OCCT_ARTIFACT_NATIVE_IDENTITY_V1_HEADER_BYTES + 1,
+        "Artifact envelope",
+      );
+      throwOcctArtifactLimitRefusal(
+        maximum,
+        required,
+        "OCCT candidate artifact exceeds maxArtifactBytes",
+      );
+    }
+    throw error;
+  }
   if (state.byteLength === 0 || state.byteLength > MAX_STATE_BYTES) {
     throw new RangeError("OCCT candidate state section is empty or oversized");
   }
@@ -1143,21 +1184,48 @@ function encodeEnvelope(
     "Artifact envelope",
   );
   const identityMaximum = maximum - identityBase - 1;
-  const identity = encodeOcctArtifactNativeIdentityV1(
-    captured.nativeIdentity,
-    {
-      maxBytes: identityMaximum,
-      ...(signal === undefined ? {} : { signal }),
-    },
-    nativeIdentityCounts(captured.nativeStructure),
-  );
+  let identity: Uint8Array;
+  try {
+    identity = encodeOcctArtifactNativeIdentityV1(
+      captured.nativeIdentity,
+      {
+        maxBytes: identityMaximum,
+        ...(signal === undefined ? {} : { signal }),
+      },
+      nativeIdentityCounts(captured.nativeStructure),
+    );
+  } catch (error) {
+    checkAbort(signal);
+    const refusal = occtArtifactLimitRefusal(error, identityMaximum);
+    if (refusal !== undefined) {
+      const required = checkedLength(
+        checkedLength(
+          identityBase,
+          refusal.actual,
+          "Artifact envelope",
+        ),
+        1,
+        "Artifact envelope",
+      );
+      throwOcctArtifactLimitRefusal(
+        maximum,
+        required,
+        "OCCT candidate artifact exceeds maxArtifactBytes",
+      );
+    }
+    throw error;
+  }
   const nativeBase = checkedLength(
     identityBase,
     identity.byteLength,
     "Artifact envelope",
   );
   if (checkedLength(nativeBase, 1, "Artifact envelope") > maximum) {
-    throw new RangeError("OCCT candidate artifact exceeds maxArtifactBytes");
+    throwOcctArtifactLimitRefusal(
+      maximum,
+      checkedLength(nativeBase, 1, "Artifact envelope"),
+      "OCCT candidate artifact exceeds maxArtifactBytes",
+    );
   }
   const nativeMaximum = maximum - nativeBase;
   let brep: Uint8Array;
@@ -1165,6 +1233,14 @@ function encodeEnvelope(
     brep = host.encodeNative(shape, nativeMaximum, signal);
   } catch (error) {
     checkAbort(signal);
+    const refusal = occtArtifactLimitRefusal(error, nativeMaximum);
+    if (refusal !== undefined) {
+      throwOcctArtifactLimitRefusal(
+        maximum,
+        checkedLength(nativeBase, refusal.actual, "Artifact envelope"),
+        "OCCT candidate artifact exceeds maxArtifactBytes",
+      );
+    }
     throw error;
   }
   checkAbort(signal);
@@ -1349,8 +1425,7 @@ function candidateHost(kernel: GeometryKernel): OcctShapeArtifactCandidateHost |
     }
     const fingerprint = (host as OcctShapeArtifactCandidateHost)
       .compatibilityFingerprint;
-    const bytes = textEncoder.encode(fingerprint);
-    return bytes.byteLength > 0 && bytes.byteLength <= MAX_FINGERPRINT_BYTES
+    return isCanonicalUtf8StringWithin(fingerprint, MAX_FINGERPRINT_BYTES)
       ? (host as OcctShapeArtifactCandidateHost)
       : undefined;
   } catch {

@@ -1,10 +1,20 @@
 import { isAbsolute } from "node:path";
 
-export const OCCT_ARTIFACT_PROCESS_PROTOCOL_VERSION = 2 as const;
+export const OCCT_ARTIFACT_PROCESS_PROTOCOL_VERSION = 3 as const;
 export const OCCT_ARTIFACT_PROCESS_EVIDENCE_VERSION = 1 as const;
 export const OCCT_EVALUATOR_PROCESS_EVIDENCE_VERSION = 1 as const;
+export const OCCT_EVALUATOR_CACHE_PROCESS_EVIDENCE_VERSION = 1 as const;
 export const OCCT_ARTIFACT_PROCESS_MAX_ARTIFACT_BYTES =
   64 * 1024 * 1024;
+export const OCCT_ARTIFACT_PROCESS_MAX_CACHE_RECORD_HEADER_BYTES =
+  32 * 1024;
+export const OCCT_ARTIFACT_PROCESS_CACHE_RECORD_PREFIX_BYTES = 12;
+export const OCCT_ARTIFACT_PROCESS_MAX_CACHE_RECORD_BYTES =
+  OCCT_ARTIFACT_PROCESS_MAX_ARTIFACT_BYTES +
+  OCCT_ARTIFACT_PROCESS_MAX_CACHE_RECORD_HEADER_BYTES +
+  OCCT_ARTIFACT_PROCESS_CACHE_RECORD_PREFIX_BYTES;
+export const OCCT_EVALUATOR_CACHE_PROCESS_MAX_SOLVER_FINGERPRINT_BYTES =
+  2_048;
 export const OCCT_ARTIFACT_PROCESS_MAX_REQUEST_BYTES = 16 * 1024;
 export const OCCT_ARTIFACT_PROCESS_MAX_RESULT_BYTES = 64 * 1024;
 export const OCCT_ARTIFACT_PROCESS_MAX_OUTPUT_BYTES = 64 * 1024;
@@ -15,6 +25,8 @@ export type OcctArtifactProcessOperation =
   | "produce"
   | "consume"
   | "evaluate"
+  | "cache-produce"
+  | "cache-consume"
   | "stall-during-evaluate"
   | "fail-cleanup-during-evaluate"
   | "trap";
@@ -40,6 +52,24 @@ export interface OcctArtifactProcessConsumeRequest
   readonly inputArtifactPath: string;
 }
 
+interface OcctEvaluatorCacheProcessRequestBase
+  extends OcctArtifactProcessRequestBase {
+  readonly operation: "cache-produce" | "cache-consume";
+  readonly solverFingerprint: string;
+}
+
+export interface OcctEvaluatorCacheProcessProduceRequest
+  extends OcctEvaluatorCacheProcessRequestBase {
+  readonly operation: "cache-produce";
+  readonly outputCacheRecordPath: string;
+}
+
+export interface OcctEvaluatorCacheProcessConsumeRequest
+  extends OcctEvaluatorCacheProcessRequestBase {
+  readonly operation: "cache-consume";
+  readonly inputCacheRecordPath: string;
+}
+
 export interface OcctArtifactProcessFaultRequest
   extends OcctArtifactProcessRequestBase {
   readonly operation:
@@ -57,6 +87,8 @@ export type OcctArtifactProcessRequest =
   | OcctArtifactProcessProduceRequest
   | OcctArtifactProcessConsumeRequest
   | OcctEvaluatorProcessRequest
+  | OcctEvaluatorCacheProcessProduceRequest
+  | OcctEvaluatorCacheProcessConsumeRequest
   | OcctArtifactProcessFaultRequest;
 
 export interface OcctArtifactProcessStartEvent {
@@ -188,6 +220,52 @@ export interface OcctEvaluatorProcessEvidence {
   readonly cleanupCompletedBeforeResponse: true;
 }
 
+export type OcctEvaluatorCacheProcessOutcome =
+  | "cold-write"
+  | "warm-hit"
+  | "incompatible-miss";
+
+export interface OcctEvaluatorCacheProcessEvidence {
+  readonly kind: "invariantcad-private-occt-evaluator-cache-process-evidence";
+  readonly evidenceVersion:
+    typeof OCCT_EVALUATOR_CACHE_PROCESS_EVIDENCE_VERSION;
+  readonly operation: "cache-produce" | "cache-consume";
+  readonly executionBoundary: "one-shot-node-child-process";
+  readonly evaluatorPath: "Evaluator.evaluate";
+  readonly fixture: "owned-occt-evaluator-cache-box-v1";
+  readonly feature: "cache-box";
+  readonly documentSha256: string;
+  readonly configurationId: null;
+  readonly parameters: Readonly<Record<string, never>>;
+  readonly solverFingerprint: string;
+  readonly output: {
+    readonly name: "result";
+    readonly kind: "solid";
+    readonly measurements: OcctEvaluatorProcessMeasurementEvidence;
+    readonly topology: OcctEvaluatorProcessTopologyEvidence;
+  };
+  readonly cache: {
+    readonly mode: "read-write" | "read-only";
+    readonly events: readonly ("hit" | "miss" | "write")[];
+    readonly key: string;
+    readonly nativeBoxCalls: 0 | 1;
+    readonly artifactEncodeObserved: boolean;
+    readonly artifactDecodeObserved: boolean;
+    readonly outcome: OcctEvaluatorCacheProcessOutcome;
+    readonly record: OcctArtifactProcessArtifactEvidence;
+  };
+  readonly runtime: OcctArtifactProcessRuntimeEvidence;
+  readonly capabilities: OcctArtifactProcessCapabilityEvidence;
+  readonly advertisement: "unadvertised";
+  readonly shapeArtifactsAbsent: true;
+  readonly privateCandidateOnly: true;
+  readonly trustedStoreBoundary: "trusted-parent-mediated-record";
+  readonly recordIntegrityAuthenticated: false;
+  readonly certifiesCompatibility: false;
+  readonly certifiesOperationalCancellation: false;
+  readonly cleanupCompletedBeforeResponse: true;
+}
+
 export interface OcctArtifactProcessSuccess {
   readonly protocolVersion: typeof OCCT_ARTIFACT_PROCESS_PROTOCOL_VERSION;
   readonly requestId: string;
@@ -202,6 +280,14 @@ export interface OcctEvaluatorProcessSuccess {
   readonly operation: "evaluate";
   readonly ok: true;
   readonly evidence: OcctEvaluatorProcessEvidence;
+}
+
+export interface OcctEvaluatorCacheProcessSuccess {
+  readonly protocolVersion: typeof OCCT_ARTIFACT_PROCESS_PROTOCOL_VERSION;
+  readonly requestId: string;
+  readonly operation: "cache-produce" | "cache-consume";
+  readonly ok: true;
+  readonly evidence: OcctEvaluatorCacheProcessEvidence;
 }
 
 export type OcctArtifactProcessErrorCode =
@@ -224,13 +310,17 @@ export interface OcctArtifactProcessFailure {
 export type OcctArtifactProcessResult =
   | OcctArtifactProcessSuccess
   | OcctEvaluatorProcessSuccess
+  | OcctEvaluatorCacheProcessSuccess
   | OcctArtifactProcessFailure;
 
 const requestIdPattern = /^[0-9a-f]{32}$/u;
 const sha256Pattern = /^[0-9a-f]{64}$/u;
 const semanticWitnessPattern =
   /^invariantcad:kernel-shape-semantic:v1:sha256:[0-9a-f]{64}$/u;
+const artifactCacheKeyPattern =
+  /^invariantcad:kernel-shape:v1:sha256:[0-9a-f]{64}$/u;
 const textEncoder = new TextEncoder();
+const fatalTextDecoder = new TextDecoder("utf-8", { fatal: true });
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -257,6 +347,15 @@ function boundedString(
     value.length > 0 &&
     textEncoder.encode(value).byteLength <= maximumBytes
   );
+}
+
+function boundedCanonicalString(
+  value: unknown,
+  maximumBytes: number,
+): value is string {
+  if (!boundedString(value, maximumBytes)) return false;
+  const encoded = textEncoder.encode(value);
+  return fatalTextDecoder.decode(encoded) === value;
 }
 
 function absolutePath(value: unknown): value is string {
@@ -289,6 +388,8 @@ function validRequestBase(
     (value.operation === "produce" ||
       value.operation === "consume" ||
       value.operation === "evaluate" ||
+      value.operation === "cache-produce" ||
+      value.operation === "cache-consume" ||
       value.operation === "stall-during-evaluate" ||
       value.operation === "fail-cleanup-during-evaluate" ||
       value.operation === "trap") &&
@@ -328,6 +429,40 @@ export function parseOcctArtifactProcessRequest(
       !absolutePath(value.inputArtifactPath)
     ) {
       throw new TypeError("OCCT artifact process consume request is malformed");
+    }
+  } else if (value.operation === "cache-produce") {
+    if (
+      !exactKeys(value, [
+        ...common,
+        "solverFingerprint",
+        "outputCacheRecordPath",
+      ]) ||
+      !boundedCanonicalString(
+        value.solverFingerprint,
+        OCCT_EVALUATOR_CACHE_PROCESS_MAX_SOLVER_FINGERPRINT_BYTES,
+      ) ||
+      !absolutePath(value.outputCacheRecordPath)
+    ) {
+      throw new TypeError(
+        "OCCT evaluator-cache process produce request is malformed",
+      );
+    }
+  } else if (value.operation === "cache-consume") {
+    if (
+      !exactKeys(value, [
+        ...common,
+        "solverFingerprint",
+        "inputCacheRecordPath",
+      ]) ||
+      !boundedCanonicalString(
+        value.solverFingerprint,
+        OCCT_EVALUATOR_CACHE_PROCESS_MAX_SOLVER_FINGERPRINT_BYTES,
+      ) ||
+      !absolutePath(value.inputCacheRecordPath)
+    ) {
+      throw new TypeError(
+        "OCCT evaluator-cache process consume request is malformed",
+      );
     }
   } else if (!exactKeys(value, common)) {
     throw new TypeError("OCCT artifact process fault request is malformed");
@@ -861,6 +996,244 @@ function parseEvaluatorEvidence(
   });
 }
 
+function parseCacheRecordEvidence(
+  value: unknown,
+): OcctArtifactProcessArtifactEvidence {
+  if (
+    !isRecord(value) ||
+    !exactKeys(value, ["byteLength", "sha256"]) ||
+    !positiveSafeInteger(
+      value.byteLength,
+      OCCT_ARTIFACT_PROCESS_MAX_CACHE_RECORD_BYTES,
+    ) ||
+    typeof value.sha256 !== "string" ||
+    !sha256Pattern.test(value.sha256)
+  ) {
+    throw new TypeError(
+      "OCCT evaluator-cache process record evidence is malformed",
+    );
+  }
+  return Object.freeze({
+    byteLength: value.byteLength,
+    sha256: value.sha256,
+  });
+}
+
+function parseEvaluatorCacheEvidence(
+  value: unknown,
+): OcctEvaluatorCacheProcessEvidence {
+  if (
+    !isRecord(value) ||
+    !exactKeys(value, [
+      "kind",
+      "evidenceVersion",
+      "operation",
+      "executionBoundary",
+      "evaluatorPath",
+      "fixture",
+      "feature",
+      "documentSha256",
+      "configurationId",
+      "parameters",
+      "solverFingerprint",
+      "output",
+      "cache",
+      "runtime",
+      "capabilities",
+      "advertisement",
+      "shapeArtifactsAbsent",
+      "privateCandidateOnly",
+      "trustedStoreBoundary",
+      "recordIntegrityAuthenticated",
+      "certifiesCompatibility",
+      "certifiesOperationalCancellation",
+      "cleanupCompletedBeforeResponse",
+    ]) ||
+    value.kind !==
+      "invariantcad-private-occt-evaluator-cache-process-evidence" ||
+    value.evidenceVersion !==
+      OCCT_EVALUATOR_CACHE_PROCESS_EVIDENCE_VERSION ||
+    (value.operation !== "cache-produce" &&
+      value.operation !== "cache-consume") ||
+    value.executionBoundary !== "one-shot-node-child-process" ||
+    value.evaluatorPath !== "Evaluator.evaluate" ||
+    value.fixture !== "owned-occt-evaluator-cache-box-v1" ||
+    value.feature !== "cache-box" ||
+    typeof value.documentSha256 !== "string" ||
+    !sha256Pattern.test(value.documentSha256) ||
+    value.configurationId !== null ||
+    !isRecord(value.parameters) ||
+    !exactKeys(value.parameters, []) ||
+    !boundedCanonicalString(
+      value.solverFingerprint,
+      OCCT_EVALUATOR_CACHE_PROCESS_MAX_SOLVER_FINGERPRINT_BYTES,
+    ) ||
+    !isRecord(value.output) ||
+    !exactKeys(value.output, [
+      "name",
+      "kind",
+      "measurements",
+      "topology",
+    ]) ||
+    value.output.name !== "result" ||
+    value.output.kind !== "solid" ||
+    !isRecord(value.cache) ||
+    !exactKeys(value.cache, [
+      "mode",
+      "events",
+      "key",
+      "nativeBoxCalls",
+      "artifactEncodeObserved",
+      "artifactDecodeObserved",
+      "outcome",
+      "record",
+    ]) ||
+    (value.cache.mode !== "read-write" &&
+      value.cache.mode !== "read-only") ||
+    !Array.isArray(value.cache.events) ||
+    !exactKeys(
+      value.cache.events as unknown as Record<string, unknown>,
+      Array.from(
+        { length: value.cache.events.length },
+        (_, index) => String(index),
+      ),
+    ) ||
+    !value.cache.events.every(
+      (event) =>
+        event === "hit" || event === "miss" || event === "write",
+    ) ||
+    typeof value.cache.key !== "string" ||
+    !artifactCacheKeyPattern.test(value.cache.key) ||
+    (value.cache.nativeBoxCalls !== 0 &&
+      value.cache.nativeBoxCalls !== 1) ||
+    typeof value.cache.artifactEncodeObserved !== "boolean" ||
+    typeof value.cache.artifactDecodeObserved !== "boolean" ||
+    (value.cache.outcome !== "cold-write" &&
+      value.cache.outcome !== "warm-hit" &&
+      value.cache.outcome !== "incompatible-miss") ||
+    value.advertisement !== "unadvertised" ||
+    value.shapeArtifactsAbsent !== true ||
+    value.privateCandidateOnly !== true ||
+    value.trustedStoreBoundary !== "trusted-parent-mediated-record" ||
+    value.recordIntegrityAuthenticated !== false ||
+    value.certifiesCompatibility !== false ||
+    value.certifiesOperationalCancellation !== false ||
+    value.cleanupCompletedBeforeResponse !== true
+  ) {
+    throw new TypeError(
+      "OCCT evaluator-cache process evidence is malformed",
+    );
+  }
+
+  const expected:
+    | {
+        readonly mode: "read-write";
+        readonly events: readonly ["miss", "write"];
+        readonly nativeBoxCalls: 1;
+        readonly artifactEncodeObserved: true;
+        readonly artifactDecodeObserved: false;
+        readonly outcome: "cold-write";
+      }
+    | {
+        readonly mode: "read-only";
+        readonly events: readonly ["hit"];
+        readonly nativeBoxCalls: 0;
+        readonly artifactEncodeObserved: false;
+        readonly artifactDecodeObserved: true;
+        readonly outcome: "warm-hit";
+      }
+    | {
+        readonly mode: "read-only";
+        readonly events: readonly ["miss"];
+        readonly nativeBoxCalls: 1;
+        readonly artifactEncodeObserved: false;
+        readonly artifactDecodeObserved: false;
+        readonly outcome: "incompatible-miss";
+      } =
+    value.operation === "cache-produce"
+      ? {
+          mode: "read-write",
+          events: ["miss", "write"],
+          nativeBoxCalls: 1,
+          artifactEncodeObserved: true,
+          artifactDecodeObserved: false,
+          outcome: "cold-write",
+        }
+      : value.cache.outcome === "warm-hit"
+        ? {
+            mode: "read-only",
+            events: ["hit"],
+            nativeBoxCalls: 0,
+            artifactEncodeObserved: false,
+            artifactDecodeObserved: true,
+            outcome: "warm-hit",
+          }
+        : {
+            mode: "read-only",
+            events: ["miss"],
+            nativeBoxCalls: 1,
+            artifactEncodeObserved: false,
+            artifactDecodeObserved: false,
+            outcome: "incompatible-miss",
+          };
+  if (
+    value.cache.mode !== expected.mode ||
+    value.cache.events.length !== expected.events.length ||
+    !value.cache.events.every(
+      (event, index) => event === expected.events[index],
+    ) ||
+    value.cache.nativeBoxCalls !== expected.nativeBoxCalls ||
+    value.cache.artifactEncodeObserved !==
+      expected.artifactEncodeObserved ||
+    value.cache.artifactDecodeObserved !==
+      expected.artifactDecodeObserved ||
+    value.cache.outcome !== expected.outcome
+  ) {
+    throw new TypeError(
+      "OCCT evaluator-cache process outcome evidence is inconsistent",
+    );
+  }
+  return Object.freeze({
+    kind: "invariantcad-private-occt-evaluator-cache-process-evidence",
+    evidenceVersion: OCCT_EVALUATOR_CACHE_PROCESS_EVIDENCE_VERSION,
+    operation: value.operation,
+    executionBoundary: "one-shot-node-child-process",
+    evaluatorPath: "Evaluator.evaluate",
+    fixture: "owned-occt-evaluator-cache-box-v1",
+    feature: "cache-box",
+    documentSha256: value.documentSha256,
+    configurationId: null,
+    parameters: Object.freeze({}),
+    solverFingerprint: value.solverFingerprint,
+    output: Object.freeze({
+      name: "result",
+      kind: "solid",
+      measurements: parseMeasurementEvidence(value.output.measurements),
+      topology: parseTopologyEvidence(value.output.topology),
+    }),
+    cache: Object.freeze({
+      mode: expected.mode,
+      events: Object.freeze([...expected.events]),
+      key: value.cache.key,
+      nativeBoxCalls: expected.nativeBoxCalls,
+      artifactEncodeObserved: expected.artifactEncodeObserved,
+      artifactDecodeObserved: expected.artifactDecodeObserved,
+      outcome: expected.outcome,
+      record: parseCacheRecordEvidence(value.cache.record),
+    }),
+    runtime: parseRuntimeEvidence(value.runtime),
+    capabilities: parseCapabilityEvidence(value.capabilities),
+    advertisement: "unadvertised",
+    shapeArtifactsAbsent: true,
+    privateCandidateOnly: true,
+    trustedStoreBoundary: "trusted-parent-mediated-record",
+    recordIntegrityAuthenticated: false,
+    certifiesCompatibility: false,
+    certifiesOperationalCancellation: false,
+    cleanupCompletedBeforeResponse: true,
+  });
+}
+
 function parseFailureError(
   value: unknown,
 ): OcctArtifactProcessFailure["error"] {
@@ -893,6 +1266,8 @@ export function parseOcctArtifactProcessResult(
     (value.operation !== "produce" &&
       value.operation !== "consume" &&
       value.operation !== "evaluate" &&
+      value.operation !== "cache-produce" &&
+      value.operation !== "cache-consume" &&
       value.operation !== "stall-during-evaluate" &&
       value.operation !== "fail-cleanup-during-evaluate" &&
       value.operation !== "trap") ||
@@ -911,14 +1286,19 @@ export function parseOcctArtifactProcessResult(
       ]) ||
       (value.operation !== "produce" &&
         value.operation !== "consume" &&
-        value.operation !== "evaluate")
+        value.operation !== "evaluate" &&
+        value.operation !== "cache-produce" &&
+        value.operation !== "cache-consume")
     ) {
       throw new TypeError("OCCT artifact process success is malformed");
     }
     const evidence =
       value.operation === "evaluate"
         ? parseEvaluatorEvidence(value.evidence)
-        : parseEvidence(value.evidence);
+        : value.operation === "cache-produce" ||
+            value.operation === "cache-consume"
+          ? parseEvaluatorCacheEvidence(value.evidence)
+          : parseEvidence(value.evidence);
     if (evidence.operation !== value.operation) {
       throw new TypeError(
         "OCCT artifact process success operation is inconsistent",
@@ -930,7 +1310,10 @@ export function parseOcctArtifactProcessResult(
       operation: value.operation,
       ok: true,
       evidence,
-    } as OcctArtifactProcessSuccess | OcctEvaluatorProcessSuccess);
+    } as
+      | OcctArtifactProcessSuccess
+      | OcctEvaluatorProcessSuccess
+      | OcctEvaluatorCacheProcessSuccess);
   }
   if (
     !exactKeys(value, [

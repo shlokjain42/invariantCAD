@@ -51,6 +51,8 @@ export const GEOMETRY_KERNEL_PROTOCOL_VERSION = 1 as const;
 export const COMPOSITE_SWEEP_REFINEMENT_PROTOCOL_VERSION = 1 as const;
 export const EXACT_INDEXED_TOPOLOGY_EVOLUTION_PROTOCOL_VERSION = 1 as const;
 export const KERNEL_SHAPE_ARTIFACT_PROTOCOL_VERSION = 1 as const;
+export const KERNEL_SHAPE_ARTIFACT_MAX_COMPATIBILITY_FINGERPRINT_BYTES =
+  2_048 as const;
 
 export type Awaitable<T> = T | PromiseLike<T>;
 

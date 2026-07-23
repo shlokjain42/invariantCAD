@@ -213,9 +213,34 @@ verified local bundle is not a supported public download.
 
 ## In progress — production shape artifacts and transparent caching
 
-This is the current implementation frontier. The public protocol exists, but
-**no shipped backend advertises `shapeArtifacts` and the evaluator does not read
-or write cached shapes today**.
+This is the current implementation frontier. The public protocol exists and a
+repository-private evaluator experiment exercises one bounded slice, but **no
+shipped backend advertises `shapeArtifacts`, no public evaluator option enables
+shape reuse, and ordinary package consumers cannot bind the experiment**.
+
+- A package-private, explicit-`trusted` binding now connects the OCCT candidate
+  to the cache session for requested solid outputs whose referenced feature is
+  directly a `box`. It snapshots the document and effective evaluation options,
+  validates capability and dimensions before touching the store, creates a
+  fresh session per evaluation, rejects overlap/disposal while active, and
+  preserves ordinary status, measurement, topology, empty-result, ownership,
+  and cleanup behavior on cold and warm paths. Misses model/encode/write; hits
+  decode a fresh owner. Corruption in read-write mode is deleted and
+  recomputed, while read-only poison, failed eviction, store/codec/write
+  failures, and cancellation fail strictly. Oversized key metadata bypasses
+  this private optimization and models normally.
+- This binding is deliberately box-only. Dependent transforms and every other
+  feature remain uncached because skipping a subtree without a versioned
+  diagnostic/topology-policy transcript could make warm evaluation observably
+  different. It does not alter `CreateEvaluatorOptions`, `EvaluationOptions`,
+  `GeometryKernel`, root exports, or kernel capability advertising.
+- Cache keys now reject non-canonical UTF-8 and bound node IDs, identities,
+  solver/codec fingerprints, and aggregate canonical key material before
+  hashing. Record construction snapshots non-shared bytes before its first
+  await, and the package-private atomic encode/write path supplies the encoder
+  the exact race-free remaining budget. Record SHA-256 detects corruption or
+  misrouting, not a malicious trusted store that substitutes another valid
+  artifact and recomputes its digest.
 
 - The repository-private OCCT candidate format v3 retains binary BREP and the
   bounded canonical topology/native-orientation/lineage/history/volume sidecar
@@ -287,13 +312,16 @@ or write cached shapes today**.
   immutability and transfer detachment, accepts only its closed started/result
   protocol, and returns scalar evidence only after shape/kernel cleanup. The
   same production bundle also runs a real `Evaluator.evaluate(...)` over a
-  stock-OCCT box. Deadline and post-kernel-start abort cases complete the native
-  box first and then stall without yielding inside its wrapper; the host
-  requests termination and a fresh worker reproduces the successful evaluator's
-  detached scalar evidence exactly. Browser `Worker.terminate()` is not
-  awaitable, so this proves termination requests and fresh-worker recovery
-  rather than observed worker exit. Live native handles never cross the realm
-  boundary.
+  stock-OCCT box. Its normal case uses the private trusted-store binding: cold
+  evaluation records `miss,write` and one native box call, while warm evaluation
+  records `hit`, exact detached evidence parity, and zero additional box calls.
+  Public artifact support remains absent. Deadline and post-kernel-start abort
+  cases complete the native box first and then stall without yielding inside an
+  unbound wrapper; the host requests termination and a fresh worker reproduces
+  the successful evaluator's detached scalar evidence exactly. Browser
+  `Worker.terminate()` is not awaitable, so this proves termination requests and
+  fresh-worker recovery rather than observed worker exit. Live native handles
+  never cross the realm boundary.
 - `pnpm test:occt-artifact-process` now runs the owned ABI 0.9 candidate as
   one-shot Node children and is included in `test:occt-facade-bundle`.
   Fresh producer A and consumer B agree on deterministic artifact, capability,
@@ -318,6 +346,20 @@ or write cached shapes today**.
   covers injected-trap discard and fresh recovery. Its closed evidence
   explicitly records `shapeArtifacts` as absent and
   `certifiesCompatibility: false`.
+- Process protocol v3 now adds parent-mediated evaluator-cache record transfer
+  for a direct-output `2 × 3 × 5` box. Two independent fresh verified producers
+  must emit byte-identical records and evidence after `miss,write`, one native
+  box, and observed encode. A fresh compatible read-only consumer must record
+  `hit`, observe decode, perform zero native box calls, and reproduce complete
+  measurements/topology; another solver fingerprint must derive another key,
+  miss, and model once without invoking either codec direction. The binary
+  transfer has an 8-byte versioned magic, a little-endian 32-bit header length,
+  a 32 KiB closed canonical-JSON header ceiling, exact payload/EOF, fatal UTF-8,
+  record/key/integrity validation, SHA-256, and request-specific byte bounds.
+  Tampered payloads, forged key/metadata, shared or hostile views, post-start
+  abort, and injected failure are followed by fresh-process recovery. Evidence
+  fixes the trust boundary as `trusted-parent-mediated-record`, sets record
+  authentication false, and retains both certification non-claims.
 - Public Node and browser attested loaders now close exact owned-runtime-pair
   identity under an independent canonical release-manifest pin. Executable
   authority stays private to the evaluated InvariantCAD internal module instance
@@ -350,14 +392,17 @@ or write cached shapes today**.
   added.
 - Production work therefore still requires a public operational isolation
   boundary where hard cancellation is promised and a reviewed cross-platform
-  owned-runtime golden matrix. Evaluator/cache integration remains separate;
-  cross-edit topology and persistent assembly identity are separate protocols,
-  not claims made by v3. Build/publisher provenance remains an explicit
-  non-claim rather than a cache-compatibility identity.
+  owned-runtime golden matrix. The repository-private box integration must
+  expand into a public, diagnostic-preserving evaluator contract; cross-edit
+  topology and persistent assembly identity are separate protocols, not claims
+  made by v3. Build/publisher provenance remains an explicit non-claim rather
+  than a cache-compatibility identity.
 - Only after that matrix passes will OCCT advertise the capability. Evaluator
-  integration must then cover per-solid cache read/decode and encode/write,
-  fresh ownership, corruption, cancellation, cleanup, eviction, concurrent
-  sessions, configuration/solver/kernel compatibility, and conformance gates.
+  integration must then expand beyond direct boxes to dependency-bearing solid
+  families while preserving every diagnostic and topology policy, and retain
+  the current read/decode, encode/write, fresh-ownership, corruption,
+  cancellation, cleanup, eviction, concurrency, configuration/solver/kernel
+  compatibility, and conformance guarantees.
 - Backend-owned codecs for other runtimes remain deferred until they can
   round-trip every evaluator-observable semantic. In the lockfile-tested
   Manifold 3.5.1 runtime, reconstructing a translated `1 × 2 × 3` box from the

@@ -1,11 +1,16 @@
 import { getOcctShapeArtifactCodecCandidate } from "../../src/internal/occt-artifact-candidate.js";
+import { bindOcctEvaluatorArtifactCacheCandidate } from "../../src/internal/evaluator-artifact-cache-candidate.js";
 import {
+  MemoryArtifactCacheStore,
   createEvaluator,
+  createReferenceSketchSolver,
   design,
   EvaluatedSolid,
   mm,
+  type ArtifactCacheEvent,
   type EvaluatedDesign,
   type Evaluator,
+  type SketchSolverBackend,
   vec3,
 } from "../../src/index.js";
 import type {
@@ -37,6 +42,16 @@ export interface EvaluatorWorkerEvidence {
   readonly vertices: number;
   readonly outputCount: number;
   readonly diagnosticCount: number;
+  readonly cacheColdNativeBoxCalls: number;
+  readonly cacheWarmNativeBoxCalls: number;
+  readonly cacheEntries: number;
+  readonly cacheColdEvents: string;
+  readonly cacheWarmEvents: string;
+  readonly cacheMeasurementsMatch: true;
+  readonly shapeArtifactsAbsent: true;
+  readonly trustedStoreOnly: true;
+  readonly certifiesCompatibility: false;
+  readonly certifiesOperationalCancellation: false;
   readonly cleanupCompletedBeforeResponse: true;
 }
 
@@ -208,47 +223,172 @@ function stallOnBox(delegate: GeometryKernel): GeometryKernel {
   });
 }
 
+function artifactCompatibleSolver(): SketchSolverBackend {
+  const delegate = createReferenceSketchSolver();
+  return Object.freeze({
+    id: delegate.id,
+    capabilities: delegate.capabilities,
+    artifactCompatibilityFingerprint:
+      "invariantcad.reference-sketch-solver.browser-test@1",
+    solve: delegate.solve.bind(delegate),
+    dispose: delegate.dispose.bind(delegate),
+  });
+}
+
+function countBoxOperations(
+  delegate: GeometryKernel,
+  observed: { boxCalls: number },
+): GeometryKernel {
+  return new Proxy(delegate, {
+    get(target, property) {
+      if (property === "box") {
+        return (
+          ...arguments_: Parameters<
+            NonNullable<GeometryKernel["box"]>
+          >
+        ): KernelShape => {
+          const box = target.box;
+          if (box === undefined) {
+            throw new TypeError("Stock OCCT box primitive is unavailable");
+          }
+          observed.boxCalls += 1;
+          return Reflect.apply(box, target, arguments_) as KernelShape;
+        };
+      }
+      const value: unknown = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
+
+function evaluatorEvidence(
+  evaluated: EvaluatedDesign,
+): Omit<
+  EvaluatorWorkerEvidence,
+  | "cacheColdNativeBoxCalls"
+  | "cacheWarmNativeBoxCalls"
+  | "cacheEntries"
+  | "cacheColdEvents"
+  | "cacheWarmEvents"
+  | "cacheMeasurementsMatch"
+  | "shapeArtifactsAbsent"
+  | "trustedStoreOnly"
+  | "certifiesCompatibility"
+  | "certifiesOperationalCancellation"
+  | "cleanupCompletedBeforeResponse"
+> {
+  const output = evaluated.output(EVALUATOR_OUTPUT);
+  if (!(output instanceof EvaluatedSolid)) {
+    throw new TypeError("Expected the isolated evaluator output to be a solid");
+  }
+  const topology = output.topology();
+  if (!topology.ok) {
+    throw new Error(
+      topology.diagnostics
+        .map((item) => `${item.code}: ${item.message}`)
+        .join("\n"),
+    );
+  }
+  return {
+    volume: output.measure().volume,
+    faces: topology.value.faces.length,
+    edges: topology.value.edges.length,
+    vertices: topology.value.vertices.length,
+    outputCount: evaluated.outputNames.length,
+    diagnosticCount: evaluated.diagnostics.length,
+  };
+}
+
 async function evaluateDocument(
   stall: boolean,
 ): Promise<EvaluatorWorkerEvidence> {
   const delegate = await createOcctKernel();
   let evaluator: Evaluator | undefined;
   let evaluated: EvaluatedDesign | undefined;
-  let evidence:
-    | Omit<EvaluatorWorkerEvidence, "cleanupCompletedBeforeResponse">
-    | undefined;
+  let evidence: Omit<
+    EvaluatorWorkerEvidence,
+    "cleanupCompletedBeforeResponse"
+  > | undefined;
   try {
+    if (stall) {
+      evaluator = await createEvaluator({ kernel: stallOnBox(delegate) });
+      const result = await evaluator.evaluate(evaluatorDocument());
+      if (result.ok) result.value.dispose();
+      throw new Error("Stalled evaluator unexpectedly returned");
+    }
+    const observed = { boxCalls: 0 };
+    const kernel = countBoxOperations(delegate, observed);
+    const store = new MemoryArtifactCacheStore();
+    const events: ArtifactCacheEvent[] = [];
     evaluator = await createEvaluator({
-      kernel: stall ? stallOnBox(delegate) : delegate,
+      kernel,
+      sketchSolver: artifactCompatibleSolver(),
     });
-    const result = await evaluator.evaluate(evaluatorDocument());
-    if (!result.ok) {
+    if (
+      kernel.capabilities.shapeArtifacts !== undefined ||
+      kernel.encodeShapeArtifact !== undefined ||
+      kernel.decodeShapeArtifact !== undefined
+    ) {
+      throw new Error("Private evaluator caching must remain unadvertised");
+    }
+    const bound = bindOcctEvaluatorArtifactCacheCandidate(evaluator, {
+      trust: "trusted",
+      cache: {
+        store,
+        onEvent: (event) => {
+          events.push(event);
+        },
+      },
+    });
+    if (!bound.ok) {
       throw new Error(
-        result.diagnostics
+        bound.diagnostics
           .map((item) => `${item.code}: ${item.message}`)
           .join("\n"),
       );
     }
-    evaluated = result.value;
-    const output = evaluated.output(EVALUATOR_OUTPUT);
-    if (!(output instanceof EvaluatedSolid)) {
-      throw new TypeError("Expected the isolated evaluator output to be a solid");
-    }
-    const topology = output.topology();
-    if (!topology.ok) {
+    const cold = await evaluator.evaluate(evaluatorDocument());
+    if (!cold.ok) {
       throw new Error(
-        topology.diagnostics
+        cold.diagnostics
           .map((item) => `${item.code}: ${item.message}`)
           .join("\n"),
       );
+    }
+    evaluated = cold.value;
+    const coldEvidence = evaluatorEvidence(evaluated);
+    const coldNativeBoxCalls = observed.boxCalls;
+    const coldEvents = events.map((event) => event.kind).join(",");
+    evaluated.dispose();
+    evaluated = undefined;
+    events.length = 0;
+
+    const warm = await evaluator.evaluate(evaluatorDocument());
+    if (!warm.ok) {
+      throw new Error(
+        warm.diagnostics
+          .map((item) => `${item.code}: ${item.message}`)
+          .join("\n"),
+      );
+    }
+    evaluated = warm.value;
+    const warmEvidence = evaluatorEvidence(evaluated);
+    const warmNativeBoxCalls = observed.boxCalls - coldNativeBoxCalls;
+    if (JSON.stringify(coldEvidence) !== JSON.stringify(warmEvidence)) {
+      throw new Error("Cold and warm evaluator-cache evidence diverged");
     }
     evidence = {
-      volume: output.measure().volume,
-      faces: topology.value.faces.length,
-      edges: topology.value.edges.length,
-      vertices: topology.value.vertices.length,
-      outputCount: evaluated.outputNames.length,
-      diagnosticCount: evaluated.diagnostics.length,
+      ...warmEvidence,
+      cacheColdNativeBoxCalls: coldNativeBoxCalls,
+      cacheWarmNativeBoxCalls: warmNativeBoxCalls,
+      cacheEntries: store.size,
+      cacheColdEvents: coldEvents,
+      cacheWarmEvents: events.map((event) => event.kind).join(","),
+      cacheMeasurementsMatch: true,
+      shapeArtifactsAbsent: true,
+      trustedStoreOnly: true,
+      certifiesCompatibility: false,
+      certifiesOperationalCancellation: false,
     };
   } finally {
     try {

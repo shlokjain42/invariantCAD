@@ -7,10 +7,12 @@ import {
 } from "../src/artifact-cache.js";
 import {
   ARTIFACT_CACHE_KEY_PREFIX,
+  ARTIFACT_CACHE_MAX_KEY_MATERIAL_BYTES,
   ARTIFACT_CACHE_PROTOCOL_VERSION,
   ArtifactCacheStoreLimitError,
   DEFAULT_ARTIFACT_CACHE_LIMITS,
   FEATURE_HASH_PREFIX,
+  KERNEL_SHAPE_ARTIFACT_MAX_COMPATIBILITY_FINGERPRINT_BYTES,
   KERNEL_SHAPE_ARTIFACT_PROTOCOL_VERSION,
   MemoryArtifactCacheStore,
   createArtifactCacheRecord,
@@ -31,6 +33,7 @@ import {
   type KernelShapeArtifactCapabilities,
   type KernelShapeArtifactCacheKey,
 } from "../src/index.js";
+import { getArtifactCacheSessionInternalAccess } from "../src/internal/artifact-cache-session-access.js";
 
 function featureHash(seed: string): FeatureHash {
   return `${FEATURE_HASH_PREFIX}${seed.repeat(64).slice(0, 64)}` as FeatureHash;
@@ -140,6 +143,53 @@ async function keyValue(
 }
 
 describe("kernel shape artifact cache protocol", () => {
+  it("keeps session construction, state, and queue internals runtime-private", () => {
+    const created = createArtifactCacheSession({
+      store: new MemoryArtifactCacheStore(),
+      mode: "read-only",
+    });
+    expect(created.ok, JSON.stringify(created.diagnostics)).toBe(true);
+    if (!created.ok) throw new Error("Expected an artifact-cache session");
+    const session = created.value;
+    const prototypeNames = Object.getOwnPropertyNames(
+      ArtifactCacheSession.prototype,
+    );
+    expect(prototypeNames).not.toEqual(
+      expect.arrayContaining([
+        "encodeAndWrite",
+        "encodeAndWriteExclusive",
+        "exclusive",
+        "readExclusive",
+        "writeExclusive",
+        "deleteExclusive",
+      ]),
+    );
+    expect(Reflect.get(session, "encodeAndWrite")).toBeUndefined();
+    expect(Reflect.get(session, "operationCount")).toBeUndefined();
+    expect(Object.isFrozen(session)).toBe(true);
+    expect(Reflect.set(session, "mode", "read-write")).toBe(false);
+    expect(Reflect.set(session, "operationCount", -1)).toBe(false);
+    expect(session.mode).toBe("read-only");
+    expect(session.usage).toEqual({
+      operations: 0,
+      readBytes: 0,
+      writeBytes: 0,
+    });
+
+    const RuntimeSession = ArtifactCacheSession as unknown as new (
+      ...arguments_: readonly unknown[]
+    ) => ArtifactCacheSession;
+    expect(
+      () =>
+        new RuntimeSession(
+          Symbol("forged-constructor-token"),
+          new MemoryArtifactCacheStore(),
+          "read-write",
+          DEFAULT_ARTIFACT_CACHE_LIMITS,
+        ),
+    ).toThrow(/must be created through/);
+  });
+
   it("requires a complete, strong kernel codec declaration", () => {
     expect(
       inspectKernelShapeArtifactSupport(
@@ -163,6 +213,31 @@ describe("kernel shape artifact cache protocol", () => {
       },
     });
     expect(Object.isFrozen(supported)).toBe(true);
+
+    expect(
+      inspectKernelShapeArtifactSupport(
+        fakeKernel({ fingerprint: "é".repeat(1_024) }),
+      ).status,
+    ).toBe("supported");
+    expect(
+      inspectKernelShapeArtifactSupport(
+        fakeKernel({ fingerprint: "é".repeat(1_025) }),
+      ),
+    ).toMatchObject({
+      status: "malformed",
+      reason: "invalid-capabilities",
+    });
+    expect(
+      inspectKernelShapeArtifactSupport(
+        fakeKernel({ fingerprint: `unpaired-\ud800` }),
+      ),
+    ).toMatchObject({
+      status: "malformed",
+      reason: "invalid-capabilities",
+    });
+    expect(
+      KERNEL_SHAPE_ARTIFACT_MAX_COMPATIBILITY_FINGERPRINT_BYTES,
+    ).toBe(2_048);
   });
 
   it("domain-separates stable keys and invalidates every compatibility axis", async () => {
@@ -195,6 +270,77 @@ describe("kernel shape artifact cache protocol", () => {
     );
     expect(Object.isFrozen(first.material)).toBe(true);
     expectTypeOf(first).toEqualTypeOf<KernelShapeArtifactCacheKey>();
+  });
+
+  it("bounds canonical key material before hashing untrusted metadata", async () => {
+    expect(ARTIFACT_CACHE_MAX_KEY_MATERIAL_BYTES).toBe(16 * 1024);
+    const boundaryKey = await createKernelShapeArtifactCacheKey(
+      {
+        node: "é".repeat(512),
+        outputKind: "solid",
+        hash: featureHash("a"),
+      },
+      fakeKernel(),
+      artifactCompatibleTestSolver(),
+    );
+    expect(boundaryKey.ok, JSON.stringify(boundaryKey.diagnostics)).toBe(true);
+    const oversizedNode = "é".repeat(513);
+    const rejectedKey = await createKernelShapeArtifactCacheKey(
+      {
+        node: oversizedNode,
+        outputKind: "solid",
+        hash: featureHash("a"),
+      },
+      fakeKernel(),
+      artifactCompatibleTestSolver(),
+    );
+    expect(rejectedKey.ok).toBe(false);
+    if (!rejectedKey.ok) {
+      expect(rejectedKey.diagnostics[0]?.code).toBe(
+        "ARTIFACT_CACHE_ENTRY_INVALID",
+      );
+    }
+    const escapedAggregate = await createKernelShapeArtifactCacheKey(
+      {
+        node: "\u0000".repeat(1_024),
+        outputKind: "solid",
+        hash: featureHash("a"),
+      },
+      fakeKernel({
+        id: "\u0000".repeat(256),
+        fingerprint: "\u0000".repeat(2_048),
+      }),
+      artifactCompatibleTestSolver("\u0000".repeat(2_048)),
+    );
+    expect(escapedAggregate.ok).toBe(false);
+    if (!escapedAggregate.ok) {
+      expect(escapedAggregate.diagnostics[0]).toMatchObject({
+        code: "ARTIFACT_CACHE_ENTRY_INVALID",
+        node: "\u0000".repeat(1_024),
+      });
+      expect(escapedAggregate.diagnostics[0]?.message).toContain(
+        `${ARTIFACT_CACHE_MAX_KEY_MATERIAL_BYTES}`,
+      );
+    }
+
+    const key = await keyValue();
+    const created = await createArtifactCacheRecord(
+      key,
+      new Uint8Array([1, 2, 3]),
+    );
+    if (!created.ok) throw new Error(JSON.stringify(created.diagnostics));
+    const oversizedMetadata = structuredClone(created.value);
+    (oversizedMetadata.metadata as { node: string }).node = oversizedNode;
+    const rejectedRecord = await validateArtifactCacheRecord(
+      key,
+      oversizedMetadata,
+    );
+    expect(rejectedRecord.ok).toBe(false);
+    if (!rejectedRecord.ok) {
+      expect(rejectedRecord.diagnostics[0]?.code).toBe(
+        "ARTIFACT_CACHE_ENTRY_INVALID",
+      );
+    }
   });
 
   it("takes one solid report entry and preserves its document node key", async () => {
@@ -238,10 +384,11 @@ describe("kernel shape artifact cache protocol", () => {
   it("round-trips integrity-checked detached records through the memory store", async () => {
     const key = await keyValue();
     const source = new Uint8Array([1, 2, 3, 4]);
-    const created = await createArtifactCacheRecord(key, source);
+    const pendingCreation = createArtifactCacheRecord(key, source);
+    source[0] = 99;
+    const created = await pendingCreation;
     expect(created.ok, JSON.stringify(created.diagnostics)).toBe(true);
     if (!created.ok) throw new Error("Expected an artifact record");
-    source[0] = 99;
     expect([...created.value.payload]).toEqual([1, 2, 3, 4]);
     expect(created.value.integrity.byteLength).toBe(4);
     expect(created.value.integrity.digest).toMatch(/^[0-9a-f]{64}$/);
@@ -299,6 +446,23 @@ describe("kernel shape artifact cache protocol", () => {
       future: true,
     });
     expect(unknownField.ok).toBe(false);
+    let oversizedFieldReads = 0;
+    const oversizedFieldSet: Record<string, unknown> = {};
+    for (let index = 0; index < 9; index += 1) {
+      Object.defineProperty(oversizedFieldSet, `field${index}`, {
+        enumerable: true,
+        get: () => {
+          oversizedFieldReads += 1;
+          return index;
+        },
+      });
+    }
+    const oversizedFieldResult = await validateArtifactCacheRecord(
+      key,
+      oversizedFieldSet,
+    );
+    expect(oversizedFieldResult.ok).toBe(false);
+    expect(oversizedFieldReads).toBe(0);
     const oversized = await validateArtifactCacheRecord(key, created.value, {
       maxEntryBytes: 2,
     });
@@ -380,6 +544,11 @@ describe("kernel shape artifact cache protocol", () => {
     });
     const detached = await createArtifactCacheRecord(key, hostileIterator);
     expect(detached.ok).toBe(true);
+
+    const shared = new Uint8Array(new SharedArrayBuffer(2));
+    expect(
+      (await createArtifactCacheRecord(key, shared)).ok,
+    ).toBe(false);
   });
 
   it("contains store failures and gives cancellation precedence", async () => {
@@ -572,6 +741,16 @@ describe("kernel shape artifact cache protocol", () => {
       writeSession.value.write(secondRecord.value),
     ]);
     expect(writes.map((item) => item.ok)).toEqual([true, false]);
+    if (writes[1]?.ok === false) {
+      expect(writes[1].diagnostics[0]).toMatchObject({
+        code: "ARTIFACT_CACHE_LIMIT_EXCEEDED",
+        details: {
+          resource: "maxTotalWriteBytes",
+          limit: 5,
+          actual: 6,
+        },
+      });
+    }
     expect(writeStore.size).toBe(1);
     expect(writeSession.value.usage).toEqual({
       operations: 2,
@@ -597,6 +776,16 @@ describe("kernel shape artifact cache protocol", () => {
       readSession.value.read(secondKey),
     ]);
     expect(reads.map((item) => item.ok)).toEqual([true, false]);
+    if (reads[1]?.ok === false) {
+      expect(reads[1].diagnostics[0]).toMatchObject({
+        code: "ARTIFACT_CACHE_LIMIT_EXCEEDED",
+        details: {
+          resource: "maxTotalReadBytes",
+          limit: 5,
+          actual: 6,
+        },
+      });
+    }
     expect(readSession.value.usage).toEqual({
       operations: 2,
       readBytes: 3,
@@ -613,6 +802,251 @@ describe("kernel shape artifact cache protocol", () => {
     expect(overOperationLimit.ok).toBe(false);
     expect(oneOperation.value.usage.operations).toBe(1);
     expectTypeOf(writeSession.value).toEqualTypeOf<ArtifactCacheSession>();
+  });
+
+  it("reports cumulative session limits for trusted store-side refusals", async () => {
+    const firstKey = await keyValue({ node: "first" });
+    const secondKey = await keyValue({ node: "second" });
+    const firstRecord = await createArtifactCacheRecord(
+      firstKey,
+      new Uint8Array([1, 2, 3]),
+    );
+    const secondRecord = await createArtifactCacheRecord(
+      secondKey,
+      new Uint8Array([4, 5]),
+    );
+    if (!firstRecord.ok || !secondRecord.ok) {
+      throw new Error("Expected records");
+    }
+
+    let readCalls = 0;
+    const readStore: ArtifactCacheStore = {
+      read: (_key, context) => {
+        readCalls += 1;
+        if (readCalls === 1) return firstRecord.value;
+        throw new ArtifactCacheStoreLimitError(context.maxBytes, 3);
+      },
+      write: () => {},
+      delete: () => {},
+    };
+    const readSession = createArtifactCacheSession({
+      store: readStore,
+      limits: { maxEntryBytes: 10, maxTotalReadBytes: 5 },
+    });
+    if (!readSession.ok) throw new Error("Expected read session");
+    expect((await readSession.value.read(firstKey)).ok).toBe(true);
+    const refusedRead = await readSession.value.read(secondKey);
+    expect(refusedRead.ok).toBe(false);
+    if (!refusedRead.ok) {
+      expect(refusedRead.diagnostics[0]).toMatchObject({
+        code: "ARTIFACT_CACHE_LIMIT_EXCEEDED",
+        details: {
+          resource: "maxTotalReadBytes",
+          limit: 5,
+          actual: 6,
+        },
+      });
+    }
+
+    let writeCalls = 0;
+    const writeStore: ArtifactCacheStore = {
+      read: () => undefined,
+      write: (_record, context) => {
+        writeCalls += 1;
+        if (writeCalls === 2) {
+          throw new ArtifactCacheStoreLimitError(context.maxBytes, 3);
+        }
+      },
+      delete: () => {},
+    };
+    const writeSession = createArtifactCacheSession({
+      store: writeStore,
+      limits: { maxEntryBytes: 10, maxTotalWriteBytes: 5 },
+    });
+    if (!writeSession.ok) throw new Error("Expected write session");
+    expect((await writeSession.value.write(firstRecord.value)).ok).toBe(true);
+    const refusedWrite = await writeSession.value.write(secondRecord.value);
+    expect(refusedWrite.ok).toBe(false);
+    if (!refusedWrite.ok) {
+      expect(refusedWrite.diagnostics[0]).toMatchObject({
+        code: "ARTIFACT_CACHE_LIMIT_EXCEEDED",
+        details: {
+          resource: "maxTotalWriteBytes",
+          limit: 5,
+          actual: 6,
+        },
+      });
+    }
+    expect(writeSession.value.usage.writeBytes).toBe(5);
+  });
+
+  it("atomically bounds encoding by the session's remaining write budget", async () => {
+    const firstKey = await keyValue({ node: "first" });
+    const secondKey = await keyValue({ node: "second" });
+    const events: ArtifactCacheEvent[] = [];
+    const store = new MemoryArtifactCacheStore();
+    const session = createArtifactCacheSession({
+      store,
+      limits: {
+        maxEntryBytes: 4,
+        maxTotalWriteBytes: 5,
+      },
+      onEvent: (event) => {
+        events.push(event);
+      },
+    });
+    if (!session.ok) throw new Error("Expected session");
+    const internal = getArtifactCacheSessionInternalAccess(session.value);
+    expect(internal).toBeDefined();
+    if (internal === undefined) throw new Error("Expected internal access");
+
+    let releaseFirst = (): void => {};
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let markFirstEncoderStarted = (): void => {};
+    const firstEncoderStarted = new Promise<void>((resolve) => {
+      markFirstEncoderStarted = resolve;
+    });
+    const ceilings: number[] = [];
+    const first = internal.encodeAndWrite(firstKey, {}, async (maximum) => {
+      ceilings.push(maximum);
+      markFirstEncoderStarted();
+      await firstGate;
+      return new Uint8Array([1, 2, 3]);
+    });
+    const second = internal.encodeAndWrite(secondKey, {}, (maximum) => {
+      ceilings.push(maximum);
+      return new Uint8Array([4, 5]);
+    });
+    await firstEncoderStarted;
+    expect(ceilings).toEqual([4]);
+    releaseFirst();
+
+    expect(await first).toEqual({
+      ok: true,
+      value: "written",
+      diagnostics: [],
+    });
+    expect(await second).toEqual({
+      ok: true,
+      value: "written",
+      diagnostics: [],
+    });
+    expect(ceilings).toEqual([4, 2]);
+    expect(session.value.usage).toEqual({
+      operations: 2,
+      readBytes: 0,
+      writeBytes: 5,
+    });
+    expect(store.size).toBe(2);
+    expect(events.map((event) => event.kind)).toEqual(["write", "write"]);
+
+    let overEncoderCalled = false;
+    const over = await internal.encodeAndWrite(firstKey, {}, () => {
+      overEncoderCalled = true;
+      return new Uint8Array([9]);
+    });
+    expect(overEncoderCalled).toBe(false);
+    expect(over.ok).toBe(false);
+    if (!over.ok) {
+      expect(over.diagnostics[0]).toMatchObject({
+        code: "ARTIFACT_CACHE_LIMIT_EXCEEDED",
+        details: {
+          resource: "maxTotalWriteBytes",
+          limit: 5,
+          actual: 6,
+        },
+      });
+    }
+    expect(events.at(-1)).toMatchObject({
+      kind: "limit",
+      operation: "encode",
+      node: "first",
+    });
+
+    const zeroEntry = createArtifactCacheSession({
+      store: new MemoryArtifactCacheStore(),
+      limits: { maxEntryBytes: 0, maxTotalWriteBytes: 5 },
+    });
+    if (!zeroEntry.ok) throw new Error("Expected zero-entry session");
+    const zeroEntryInternal = getArtifactCacheSessionInternalAccess(
+      zeroEntry.value,
+    );
+    if (zeroEntryInternal === undefined) {
+      throw new Error("Expected zero-entry internal access");
+    }
+    let zeroEntryEncoderCalled = false;
+    const zeroEntryResult = await zeroEntryInternal.encodeAndWrite(
+      firstKey,
+      {},
+      () => {
+        zeroEntryEncoderCalled = true;
+        return new Uint8Array([1]);
+      },
+    );
+    expect(zeroEntryEncoderCalled).toBe(false);
+    expect(zeroEntryResult.ok).toBe(false);
+    if (!zeroEntryResult.ok) {
+      expect(zeroEntryResult.diagnostics[0]).toMatchObject({
+        code: "ARTIFACT_CACHE_LIMIT_EXCEEDED",
+        details: {
+          resource: "maxEntryBytes",
+          limit: 0,
+          actual: 1,
+        },
+      });
+    }
+
+    const codecLimited = createArtifactCacheSession({
+      store: new MemoryArtifactCacheStore(),
+      limits: { maxEntryBytes: 2, maxTotalWriteBytes: 5 },
+    });
+    if (!codecLimited.ok) throw new Error("Expected codec-limited session");
+    const codecLimitedInternal = getArtifactCacheSessionInternalAccess(
+      codecLimited.value,
+    );
+    if (codecLimitedInternal === undefined) {
+      throw new Error("Expected codec-limited internal access");
+    }
+    const codecLimitedResult = await codecLimitedInternal.encodeAndWrite(
+      firstKey,
+      {},
+      (maximum, limitExceeded) => {
+        expect(maximum).toBe(2);
+        return limitExceeded(3);
+      },
+    );
+    expect(codecLimitedResult.ok).toBe(false);
+    if (!codecLimitedResult.ok) {
+      expect(codecLimitedResult.diagnostics[0]).toMatchObject({
+        code: "ARTIFACT_CACHE_LIMIT_EXCEEDED",
+        details: {
+          resource: "maxEntryBytes",
+          limit: 2,
+          actual: 3,
+        },
+      });
+    }
+
+    const readOnly = createArtifactCacheSession({
+      store: new MemoryArtifactCacheStore(),
+      mode: "read-only",
+    });
+    if (!readOnly.ok) throw new Error("Expected read-only session");
+    const readOnlyInternal = getArtifactCacheSessionInternalAccess(
+      readOnly.value,
+    );
+    if (readOnlyInternal === undefined) throw new Error("Expected internal access");
+    let encoded = false;
+    expect(
+      await readOnlyInternal.encodeAndWrite(firstKey, {}, () => {
+        encoded = true;
+        return new Uint8Array([1]);
+      }),
+    ).toEqual({ ok: true, value: "bypassed", diagnostics: [] });
+    expect(encoded).toBe(false);
+    expect(readOnly.value.usage.operations).toBe(0);
   });
 
   it("returns queued cancellation without letting later work overtake", async () => {
@@ -661,10 +1095,13 @@ describe("kernel shape artifact cache protocol", () => {
       }
     }
     expect(calls).toEqual(["read-start"]);
+    const third = session.value.delete(key);
+    await Promise.resolve();
+    expect(calls).toEqual(["read-start"]);
     releaseFirst();
     expect((await first).ok).toBe(true);
-    await Promise.resolve();
-    expect(calls).toEqual(["read-start", "read-end"]);
+    expect((await third).ok).toBe(true);
+    expect(calls).toEqual(["read-start", "read-end", "delete"]);
 
     let abortedReads = 0;
     let removedListeners = 0;
@@ -690,7 +1127,7 @@ describe("kernel shape artifact cache protocol", () => {
       );
     }
     expect(removedListeners).toBe(1);
-    expect(calls).toEqual(["read-start", "read-end"]);
+    expect(calls).toEqual(["read-start", "read-end", "delete"]);
   });
 
   it("honors session modes and isolates event-listener failures", async () => {

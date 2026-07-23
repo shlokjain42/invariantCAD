@@ -15,6 +15,11 @@ import {
   type Vec3,
 } from "./core/math.js";
 import {
+  createKernelShapeArtifactCacheKeyForCandidate,
+  type ArtifactCacheSession,
+  type KernelShapeArtifactCacheKey,
+} from "./artifact-cache.js";
+import {
   CadError,
   diagnostic,
   failure,
@@ -25,6 +30,10 @@ import {
   type Diagnostic,
 } from "./core/result.js";
 import { exportMesh, type MeshExportFormat } from "./exporters.js";
+import {
+  hashDesignFeatures,
+  type DesignFeatureHashEntry,
+} from "./feature-hashes.js";
 import {
   evaluateExpression,
   type ExpressionIR,
@@ -125,6 +134,12 @@ import {
   resolveEvaluationParameters,
   type EvaluationParameterOverride,
 } from "./internal/evaluation-parameters.js";
+import { getArtifactCacheSessionInternalAccess } from "./internal/artifact-cache-session-access.js";
+import {
+  getEvaluatorArtifactCacheCandidateBinding,
+  type EvaluatorArtifactCacheCandidateBinding,
+} from "./internal/evaluator-artifact-cache-candidate.js";
+import { parseDocumentValue } from "./serialization.js";
 
 export type ParameterOverride = EvaluationParameterOverride;
 export type ShapeExportFormat = MeshExportFormat | KernelExchangeFormat;
@@ -144,6 +159,52 @@ export interface CreateEvaluatorOptions {
   readonly kernel?: GeometryKernel;
   readonly manifold?: ManifoldKernelOptions;
   readonly sketchSolver?: SketchSolverBackend;
+}
+
+function snapshotPrivateEvaluationOptions(
+  value: EvaluationOptions,
+): CadResult<EvaluationOptions> {
+  try {
+    const configuration = value.configuration;
+    const rawParameters = value.parameters;
+    const rawOutputs = value.outputs;
+    const signal = value.signal;
+    const allowEmpty = value.allowEmpty;
+    const rawTopologyLimits = value.topologySignatureLimits;
+    const parameters = rawParameters === undefined
+      ? undefined
+      : Object.freeze(
+          Object.fromEntries(
+            Object.keys(rawParameters).map((key) => [key, rawParameters[key]!]),
+          ),
+        );
+    const outputs = rawOutputs === undefined
+      ? undefined
+      : Object.freeze(Array.from(rawOutputs));
+    const topologySignatureLimits = rawTopologyLimits === undefined
+      ? undefined
+      : Object.freeze({ ...rawTopologyLimits });
+    return success(
+      Object.freeze({
+        ...(configuration === undefined ? {} : { configuration }),
+        ...(parameters === undefined ? {} : { parameters }),
+        ...(outputs === undefined ? {} : { outputs }),
+        ...(signal === undefined ? {} : { signal }),
+        ...(allowEmpty === undefined ? {} : { allowEmpty }),
+        ...(topologySignatureLimits === undefined
+          ? {}
+          : { topologySignatureLimits }),
+      }),
+    );
+  } catch (error) {
+    return failure(
+      diagnostic(
+        "IR_INVALID",
+        safeErrorMessage(error, "Evaluation options could not be snapshotted"),
+        { severity: "error" },
+      ),
+    );
+  }
 }
 
 type SignatureCapabilityInspection =
@@ -1078,7 +1139,8 @@ export class EvaluatedDesign {
 export class Evaluator {
   readonly kernel: GeometryKernel;
   readonly sketchSolver: SketchSolverBackend;
-  private disposed = false;
+  #disposed = false;
+  #artifactCacheEvaluationActive = false;
 
   constructor(kernel: GeometryKernel, sketchSolver: SketchSolverBackend) {
     this.kernel = kernel;
@@ -1089,7 +1151,40 @@ export class Evaluator {
     document: DesignDocument,
     options: EvaluationOptions = {},
   ): Promise<CadResult<EvaluatedDesign>> {
-    if (this.disposed) throw new Error("This evaluator has been disposed");
+    if (this.#disposed) throw new Error("This evaluator has been disposed");
+    const artifactCache =
+      getEvaluatorArtifactCacheCandidateBinding(this);
+    if (artifactCache === undefined) {
+      return this.#evaluateOnce(document, options);
+    }
+    if (this.#artifactCacheEvaluationActive) {
+      throw new Error(
+        "Private artifact-cache evaluations cannot overlap on one evaluator",
+      );
+    }
+    this.#artifactCacheEvaluationActive = true;
+    try {
+      return await this.#evaluateOnce(document, options, artifactCache);
+    } finally {
+      this.#artifactCacheEvaluationActive = false;
+    }
+  }
+
+  async #evaluateOnce(
+    inputDocument: DesignDocument,
+    inputOptions: EvaluationOptions,
+    artifactCache?: EvaluatorArtifactCacheCandidateBinding,
+  ): Promise<CadResult<EvaluatedDesign>> {
+    let document = inputDocument;
+    let options = inputOptions;
+    if (artifactCache !== undefined) {
+      const parsed = parseDocumentValue(inputDocument);
+      if (!parsed.ok) return parsed;
+      const capturedOptions = snapshotPrivateEvaluationOptions(inputOptions);
+      if (!capturedOptions.ok) return capturedOptions;
+      document = parsed.value;
+      options = capturedOptions.value;
+    }
     if (
       (this.kernel.capabilities.protocolVersion as number) !==
       GEOMETRY_KERNEL_PROTOCOL_VERSION
@@ -1599,6 +1694,280 @@ export class Evaluator {
         );
       }
       return value;
+    };
+    const artifactSession: ArtifactCacheSession | undefined =
+      artifactCache?.createSession();
+    const artifactSessionAccess = artifactSession === undefined
+      ? undefined
+      : getArtifactCacheSessionInternalAccess(artifactSession);
+    const effectiveParameterOverrides = Object.freeze(
+      Object.fromEntries(parameterValues),
+    );
+    let featureHashReport:
+      | ReturnType<typeof hashDesignFeatures>
+      | undefined;
+    let featureHashEntries:
+      | ReadonlyMap<string, DesignFeatureHashEntry>
+      | undefined;
+    const throwCacheFailure = (
+      result: CadResult<unknown>,
+      fallback: string,
+      id: NodeId,
+    ): never => {
+      if (result.ok) {
+        throw new EvaluationFailure(
+          diagnostic("ARTIFACT_CACHE_OPERATION_FAILED", fallback, {
+            severity: "error",
+            node: id,
+          }),
+        );
+      }
+      const items = result.diagnostics.length > 0
+        ? result.diagnostics
+        : [
+            diagnostic("ARTIFACT_CACHE_OPERATION_FAILED", fallback, {
+              severity: "error",
+              node: id,
+            }),
+          ];
+      for (const item of items) {
+        if (!diagnostics.includes(item)) diagnostics.push(item);
+      }
+      throw new EvaluationFailure(items[0]!);
+    };
+    const featureEntry = async (
+      id: NodeId,
+    ): Promise<DesignFeatureHashEntry> => {
+      featureHashReport ??= hashDesignFeatures(document, {
+        ...(options.configuration === undefined
+          ? {}
+          : { configuration: options.configuration }),
+        parameters: effectiveParameterOverrides,
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
+      });
+      const report = await featureHashReport;
+      ensureLive();
+      if (!report.ok) {
+        return throwCacheFailure(
+          report,
+          "Feature hashing for artifact caching failed",
+          id,
+        );
+      }
+      featureHashEntries ??= new Map(
+        report.value.nodes.map((candidate) => [candidate.node, candidate]),
+      );
+      const entry = featureHashEntries.get(id);
+      if (entry === undefined || entry.kind !== "box") {
+        throw new EvaluationFailure(
+          diagnostic(
+            "ARTIFACT_CACHE_ENTRY_INVALID",
+            `Feature-hash report entry '${id}' is not an eligible box`,
+            { severity: "error", node: id },
+          ),
+        );
+      }
+      return entry;
+    };
+    const registerAcquiredShape = (
+      shape: KernelShape,
+      id: NodeId,
+    ): void => {
+      if (createdShapes.has(shape)) {
+        throw new EvaluationFailure(
+          diagnostic(
+            "ARTIFACT_CACHE_ENTRY_INVALID",
+            `Shape-artifact decode for '${id}' did not return a fresh shape`,
+            {
+              severity: "error",
+              node: id,
+              details: { kernel: this.kernel.id },
+            },
+          ),
+        );
+      }
+      createdShapes.add(shape);
+    };
+    const cacheKeyForBox = async (
+      id: NodeId,
+    ): Promise<KernelShapeArtifactCacheKey | undefined> => {
+      if (artifactCache === undefined) {
+        throw new Error("Private evaluator artifact cache is unavailable");
+      }
+      const key = await createKernelShapeArtifactCacheKeyForCandidate(
+        await featureEntry(id),
+        this.kernel.id,
+        artifactCache.artifact,
+        this.sketchSolver,
+      );
+      ensureLive();
+      if (!key.ok) {
+        if (key.diagnostics[0]?.code === "ARTIFACT_CACHE_ENTRY_INVALID") {
+          return undefined;
+        }
+        return throwCacheFailure(key, "Artifact cache key creation failed", id);
+      }
+      return key.value;
+    };
+    const decodeFailureResult = (
+      id: NodeId,
+      key: KernelShapeArtifactCacheKey,
+      error: unknown,
+    ): CadResult<never> =>
+      failure(
+        diagnostic(
+          "ARTIFACT_CACHE_ENTRY_INVALID",
+          safeErrorMessage(
+            error,
+            `Cached shape artifact for '${id}' could not be decoded`,
+          ),
+          {
+            severity: "error",
+            node: id,
+            details: { operation: "decode", key: key.key },
+          },
+        ),
+      );
+    const prepareDirectCachedBox = async (
+      id: NodeId,
+      node: Extract<NodeIR, { readonly kind: "box" }>,
+    ): Promise<void> => {
+      if (artifactCache === undefined || cache.has(id)) return;
+      // Match evaluateNode's cancellation precedence before capability,
+      // expression, or cache validation.
+      ensureLive();
+      if (artifactSession === undefined || artifactSessionAccess === undefined) {
+        throw new EvaluationFailure(
+          diagnostic(
+            "ARTIFACT_CACHE_OPERATION_FAILED",
+            "Private evaluator-cache session coordination is unavailable",
+            { severity: "error", node: id },
+          ),
+        );
+      }
+
+      // Preserve the ordinary evaluator order before touching the cache.
+      requireKernelCapability("primitive", "box", id);
+      const size = node.size.map((value, index) =>
+        positive(expression(value), id, `size/${index}`),
+      ) as unknown as Vec3;
+      const context = featureContext(id);
+      const key = await cacheKeyForBox(id);
+      if (key === undefined) {
+        ensureLive();
+        const uncached = this.kernel.box!(size, node.center, context);
+        registerAcquiredShape(uncached, id);
+        ensureLive();
+        cache.set(id, ownShape(uncached, id));
+        return;
+      }
+      const read = await artifactSession.read(key, {
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
+      });
+      ensureLive();
+
+      let shouldWrite = false;
+      let shape: KernelShape | undefined;
+      if (!read.ok) {
+        if (
+          read.diagnostics[0]?.code !== "ARTIFACT_CACHE_ENTRY_INVALID" ||
+          artifactSession.mode !== "read-write"
+        ) {
+          throwCacheFailure(read, "Artifact cache read failed", id);
+        }
+        const deleted = await artifactSession.delete(key, {
+          ...(options.signal === undefined ? {} : { signal: options.signal }),
+        });
+        ensureLive();
+        if (!deleted.ok) {
+          throwCacheFailure(deleted, "Invalid artifact eviction failed", id);
+        }
+        shouldWrite = true;
+      } else if (read.value.status === "hit") {
+        try {
+          shape = await artifactCache.codec.decodeShapeArtifact(
+            read.value.record.payload,
+            {
+              feature: id,
+              maxArtifactBytes: read.value.record.payload.byteLength,
+              ...(options.signal === undefined
+                ? {}
+                : { signal: options.signal }),
+            },
+          );
+          registerAcquiredShape(shape, id);
+          ensureLive();
+        } catch (error) {
+          ensureLive();
+          if (error instanceof DOMException && error.name === "AbortError") {
+            throw new EvaluationFailure(
+              diagnostic("EVALUATION_ABORTED", "CAD evaluation was aborted", {
+                severity: "error",
+                node: id,
+              }),
+            );
+          }
+          const invalid = decodeFailureResult(id, key, error);
+          artifactSessionAccess.reportCodecFailure(
+            "decode",
+            key,
+            invalid,
+          );
+          shape = undefined;
+          if (artifactSession.mode !== "read-write") {
+            throwCacheFailure(invalid, "Shape-artifact decode failed", id);
+          }
+          const deleted = await artifactSession.delete(key, {
+            ...(options.signal === undefined ? {} : { signal: options.signal }),
+          });
+          ensureLive();
+          if (!deleted.ok) {
+            throwCacheFailure(deleted, "Invalid artifact eviction failed", id);
+          }
+          shouldWrite = true;
+        }
+      } else {
+        shouldWrite = artifactSession.mode !== "read-only";
+      }
+
+      if (shape === undefined) {
+        ensureLive();
+        shape = this.kernel.box!(size, node.center, context);
+        registerAcquiredShape(shape, id);
+        ensureLive();
+      }
+      const value = ownShape(shape, id);
+      cache.set(id, value);
+      if (shouldWrite) {
+        const written = await artifactSessionAccess.encodeAndWrite(
+          key,
+          {
+            ...(options.signal === undefined ? {} : { signal: options.signal }),
+          },
+          async (maxArtifactBytes, limitExceeded) => {
+            try {
+              return await artifactCache.codec.encodeShapeArtifact(shape, {
+                feature: id,
+                maxArtifactBytes,
+                ...(options.signal === undefined
+                  ? {}
+                  : { signal: options.signal }),
+              });
+            } catch (error) {
+              const actual = artifactCache.limitRefusalActual(
+                error,
+                maxArtifactBytes,
+              );
+              if (actual !== undefined) limitExceeded(actual);
+              throw error;
+            }
+          },
+        );
+        ensureLive();
+        if (!written.ok) {
+          throwCacheFailure(written, "Shape-artifact cache write failed", id);
+        }
+      }
     };
     const resolvedDraftNumber = (
       value: ExpressionIR,
@@ -2765,6 +3134,12 @@ export class Evaluator {
             }),
           );
         }
+        const directNode = Object.hasOwn(document.nodes, reference.node)
+          ? document.nodes[reference.node]
+          : undefined;
+        if (artifactCache !== undefined && directNode?.kind === "box") {
+          await prepareDirectCachedBox(reference.node, directNode);
+        }
         rawOutputs.set(name, evaluateNode(reference.node));
       }
       const owner = new EvaluationOwner(
@@ -2817,10 +3192,15 @@ export class Evaluator {
   }
 
   dispose(): void {
-    if (this.disposed) return;
+    if (this.#disposed) return;
+    if (this.#artifactCacheEvaluationActive) {
+      throw new Error(
+        "Cannot dispose an evaluator during a private artifact-cache evaluation",
+      );
+    }
     this.sketchSolver.dispose();
     this.kernel.dispose();
-    this.disposed = true;
+    this.#disposed = true;
   }
 }
 

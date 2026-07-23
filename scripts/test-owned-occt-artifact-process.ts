@@ -24,6 +24,11 @@ const normalTimeoutMs = 30_000;
 const stallTimeoutMs = 1_000;
 const feature = "owned-artifact-process.asymmetric-box";
 const evaluatorFeature = "result";
+const evaluatorCacheFeature = "cache-box";
+const evaluatorCacheSolverFingerprint =
+  "invariantcad.reference-sketch-solver.process-cache@1";
+const incompatibleEvaluatorCacheSolverFingerprint =
+  "invariantcad.reference-sketch-solver.process-cache@2";
 
 function runtimeDirectory(arguments_: readonly string[]): string {
   const values = arguments_[0] === "--" ? arguments_.slice(1) : arguments_;
@@ -51,6 +56,39 @@ function sameBytes(first: Uint8Array, second: Uint8Array): boolean {
 
 function sha256(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+function forgeCacheRecordKey(record: Uint8Array): Uint8Array {
+  const output = record.slice();
+  assert.ok(output.byteLength > 12);
+  const view = new DataView(
+    output.buffer,
+    output.byteOffset,
+    output.byteLength,
+  );
+  const headerByteLength = view.getUint32(8, true);
+  assert.ok(headerByteLength > 0 && 12 + headerByteLength < output.byteLength);
+  const header = JSON.parse(
+    new TextDecoder("utf-8", { fatal: true }).decode(
+      output.subarray(12, 12 + headerByteLength),
+    ),
+  ) as {
+    protocolVersion: number;
+    key: string;
+    metadata: unknown;
+    integrity: unknown;
+  };
+  assert.match(
+    header.key,
+    /^invariantcad:kernel-shape:v1:sha256:[0-9a-f]{64}$/u,
+  );
+  const final = header.key.at(-1);
+  assert.notEqual(final, undefined);
+  header.key = `${header.key.slice(0, -1)}${final === "0" ? "1" : "0"}`;
+  const encoded = new TextEncoder().encode(JSON.stringify(header));
+  assert.equal(encoded.byteLength, headerByteLength);
+  output.set(encoded, 12);
+  return output;
 }
 
 async function mutateFirstByte(path: string): Promise<void> {
@@ -101,6 +139,21 @@ await assert.rejects(
 
 await assert.rejects(
   runOcctArtifactProcess({
+    operation: "cache-produce",
+    runtimeDirectory: resolve(projectRoot, ".definitely-missing-runtime"),
+    feature: evaluatorCacheFeature,
+    maxArtifactBytes: maximumArtifactBytes,
+    timeoutMs: normalTimeoutMs,
+    solverFingerprint: evaluatorCacheSolverFingerprint,
+    signal: preAborted.signal,
+  }),
+  (error: unknown) =>
+    error instanceof DOMException && error.name === "AbortError",
+  "A pre-aborted evaluator-cache request must fail before spawning or inspecting a runtime",
+);
+
+await assert.rejects(
+  runOcctArtifactProcess({
     operation: "produce",
     runtimeDirectory: resolve(projectRoot, ".definitely-missing-runtime"),
     feature,
@@ -127,6 +180,33 @@ await assert.rejects(
   }),
   /signal must be an AbortSignal/,
   "A non-branded signal wrapper must fail before spawning a child",
+);
+
+const sharedInput = new Uint8Array(new SharedArrayBuffer(16));
+await assert.rejects(
+  runOcctArtifactProcess({
+    operation: "consume",
+    runtimeDirectory: resolve(projectRoot, ".definitely-missing-runtime"),
+    feature,
+    maxArtifactBytes: maximumArtifactBytes,
+    timeoutMs: normalTimeoutMs,
+    artifact: sharedInput,
+  }),
+  /consume artifact must not use a SharedArrayBuffer/,
+  "Artifact inputs backed by shared memory must fail before spawning a child",
+);
+await assert.rejects(
+  runOcctArtifactProcess({
+    operation: "cache-consume",
+    runtimeDirectory: resolve(projectRoot, ".definitely-missing-runtime"),
+    feature: evaluatorCacheFeature,
+    maxArtifactBytes: maximumArtifactBytes,
+    timeoutMs: normalTimeoutMs,
+    solverFingerprint: evaluatorCacheSolverFingerprint,
+    cacheRecord: sharedInput,
+  }),
+  /cache-consume record must not use a SharedArrayBuffer/,
+  "Cache-record inputs backed by shared memory must fail before spawning a child",
 );
 
 const producerA = await runOcctArtifactProcess({
@@ -311,6 +391,268 @@ assert.deepEqual(consumerB.evidence.runtime, producerA.evidence.runtime);
 assert.deepEqual(consumerB.evidence.artifact, producerA.evidence.artifact);
 assert.equal(consumerB.evidence.shapeArtifactsAbsent, true);
 assert.equal(consumerB.evidence.certifiesCompatibility, false);
+
+const cacheProducer = await runOcctArtifactProcess({
+  operation: "cache-produce",
+  runtimeDirectory: directory,
+  feature: evaluatorCacheFeature,
+  maxArtifactBytes: maximumArtifactBytes,
+  timeoutMs: normalTimeoutMs,
+  solverFingerprint: evaluatorCacheSolverFingerprint,
+});
+const repeatedCacheProducer = await runOcctArtifactProcess({
+  operation: "cache-produce",
+  runtimeDirectory: directory,
+  feature: evaluatorCacheFeature,
+  maxArtifactBytes: maximumArtifactBytes,
+  timeoutMs: normalTimeoutMs,
+  solverFingerprint: evaluatorCacheSolverFingerprint,
+});
+const expectedCacheRecord = cacheProducer.cacheRecord.slice();
+assert.ok(cacheProducer.cacheRecord.byteLength > 12);
+assert.ok(
+  cacheProducer.cacheRecord.byteLength <= maximumArtifactBytes + 32 * 1024 + 12,
+);
+assert.deepEqual(cacheProducer.evidence.cache.record, {
+  byteLength: cacheProducer.cacheRecord.byteLength,
+  sha256: sha256(cacheProducer.cacheRecord),
+});
+assert.ok(
+  sameBytes(cacheProducer.cacheRecord, repeatedCacheProducer.cacheRecord),
+  "Fresh verified evaluator-cache producers must emit byte-identical records",
+);
+assert.deepEqual(
+  cacheProducer.evidence,
+  repeatedCacheProducer.evidence,
+  "Fresh verified evaluator-cache producers must emit identical detached evidence",
+);
+assert.equal(cacheProducer.evidence.operation, "cache-produce");
+assert.equal(cacheProducer.evidence.evaluatorPath, "Evaluator.evaluate");
+assert.equal(
+  cacheProducer.evidence.fixture,
+  "owned-occt-evaluator-cache-box-v1",
+);
+assert.equal(cacheProducer.evidence.feature, evaluatorCacheFeature);
+assert.equal(
+  cacheProducer.evidence.documentSha256,
+  "88f66cf1fabaf0ac9c33da5ee317be5ee67f8980c6b1c4483555bb0f7cda259a",
+);
+assert.equal(cacheProducer.evidence.configurationId, null);
+assert.deepEqual(cacheProducer.evidence.parameters, {});
+assert.equal(
+  cacheProducer.evidence.solverFingerprint,
+  evaluatorCacheSolverFingerprint,
+);
+assert.equal(cacheProducer.evidence.output.name, "result");
+assert.equal(cacheProducer.evidence.output.kind, "solid");
+assert.equal(cacheProducer.evidence.output.measurements.volume, 30);
+assert.ok(
+  Math.abs(cacheProducer.evidence.output.measurements.surfaceArea - 62) <
+    1e-9,
+);
+assert.deepEqual(
+  cacheProducer.evidence.output.measurements.centerOfMass,
+  [1, 1.5, 2.5],
+);
+assert.deepEqual(
+  cacheProducer.evidence.output.measurements.boundingBox,
+  {
+    min: [0, 0, 0],
+    max: [2, 3, 5],
+  },
+);
+assert.deepEqual(cacheProducer.evidence.output.topology, {
+  history: "complete",
+  faces: 6,
+  edges: 12,
+  vertices: 8,
+});
+assert.deepEqual(cacheProducer.evidence.cache.events, [
+  "miss",
+  "write",
+]);
+assert.equal(cacheProducer.evidence.cache.nativeBoxCalls, 1);
+assert.equal(cacheProducer.evidence.cache.artifactEncodeObserved, true);
+assert.equal(cacheProducer.evidence.cache.artifactDecodeObserved, false);
+assert.equal(cacheProducer.evidence.cache.outcome, "cold-write");
+assert.match(
+  cacheProducer.evidence.cache.key,
+  /^invariantcad:kernel-shape:v1:sha256:[0-9a-f]{64}$/u,
+);
+assert.deepEqual(
+  cacheProducer.evidence.capabilities,
+  producerA.evidence.capabilities,
+);
+assert.deepEqual(cacheProducer.evidence.runtime, producerA.evidence.runtime);
+assert.equal(cacheProducer.evidence.advertisement, "unadvertised");
+assert.equal(cacheProducer.evidence.shapeArtifactsAbsent, true);
+assert.equal(cacheProducer.evidence.privateCandidateOnly, true);
+assert.equal(
+  cacheProducer.evidence.trustedStoreBoundary,
+  "trusted-parent-mediated-record",
+);
+assert.equal(cacheProducer.evidence.recordIntegrityAuthenticated, false);
+assert.equal(cacheProducer.evidence.certifiesCompatibility, false);
+assert.equal(
+  cacheProducer.evidence.certifiesOperationalCancellation,
+  false,
+);
+assert.equal(
+  cacheProducer.evidence.cleanupCompletedBeforeResponse,
+  true,
+);
+
+const mutableCacheInput = expectedCacheRecord.slice();
+const cacheConsumerPromise = runOcctArtifactProcess({
+  operation: "cache-consume",
+  runtimeDirectory: directory,
+  feature: evaluatorCacheFeature,
+  maxArtifactBytes: maximumArtifactBytes,
+  timeoutMs: normalTimeoutMs,
+  solverFingerprint: evaluatorCacheSolverFingerprint,
+  cacheRecord: mutableCacheInput,
+});
+mutableCacheInput.fill(0);
+const cacheConsumer = await cacheConsumerPromise;
+assert.deepEqual(cacheConsumer.evidence.output, cacheProducer.evidence.output);
+assert.equal(cacheConsumer.evidence.cache.mode, "read-only");
+assert.deepEqual(cacheConsumer.evidence.cache.events, ["hit"]);
+assert.equal(cacheConsumer.evidence.cache.key, cacheProducer.evidence.cache.key);
+assert.equal(cacheConsumer.evidence.cache.nativeBoxCalls, 0);
+assert.equal(cacheConsumer.evidence.cache.artifactEncodeObserved, false);
+assert.equal(cacheConsumer.evidence.cache.artifactDecodeObserved, true);
+assert.equal(cacheConsumer.evidence.cache.outcome, "warm-hit");
+assert.deepEqual(
+  cacheConsumer.evidence.cache.record,
+  cacheProducer.evidence.cache.record,
+);
+assert.deepEqual(cacheConsumer.evidence.runtime, cacheProducer.evidence.runtime);
+assert.deepEqual(
+  cacheConsumer.evidence.capabilities,
+  cacheProducer.evidence.capabilities,
+);
+
+const incompatibleCacheConsumer = await runOcctArtifactProcess({
+  operation: "cache-consume",
+  runtimeDirectory: directory,
+  feature: evaluatorCacheFeature,
+  maxArtifactBytes: maximumArtifactBytes,
+  timeoutMs: normalTimeoutMs,
+  solverFingerprint: incompatibleEvaluatorCacheSolverFingerprint,
+  cacheRecord: expectedCacheRecord,
+});
+assert.equal(
+  incompatibleCacheConsumer.evidence.cache.outcome,
+  "incompatible-miss",
+);
+assert.deepEqual(incompatibleCacheConsumer.evidence.cache.events, ["miss"]);
+assert.equal(incompatibleCacheConsumer.evidence.cache.nativeBoxCalls, 1);
+assert.equal(
+  incompatibleCacheConsumer.evidence.cache.artifactEncodeObserved,
+  false,
+);
+assert.equal(
+  incompatibleCacheConsumer.evidence.cache.artifactDecodeObserved,
+  false,
+);
+assert.notEqual(
+  incompatibleCacheConsumer.evidence.cache.key,
+  cacheProducer.evidence.cache.key,
+);
+assert.deepEqual(
+  incompatibleCacheConsumer.evidence.cache.record,
+  cacheProducer.evidence.cache.record,
+);
+assert.deepEqual(
+  incompatibleCacheConsumer.evidence.output,
+  cacheProducer.evidence.output,
+);
+
+const tamperedCachePayload = expectedCacheRecord.slice();
+tamperedCachePayload[tamperedCachePayload.length - 1] =
+  tamperedCachePayload[tamperedCachePayload.length - 1]! ^ 0xff;
+await assert.rejects(
+  runOcctArtifactProcess({
+    operation: "cache-consume",
+    runtimeDirectory: directory,
+    feature: evaluatorCacheFeature,
+    maxArtifactBytes: maximumArtifactBytes,
+    timeoutMs: normalTimeoutMs,
+    solverFingerprint: evaluatorCacheSolverFingerprint,
+    cacheRecord: tamperedCachePayload,
+  }),
+  (error: unknown) =>
+    error instanceof OcctArtifactProcessChildError &&
+    error.childError.code === "OPERATION_FAILED" &&
+    error.message.includes("payload integrity is invalid"),
+  "A one-byte cache payload mutation must fail closed",
+);
+
+const forgedCacheKey = forgeCacheRecordKey(expectedCacheRecord);
+await assert.rejects(
+  runOcctArtifactProcess({
+    operation: "cache-consume",
+    runtimeDirectory: directory,
+    feature: evaluatorCacheFeature,
+    maxArtifactBytes: maximumArtifactBytes,
+    timeoutMs: normalTimeoutMs,
+    solverFingerprint: incompatibleEvaluatorCacheSolverFingerprint,
+    cacheRecord: forgedCacheKey,
+  }),
+  (error: unknown) =>
+    error instanceof OcctArtifactProcessChildError &&
+    error.childError.code === "OPERATION_FAILED" &&
+    error.message.includes("transfer record is invalid"),
+  "A forged alternate-key record must fail validation instead of masquerading as an incompatible miss",
+);
+
+const cacheAbortController = new AbortController();
+const abortedCacheOperation = runOcctArtifactProcess({
+  operation: "cache-consume",
+  runtimeDirectory: directory,
+  feature: evaluatorCacheFeature,
+  maxArtifactBytes: maximumArtifactBytes,
+  timeoutMs: normalTimeoutMs,
+  solverFingerprint: evaluatorCacheSolverFingerprint,
+  cacheRecord: expectedCacheRecord,
+  signal: cacheAbortController.signal,
+  onStarted: () => {
+    cacheAbortController.abort();
+  },
+});
+await assert.rejects(
+  abortedCacheOperation,
+  (error: unknown) =>
+    error instanceof DOMException && error.name === "AbortError",
+  "A post-start evaluator-cache abort must kill and await its fresh child",
+);
+const recoveredCacheConsumer = await runOcctArtifactProcess({
+  operation: "cache-consume",
+  runtimeDirectory: directory,
+  feature: evaluatorCacheFeature,
+  maxArtifactBytes: maximumArtifactBytes,
+  timeoutMs: normalTimeoutMs,
+  solverFingerprint: evaluatorCacheSolverFingerprint,
+  cacheRecord: (() => {
+    class HostileCacheRecord extends Uint8Array {
+      override slice(): Uint8Array<ArrayBuffer> {
+        throw new Error("Hostile slice override must not be called");
+      }
+    }
+    const input = new HostileCacheRecord(expectedCacheRecord.byteLength);
+    input.set(expectedCacheRecord);
+    return input;
+  })(),
+});
+assert.deepEqual(
+  recoveredCacheConsumer.evidence,
+  cacheConsumer.evidence,
+  "A fresh evaluator-cache consumer must recover after tamper and abort failures",
+);
+assert.ok(
+  sameBytes(cacheProducer.cacheRecord, expectedCacheRecord),
+  "The parent-owned cache record must remain unchanged",
+);
 
 const tamperedBundle = await mkdtemp(
   join(tmpdir(), "invariantcad-tampered-occt-bundle-"),
@@ -564,5 +906,5 @@ assert.equal(recovered.evidence.certifiesCompatibility, false);
 assert.ok(sameBytes(borrowedArtifact, beforeConsume));
 
 process.stdout.write(
-  "owned OCCT artifact/evaluator one-shot process isolation, cleanup, recovery, and cross-process evidence passed\n",
+  "owned OCCT artifact/evaluator/cache one-shot process isolation, cleanup, recovery, and cross-process evidence passed\n",
 );

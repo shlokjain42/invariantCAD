@@ -439,8 +439,11 @@ Operational cache eligibility remains the conjunction of separate gates:
 4. the evaluator's cache read/decode and encode/write integration is present
    with transactional cleanup, cancellation, corruption, and eviction handling.
 
-InvariantCAD currently has the protocol and audit boundary, but not that full
-conjunction.
+InvariantCAD now exercises one direct-output box slice through an unexported,
+explicitly trusted-store evaluator binding. That is integration evidence for
+item 4 only; the advertised capability, reviewed compatibility matrix, and
+production solver fingerprint gates remain absent, so the full conjunction is
+still intentionally unavailable.
 
 ## Why shipped backends do not advertise support
 
@@ -583,12 +586,16 @@ only scalar volume, topology-count, candidate-version, fingerprint, and
 input-immutability evidence after disposing the decoded shape and kernel.
 
 The same production bundle also exercises actual evaluator work in fresh
-stock-OCCT workers. A successful worker runs `Evaluator.evaluate(...)` over a
-fixed `2 × 3 × 7` box, detaches its volume, topology counts, output count, and
-diagnostic count, and responds only after disposing the `EvaluatedDesign` and
-evaluator. The deadline and post-start abort cases acknowledge both worker
-start and entry into the wrapped box operation. That wrapper first completes
-the real native box and only then enters a non-yielding stall. The host requests
+stock-OCCT workers. A successful worker binds the repository-private
+trusted-store experiment, runs `Evaluator.evaluate(...)` over a fixed
+`2 × 3 × 7` box cold and warm, and requires `miss,write` with one native box
+construction followed by `hit` with zero additional box construction. Detached
+volume, topology counts, output count, and diagnostics must match exactly;
+public artifact support remains absent, and the worker responds only after
+disposing the `EvaluatedDesign` and evaluator. The deadline and post-start
+abort cases use an unbound evaluator and acknowledge both worker start and
+entry into the wrapped box operation. That wrapper first completes the real
+native box and only then enters a non-yielding stall. The host requests
 termination, and a new worker must reproduce the successful evaluator's scalar
 evidence exactly. Browser `Worker.terminate()` returns `void`, so the gate
 cannot await or claim observed worker exit; it proves an exact termination
@@ -654,6 +661,27 @@ successful evidence. Forced termination is different: a killed child cannot
 execute its language-level `finally` cleanup, so destruction of the entire
 one-shot process is the containment and reclamation boundary.
 
+Process protocol v3 also carries one evaluator-cache record through the parent
+between fresh verified children. Two producer children independently evaluate a
+fixed direct-output `2 × 3 × 5` box and must emit identical binary records and
+detached evidence after `miss,write`, one native box construction, and observed
+encode. A compatible read-only consumer must record `hit`, observe decode,
+perform zero native box calls, and reproduce the producer's complete detached
+measurements and topology. A consumer with another solver fingerprint derives a
+different key, records `miss`, performs one native box call, and invokes neither
+codec direction.
+
+The parent-mediated record is one exact binary frame: an 8-byte versioned magic,
+a little-endian 32-bit canonical-JSON header length capped at 32 KiB, then the
+exact artifact payload. Fatal UTF-8, closed header fields, protocol/key/metadata
+and integrity validation, request-specific byte ceilings, SHA-256, exact
+payload length, and exact EOF are checked. The gate preserves caller-owned
+input, rejects a changed payload, forged key/metadata, shared or hostile
+typed-array input, and post-start abort, then proves recovery with another fresh
+consumer. Its evidence names `trusted-parent-mediated-record` and explicitly
+sets `recordIntegrityAuthenticated: false`; the digest detects corruption, not
+an authorized parent's malicious substitution.
+
 The verified facade-bundle gate invokes the same command against its packaged
 runtime automatically. Every successful result records one-shot cleanup before
 response, `shapeArtifactsAbsent: true`, and `certifiesCompatibility: false`.
@@ -665,8 +693,8 @@ the Node module-hook chain or host from same-process/same-UID interference, or
 attest the wider application, library, wrapper, or JavaScript engine. The
 injected trap is not a real OCCT trap fault injection. These gates do not
 measure live or peak memory, establish durable native subshape identity, create
-a reviewed cross-platform golden matrix, or integrate the evaluator/cache
-path. Evaluator evidence also sets
+a reviewed cross-platform golden matrix, or expose a public/production
+evaluator cache. Evaluator evidence also sets
 `certifiesOperationalCancellation: false`.
 
 Owned facade ABI 0.7 closes a specific, previously open part of the candidate
@@ -781,7 +809,8 @@ occurrence manifest. The hook remains candidate-only because:
 
 Production promotion therefore still requires a public operational isolation
 boundary wherever hard cancellation is promised, reviewed cross-platform
-owned-runtime goldens, and evaluator/cache integration. Cross-edit topology and
+owned-runtime goldens, and expansion from the private direct-box cache slice to
+a public diagnostic-preserving evaluator contract. Cross-edit topology and
 persistent assembly identity remain separate protocols rather than v3 claims.
 The private compatibility fingerprint now binds the exact native
 WASM/JavaScript pair identity alongside versioned declarations for the adapter

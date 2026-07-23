@@ -560,6 +560,16 @@ function parseArtifactWorkerResponse(
           "vertices",
           "outputCount",
           "diagnosticCount",
+          "cacheColdNativeBoxCalls",
+          "cacheWarmNativeBoxCalls",
+          "cacheEntries",
+          "cacheColdEvents",
+          "cacheWarmEvents",
+          "cacheMeasurementsMatch",
+          "shapeArtifactsAbsent",
+          "trustedStoreOnly",
+          "certifiesCompatibility",
+          "certifiesOperationalCancellation",
           "cleanupCompletedBeforeResponse",
         ]) ||
         typeof evidence.volume !== "number" ||
@@ -580,6 +590,22 @@ function parseArtifactWorkerResponse(
         typeof evidence.diagnosticCount !== "number" ||
         !Number.isSafeInteger(evidence.diagnosticCount) ||
         evidence.diagnosticCount < 0 ||
+        typeof evidence.cacheColdNativeBoxCalls !== "number" ||
+        !Number.isSafeInteger(evidence.cacheColdNativeBoxCalls) ||
+        evidence.cacheColdNativeBoxCalls < 0 ||
+        typeof evidence.cacheWarmNativeBoxCalls !== "number" ||
+        !Number.isSafeInteger(evidence.cacheWarmNativeBoxCalls) ||
+        evidence.cacheWarmNativeBoxCalls < 0 ||
+        typeof evidence.cacheEntries !== "number" ||
+        !Number.isSafeInteger(evidence.cacheEntries) ||
+        evidence.cacheEntries < 0 ||
+        typeof evidence.cacheColdEvents !== "string" ||
+        typeof evidence.cacheWarmEvents !== "string" ||
+        evidence.cacheMeasurementsMatch !== true ||
+        evidence.shapeArtifactsAbsent !== true ||
+        evidence.trustedStoreOnly !== true ||
+        evidence.certifiesCompatibility !== false ||
+        evidence.certifiesOperationalCancellation !== false ||
         evidence.cleanupCompletedBeforeResponse !== true
       ) {
         throw new TypeError(

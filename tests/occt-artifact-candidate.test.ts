@@ -401,6 +401,26 @@ describe("OCCT shape-artifact codec candidate", () => {
       expect(inspectKernelShapeArtifactSupport(kernel)).toEqual({
         status: "absent",
       });
+      const host = (
+        kernel as GeometryKernel & {
+          readonly [OCCT_SHAPE_ARTIFACT_CANDIDATE_ACCESS]?:
+            OcctShapeArtifactCandidateHost;
+        }
+      )[OCCT_SHAPE_ARTIFACT_CANDIDATE_ACCESS];
+      expect(host).toBeDefined();
+      if (host === undefined) throw new Error("Expected candidate host");
+      const malformedHost = Object.freeze({
+        ...host,
+        compatibilityFingerprint: `unpaired-\ud800`,
+      });
+      const malformedKernel = new Proxy(kernel, {
+        get(target, property, receiver) {
+          return property === OCCT_SHAPE_ARTIFACT_CANDIDATE_ACCESS
+            ? malformedHost
+            : Reflect.get(target, property, receiver);
+        },
+      });
+      expect(getOcctShapeArtifactCodecCandidate(malformedKernel)).toBeUndefined();
     } finally {
       kernel.dispose();
     }
