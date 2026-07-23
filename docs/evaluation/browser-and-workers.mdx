@@ -191,14 +191,17 @@ evidence. It disposes the live shape and kernel before posting that evidence; no
 native handle crosses the worker boundary.
 
 Separate fresh workers run the actual `Evaluator.evaluate(...)` path over a
-fixed `2 × 3 × 7` stock-OCCT box. A successful run returns only volume, face,
-edge, and vertex counts plus output and diagnostic counts after disposing its
-`EvaluatedDesign` and evaluator. Deadline and post-start abort runs emit
-`started`, enter the wrapped box operation, complete the real native box, emit
-`kernel-operation-started`, and then stall without yielding before the wrapper
-can return to the evaluator. The host requests `Worker.terminate()` in both
-cases. A subsequent fresh worker must reproduce the successful evaluator's
-detached scalar evidence exactly.
+fixed `2 × 3 × 7` stock-OCCT box. A successful worker binds the unexported
+trusted-store experiment, evaluates cold and warm, and requires `miss,write`
+with one native box call followed by `hit` with zero additional box calls.
+Volume, face, edge, vertex, output, and diagnostic evidence must match exactly;
+public artifact support remains absent, and the worker responds only after
+disposing its `EvaluatedDesign` and evaluator. Deadline and post-start abort
+runs use an unbound evaluator, emit `started`, enter the wrapped box operation,
+complete the real native box, emit `kernel-operation-started`, and then stall
+without yielding before the wrapper can return to the evaluator. The host
+requests `Worker.terminate()` in both cases. A subsequent fresh worker must
+reproduce the successful evaluator's detached scalar evidence exactly.
 
 This proves production-bundle termination requests and deterministic recovery
 for the tested stock runtime, not observed exit of the terminated worker.
@@ -208,9 +211,9 @@ destroying that complete realm is the containment mechanism. The worker cases
 are not themselves runtime attestation, live/peak-memory measurement, a real
 OCCT-trap injection, trusted-host isolation, cross-edit/persistent assembly
 identity, distinct-location `IsPartner`/shared-TShape proof, a cross-platform
-golden matrix, evaluator/cache integration, compatibility certification, or
-operational-cancellation certification. The v3 paths remain coordinates in the
-exact serialized child hierarchy.
+golden matrix, a public/production evaluator cache, compatibility certification,
+or operational-cancellation certification. The v3 paths remain coordinates in
+the exact serialized child hierarchy.
 
 The separate Node owned-runtime gate is repository tooling rather than browser
 deployment support. `pnpm test:occt-artifact-process` runs fresh ABI 0.9
@@ -231,6 +234,18 @@ failure legitimately emits no marker. Only detached measurements, topology,
 document, and runtime evidence can succeed, and only after cleanup; an injected
 cleanup failure must fail the operation. The verified facade-bundle gate invokes
 this matrix automatically. No temporary executable JavaScript file is created.
+
+Process protocol v3 additionally passes one private evaluator-cache record
+through the parent between fresh verified owned-runtime children. Independent
+producers must emit identical records after `miss,write`, one native direct-box
+construction, and encode; a compatible read-only consumer must `hit`, decode,
+perform zero native box calls, and reproduce complete detached geometry
+evidence. A different solver fingerprint derives another key and must miss
+without invoking either codec direction. The parent validates a bounded,
+versioned binary frame, canonical header, exact payload, and SHA-256; tamper,
+forged metadata, shared/hostile input, and post-start abort precede a fresh
+recovery run. This is explicitly a trusted parent-mediated record, not record
+authentication or a public cache API.
 
 ## Content Security Policy
 
@@ -258,8 +273,8 @@ added. The private candidate remains unexported, `shapeArtifacts` remains
 absent, and these tests confer no production compatibility or operational
 cancellation certification. Ordinary public `Evaluator.evaluate(...)` remains
 same-thread and cooperatively cancellable; no public isolated evaluator API,
-cache integration, compatibility certification, public compound/compsolid
-identity class, or cross-platform matrix has been added. These workers also do
-not turn repository-private process/realm termination into hard cancellation
-in the public evaluator API or make serialization-local paths persistent across
-model edits or assemblies.
+public cache configuration, compatibility certification, public
+compound/compsolid identity class, or cross-platform matrix has been added.
+These workers also do not turn repository-private process/realm termination
+into hard cancellation in the public evaluator API or make
+serialization-local paths persistent across model edits or assemblies.

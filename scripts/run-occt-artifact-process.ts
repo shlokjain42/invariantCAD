@@ -12,12 +12,15 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   OCCT_ARTIFACT_PROCESS_MAX_ARTIFACT_BYTES,
+  OCCT_ARTIFACT_PROCESS_CACHE_RECORD_PREFIX_BYTES,
+  OCCT_ARTIFACT_PROCESS_MAX_CACHE_RECORD_HEADER_BYTES,
   OCCT_ARTIFACT_PROCESS_MAX_OUTPUT_BYTES,
   OCCT_ARTIFACT_PROCESS_MAX_REQUEST_BYTES,
   OCCT_ARTIFACT_PROCESS_MAX_RESULT_BYTES,
   OCCT_ARTIFACT_PROCESS_MAX_TIMEOUT_MS,
   OCCT_ARTIFACT_PROCESS_PROTOCOL_VERSION,
   OCCT_ARTIFACT_PROCESS_STARTUP_TIMEOUT_MS,
+  OCCT_EVALUATOR_CACHE_PROCESS_MAX_SOLVER_FINGERPRINT_BYTES,
   encodeOcctArtifactProcessStartEvent,
   encodeOcctEvaluatorKernelOperationStartEvent,
   encodeOcctEvaluatorNonYieldingStallStartEvent,
@@ -27,6 +30,7 @@ import {
   type OcctArtifactProcessOperation,
   type OcctArtifactProcessRequest,
   type OcctEvaluatorProcessEvidence,
+  type OcctEvaluatorCacheProcessEvidence,
 } from "./occt-artifact-process-protocol.js";
 
 interface RunOcctArtifactProcessBase {
@@ -69,10 +73,29 @@ export interface RunOcctEvaluatorProcessOptions
   readonly operation: "evaluate";
 }
 
+interface RunOcctEvaluatorCacheProcessBase
+  extends RunOcctArtifactProcessBase {
+  readonly solverFingerprint: string;
+}
+
+export interface RunOcctEvaluatorCacheProcessProduceOptions
+  extends RunOcctEvaluatorCacheProcessBase {
+  readonly operation: "cache-produce";
+}
+
+export interface RunOcctEvaluatorCacheProcessConsumeOptions
+  extends RunOcctEvaluatorCacheProcessBase {
+  readonly operation: "cache-consume";
+  /** Borrowed. The runner snapshots this before its first asynchronous step. */
+  readonly cacheRecord: Uint8Array;
+}
+
 export type RunOcctArtifactProcessOptions =
   | RunOcctArtifactProcessProduceOptions
   | RunOcctArtifactProcessConsumeOptions
   | RunOcctEvaluatorProcessOptions
+  | RunOcctEvaluatorCacheProcessProduceOptions
+  | RunOcctEvaluatorCacheProcessConsumeOptions
   | RunOcctArtifactProcessFaultOptions;
 
 export interface OcctArtifactProcessProduceOutput {
@@ -88,10 +111,21 @@ export interface OcctEvaluatorProcessOutput {
   readonly evidence: OcctEvaluatorProcessEvidence;
 }
 
+export interface OcctEvaluatorCacheProcessProduceOutput {
+  readonly evidence: OcctEvaluatorCacheProcessEvidence;
+  readonly cacheRecord: Uint8Array;
+}
+
+export interface OcctEvaluatorCacheProcessConsumeOutput {
+  readonly evidence: OcctEvaluatorCacheProcessEvidence;
+}
+
 export type OcctArtifactProcessOutput =
   | OcctArtifactProcessProduceOutput
   | OcctArtifactProcessConsumeOutput
-  | OcctEvaluatorProcessOutput;
+  | OcctEvaluatorProcessOutput
+  | OcctEvaluatorCacheProcessProduceOutput
+  | OcctEvaluatorCacheProcessConsumeOutput;
 
 export class OcctArtifactProcessProtocolError extends Error {
   constructor(message: string) {
@@ -135,6 +169,8 @@ interface CapturedOptions {
   readonly onKernelOperationStarted?: () => void;
   readonly onNonYieldingStallStarted?: () => void;
   readonly artifact?: Uint8Array;
+  readonly cacheRecord?: Uint8Array;
+  readonly solverFingerprint?: string;
 }
 
 type KillReason =
@@ -169,6 +205,7 @@ const childPath = fileURLToPath(
   new URL("./test-owned-occt-artifact-process-child.ts", import.meta.url),
 );
 const textEncoder = new TextEncoder();
+const fatalTextDecoder = new TextDecoder("utf-8", { fatal: true });
 const abortSignalAbortedGetter = Object.getOwnPropertyDescriptor(
   AbortSignal.prototype,
   "aborted",
@@ -176,6 +213,29 @@ const abortSignalAbortedGetter = Object.getOwnPropertyDescriptor(
 const abortSignalAddEventListener = AbortSignal.prototype.addEventListener;
 const abortSignalRemoveEventListener =
   AbortSignal.prototype.removeEventListener;
+const typedArrayPrototype = Object.getPrototypeOf(
+  Uint8Array.prototype,
+) as object;
+const typedArrayBufferGetter = Object.getOwnPropertyDescriptor(
+  typedArrayPrototype,
+  "buffer",
+)?.get;
+const typedArrayByteOffsetGetter = Object.getOwnPropertyDescriptor(
+  typedArrayPrototype,
+  "byteOffset",
+)?.get;
+const typedArrayByteLengthGetter = Object.getOwnPropertyDescriptor(
+  typedArrayPrototype,
+  "byteLength",
+)?.get;
+const uint8ArraySet = Uint8Array.prototype.set;
+const sharedArrayBufferByteLengthGetter =
+  typeof SharedArrayBuffer === "undefined"
+    ? undefined
+    : Object.getOwnPropertyDescriptor(
+        SharedArrayBuffer.prototype,
+        "byteLength",
+      )?.get;
 
 function sha256(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
@@ -225,6 +285,80 @@ function positiveSafeInteger(
   return value;
 }
 
+function maximumCacheRecordBytes(maxArtifactBytes: number): number {
+  return (
+    maxArtifactBytes +
+    OCCT_ARTIFACT_PROCESS_MAX_CACHE_RECORD_HEADER_BYTES +
+    OCCT_ARTIFACT_PROCESS_CACHE_RECORD_PREFIX_BYTES
+  );
+}
+
+function isSharedArrayBuffer(value: ArrayBufferLike): boolean {
+  if (sharedArrayBufferByteLengthGetter === undefined) return false;
+  try {
+    Reflect.apply(sharedArrayBufferByteLengthGetter, value, []);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function snapshotByteInput(
+  value: unknown,
+  maximumBytes: number,
+  label: string,
+): Uint8Array {
+  if (
+    !(value instanceof Uint8Array) ||
+    typedArrayBufferGetter === undefined ||
+    typedArrayByteOffsetGetter === undefined ||
+    typedArrayByteLengthGetter === undefined
+  ) {
+    throw new TypeError(`${label} must be a Uint8Array`);
+  }
+  let buffer: ArrayBufferLike;
+  let byteOffset: number;
+  let byteLength: number;
+  try {
+    buffer = Reflect.apply(
+      typedArrayBufferGetter,
+      value,
+      [],
+    ) as ArrayBufferLike;
+    byteOffset = Reflect.apply(
+      typedArrayByteOffsetGetter,
+      value,
+      [],
+    ) as number;
+    byteLength = Reflect.apply(
+      typedArrayByteLengthGetter,
+      value,
+      [],
+    ) as number;
+  } catch {
+    throw new TypeError(`${label} must be a Uint8Array`);
+  }
+  if (isSharedArrayBuffer(buffer)) {
+    throw new TypeError(`${label} must not use a SharedArrayBuffer`);
+  }
+  if (
+    !Number.isSafeInteger(byteOffset) ||
+    !Number.isSafeInteger(byteLength) ||
+    byteLength <= 0 ||
+    byteLength > maximumBytes
+  ) {
+    throw new RangeError(`${label} exceeded its byte limit`);
+  }
+  try {
+    const source = new Uint8Array(buffer, byteOffset, byteLength);
+    const snapshot = new Uint8Array(byteLength);
+    Reflect.apply(uint8ArraySet, snapshot, [source]);
+    return snapshot;
+  } catch {
+    throw new TypeError(`${label} could not be snapshotted`);
+  }
+}
+
 function captureOptions(
   options: RunOcctArtifactProcessOptions,
 ): CapturedOptions {
@@ -236,6 +370,8 @@ function captureOptions(
     operation !== "produce" &&
     operation !== "consume" &&
     operation !== "evaluate" &&
+    operation !== "cache-produce" &&
+    operation !== "cache-consume" &&
     operation !== "stall-during-evaluate" &&
     operation !== "fail-cleanup-during-evaluate" &&
     operation !== "trap"
@@ -288,16 +424,11 @@ function captureOptions(
   }
   if (signal !== undefined && signalAborted(signal)) throw abortError();
   if (operation === "consume") {
-    const artifact = options.artifact;
-    if (
-      !(artifact instanceof Uint8Array) ||
-      artifact.byteLength === 0 ||
-      artifact.byteLength > maxArtifactBytes
-    ) {
-      throw new RangeError(
-        "consume artifact must be a non-empty Uint8Array within maxArtifactBytes",
-      );
-    }
+    const artifact = snapshotByteInput(
+      options.artifact,
+      maxArtifactBytes,
+      "consume artifact",
+    );
     return Object.freeze({
       operation,
       runtimeDirectory: resolve(options.runtimeDirectory),
@@ -313,12 +444,83 @@ function captureOptions(
         ? {}
         : { onNonYieldingStallStarted }),
       // Snapshot before the first await; the caller keeps its original bytes.
-      artifact: artifact.slice(),
+      artifact,
+    });
+  }
+  if (operation === "cache-produce" || operation === "cache-consume") {
+    const solverFingerprint = options.solverFingerprint;
+    if (
+      typeof solverFingerprint !== "string" ||
+      solverFingerprint.length === 0 ||
+      textEncoder.encode(solverFingerprint).byteLength >
+        OCCT_EVALUATOR_CACHE_PROCESS_MAX_SOLVER_FINGERPRINT_BYTES ||
+      fatalTextDecoder.decode(textEncoder.encode(solverFingerprint)) !==
+        solverFingerprint
+    ) {
+      throw new TypeError(
+        "solverFingerprint must be a non-empty bounded string",
+      );
+    }
+    if ("artifact" in options) {
+      throw new TypeError(
+        "Evaluator-cache operations do not accept an artifact input",
+      );
+    }
+    if (operation === "cache-consume") {
+      const cacheRecord = snapshotByteInput(
+        options.cacheRecord,
+        maximumCacheRecordBytes(maxArtifactBytes),
+        "cache-consume record",
+      );
+      return Object.freeze({
+        operation,
+        runtimeDirectory: resolve(options.runtimeDirectory),
+        feature: options.feature,
+        maxArtifactBytes,
+        timeoutMs,
+        solverFingerprint,
+        ...(signal === undefined ? {} : { signal }),
+        ...(onStarted === undefined ? {} : { onStarted }),
+        ...(onKernelOperationStarted === undefined
+          ? {}
+          : { onKernelOperationStarted }),
+        ...(onNonYieldingStallStarted === undefined
+          ? {}
+          : { onNonYieldingStallStarted }),
+        // Snapshot before the first await; the caller keeps its original bytes.
+        cacheRecord,
+      });
+    }
+    if ("cacheRecord" in options) {
+      throw new TypeError(
+        "Only cache-consume accepts a cache-record input",
+      );
+    }
+    return Object.freeze({
+      operation,
+      runtimeDirectory: resolve(options.runtimeDirectory),
+      feature: options.feature,
+      maxArtifactBytes,
+      timeoutMs,
+      solverFingerprint,
+      ...(signal === undefined ? {} : { signal }),
+      ...(onStarted === undefined ? {} : { onStarted }),
+      ...(onKernelOperationStarted === undefined
+        ? {}
+        : { onKernelOperationStarted }),
+      ...(onNonYieldingStallStarted === undefined
+        ? {}
+        : { onNonYieldingStallStarted }),
     });
   }
   if ("artifact" in options) {
     throw new TypeError(
       "Only the consume operation accepts an artifact input",
+    );
+  }
+  if ("cacheRecord" in options || "solverFingerprint" in options) {
+    throw new TypeError(
+      "Only evaluator-cache operations accept cache-record options",
     );
   }
   return Object.freeze({
@@ -729,6 +931,12 @@ export function runOcctArtifactProcess(
   options: RunOcctEvaluatorProcessOptions,
 ): Promise<OcctEvaluatorProcessOutput>;
 export function runOcctArtifactProcess(
+  options: RunOcctEvaluatorCacheProcessProduceOptions,
+): Promise<OcctEvaluatorCacheProcessProduceOutput>;
+export function runOcctArtifactProcess(
+  options: RunOcctEvaluatorCacheProcessConsumeOptions,
+): Promise<OcctEvaluatorCacheProcessConsumeOutput>;
+export function runOcctArtifactProcess(
   options: RunOcctArtifactProcessFaultOptions,
 ): Promise<never>;
 export async function runOcctArtifactProcess(
@@ -744,41 +952,79 @@ export async function runOcctArtifactProcess(
     const resultPath = join(temporaryDirectory, "result.json");
     const inputArtifactPath = join(temporaryDirectory, "input.artifact");
     const outputArtifactPath = join(temporaryDirectory, "output.artifact");
+    const inputCacheRecordPath = join(
+      temporaryDirectory,
+      "input.cache-record",
+    );
+    const outputCacheRecordPath = join(
+      temporaryDirectory,
+      "output.cache-record",
+    );
     if (captured.artifact !== undefined) {
       await writeFile(inputArtifactPath, captured.artifact, {
         flag: "wx",
         mode: 0o600,
       });
     }
-    const request: OcctArtifactProcessRequest =
-      captured.operation === "produce"
-        ? {
-            protocolVersion: OCCT_ARTIFACT_PROCESS_PROTOCOL_VERSION,
-            requestId,
-            operation: "produce",
-            runtimeDirectory: captured.runtimeDirectory,
-            feature: captured.feature,
-            maxArtifactBytes: captured.maxArtifactBytes,
-            outputArtifactPath,
-          }
-        : captured.operation === "consume"
-          ? {
-              protocolVersion: OCCT_ARTIFACT_PROCESS_PROTOCOL_VERSION,
-              requestId,
-              operation: "consume",
-              runtimeDirectory: captured.runtimeDirectory,
-              feature: captured.feature,
-              maxArtifactBytes: captured.maxArtifactBytes,
-              inputArtifactPath,
-            }
-          : {
-              protocolVersion: OCCT_ARTIFACT_PROCESS_PROTOCOL_VERSION,
-              requestId,
-              operation: captured.operation,
-              runtimeDirectory: captured.runtimeDirectory,
-              feature: captured.feature,
-              maxArtifactBytes: captured.maxArtifactBytes,
-            };
+    if (captured.cacheRecord !== undefined) {
+      await writeFile(inputCacheRecordPath, captured.cacheRecord, {
+        flag: "wx",
+        mode: 0o600,
+      });
+    }
+    const requestBase = {
+      protocolVersion: OCCT_ARTIFACT_PROCESS_PROTOCOL_VERSION,
+      requestId,
+      runtimeDirectory: captured.runtimeDirectory,
+      feature: captured.feature,
+      maxArtifactBytes: captured.maxArtifactBytes,
+    } as const;
+    let request: OcctArtifactProcessRequest;
+    if (captured.operation === "produce") {
+      request = {
+        ...requestBase,
+        operation: "produce",
+        outputArtifactPath,
+      };
+    } else if (captured.operation === "consume") {
+      request = {
+        ...requestBase,
+        operation: "consume",
+        inputArtifactPath,
+      };
+    } else if (
+      captured.operation === "cache-produce" &&
+      captured.solverFingerprint !== undefined
+    ) {
+      request = {
+        ...requestBase,
+        operation: "cache-produce",
+        solverFingerprint: captured.solverFingerprint,
+        outputCacheRecordPath,
+      };
+    } else if (
+      captured.operation === "cache-consume" &&
+      captured.solverFingerprint !== undefined
+    ) {
+      request = {
+        ...requestBase,
+        operation: "cache-consume",
+        solverFingerprint: captured.solverFingerprint,
+        inputCacheRecordPath,
+      };
+    } else if (
+      captured.operation === "cache-produce" ||
+      captured.operation === "cache-consume"
+    ) {
+      throw new OcctArtifactProcessProtocolError(
+        "Captured evaluator-cache request lost its solver fingerprint",
+      );
+    } else {
+      request = {
+        ...requestBase,
+        operation: captured.operation,
+      };
+    }
     const requestBytes = textEncoder.encode(JSON.stringify(request));
     if (requestBytes.byteLength > OCCT_ARTIFACT_PROCESS_MAX_REQUEST_BYTES) {
       throw new OcctArtifactProcessProtocolError(
@@ -924,6 +1170,17 @@ export async function runOcctArtifactProcess(
         ),
       );
     }
+    if (
+      (result.operation === "cache-produce" ||
+        result.operation === "cache-consume") &&
+      (result.evidence.feature !== captured.feature ||
+        result.evidence.solverFingerprint !==
+          captured.solverFingerprint)
+    ) {
+      throw new OcctArtifactProcessProtocolError(
+        "Disposable OCCT evaluator-cache evidence did not match its request",
+      );
+    }
     if (captured.operation === "produce" && result.operation === "produce") {
       const artifact = await readBoundedFile(
         outputArtifactPath,
@@ -956,6 +1213,48 @@ export async function runOcctArtifactProcess(
       ) {
         throw new OcctArtifactProcessProtocolError(
           "Disposable OCCT artifact process input evidence did not match its snapshot",
+        );
+      }
+      assertParentPhaseActive();
+      return Object.freeze({ evidence: result.evidence });
+    }
+    if (
+      captured.operation === "cache-produce" &&
+      result.operation === "cache-produce"
+    ) {
+      const cacheRecord = await readBoundedFile(
+        outputCacheRecordPath,
+        maximumCacheRecordBytes(captured.maxArtifactBytes),
+        "Disposable OCCT evaluator-cache output record",
+      );
+      assertParentPhaseActive();
+      if (
+        cacheRecord.byteLength !== result.evidence.cache.record.byteLength ||
+        sha256(cacheRecord) !== result.evidence.cache.record.sha256
+      ) {
+        throw new OcctArtifactProcessProtocolError(
+          "Disposable OCCT evaluator-cache output evidence did not match its record bytes",
+        );
+      }
+      assertParentPhaseActive();
+      return Object.freeze({
+        evidence: result.evidence,
+        cacheRecord,
+      });
+    }
+    if (
+      captured.operation === "cache-consume" &&
+      captured.cacheRecord !== undefined &&
+      result.operation === "cache-consume"
+    ) {
+      if (
+        captured.cacheRecord.byteLength !==
+          result.evidence.cache.record.byteLength ||
+        sha256(captured.cacheRecord) !==
+          result.evidence.cache.record.sha256
+      ) {
+        throw new OcctArtifactProcessProtocolError(
+          "Disposable OCCT evaluator-cache input evidence did not match its snapshot",
         );
       }
       assertParentPhaseActive();

@@ -1,4 +1,5 @@
 import type { ShapeOrientation, ShapeType } from "occt-wasm";
+import { throwOcctArtifactLimitRefusal } from "./occt-artifact-limit.js";
 
 export const OCCT_ARTIFACT_NATIVE_IDENTITY_V1_HEADER_BYTES = 64;
 export const OCCT_ARTIFACT_NATIVE_IDENTITY_V1_OCCURRENCE_BYTES = 12;
@@ -460,7 +461,11 @@ export function encodeOcctArtifactNativeIdentityV1(
     prepared.identity.occurrences.length,
   );
   if (byteLength > maximum) {
-    throw new RangeError("OCCT shape-artifact native identity exceeds maxBytes");
+    throwOcctArtifactLimitRefusal(
+      maximum,
+      byteLength,
+      "OCCT shape-artifact native identity exceeds maxBytes",
+    );
   }
   const output = new Uint8Array(byteLength);
   output.set(MAGIC);

@@ -246,4 +246,12 @@ structural but unindexed. The duplicate-occurrence regression requires a
 one-component artifact to reject a substituted two-occurrence BREP
 transactionally. The loader does not expand this serialization-local scope or
 supply the missing `IsPartner` primitive. Public hard cancellation,
-cross-platform goldens, and evaluator/cache integration remain separate gates.
+cross-platform goldens, and expansion from the repository-private direct-box
+cache slice to a public diagnostic-preserving evaluator contract remain
+separate gates.
+
+The owned fresh-process gate uses this exact loader boundary for two
+byte-identical direct-box cache producers, a zero-native-box compatible
+consumer, and an incompatible-solver miss. Its parent-mediated binary record is
+still explicitly trusted and unauthenticated; runtime-pair verification does
+not convert the record digest into origin authorization.

@@ -15,6 +15,7 @@ import {
   type KernelShapeArtifactSemanticWitness,
 } from "../src/conformance.js";
 import {
+  KERNEL_SHAPE_ARTIFACT_MAX_COMPATIBILITY_FINGERPRINT_BYTES,
   KERNEL_SHAPE_ARTIFACT_PROTOCOL_VERSION,
   type GeometryKernel,
   type KernelCapabilities,
@@ -134,12 +135,18 @@ class SyntheticHarness {
   readonly contexts: KernelShapeArtifactContext[] = [];
   readonly coupling: Coupling = { live: true };
   readonly fault: Fault;
+  readonly artifactCapabilities: KernelShapeArtifactCapabilities;
   peakLiveRuntimes = 0;
   private sharedEncodeBuffer: Uint8Array | undefined;
   private preWitnessSourceCoupling: Coupling | undefined;
 
-  constructor(fault: Fault = "none") {
+  constructor(
+    fault: Fault = "none",
+    artifactCapabilities: KernelShapeArtifactCapabilities =
+      ARTIFACT_CAPABILITIES,
+  ) {
     this.fault = fault;
+    this.artifactCapabilities = artifactCapabilities;
   }
 
   create(advertisement: Advertisement): {
@@ -248,7 +255,7 @@ class SyntheticHarness {
     };
 
     const codec: KernelShapeArtifactCodecCandidate = {
-      capabilities: ARTIFACT_CAPABILITIES,
+      capabilities: this.artifactCapabilities,
       encodeShapeArtifact: encode,
       decodeShapeArtifact: decode,
     };
@@ -263,7 +270,7 @@ class SyntheticHarness {
       nativeExports: [],
       ...(advertisement === "absent"
         ? {}
-        : { shapeArtifacts: ARTIFACT_CAPABILITIES }),
+        : { shapeArtifacts: this.artifactCapabilities }),
     };
     const kernel: GeometryKernel = {
       id: KERNEL_ID,
@@ -496,7 +503,7 @@ async function optionsFor(
     target,
     expectedIdentity: options.expectedIdentity ?? {
       kernelId: KERNEL_ID,
-      artifact: ARTIFACT_CAPABILITIES,
+      artifact: harness.artifactCapabilities,
     },
     cases: options.cases ?? (await casesFor(harness)),
     ...(options.limits === undefined ? {} : { limits: options.limits }),
@@ -692,6 +699,38 @@ describe("kernel shape-artifact codec audit", () => {
       ),
     ).toBe(true);
     harness.expectFullyDisposed();
+  });
+
+  it("uses the shared canonical UTF-8 artifact-fingerprint byte ceiling", async () => {
+    const boundaryCapabilities: KernelShapeArtifactCapabilities =
+      Object.freeze({
+        ...ARTIFACT_CAPABILITIES,
+        compatibilityFingerprint: "é".repeat(1_024),
+      });
+    const harness = new SyntheticHarness("none", boundaryCapabilities);
+    const accepted = await auditKernelShapeArtifactCodec(
+      await optionsFor(harness, "candidate"),
+    );
+    expect(accepted.ok, JSON.stringify(accepted.diagnostics)).toBe(true);
+    harness.expectFullyDisposed();
+
+    const rejectedHarness = new SyntheticHarness();
+    const rejected = await auditKernelShapeArtifactCodec(
+      await optionsFor(rejectedHarness, "candidate", {
+        expectedIdentity: {
+          kernelId: KERNEL_ID,
+          artifact: {
+            ...ARTIFACT_CAPABILITIES,
+            compatibilityFingerprint: "é".repeat(1_025),
+          },
+        },
+      }),
+    );
+    expectFailure(rejected, "ARTIFACT_CACHE_ENTRY_INVALID");
+    expect(rejectedHarness.runtimes).toHaveLength(0);
+    expect(
+      KERNEL_SHAPE_ARTIFACT_MAX_COMPATIBILITY_FINGERPRINT_BYTES,
+    ).toBe(2_048);
   });
 
   it.each([

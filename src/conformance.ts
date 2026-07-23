@@ -12,6 +12,7 @@ import {
   type Diagnostic,
 } from "./core/result.js";
 import {
+  KERNEL_SHAPE_ARTIFACT_MAX_COMPATIBILITY_FINGERPRINT_BYTES,
   KERNEL_SHAPE_ARTIFACT_PROTOCOL_VERSION,
   type Awaitable,
   type GeometryKernel,
@@ -19,6 +20,7 @@ import {
   type KernelShapeArtifactCapabilities,
   type KernelShapeArtifactContext,
 } from "./kernel.js";
+import { isCanonicalUtf8StringWithin } from "./core/utf8.js";
 import {
   encodeKernelShapeSemanticObservation,
   type KernelShapeSemanticObservation,
@@ -558,7 +560,10 @@ function captureIdentity(
       typeof raw.artifact.formatVersion !== "number" ||
       !Number.isSafeInteger(raw.artifact.formatVersion) ||
       raw.artifact.formatVersion < 1 ||
-      !boundedString(raw.artifact.compatibilityFingerprint, 1_024)
+      !isCanonicalUtf8StringWithin(
+        raw.artifact.compatibilityFingerprint,
+        KERNEL_SHAPE_ARTIFACT_MAX_COMPATIBILITY_FINGERPRINT_BYTES,
+      )
     ) {
       return invalidOptions(
         "Kernel shape-artifact audit expectedIdentity is malformed",
@@ -1046,7 +1051,10 @@ function normalizeCandidateCapabilities(
       typeof value.formatVersion !== "number" ||
       !Number.isSafeInteger(value.formatVersion) ||
       value.formatVersion < 1 ||
-      !boundedString(value.compatibilityFingerprint, 1_024)
+      !isCanonicalUtf8StringWithin(
+        value.compatibilityFingerprint,
+        KERNEL_SHAPE_ARTIFACT_MAX_COMPATIBILITY_FINGERPRINT_BYTES,
+      )
     ) {
       return undefined;
     }

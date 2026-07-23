@@ -117,6 +117,7 @@ import {
   readBoundedOcctArtifactBrep,
   writeBoundedOcctArtifactBrep,
 } from "./internal/occt-artifact-facade.js";
+import { throwOcctArtifactLimitRefusal } from "./internal/occt-artifact-limit.js";
 import { resolvedCompositeSweepVolumeOracle } from "./internal/transported-profile-volume.js";
 import {
   combineMassProperties,
@@ -1136,16 +1137,21 @@ class OcctKernel implements GeometryKernel {
       const brep = this.raw.toBREPBinary(owned[OCCT_SHAPE]).slice();
       checkArtifactCandidateSignal(signal);
       if (brep.byteLength > maxBytes) {
-        throw new RangeError("OCCT candidate artifact exceeds maxArtifactBytes");
+        throwOcctArtifactLimitRefusal(
+          maxBytes,
+          brep.byteLength,
+          "OCCT candidate artifact exceeds maxArtifactBytes",
+        );
       }
       return brep;
     }
+    const outputMaximum = Math.min(maxBytes, TOPOLOGY_HASH_UPPER_BOUND);
     try {
       const brep = writeBoundedOcctArtifactBrep({
         module: this.facade.artifact,
         kernel: this.raw.getRawKernel(),
         shapeId: owned[OCCT_SHAPE] as number,
-        maxOutputBytes: Math.min(maxBytes, TOPOLOGY_HASH_UPPER_BOUND),
+        maxOutputBytes: outputMaximum,
         ...(this.facade?.abi === "0.8" || this.facade?.abi === "0.9"
           ? {
               maxNativeRequestedBytes:
@@ -1160,7 +1166,11 @@ class OcctKernel implements GeometryKernel {
         error instanceof OcctArtifactWriteError &&
         error.diagnostics.code === "OUTPUT_LIMIT_EXCEEDED"
       ) {
-        throw new RangeError("OCCT candidate artifact exceeds maxArtifactBytes");
+        throwOcctArtifactLimitRefusal(
+          outputMaximum,
+          outputMaximum + 1,
+          "OCCT candidate artifact exceeds maxArtifactBytes",
+        );
       }
       throw error;
     }
