@@ -8,6 +8,10 @@ import {
   vec3,
 } from "invariantcad";
 import { createOcctKernel } from "invariantcad/kernels/occt";
+import {
+  loadAttestedOcctRuntime,
+  type OcctRuntimeAttestationFailureReason,
+} from "invariantcad/kernels/occt/browser";
 import stockOcctWasmUrl from "occt-wasm/dist/occt-wasm.wasm?url";
 import {
   DisposableWorkerOperationTimeoutError,
@@ -53,6 +57,25 @@ export interface BrowserSmokeResult {
     readonly recovery: ArtifactWorkerEvidence;
     readonly workersCreated: number;
     readonly workersTerminated: number;
+  };
+  readonly runtimeAttestation: {
+    readonly runtimePairIdentity: string;
+    readonly declaredBuildIdentity: string;
+    readonly imports: number;
+    readonly factories: number;
+    readonly constructed: number;
+    readonly disposed: number;
+    readonly exactWasmReceived: boolean;
+    readonly draftAdvertised: boolean;
+    readonly shapeArtifactsAbsent: boolean;
+    readonly topologyFingerprint: string;
+    readonly tamperReason: OcctRuntimeAttestationFailureReason;
+    readonly tamperExecutedJavaScript: boolean;
+    readonly importFailureReason: OcctRuntimeAttestationFailureReason;
+    readonly recoverySameIdentity: boolean;
+    readonly blobUrlsCreated: number;
+    readonly blobUrlsRevoked: number;
+    readonly blobUrlsOutstanding: number;
   };
 }
 
@@ -103,6 +126,331 @@ function sameBytes(first: Uint8Array, second: Uint8Array): boolean {
     first.byteLength === second.byteLength &&
     first.every((byte, index) => byte === second[index])
   );
+}
+
+interface BrowserAttestationState {
+  imports: number;
+  factories: number;
+  constructed: number;
+  disposed: number;
+  exactWasmReceived: boolean;
+}
+
+const BROWSER_ATTESTATION_STATE =
+  "__invariantCadBrowserRuntimeAttestation";
+const BROWSER_ATTESTATION_FACADE =
+  "invariantcad-facade@0.2.0+occt-wasm.3.7.0";
+const browserAttestationWasm = new Uint8Array([9, 8, 7, 6]);
+const browserAttestationJavascript = new TextEncoder().encode(`
+const state = globalThis.${BROWSER_ATTESTATION_STATE} ??= {
+  imports: 0,
+  factories: 0,
+  constructed: 0,
+  disposed: 0,
+  exactWasmReceived: false
+};
+state.imports += 1;
+const topologyKind = Object.freeze({ NONE: -1, FACE: 0, EDGE: 1, VERTEX: 2 });
+const topologyRelation = Object.freeze({
+  PRESERVED: 0,
+  MODIFIED: 1,
+  GENERATED: 2,
+  DELETED: 3,
+  CREATED: 4
+});
+class MinimalRawKernel {
+  constructor() { state.constructed += 1; }
+  releaseAll() {}
+  delete() { state.disposed += 1; }
+}
+export default async function createModule(options = {}) {
+  state.factories += 1;
+  const bytes = new Uint8Array(options.wasmBinary);
+  state.exactWasmReceived =
+    bytes.length === 4 &&
+    bytes[0] === 9 &&
+    bytes[1] === 8 &&
+    bytes[2] === 7 &&
+    bytes[3] === 6;
+  if (!state.exactWasmReceived) throw new Error("wrong verified WASM bytes");
+  return {
+    OcctKernel: MinimalRawKernel,
+    VectorUint32: class {},
+    InvariantCadDraftReport: class {},
+    InvariantCadTopologyKind: topologyKind,
+    InvariantCadTopologyRelation: topologyRelation,
+    invariantcadFacadeVersion: () => ${JSON.stringify(BROWSER_ATTESTATION_FACADE)},
+    invariantcadDraftFacesAtomic: () => {
+      throw new Error("not invoked");
+    }
+  };
+}
+`);
+
+async function sha256Hex(value: Uint8Array): Promise<string> {
+  const digest = new Uint8Array(
+    await crypto.subtle.digest(
+      "SHA-256",
+      value as Uint8Array<ArrayBuffer>,
+    ),
+  );
+  return [...digest]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function browserAttestationManifest(
+  javascript = browserAttestationJavascript,
+  webassembly = browserAttestationWasm,
+): Promise<Uint8Array> {
+  const [javascriptSha256, webassemblySha256, lockSha256, patchSha256, buildSha256] =
+    await Promise.all([
+      sha256Hex(javascript),
+      sha256Hex(webassembly),
+      sha256Hex(new TextEncoder().encode("lock")),
+      sha256Hex(new TextEncoder().encode("patch")),
+      sha256Hex(new TextEncoder().encode("build")),
+    ]);
+  const patch = {
+    path: "source/native/occt/patches/0001-test.patch",
+    size: 1,
+    sha256: patchSha256,
+  };
+  const manifest = {
+    schemaVersion: 1,
+    bundle: {
+      name: "invariantcad-occt-facade",
+      version: "0.2.0",
+      layoutVersion: 1,
+    },
+    facade: {
+      marker: BROWSER_ATTESTATION_FACADE,
+      abiVersion: "0.2.0",
+      upstreamOcctWasmVersion: "3.7.0",
+    },
+    runtime: [
+      {
+        path: "runtime/occt-wasm.js",
+        mediaType: "text/javascript",
+        size: javascript.byteLength,
+        sha256: javascriptSha256,
+      },
+      {
+        path: "runtime/occt-wasm.wasm",
+        mediaType: "application/wasm",
+        size: webassembly.byteLength,
+        sha256: webassemblySha256,
+      },
+    ],
+    source: {
+      lockPath: "source/native/occt/upstream.lock.json",
+      buildScriptPath: "source/scripts/build-occt-facade.sh",
+      patches: [patch],
+      relinkInstructionsPath: "SOURCE_AND_RELINK.md",
+      materials: [
+        {
+          path: "source/native/occt/upstream.lock.json",
+          role: "source-lock",
+          size: 1,
+          sha256: lockSha256,
+        },
+        {
+          path: patch.path,
+          role: "source-patch",
+          size: patch.size,
+          sha256: patch.sha256,
+        },
+        {
+          path: "source/scripts/build-occt-facade.sh",
+          role: "build-script",
+          size: 1,
+          sha256: buildSha256,
+        },
+      ],
+    },
+    integrity: {
+      algorithm: "SHA-256",
+      manifestPath: "SHA256SUMS",
+      coverage: "all regular bundle files except SHA256SUMS",
+    },
+  };
+  return new TextEncoder().encode(
+    `${JSON.stringify(manifest, undefined, 2)}\n`,
+  );
+}
+
+async function executeBrowserRuntimeAttestationGate(): Promise<
+  Omit<
+    BrowserSmokeResult["runtimeAttestation"],
+    "blobUrlsCreated" | "blobUrlsRevoked" | "blobUrlsOutstanding"
+  >
+> {
+  delete (globalThis as Record<string, unknown>)[BROWSER_ATTESTATION_STATE];
+  const releaseManifest = await browserAttestationManifest();
+  const expectedReleaseManifestSha256 = await sha256Hex(releaseManifest);
+  const runtimePromise = loadAttestedOcctRuntime({
+    releaseManifest,
+    expectedReleaseManifestSha256,
+    javascript: browserAttestationJavascript,
+    webassembly: browserAttestationWasm,
+  });
+  releaseManifest.fill(0);
+  const runtime = await runtimePromise;
+  const kernel = await createOcctKernel({ attestedRuntime: runtime });
+  const topologyFingerprint =
+    kernel.capabilities.topology?.signatures?.fingerprint;
+  if (topologyFingerprint === undefined) {
+    kernel.dispose();
+    throw new Error("Attested browser runtime omitted topology signatures");
+  }
+  const draftAdvertised = kernel.draft instanceof Function;
+  const shapeArtifactsAbsent =
+    kernel.capabilities.shapeArtifacts === undefined &&
+    !("encodeShapeArtifact" in kernel) &&
+    !("decodeShapeArtifact" in kernel);
+  kernel.dispose();
+
+  const beforeTamper = (
+    globalThis as Record<string, unknown>
+  )[BROWSER_ATTESTATION_STATE] as BrowserAttestationState;
+  const importsBeforeTamper = beforeTamper.imports;
+  const tamperedJavascript = browserAttestationJavascript.slice();
+  tamperedJavascript[0] = tamperedJavascript[0]! ^ 1;
+  let tamperReason: OcctRuntimeAttestationFailureReason | undefined;
+  try {
+    const untamperedManifest = await browserAttestationManifest();
+    await loadAttestedOcctRuntime({
+      releaseManifest: untamperedManifest,
+      expectedReleaseManifestSha256: await sha256Hex(untamperedManifest),
+      javascript: tamperedJavascript,
+      webassembly: browserAttestationWasm,
+    });
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "reason" in error &&
+      typeof error.reason === "string"
+    ) {
+      tamperReason = error.reason as OcctRuntimeAttestationFailureReason;
+    } else {
+      throw error;
+    }
+  }
+  if (tamperReason === undefined) {
+    throw new Error("Tampered browser JavaScript was accepted");
+  }
+  const importsAfterTamper = (
+    (
+      globalThis as Record<string, unknown>
+    )[BROWSER_ATTESTATION_STATE] as BrowserAttestationState
+  ).imports;
+
+  const invalidJavascript = new TextEncoder().encode(
+    `throw new Proxy({}, {
+  getPrototypeOf() {
+    throw new Error("import rejection prototype trap must not run");
+  }
+});
+export default function unreachable() {}
+`,
+  );
+  const invalidManifest =
+    await browserAttestationManifest(invalidJavascript);
+  let importFailureReason: OcctRuntimeAttestationFailureReason | undefined;
+  try {
+    await loadAttestedOcctRuntime({
+      releaseManifest: invalidManifest,
+      expectedReleaseManifestSha256: await sha256Hex(invalidManifest),
+      javascript: invalidJavascript,
+      webassembly: browserAttestationWasm,
+    });
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "reason" in error &&
+      typeof error.reason === "string"
+    ) {
+      importFailureReason =
+        error.reason as OcctRuntimeAttestationFailureReason;
+    } else {
+      throw error;
+    }
+  }
+  if (importFailureReason === undefined) {
+    throw new Error("Invalid verified browser JavaScript was accepted");
+  }
+
+  const recoveryManifest = await browserAttestationManifest();
+  const recoveredRuntime = await loadAttestedOcctRuntime({
+    releaseManifest: recoveryManifest,
+    expectedReleaseManifestSha256: await sha256Hex(recoveryManifest),
+    javascript: browserAttestationJavascript,
+    webassembly: browserAttestationWasm,
+  });
+  const recoveredKernel = await createOcctKernel({
+    attestedRuntime: recoveredRuntime,
+  });
+  recoveredKernel.dispose();
+
+  const finalState = (
+    globalThis as Record<string, unknown>
+  )[BROWSER_ATTESTATION_STATE] as BrowserAttestationState;
+  return {
+    runtimePairIdentity: runtime.attestation.runtimePairIdentity,
+    declaredBuildIdentity: runtime.attestation.declaredBuildIdentity,
+    imports: finalState.imports,
+    factories: finalState.factories,
+    constructed: finalState.constructed,
+    disposed: finalState.disposed,
+    exactWasmReceived: finalState.exactWasmReceived,
+    draftAdvertised,
+    shapeArtifactsAbsent,
+    topologyFingerprint,
+    tamperReason,
+    tamperExecutedJavaScript: importsAfterTamper !== importsBeforeTamper,
+    importFailureReason,
+    recoverySameIdentity:
+      recoveredRuntime.attestation.runtimePairIdentity ===
+      runtime.attestation.runtimePairIdentity,
+  };
+}
+
+async function runBrowserRuntimeAttestationGate(): Promise<
+  BrowserSmokeResult["runtimeAttestation"]
+> {
+  const createObjectUrl = URL.createObjectURL;
+  const revokeObjectUrl = URL.revokeObjectURL;
+  const activeUrls = new Set<string>();
+  let blobUrlsCreated = 0;
+  let blobUrlsRevoked = 0;
+  URL.createObjectURL = (object: Blob | MediaSource): string => {
+    const url = Reflect.apply(createObjectUrl, URL, [object]) as string;
+    blobUrlsCreated += 1;
+    activeUrls.add(url);
+    return url;
+  };
+  URL.revokeObjectURL = (url: string): void => {
+    blobUrlsRevoked += 1;
+    activeUrls.delete(url);
+    Reflect.apply(revokeObjectUrl, URL, [url]);
+    throw new Error(
+      "caller-controlled URL.revokeObjectURL failure must not mask the load",
+    );
+  };
+  try {
+    const result = await executeBrowserRuntimeAttestationGate();
+    return {
+      ...result,
+      blobUrlsCreated,
+      blobUrlsRevoked,
+      blobUrlsOutstanding: activeUrls.size,
+    };
+  } finally {
+    URL.createObjectURL = createObjectUrl;
+    URL.revokeObjectURL = revokeObjectUrl;
+  }
 }
 
 function workerFailure(error: {
@@ -515,7 +863,8 @@ async function runBrowserSmoke(): Promise<BrowserSmokeResult> {
   }
 
   const artifactWorker = await runArtifactWorkerGate();
-  return { manifold, occt, artifactWorker };
+  const runtimeAttestation = await runBrowserRuntimeAttestationGate();
+  return { manifold, occt, artifactWorker, runtimeAttestation };
 }
 
 const resultElement = document.querySelector("#result");

@@ -6,6 +6,24 @@
   form and added a release check for its path, shebang, and executable mode.
 - Replaced token-based release authentication with npm Trusted Publishing and
   a short-lived GitHub Actions OIDC identity.
+- Added public, environment-specific owned-OCCT runtime loaders at
+  `invariantcad/kernels/occt/node` and
+  `invariantcad/kernels/occt/browser`. They snapshot caller-owned bytes, verify
+  canonical `metadata/release.json` against an independently trusted SHA-256
+  pin, verify the exact JavaScript/WASM sizes and digests before importing
+  JavaScript, and return an opaque matched pair for
+  `createOcctKernel({ attestedRuntime })`. Kernel creation checks the initialized
+  facade marker and gives each instance a fresh verified WASM copy. The exact
+  runtime-pair identity is bound only into the repository-private artifact
+  compatibility fingerprint; the separate declared-build identity records the
+  manifest while explicitly leaving build execution, publisher identity, and
+  compatibility uncertified. The Node loader uses a process-global
+  `node:module.register()` hook without temporary executable files and requires
+  worker permission under Node's Permission Model. The browser loader imports a
+  short-lived Blob URL and therefore requires `blob:` in the applicable CSP.
+  Executable pair authority remains private to the evaluated InvariantCAD
+  internal module instance that created it, and no backend now advertises
+  `shapeArtifacts`.
 - Reworked the roadmap into explicit shipped, repository-only, in-progress,
   planned, and deferred tracks, including everyday modeling, visualization,
   CAE, plugins, performance, runtime coverage, and measurable 1.0 criteria.
@@ -21,17 +39,19 @@
   immutability and transfer detachment, hard-terminates a started non-yielding
   worker, and decodes successfully in a fresh worker while returning only
   scalar evidence after native cleanup. A separate Node gate runs owned ABI 0.9
-  producer A and consumer B in one-shot child processes, exact-checks the
-  release-input JS/WASM sizes and SHA-256 digests, executes private copied
-  JavaScript plus the verified `wasmBinary`, checks deterministic artifact and
-  evidence, rejects one-byte runtime tampering, and proves post-start
-  `SIGKILL` timeout/abort, injected-trap discard, and fresh recovery. It runs as
+  producer A and consumer B in one-shot child processes, verifies packaged
+  `metadata/release.json` against the reviewed manifest pin, imports the exact
+  verified JavaScript through the module hook, supplies the verified WASM copy,
+  checks deterministic artifact and evidence, rejects one-byte manifest/runtime
+  tampering, and proves post-start `SIGKILL` timeout/abort, injected-trap
+  discard, and fresh recovery. It runs as
   `pnpm test:occt-artifact-process` and is included in the facade-bundle gate.
-  Its evidence explicitly sets `certifiesCompatibility: false`: these checks
-  are not general runtime/build attestation, trusted-host or same-UID
-  protection, live/peak-memory proof, a real OCCT-trap injection, durable native
-  subshape identity, a reviewed cross-platform golden matrix, or evaluator/cache
-  integration, and no backend now advertises `shapeArtifacts`.
+  Its evidence explicitly sets `certifiesCompatibility: false`: these checks do
+  not authenticate build execution or a publisher, protect against a trusted
+  host/module-hook chain or same-UID process, prove live/peak memory or a real
+  OCCT trap, establish durable native subshape identity or a reviewed
+  cross-platform matrix, or integrate the evaluator/cache, and no backend now
+  advertises `shapeArtifacts`.
 - Made `createOcctKernel` snapshot every caller-owned initialization option
   before its first asynchronous import, including cross-realm URL state and
   copied WASM bytes, so later caller mutation cannot make execution inputs and
@@ -46,7 +66,7 @@
   fixture is retained as a negative corpus, and a read-only generator check is
   part of ordinary verification. Production capability advertising remains
   blocked by the separate native-allocation, cancellation, identity,
-  attestation, and reviewed cross-platform proof gaps.
+  authenticated-build-provenance, and reviewed cross-platform proof gaps.
 - Advanced the repository-private owned OCCT facade and compliance bundle to
   ABI 0.8 with a fixed 128 MiB per-operation ceiling over cumulative allocation
   requests observed at twelve reviewed linker-wrapped entry points. Reports
@@ -54,8 +74,9 @@
   new argument, and disposable-process tests cover write/read denial plus
   recovery. This is unadvertised defense-in-depth: direct C denial is fail-stop,
   and strict BinTools count/product preflight, work bounds, cancellation,
-  runtime attestation, durable identity, and reviewed cross-platform goldens
-  remain open.
+  runtime-pair verification, durable identity, and reviewed cross-platform
+  goldens require separate gates; the exact pair gate is supplied independently
+  by the attested loader above.
 - Advanced the repository-private owned OCCT facade and compliance bundle to
   ABI 0.9 with an exact parser for the owned writer's BinTools-v4 profile before
   `BinTools::Read`. Decode now validates canonical sections, finite geometry,
@@ -71,9 +92,10 @@
   modeling limit. Reports expose preflight limit/usage, depth, location-power,
   consumed-byte, completion/code, and deserialization-start telemetry. The
   private candidate still does not advertise `shapeArtifacts`; these controls
-  are not live/peak-memory accounting, prompt same-thread cancellation, exact
-  runtime attestation, reviewed cross-platform compatibility proof, or
-  comprehensive durable identity for symmetric topology.
+  are not live/peak-memory accounting, prompt same-thread cancellation,
+  authenticated build execution or publisher identity, reviewed cross-platform
+  compatibility proof, or comprehensive durable identity for symmetric
+  topology.
 
 ## [0.1.0] - 2026-07-22
 

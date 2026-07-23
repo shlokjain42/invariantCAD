@@ -19,6 +19,7 @@ import { pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 import { gzipSync, gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
+import { INVARIANTCAD_OCCT_FACADE_0_9_0_RELEASE_MANIFEST_SHA256 } from "../src/occt-runtime-node.js";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const verifierPath = join(repoRoot, "scripts/verify-occt-facade-bundle.mjs");
@@ -722,6 +723,15 @@ async function coherentlyTamperRuntime(fixture: Fixture, path: string): Promise<
 }
 
 describe("OCCT facade compliance bundle verification", () => {
+  it("keeps the public attested-loader trust pin aligned with canonical release metadata", async () => {
+    const descriptor = JSON.parse(
+      await readFile(descriptorPath, "utf8"),
+    ) as ReleaseInput;
+    expect(
+      sha256(stableJson(makeRelease(descriptor, descriptor.runtime))),
+    ).toBe(INVARIANTCAD_OCCT_FACADE_0_9_0_RELEASE_MANIFEST_SHA256);
+  });
+
   it("accepts a complete internally consistent fixture against explicit test runtime pins", async () => {
     const fixture = await makeFixture();
     await expect(verifyFixture(fixture)).resolves.toMatchObject({

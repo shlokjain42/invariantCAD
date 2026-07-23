@@ -7,9 +7,10 @@ icon: "globe"
 InvariantCAD's release gate builds a production Vite application and exercises
 both public kernel entry points in Chromium. The test evaluates a `2 × 3 × 4`
 box, checks Manifold mesh/STL results, checks exact OCCT topology counts, and
-exports STEP. It also exercises the repository-private OCCT artifact candidate
-inside disposable stock-runtime module workers; that test does not advertise a
-public codec.
+exports STEP. It also exercises exact manifest/JavaScript/WASM verification
+through the browser-specific OCCT attested loader and exercises the
+repository-private OCCT artifact candidate inside disposable stock-runtime
+module workers. Neither test advertises a public codec.
 
 ## Vite application
 
@@ -64,6 +65,46 @@ runtime identity.
 Serve WASM with `Content-Type: application/wasm`. Same-origin hosting avoids
 cross-origin credential and policy surprises; otherwise configure CORS
 explicitly.
+
+## Attested owned OCCT runtime
+
+The browser-specific entry verifies an already acquired owned runtime pair
+before importing its JavaScript:
+
+```ts
+import { createOcctKernel } from "invariantcad/kernels/occt";
+import {
+  INVARIANTCAD_OCCT_FACADE_0_9_0_RELEASE_MANIFEST_SHA256,
+  loadAttestedOcctRuntime,
+} from "invariantcad/kernels/occt/browser";
+
+const attestedRuntime = await loadAttestedOcctRuntime({
+  releaseManifest,
+  expectedReleaseManifestSha256:
+    INVARIANTCAD_OCCT_FACADE_0_9_0_RELEASE_MANIFEST_SHA256,
+  javascript,
+  webassembly,
+});
+const kernel = await createOcctKernel({ attestedRuntime });
+```
+
+`releaseManifest`, `javascript`, and `webassembly` are `ArrayBuffer` or
+`Uint8Array` values fetched under application-controlled size and network
+limits. The loader snapshots their exact views, verifies the canonical manifest
+against the independent pin, and checks both runtime files against that trusted
+manifest before creating a Blob module URL. It revokes the URL after import;
+the evaluated module remains cached for the lifetime of that realm.
+
+The visible attestation report can be structured-cloned, but that clone carries
+no executable authority. The private `attestedRuntime` authority cannot be
+transferred into another Worker or reproduced outside the evaluated
+InvariantCAD internal module instance that created it. Load and verify a new pair
+inside each worker/module instance that needs one, and terminate the worker when
+hard code/runtime reclamation is required. The pair identity is bound only to
+the repository-private artifact fingerprint, while the declared-build identity
+and explicit evidence flags do not authenticate build execution, a publisher,
+or the host. See
+[OCCT runtime attestation](/evaluation/occt-runtime-attestation).
 
 ## Worker pattern
 
@@ -137,30 +178,42 @@ The timeout case acknowledges startup and then enters a deliberately
 non-yielding loop. The owner hard-terminates that worker at the deadline and
 subsequently creates a fresh worker that decodes the real fixture. This proves
 the production bundle's kill-and-recover orchestration for the tested stock
-runtime. It is not live/peak-memory measurement, a real OCCT-trap injection,
-general runtime/build attestation, trusted-host isolation, durable subshape
-identity, a cross-platform golden matrix, or evaluator/cache integration.
+runtime. That stock-worker case is not itself runtime attestation,
+live/peak-memory measurement, a real OCCT-trap injection, trusted-host
+isolation, durable subshape identity, a cross-platform golden matrix, or
+evaluator/cache integration.
 
 The separate Node owned-runtime gate is repository tooling rather than browser
 deployment support. `pnpm test:occt-artifact-process` runs fresh ABI 0.9
-producer and consumer child processes, verifies release-input JS/WASM
-size/SHA-256 before using copied bytes as execution inputs, covers `SIGKILL`
-deadline/abort and injected-trap recovery, and explicitly reports
+producer and consumer child processes, verifies packaged
+`metadata/release.json` against the independently maintained reviewed pin,
+imports the exact verified JavaScript through a process-global Node module hook,
+passes a fresh verified WASM copy, covers `SIGKILL` deadline/abort and
+injected-trap recovery, and explicitly reports
 `certifiesCompatibility: false`. The verified facade-bundle gate invokes it
-automatically.
+automatically. No temporary executable JavaScript file is created.
 
 ## Content Security Policy
 
 WebAssembly compilation may require `wasm-unsafe-eval` in `script-src`,
 depending on browser and deployment mode. Test the exact production policy;
 avoid broadly enabling `unsafe-eval`. Asset fetching also needs the relevant
-`connect-src` or `default-src` allowance.
+`connect-src` or `default-src` allowance. The attested browser loader also
+requires `blob:` for module scripts, for example:
+
+```http
+Content-Security-Policy: script-src 'self' blob: 'wasm-unsafe-eval'
+```
+
+Use only the directives required by the tested application and browser.
 
 ## Tested boundary
 
 The release suite currently guarantees Chromium production-bundle behavior for
-the public kernels and the stock-runtime module-worker scenario described
-above. Other evergreen browsers are plausible but are not claimed as
-release-gated until executable coverage is added. The private candidate remains
-unexported, `shapeArtifacts` remains absent, and these tests confer no
-production compatibility certification.
+the public kernels, a synthetic matched-pair/tamper corpus through the browser
+attested loader, and the stock-runtime module-worker scenario described above.
+The owned ABI 0.9 pair is exercised through the separate Node process gate, not
+as a real owned-browser bundle in this Chromium test. Other evergreen browsers
+are plausible but are not claimed as release-gated until executable coverage is
+added. The private candidate remains unexported, `shapeArtifacts` remains
+absent, and these tests confer no production compatibility certification.

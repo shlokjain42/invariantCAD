@@ -8,8 +8,8 @@
   },
   "archive": {
     "format": "ustar+gzip",
-    "size": 7191122,
-    "sha256": "942dd214d83d3156249181d304a55938b2b2722ce039874502b895af353ccad7"
+    "size": 7193004,
+    "sha256": "db18c94517e09f0f7a62b8a22bb36d046f1daaf76973153b003884762bf97c3c"
   },
   "facade": {
     "marker": "invariantcad-facade@0.9.0+occt-wasm.3.7.0",
@@ -126,8 +126,8 @@
       "target": "SOURCE_AND_RELINK.md",
       "role": "source-relink-guide",
       "mode": "0644",
-      "size": 16750,
-      "sha256": "39d79cc4bc2f188782bf558992d0f1921d89097ad0a28122f51b1b352b545b3b"
+      "size": 18143,
+      "sha256": "d6422e247ceda890facf7a78fae323a5923936aa4086454eadbb9631a766db6e"
     },
     {
       "source": "LICENSE",

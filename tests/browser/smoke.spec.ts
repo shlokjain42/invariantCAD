@@ -48,4 +48,32 @@ test("loads both WASM kernels and confines artifact live shapes to disposable mo
   );
   expect(recovery.compatibilityFingerprint).toContain("runtime=stock");
   expect(recovery.inputBytesPreserved).toBe(true);
+
+  const attestation = result.runtimeAttestation;
+  expect(attestation.runtimePairIdentity).toMatch(
+    /^invariantcad-occt-runtime-pair@1:sha256:[0-9a-f]{64}$/u,
+  );
+  expect(attestation.declaredBuildIdentity).toMatch(
+    /^invariantcad-occt-release-manifest@1:sha256:[0-9a-f]{64}$/u,
+  );
+  expect(attestation.imports).toBe(2);
+  expect(attestation.factories).toBe(2);
+  expect(attestation.constructed).toBe(2);
+  expect(attestation.disposed).toBe(2);
+  expect(attestation.exactWasmReceived).toBe(true);
+  expect(attestation.draftAdvertised).toBe(true);
+  expect(attestation.shapeArtifactsAbsent).toBe(true);
+  expect(attestation.topologyFingerprint).toContain(
+    "runtime=invariantcad-facade@0.2.0+occt-wasm.3.7.0",
+  );
+  expect(attestation.topologyFingerprint).not.toContain(
+    "runtimeAttestation=",
+  );
+  expect(attestation.tamperReason).toBe("javascript-digest-mismatch");
+  expect(attestation.tamperExecutedJavaScript).toBe(false);
+  expect(attestation.importFailureReason).toBe("module-import-failed");
+  expect(attestation.recoverySameIdentity).toBe(true);
+  expect(attestation.blobUrlsCreated).toBe(3);
+  expect(attestation.blobUrlsRevoked).toBe(3);
+  expect(attestation.blobUrlsOutstanding).toBe(0);
 });

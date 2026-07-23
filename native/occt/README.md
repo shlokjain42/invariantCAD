@@ -152,8 +152,30 @@ pnpm bundle:occt-facade --check-reproducible
 
 “Package-neutral” means that the archive is not an npm package and does not
 install or register itself. InvariantCAD never downloads, extracts, or selects
-it implicitly; an application must explicitly load `runtime/occt-wasm.js` and
-pass its matched `runtime/occt-wasm.wasm` to `createOcctKernel`.
+it implicitly; an application must explicitly acquire the bundle inputs.
+
+For the reviewed ABI 0.9 bundle, prefer
+`loadAttestedOcctRuntime(...)` from
+`invariantcad/kernels/occt/node` or
+`invariantcad/kernels/occt/browser`. Supply canonical
+`metadata/release.json`, both files under `runtime/`, and the independently
+maintained
+`INVARIANTCAD_OCCT_FACADE_0_9_0_RELEASE_MANIFEST_SHA256` pin, then pass the
+opaque result to `createOcctKernel({ attestedRuntime })`. The loader copies all
+three caller-owned inputs, verifies the manifest before importing JavaScript,
+and verifies the exact JavaScript/WASM sizes and digests against that trusted
+manifest. A digest obtained beside an untrusted bundle is not an independent
+trust anchor.
+
+The Node loader transfers verified JavaScript through one process-global module
+hook without writing a temporary executable file; Node's Permission Model must
+allow the hook worker. The browser loader uses a short-lived Blob module URL and
+requires `blob:` in the applicable CSP. Executable pair authority remains
+private to the evaluated InvariantCAD internal module instance that created it;
+cloning the visible report does not reproduce that authority. Direct
+`moduleFactory` plus `wasm` remains available for an intentionally trusted
+custom/rebuilt pair, but that raw path has no attested runtime-pair identity. See
+[`docs/evaluation/occt-runtime-attestation.mdx`](../../docs/evaluation/occt-runtime-attestation.mdx).
 
 The generated bundle is a review artifact, not a legal certification. It has
 not been published to npm or another release channel. Public distribution and
@@ -566,14 +588,17 @@ bounded; it is not a live/peak-memory proof. Synchronous same-thread WASM also
 has an in-flight cancellation gap, so an ordinary timer-driven `AbortSignal`
 does not provide prompt cancellation during native work. Ordered native
 evidence is not a comprehensive durable identity scheme for indistinguishable
-symmetric topology, the runtime has no in-process attestation of the exact
-JavaScript/WASM/build pair, and the stock fixture is not cross-process
-compatibility proof. Binary sidecar v2 and ABI 0.9 materially narrow the
-candidate boundary, but production promotion still requires prompt
-cancellation outside the same-thread gap, comprehensive durable artifact-local
-identity, exact runtime attestation, reviewed owned-runtime cross-process
-goldens, and the remaining evaluator/cache integration and release gates. The
-codec remains reachable only through repository-private test plumbing.
+symmetric topology, and the stock fixture is not cross-process compatibility
+proof. The attested loaders now verify the exact owned JavaScript/WASM pair
+under an independent canonical release-manifest pin, and the private candidate
+fingerprint binds that pair identity. The separate declared-build identity does
+not prove that recipe ran, authenticate a publisher, or attest the wider
+library/wrapper/host. Binary sidecar v2, ABI 0.9, and exact pair verification
+materially narrow the candidate boundary, but production promotion still
+requires prompt cancellation outside the same-thread gap, comprehensive durable
+artifact-local identity, reviewed owned-runtime cross-process goldens, and the
+remaining evaluator/cache integration and release gates. The codec remains
+reachable only through repository-private test plumbing.
 
 The generated pair and its local package-neutral bundle remain ignored build
 artifacts and are not included in the `invariantcad` npm tarball. Until an
@@ -611,6 +636,9 @@ update the image digest in the lock. Facade-only changes should be carried as
 ordered patches here so the replacement path remains inspectable.
 
 Likewise, successful local bundle generation and verification show that the
-declared files and digests are internally consistent. They do not establish
-publisher identity, certify legal compliance, or replace external review of
-the actual distribution channel and corresponding-source offer.
+declared files and digests are internally consistent. An independently trusted
+release-manifest pin plus the attested loader proves the exact manifest and
+runtime pair supplied to that loader, not that the declared build execution ran.
+Neither path establishes publisher identity, certifies legal compliance, or
+replaces external review of the actual distribution channel and
+corresponding-source offer.

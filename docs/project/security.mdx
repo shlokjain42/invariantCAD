@@ -43,6 +43,40 @@ Run untrusted or high-cost workloads in a worker, process, or container with
 host resource limits. An `AbortSignal` is cooperative and cannot preempt every
 same-thread synchronous native call.
 
+## Attested owned OCCT loading
+
+For a reviewed owned-facade bundle, use
+`invariantcad/kernels/occt/node` or
+`invariantcad/kernels/occt/browser`. The loaders copy caller-owned manifest,
+JavaScript, and WASM bytes; verify exact canonical `metadata/release.json`
+against an independently trusted SHA-256 pin; and verify the runtime file sizes
+and digests before supplied JavaScript executes. A digest fetched beside an
+otherwise untrusted bundle is not an independent trust anchor.
+
+The resulting `attestedRuntime` is an opaque authority accepted only by the
+evaluated InvariantCAD internal module instance that created it. Its visible
+attestation report can be cloned, but the executable authority cannot be
+reproduced or transferred to another Worker. `createOcctKernel` supplies a
+fresh verified WASM copy, checks the initialized facade marker, and binds the
+exact pair identity only into the repository-private artifact fingerprint. It
+still does not advertise `shapeArtifacts`.
+
+In Node.js, the loader installs one process-global `node:module.register()` hook
+and leaves the evaluated module cache in place for the process lifetime; it
+does not create a temporary executable file. Node's Permission Model must allow
+the hook worker. In browsers, the loader imports a unique Blob module URL and
+requires `blob:` in the applicable `script-src` policy. A Worker or child
+process remains the hard reclamation boundary.
+
+The report's separate declared-build identity hashes the exact release manifest,
+but `buildExecutionObserved`, `buildExecutionAuthenticated`,
+`publisherAuthenticated`, and `certifiesCompatibility` remain false. This
+mechanism does not defend a compromised realm, browser, extension, service
+worker, Node module-hook chain, same-process attacker, host, or engine, and it
+does not attest the wider application, InvariantCAD wrapper/library, or machine
+instructions. See
+[OCCT runtime attestation](/evaluation/occt-runtime-attestation).
+
 ## Dependency policy
 
 Production releases require a zero-advisory package audit. The default Manifold
