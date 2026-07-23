@@ -548,21 +548,35 @@ transport boundary:
   validates every report echo and releases a transferred root if subsequent
   sidecar validation or adoption fails.
 
+Owned facade ABI 0.8 retains those guarantees and adds a trailing signed-int
+`maxNativeRequestedBytes` to both native calls. Private linker-wrapped allocator
+entry points count admitted cumulative requested bytes and allocation calls.
+Both reports echo the limit and expose `nativeRequestedBytes`,
+`nativeAllocationCalls`, and `nativeRequestLimitExceeded`. Reviewed throwing C++
+entry points return `NATIVE_REQUEST_LIMIT_EXCEEDED`; the admitted byte total
+never exceeds the cap, while the call count includes the denied request. Direct
+C allocator denials abort the affected WASM runtime instead of returning null to
+unchecked OCCT callers, so callers must isolate candidate work and discard that
+runtime after a trap. This is cumulative-request defense-in-depth, not
+live/peak-memory accounting or hostile-input safety.
+
 These tests prove bounded retained native output, a pre-snapshot input-byte
 gate, pinned v4/no-triangulation serialization, exact archive consumption, a
 post-read topology ceiling, and transactional report ownership for the reviewed
-owned ABI 0.7 candidate path. They do not promote that path into a production
-codec. Stock OCCT and owned ABI 0.2 through 0.6 retain the earlier unbounded
-research path, and no shipped backend advertises
+owned ABI 0.8 candidate path, plus deterministic request-limit reporting. They
+do not promote that path into a production codec. Owned ABI 0.7 retains bounded
+transport without the private native-request quota; stock OCCT and owned ABI
+0.2 through 0.6 retain the earlier unbounded research path, and no shipped
+backend advertises
 `KernelCapabilities.shapeArtifacts`.
 
 Binary sidecar v2 closes the former JSON-intermediate allocation blocker. The
 hook remains candidate-only for five independent reasons:
 
 - an admitted binary BREP can declare large table, pole, knot, or related
-  geometry counts that cause allocation amplification inside `BinTools::Read`.
-  Those allocations occur before the post-read topology ceiling can reject the
-  decoded graph;
+  geometry counts. Count/product overflow can occur before a wrapped allocation
+  request is visible, other paths may bypass those wrappers, and bounded
+  cumulative requests do not bound native work, live bytes, or peak memory;
 - synchronous same-thread WASM does not yield for an ordinary timer-driven
   `AbortSignal`, so entry checks do not provide prompt in-flight cancellation;
 - ordered topology evidence is useful for fail-closed comparison in the pinned
@@ -575,19 +589,21 @@ hook remains candidate-only for five independent reasons:
   the owned facade across fresh processes, platforms, or reviewed release
   builds.
 
-Production promotion therefore still requires strict native archive preflight
-and/or decode-time allocation and work quotas, prompt cancellation outside the
-same-thread synchronous gap, durable artifact-local native subshape identity,
-exact loaded-runtime/build attestation, and reviewed cross-process goldens. The
+Production promotion therefore still requires strict BinTools grammar, count,
+and product preflight plus reviewed hard memory and work quotas, prompt
+cancellation outside the same-thread synchronous gap, durable artifact-local
+native subshape identity, exact loaded-runtime/build attestation, and reviewed
+cross-process goldens. The
 compatibility fingerprint must bind the native
 binary/WASM and JavaScript pair, wrapper, envelope and sidecar revisions,
 identity scheme, relevant tolerance and serialization options, and every other
 input that can change the result.
 
 ABI 0.7 resolves the candidate's former full-output-materialization and
-successful-result ownership gaps, while sidecar v2 resolves the JSON
-materialization gap. Neither resolves the remaining native preallocation,
-cancellation, identity, attestation, or compatibility-proof gaps.
+successful-result ownership gaps, ABI 0.8 adds a private cumulative-request
+quota, and sidecar v2 resolves the JSON materialization gap. None provides
+strict native archive preflight or resolves the remaining work, cancellation,
+identity, attestation, or compatibility-proof gaps.
 Advertising an ordinary native exchange function under the stronger
 shape-artifact capability would therefore remain incorrect, even when it can
 reconstruct a geometrically valid solid.

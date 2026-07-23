@@ -13,7 +13,7 @@ missing or ambiguous diagnostic. Success never means guessing from a kernel
 index or enumeration order.
 
 The published corpus exercises protocol-v2 primary descriptor `@6` on both the
-known stock OCCT runtime and the matched owned facade ABI 0.7 runtime, which
+known stock OCCT runtime and the matched owned facade ABI 0.8 runtime, which
 retains the ABI 0.6 exact-evolution matrix. Each runtime also exposes its exact
 protocol-v1 compatibility floor:
 descriptor `@4` for stock and owned ABI 0.2–0.4, or descriptor `@5` for owned
@@ -64,10 +64,11 @@ The version boundaries are tested independently. Document v6 admits vertex
 references and queries while v1–v5 stay frozen. Signature protocol v2 adds
 vertex evidence while protocol-v1 reference bytes, evidence construction, and
 matching stay frozen. OCCT descriptor `@6` is primary and `@4`/`@5` are exact
-v1 compatibility profiles. The current owned facade ABI is 0.7: it retains the
-ABI 0.6 modeling/history surface and adds bounded artifact transport only for
-the repository-private candidate, while the separate exact indexed
-topology-evolution protocol remains version 1.
+v1 compatibility profiles. The current owned facade ABI is 0.8: it retains the
+ABI 0.6 modeling/history surface and ABI 0.7 bounded artifact transport, then
+adds a private cumulative native allocation-request budget only for the
+repository-private candidate. The separate exact indexed topology-evolution
+protocol remains version 1.
 
 The source-repository fixtures are
 `tests/topology-persistence-torture-transform.test.ts`,
@@ -89,7 +90,7 @@ pnpm vitest run \
   tests/topology-signatures-occt.test.ts
 ```
 
-After building or otherwise supplying the matched owned facade ABI 0.7 runtime,
+After building or otherwise supplying the matched owned facade ABI 0.8 runtime,
 run the ABI 0.6 exact-evolution matrix it retains with:
 
 ```sh

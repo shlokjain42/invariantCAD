@@ -752,7 +752,7 @@ try {
         "let facadeChecked = false;",
         "const moduleFactory = async (options) => {",
         "  const module = await loaded.default(options);",
-        '  assert.equal(module.invariantcadFacadeVersion(), "invariantcad-facade@0.7.0+occt-wasm.3.7.0");',
+        '  assert.equal(module.invariantcadFacadeVersion(), "invariantcad-facade@0.8.0+occt-wasm.3.7.0");',
         '  assert.equal(typeof module.InvariantCadPipeShellReport, "function");',
         '  assert.equal(typeof module.invariantcadPipeShellSolid, "function");',
         '  assert.equal(typeof module.InvariantCadBooleanReport, "function");',

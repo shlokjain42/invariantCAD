@@ -25,12 +25,15 @@ const verifierPath = join(repoRoot, "scripts/verify-occt-facade-bundle.mjs");
 const packagerPath = join(repoRoot, "scripts/package-occt-facade-bundle.mjs");
 const descriptorPath = join(repoRoot, "native/occt/bundle/release-input.json");
 const lockPath = join(repoRoot, "native/occt/upstream.lock.json");
-const bundleVersion = "0.7.0";
+const bundleVersion = "0.8.0";
 const bundleName = `invariantcad-occt-facade-${bundleVersion}`;
 const facadeMarker = `invariantcad-facade@${bundleVersion}+occt-wasm.3.7.0`;
 const pipeShellPatchSource =
   "native/occt/patches/0003-controlled-pipe-shell.patch";
 const pipeShellPatchTarget = `source/${pipeShellPatchSource}`;
+const hardenedArtifactPatchSource =
+  "native/occt/patches/0008-hardened-shape-artifact-budgets.patch";
+const hardenedArtifactPatchTarget = `source/${hardenedArtifactPatchSource}`;
 const temporaryRoots: string[] = [];
 
 interface LockedEntry {
@@ -173,6 +176,11 @@ function syntheticWasm(): Buffer {
         "invariantcadSolidOffsetAtomic",
         "invariantcadWriteArtifactBrep",
         "invariantcadReadArtifactBrep",
+        "maxNativeRequestedBytes",
+        "nativeRequestedBytes",
+        "nativeAllocationCalls",
+        "nativeRequestLimitExceeded",
+        "NATIVE_REQUEST_LIMIT_EXCEEDED",
       ].join("\0"),
     ),
   ]);
@@ -191,8 +199,21 @@ async function makeFixtureReleaseInput(): Promise<ReleaseInput> {
     size: patchBytes.length,
     sha256: sha256(patchBytes),
   };
+  const hardenedArtifactPatchBytes = await readFile(
+    join(repoRoot, hardenedArtifactPatchSource),
+  );
+  const hardenedArtifactPatch: LockedEntry = {
+    source: hardenedArtifactPatchSource,
+    target: hardenedArtifactPatchTarget,
+    role: "source-patch",
+    mode: "0644",
+    size: hardenedArtifactPatchBytes.length,
+    sha256: sha256(hardenedArtifactPatchBytes),
+  };
   const inputs = current.inputs.filter(
-    (entry) => entry.target !== pipeShellPatchTarget,
+    (entry) =>
+      entry.target !== pipeShellPatchTarget &&
+      entry.target !== hardenedArtifactPatchTarget,
   );
   const nextPatchIndex = inputs.findIndex(
     (entry) =>
@@ -203,6 +224,15 @@ async function makeFixtureReleaseInput(): Promise<ReleaseInput> {
     throw new Error("Fixture release input lacks the exact Boolean patch");
   }
   inputs.splice(nextPatchIndex, 0, pipeShellPatch);
+  const boundedArtifactPatchIndex = inputs.findIndex(
+    (entry) =>
+      entry.target ===
+      "source/native/occt/patches/0007-bounded-shape-artifacts.patch",
+  );
+  if (boundedArtifactPatchIndex === -1) {
+    throw new Error("Fixture release input lacks the bounded artifact patch");
+  }
+  inputs.splice(boundedArtifactPatchIndex + 1, 0, hardenedArtifactPatch);
   return {
     ...current,
     bundle: { ...current.bundle, version: bundleVersion },
@@ -670,6 +700,9 @@ describe("OCCT facade compliance bundle verification", () => {
 
   it("accepts the same fixture as an exactly normalized ustar/gzip archive", async () => {
     const fixture = await makeFixture();
+    expect(
+      Buffer.byteLength(`${bundleName}/${hardenedArtifactPatchTarget}`),
+    ).toBe(100);
     const { archive } = await makeNormalizedArchive(fixture);
     const verifier = await loadVerifier();
     await expect(
@@ -1058,7 +1091,7 @@ describe("OCCT facade compliance bundle verification", () => {
         descriptor.inputs?.some(
           (entry: LockedEntry) =>
             entry.target ===
-            "source/native/occt/patches/0007-bounded-shape-artifacts.patch",
+            "source/native/occt/patches/0008-hardened-shape-artifact-budgets.patch",
         ) &&
         descriptor.runtime.every((entry) => {
           const path = join(runtimeDirectory, entry.source);

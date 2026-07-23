@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-const EXPECTED_FACADE_VERSION = "invariantcad-facade@0.7.0+occt-wasm.3.7.0";
+const EXPECTED_FACADE_VERSION = "invariantcad-facade@0.8.0+occt-wasm.3.7.0";
 const EXPECTED_TOPOLOGY_HISTORY_VERSION = 1;
+const ARTIFACT_NATIVE_REQUEST_LIMIT = 128 * 1024 * 1024;
 const EXACT_BOOLEAN_HISTORY_RECORD_LIMIT = 1_000_000;
 const EXACT_EDGE_TREATMENT_HISTORY_RECORD_LIMIT = 1_000_000;
 const EXACT_SOLID_OFFSET_HISTORY_RECORD_LIMIT = 1_000_000;
@@ -1205,12 +1206,27 @@ try {
     const arenaWithSource = kernel.getShapeCount();
     let bytes;
     withReport(
-      Module.invariantcadWriteArtifactBrep(kernel, source, 1_000_000),
+      Module.invariantcadWriteArtifactBrep(
+        kernel,
+        source,
+        1_000_000,
+        ARTIFACT_NATIVE_REQUEST_LIMIT,
+      ),
       (report) => {
         assert.equal(report.ok, true);
         assert.equal(report.stage, "complete");
         assert.equal(report.code, "OK");
         assert.equal(report.maxOutputBytes, 1_000_000);
+        assert.equal(
+          report.maxNativeRequestedBytes,
+          ARTIFACT_NATIVE_REQUEST_LIMIT,
+        );
+        assert.ok(report.nativeRequestedBytes > 0);
+        assert.ok(
+          report.nativeRequestedBytes <= report.maxNativeRequestedBytes,
+        );
+        assert.ok(report.nativeAllocationCalls > 0);
+        assert.equal(report.nativeRequestLimitExceeded, false);
         assert.equal(report.hasBytes(), true);
         assert.ok(report.byteCount() > 0);
         bytes = report.copyBytes();
@@ -1221,7 +1237,12 @@ try {
     assert.equal(kernel.getShapeCount(), arenaWithSource);
 
     withReport(
-      Module.invariantcadWriteArtifactBrep(kernel, source, 0),
+      Module.invariantcadWriteArtifactBrep(
+        kernel,
+        source,
+        0,
+        ARTIFACT_NATIVE_REQUEST_LIMIT,
+      ),
       (failed) => {
         assert.equal(failed.ok, false);
         assert.equal(failed.code, "INVALID_OUTPUT_LIMIT");
@@ -1229,7 +1250,20 @@ try {
       },
     );
     withReport(
-      Module.invariantcadWriteArtifactBrep(kernel, 0xffff_ffff, 1_000),
+      Module.invariantcadWriteArtifactBrep(kernel, source, 1_000, 0),
+      (failed) => {
+        assert.equal(failed.ok, false);
+        assert.equal(failed.code, "INVALID_NATIVE_REQUEST_LIMIT");
+        assert.equal(failed.hasBytes(), false);
+      },
+    );
+    withReport(
+      Module.invariantcadWriteArtifactBrep(
+        kernel,
+        0xffff_ffff,
+        1_000,
+        ARTIFACT_NATIVE_REQUEST_LIMIT,
+      ),
       (failed) => {
         assert.equal(failed.ok, false);
         assert.equal(failed.code, "INVALID_SHAPE_ID");
@@ -1239,7 +1273,12 @@ try {
     assert.equal(kernel.getShapeCount(), arenaWithSource);
 
     withReport(
-      Module.invariantcadWriteArtifactBrep(kernel, source, bytes.byteLength),
+      Module.invariantcadWriteArtifactBrep(
+        kernel,
+        source,
+        bytes.byteLength,
+        ARTIFACT_NATIVE_REQUEST_LIMIT,
+      ),
       (report) => {
         assert.equal(report.ok, true);
         assert.equal(report.maxOutputBytes, bytes.byteLength);
@@ -1251,6 +1290,7 @@ try {
         kernel,
         source,
         bytes.byteLength - 1,
+        ARTIFACT_NATIVE_REQUEST_LIMIT,
       ),
       (report) => {
         assert.equal(report.ok, false);
@@ -1272,6 +1312,7 @@ try {
       borrowed,
       borrowed.byteLength,
       100,
+      ARTIFACT_NATIVE_REQUEST_LIMIT,
     );
     const alias = report.clone();
     const foreign = new Module.OcctKernel();
@@ -1285,6 +1326,14 @@ try {
       assert.ok(report.topologyItemCount > 0);
       assert.ok(report.topologyItemCount <= 100);
       assert.equal(report.maxTopologyItems, 100);
+      assert.equal(
+        report.maxNativeRequestedBytes,
+        ARTIFACT_NATIVE_REQUEST_LIMIT,
+      );
+      assert.ok(report.nativeRequestedBytes > 0);
+      assert.ok(report.nativeRequestedBytes <= report.maxNativeRequestedBytes);
+      assert.ok(report.nativeAllocationCalls > 0);
+      assert.equal(report.nativeRequestLimitExceeded, false);
       assert.equal(report.hasResult(), true);
       assert.equal(report.transferCode(kernel), "READY");
       assert.equal(report.transferCode(foreign), "WRONG_KERNEL");
@@ -1318,6 +1367,7 @@ try {
       bytes,
       bytes.byteLength,
       100,
+      ARTIFACT_NATIVE_REQUEST_LIMIT,
     );
     const untakenAlias = untaken.clone();
     assert.equal(untaken.ok, true);
@@ -1382,6 +1432,14 @@ try {
         code: "INVALID_TOPOLOGY_LIMIT",
       },
       {
+        label: "invalid native request cap",
+        input: bytes,
+        inputLimit: bytes.byteLength,
+        topologyLimit: 100,
+        nativeRequestLimit: 0,
+        code: "INVALID_NATIVE_REQUEST_LIMIT",
+      },
+      {
         label: "topology cap",
         input: bytes,
         inputLimit: bytes.byteLength,
@@ -1397,6 +1455,7 @@ try {
           failure.input,
           failure.inputLimit,
           failure.topologyLimit,
+          failure.nativeRequestLimit ?? ARTIFACT_NATIVE_REQUEST_LIMIT,
         ),
         (failed) => {
           assert.equal(failed.ok, false, `${failure.label}.ok`);

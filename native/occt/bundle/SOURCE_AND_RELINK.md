@@ -1,6 +1,6 @@
 # InvariantCAD OCCT facade source and relink guide
 
-This ABI/bundle 0.7 release pairs the InvariantCAD OCCT facade runtime with the
+This ABI/bundle 0.8 release pairs the InvariantCAD OCCT facade runtime with the
 exact public source locations, local patches, and build recipe used to reproduce
 a compatible JavaScript/WebAssembly pair. The inventory and instructions are
 engineering aids, not legal advice or a claim that this bundle alone satisfies
@@ -20,8 +20,9 @@ every recipient's licensing obligations.
   `0003-controlled-pipe-shell.patch`,
   `0004-exact-boolean-history.patch`,
   `0005-exact-edge-treatment-history.patch`,
-  `0006-exact-solid-offset-history.patch`, and
-  `0007-bounded-shape-artifacts.patch`. The fourth patch adds the transactional
+  `0006-exact-solid-offset-history.patch`,
+  `0007-bounded-shape-artifacts.patch`, and
+  `0008-hardened-shape-artifact-budgets.patch`. The fourth patch adds the transactional
   multi-input union/subtraction/intersection ABI and complete face/edge/vertex
   topology graph, isolated operand copies, and native history-record
   budget. The fifth patch adds transactional constant-radius fillet and
@@ -33,7 +34,9 @@ every recipient's licensing obligations.
   generated-only replacement reconciliation, one-shot report ownership, and a
   third native history-record budget. The seventh patch adds capped chunked
   binary-BREP output and bounded-input report-owned decode with same-kernel
-  one-shot transfer. All seven are part of the matching 0.7 source, not
+  one-shot transfer. The eighth adds private linker-wrapped cumulative native
+  allocation-request limits and report telemetry around artifact reads and
+  writes. All eight are part of the matching 0.8 source, not
   optional patches.
 - `source/scripts/build-occt-facade.sh` is the exact rootless, digest-pinned
   build driver. Its compilation phase has networking disabled.
@@ -96,7 +99,7 @@ source/scripts/build-occt-facade.sh \
 The rebuilt files are written below `source/.artifacts/occt-facade/`. They are
 compatible replacement candidates, but a modified build is not expected to
 match this release's checksums. Test the generated pair together; never mix
-JavaScript glue from one build with WebAssembly from another. A matching 0.7
+JavaScript glue from one build with WebAssembly from another. A matching 0.8
 pair must expose the retained draft and PipeShell surfaces plus
 `invariantcadBooleanAtomic`, the stable union/subtract/intersect operation enum,
 and complete version-1 `PRESERVED`/`MODIFIED`/`GENERATED`/`DELETED`/`CREATED`
@@ -145,9 +148,20 @@ cap, and exposes no partial bytes on failure. The reader checks a borrowed
 and exact consumption, enforces a post-read native topology-item ceiling before
 full validity analysis, and keeps a successful result outside the arena until
 one same-kernel transfer. This is candidate transport, not production artifact
-capability: hostile native count allocation, durable symmetric-topology
-identity, bounded sidecar parsing, prompt cancellation, exact runtime
-attestation, and cross-process goldens remain required before promotion.
+capability. Both calls accept a trailing signed-int
+`maxNativeRequestedBytes`; their reports echo it and expose admitted cumulative
+`nativeRequestedBytes`, `nativeAllocationCalls`, and
+`nativeRequestLimitExceeded`. Reviewed throwing C++ entry points report a denial
+as `NATIVE_REQUEST_LIMIT_EXCEEDED`; admitted requested bytes do not exceed the
+cap, and the call count includes the denied call. Direct C allocator denials
+abort the affected WASM runtime rather than returning null to unchecked OCCT
+callers, so candidate work requires a disposable worker/process whose runtime
+is discarded after a trap. This private allocator wrapping is cumulative-request
+defense-in-depth, not hostile-input safety or a measurement of live/peak memory.
+Strict BinTools grammar, count, and product preflight, reviewed hard memory/work
+quotas, durable symmetric-topology identity, bounded sidecar parsing, prompt
+cancellation, exact runtime attestation, and cross-process goldens remain
+required before promotion.
 
 ## Modify OCCT and relink
 
@@ -175,8 +189,10 @@ rebuilding and relinking the complete pair. To do that:
    `0005-exact-edge-treatment-history.patch`. If it replaces exact shell/offset
    evolution, modify or supersede `0006-exact-solid-offset-history.patch`. If
    it replaces bounded artifact transport, modify or supersede
-   `0007-bounded-shape-artifacts.patch`. Do not omit any of these patches and
-   still label the result ABI 0.7. Add any
+   `0007-bounded-shape-artifacts.patch`. If it replaces the private artifact
+   allocation-request budget, modify or supersede
+   `0008-hardened-shape-artifact-budgets.patch`. Do not omit any of these
+   patches and still label the result ABI 0.8. Add any
    later patch with a higher lexical prefix, then
    update the working bundle input inventory and digests.
 6. Run the included build driver against that working recipe and test the new
@@ -203,8 +219,12 @@ rebuilding and relinking the complete pair. To do that:
    detached copied bytes, borrowed nonzero-offset input, strict archive and
    trailing-byte rejection, topology-limit failure, cloned reports,
    wrong-kernel rejection, untaken cleanup, one-shot transfer, and successful
-   work after every failure. These tests do not claim a pre-decode native
-   allocation bound.
+   work after every recoverable failure. It must also cover exact
+   native-request limits, deterministic structured denial and telemetry for the
+   reviewed throwing C++ entry points, fail-stop direct-C denial in a disposable
+   process, and successful work in a fresh runtime after either denial mode.
+   These tests do not claim strict BinTools preflight, a live/peak-memory bound,
+   or hostile-input safety.
 7. Deploy both rebuilt runtime files together. InvariantCAD accepts an explicit
    module factory and WebAssembly override and does not require release hashes
    when an application intentionally supplies its own trusted build.

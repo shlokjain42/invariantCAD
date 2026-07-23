@@ -54,12 +54,13 @@ the mounted cache.
 
 Patches belong in `native/occt/patches/` and should use Git's `a/` and `b/`
 path prefixes. Prefix filenames with an ordering number because lexical order is
-part of the build. Facade ABI 0.7 is the exact seven-patch series
+part of the build. Facade ABI 0.8 is the exact eight-patch series
 `0001-atomic-multi-face-draft.patch`, `0002-indexed-draft-history.patch`,
 `0003-controlled-pipe-shell.patch`, `0004-exact-boolean-history.patch`,
 `0005-exact-edge-treatment-history.patch`,
-`0006-exact-solid-offset-history.patch`, and
-`0007-bounded-shape-artifacts.patch`.
+`0006-exact-solid-offset-history.patch`,
+`0007-bounded-shape-artifacts.patch`, and
+`0008-hardened-shape-artifact-budgets.patch`.
 
 ## Native smoke test
 
@@ -81,7 +82,8 @@ generated-only-replacement cases; canonical tangent-contour seeds and shell
 openings; isolated working copies with byte-stable arena operands; separate
 record budgets; empty Boolean results; report cloning; foreign-kernel
 rejection; one-shot transfer; and capped binary-BREP output plus bounded-input
-report-owned artifact decode.
+report-owned artifact decode with private cumulative native allocation-request
+telemetry and limits.
 The public smoke loads the same generated pair through `createOcctKernel` and
 exercises direct and evaluated draft, exact Boolean, fillet/chamfer, and
 shell/offset lineage, protocol-v2 vertex persistence with the descriptor-`@6`
@@ -110,11 +112,11 @@ The packager reads `.artifacts/occt-facade/` and writes both of these ignored
 outputs:
 
 ```text
-.artifacts/occt-facade-bundle/invariantcad-occt-facade-0.7.0/
-.artifacts/occt-facade-bundle/invariantcad-occt-facade-0.7.0.tar.gz
+.artifacts/occt-facade-bundle/invariantcad-occt-facade-0.8.0/
+.artifacts/occt-facade-bundle/invariantcad-occt-facade-0.8.0.tar.gz
 ```
 
-`0.7.0` is the owned facade ABI and bundle version; it is independent of the
+`0.8.0` is the owned facade ABI and bundle version; it is independent of the
 InvariantCAD npm package version, document schema version, and product-roadmap
 milestone numbered 0.6.
 
@@ -231,7 +233,8 @@ ordinary `draft` support and feature-scoped `exactIndexedTopologyEvolution` v1
 for draft. ABI 0.4 adds `boolean`; ABI 0.5 adds `fillet` and `chamfer`; ABI 0.6
 advertises the protocol for `draft`, `boolean`, `fillet`, `chamfer`, `shell`,
 and `offset`; ABI 0.7 preserves that feature proof and adds bounded artifact
-transport without advertising a production artifact codec.
+transport, while ABI 0.8 adds a private cumulative native allocation-request
+budget around that transport. Neither advertises a production artifact codec.
 The TypeScript descriptor declaration is conditional on that probed surface.
 Known stock OCCT and every recognized owned facade now advertise
 topology-signature protocol v2 with primary descriptor `@6`, including exact
@@ -244,7 +247,7 @@ bytes, evidence construction, and matching behavior remain frozen and ignore
 the added vertex evidence.
 
 These descriptor/profile changes do not change the native boundary. The owned
-facade ABI is 0.7, and `exactIndexedTopologyEvolution` remains version 1.
+facade ABI is 0.8, and `exactIndexedTopologyEvolution` remains version 1.
 Document v6 and topology-signature protocol v2 are separate TypeScript/document
 axes; no semantic vertex roles are introduced. Distinct coincident B-Rep
 vertices remain separate snapshot items and resolve ambiguously when their
@@ -466,10 +469,27 @@ copying, snapshots exactly that view, requires the pinned v4 header and exact
 input consumption, and rejects a decoded topology graph beyond the caller's
 item ceiling before running full B-Rep validity analysis. A successful shape
 remains outside the kernel arena until a same-kernel one-shot transfer; deleting
-an untaken report releases it. The TypeScript candidate passes its remaining
-artifact byte allowance into this ABI, validates every report echo, and
-releases a transferred root if later sidecar adoption fails. Stock OCCT and
-owned ABI 0.2 through 0.6 retain the earlier unbounded research path.
+an untaken report releases it.
+
+Facade ABI 0.8 retains that transport and adds a trailing signed-int
+`maxNativeRequestedBytes` argument to both the writer and reader. During each
+call, private linker-wrapped allocator entry points count admitted cumulative
+native requested bytes and allocation calls. Both reports echo the limit and
+expose `nativeRequestedBytes`, `nativeAllocationCalls`, and
+`nativeRequestLimitExceeded`. A denial reached through the reviewed throwing
+C++ allocation entry points returns `NATIVE_REQUEST_LIMIT_EXCEEDED`; admitted
+requested bytes never exceed the limit, while the call count includes the
+denied request. Direct C allocator denials deliberately abort the affected WASM
+runtime instead of returning null to unchecked OCCT callers. Callers must run
+candidate work in a disposable worker/process and discard that runtime after a
+trap. These counters measure cumulative requests, not current live bytes, peak
+resident memory, or all physical WebAssembly memory growth.
+
+The TypeScript candidate passes a fixed private 128 MiB cumulative-request
+limit to ABI 0.8, validates every report echo, and releases a transferred root
+if later sidecar adoption fails. Owned ABI 0.7 retains the byte and topology
+caps without this private request quota; stock OCCT and owned ABI 0.2 through
+0.6 retain the earlier unbounded research path.
 
 Candidate format v2 also replaces the former JSON semantic state with a bounded
 binary sidecar. Its fixed 48-byte big-endian header declares exact sidecar
@@ -481,8 +501,8 @@ minimum representation before topology-table allocation, accepts only closed
 tags/masks and finite canonical binary64 values, charges nested collections
 against the declared totals, and requires exact EOF. UTF-16BE code units retain
 arbitrary JavaScript strings without replacement. This bounded sidecar is used
-with both the ABI 0.7 native path and the stock/legacy research path; it does not
-make their native materialization behavior equivalent.
+with the ABI 0.7/0.8 native paths and the stock/legacy research path; it does
+not make their native materialization behavior equivalent.
 
 The reviewed deterministic stock-runtime v2 asymmetric-box fixture is `11,591`
 bytes with fixture witness
@@ -493,17 +513,22 @@ The v1 fixture is retained only to prove fail-closed rejection before native
 restore. Verify the current fixture without writing with
 `pnpm artifact:fixture:occt -- --check --version v2`.
 
-ABI 0.7 still does not advertise `KernelCapabilities.shapeArtifacts`. A small
-malformed v4 body can declare native geometry arrays that OCCT allocates before
-the post-read topology ceiling is available. Synchronous same-thread WASM also
-has an in-flight cancellation gap, ordered native enumeration is not durable
-identity for symmetric topology, the runtime has no in-process proof of the
-exact JavaScript/WASM/build hashes, and the stock fixture is not cross-process
-proof. Binary sidecar v2 closes the former JSON amplification blocker, but
-production promotion still requires strict native archive preflight and
-allocation/work quotas, prompt cancellation outside the same-thread gap,
-durable artifact-local native identity, exact runtime attestation, and reviewed
-owned-runtime cross-process goldens.
+ABI 0.8 still does not advertise `KernelCapabilities.shapeArtifacts`. Its
+allocator wrapping is private, cumulative-request defense-in-depth, not
+hostile-input safety: a small malformed v4 body can encode unchecked native
+counts or products before an allocation request is visible, consume excessive
+work, or reach allocation paths outside the wrappers. It also does not measure
+live or peak memory. Strict BinTools grammar, count, and product preflight is
+therefore still required before any production promotion. Synchronous
+same-thread WASM also has an in-flight cancellation gap, ordered native
+enumeration is not durable identity for symmetric topology, the runtime has no
+in-process proof of the exact JavaScript/WASM/build hashes, and the stock
+fixture is not cross-process proof. Binary sidecar v2 closes the former JSON
+amplification blocker, but production promotion still requires that strict
+native archive preflight plus reviewed hard memory and work quotas, prompt
+cancellation outside the same-thread gap, durable artifact-local native
+identity, exact runtime attestation, and reviewed owned-runtime cross-process
+goldens.
 
 The generated pair and its local package-neutral bundle remain ignored build
 artifacts and are not included in the `invariantcad` npm tarball. Until an

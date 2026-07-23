@@ -196,14 +196,15 @@ implicit runtime download.
   evolution. It also strengthens bounded composite sweeps with controlled
   corrected-Frenet/right-corner PipeShell refinements.
 - A reproducible, digest-pinned facade build foundation and strict local
-  package-neutral ABI/bundle 0.7 generation are present. The JS/WASM bundle
+  package-neutral ABI/bundle 0.8 generation are present. The JS/WASM bundle
   carries checksums, provenance, CycloneDX SBOM, source/relinking information,
-  notices, licenses, and the ordered seven-patch series ending in
-  `0007-bounded-shape-artifacts.patch`.
+  notices, licenses, and the ordered eight-patch series ending in
+  `0008-hardened-shape-artifact-budgets.patch`.
 
 Facade ABI/bundle numbers version the native adapter boundary, not product
-releases. ABI 0.7 retains ABI 0.6's modeling/history surface and adds bounded
-artifact transport only for the repository-private candidate.
+releases. ABI 0.8 retains ABI 0.6's modeling/history surface and ABI 0.7's
+bounded artifact transport, then adds a private cumulative native
+allocation-request budget only for the repository-private candidate.
 
 **Deferred:** public facade distribution requires external legal, release, and
 security review plus an explicit durable publication channel. Until then, the
@@ -234,14 +235,20 @@ or write cached shapes today**.
   `pnpm artifact:fixture:occt -- --check --version v2`. ABI 0.7 adds a capped
   chunked BinTools-v4 writer, borrowed-input length checks, strict consumption,
   a post-read topology ceiling, report-owned decode, same-kernel one-shot
-  transfer, and exact TypeScript rollback. The owned-runtime path does not fall
-  back to legacy MEMFS.
-- Promotion remains blocked by hostile native counts that can allocate before
-  post-read checks, same-thread synchronous WASM cancellation gaps, order-based
-  symmetric topology, and the absence of exact loaded-runtime attestation and
-  reviewed cross-process goldens.
-- Production work therefore requires strict archive preflight, native
-  allocation and work quotas, promptly cancellable native operations, durable
+  transfer, and exact TypeScript rollback. ABI 0.8 additionally applies a
+  private cumulative native allocation-request budget and reports admitted
+  requested bytes, allocation calls, and denial. The owned-runtime path does
+  not fall back to legacy MEMFS. Reviewed throwing C++ denial paths return a
+  report, while direct C allocator denial is fail-stop and requires discarding
+  the disposable worker/process runtime.
+- Promotion remains blocked because that allocator wrapping is defense-in-depth,
+  not hostile-input safety: hostile counts/products can fail before a wrapped
+  request is visible or consume excessive work. Same-thread synchronous WASM
+  cancellation gaps, order-based symmetric topology, and the absence of exact
+  loaded-runtime attestation and reviewed cross-process goldens also remain.
+- Production work therefore still requires strict BinTools grammar, count, and
+  product preflight, reviewed hard memory and work quotas, promptly cancellable
+  native operations, durable
   artifact-local native identity markers rather than enumeration order, exact
   loaded JS/WASM/build attestation, and a reviewed cross-process golden matrix.
 - Only after that matrix passes will OCCT advertise the capability. Evaluator

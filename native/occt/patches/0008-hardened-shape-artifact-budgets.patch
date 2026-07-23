@@ -1,0 +1,824 @@
+diff --git a/facade/include/occt_kernel.h b/facade/include/occt_kernel.h
+index ff40fe7..b385dc1 100644
+--- a/facade/include/occt_kernel.h
++++ b/facade/include/occt_kernel.h
+@@ -383,16 +383,22 @@ struct InvariantCadSolidOffsetReport {
+         double tolerance, int maxHistoryRecords);
+ };
+ 
+-/// Bounded binary-BREP serialization result used by facade ABI 0.7.
++/// Bounded binary-BREP serialization result used by facade ABI 0.8.
+ /// The report owns chunked native bytes whose aggregate payload never exceeds
+ /// maxOutputBytes. copyBytes() creates a detached JavaScript Uint8Array only
+-/// after native serialization has completed within that ceiling.
++/// after native serialization has completed within that ceiling. Native
++/// allocation-request telemetry covers the scoped candidate operation; the
++/// request ceiling is cumulative and never credits frees.
+ struct InvariantCadArtifactWriteReport {
+     bool ok = false;
+     std::string stage = "validation";
+     std::string code = "INTERNAL_ERROR";
+     std::string message;
+     int maxOutputBytes = 0;
++    int maxNativeRequestedBytes = 0;
++    int nativeRequestedBytes = 0;
++    int nativeAllocationCalls = 0;
++    bool nativeRequestLimitExceeded = false;
+ 
+     InvariantCadArtifactWriteReport() = default;
+     InvariantCadArtifactWriteReport(const InvariantCadArtifactWriteReport&) = default;
+@@ -405,6 +411,12 @@ struct InvariantCadArtifactWriteReport {
+     std::string getCode() const { return code; }
+     std::string getMessage() const { return message; }
+     int getMaxOutputBytes() const { return maxOutputBytes; }
++    int getMaxNativeRequestedBytes() const { return maxNativeRequestedBytes; }
++    int getNativeRequestedBytes() const { return nativeRequestedBytes; }
++    int getNativeAllocationCalls() const { return nativeAllocationCalls; }
++    bool getNativeRequestLimitExceeded() const {
++        return nativeRequestLimitExceeded;
++    }
+ 
+     bool hasBytes() const;
+     int byteCount() const;
+@@ -414,10 +426,11 @@ struct InvariantCadArtifactWriteReport {
+     std::shared_ptr<InvariantCadArtifactWriteState> output_;
+ 
+     friend InvariantCadArtifactWriteReport invariantcadWriteArtifactBrep(
+-        OcctKernel& kernel, uint32_t shapeId, int maxOutputBytes);
++        OcctKernel& kernel, uint32_t shapeId, int maxOutputBytes,
++        int maxNativeRequestedBytes);
+ };
+ 
+-/// Bounded-input binary-BREP decode result used by facade ABI 0.7.
++/// Bounded-input binary-BREP decode result used by facade ABI 0.8.
+ /// JavaScript input is borrowed and length-checked before the facade snapshots
+ /// it into native memory. A successful decoded shape remains outside the arena
+ /// until one checked same-kernel takeResultId() call.
+@@ -431,6 +444,10 @@ struct InvariantCadArtifactReadReport {
+     int consumedByteCount = 0;
+     int topologyItemCount = 0;
+     int maxTopologyItems = 0;
++    int maxNativeRequestedBytes = 0;
++    int nativeRequestedBytes = 0;
++    int nativeAllocationCalls = 0;
++    bool nativeRequestLimitExceeded = false;
+ 
+     InvariantCadArtifactReadReport() = default;
+     InvariantCadArtifactReadReport(const InvariantCadArtifactReadReport&) = default;
+@@ -447,6 +464,12 @@ struct InvariantCadArtifactReadReport {
+     int getConsumedByteCount() const { return consumedByteCount; }
+     int getTopologyItemCount() const { return topologyItemCount; }
+     int getMaxTopologyItems() const { return maxTopologyItems; }
++    int getMaxNativeRequestedBytes() const { return maxNativeRequestedBytes; }
++    int getNativeRequestedBytes() const { return nativeRequestedBytes; }
++    int getNativeAllocationCalls() const { return nativeAllocationCalls; }
++    bool getNativeRequestLimitExceeded() const {
++        return nativeRequestLimitExceeded;
++    }
+ 
+     uint32_t takeResultId(OcctKernel& kernel);
+     bool hasResult() const;
+@@ -457,7 +480,8 @@ struct InvariantCadArtifactReadReport {
+ 
+     friend InvariantCadArtifactReadReport invariantcadReadArtifactBrep(
+         OcctKernel& kernel, const emscripten::val& input,
+-        int maxInputBytes, int maxTopologyItems);
++        int maxInputBytes, int maxTopologyItems,
++        int maxNativeRequestedBytes);
+ };
+ 
+ /// Transactional result of the controlled InvariantCAD PipeShell facade.
+@@ -531,13 +555,14 @@ InvariantCadSolidOffsetReport invariantcadSolidOffsetAtomic(
+ /// Serializes one arena-owned shape through a native chunked sink that stops
+ /// before writing a byte beyond maxOutputBytes.
+ InvariantCadArtifactWriteReport invariantcadWriteArtifactBrep(
+-    OcctKernel& kernel, uint32_t shapeId, int maxOutputBytes);
++    OcctKernel& kernel, uint32_t shapeId, int maxOutputBytes,
++    int maxNativeRequestedBytes);
+ 
+ /// Snapshots a borrowed Uint8Array only after its length passes maxInputBytes,
+ /// decodes one binary BREP, and retains the shape for one checked transfer.
+ InvariantCadArtifactReadReport invariantcadReadArtifactBrep(
+     OcctKernel& kernel, const emscripten::val& input,
+-    int maxInputBytes, int maxTopologyItems);
++    int maxInputBytes, int maxTopologyItems, int maxNativeRequestedBytes);
+ 
+ /// Builds one corrected-Frenet, right-corner solid PipeShell with explicit
+ /// native tolerances. The report exposes OCCT's measured surface error and
+@@ -1004,10 +1029,12 @@ class OcctKernel {
+         std::vector<uint32_t> openingFaceIds, double amount, int direction,
+         double tolerance, int maxHistoryRecords);
+     friend InvariantCadArtifactWriteReport invariantcadWriteArtifactBrep(
+-        OcctKernel& kernel, uint32_t shapeId, int maxOutputBytes);
++        OcctKernel& kernel, uint32_t shapeId, int maxOutputBytes,
++        int maxNativeRequestedBytes);
+     friend InvariantCadArtifactReadReport invariantcadReadArtifactBrep(
+         OcctKernel& kernel, const emscripten::val& input,
+-        int maxInputBytes, int maxTopologyItems);
++        int maxInputBytes, int maxTopologyItems,
++        int maxNativeRequestedBytes);
+     uint32_t store(const TopoDS_Shape& shape);
+     uint32_t invariantcadStoreTransferredShape(const TopoDS_Shape& shape);
+     const TopoDS_Shape& get(uint32_t id) const;
+diff --git a/facade/include/invariantcad_allocation_budget.h b/facade/include/invariantcad_allocation_budget.h
+new file mode 100644
+index 0000000..c49d489
+--- /dev/null
++++ b/facade/include/invariantcad_allocation_budget.h
+@@ -0,0 +1,35 @@
++// SPDX-License-Identifier: Apache-2.0
++// Copyright 2026 InvariantCAD contributors
++//
++// InvariantCAD-owned extension code.
++
++#pragma once
++
++#include <cstddef>
++
++struct InvariantCadNativeAllocationSnapshot {
++    std::size_t maximumRequestedBytes = 0;
++    std::size_t requestedBytes = 0;
++    int allocationCalls = 0;
++    bool exceeded = false;
++};
++
++// Empty, allocation-free exception used only by reviewed throwing allocator
++// entry points. Direct C allocator denials are deliberately fail-stop.
++struct InvariantCadNativeAllocationLimitExceeded final {};
++
++class InvariantCadNativeAllocationScope final {
++  public:
++    explicit InvariantCadNativeAllocationScope(std::size_t maximumRequestedBytes) noexcept;
++    ~InvariantCadNativeAllocationScope();
++
++    InvariantCadNativeAllocationScope(const InvariantCadNativeAllocationScope&) = delete;
++    InvariantCadNativeAllocationScope& operator=(
++        const InvariantCadNativeAllocationScope&) = delete;
++
++    bool exceeded() const noexcept;
++    InvariantCadNativeAllocationSnapshot stop() noexcept;
++
++  private:
++    bool active_ = false;
++};
+diff --git a/facade/src/invariantcad_allocation_budget.cpp b/facade/src/invariantcad_allocation_budget.cpp
+new file mode 100644
+index 0000000..b4b6158
+--- /dev/null
++++ b/facade/src/invariantcad_allocation_budget.cpp
+@@ -0,0 +1,223 @@
++// SPDX-License-Identifier: Apache-2.0
++// Copyright 2026 InvariantCAD contributors
++//
++// InvariantCAD-owned extension code.
++
++#include "invariantcad_allocation_budget.h"
++
++#include <climits>
++#include <cstdint>
++#include <cstdlib>
++#include <limits>
++#include <new>
++
++namespace {
++
++struct NativeAllocationBudgetState {
++    std::size_t maximumRequestedBytes = 0;
++    std::size_t requestedBytes = 0;
++    int allocationCalls = 0;
++    bool active = false;
++    bool exceeded = false;
++};
++
++thread_local NativeAllocationBudgetState THE_BUDGET;
++thread_local unsigned int THE_ALLOCATOR_BYPASS_DEPTH = 0;
++
++class AllocatorBypassScope final {
++  public:
++    AllocatorBypassScope() noexcept { ++THE_ALLOCATOR_BYPASS_DEPTH; }
++    ~AllocatorBypassScope() { --THE_ALLOCATOR_BYPASS_DEPTH; }
++
++    AllocatorBypassScope(const AllocatorBypassScope&) = delete;
++    AllocatorBypassScope& operator=(const AllocatorBypassScope&) = delete;
++};
++
++bool allocatorBypassed() noexcept { return THE_ALLOCATOR_BYPASS_DEPTH != 0; }
++
++bool chargeRequest(std::size_t requestedBytes) noexcept {
++    if (!THE_BUDGET.active || allocatorBypassed()) {
++        return true;
++    }
++    if (THE_BUDGET.allocationCalls == INT_MAX) {
++        THE_BUDGET.exceeded = true;
++        return false;
++    }
++    ++THE_BUDGET.allocationCalls;
++    if (requestedBytes >
++        THE_BUDGET.maximumRequestedBytes - THE_BUDGET.requestedBytes) {
++        THE_BUDGET.exceeded = true;
++        return false;
++    }
++    THE_BUDGET.requestedBytes += requestedBytes;
++    return true;
++}
++
++[[noreturn]] void throwAllocationLimit() {
++    // C++ exception construction and stack unwinding may allocate. Once the
++    // limit is latched, switch to emergency unmetered cleanup until the owning
++    // artifact scope snapshots and clears the state.
++    THE_ALLOCATOR_BYPASS_DEPTH = 1;
++    throw InvariantCadNativeAllocationLimitExceeded{};
++}
++
++[[noreturn]] void failStopAllocationLimit() noexcept { std::abort(); }
++
++template <typename Function>
++void* callRealAllocator(Function function) noexcept {
++    AllocatorBypassScope bypass;
++    return function();
++}
++
++} // namespace
++
++InvariantCadNativeAllocationScope::InvariantCadNativeAllocationScope(
++    std::size_t maximumRequestedBytes) noexcept {
++    if (THE_BUDGET.active || THE_ALLOCATOR_BYPASS_DEPTH != 0 ||
++        maximumRequestedBytes == 0) {
++        std::abort();
++    }
++    THE_BUDGET = NativeAllocationBudgetState{
++        maximumRequestedBytes, 0, 0, true, false};
++    active_ = true;
++}
++
++InvariantCadNativeAllocationScope::~InvariantCadNativeAllocationScope() {
++    if (active_) {
++        THE_BUDGET = NativeAllocationBudgetState{};
++        THE_ALLOCATOR_BYPASS_DEPTH = 0;
++    }
++}
++
++bool InvariantCadNativeAllocationScope::exceeded() const noexcept {
++    return active_ && THE_BUDGET.exceeded;
++}
++
++InvariantCadNativeAllocationSnapshot
++InvariantCadNativeAllocationScope::stop() noexcept {
++    if (!active_) {
++        std::abort();
++    }
++    const InvariantCadNativeAllocationSnapshot snapshot{
++        THE_BUDGET.maximumRequestedBytes,
++        THE_BUDGET.requestedBytes,
++        THE_BUDGET.allocationCalls,
++        THE_BUDGET.exceeded,
++    };
++    THE_BUDGET = NativeAllocationBudgetState{};
++    THE_ALLOCATOR_BYPASS_DEPTH = 0;
++    active_ = false;
++    return snapshot;
++}
++
++extern "C" void* __real__ZN8Standard8AllocateEm(std::size_t);
++extern "C" void* __real__ZN8Standard15AllocateOptimalEm(std::size_t);
++extern "C" void* __real__ZN8Standard10ReallocateEPvm(void*, std::size_t);
++extern "C" void* __real__ZN8Standard15AllocateAlignedEmm(
++    std::size_t, std::size_t);
++
++extern "C" void* __wrap__ZN8Standard8AllocateEm(std::size_t size) {
++    if (!chargeRequest(size)) throwAllocationLimit();
++    AllocatorBypassScope bypass;
++    return __real__ZN8Standard8AllocateEm(size);
++}
++
++extern "C" void* __wrap__ZN8Standard15AllocateOptimalEm(std::size_t size) {
++    if (!chargeRequest(size)) throwAllocationLimit();
++    AllocatorBypassScope bypass;
++    return __real__ZN8Standard15AllocateOptimalEm(size);
++}
++
++extern "C" void* __wrap__ZN8Standard10ReallocateEPvm(
++    void* pointer, std::size_t size) {
++    if (!chargeRequest(size)) throwAllocationLimit();
++    AllocatorBypassScope bypass;
++    return __real__ZN8Standard10ReallocateEPvm(pointer, size);
++}
++
++extern "C" void* __wrap__ZN8Standard15AllocateAlignedEmm(
++    std::size_t size, std::size_t alignment) {
++    if (!chargeRequest(size)) throwAllocationLimit();
++    AllocatorBypassScope bypass;
++    return __real__ZN8Standard15AllocateAlignedEmm(size, alignment);
++}
++
++extern "C" void* __real__Znwm(std::size_t);
++extern "C" void* __real__Znam(std::size_t);
++
++extern "C" void* __wrap__Znwm(std::size_t size) {
++    if (!chargeRequest(size)) throwAllocationLimit();
++    AllocatorBypassScope bypass;
++    return __real__Znwm(size);
++}
++
++extern "C" void* __wrap__Znam(std::size_t size) {
++    if (!chargeRequest(size)) throwAllocationLimit();
++    AllocatorBypassScope bypass;
++    return __real__Znam(size);
++}
++
++extern "C" void* __real_malloc(std::size_t);
++extern "C" void* __real_calloc(std::size_t, std::size_t);
++extern "C" void* __real_realloc(void*, std::size_t);
++extern "C" int __real_posix_memalign(void**, std::size_t, std::size_t);
++extern "C" void* __real_aligned_alloc(std::size_t, std::size_t);
++extern "C" void* __real_memalign(std::size_t, std::size_t);
++
++extern "C" void* __wrap_malloc(std::size_t size) noexcept {
++    if (allocatorBypassed() || !THE_BUDGET.active) return __real_malloc(size);
++    if (!chargeRequest(size)) failStopAllocationLimit();
++    return callRealAllocator([&]() { return __real_malloc(size); });
++}
++
++extern "C" void* __wrap_calloc(
++    std::size_t count, std::size_t size) noexcept {
++    if (allocatorBypassed() || !THE_BUDGET.active) {
++        return __real_calloc(count, size);
++    }
++    if (count != 0 && size > std::numeric_limits<std::size_t>::max() / count) {
++        THE_BUDGET.exceeded = true;
++        failStopAllocationLimit();
++    }
++    const std::size_t requestedBytes = count * size;
++    if (!chargeRequest(requestedBytes)) failStopAllocationLimit();
++    return callRealAllocator([&]() { return __real_calloc(count, size); });
++}
++
++extern "C" void* __wrap_realloc(
++    void* pointer, std::size_t size) noexcept {
++    if (allocatorBypassed() || !THE_BUDGET.active) {
++        return __real_realloc(pointer, size);
++    }
++    if (!chargeRequest(size)) failStopAllocationLimit();
++    return callRealAllocator([&]() { return __real_realloc(pointer, size); });
++}
++
++extern "C" int __wrap_posix_memalign(
++    void** pointer, std::size_t alignment, std::size_t size) noexcept {
++    if (allocatorBypassed() || !THE_BUDGET.active) {
++        return __real_posix_memalign(pointer, alignment, size);
++    }
++    if (!chargeRequest(size)) failStopAllocationLimit();
++    AllocatorBypassScope bypass;
++    return __real_posix_memalign(pointer, alignment, size);
++}
++
++extern "C" void* __wrap_aligned_alloc(
++    std::size_t alignment, std::size_t size) noexcept {
++    if (allocatorBypassed() || !THE_BUDGET.active) {
++        return __real_aligned_alloc(alignment, size);
++    }
++    if (!chargeRequest(size)) failStopAllocationLimit();
++    return callRealAllocator(
++        [&]() { return __real_aligned_alloc(alignment, size); });
++}
++
++extern "C" void* __wrap_memalign(
++    std::size_t alignment, std::size_t size) noexcept {
++    if (allocatorBypassed() || !THE_BUDGET.active) {
++        return __real_memalign(alignment, size);
++    }
++    if (!chargeRequest(size)) failStopAllocationLimit();
++    return callRealAllocator([&]() { return __real_memalign(alignment, size); });
++}
+diff --git a/facade/src/invariantcad_bindings.cpp b/facade/src/invariantcad_bindings.cpp
+index 9c700b3..ade1afa 100644
+--- a/facade/src/invariantcad_bindings.cpp
++++ b/facade/src/invariantcad_bindings.cpp
+@@ -203,6 +203,14 @@ EMSCRIPTEN_BINDINGS(invariantcad_facade) {
+         .property("message", &InvariantCadArtifactWriteReport::getMessage)
+         .property("maxOutputBytes",
+                   &InvariantCadArtifactWriteReport::getMaxOutputBytes)
++        .property("maxNativeRequestedBytes",
++                  &InvariantCadArtifactWriteReport::getMaxNativeRequestedBytes)
++        .property("nativeRequestedBytes",
++                  &InvariantCadArtifactWriteReport::getNativeRequestedBytes)
++        .property("nativeAllocationCalls",
++                  &InvariantCadArtifactWriteReport::getNativeAllocationCalls)
++        .property("nativeRequestLimitExceeded",
++                  &InvariantCadArtifactWriteReport::getNativeRequestLimitExceeded)
+         .function("hasBytes", &InvariantCadArtifactWriteReport::hasBytes)
+         .function("byteCount", &InvariantCadArtifactWriteReport::byteCount)
+         .function("copyBytes", &InvariantCadArtifactWriteReport::copyBytes);
+@@ -222,6 +230,14 @@ EMSCRIPTEN_BINDINGS(invariantcad_facade) {
+                   &InvariantCadArtifactReadReport::getTopologyItemCount)
+         .property("maxTopologyItems",
+                   &InvariantCadArtifactReadReport::getMaxTopologyItems)
++        .property("maxNativeRequestedBytes",
++                  &InvariantCadArtifactReadReport::getMaxNativeRequestedBytes)
++        .property("nativeRequestedBytes",
++                  &InvariantCadArtifactReadReport::getNativeRequestedBytes)
++        .property("nativeAllocationCalls",
++                  &InvariantCadArtifactReadReport::getNativeAllocationCalls)
++        .property("nativeRequestLimitExceeded",
++                  &InvariantCadArtifactReadReport::getNativeRequestLimitExceeded)
+         .function("hasResult", &InvariantCadArtifactReadReport::hasResult)
+         .function("transferCode", &InvariantCadArtifactReadReport::transferCode)
+         .function("takeResultId", &InvariantCadArtifactReadReport::takeResultId);
+diff --git a/facade/src/invariantcad_facade.cpp b/facade/src/invariantcad_facade.cpp
+index a3443e3..fe6bfdf 100644
+--- a/facade/src/invariantcad_facade.cpp
++++ b/facade/src/invariantcad_facade.cpp
+@@ -5,6 +5,7 @@
+ // dependencies retain their respective upstream licenses.
+ 
+ #include "occt_kernel.h"
++#include "invariantcad_allocation_budget.h"
+ 
+ #include <BinTools.hxx>
+ #include <BRepCheck_Analyzer.hxx>
+@@ -1746,7 +1747,9 @@ InvariantCadTopologyEvolutionRecord InvariantCadSolidOffsetReport::topologyRecor
+ }
+ 
+ InvariantCadArtifactWriteReport invariantcadWriteArtifactBrep(
+-    OcctKernel& kernel, uint32_t shapeId, int maxOutputBytes) {
++    OcctKernel& kernel, uint32_t shapeId, int maxOutputBytes,
++    int maxNativeRequestedBytes) {
++    InvariantCadNativeAllocationSnapshot allocation;
+     auto failure = [&](const char* stage, const char* code,
+                        const std::string& message) {
+         InvariantCadArtifactWriteReport report;
+@@ -1754,12 +1757,22 @@ InvariantCadArtifactWriteReport invariantcadWriteArtifactBrep(
+         report.code = code;
+         report.message = message;
+         report.maxOutputBytes = maxOutputBytes;
++        report.maxNativeRequestedBytes = maxNativeRequestedBytes;
++        report.nativeRequestedBytes =
++            static_cast<int>(allocation.requestedBytes);
++        report.nativeAllocationCalls = allocation.allocationCalls;
++        report.nativeRequestLimitExceeded = allocation.exceeded;
+         return report;
+     };
+     if (maxOutputBytes <= 0) {
+         return failure("validation", "INVALID_OUTPUT_LIMIT",
+                        "Artifact output limit must be a positive signed 32-bit integer");
+     }
++    if (maxNativeRequestedBytes <= 0) {
++        return failure(
++            "validation", "INVALID_NATIVE_REQUEST_LIMIT",
++            "Artifact native-request limit must be a positive signed 32-bit integer");
++    }
+ 
+     const TopoDS_Shape* shape = nullptr;
+     try {
+@@ -1775,42 +1788,65 @@ InvariantCadArtifactWriteReport invariantcadWriteArtifactBrep(
+                        "Artifact source shape must not be null");
+     }
+ 
+-    BoundedArtifactOutputBuffer buffer(static_cast<size_t>(maxOutputBytes));
++    std::unique_ptr<BoundedArtifactOutputBuffer> buffer;
++    InvariantCadNativeAllocationScope allocationScope(
++        static_cast<size_t>(maxNativeRequestedBytes));
++    auto failAfterStop = [&](const char* stage, const char* code,
++                             const char* message) {
++        allocation = allocationScope.stop();
++        return failure(stage, code, message == nullptr ? "" : message);
++    };
+     try {
+-        std::ostream stream(&buffer);
++        buffer = std::make_unique<BoundedArtifactOutputBuffer>(
++            static_cast<size_t>(maxOutputBytes));
++        std::ostream stream(buffer.get());
+         stream.exceptions(std::ios::badbit | std::ios::failbit);
+         BinTools::Write(*shape, stream, false, false,
+                         BinTools_FormatVersion_VERSION_4);
+         stream.flush();
++    } catch (const InvariantCadNativeAllocationLimitExceeded&) {
++        return failAfterStop(
++            "serialization", "NATIVE_REQUEST_LIMIT_EXCEEDED",
++            "Binary BREP serialization exceeded the cumulative native allocation-request limit");
+     } catch (const Standard_Failure& error) {
+-        if (buffer.exceeded()) {
+-            return failure("serialization", "OUTPUT_LIMIT_EXCEEDED",
+-                           "Binary BREP exceeds the configured artifact output limit");
+-        }
+-        return failure("serialization", "OCCT_EXCEPTION",
+-                       error.GetMessageString());
++        const bool outputExceeded = buffer && buffer->exceeded();
++        const char* message = error.GetMessageString();
++        return failAfterStop(
++            "serialization",
++            outputExceeded ? "OUTPUT_LIMIT_EXCEEDED" : "OCCT_EXCEPTION",
++            outputExceeded
++                ? "Binary BREP exceeds the configured artifact output limit"
++                : message);
+     } catch (const std::exception& error) {
+-        if (buffer.exceeded()) {
+-            return failure("serialization", "OUTPUT_LIMIT_EXCEEDED",
+-                           "Binary BREP exceeds the configured artifact output limit");
+-        }
+-        return failure("serialization", "SERIALIZATION_FAILED", error.what());
++        const bool outputExceeded = buffer && buffer->exceeded();
++        return failAfterStop(
++            "serialization",
++            outputExceeded ? "OUTPUT_LIMIT_EXCEEDED" : "SERIALIZATION_FAILED",
++            outputExceeded
++                ? "Binary BREP exceeds the configured artifact output limit"
++                : error.what());
+     } catch (...) {
+-        if (buffer.exceeded()) {
+-            return failure("serialization", "OUTPUT_LIMIT_EXCEEDED",
+-                           "Binary BREP exceeds the configured artifact output limit");
+-        }
+-        return failure("serialization", "SERIALIZATION_FAILED",
+-                       "Unknown failure while serializing binary BREP");
+-    }
+-    if (buffer.exceeded()) {
+-        return failure("serialization", "OUTPUT_LIMIT_EXCEEDED",
+-                       "Binary BREP exceeds the configured artifact output limit");
+-    }
+-    if (!buffer.output() || buffer.output()->byteCount == 0) {
+-        return failure("serialization", "EMPTY_OUTPUT",
+-                       "Binary BREP serialization produced no bytes");
+-    }
++        const bool outputExceeded = buffer && buffer->exceeded();
++        return failAfterStop(
++            "serialization",
++            outputExceeded ? "OUTPUT_LIMIT_EXCEEDED" : "SERIALIZATION_FAILED",
++            outputExceeded
++                ? "Binary BREP exceeds the configured artifact output limit"
++                : "Unknown failure while serializing binary BREP");
++    }
++    if (buffer->exceeded()) {
++        return failAfterStop(
++            "serialization", "OUTPUT_LIMIT_EXCEEDED",
++            "Binary BREP exceeds the configured artifact output limit");
++    }
++    const std::shared_ptr<InvariantCadArtifactWriteState> output =
++        buffer->output();
++    if (!output || output->byteCount == 0) {
++        return failAfterStop(
++            "serialization", "EMPTY_OUTPUT",
++            "Binary BREP serialization produced no bytes");
++    }
++    allocation = allocationScope.stop();
+ 
+     InvariantCadArtifactWriteReport report;
+     report.ok = true;
+@@ -1818,16 +1854,21 @@ InvariantCadArtifactWriteReport invariantcadWriteArtifactBrep(
+     report.code = "OK";
+     report.message = "Binary BREP serialization completed within the native byte limit";
+     report.maxOutputBytes = maxOutputBytes;
+-    report.output_ = buffer.output();
++    report.maxNativeRequestedBytes = maxNativeRequestedBytes;
++    report.nativeRequestedBytes = static_cast<int>(allocation.requestedBytes);
++    report.nativeAllocationCalls = allocation.allocationCalls;
++    report.nativeRequestLimitExceeded = allocation.exceeded;
++    report.output_ = output;
+     return report;
+ }
+ 
+ InvariantCadArtifactReadReport invariantcadReadArtifactBrep(
+     OcctKernel& kernel, const emscripten::val& input, int maxInputBytes,
+-    int maxTopologyItems) {
++    int maxTopologyItems, int maxNativeRequestedBytes) {
+     int inputByteCount = 0;
+     int consumedByteCount = 0;
+     int topologyItemCount = 0;
++    InvariantCadNativeAllocationSnapshot allocation;
+     auto failure = [&](const char* stage, const char* code,
+                        const std::string& message) {
+         InvariantCadArtifactReadReport report;
+@@ -1839,6 +1880,11 @@ InvariantCadArtifactReadReport invariantcadReadArtifactBrep(
+         report.consumedByteCount = consumedByteCount;
+         report.topologyItemCount = topologyItemCount;
+         report.maxTopologyItems = maxTopologyItems;
++        report.maxNativeRequestedBytes = maxNativeRequestedBytes;
++        report.nativeRequestedBytes =
++            static_cast<int>(allocation.requestedBytes);
++        report.nativeAllocationCalls = allocation.allocationCalls;
++        report.nativeRequestLimitExceeded = allocation.exceeded;
+         return report;
+     };
+     if (maxInputBytes <= 0) {
+@@ -1849,6 +1895,11 @@ InvariantCadArtifactReadReport invariantcadReadArtifactBrep(
+         return failure("validation", "INVALID_TOPOLOGY_LIMIT",
+                        "Artifact topology limit must be a positive signed 32-bit integer");
+     }
++    if (maxNativeRequestedBytes <= 0) {
++        return failure(
++            "validation", "INVALID_NATIVE_REQUEST_LIMIT",
++            "Artifact native-request limit must be a positive signed 32-bit integer");
++    }
+ 
+     try {
+         const emscripten::val uint8Array =
+@@ -1880,21 +1931,34 @@ InvariantCadArtifactReadReport invariantcadReadArtifactBrep(
+                        "Artifact input exceeds the configured native byte limit");
+     }
+ 
++    InvariantCadNativeAllocationScope allocationScope(
++        static_cast<size_t>(maxNativeRequestedBytes));
++    auto failAfterStop = [&](const char* stage, const char* code,
++                             const char* message) {
++        allocation = allocationScope.stop();
++        return failure(stage, code, message == nullptr ? "" : message);
++    };
+     std::vector<uint8_t> snapshot;
+     try {
+         snapshot.resize(static_cast<size_t>(inputByteCount));
+         emscripten::val destination(emscripten::typed_memory_view(
+             snapshot.size(), snapshot.data()));
+         destination.call<void>("set", input);
++    } catch (const InvariantCadNativeAllocationLimitExceeded&) {
++        return failAfterStop(
++            "copy", "NATIVE_REQUEST_LIMIT_EXCEEDED",
++            "Artifact snapshot exceeded the cumulative native allocation-request limit");
+     } catch (const std::exception& error) {
+-        return failure("copy", "INPUT_COPY_FAILED", error.what());
++        return failAfterStop("copy", "INPUT_COPY_FAILED", error.what());
+     } catch (...) {
+-        return failure("copy", "INPUT_COPY_FAILED",
+-                       "Unknown failure while snapshotting artifact input");
++        return failAfterStop(
++            "copy", "INPUT_COPY_FAILED",
++            "Unknown failure while snapshotting artifact input");
+     }
+     if (!hasStrictArtifactArchiveHeader(snapshot)) {
+-        return failure("validation", "UNSUPPORTED_ARCHIVE",
+-                       "Artifact input is not the pinned binary BREP v4 archive");
++        return failAfterStop(
++            "validation", "UNSUPPORTED_ARCHIVE",
++            "Artifact input is not the pinned binary BREP v4 archive");
+     }
+ 
+     TopoDS_Shape result;
+@@ -1904,58 +1968,95 @@ InvariantCadArtifactReadReport invariantcadReadArtifactBrep(
+         BinTools::Read(result, stream);
+         consumedByteCount = static_cast<int>(buffer.consumed());
+         if (stream.bad()) {
+-            return failure("deserialization", "STREAM_FAILURE",
+-                           "Binary BREP input stream failed");
++            return failAfterStop("deserialization", "STREAM_FAILURE",
++                                 "Binary BREP input stream failed");
+         }
++    } catch (const InvariantCadNativeAllocationLimitExceeded&) {
++        consumedByteCount = static_cast<int>(buffer.consumed());
++        return failAfterStop(
++            "deserialization", "NATIVE_REQUEST_LIMIT_EXCEEDED",
++            "Binary BREP decode exceeded the cumulative native allocation-request limit");
+     } catch (const Standard_Failure& error) {
+         consumedByteCount = static_cast<int>(buffer.consumed());
+-        return failure("deserialization", "OCCT_EXCEPTION",
+-                       error.GetMessageString());
++        return failAfterStop("deserialization", "OCCT_EXCEPTION",
++                             error.GetMessageString());
+     } catch (const std::exception& error) {
+         consumedByteCount = static_cast<int>(buffer.consumed());
+-        return failure("deserialization", "DESERIALIZATION_FAILED", error.what());
++        return failAfterStop("deserialization", "DESERIALIZATION_FAILED",
++                             error.what());
+     } catch (...) {
+         consumedByteCount = static_cast<int>(buffer.consumed());
+-        return failure("deserialization", "DESERIALIZATION_FAILED",
+-                       "Unknown failure while deserializing binary BREP");
++        return failAfterStop(
++            "deserialization", "DESERIALIZATION_FAILED",
++            "Unknown failure while deserializing binary BREP");
+     }
+     if (result.IsNull()) {
+-        return failure("deserialization", "NULL_SHAPE",
+-                       "Binary BREP did not produce a shape");
++        return failAfterStop("deserialization", "NULL_SHAPE",
++                             "Binary BREP did not produce a shape");
+     }
+     if (consumedByteCount != inputByteCount) {
+-        return failure("deserialization", "TRAILING_INPUT",
+-                       "Binary BREP input contains trailing bytes");
++        return failAfterStop("deserialization", "TRAILING_INPUT",
++                             "Binary BREP input contains trailing bytes");
+     }
+     try {
+         if (!countTopologyWithinBudget(result, maxTopologyItems,
+                                        topologyItemCount)) {
+-            return failure("validation", "TOPOLOGY_LIMIT_EXCEEDED",
+-                           "Decoded BREP exceeds the configured topology-item limit");
+-        }
++            return failAfterStop(
++                "validation", "TOPOLOGY_LIMIT_EXCEEDED",
++                "Decoded BREP exceeds the configured topology-item limit");
++        }
++    } catch (const InvariantCadNativeAllocationLimitExceeded&) {
++        return failAfterStop(
++            "validation", "NATIVE_REQUEST_LIMIT_EXCEEDED",
++            "Topology traversal exceeded the cumulative native allocation-request limit");
+     } catch (const Standard_Failure& error) {
+-        return failure("validation", "TOPOLOGY_OCCT_EXCEPTION",
+-                       error.GetMessageString());
++        return failAfterStop("validation", "TOPOLOGY_OCCT_EXCEPTION",
++                             error.GetMessageString());
+     } catch (const std::exception& error) {
+-        return failure("validation", "TOPOLOGY_FAILED", error.what());
++        return failAfterStop("validation", "TOPOLOGY_FAILED", error.what());
+     } catch (...) {
+-        return failure("validation", "TOPOLOGY_FAILED",
+-                       "Unknown failure while counting decoded BREP topology");
++        return failAfterStop(
++            "validation", "TOPOLOGY_FAILED",
++            "Unknown failure while counting decoded BREP topology");
+     }
+     try {
+         if (!BRepCheck_Analyzer(result).IsValid()) {
+-            return failure("validation", "INVALID_SHAPE",
+-                           "Binary BREP produced an invalid shape");
++            return failAfterStop("validation", "INVALID_SHAPE",
++                                 "Binary BREP produced an invalid shape");
+         }
++    } catch (const InvariantCadNativeAllocationLimitExceeded&) {
++        return failAfterStop(
++            "validation", "NATIVE_REQUEST_LIMIT_EXCEEDED",
++            "Shape validation exceeded the cumulative native allocation-request limit");
+     } catch (const Standard_Failure& error) {
+-        return failure("validation", "VALIDATION_OCCT_EXCEPTION",
+-                       error.GetMessageString());
++        return failAfterStop("validation", "VALIDATION_OCCT_EXCEPTION",
++                             error.GetMessageString());
++    } catch (const std::exception& error) {
++        return failAfterStop("validation", "VALIDATION_FAILED", error.what());
++    } catch (...) {
++        return failAfterStop(
++            "validation", "VALIDATION_FAILED",
++            "Unknown failure while validating decoded BREP");
++    }
++
++    std::shared_ptr<InvariantCadArtifactReadTransferState> transfer;
++    try {
++        transfer = std::make_shared<InvariantCadArtifactReadTransferState>();
++        transfer->result = result;
++        transfer->kernelInstanceToken = kernel.invariantcadInstanceToken_;
++    } catch (const InvariantCadNativeAllocationLimitExceeded&) {
++        return failAfterStop(
++            "ownership", "NATIVE_REQUEST_LIMIT_EXCEEDED",
++            "Result retention exceeded the cumulative native allocation-request limit");
+     } catch (const std::exception& error) {
+-        return failure("validation", "VALIDATION_FAILED", error.what());
++        return failAfterStop("ownership", "RESULT_RETENTION_FAILED",
++                             error.what());
+     } catch (...) {
+-        return failure("validation", "VALIDATION_FAILED",
+-                       "Unknown failure while validating decoded BREP");
++        return failAfterStop(
++            "ownership", "RESULT_RETENTION_FAILED",
++            "Unknown failure while retaining decoded BREP result");
+     }
++    allocation = allocationScope.stop();
+ 
+     InvariantCadArtifactReadReport report;
+     report.ok = true;
+@@ -1967,14 +2068,16 @@ InvariantCadArtifactReadReport invariantcadReadArtifactBrep(
+     report.consumedByteCount = consumedByteCount;
+     report.topologyItemCount = topologyItemCount;
+     report.maxTopologyItems = maxTopologyItems;
+-    report.transfer_ = std::make_shared<InvariantCadArtifactReadTransferState>();
+-    report.transfer_->result = result;
+-    report.transfer_->kernelInstanceToken = kernel.invariantcadInstanceToken_;
++    report.maxNativeRequestedBytes = maxNativeRequestedBytes;
++    report.nativeRequestedBytes = static_cast<int>(allocation.requestedBytes);
++    report.nativeAllocationCalls = allocation.allocationCalls;
++    report.nativeRequestLimitExceeded = allocation.exceeded;
++    report.transfer_ = std::move(transfer);
+     return report;
+ }
+ 
+ std::string invariantcadFacadeVersion() {
+-    return "invariantcad-facade@0.7.0+occt-wasm.3.7.0";
++    return "invariantcad-facade@0.8.0+occt-wasm.3.7.0";
+ }
+ 
+ InvariantCadBooleanReport invariantcadBooleanAtomic(
+diff --git a/xtask/src/build.rs b/xtask/src/build.rs
+index 960f2c9..0b8e77d 100644
+--- a/xtask/src/build.rs
++++ b/xtask/src/build.rs
+@@ -244,6 +244,22 @@ fn link_wasm(
+         "-sEXPORTED_RUNTIME_METHODS=[\"FS\",\"HEAP32\",\"HEAPF32\",\"HEAPU32\"]".into(),
+         "-sEXPORT_EXCEPTION_HANDLING_HELPERS=1".into(),
+         "--no-entry".into(),
++        // ABI 0.8 candidate artifact operations activate a thread-local,
++        // cumulative requested-byte budget. Link-time wrapping covers the
++        // reviewed OCCT, C++, and libc allocation entry points without
++        // changing allocation behavior outside an active artifact scope.
++        "-Wl,--wrap=_ZN8Standard8AllocateEm".into(),
++        "-Wl,--wrap=_ZN8Standard15AllocateOptimalEm".into(),
++        "-Wl,--wrap=_ZN8Standard10ReallocateEPvm".into(),
++        "-Wl,--wrap=_ZN8Standard15AllocateAlignedEmm".into(),
++        "-Wl,--wrap=_Znwm".into(),
++        "-Wl,--wrap=_Znam".into(),
++        "-Wl,--wrap=malloc".into(),
++        "-Wl,--wrap=calloc".into(),
++        "-Wl,--wrap=realloc".into(),
++        "-Wl,--wrap=posix_memalign".into(),
++        "-Wl,--wrap=aligned_alloc".into(),
++        "-Wl,--wrap=memalign".into(),
+         format!("--post-js={post_js_str}"),
+     ];
+ 
