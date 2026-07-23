@@ -88,7 +88,7 @@ export interface OcctShapeArtifactCodecCandidate {
 const ENVELOPE_VERSION = 2;
 const HEADER_BYTES = 40;
 const MAX_UINT32 = 0xffff_ffff;
-const MAX_FINGERPRINT_BYTES = 1_024;
+const MAX_FINGERPRINT_BYTES = 2_048;
 const MAX_STATE_BYTES = 16 * 1024 * 1024;
 const MAX_TOPOLOGY_ITEMS = 100_000;
 const MAX_ADJACENCY_LINKS = 1_000_000;

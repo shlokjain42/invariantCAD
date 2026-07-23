@@ -196,15 +196,16 @@ implicit runtime download.
   evolution. It also strengthens bounded composite sweeps with controlled
   corrected-Frenet/right-corner PipeShell refinements.
 - A reproducible, digest-pinned facade build foundation and strict local
-  package-neutral ABI/bundle 0.8 generation are present. The JS/WASM bundle
+  package-neutral ABI/bundle 0.9 generation are present. The JS/WASM bundle
   carries checksums, provenance, CycloneDX SBOM, source/relinking information,
-  notices, licenses, and the ordered eight-patch series ending in
-  `0008-hardened-shape-artifact-budgets.patch`.
+  notices, licenses, and the ordered nine-patch series ending in
+  `0009-bintools-v4-structural-preflight.patch`.
 
 Facade ABI/bundle numbers version the native adapter boundary, not product
-releases. ABI 0.8 retains ABI 0.6's modeling/history surface and ABI 0.7's
-bounded artifact transport, then adds a private cumulative native
-allocation-request budget only for the repository-private candidate.
+releases. ABI 0.9 retains ABI 0.6's modeling/history surface, ABI 0.7's bounded
+artifact transport, and ABI 0.8's fixed 128 MiB cumulative native
+allocation-request budget, then adds exact owned-profile BinTools-v4 structural
+preflight only for the repository-private candidate.
 
 **Deferred:** public facade distribution requires external legal, release, and
 security review plus an explicit durable publication channel. Until then, the
@@ -224,7 +225,8 @@ or write cached shapes today**.
   preflights the header and totals, requires closed canonical values and exact
   EOF, creates fresh evaluation keys, and accepts state only after exact native
   structural verification. This closes the former JSON-intermediate sidecar
-  allocation gap.
+  allocation gap. The private envelope also caps its compatibility fingerprint
+  at `2,048` UTF-8 bytes.
 - Direct state, corruption, ownership, and pinned asymmetric-box golden audits
   pass on the reviewed runtime without certifying compatibility. The v2 golden
   is `11,591` bytes with fixture witness
@@ -240,17 +242,28 @@ or write cached shapes today**.
   requested bytes, allocation calls, and denial. The owned-runtime path does
   not fall back to legacy MEMFS. Reviewed throwing C++ denial paths return a
   report, while direct C allocator denial is fail-stop and requires discarding
-  the disposable worker/process runtime.
-- Promotion remains blocked because that allocator wrapping is defense-in-depth,
-  not hostile-input safety: hostile counts/products can fail before a wrapped
-  request is visible or consume excessive work. Same-thread synchronous WASM
-  cancellation gaps, order-based symmetric topology, and the absence of exact
-  loaded-runtime attestation and reviewed cross-process goldens also remain.
-- Production work therefore still requires strict BinTools grammar, count, and
-  product preflight, reviewed hard memory and work quotas, promptly cancellable
-  native operations, durable
-  artifact-local native identity markers rather than enumeration order, exact
-  loaded JS/WASM/build attestation, and a reviewed cross-process golden matrix.
+  the disposable worker/process runtime. ABI 0.9 parses the exact owned
+  BinTools-v4 profile before OCCT under fixed ceilings of `1,000,000` structural
+  work units, `64` nesting levels, and location-power magnitude `1,000,000`.
+  Canonical locations and the complete backward TShape hierarchy/reachability
+  are checked; bounded TShape metadata is charged to the native request quota;
+  and reports expose work/depth/location-power/consumed-byte, completion/code,
+  and deserialization-start telemetry. Conservative squared aggregate geometry,
+  representation, expanded-topology, wire, and face envelopes prevent compact
+  records from hiding disproportionate downstream validation. Global geometry
+  squaring deliberately admits roughly fewer than `1,000` geometry work units
+  under the shared cap, with other charges lowering it; this is a private
+  artifact-compatibility ceiling, not a general modeling limit.
+- Promotion remains blocked because the cumulative 128 MiB request budget and
+  structural-work meter are not live/peak-memory proof. Same-thread synchronous
+  WASM still cannot provide prompt timer-driven cancellation, ordered evidence
+  is not comprehensive durable identity for indistinguishable symmetric
+  topology, the loaded runtime is not exactly attested, and the in-process
+  stock golden is not cross-process compatibility proof.
+- Production work therefore still requires promptly cancellable native
+  operations, comprehensive durable artifact-local identity rather than
+  enumeration order, exact loaded JS/WASM/build attestation, and a reviewed
+  cross-process golden matrix.
 - Only after that matrix passes will OCCT advertise the capability. Evaluator
   integration must then cover per-solid cache read/decode and encode/write,
   fresh ownership, corruption, cancellation, cleanup, eviction, concurrent
@@ -436,7 +449,7 @@ Four version axes are independent: Document v6 is the current JSON authoring
 grammar; persistent-reference protocol v2 is the current detached-evidence
 envelope while v1 remains supported; OCCT descriptor `@6` is the primary v2
 declaration while descriptor `@4`/`@5` fingerprints remain exact v1
-compatibility profiles; and facade ABI is 0.7 while exact indexed topology
+compatibility profiles; and facade ABI is 0.9 while exact indexed topology
 evolution remains protocol v1. Document migration never upgrades a stored
 protocol or descriptor fingerprint and never rewrites evidence.
 

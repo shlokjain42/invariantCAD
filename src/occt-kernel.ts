@@ -109,6 +109,9 @@ import {
 import { adoptOcctControlledPipeShell } from "./internal/occt-pipe-shell.js";
 import {
   OCCT_ARTIFACT_MAX_NATIVE_REQUESTED_BYTES,
+  OCCT_ARTIFACT_MAX_PREFLIGHT_LOCATION_POWER,
+  OCCT_ARTIFACT_MAX_PREFLIGHT_NESTING_DEPTH,
+  OCCT_ARTIFACT_MAX_PREFLIGHT_WORK_UNITS,
   OcctArtifactWriteError,
   readBoundedOcctArtifactBrep,
   writeBoundedOcctArtifactBrep,
@@ -334,7 +337,7 @@ function occtArtifactCandidateCompatibilityFingerprint(
   maxExactEdgeTreatmentHistoryRecords: number,
   maxExactSolidOffsetHistoryRecords: number,
   capabilities: KernelCapabilities,
-  artifactAbi: "0.7" | "0.8" | undefined,
+  artifactAbi: "0.7" | "0.8" | "0.9" | undefined,
 ): string | undefined {
   if (
     runtime === undefined ||
@@ -345,6 +348,9 @@ function occtArtifactCandidateCompatibilityFingerprint(
   }
   try {
     const boundedNativeIo = artifactAbi !== undefined;
+    const hasNativeRequestBudget =
+      artifactAbi === "0.8" || artifactAbi === "0.9";
+    const hasBinToolsPreflight = artifactAbi === "0.9";
     const linearDeflection = tessellation.linearDeflection;
     const angularDeflection = tessellation.angularDeflection;
     const relative = tessellation.relative;
@@ -386,14 +392,25 @@ function occtArtifactCandidateCompatibilityFingerprint(
         : "nativeArchive=occt-brep-binary",
       "topologySidecar=bounded-binary-artifact-local-index-v2",
       "nativeStructure=ordered-type-orientation-v1",
-      ...(artifactAbi === "0.8"
+      ...(hasNativeRequestBudget
         ? [
             `nativeRequestLimitBytes=${OCCT_ARTIFACT_MAX_NATIVE_REQUESTED_BYTES}`,
             "nativeRequestAccounting=scoped-cumulative-reviewed-entrypoints-v1",
           ]
         : []),
-      artifactAbi === "0.8"
-        ? "nativeMaterialization=facade-capped-output-bounded-input-cumulative-native-requests-v2"
+      ...(hasBinToolsPreflight
+        ? [
+            "nativeArchivePreflight=invariantcad-bintools-v4-owned-profile@1",
+            `nativeArchivePreflightWorkUnits=${OCCT_ARTIFACT_MAX_PREFLIGHT_WORK_UNITS}`,
+            `nativeArchivePreflightNestingDepth=${OCCT_ARTIFACT_MAX_PREFLIGHT_NESTING_DEPTH}`,
+            `nativeArchivePreflightLocationPower=${OCCT_ARTIFACT_MAX_PREFLIGHT_LOCATION_POWER}`,
+            "nativeArchivePreflightAccounting=quota-accounted-metadata-cursor-expanded-topology-geometry-pair-work-v1",
+          ]
+        : []),
+      hasBinToolsPreflight
+        ? "nativeMaterialization=facade-capped-output-bounded-input-preflighted-cumulative-native-requests-v3"
+        : hasNativeRequestBudget
+          ? "nativeMaterialization=facade-capped-output-bounded-input-cumulative-native-requests-v2"
         : boundedNativeIo
           ? "nativeMaterialization=facade-capped-output-bounded-input-snapshot-v1"
           : "nativeMaterialization=unbounded-candidate-only",
@@ -1000,7 +1017,7 @@ class OcctKernel implements GeometryKernel {
         kernel: this.raw.getRawKernel(),
         shapeId: owned[OCCT_SHAPE] as number,
         maxOutputBytes: Math.min(maxBytes, TOPOLOGY_HASH_UPPER_BOUND),
-        ...(this.facade?.abi === "0.8"
+        ...(this.facade?.abi === "0.8" || this.facade?.abi === "0.9"
           ? {
               maxNativeRequestedBytes:
                 OCCT_ARTIFACT_MAX_NATIVE_REQUESTED_BYTES,
@@ -1037,10 +1054,20 @@ class OcctKernel implements GeometryKernel {
           input: state.brep,
           maxInputBytes: state.brep.byteLength,
           maxTopologyItems: MAX_ARTIFACT_NATIVE_TOPOLOGY_ITEMS,
-          ...(this.facade?.abi === "0.8"
+          ...(this.facade?.abi === "0.8" || this.facade?.abi === "0.9"
             ? {
                 maxNativeRequestedBytes:
                   OCCT_ARTIFACT_MAX_NATIVE_REQUESTED_BYTES,
+            }
+            : {}),
+          ...(this.facade?.abi === "0.9"
+            ? {
+                maxPreflightWorkUnits:
+                  OCCT_ARTIFACT_MAX_PREFLIGHT_WORK_UNITS,
+                maxPreflightNestingDepth:
+                  OCCT_ARTIFACT_MAX_PREFLIGHT_NESTING_DEPTH,
+                maxPreflightLocationPower:
+                  OCCT_ARTIFACT_MAX_PREFLIGHT_LOCATION_POWER,
               }
             : {}),
         }) as ShapeHandle;
@@ -1053,11 +1080,16 @@ class OcctKernel implements GeometryKernel {
           : { volumeOverride: state.volumeOverride }),
       });
       handle = undefined;
-      const status = this.status(provisional);
-      if (!status.ok) {
-        throw new TypeError(
-          `OCCT candidate BREP did not restore a valid shape: ${status.code}`,
-        );
+      // ABI 0.9 already ran the full OCCT analyzer inside its cumulative native
+      // request scope after structurally bounding recursive and pairwise work.
+      // Repeating raw.isValid() here would escape that allocation boundary.
+      if (this.facade?.abi !== "0.9") {
+        const status = this.status(provisional);
+        if (!status.ok) {
+          throw new TypeError(
+            `OCCT candidate BREP did not restore a valid shape: ${status.code}`,
+          );
+        }
       }
       const freshTopology = this.topology(provisional);
       const freshNativeStructure = this.captureShapeArtifactNativeStructure(

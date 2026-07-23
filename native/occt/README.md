@@ -54,13 +54,14 @@ the mounted cache.
 
 Patches belong in `native/occt/patches/` and should use Git's `a/` and `b/`
 path prefixes. Prefix filenames with an ordering number because lexical order is
-part of the build. Facade ABI 0.8 is the exact eight-patch series
+part of the build. Facade ABI 0.9 is the exact nine-patch series
 `0001-atomic-multi-face-draft.patch`, `0002-indexed-draft-history.patch`,
 `0003-controlled-pipe-shell.patch`, `0004-exact-boolean-history.patch`,
 `0005-exact-edge-treatment-history.patch`,
 `0006-exact-solid-offset-history.patch`,
 `0007-bounded-shape-artifacts.patch`, and
-`0008-hardened-shape-artifact-budgets.patch`.
+`0008-hardened-shape-artifact-budgets.patch`, followed by
+`0009-bintools-v4-structural-preflight.patch`.
 
 ## Native smoke test
 
@@ -83,7 +84,11 @@ openings; isolated working copies with byte-stable arena operands; separate
 record budgets; empty Boolean results; report cloning; foreign-kernel
 rejection; one-shot transfer; and capped binary-BREP output plus bounded-input
 report-owned artifact decode with private cumulative native allocation-request
-telemetry and limits.
+telemetry and limits. ABI 0.9 artifact tests additionally exercise the exact
+owned BinTools-v4 structural preflight, its work/depth/location-power ceilings,
+canonical TShape hierarchy and reachability, conservative validation-work
+envelopes, report telemetry, and proof that rejected archives never start OCCT
+deserialization.
 The public smoke loads the same generated pair through `createOcctKernel` and
 exercises direct and evaluated draft, exact Boolean, fillet/chamfer, and
 shell/offset lineage, protocol-v2 vertex persistence with the descriptor-`@6`
@@ -112,11 +117,11 @@ The packager reads `.artifacts/occt-facade/` and writes both of these ignored
 outputs:
 
 ```text
-.artifacts/occt-facade-bundle/invariantcad-occt-facade-0.8.0/
-.artifacts/occt-facade-bundle/invariantcad-occt-facade-0.8.0.tar.gz
+.artifacts/occt-facade-bundle/invariantcad-occt-facade-0.9.0/
+.artifacts/occt-facade-bundle/invariantcad-occt-facade-0.9.0.tar.gz
 ```
 
-`0.8.0` is the owned facade ABI and bundle version; it is independent of the
+`0.9.0` is the owned facade ABI and bundle version; it is independent of the
 InvariantCAD npm package version, document schema version, and product-roadmap
 milestone numbered 0.6.
 
@@ -234,7 +239,9 @@ for draft. ABI 0.4 adds `boolean`; ABI 0.5 adds `fillet` and `chamfer`; ABI 0.6
 advertises the protocol for `draft`, `boolean`, `fillet`, `chamfer`, `shell`,
 and `offset`; ABI 0.7 preserves that feature proof and adds bounded artifact
 transport, while ABI 0.8 adds a private cumulative native allocation-request
-budget around that transport. Neither advertises a production artifact codec.
+budget around that transport. ABI 0.9 adds exact structural preflight for the
+owned BinTools-v4 profile before OCCT deserialization. None advertises a
+production artifact codec.
 The TypeScript descriptor declaration is conditional on that probed surface.
 Known stock OCCT and every recognized owned facade now advertise
 topology-signature protocol v2 with primary descriptor `@6`, including exact
@@ -246,8 +253,9 @@ its exact generated edge-to-face treatment roles. Protocol-v1 face/edge wire
 bytes, evidence construction, and matching behavior remain frozen and ignore
 the added vertex evidence.
 
-These descriptor/profile changes do not change the native boundary. The owned
-facade ABI is 0.8, and `exactIndexedTopologyEvolution` remains version 1.
+These descriptor/profile changes do not change the modeling/history boundary.
+The owned facade ABI is 0.9, and `exactIndexedTopologyEvolution` remains
+version 1.
 Document v6 and topology-signature protocol v2 are separate TypeScript/document
 axes; no semantic vertex roles are introduced. Distinct coincident B-Rep
 vertices remain separate snapshot items and resolve ambiguously when their
@@ -491,6 +499,42 @@ if later sidecar adoption fails. Owned ABI 0.7 retains the byte and topology
 caps without this private request quota; stock OCCT and owned ABI 0.2 through
 0.6 retain the earlier unbounded research path.
 
+Facade ABI 0.9 retains that 128 MiB cumulative native request budget and adds
+three reader-only signed-int ceilings: `1,000,000` structural work units, `64`
+structural nesting levels, and location-power magnitude `1,000,000`. After the
+single admitted input snapshot is created, an exact parser for the owned
+writer's BinTools-v4 profile must consume the complete archive before
+`BinTools::Read` can start. It validates canonical section names, decimal
+counts, table order, tags, booleans, finite binary numbers, analytic and spline
+geometry, knot/multiplicity/pole relationships, count products, permitted
+representations, in-range references, and exact end-of-input. It also validates
+canonical elementary/composite locations with backward references and bounded
+nonzero powers, and the backward-only TShape graph with its canonical child
+types, root, nesting, and complete record reachability.
+
+The work counter charges table entries, nested geometry, products,
+representations, location terms, subshape occurrences, and the conservative
+validation envelope OCCT will later traverse. Wire edge-pair and face
+wire/edge-pair, representation, expanded-topology, and aggregate geometry
+checks use explicit squared envelopes, so compact but complex records cannot
+hide disproportionate downstream work. With the `1,000,000` aggregate work cap,
+global geometry-work squaring deliberately admits roughly fewer than `1,000`
+geometry work units, and the other charges can only lower that ceiling. This is
+a private artifact-compatibility limit, not a core CAD authoring or modeling
+limit. Preflight keeps one bounded TShape metrics table; that metadata
+allocation is visible to and limited by the same 128 MiB cumulative native
+request budget before OCCT shape deserialization.
+
+ABI 0.9 read reports echo all three preflight limits and expose
+`preflightWorkUnits`, `preflightMaximumDepth`,
+`preflightMaximumLocationPower`, `preflightConsumedByteCount`,
+`preflightCode`, `archivePreflightComplete`, and
+`deserializationStarted`, alongside ABI 0.8's native request/allocation
+telemetry. A structural rejection reports the `preflight` stage, leaves
+`deserializationStarted` false, and exposes no result. ABI 0.8 remains
+loadable through its older reader signature, but it has no structural
+preflight telemetry.
+
 Candidate format v2 also replaces the former JSON semantic state with a bounded
 binary sidecar. Its fixed 48-byte big-endian header declares exact sidecar
 length and aggregate face, edge, vertex, adjacency, lineage, UTF-16BE
@@ -501,7 +545,7 @@ minimum representation before topology-table allocation, accepts only closed
 tags/masks and finite canonical binary64 values, charges nested collections
 against the declared totals, and requires exact EOF. UTF-16BE code units retain
 arbitrary JavaScript strings without replacement. This bounded sidecar is used
-with the ABI 0.7/0.8 native paths and the stock/legacy research path; it does
+with the ABI 0.7/0.8/0.9 native paths and the stock/legacy research path; it does
 not make their native materialization behavior equivalent.
 
 The reviewed deterministic stock-runtime v2 asymmetric-box fixture is `11,591`
@@ -513,22 +557,23 @@ The v1 fixture is retained only to prove fail-closed rejection before native
 restore. Verify the current fixture without writing with
 `pnpm artifact:fixture:occt -- --check --version v2`.
 
-ABI 0.8 still does not advertise `KernelCapabilities.shapeArtifacts`. Its
-allocator wrapping is private, cumulative-request defense-in-depth, not
-hostile-input safety: a small malformed v4 body can encode unchecked native
-counts or products before an allocation request is visible, consume excessive
-work, or reach allocation paths outside the wrappers. It also does not measure
-live or peak memory. Strict BinTools grammar, count, and product preflight is
-therefore still required before any production promotion. Synchronous
-same-thread WASM also has an in-flight cancellation gap, ordered native
-enumeration is not durable identity for symmetric topology, the runtime has no
-in-process proof of the exact JavaScript/WASM/build hashes, and the stock
-fixture is not cross-process proof. Binary sidecar v2 closes the former JSON
-amplification blocker, but production promotion still requires that strict
-native archive preflight plus reviewed hard memory and work quotas, prompt
-cancellation outside the same-thread gap, durable artifact-local native
-identity, exact runtime attestation, and reviewed owned-runtime cross-process
-goldens.
+ABI 0.9 still does not advertise `KernelCapabilities.shapeArtifacts`. The
+owned-profile parser closes the previously documented BinTools grammar/count/
+product preflight gap for archives it admits, but the 128 MiB counter measures
+cumulative requests rather than current live bytes, peak resident memory, or
+all WebAssembly growth. The structural work envelope is conservative and
+bounded; it is not a live/peak-memory proof. Synchronous same-thread WASM also
+has an in-flight cancellation gap, so an ordinary timer-driven `AbortSignal`
+does not provide prompt cancellation during native work. Ordered native
+evidence is not a comprehensive durable identity scheme for indistinguishable
+symmetric topology, the runtime has no in-process attestation of the exact
+JavaScript/WASM/build pair, and the stock fixture is not cross-process
+compatibility proof. Binary sidecar v2 and ABI 0.9 materially narrow the
+candidate boundary, but production promotion still requires prompt
+cancellation outside the same-thread gap, comprehensive durable artifact-local
+identity, exact runtime attestation, reviewed owned-runtime cross-process
+goldens, and the remaining evaluator/cache integration and release gates. The
+codec remains reachable only through repository-private test plumbing.
 
 The generated pair and its local package-neutral bundle remain ignored build
 artifacts and are not included in the `invariantcad` npm tarball. Until an

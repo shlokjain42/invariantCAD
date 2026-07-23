@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   OCCT_ARTIFACT_MAX_NATIVE_REQUESTED_BYTES,
+  OCCT_ARTIFACT_MAX_PREFLIGHT_LOCATION_POWER,
+  OCCT_ARTIFACT_MAX_PREFLIGHT_NESTING_DEPTH,
+  OCCT_ARTIFACT_MAX_PREFLIGHT_WORK_UNITS,
   OcctArtifactFacadeProtocolError,
   OcctArtifactReadError,
   OcctArtifactWriteError,
@@ -16,6 +19,41 @@ const nativeRequestFields = Object.freeze({
   nativeAllocationCalls: 12,
   nativeRequestLimitExceeded: false,
 });
+
+const preflightLimits = Object.freeze({
+  maxPreflightWorkUnits: OCCT_ARTIFACT_MAX_PREFLIGHT_WORK_UNITS,
+  maxPreflightNestingDepth: OCCT_ARTIFACT_MAX_PREFLIGHT_NESTING_DEPTH,
+  maxPreflightLocationPower: OCCT_ARTIFACT_MAX_PREFLIGHT_LOCATION_POWER,
+});
+
+const successfulPreflightFields = Object.freeze({
+  ...preflightLimits,
+  preflightWorkUnits: 73,
+  preflightMaximumDepth: 9,
+  preflightMaximumLocationPower: 4,
+  preflightConsumedByteCount: 4,
+  preflightCode: "OK",
+  archivePreflightComplete: true,
+  deserializationStarted: true,
+});
+
+const preflightFieldNames = Object.freeze(
+  Object.keys(successfulPreflightFields),
+);
+
+function installThrowingGetters(
+  report: object,
+  fields: readonly string[],
+  abi: string,
+): void {
+  for (const field of fields) {
+    Object.defineProperty(report, field, {
+      get: () => {
+        throw new Error(`unexpected ABI ${abi} field read: ${field}`);
+      },
+    });
+  }
+}
 
 function writeFixture(
   overrides: Partial<OcctArtifactWriteRawReport> = {},
@@ -270,8 +308,9 @@ describe("bounded OCCT artifact facade adapter", () => {
     expect(fixture.report.delete).toHaveBeenCalledOnce();
   });
 
-  it("passes the exact borrowed view and transfers a validated result once", () => {
+  it("keeps ABI 0.7 read arity independent of every ABI 0.9 field", () => {
     const fixture = readFixture();
+    installThrowingGetters(fixture.report, preflightFieldNames, "0.9");
     const kernel = { release: vi.fn() };
     const backing = new Uint8Array([90, 1, 2, 3, 4, 91]);
     const input = backing.subarray(1, 5);
@@ -286,6 +325,7 @@ describe("bounded OCCT artifact facade adapter", () => {
 
     expect(result).toBe(41);
     expect(fixture.invoke).toHaveBeenCalledWith(kernel, input, 16, 100);
+    expect(fixture.invoke.mock.calls[0]).toHaveLength(4);
     expect(fixture.take).toHaveBeenCalledOnce();
     expect(kernel.release).not.toHaveBeenCalled();
     expect(fixture.report.delete).toHaveBeenCalledOnce();
@@ -294,6 +334,7 @@ describe("bounded OCCT artifact facade adapter", () => {
 
   it("passes and validates the trailing ABI 0.8 read budget", () => {
     const fixture = readFixture({ overrides: nativeRequestFields });
+    installThrowingGetters(fixture.report, preflightFieldNames, "0.9");
     const kernel = { release: vi.fn() };
     const input = new Uint8Array([1, 2, 3, 4]);
 
@@ -314,7 +355,103 @@ describe("bounded OCCT artifact facade adapter", () => {
       100,
       OCCT_ARTIFACT_MAX_NATIVE_REQUESTED_BYTES,
     );
+    expect(fixture.invoke.mock.calls[0]).toHaveLength(5);
     expect(fixture.take).toHaveBeenCalledOnce();
+    expect(fixture.report.delete).toHaveBeenCalledOnce();
+  });
+
+  it("dispatches ABI 0.9 with exactly eight arguments and accepts complete telemetry", () => {
+    const fixture = readFixture({
+      overrides: {
+        ...nativeRequestFields,
+        ...successfulPreflightFields,
+      },
+    });
+    const kernel = { release: vi.fn() };
+    const input = new Uint8Array([1, 2, 3, 4]);
+
+    expect(
+      readBoundedOcctArtifactBrep({
+        module: fixture.module,
+        kernel,
+        input,
+        maxInputBytes: 16,
+        maxTopologyItems: 100,
+        maxNativeRequestedBytes: OCCT_ARTIFACT_MAX_NATIVE_REQUESTED_BYTES,
+        ...preflightLimits,
+      }),
+    ).toBe(41);
+    expect(fixture.invoke).toHaveBeenCalledWith(
+      kernel,
+      input,
+      16,
+      100,
+      OCCT_ARTIFACT_MAX_NATIVE_REQUESTED_BYTES,
+      OCCT_ARTIFACT_MAX_PREFLIGHT_WORK_UNITS,
+      OCCT_ARTIFACT_MAX_PREFLIGHT_NESTING_DEPTH,
+      OCCT_ARTIFACT_MAX_PREFLIGHT_LOCATION_POWER,
+    );
+    expect(fixture.invoke.mock.calls[0]).toHaveLength(8);
+    expect(fixture.take).toHaveBeenCalledOnce();
+    expect(fixture.report.delete).toHaveBeenCalledOnce();
+  });
+
+  it("preserves ABI 0.9 preflight failure telemetry without starting OCCT", () => {
+    const fixture = readFixture({
+      overrides: {
+        ...nativeRequestFields,
+        ...successfulPreflightFields,
+        ok: false,
+        stage: "preflight",
+        code: "WORK_LIMIT_EXCEEDED",
+        message: "preflight work budget exceeded",
+        consumedByteCount: 0,
+        topologyItemCount: 0,
+        preflightWorkUnits: OCCT_ARTIFACT_MAX_PREFLIGHT_WORK_UNITS,
+        preflightConsumedByteCount: 3,
+        preflightCode: "WORK_LIMIT_EXCEEDED",
+        archivePreflightComplete: false,
+        deserializationStarted: false,
+        hasResult: vi.fn(() => false),
+        transferCode: vi.fn(() => "NO_RESULT"),
+      },
+    });
+    let caught: unknown;
+
+    try {
+      readBoundedOcctArtifactBrep({
+        module: fixture.module,
+        kernel: { release: vi.fn() },
+        input: new Uint8Array([1, 2, 3, 4]),
+        maxInputBytes: 16,
+        maxTopologyItems: 100,
+        maxNativeRequestedBytes: OCCT_ARTIFACT_MAX_NATIVE_REQUESTED_BYTES,
+        ...preflightLimits,
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(OcctArtifactReadError);
+    expect((caught as OcctArtifactReadError).diagnostics).toMatchObject({
+      ok: false,
+      stage: "preflight",
+      code: "WORK_LIMIT_EXCEEDED",
+      maxPreflightWorkUnits: OCCT_ARTIFACT_MAX_PREFLIGHT_WORK_UNITS,
+      preflightWorkUnits: OCCT_ARTIFACT_MAX_PREFLIGHT_WORK_UNITS,
+      maxPreflightNestingDepth: OCCT_ARTIFACT_MAX_PREFLIGHT_NESTING_DEPTH,
+      preflightMaximumDepth: 9,
+      maxPreflightLocationPower: OCCT_ARTIFACT_MAX_PREFLIGHT_LOCATION_POWER,
+      preflightMaximumLocationPower: 4,
+      preflightConsumedByteCount: 3,
+      preflightCode: "WORK_LIMIT_EXCEEDED",
+      archivePreflightComplete: false,
+      deserializationStarted: false,
+    });
+    expect(Object.isFrozen((caught as OcctArtifactReadError).diagnostics)).toBe(
+      true,
+    );
+    expect(fixture.take).not.toHaveBeenCalled();
     expect(fixture.report.delete).toHaveBeenCalledOnce();
   });
 
@@ -410,6 +547,366 @@ describe("bounded OCCT artifact facade adapter", () => {
         maxNativeRequestedBytes: OCCT_ARTIFACT_MAX_NATIVE_REQUESTED_BYTES,
       }),
     ).toThrow(OcctArtifactFacadeProtocolError);
+    expect(fixture.take).not.toHaveBeenCalled();
+    expect(fixture.report.delete).toHaveBeenCalledOnce();
+  });
+
+  it.each<
+    readonly [
+      string,
+      Partial<{
+        readonly maxPreflightWorkUnits: number;
+        readonly maxPreflightNestingDepth: number;
+        readonly maxPreflightLocationPower: number;
+      }>,
+    ]
+  >([
+    [
+      "work only",
+      { maxPreflightWorkUnits: OCCT_ARTIFACT_MAX_PREFLIGHT_WORK_UNITS },
+    ],
+    [
+      "depth only",
+      {
+        maxPreflightNestingDepth:
+          OCCT_ARTIFACT_MAX_PREFLIGHT_NESTING_DEPTH,
+      },
+    ],
+    [
+      "location power only",
+      {
+        maxPreflightLocationPower:
+          OCCT_ARTIFACT_MAX_PREFLIGHT_LOCATION_POWER,
+      },
+    ],
+    [
+      "work and depth",
+      {
+        maxPreflightWorkUnits: OCCT_ARTIFACT_MAX_PREFLIGHT_WORK_UNITS,
+        maxPreflightNestingDepth:
+          OCCT_ARTIFACT_MAX_PREFLIGHT_NESTING_DEPTH,
+      },
+    ],
+    [
+      "work and location power",
+      {
+        maxPreflightWorkUnits: OCCT_ARTIFACT_MAX_PREFLIGHT_WORK_UNITS,
+        maxPreflightLocationPower:
+          OCCT_ARTIFACT_MAX_PREFLIGHT_LOCATION_POWER,
+      },
+    ],
+    [
+      "depth and location power",
+      {
+        maxPreflightNestingDepth:
+          OCCT_ARTIFACT_MAX_PREFLIGHT_NESTING_DEPTH,
+        maxPreflightLocationPower:
+          OCCT_ARTIFACT_MAX_PREFLIGHT_LOCATION_POWER,
+      },
+    ],
+  ])("rejects partial ABI 0.9 limits before native work: %s", (_label, limits) => {
+    const fixture = readFixture();
+
+    expect(() =>
+      readBoundedOcctArtifactBrep({
+        module: fixture.module,
+        kernel: { release: vi.fn() },
+        input: new Uint8Array(4),
+        maxInputBytes: 16,
+        maxTopologyItems: 100,
+        maxNativeRequestedBytes: OCCT_ARTIFACT_MAX_NATIVE_REQUESTED_BYTES,
+        ...limits,
+      }),
+    ).toThrow("preflight limits must be supplied together");
+    expect(fixture.invoke).not.toHaveBeenCalled();
+  });
+
+  it("requires the ABI 0.8 native budget when enabling ABI 0.9 preflight", () => {
+    const fixture = readFixture();
+
+    expect(() =>
+      readBoundedOcctArtifactBrep({
+        module: fixture.module,
+        kernel: { release: vi.fn() },
+        input: new Uint8Array(4),
+        maxInputBytes: 16,
+        maxTopologyItems: 100,
+        ...preflightLimits,
+      }),
+    ).toThrow("preflight limits require maxNativeRequestedBytes");
+    expect(fixture.invoke).not.toHaveBeenCalled();
+  });
+
+  it.each<
+    readonly [
+      string,
+      {
+        readonly maxPreflightWorkUnits: number;
+        readonly maxPreflightNestingDepth: number;
+        readonly maxPreflightLocationPower: number;
+      },
+    ]
+  >([
+    [
+      "zero work",
+      { ...preflightLimits, maxPreflightWorkUnits: 0 },
+    ],
+    [
+      "fractional work",
+      { ...preflightLimits, maxPreflightWorkUnits: 1.5 },
+    ],
+    [
+      "work above signed 32-bit",
+      { ...preflightLimits, maxPreflightWorkUnits: 2_147_483_648 },
+    ],
+    [
+      "zero depth",
+      { ...preflightLimits, maxPreflightNestingDepth: 0 },
+    ],
+    [
+      "depth above the parser hard cap",
+      {
+        ...preflightLimits,
+        maxPreflightNestingDepth:
+          OCCT_ARTIFACT_MAX_PREFLIGHT_NESTING_DEPTH + 1,
+      },
+    ],
+    [
+      "zero location power",
+      { ...preflightLimits, maxPreflightLocationPower: 0 },
+    ],
+    [
+      "location power above signed 32-bit",
+      { ...preflightLimits, maxPreflightLocationPower: 2_147_483_648 },
+    ],
+  ])("rejects invalid ABI 0.9 limits before native work: %s", (_label, limits) => {
+    const fixture = readFixture();
+
+    expect(() =>
+      readBoundedOcctArtifactBrep({
+        module: fixture.module,
+        kernel: { release: vi.fn() },
+        input: new Uint8Array(4),
+        maxInputBytes: 16,
+        maxTopologyItems: 100,
+        maxNativeRequestedBytes: OCCT_ARTIFACT_MAX_NATIVE_REQUESTED_BYTES,
+        ...limits,
+      }),
+    ).toThrow(RangeError);
+    expect(fixture.invoke).not.toHaveBeenCalled();
+  });
+
+  it.each<
+    readonly [string, Partial<OcctArtifactReadRawReport>, string]
+  >([
+    [
+      "unechoed work cap",
+      {
+        maxPreflightWorkUnits:
+          OCCT_ARTIFACT_MAX_PREFLIGHT_WORK_UNITS - 1,
+      },
+      "report preflight limits do not echo the request",
+    ],
+    [
+      "unechoed depth cap",
+      {
+        maxPreflightNestingDepth:
+          OCCT_ARTIFACT_MAX_PREFLIGHT_NESTING_DEPTH - 1,
+      },
+      "report preflight limits do not echo the request",
+    ],
+    [
+      "unechoed location-power cap",
+      {
+        maxPreflightLocationPower:
+          OCCT_ARTIFACT_MAX_PREFLIGHT_LOCATION_POWER - 1,
+      },
+      "report preflight limits do not echo the request",
+    ],
+    [
+      "work counter above its cap",
+      {
+        preflightWorkUnits:
+          OCCT_ARTIFACT_MAX_PREFLIGHT_WORK_UNITS + 1,
+      },
+      "report preflight counters exceed their limits",
+    ],
+    [
+      "depth counter above its cap",
+      {
+        preflightMaximumDepth:
+          OCCT_ARTIFACT_MAX_PREFLIGHT_NESTING_DEPTH + 1,
+      },
+      "report preflight counters exceed their limits",
+    ],
+    [
+      "location-power counter above its cap",
+      {
+        preflightMaximumLocationPower:
+          OCCT_ARTIFACT_MAX_PREFLIGHT_LOCATION_POWER + 1,
+      },
+      "report preflight counters exceed their limits",
+    ],
+    [
+      "complete flag paired with a failure code",
+      {
+        preflightCode: "TRUNCATED",
+        archivePreflightComplete: true,
+      },
+      "report preflight completion must exactly match report.preflightCode",
+    ],
+    [
+      "incomplete flag paired with OK",
+      {
+        preflightCode: "OK",
+        archivePreflightComplete: false,
+      },
+      "report preflight completion must exactly match report.preflightCode",
+    ],
+    [
+      "deserialization started before completion",
+      {
+        ok: false,
+        stage: "preflight",
+        code: "TRUNCATED",
+        consumedByteCount: 0,
+        topologyItemCount: 0,
+        preflightCode: "TRUNCATED",
+        archivePreflightComplete: false,
+        deserializationStarted: true,
+        hasResult: vi.fn(() => false),
+        transferCode: vi.fn(() => "NO_RESULT"),
+      },
+      "deserialization start must exactly match completed preflight",
+    ],
+    [
+      "successful decode without deserialization",
+      { deserializationStarted: false },
+      "deserialization start must exactly match completed preflight",
+    ],
+    [
+      "preflight counters before execution",
+      {
+        ok: false,
+        stage: "validation",
+        code: "EMPTY_INPUT",
+        consumedByteCount: 0,
+        topologyItemCount: 0,
+        preflightWorkUnits: 1,
+        preflightMaximumDepth: 0,
+        preflightMaximumLocationPower: 0,
+        preflightConsumedByteCount: 0,
+        preflightCode: "NOT_RUN",
+        archivePreflightComplete: false,
+        deserializationStarted: false,
+        hasResult: vi.fn(() => false),
+        transferCode: vi.fn(() => "NO_RESULT"),
+      },
+      "preflight counters must be zero before preflight runs",
+    ],
+    [
+      "preflight consumed bytes above input",
+      { preflightConsumedByteCount: 5 },
+      "preflight consumed bytes exceed the input length",
+    ],
+    [
+      "completed preflight with trailing bytes",
+      { preflightConsumedByteCount: 3 },
+      "completed preflight must consume the exact input",
+    ],
+    [
+      "incomplete preflight after OCCT consumed bytes",
+      {
+        ok: false,
+        stage: "preflight",
+        code: "TRUNCATED",
+        consumedByteCount: 1,
+        topologyItemCount: 0,
+        preflightCode: "TRUNCATED",
+        archivePreflightComplete: false,
+        deserializationStarted: false,
+        hasResult: vi.fn(() => false),
+        transferCode: vi.fn(() => "NO_RESULT"),
+      },
+      "incomplete preflight must precede all OCCT decode counters",
+    ],
+    [
+      "incomplete preflight after OCCT topology work",
+      {
+        ok: false,
+        stage: "preflight",
+        code: "TRUNCATED",
+        consumedByteCount: 0,
+        topologyItemCount: 1,
+        preflightCode: "TRUNCATED",
+        archivePreflightComplete: false,
+        deserializationStarted: false,
+        hasResult: vi.fn(() => false),
+        transferCode: vi.fn(() => "NO_RESULT"),
+      },
+      "incomplete preflight must precede all OCCT decode counters",
+    ],
+    [
+      "preflight rejection with the wrong stage",
+      {
+        ok: false,
+        stage: "deserialization",
+        code: "TRUNCATED",
+        consumedByteCount: 0,
+        topologyItemCount: 0,
+        preflightCode: "TRUNCATED",
+        archivePreflightComplete: false,
+        deserializationStarted: false,
+        hasResult: vi.fn(() => false),
+        transferCode: vi.fn(() => "NO_RESULT"),
+      },
+      "preflight rejection must use the preflight stage",
+    ],
+    [
+      "preflight failure code disagreeing with the read report",
+      {
+        ok: false,
+        stage: "preflight",
+        code: "INVALID_COUNT",
+        consumedByteCount: 0,
+        topologyItemCount: 0,
+        preflightCode: "TRUNCATED",
+        archivePreflightComplete: false,
+        deserializationStarted: false,
+        hasResult: vi.fn(() => false),
+        transferCode: vi.fn(() => "NO_RESULT"),
+      },
+      "preflight failure code does not match the report code",
+    ],
+    [
+      "omitted depth telemetry",
+      { preflightMaximumDepth: undefined },
+      "report.preflightMaximumDepth must be a non-negative signed 32-bit integer",
+    ],
+  ])("rejects ABI 0.9 report protocol mismatch: %s", (
+    _label,
+    overrides,
+    message,
+  ) => {
+    const fixture = readFixture({
+      overrides: {
+        ...nativeRequestFields,
+        ...successfulPreflightFields,
+        ...overrides,
+      },
+    });
+
+    expect(() =>
+      readBoundedOcctArtifactBrep({
+        module: fixture.module,
+        kernel: { release: vi.fn() },
+        input: new Uint8Array(4),
+        maxInputBytes: 16,
+        maxTopologyItems: 100,
+        maxNativeRequestedBytes: OCCT_ARTIFACT_MAX_NATIVE_REQUESTED_BYTES,
+        ...preflightLimits,
+      }),
+    ).toThrow(message);
     expect(fixture.take).not.toHaveBeenCalled();
     expect(fixture.report.delete).toHaveBeenCalledOnce();
   });

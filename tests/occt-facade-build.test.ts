@@ -37,6 +37,10 @@ const hardenedArtifactPatchUrl = new URL(
   "../native/occt/patches/0008-hardened-shape-artifact-budgets.patch",
   import.meta.url,
 );
+const artifactPreflightPatchUrl = new URL(
+  "../native/occt/patches/0009-bintools-v4-structural-preflight.patch",
+  import.meta.url,
+);
 const smokeUrl = new URL("../scripts/test-occt-facade.mjs", import.meta.url);
 const packagerUrl = new URL(
   "../scripts/package-occt-facade-bundle.mjs",
@@ -218,6 +222,33 @@ describe("owned OCCT facade build boundary", () => {
     );
     expect(hardenedArtifactPatch).toContain(
       "invariantcad-facade@0.8.0+occt-wasm.3.7.0",
+    );
+
+    const artifactPreflightPatch = await readFile(
+      artifactPreflightPatchUrl,
+      "utf8",
+    );
+    expect(artifactPreflightPatch).toContain(
+      "invariantcad_bintools_v4_preflight.h",
+    );
+    expect(artifactPreflightPatch).toContain(
+      "invariantcad_bintools_v4_preflight.cpp",
+    );
+    expect(artifactPreflightPatch).toContain(
+      "Open CASCADE Topology V4",
+    );
+    expect(artifactPreflightPatch).toContain("maxPreflightWorkUnits");
+    expect(artifactPreflightPatch).toContain("maxPreflightNestingDepth");
+    expect(artifactPreflightPatch).toContain("maxPreflightLocationPower");
+    expect(artifactPreflightPatch).toContain("ShapeMetrics");
+    expect(artifactPreflightPatch).toContain("expandedOccurrences");
+    expect(artifactPreflightPatch).toContain(
+      "Owned writer location table contains no duplicate chains",
+    );
+    expect(artifactPreflightPatch).toContain("archivePreflightComplete");
+    expect(artifactPreflightPatch).toContain("deserializationStarted");
+    expect(artifactPreflightPatch).toContain(
+      "invariantcad-facade@0.9.0+occt-wasm.3.7.0",
     );
 
     const releaseInput = JSON.parse(await readFile(releaseInputUrl, "utf8")) as {

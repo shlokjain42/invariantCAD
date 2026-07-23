@@ -2,18 +2,18 @@
   "schemaVersion": 1,
   "bundle": {
     "name": "invariantcad-occt-facade",
-    "version": "0.8.0",
+    "version": "0.9.0",
     "layoutVersion": 1,
     "sourceDateEpoch": 0
   },
   "archive": {
     "format": "ustar+gzip",
-    "size": 7171705,
-    "sha256": "bf9b5beab410131f1bbcb2bf3e0f02335dbe946d8ecb3d1caec170e4b6658719"
+    "size": 7191122,
+    "sha256": "942dd214d83d3156249181d304a55938b2b2722ce039874502b895af353ccad7"
   },
   "facade": {
-    "marker": "invariantcad-facade@0.8.0+occt-wasm.3.7.0",
-    "abiVersion": "0.8.0",
+    "marker": "invariantcad-facade@0.9.0+occt-wasm.3.7.0",
+    "abiVersion": "0.9.0",
     "upstreamOcctWasmVersion": "3.7.0"
   },
   "runtime": [
@@ -28,8 +28,8 @@
       "source": "occt-wasm.wasm",
       "target": "runtime/occt-wasm.wasm",
       "mediaType": "application/wasm",
-      "size": 22275579,
-      "sha256": "f283b44bf9088b6524786d7631d2bb258cf8cabd1d4ae1972b1771c1f667b8ed"
+      "size": 22304689,
+      "sha256": "ee2bc82eaf80ff450ecf191126bb42480cf5bcf40e2bca697aa521771eb3503d"
     }
   ],
   "inputs": [
@@ -106,6 +106,14 @@
       "sha256": "234407c5736f8066ce7403a5509c07330ef1fb6a9179fcbe6a212ee8db943105"
     },
     {
+      "source": "native/occt/patches/0009-bintools-v4-structural-preflight.patch",
+      "target": "source/native/occt/patches/0009-bintools-v4-structural-preflight.patch",
+      "role": "source-patch",
+      "mode": "0644",
+      "size": 67642,
+      "sha256": "b9a0f4e5d64cdba52748adc295489afc4dbe901d3bb954d7fc68e94ed957802e"
+    },
+    {
       "source": "scripts/build-occt-facade.sh",
       "target": "source/scripts/build-occt-facade.sh",
       "role": "build-script",
@@ -118,8 +126,8 @@
       "target": "SOURCE_AND_RELINK.md",
       "role": "source-relink-guide",
       "mode": "0644",
-      "size": 14594,
-      "sha256": "31a481861f7ff3940309637d364a373f711accbd75a3ee92b6979f6af2d9907b"
+      "size": 16750,
+      "sha256": "39d79cc4bc2f188782bf558992d0f1921d89097ad0a28122f51b1b352b545b3b"
     },
     {
       "source": "LICENSE",

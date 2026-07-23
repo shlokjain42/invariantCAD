@@ -2,9 +2,12 @@ import assert from "node:assert/strict";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-const EXPECTED_FACADE_VERSION = "invariantcad-facade@0.8.0+occt-wasm.3.7.0";
+const EXPECTED_FACADE_VERSION = "invariantcad-facade@0.9.0+occt-wasm.3.7.0";
 const EXPECTED_TOPOLOGY_HISTORY_VERSION = 1;
 const ARTIFACT_NATIVE_REQUEST_LIMIT = 128 * 1024 * 1024;
+const ARTIFACT_PREFLIGHT_WORK_LIMIT = 1_000_000;
+const ARTIFACT_PREFLIGHT_NESTING_LIMIT = 64;
+const ARTIFACT_PREFLIGHT_LOCATION_POWER_LIMIT = 1_000_000;
 const EXACT_BOOLEAN_HISTORY_RECORD_LIMIT = 1_000_000;
 const EXACT_EDGE_TREATMENT_HISTORY_RECORD_LIMIT = 1_000_000;
 const EXACT_SOLID_OFFSET_HISTORY_RECORD_LIMIT = 1_000_000;
@@ -476,6 +479,281 @@ function withReport(report, action) {
   } finally {
     report.delete();
   }
+}
+
+function artifactReadLimits(inputByteCount, overrides = {}) {
+  return {
+    maxInputBytes: inputByteCount,
+    maxTopologyItems: 100,
+    maxNativeRequestedBytes: ARTIFACT_NATIVE_REQUEST_LIMIT,
+    maxPreflightWorkUnits: ARTIFACT_PREFLIGHT_WORK_LIMIT,
+    maxPreflightNestingDepth: ARTIFACT_PREFLIGHT_NESTING_LIMIT,
+    maxPreflightLocationPower: ARTIFACT_PREFLIGHT_LOCATION_POWER_LIMIT,
+    ...overrides,
+  };
+}
+
+function readArtifactBrep(selectedKernel, input, limits) {
+  return Module.invariantcadReadArtifactBrep(
+    selectedKernel,
+    input,
+    limits.maxInputBytes,
+    limits.maxTopologyItems,
+    limits.maxNativeRequestedBytes,
+    limits.maxPreflightWorkUnits,
+    limits.maxPreflightNestingDepth,
+    limits.maxPreflightLocationPower,
+  );
+}
+
+function assertArtifactReadLimitEchoes(report, limits, label) {
+  assert.equal(
+    report.maxInputBytes,
+    limits.maxInputBytes,
+    `${label}.maxInputBytes`,
+  );
+  assert.equal(
+    report.maxTopologyItems,
+    limits.maxTopologyItems,
+    `${label}.maxTopologyItems`,
+  );
+  assert.equal(
+    report.maxNativeRequestedBytes,
+    limits.maxNativeRequestedBytes,
+    `${label}.maxNativeRequestedBytes`,
+  );
+  assert.equal(
+    report.maxPreflightWorkUnits,
+    limits.maxPreflightWorkUnits,
+    `${label}.maxPreflightWorkUnits`,
+  );
+  assert.equal(
+    report.maxPreflightNestingDepth,
+    limits.maxPreflightNestingDepth,
+    `${label}.maxPreflightNestingDepth`,
+  );
+  assert.equal(
+    report.maxPreflightLocationPower,
+    limits.maxPreflightLocationPower,
+    `${label}.maxPreflightLocationPower`,
+  );
+}
+
+function assertArtifactHasNoResult(report, selectedKernel, label) {
+  assert.equal(report.hasResult(), false, `${label}.hasResult`);
+  assert.equal(
+    report.transferCode(selectedKernel),
+    "NO_RESULT",
+    `${label}.transferCode`,
+  );
+  assert.throws(
+    () => report.takeResultId(selectedKernel),
+    `${label}: a failed read must not transfer a result`,
+  );
+}
+
+function assertArtifactPreflightNotRun(report, label) {
+  assert.equal(report.preflightWorkUnits, 0, `${label}.preflightWorkUnits`);
+  assert.equal(
+    report.preflightMaximumDepth,
+    0,
+    `${label}.preflightMaximumDepth`,
+  );
+  assert.equal(
+    report.preflightMaximumLocationPower,
+    0,
+    `${label}.preflightMaximumLocationPower`,
+  );
+  assert.equal(
+    report.preflightConsumedByteCount,
+    0,
+    `${label}.preflightConsumedByteCount`,
+  );
+  assert.equal(report.preflightCode, "NOT_RUN", `${label}.preflightCode`);
+  assert.equal(
+    report.archivePreflightComplete,
+    false,
+    `${label}.archivePreflightComplete`,
+  );
+  assert.equal(
+    report.deserializationStarted,
+    false,
+    `${label}.deserializationStarted`,
+  );
+  assert.equal(report.consumedByteCount, 0, `${label}.consumedByteCount`);
+  assert.equal(report.topologyItemCount, 0, `${label}.topologyItemCount`);
+}
+
+function assertArtifactPreflightRejected(
+  report,
+  inputByteCount,
+  limits,
+  code,
+  label,
+) {
+  assert.equal(report.ok, false, `${label}.ok`);
+  assert.equal(report.stage, "preflight", `${label}.stage`);
+  assert.equal(report.code, code, `${label}.code`);
+  assert.equal(report.inputByteCount, inputByteCount, `${label}.inputByteCount`);
+  assertArtifactReadLimitEchoes(report, limits, label);
+  assert.ok(
+    report.preflightWorkUnits >= 0 &&
+      report.preflightWorkUnits <= limits.maxPreflightWorkUnits,
+    `${label}.preflightWorkUnits`,
+  );
+  assert.ok(
+    report.preflightMaximumDepth >= 0 &&
+      report.preflightMaximumDepth <= limits.maxPreflightNestingDepth,
+    `${label}.preflightMaximumDepth`,
+  );
+  assert.ok(
+    report.preflightMaximumLocationPower >= 0 &&
+      report.preflightMaximumLocationPower <=
+        limits.maxPreflightLocationPower,
+    `${label}.preflightMaximumLocationPower`,
+  );
+  assert.ok(
+    report.preflightConsumedByteCount >= 0 &&
+      report.preflightConsumedByteCount <= inputByteCount,
+    `${label}.preflightConsumedByteCount`,
+  );
+  assert.equal(report.preflightCode, code, `${label}.preflightCode`);
+  assert.equal(
+    report.archivePreflightComplete,
+    false,
+    `${label}.archivePreflightComplete`,
+  );
+  assert.equal(
+    report.deserializationStarted,
+    false,
+    `${label}.deserializationStarted`,
+  );
+  assert.equal(report.consumedByteCount, 0, `${label}.consumedByteCount`);
+  assert.equal(report.topologyItemCount, 0, `${label}.topologyItemCount`);
+  assert.ok(report.nativeRequestedBytes > 0, `${label}.nativeRequestedBytes`);
+  assert.ok(
+    report.nativeRequestedBytes <= limits.maxNativeRequestedBytes,
+    `${label}.nativeRequestedBytesLimit`,
+  );
+  assert.ok(
+    report.nativeAllocationCalls > 0,
+    `${label}.nativeAllocationCalls`,
+  );
+  assert.equal(
+    report.nativeRequestLimitExceeded,
+    false,
+    `${label}.nativeRequestLimitExceeded`,
+  );
+  assertArtifactHasNoResult(report, kernel, label);
+}
+
+function assertArtifactPreflightComplete(report, inputByteCount, limits, label) {
+  assertArtifactReadLimitEchoes(report, limits, label);
+  assert.ok(report.preflightWorkUnits > 0, `${label}.preflightWorkUnits`);
+  assert.ok(
+    report.preflightWorkUnits <= limits.maxPreflightWorkUnits,
+    `${label}.preflightWorkUnitsLimit`,
+  );
+  assert.ok(
+    report.preflightMaximumDepth > 0 &&
+      report.preflightMaximumDepth <= limits.maxPreflightNestingDepth,
+    `${label}.preflightMaximumDepth`,
+  );
+  assert.ok(
+    report.preflightMaximumLocationPower >= 0 &&
+      report.preflightMaximumLocationPower <=
+        limits.maxPreflightLocationPower,
+    `${label}.preflightMaximumLocationPower`,
+  );
+  assert.equal(
+    report.preflightConsumedByteCount,
+    inputByteCount,
+    `${label}.preflightConsumedByteCount`,
+  );
+  assert.equal(report.preflightCode, "OK", `${label}.preflightCode`);
+  assert.equal(
+    report.archivePreflightComplete,
+    true,
+    `${label}.archivePreflightComplete`,
+  );
+  assert.equal(
+    report.deserializationStarted,
+    true,
+    `${label}.deserializationStarted`,
+  );
+}
+
+const asciiEncoder = new TextEncoder();
+
+function asciiBytes(value) {
+  return asciiEncoder.encode(value);
+}
+
+function findBytes(bytes, needle, label) {
+  outer: for (
+    let offset = 0;
+    offset <= bytes.byteLength - needle.byteLength;
+    offset += 1
+  ) {
+    for (let index = 0; index < needle.byteLength; index += 1) {
+      if (bytes[offset + index] !== needle[index]) continue outer;
+    }
+    return offset;
+  }
+  assert.fail(`${label}: byte sequence was not found`);
+}
+
+function findLineDataOffset(bytes, prefix, label) {
+  const prefixBytes = asciiBytes(prefix);
+  const prefixOffset = findBytes(bytes, prefixBytes, label);
+  const lineEnd = bytes.indexOf(
+    "\n".charCodeAt(0),
+    prefixOffset + prefixBytes.byteLength,
+  );
+  assert.ok(lineEnd >= 0, `${label}: line terminator was not found`);
+  return lineEnd + 1;
+}
+
+function replaceBytes(bytes, offset, removedByteCount, replacement) {
+  const output = new Uint8Array(
+    bytes.byteLength - removedByteCount + replacement.byteLength,
+  );
+  output.set(bytes.subarray(0, offset), 0);
+  output.set(replacement, offset);
+  output.set(
+    bytes.subarray(offset + removedByteCount),
+    offset + replacement.byteLength,
+  );
+  return output;
+}
+
+function artifactWithCompositeLocation(bytes, power) {
+  const oldLine = asciiBytes("Locations 0\n");
+  const lineOffset = findBytes(bytes, oldLine, "Locations section");
+  const newLine = asciiBytes("Locations 2\n");
+  const records = new Uint8Array(1 + 12 * 8 + 1 + 4 + 4 + 4);
+  const view = new DataView(records.buffer);
+  let offset = 0;
+  records[offset] = 1;
+  offset += 1;
+  for (const value of [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0]) {
+    view.setFloat64(offset, value, true);
+    offset += 8;
+  }
+  records[offset] = 2;
+  offset += 1;
+  view.setInt32(offset, 1, true);
+  offset += 4;
+  view.setInt32(offset, power, true);
+  offset += 4;
+  view.setInt32(offset, 0, true);
+  offset += 4;
+  assert.equal(offset, records.byteLength);
+
+  const replacement = new Uint8Array(newLine.byteLength + records.byteLength);
+  replacement.set(newLine);
+  replacement.set(records, newLine.byteLength);
+  return replaceBytes(bytes, lineOffset, oldLine.byteLength, replacement);
 }
 
 function assertBounds(actual, expected, label) {
@@ -1307,13 +1585,8 @@ try {
     guarded[guarded.byteLength - 1] = 0x5a;
     guarded.set(bytes, 1);
     const borrowed = guarded.subarray(1, guarded.byteLength - 1);
-    const report = Module.invariantcadReadArtifactBrep(
-      kernel,
-      borrowed,
-      borrowed.byteLength,
-      100,
-      ARTIFACT_NATIVE_REQUEST_LIMIT,
-    );
+    const readLimits = artifactReadLimits(borrowed.byteLength);
+    const report = readArtifactBrep(kernel, borrowed, readLimits);
     const alias = report.clone();
     const foreign = new Module.OcctKernel();
     try {
@@ -1321,14 +1594,14 @@ try {
       assert.equal(report.stage, "complete");
       assert.equal(report.code, "OK");
       assert.equal(report.inputByteCount, borrowed.byteLength);
-      assert.equal(report.maxInputBytes, borrowed.byteLength);
       assert.equal(report.consumedByteCount, borrowed.byteLength);
       assert.ok(report.topologyItemCount > 0);
       assert.ok(report.topologyItemCount <= 100);
-      assert.equal(report.maxTopologyItems, 100);
-      assert.equal(
-        report.maxNativeRequestedBytes,
-        ARTIFACT_NATIVE_REQUEST_LIMIT,
+      assertArtifactPreflightComplete(
+        report,
+        borrowed.byteLength,
+        readLimits,
+        "artifact.success",
       );
       assert.ok(report.nativeRequestedBytes > 0);
       assert.ok(report.nativeRequestedBytes <= report.maxNativeRequestedBytes);
@@ -1362,114 +1635,768 @@ try {
     assert.deepEqual(borrowed, bytes);
     assert.equal(kernel.getShapeCount(), arenaWithSource);
 
-    const untaken = Module.invariantcadReadArtifactBrep(
-      kernel,
-      bytes,
-      bytes.byteLength,
-      100,
-      ARTIFACT_NATIVE_REQUEST_LIMIT,
-    );
+    const untakenLimits = artifactReadLimits(bytes.byteLength);
+    const untaken = readArtifactBrep(kernel, bytes, untakenLimits);
     const untakenAlias = untaken.clone();
     assert.equal(untaken.ok, true);
+    assertArtifactPreflightComplete(
+      untaken,
+      bytes.byteLength,
+      untakenLimits,
+      "artifact.untaken",
+    );
     assert.equal(untaken.transferCode(kernel), "READY");
     untaken.delete();
     assert.equal(untakenAlias.transferCode(kernel), "READY");
     untakenAlias.delete();
     assert.equal(kernel.getShapeCount(), arenaWithSource);
 
-    const wrongVersion = bytes.slice();
-    const versionMarker = wrongVersion.indexOf("V".charCodeAt(0));
-    assert.ok(versionMarker >= 0);
-    wrongVersion[versionMarker + 1] = "3".charCodeAt(0);
-    const failures = [
+    const assertSameRuntimeRecovery = (label) => {
+      const inputBefore = bytes.slice();
+      const limits = artifactReadLimits(bytes.byteLength);
+      withReport(readArtifactBrep(kernel, bytes, limits), (recovery) => {
+        assert.equal(recovery.ok, true, `${label}.ok`);
+        assert.equal(recovery.stage, "complete", `${label}.stage`);
+        assert.equal(recovery.code, "OK", `${label}.code`);
+        assert.equal(
+          recovery.inputByteCount,
+          bytes.byteLength,
+          `${label}.inputByteCount`,
+        );
+        assert.equal(
+          recovery.consumedByteCount,
+          bytes.byteLength,
+          `${label}.consumedByteCount`,
+        );
+        assert.ok(recovery.topologyItemCount > 0, `${label}.topologyItemCount`);
+        assertArtifactPreflightComplete(
+          recovery,
+          bytes.byteLength,
+          limits,
+          label,
+        );
+        assert.equal(recovery.hasResult(), true, `${label}.hasResult`);
+        assert.equal(recovery.transferCode(kernel), "READY", `${label}.transfer`);
+        assert.equal(
+          kernel.getShapeCount(),
+          arenaWithSource,
+          `${label}.ownedResult`,
+        );
+        const recovered = recovery.takeResultId(kernel);
+        assert.equal(
+          kernel.getShapeCount(),
+          arenaWithSource + 1,
+          `${label}.transferredResult`,
+        );
+        assert.equal(kernel.getShapeType(recovered), "solid", `${label}.type`);
+        assert.equal(kernel.isValid(recovered), true, `${label}.valid`);
+        assertClose(
+          kernel.getVolume(recovered),
+          6,
+          VOLUME_TOLERANCE,
+          `${label}.volume`,
+        );
+        kernel.release(recovered);
+      });
+      assert.deepEqual(bytes, inputBefore, `${label}.input`);
+      assert.equal(kernel.getShapeCount(), arenaWithSource, `${label}.arena`);
+    };
+
+    const validationFailures = [
       {
         label: "empty",
         input: new Uint8Array(),
-        inputLimit: 1,
-        topologyLimit: 100,
+        limits: artifactReadLimits(1),
+        expectedInputByteCount: 0,
         code: "EMPTY_INPUT",
-      },
-      {
-        label: "truncated",
-        input: bytes.subarray(0, 48),
-        inputLimit: 48,
-        topologyLimit: 100,
-        code: "OCCT_EXCEPTION",
-      },
-      {
-        label: "wrong version",
-        input: wrongVersion,
-        inputLimit: wrongVersion.byteLength,
-        topologyLimit: 100,
-        code: "UNSUPPORTED_ARCHIVE",
-      },
-      {
-        label: "trailing",
-        input: Uint8Array.from([...bytes, 0]),
-        inputLimit: bytes.byteLength + 1,
-        topologyLimit: 100,
-        code: "TRAILING_INPUT",
       },
       {
         label: "input cap",
         input: bytes,
-        inputLimit: bytes.byteLength - 1,
-        topologyLimit: 100,
+        limits: artifactReadLimits(bytes.byteLength - 1),
+        expectedInputByteCount: bytes.byteLength,
         code: "INPUT_LIMIT_EXCEEDED",
       },
       {
         label: "invalid input cap",
         input: bytes,
-        inputLimit: 0,
-        topologyLimit: 100,
+        limits: artifactReadLimits(0),
+        expectedInputByteCount: 0,
         code: "INVALID_INPUT_LIMIT",
       },
       {
         label: "invalid topology cap",
         input: bytes,
-        inputLimit: bytes.byteLength,
-        topologyLimit: 0,
+        limits: artifactReadLimits(bytes.byteLength, {
+          maxTopologyItems: 0,
+        }),
+        expectedInputByteCount: 0,
         code: "INVALID_TOPOLOGY_LIMIT",
       },
       {
         label: "invalid native request cap",
         input: bytes,
-        inputLimit: bytes.byteLength,
-        topologyLimit: 100,
-        nativeRequestLimit: 0,
+        limits: artifactReadLimits(bytes.byteLength, {
+          maxNativeRequestedBytes: 0,
+        }),
+        expectedInputByteCount: 0,
         code: "INVALID_NATIVE_REQUEST_LIMIT",
       },
       {
-        label: "topology cap",
+        label: "invalid preflight work cap",
         input: bytes,
-        inputLimit: bytes.byteLength,
-        topologyLimit: 1,
-        code: "TOPOLOGY_LIMIT_EXCEEDED",
+        limits: artifactReadLimits(bytes.byteLength, {
+          maxPreflightWorkUnits: 0,
+        }),
+        expectedInputByteCount: 0,
+        code: "INVALID_PREFLIGHT_WORK_LIMIT",
+      },
+      {
+        label: "invalid preflight nesting cap",
+        input: bytes,
+        limits: artifactReadLimits(bytes.byteLength, {
+          maxPreflightNestingDepth: 0,
+        }),
+        expectedInputByteCount: 0,
+        code: "INVALID_PREFLIGHT_NESTING_LIMIT",
+      },
+      {
+        label: "unsupported preflight nesting cap",
+        input: bytes,
+        limits: artifactReadLimits(bytes.byteLength, {
+          maxPreflightNestingDepth: 65,
+        }),
+        expectedInputByteCount: 0,
+        code: "INVALID_PREFLIGHT_NESTING_LIMIT",
+      },
+      {
+        label: "invalid preflight location-power cap",
+        input: bytes,
+        limits: artifactReadLimits(bytes.byteLength, {
+          maxPreflightLocationPower: 0,
+        }),
+        expectedInputByteCount: 0,
+        code: "INVALID_PREFLIGHT_LOCATION_POWER_LIMIT",
       },
     ];
-    for (const failure of failures) {
+    for (const failure of validationFailures) {
       const inputBefore = failure.input.slice();
       withReport(
-        Module.invariantcadReadArtifactBrep(
-          kernel,
-          failure.input,
-          failure.inputLimit,
-          failure.topologyLimit,
-          failure.nativeRequestLimit ?? ARTIFACT_NATIVE_REQUEST_LIMIT,
-        ),
+        readArtifactBrep(kernel, failure.input, failure.limits),
         (failed) => {
           assert.equal(failed.ok, false, `${failure.label}.ok`);
+          assert.equal(failed.stage, "validation", `${failure.label}.stage`);
           assert.equal(failed.code, failure.code, `${failure.label}.code`);
-          assert.equal(failed.hasResult(), false, `${failure.label}.result`);
           assert.equal(
-            failed.transferCode(kernel),
-            "NO_RESULT",
-            `${failure.label}.transfer`,
+            failed.inputByteCount,
+            failure.expectedInputByteCount,
+            `${failure.label}.inputByteCount`,
           );
+          assertArtifactReadLimitEchoes(
+            failed,
+            failure.limits,
+            failure.label,
+          );
+          assertArtifactPreflightNotRun(failed, failure.label);
+          assert.equal(
+            failed.nativeRequestedBytes,
+            0,
+            `${failure.label}.nativeRequestedBytes`,
+          );
+          assert.equal(
+            failed.nativeAllocationCalls,
+            0,
+            `${failure.label}.nativeAllocationCalls`,
+          );
+          assert.equal(
+            failed.nativeRequestLimitExceeded,
+            false,
+            `${failure.label}.nativeRequestLimitExceeded`,
+          );
+          assertArtifactHasNoResult(failed, kernel, failure.label);
+        },
+      );
+      assert.deepEqual(
+        failure.input,
+        inputBefore,
+        `${failure.label}.input`,
+      );
+      assert.equal(
+        kernel.getShapeCount(),
+        arenaWithSource,
+        `${failure.label}.arena`,
+      );
+    }
+    assertSameRuntimeRecovery("validationFailures.recovery");
+
+    const copyFailureLimits = artifactReadLimits(bytes.byteLength, {
+      maxNativeRequestedBytes: 1,
+    });
+    const copyFailureInputBefore = bytes.slice();
+    withReport(
+      readArtifactBrep(kernel, bytes, copyFailureLimits),
+      (copyFailure) => {
+        assert.equal(copyFailure.ok, false, "copyFailure.ok");
+        assert.equal(copyFailure.stage, "copy", "copyFailure.stage");
+        assert.equal(
+          copyFailure.code,
+          "NATIVE_REQUEST_LIMIT_EXCEEDED",
+          "copyFailure.code",
+        );
+        assert.equal(
+          copyFailure.inputByteCount,
+          bytes.byteLength,
+          "copyFailure.inputByteCount",
+        );
+        assertArtifactReadLimitEchoes(
+          copyFailure,
+          copyFailureLimits,
+          "copyFailure",
+        );
+        assertArtifactPreflightNotRun(copyFailure, "copyFailure");
+        assert.ok(
+          copyFailure.nativeRequestedBytes <=
+            copyFailureLimits.maxNativeRequestedBytes,
+          "copyFailure.nativeRequestedBytes",
+        );
+        assert.ok(
+          copyFailure.nativeAllocationCalls > 0,
+          "copyFailure.nativeAllocationCalls",
+        );
+        assert.equal(
+          copyFailure.nativeRequestLimitExceeded,
+          true,
+          "copyFailure.nativeRequestLimitExceeded",
+        );
+        assertArtifactHasNoResult(copyFailure, kernel, "copyFailure");
+      },
+    );
+    assert.deepEqual(bytes, copyFailureInputBefore, "copyFailure.input");
+    assert.equal(kernel.getShapeCount(), arenaWithSource, "copyFailure.arena");
+    assertSameRuntimeRecovery("copyFailure.recovery");
+
+    const wrongVersion = bytes.slice();
+    const versionMarker = findBytes(
+      wrongVersion,
+      asciiBytes("Topology V4"),
+      "archive version",
+    );
+    wrongVersion[versionMarker + "Topology V".length] = "3".charCodeAt(0);
+
+    const wrongSection = bytes.slice();
+    const sectionOffset = findBytes(
+      wrongSection,
+      asciiBytes("Curves "),
+      "Curves section",
+    );
+    wrongSection[sectionOffset] = "X".charCodeAt(0);
+
+    const wrongCount = bytes.slice();
+    const countPrefix = asciiBytes("Curve2ds ");
+    const countPrefixOffset = findBytes(
+      wrongCount,
+      countPrefix,
+      "Curve2ds count",
+    );
+    wrongCount[countPrefixOffset + countPrefix.byteLength] =
+      "x".charCodeAt(0);
+
+    const wrongGeometryTag = bytes.slice();
+    const firstCurve2dOffset = findLineDataOffset(
+      wrongGeometryTag,
+      "Curve2ds ",
+      "Curve2ds records",
+    );
+    wrongGeometryTag[firstCurve2dOffset] = 0xff;
+
+    const wrongBoolean = bytes.slice();
+    const firstShapeOffset = findLineDataOffset(
+      wrongBoolean,
+      "\nTShapes ",
+      "TShape records",
+    );
+    assert.equal(
+      wrongBoolean[firstShapeOffset],
+      7,
+      "the owned box archive must begin with a vertex TShape",
+    );
+    const firstVertexRepresentationOffset = firstShapeOffset + 1 + 4 * 8;
+    assert.equal(
+      wrongBoolean[firstVertexRepresentationOffset],
+      0,
+      "the first box vertex must have no point representation",
+    );
+    wrongBoolean[firstVertexRepresentationOffset + 1] = 2;
+
+    const wrongReference = bytes.slice();
+    const rootReferenceOffset = wrongReference.byteLength - 9;
+    const wrongReferenceView = new DataView(
+      wrongReference.buffer,
+      wrongReference.byteOffset,
+      wrongReference.byteLength,
+    );
+    assert.ok(
+      wrongReference[rootReferenceOffset] <= 3,
+      "the owned archive must end in a shape orientation",
+    );
+    assert.equal(
+      wrongReferenceView.getInt32(rootReferenceOffset + 1, true),
+      1,
+      "the owned archive must use the canonical reverse root index",
+    );
+    wrongReferenceView.setInt32(rootReferenceOffset + 1, 0, true);
+
+    const trailing = new Uint8Array(bytes.byteLength + 1);
+    trailing.set(bytes);
+    trailing[trailing.byteLength - 1] = 0xa5;
+
+    const preflightFailures = [
+      {
+        label: "wrong version",
+        input: wrongVersion,
+        code: "UNSUPPORTED_ARCHIVE",
+      },
+      {
+        label: "wrong section",
+        input: wrongSection,
+        code: "INVALID_SECTION",
+      },
+      {
+        label: "wrong count",
+        input: wrongCount,
+        code: "INVALID_COUNT",
+      },
+      {
+        label: "wrong geometry tag",
+        input: wrongGeometryTag,
+        code: "INVALID_TAG",
+      },
+      {
+        label: "wrong boolean",
+        input: wrongBoolean,
+        code: "INVALID_BOOLEAN",
+      },
+      {
+        label: "wrong root reference",
+        input: wrongReference,
+        code: "INVALID_REFERENCE",
+      },
+      {
+        label: "truncated",
+        input: bytes.slice(0, -1),
+        code: "TRUNCATED",
+      },
+      {
+        label: "trailing",
+        input: trailing,
+        code: "TRAILING_INPUT",
+      },
+      {
+        label: "single power-one location collapse",
+        input: artifactWithCompositeLocation(bytes, 1),
+        code: "PROFILE_MISMATCH",
+        expectedPreflightMaximumDepth: 1,
+        expectedPreflightMaximumLocationPower: 1,
+      },
+      {
+        label: "preflight work cap",
+        input: bytes,
+        limits: { maxPreflightWorkUnits: 1 },
+        code: "WORK_LIMIT_EXCEEDED",
+      },
+      {
+        label: "preflight topology cap",
+        input: bytes,
+        limits: { maxTopologyItems: 1 },
+        code: "TOPOLOGY_LIMIT_EXCEEDED",
+      },
+      {
+        label: "preflight nesting cap",
+        input: bytes,
+        limits: { maxPreflightNestingDepth: 1 },
+        code: "NESTING_LIMIT_EXCEEDED",
+      },
+      {
+        label: "preflight location-power cap",
+        input: artifactWithCompositeLocation(bytes, 2),
+        limits: { maxPreflightLocationPower: 1 },
+        code: "LOCATION_POWER_LIMIT_EXCEEDED",
+        expectedPreflightMaximumDepth: 0,
+        expectedPreflightMaximumLocationPower: 0,
+      },
+    ];
+    for (const failure of preflightFailures) {
+      const limits = artifactReadLimits(
+        failure.input.byteLength,
+        failure.limits,
+      );
+      const inputBefore = failure.input.slice();
+      withReport(
+        readArtifactBrep(kernel, failure.input, limits),
+        (failed) => {
+          assertArtifactPreflightRejected(
+            failed,
+            failure.input.byteLength,
+            limits,
+            failure.code,
+            failure.label,
+          );
+          if (failure.expectedPreflightMaximumDepth !== undefined) {
+            assert.equal(
+              failed.preflightMaximumDepth,
+              failure.expectedPreflightMaximumDepth,
+              `${failure.label}.exactPreflightMaximumDepth`,
+            );
+          }
+          if (
+            failure.expectedPreflightMaximumLocationPower !== undefined
+          ) {
+            assert.equal(
+              failed.preflightMaximumLocationPower,
+              failure.expectedPreflightMaximumLocationPower,
+              `${failure.label}.exactPreflightMaximumLocationPower`,
+            );
+          }
         },
       );
       assert.deepEqual(failure.input, inputBefore, `${failure.label}.input`);
-      assert.equal(kernel.getShapeCount(), arenaWithSource);
+      assert.equal(
+        kernel.getShapeCount(),
+        arenaWithSource,
+        `${failure.label}.arena`,
+      );
+      assertSameRuntimeRecovery(`${failure.label}.recovery`);
+    }
+
+    const decodeFailureLimits = artifactReadLimits(bytes.byteLength, {
+      maxNativeRequestedBytes: bytes.byteLength + 4096,
+    });
+    const decodeFailureInputBefore = bytes.slice();
+    withReport(
+      readArtifactBrep(kernel, bytes, decodeFailureLimits),
+      (decodeFailure) => {
+        assert.equal(decodeFailure.ok, false, "decodeFailure.ok");
+        assert.equal(
+          decodeFailure.stage,
+          "deserialization",
+          "decodeFailure.stage",
+        );
+        assert.equal(
+          decodeFailure.code,
+          "NATIVE_REQUEST_LIMIT_EXCEEDED",
+          "decodeFailure.code",
+        );
+        assert.equal(
+          decodeFailure.inputByteCount,
+          bytes.byteLength,
+          "decodeFailure.inputByteCount",
+        );
+        assertArtifactPreflightComplete(
+          decodeFailure,
+          bytes.byteLength,
+          decodeFailureLimits,
+          "decodeFailure",
+        );
+        assert.ok(
+          decodeFailure.consumedByteCount >= 0 &&
+            decodeFailure.consumedByteCount <= bytes.byteLength,
+          "decodeFailure.consumedByteCount",
+        );
+        assert.equal(
+          decodeFailure.topologyItemCount,
+          0,
+          "decodeFailure.topologyItemCount",
+        );
+        assert.ok(
+          decodeFailure.nativeRequestedBytes <=
+            decodeFailureLimits.maxNativeRequestedBytes,
+          "decodeFailure.nativeRequestedBytes",
+        );
+        assert.ok(
+          decodeFailure.nativeAllocationCalls > 0,
+          "decodeFailure.nativeAllocationCalls",
+        );
+        assert.equal(
+          decodeFailure.nativeRequestLimitExceeded,
+          true,
+          "decodeFailure.nativeRequestLimitExceeded",
+        );
+        assertArtifactHasNoResult(decodeFailure, kernel, "decodeFailure");
+      },
+    );
+    assert.deepEqual(bytes, decodeFailureInputBefore, "decodeFailure.input");
+    assert.equal(kernel.getShapeCount(), arenaWithSource, "decodeFailure.arena");
+    assertSameRuntimeRecovery("decodeFailure.recovery");
+  });
+
+  runFixture("bounded artifact positive round-trip corpus", () => {
+    const numericVector = (VectorType, values) => {
+      const result = new VectorType();
+      for (const value of values) result.push_back(value);
+      return result;
+    };
+    const located = (shape, [x, y, z]) => {
+      const matrix = numericVector(Module.VectorDouble, [
+        1,
+        0,
+        0,
+        x,
+        0,
+        1,
+        0,
+        y,
+        0,
+        0,
+        1,
+        z,
+      ]);
+      try {
+        return kernel.located(shape, matrix);
+      } finally {
+        matrix.delete();
+      }
+    };
+    const structuralSnapshot = (shape) => ({
+      shapeType: kernel.getShapeType(shape),
+      topology: shapeTopologyCounts(shape),
+      bounds: boundsOf(shape),
+      volume: kernel.getVolume(shape),
+      surfaceArea: kernel.getSurfaceArea(shape),
+      length: kernel.getLength(shape),
+    });
+    const assertStructuralRoundTrip = (shape, expected, label) => {
+      assert.equal(kernel.getShapeType(shape), expected.shapeType, `${label}.type`);
+      assert.equal(kernel.isValid(shape), true, `${label}.valid`);
+      assert.deepEqual(
+        shapeTopologyCounts(shape),
+        expected.topology,
+        `${label}.topology`,
+      );
+      assertBounds(boundsOf(shape), expected.bounds, `${label}.bounds`);
+      for (const [measure, actual] of [
+        ["volume", kernel.getVolume(shape)],
+        ["surfaceArea", kernel.getSurfaceArea(shape)],
+        ["length", kernel.getLength(shape)],
+      ]) {
+        assertClose(
+          actual,
+          expected[measure],
+          VOLUME_TOLERANCE,
+          `${label}.${measure}`,
+        );
+      }
+    };
+    const roundTrip = ({
+      label,
+      source,
+      verify = () => {},
+      expectCompositeLocation = false,
+    }) => {
+      assert.equal(kernel.isValid(source), true, `${label}.source.valid`);
+      verify(source, `${label}.source`);
+      const expected = structuralSnapshot(source);
+      let bytes;
+      withReport(
+        Module.invariantcadWriteArtifactBrep(
+          kernel,
+          source,
+          4 * 1024 * 1024,
+          ARTIFACT_NATIVE_REQUEST_LIMIT,
+        ),
+        (report) => {
+          assert.equal(report.ok, true, `${report.code}: ${report.message}`);
+          assert.equal(report.stage, "complete", `${label}.write.stage`);
+          assert.equal(report.code, "OK", `${label}.write.code`);
+          assert.equal(report.maxOutputBytes, 4 * 1024 * 1024);
+          assert.equal(
+            report.maxNativeRequestedBytes,
+            ARTIFACT_NATIVE_REQUEST_LIMIT,
+          );
+          assert.ok(report.nativeRequestedBytes > 0);
+          assert.ok(
+            report.nativeRequestedBytes <= report.maxNativeRequestedBytes,
+          );
+          assert.ok(report.nativeAllocationCalls > 0);
+          assert.equal(report.nativeRequestLimitExceeded, false);
+          assert.equal(report.hasBytes(), true, `${label}.write.hasBytes`);
+          assert.ok(report.byteCount() > 0, `${label}.write.byteCount`);
+          bytes = report.copyBytes();
+          assert.equal(bytes.byteLength, report.byteCount());
+        },
+      );
+
+      const limits = artifactReadLimits(bytes.byteLength, {
+        maxTopologyItems: 10_000,
+      });
+      withReport(readArtifactBrep(kernel, bytes, limits), (report) => {
+        assert.equal(report.ok, true, `${report.code}: ${report.message}`);
+        assert.equal(report.stage, "complete", `${label}.read.stage`);
+        assert.equal(report.code, "OK", `${label}.read.code`);
+        assert.equal(
+          report.inputByteCount,
+          bytes.byteLength,
+          `${label}.read.inputByteCount`,
+        );
+        assert.equal(
+          report.consumedByteCount,
+          bytes.byteLength,
+          `${label}.read.consumedByteCount`,
+        );
+        assert.ok(report.topologyItemCount > 0, `${label}.read.topology`);
+        assert.ok(
+          report.topologyItemCount <= limits.maxTopologyItems,
+          `${label}.read.topologyLimit`,
+        );
+        assertArtifactPreflightComplete(
+          report,
+          bytes.byteLength,
+          limits,
+          `${label}.read`,
+        );
+        if (expectCompositeLocation) {
+          assert.ok(
+            report.preflightMaximumLocationPower > 0,
+            `${label}.read.locationPower`,
+          );
+        }
+        assert.ok(
+          report.nativeRequestedBytes > 0,
+          `${label}.read.nativeRequestedBytes`,
+        );
+        assert.ok(
+          report.nativeRequestedBytes <= report.maxNativeRequestedBytes,
+          `${label}.read.nativeRequestedBytesLimit`,
+        );
+        assert.ok(
+          report.nativeAllocationCalls > 0,
+          `${label}.read.nativeAllocationCalls`,
+        );
+        assert.equal(report.nativeRequestLimitExceeded, false);
+        assert.equal(report.hasResult(), true, `${label}.read.hasResult`);
+        assert.equal(
+          report.transferCode(kernel),
+          "READY",
+          `${label}.read.transferCode`,
+        );
+
+        const restored = report.takeResultId(kernel);
+        try {
+          assertStructuralRoundTrip(restored, expected, `${label}.restored`);
+          verify(restored, `${label}.restored`);
+        } finally {
+          kernel.release(restored);
+        }
+        assert.equal(report.hasResult(), false, `${label}.read.transferred`);
+        assert.equal(
+          report.transferCode(kernel),
+          "ALREADY_TRANSFERRED",
+          `${label}.read.transferCodeAfterTransfer`,
+        );
+      });
+    };
+
+    const poles = numericVector(Module.VectorDouble, [
+      0,
+      0,
+      0,
+      5,
+      5,
+      0,
+      10,
+      0,
+      0,
+    ]);
+    const weights = numericVector(Module.VectorDouble, [1, 2, 1]);
+    const knots = numericVector(Module.VectorDouble, [0, 1]);
+    const multiplicities = numericVector(Module.VectorInt, [3, 3]);
+    let rationalSpline;
+    try {
+      rationalSpline = kernel.makeBSplineEdge(
+        poles,
+        weights,
+        knots,
+        multiplicities,
+        2,
+        false,
+      );
+    } finally {
+      poles.delete();
+      weights.delete();
+      knots.delete();
+      multiplicities.delete();
+    }
+
+    const booleanTarget = kernel.makeBox(10, 10, 10);
+    const booleanTool = translatedBox([10, 10, 10], [5, 0, 0]);
+    const booleanArenaBefore = kernel.getShapeCount();
+    let booleanResult;
+    withReport(
+      exactBoolean(booleanOperations.union, booleanTarget, [booleanTool]),
+      (report) => {
+        assertBooleanReportSuccess(
+          report,
+          booleanOperations.union,
+          1,
+          booleanArenaBefore,
+          "artifactCorpus.boolean",
+        );
+        booleanResult = report.takeResultId(kernel);
+      },
+    );
+
+    const sharedCylinder = kernel.makeCylinder(2, 5);
+    const firstLocation = located(sharedCylinder, [10, 0, 0]);
+    const nestedLocation = located(firstLocation, [0, 20, 0]);
+    assert.equal(kernel.isSame(sharedCylinder, firstLocation), false);
+    assert.equal(kernel.isSame(firstLocation, nestedLocation), false);
+    const locatedChildren = vector([
+      sharedCylinder,
+      firstLocation,
+      nestedLocation,
+    ]);
+    let locatedCompound;
+    try {
+      locatedCompound = kernel.makeCompound(locatedChildren);
+    } finally {
+      locatedChildren.delete();
+    }
+
+    for (const testCase of [
+      {
+        label: "artifactCorpus.rationalSpline",
+        source: rationalSpline,
+        verify: (shape, label) => {
+          assert.equal(kernel.getShapeType(shape), "edge", `${label}.type`);
+          assert.equal(kernel.curveType(shape), "bspline", `${label}.curveType`);
+        },
+      },
+      {
+        label: "artifactCorpus.booleanResult",
+        source: booleanResult,
+        verify: (shape, label) => {
+          assertClose(
+            kernel.getVolume(shape),
+            1_500,
+            VOLUME_TOLERANCE,
+            `${label}.volume`,
+          );
+        },
+      },
+      {
+        label: "artifactCorpus.locatedSharedCompound",
+        source: locatedCompound,
+        expectCompositeLocation: true,
+        verify: (shape, label) => {
+          assert.equal(kernel.getShapeType(shape), "compound", `${label}.type`);
+          assert.deepEqual(
+            shapeTopologyCounts(shape),
+            { faces: 9, edges: 9, vertices: 6 },
+            `${label}.topology`,
+          );
+        },
+      },
+    ]) {
+      roundTrip(testCase);
     }
   });
 

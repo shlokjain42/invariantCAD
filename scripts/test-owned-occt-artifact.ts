@@ -11,8 +11,11 @@ import {
 } from "../src/occt-kernel.js";
 
 const projectRoot = fileURLToPath(new URL("..", import.meta.url));
-const expectedFacadeVersion = "invariantcad-facade@0.8.0+occt-wasm.3.7.0";
+const expectedFacadeVersion = "invariantcad-facade@0.9.0+occt-wasm.3.7.0";
 const expectedNativeRequestLimit = 128 * 1024 * 1024;
+const expectedPreflightWorkLimit = 1_000_000;
+const expectedPreflightNestingDepthLimit = 64;
+const expectedPreflightLocationPowerLimit = 1_000_000;
 
 interface NativeAllocationTelemetry {
   readonly operation: "read" | "write";
@@ -74,6 +77,60 @@ function captureNativeAllocationTelemetry(
     nativeAllocationCalls,
     nativeRequestLimitExceeded: report.nativeRequestLimitExceeded,
   });
+}
+
+function assertSuccessfulReadPreflightTelemetry(report: unknown): void {
+  assert.ok(isObject(report), "read must return an object report");
+  const inputByteCount = nonNegativeSafeInteger(
+    report.inputByteCount,
+    "read.inputByteCount",
+  );
+  const maxPreflightWorkUnits = nonNegativeSafeInteger(
+    report.maxPreflightWorkUnits,
+    "read.maxPreflightWorkUnits",
+  );
+  const preflightWorkUnits = nonNegativeSafeInteger(
+    report.preflightWorkUnits,
+    "read.preflightWorkUnits",
+  );
+  const maxPreflightNestingDepth = nonNegativeSafeInteger(
+    report.maxPreflightNestingDepth,
+    "read.maxPreflightNestingDepth",
+  );
+  const preflightMaximumDepth = nonNegativeSafeInteger(
+    report.preflightMaximumDepth,
+    "read.preflightMaximumDepth",
+  );
+  const maxPreflightLocationPower = nonNegativeSafeInteger(
+    report.maxPreflightLocationPower,
+    "read.maxPreflightLocationPower",
+  );
+  const preflightMaximumLocationPower = nonNegativeSafeInteger(
+    report.preflightMaximumLocationPower,
+    "read.preflightMaximumLocationPower",
+  );
+  const preflightConsumedByteCount = nonNegativeSafeInteger(
+    report.preflightConsumedByteCount,
+    "read.preflightConsumedByteCount",
+  );
+  assert.equal(maxPreflightWorkUnits, expectedPreflightWorkLimit);
+  assert.ok(preflightWorkUnits > 0);
+  assert.ok(preflightWorkUnits <= maxPreflightWorkUnits);
+  assert.equal(
+    maxPreflightNestingDepth,
+    expectedPreflightNestingDepthLimit,
+  );
+  assert.ok(preflightMaximumDepth > 0);
+  assert.ok(preflightMaximumDepth <= maxPreflightNestingDepth);
+  assert.equal(
+    maxPreflightLocationPower,
+    expectedPreflightLocationPowerLimit,
+  );
+  assert.ok(preflightMaximumLocationPower <= maxPreflightLocationPower);
+  assert.equal(preflightConsumedByteCount, inputByteCount);
+  assert.equal(report.preflightCode, "OK");
+  assert.equal(report.archivePreflightComplete, true);
+  assert.equal(report.deserializationStarted, true);
 }
 
 function runTinyQuotaChild(directory: string): void {
@@ -172,13 +229,17 @@ const moduleFactory: OcctModuleFactory = async (options) => {
     return report;
   };
   candidate.invariantcadReadArtifactBrep = (...arguments_: unknown[]) => {
-    assert.equal(arguments_.length, 5);
+    assert.equal(arguments_.length, 8);
     assert.equal(arguments_[4], expectedNativeRequestLimit);
+    assert.equal(arguments_[5], expectedPreflightWorkLimit);
+    assert.equal(arguments_[6], expectedPreflightNestingDepthLimit);
+    assert.equal(arguments_[7], expectedPreflightLocationPowerLimit);
     const report = Reflect.apply(readArtifact, candidate, arguments_);
     try {
       nativeAllocationTelemetry.push(
         captureNativeAllocationTelemetry("read", report),
       );
+      assertSuccessfulReadPreflightTelemetry(report);
     } catch (error) {
       if (isObject(report) && typeof report.delete === "function") {
         report.delete();
@@ -236,7 +297,27 @@ try {
   );
   assert.match(
     producerCodec.capabilities.compatibilityFingerprint,
-    /nativeMaterialization=facade-capped-output-bounded-input-cumulative-native-requests-v2/,
+    /nativeArchivePreflight=invariantcad-bintools-v4-owned-profile@1/,
+  );
+  assert.match(
+    producerCodec.capabilities.compatibilityFingerprint,
+    /nativeArchivePreflightWorkUnits=1000000/,
+  );
+  assert.match(
+    producerCodec.capabilities.compatibilityFingerprint,
+    /nativeArchivePreflightNestingDepth=64/,
+  );
+  assert.match(
+    producerCodec.capabilities.compatibilityFingerprint,
+    /nativeArchivePreflightLocationPower=1000000/,
+  );
+  assert.match(
+    producerCodec.capabilities.compatibilityFingerprint,
+    /nativeArchivePreflightAccounting=quota-accounted-metadata-cursor-expanded-topology-geometry-pair-work-v1/,
+  );
+  assert.match(
+    producerCodec.capabilities.compatibilityFingerprint,
+    /nativeMaterialization=facade-capped-output-bounded-input-preflighted-cumulative-native-requests-v3/,
   );
 
   source = producer.box?.([2, 3, 5], false, { feature: "owned-artifact-box" });

@@ -1,0 +1,1562 @@
+diff --git a/facade/include/invariantcad_bintools_v4_preflight.h b/facade/include/invariantcad_bintools_v4_preflight.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..86f48b25325fcfa0714cb957c47ecb7b9df3e750
+--- /dev/null
++++ b/facade/include/invariantcad_bintools_v4_preflight.h
+@@ -0,0 +1,35 @@
++// SPDX-License-Identifier: Apache-2.0
++// Copyright 2026 InvariantCAD contributors
++
++#ifndef INVARIANTCAD_BINTOOLS_V4_PREFLIGHT_H
++#define INVARIANTCAD_BINTOOLS_V4_PREFLIGHT_H
++
++#include <cstddef>
++#include <cstdint>
++
++/// Bounded structural validation result for the exact little-endian,
++/// table-oriented BinTools v4 archive emitted by pinned OCCT 8.0.0.p1.
++struct InvariantCadBinToolsV4PreflightResult {
++    bool ok = false;
++    const char* code = "NOT_RUN";
++    const char* message = "BinTools v4 preflight did not run";
++    int consumedBytes = 0;
++    int workUnits = 0;
++    int maximumDepth = 0;
++    int maximumLocationPower = 0;
++};
++
++/// Parses one complete canonical BinTools v4 archive with a raw byte cursor and
++/// one quota-accounted TShape metrics vector. maxWorkUnits bounds every
++/// attacker-controlled table, array, representation, location-chain, subshape,
++/// expanded topology traversal, and conservative geometry/topology
++/// pair-validation unit. maxTopologyItems rejects an oversized TShape table
++/// before metadata or OCCT allocations. Embedded geometry, location chains,
++/// and the TShape graph share an explicit nesting ceiling; signed location
++/// powers have an independent ceiling. The parser also retains a non-negotiable
++/// implementation safety ceiling of depth 64.
++InvariantCadBinToolsV4PreflightResult invariantcadPreflightBinToolsV4(
++    const uint8_t* bytes, size_t byteCount, int maxTopologyItems,
++    int maxWorkUnits, int maxNestingDepth, int maxLocationPower) noexcept;
++
++#endif
+diff --git a/facade/include/occt_kernel.h b/facade/include/occt_kernel.h
+index b385dc1ac3db8c9a84a8210948f45bba695cc407..268147d03bcf894c8d358615e144b1e06800f77e 100644
+--- a/facade/include/occt_kernel.h
++++ b/facade/include/occt_kernel.h
+@@ -383,7 +383,7 @@ struct InvariantCadSolidOffsetReport {
+         double tolerance, int maxHistoryRecords);
+ };
+ 
+-/// Bounded binary-BREP serialization result used by facade ABI 0.8.
++/// Bounded binary-BREP serialization result used by facade ABI 0.8/0.9.
+ /// The report owns chunked native bytes whose aggregate payload never exceeds
+ /// maxOutputBytes. copyBytes() creates a detached JavaScript Uint8Array only
+ /// after native serialization has completed within that ceiling. Native
+@@ -430,10 +430,14 @@ struct InvariantCadArtifactWriteReport {
+         int maxNativeRequestedBytes);
+ };
+ 
+-/// Bounded-input binary-BREP decode result used by facade ABI 0.8.
+-/// JavaScript input is borrowed and length-checked before the facade snapshots
+-/// it into native memory. A successful decoded shape remains outside the arena
+-/// until one checked same-kernel takeResultId() call.
++/// Structurally preflighted bounded-input binary-BREP decode result used by
++/// facade ABI 0.9. JavaScript input is borrowed and length-checked before the
++/// facade snapshots it into native memory. A raw cursor plus one quota-accounted
++/// TShape metrics vector validates the exact pinned table-oriented BinTools v4
++/// grammar before OCCT deserialization begins. ABI 0.8 exposes the preceding prefix of
++/// this report without the preflight fields or trailing work-limit argument.
++/// A successful decoded shape remains outside the arena until one checked
++/// same-kernel takeResultId() call.
+ struct InvariantCadArtifactReadReport {
+     bool ok = false;
+     std::string stage = "validation";
+@@ -448,6 +452,16 @@ struct InvariantCadArtifactReadReport {
+     int nativeRequestedBytes = 0;
+     int nativeAllocationCalls = 0;
+     bool nativeRequestLimitExceeded = false;
++    int maxPreflightWorkUnits = 0;
++    int preflightWorkUnits = 0;
++    int maxPreflightNestingDepth = 0;
++    int preflightMaximumDepth = 0;
++    int maxPreflightLocationPower = 0;
++    int preflightMaximumLocationPower = 0;
++    int preflightConsumedByteCount = 0;
++    std::string preflightCode = "NOT_RUN";
++    bool archivePreflightComplete = false;
++    bool deserializationStarted = false;
+ 
+     InvariantCadArtifactReadReport() = default;
+     InvariantCadArtifactReadReport(const InvariantCadArtifactReadReport&) = default;
+@@ -470,6 +484,26 @@ struct InvariantCadArtifactReadReport {
+     bool getNativeRequestLimitExceeded() const {
+         return nativeRequestLimitExceeded;
+     }
++    int getMaxPreflightWorkUnits() const { return maxPreflightWorkUnits; }
++    int getPreflightWorkUnits() const { return preflightWorkUnits; }
++    int getMaxPreflightNestingDepth() const {
++        return maxPreflightNestingDepth;
++    }
++    int getPreflightMaximumDepth() const { return preflightMaximumDepth; }
++    int getMaxPreflightLocationPower() const {
++        return maxPreflightLocationPower;
++    }
++    int getPreflightMaximumLocationPower() const {
++        return preflightMaximumLocationPower;
++    }
++    int getPreflightConsumedByteCount() const {
++        return preflightConsumedByteCount;
++    }
++    std::string getPreflightCode() const { return preflightCode; }
++    bool getArchivePreflightComplete() const {
++        return archivePreflightComplete;
++    }
++    bool getDeserializationStarted() const { return deserializationStarted; }
+ 
+     uint32_t takeResultId(OcctKernel& kernel);
+     bool hasResult() const;
+@@ -481,7 +515,8 @@ struct InvariantCadArtifactReadReport {
+     friend InvariantCadArtifactReadReport invariantcadReadArtifactBrep(
+         OcctKernel& kernel, const emscripten::val& input,
+         int maxInputBytes, int maxTopologyItems,
+-        int maxNativeRequestedBytes);
++        int maxNativeRequestedBytes, int maxPreflightWorkUnits,
++        int maxPreflightNestingDepth, int maxPreflightLocationPower);
+ };
+ 
+ /// Transactional result of the controlled InvariantCAD PipeShell facade.
+@@ -562,7 +597,9 @@ InvariantCadArtifactWriteReport invariantcadWriteArtifactBrep(
+ /// decodes one binary BREP, and retains the shape for one checked transfer.
+ InvariantCadArtifactReadReport invariantcadReadArtifactBrep(
+     OcctKernel& kernel, const emscripten::val& input,
+-    int maxInputBytes, int maxTopologyItems, int maxNativeRequestedBytes);
++    int maxInputBytes, int maxTopologyItems, int maxNativeRequestedBytes,
++    int maxPreflightWorkUnits, int maxPreflightNestingDepth,
++    int maxPreflightLocationPower);
+ 
+ /// Builds one corrected-Frenet, right-corner solid PipeShell with explicit
+ /// native tolerances. The report exposes OCCT's measured surface error and
+@@ -1034,7 +1071,8 @@ class OcctKernel {
+     friend InvariantCadArtifactReadReport invariantcadReadArtifactBrep(
+         OcctKernel& kernel, const emscripten::val& input,
+         int maxInputBytes, int maxTopologyItems,
+-        int maxNativeRequestedBytes);
++        int maxNativeRequestedBytes, int maxPreflightWorkUnits,
++        int maxPreflightNestingDepth, int maxPreflightLocationPower);
+     uint32_t store(const TopoDS_Shape& shape);
+     uint32_t invariantcadStoreTransferredShape(const TopoDS_Shape& shape);
+     const TopoDS_Shape& get(uint32_t id) const;
+diff --git a/facade/src/invariantcad_bindings.cpp b/facade/src/invariantcad_bindings.cpp
+index ade1afab0598e21017c11fa60d5f7b9796b35d74..572d6796f460892d238f8bb8eed4621eb984cee3 100644
+--- a/facade/src/invariantcad_bindings.cpp
++++ b/facade/src/invariantcad_bindings.cpp
+@@ -238,6 +238,26 @@ EMSCRIPTEN_BINDINGS(invariantcad_facade) {
+                   &InvariantCadArtifactReadReport::getNativeAllocationCalls)
+         .property("nativeRequestLimitExceeded",
+                   &InvariantCadArtifactReadReport::getNativeRequestLimitExceeded)
++        .property("maxPreflightWorkUnits",
++                  &InvariantCadArtifactReadReport::getMaxPreflightWorkUnits)
++        .property("preflightWorkUnits",
++                  &InvariantCadArtifactReadReport::getPreflightWorkUnits)
++        .property("maxPreflightNestingDepth",
++                  &InvariantCadArtifactReadReport::getMaxPreflightNestingDepth)
++        .property("preflightMaximumDepth",
++                  &InvariantCadArtifactReadReport::getPreflightMaximumDepth)
++        .property("maxPreflightLocationPower",
++                  &InvariantCadArtifactReadReport::getMaxPreflightLocationPower)
++        .property("preflightMaximumLocationPower",
++                  &InvariantCadArtifactReadReport::getPreflightMaximumLocationPower)
++        .property("preflightConsumedByteCount",
++                  &InvariantCadArtifactReadReport::getPreflightConsumedByteCount)
++        .property("preflightCode",
++                  &InvariantCadArtifactReadReport::getPreflightCode)
++        .property("archivePreflightComplete",
++                  &InvariantCadArtifactReadReport::getArchivePreflightComplete)
++        .property("deserializationStarted",
++                  &InvariantCadArtifactReadReport::getDeserializationStarted)
+         .function("hasResult", &InvariantCadArtifactReadReport::hasResult)
+         .function("transferCode", &InvariantCadArtifactReadReport::transferCode)
+         .function("takeResultId", &InvariantCadArtifactReadReport::takeResultId);
+diff --git a/facade/src/invariantcad_bintools_v4_preflight.cpp b/facade/src/invariantcad_bintools_v4_preflight.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..075c5d9d1bc983bcd54bb0cb5c6f5e3bb3b4bddf
+--- /dev/null
++++ b/facade/src/invariantcad_bintools_v4_preflight.cpp
+@@ -0,0 +1,1227 @@
++// SPDX-License-Identifier: Apache-2.0
++// Copyright 2026 InvariantCAD contributors
++
++#include "invariantcad_bintools_v4_preflight.h"
++#include "invariantcad_allocation_budget.h"
++
++#include <cmath>
++#include <cstring>
++#include <limits>
++#include <new>
++#include <vector>
++
++namespace {
++
++constexpr char kArchiveHeader[] =
++    "\nOpen CASCADE Topology V4, (c) Open Cascade\n";
++constexpr int kMaximumGeometryDepth = 64;
++constexpr uint16_t kMaximumSplineDegree = 25;
++
++struct ShapeMetrics {
++    int depth = 0;
++    uint8_t type = 0;
++    bool referenced = false;
++    uint64_t expandedOccurrences = 0;
++    uint64_t validationWork = 0;
++    uint64_t wireEdgeOccurrences = 0;
++    uint64_t vertexOccurrences = 0;
++};
++
++class BinToolsV4Preflight final {
++  public:
++    BinToolsV4Preflight(const uint8_t* bytes, size_t byteCount,
++                        int maxTopologyItems, int maxWorkUnits,
++                        int maxNestingDepth, int maxLocationPower) noexcept
++        : bytes_(bytes), byteCount_(byteCount),
++          maxTopologyItems_(maxTopologyItems), maxWorkUnits_(maxWorkUnits),
++          maxNestingDepth_(maxNestingDepth),
++          maxLocationPower_(maxLocationPower) {}
++
++    InvariantCadBinToolsV4PreflightResult run() noexcept {
++        if (bytes_ == nullptr || byteCount_ == 0 ||
++            byteCount_ > static_cast<size_t>(std::numeric_limits<int>::max())) {
++            fail("INVALID_INPUT", "Preflight input is empty or outside the signed ABI range");
++            return result();
++        }
++        if (maxWorkUnits_ <= 0) {
++            fail("INVALID_WORK_LIMIT", "Preflight work limit must be positive");
++            return result();
++        }
++        if (maxTopologyItems_ <= 0) {
++            fail("INVALID_TOPOLOGY_LIMIT",
++                 "Preflight topology limit must be positive");
++            return result();
++        }
++        if (maxNestingDepth_ <= 0 ||
++            maxNestingDepth_ > kMaximumGeometryDepth) {
++            fail("INVALID_NESTING_LIMIT",
++                 "Preflight nesting limit is outside the supported range");
++            return result();
++        }
++        if (maxLocationPower_ <= 0) {
++            fail("INVALID_LOCATION_POWER_LIMIT",
++                 "Preflight location-power limit must be positive");
++            return result();
++        }
++        if (!matchLiteral(kArchiveHeader, "UNSUPPORTED_ARCHIVE",
++                          "Archive is not the exact pinned BinTools v4 format")) {
++            return result();
++        }
++
++        int locationCount = 0;
++        int curve2dCount = 0;
++        int curveCount = 0;
++        int polygon3dCount = 0;
++        int polygonOnTriangulationCount = 0;
++        int surfaceCount = 0;
++        int triangulationCount = 0;
++        int shapeCount = 0;
++
++        if (!readCountLine("Locations ", locationCount) ||
++            !charge(locationCount)) {
++            return result();
++        }
++        locationRecordsOffset_ = offset_;
++        for (int index = 1; index <= locationCount; ++index) {
++            if (!parseLocation(index)) return result();
++        }
++        const int geometryWorkStart = workUnits_;
++
++        if (!readCountLine("Curve2ds ", curve2dCount) ||
++            !charge(curve2dCount)) {
++            return result();
++        }
++        for (int index = 0; index < curve2dCount; ++index) {
++            if (!parseCurve2d(1)) return result();
++        }
++
++        if (!readCountLine("Curves ", curveCount) || !charge(curveCount)) {
++            return result();
++        }
++        for (int index = 0; index < curveCount; ++index) {
++            if (!parseCurve(1)) return result();
++        }
++
++        if (!readCountLine("Polygon3D ", polygon3dCount) ||
++            !charge(polygon3dCount)) {
++            return result();
++        }
++        if (polygon3dCount != 0) {
++            fail("PROFILE_MISMATCH",
++                 "Owned writer profile forbids Polygon3D table entries");
++            return result();
++        }
++        for (int index = 0; index < polygon3dCount; ++index) {
++            if (!parsePolygon3d()) return result();
++        }
++
++        if (!readCountLine("PolygonOnTriangulations ",
++                           polygonOnTriangulationCount) ||
++            !charge(polygonOnTriangulationCount)) {
++            return result();
++        }
++        if (polygonOnTriangulationCount != 0) {
++            fail("PROFILE_MISMATCH",
++                 "Owned writer profile forbids polygon-on-triangulation entries");
++            return result();
++        }
++        for (int index = 0; index < polygonOnTriangulationCount; ++index) {
++            if (!parsePolygonOnTriangulation()) return result();
++        }
++
++        if (!readCountLine("Surfaces ", surfaceCount) ||
++            !charge(surfaceCount)) {
++            return result();
++        }
++        for (int index = 0; index < surfaceCount; ++index) {
++            if (!parseSurface(1)) return result();
++        }
++
++        if (!readCountLine("Triangulations ", triangulationCount) ||
++            !charge(triangulationCount)) {
++            return result();
++        }
++        for (int index = 0; index < triangulationCount; ++index) {
++            if (!parseTriangulation()) return result();
++        }
++        const uint64_t geometryWork = static_cast<uint64_t>(
++            workUnits_ - geometryWorkStart);
++        const uint64_t maximumWork = static_cast<uint64_t>(maxWorkUnits_);
++        if (geometryWork != 0 && geometryWork > maximumWork / geometryWork) {
++            fail("WORK_LIMIT_EXCEEDED",
++                 "Geometric interval-pair validation exceeds the structural work limit");
++            return result();
++        }
++        if (!charge(geometryWork * geometryWork)) return result();
++
++        if (!readCountLine("\nTShapes ", shapeCount) || shapeCount <= 0) {
++            if (!failed_) {
++                fail("INVALID_COUNT", "Archive must contain at least one TShape");
++            }
++            return result();
++        }
++        if (!charge(shapeCount)) return result();
++        if (shapeCount > maxTopologyItems_) {
++            fail("TOPOLOGY_LIMIT_EXCEEDED",
++                 "TShape table exceeds the configured topology-item limit");
++            return result();
++        }
++        try {
++            shapeMetrics_.resize(static_cast<size_t>(shapeCount) + 1U);
++        } catch (const InvariantCadNativeAllocationLimitExceeded&) {
++            fail("NATIVE_REQUEST_LIMIT_EXCEEDED",
++                 "TShape preflight metadata exceeded the native request limit");
++            return result();
++        } catch (const std::bad_alloc&) {
++            fail("PREFLIGHT_ALLOCATION_FAILED",
++                 "TShape preflight metadata allocation failed");
++            return result();
++        } catch (...) {
++            fail("PREFLIGHT_ALLOCATION_FAILED",
++                 "TShape preflight metadata initialization failed");
++            return result();
++        }
++        for (int index = 1; index <= shapeCount; ++index) {
++            if (!parseShape(index, shapeCount, locationCount, curve2dCount,
++                            curveCount, surfaceCount, triangulationCount)) {
++                return result();
++            }
++        }
++
++        if (!charge(shapeCount)) return result();
++        for (int index = 1; index < shapeCount; ++index) {
++            if (!shapeMetrics_[static_cast<size_t>(index)].referenced) {
++                fail("PROFILE_MISMATCH",
++                     "Owned writer TShape table contains no unreachable records");
++                return result();
++            }
++        }
++
++        int rootShapeIndex = 0;
++        if (!charge(1) ||
++            !parseShapeReference(shapeCount + 1, shapeCount, locationCount,
++                                 false, true, &rootShapeIndex)) {
++            return result();
++        }
++        if (rootShapeIndex < 1 ||
++            rootShapeIndex >= static_cast<int>(shapeMetrics_.size())) {
++            fail("INVALID_REFERENCE", "Archive root has no TShape metrics");
++            return result();
++        }
++        if (!charge(shapeMetrics_[static_cast<size_t>(rootShapeIndex)]
++                        .validationWork)) {
++            return result();
++        }
++        if (offset_ != byteCount_) {
++            fail("TRAILING_INPUT", "Archive contains bytes after the root shape reference");
++            return result();
++        }
++
++        ok_ = true;
++        code_ = "OK";
++        message_ = "BinTools v4 structural preflight completed";
++        return result();
++    }
++
++  private:
++    InvariantCadBinToolsV4PreflightResult result() const noexcept {
++        InvariantCadBinToolsV4PreflightResult output;
++        output.ok = ok_;
++        output.code = code_;
++        output.message = message_;
++        output.consumedBytes = static_cast<int>(offset_);
++        output.workUnits = workUnits_;
++        output.maximumDepth = maximumDepth_;
++        output.maximumLocationPower = maximumLocationPower_;
++        return output;
++    }
++
++    bool fail(const char* code, const char* message) noexcept {
++        if (!failed_) {
++            failed_ = true;
++            code_ = code;
++            message_ = message;
++        }
++        return false;
++    }
++
++    bool require(size_t count) noexcept {
++        if (count > byteCount_ - offset_) {
++            return fail("TRUNCATED", "Archive ended inside a BinTools record");
++        }
++        return true;
++    }
++
++    bool charge(uint64_t count) noexcept {
++        const uint64_t current = static_cast<uint64_t>(workUnits_);
++        const uint64_t maximum = static_cast<uint64_t>(maxWorkUnits_);
++        if (count > maximum - current) {
++            return fail("WORK_LIMIT_EXCEEDED",
++                        "Archive exceeds the configured structural work limit");
++        }
++        workUnits_ += static_cast<int>(count);
++        return true;
++    }
++
++    bool enterDepth(int depth) noexcept {
++        if (depth > maxNestingDepth_) {
++            return fail("NESTING_LIMIT_EXCEEDED",
++                        "Archive structure exceeds the configured nesting limit");
++        }
++        if (depth > maximumDepth_) maximumDepth_ = depth;
++        return true;
++    }
++
++    bool matchLiteral(const char* literal, const char* mismatchCode,
++                      const char* mismatchMessage) noexcept {
++        const size_t length = std::strlen(literal);
++        if (!require(length)) return false;
++        if (std::memcmp(bytes_ + offset_, literal, length) != 0) {
++            return fail(mismatchCode, mismatchMessage);
++        }
++        offset_ += length;
++        return true;
++    }
++
++    bool readCountLine(const char* prefix, int& value) noexcept {
++        if (!matchLiteral(prefix, "INVALID_SECTION",
++                          "Archive section header is not canonical")) {
++            return false;
++        }
++        if (!require(1)) return false;
++        const uint8_t first = bytes_[offset_];
++        if (first < '0' || first > '9') {
++            return fail("INVALID_COUNT", "Archive section count is not canonical decimal");
++        }
++        uint64_t parsed = 0;
++        bool firstDigit = true;
++        while (offset_ < byteCount_ && bytes_[offset_] != '\n') {
++            const uint8_t digit = bytes_[offset_++];
++            if (digit < '0' || digit > '9') {
++                return fail("INVALID_COUNT", "Archive section count is not canonical decimal");
++            }
++            if (firstDigit && digit == '0' && offset_ < byteCount_ &&
++                bytes_[offset_] != '\n') {
++                return fail("INVALID_COUNT", "Archive section count has a leading zero");
++            }
++            firstDigit = false;
++            parsed = parsed * 10U + static_cast<uint64_t>(digit - '0');
++            if (parsed > static_cast<uint64_t>(std::numeric_limits<int>::max())) {
++                return fail("INVALID_COUNT", "Archive section count exceeds signed range");
++            }
++        }
++        if (offset_ == byteCount_) {
++            return fail("TRUNCATED", "Archive section count has no line terminator");
++        }
++        ++offset_;
++        value = static_cast<int>(parsed);
++        return true;
++    }
++
++    bool readByte(uint8_t& value) noexcept {
++        if (!require(1)) return false;
++        value = bytes_[offset_++];
++        return true;
++    }
++
++    bool readBool(bool& value) noexcept {
++        uint8_t raw = 0;
++        if (!readByte(raw)) return false;
++        if (raw > 1) {
++            return fail("INVALID_BOOLEAN", "Archive contains a non-canonical boolean");
++        }
++        value = raw != 0;
++        return true;
++    }
++
++    bool readUint16(uint16_t& value) noexcept {
++        if (!require(2)) return false;
++        value = static_cast<uint16_t>(bytes_[offset_]) |
++                static_cast<uint16_t>(static_cast<uint16_t>(bytes_[offset_ + 1]) << 8U);
++        offset_ += 2;
++        return true;
++    }
++
++    bool readInt32(int& value) noexcept {
++        if (!require(4)) return false;
++        const uint32_t raw = static_cast<uint32_t>(bytes_[offset_]) |
++                             (static_cast<uint32_t>(bytes_[offset_ + 1]) << 8U) |
++                             (static_cast<uint32_t>(bytes_[offset_ + 2]) << 16U) |
++                             (static_cast<uint32_t>(bytes_[offset_ + 3]) << 24U);
++        int32_t signedValue = 0;
++        std::memcpy(&signedValue, &raw, sizeof(signedValue));
++        value = static_cast<int>(signedValue);
++        offset_ += 4;
++        return true;
++    }
++
++    bool readInt32At(size_t& cursor, int& value) noexcept {
++        if (cursor > byteCount_ || byteCount_ - cursor < 4) {
++            return fail("TRUNCATED", "Archive ended inside a location record");
++        }
++        const uint32_t raw = static_cast<uint32_t>(bytes_[cursor]) |
++                             (static_cast<uint32_t>(bytes_[cursor + 1]) << 8U) |
++                             (static_cast<uint32_t>(bytes_[cursor + 2]) << 16U) |
++                             (static_cast<uint32_t>(bytes_[cursor + 3]) << 24U);
++        int32_t signedValue = 0;
++        std::memcpy(&signedValue, &raw, sizeof(signedValue));
++        value = static_cast<int>(signedValue);
++        cursor += 4;
++        return true;
++    }
++
++    bool readFiniteDouble(double* output = nullptr) noexcept {
++        static_assert(sizeof(double) == 8, "BinTools v4 requires binary64");
++        if (!require(sizeof(double))) return false;
++        double value = 0.0;
++        std::memcpy(&value, bytes_ + offset_, sizeof(value));
++        offset_ += sizeof(value);
++        if (!std::isfinite(value)) {
++            return fail("INVALID_NUMBER", "Archive contains a non-finite binary64 value");
++        }
++        if (output != nullptr) *output = value;
++        return true;
++    }
++
++    bool readFiniteFloat() noexcept {
++        static_assert(sizeof(float) == 4, "BinTools v4 requires binary32");
++        if (!require(sizeof(float))) return false;
++        float value = 0.0F;
++        std::memcpy(&value, bytes_ + offset_, sizeof(value));
++        offset_ += sizeof(value);
++        if (!std::isfinite(value)) {
++            return fail("INVALID_NUMBER", "Archive contains a non-finite binary32 value");
++        }
++        return true;
++    }
++
++    bool readFiniteDoubles(int count) noexcept {
++        for (int index = 0; index < count; ++index) {
++            if (!readFiniteDouble()) return false;
++        }
++        return true;
++    }
++
++    bool readIndex(int maximum, bool allowZero, int* output = nullptr) noexcept {
++        int value = 0;
++        if (!readInt32(value)) return false;
++        const int minimum = allowZero ? 0 : 1;
++        if (value < minimum || value > maximum) {
++            return fail("INVALID_REFERENCE", "Archive contains an out-of-range table reference");
++        }
++        if (output != nullptr) *output = value;
++        return true;
++    }
++
++    bool readVertexParameter() noexcept {
++        if (!require(sizeof(double))) return false;
++        const uint8_t speculativeTag = bytes_[offset_ + sizeof(double) - 1];
++        if (!readFiniteDouble()) return false;
++        if (speculativeTag >= 1 && speculativeTag <= 3) {
++            return fail(
++                "PROFILE_MISMATCH",
++                "Vertex parameter aliases the pinned reader's legacy compatibility tag");
++        }
++        return true;
++    }
++
++    bool readPositiveCount(int& value) noexcept {
++        if (!readInt32(value)) return false;
++        if (value <= 0) {
++            return fail("INVALID_COUNT", "Archive contains a non-positive binary count");
++        }
++        return true;
++    }
++
++    bool advanceLocationRecord(size_t& cursor, size_t& recordStart,
++                               size_t& recordEnd, uint8_t& type) noexcept {
++        if (!charge(1)) return false;
++        if (cursor >= byteCount_) {
++            return fail("TRUNCATED", "Archive ended inside the location table");
++        }
++        recordStart = cursor;
++        type = bytes_[cursor++];
++        if (type == 1) {
++            constexpr size_t kTransformationByteCount = 12U * sizeof(double);
++            if (cursor > byteCount_ ||
++                byteCount_ - cursor < kTransformationByteCount) {
++                return fail("TRUNCATED", "Archive ended inside a location transform");
++            }
++            cursor += kTransformationByteCount;
++            recordEnd = cursor;
++            return true;
++        }
++        if (type != 2) {
++            return fail("INVALID_TAG", "Archive contains an unknown location tag");
++        }
++        for (;;) {
++            int reference = 0;
++            if (!readInt32At(cursor, reference)) return false;
++            if (reference == 0) break;
++            int ignoredPower = 0;
++            if (!readInt32At(cursor, ignoredPower) || !charge(1)) return false;
++            static_cast<void>(ignoredPower);
++        }
++        recordEnd = cursor;
++        return true;
++    }
++
++    bool locationRecordBounds(int targetIndex, size_t& recordStart,
++                              size_t& recordEnd, uint8_t& type) noexcept {
++        size_t cursor = locationRecordsOffset_;
++        for (int index = 1; index <= targetIndex; ++index) {
++            if (!advanceLocationRecord(cursor, recordStart, recordEnd, type)) {
++                return false;
++            }
++        }
++        return true;
++    }
++
++    bool locationRecordIsElementary(int targetIndex,
++                                    bool& isElementary) noexcept {
++        size_t recordStart = 0;
++        size_t recordEnd = 0;
++        uint8_t type = 0;
++        if (!locationRecordBounds(targetIndex, recordStart, recordEnd, type)) {
++            return false;
++        }
++        isElementary = type == 1;
++        return true;
++    }
++
++    bool ensureUniqueCompositeLocation(int oneBasedIndex,
++                                       size_t currentRecordStart,
++                                       size_t currentRecordEnd) noexcept {
++        size_t cursor = locationRecordsOffset_;
++        for (int index = 1; index < oneBasedIndex; ++index) {
++            size_t recordStart = 0;
++            size_t recordEnd = 0;
++            uint8_t type = 0;
++            if (!advanceLocationRecord(cursor, recordStart, recordEnd, type)) {
++                return false;
++            }
++            const size_t recordLength = recordEnd - recordStart;
++            const size_t currentLength = currentRecordEnd - currentRecordStart;
++            if (type == 2 && recordLength == currentLength &&
++                std::memcmp(bytes_ + recordStart,
++                            bytes_ + currentRecordStart,
++                            currentLength) == 0) {
++                return fail(
++                    "PROFILE_MISMATCH",
++                    "Owned writer location table contains no duplicate chains");
++            }
++        }
++        return true;
++    }
++
++    bool parseLocation(int oneBasedIndex) noexcept {
++        const size_t recordStart = offset_;
++        uint8_t type = 0;
++        if (!readByte(type)) return false;
++        if (type == 1) return readFiniteDoubles(12);
++        if (type != 2) {
++            return fail("INVALID_TAG", "Archive contains an unknown location tag");
++        }
++        int pairCount = 0;
++        int firstPower = 0;
++        int previousReference = 0;
++        for (;;) {
++            int reference = 0;
++            if (!readInt32(reference)) return false;
++            if (reference == 0) break;
++            int power = 0;
++            if (!readInt32(power)) return false;
++            const int64_t magnitude = power < 0
++                                          ? -static_cast<int64_t>(power)
++                                          : static_cast<int64_t>(power);
++            if (reference < 1 || reference >= oneBasedIndex || power == 0) {
++                return fail("INVALID_REFERENCE",
++                            "Archive contains an invalid location-chain reference");
++            }
++            if (reference == previousReference) {
++                return fail(
++                    "PROFILE_MISMATCH",
++                    "Owned writer location chains contain no adjacent equal datums");
++            }
++            bool isElementary = false;
++            if (!locationRecordIsElementary(reference, isElementary)) {
++                return false;
++            }
++            if (!isElementary) {
++                return fail(
++                    "PROFILE_MISMATCH",
++                    "Owned writer location chains reference only elementary datums");
++            }
++            if (magnitude > static_cast<int64_t>(maxLocationPower_)) {
++                return fail("LOCATION_POWER_LIMIT_EXCEEDED",
++                            "Archive location power exceeds the configured limit");
++            }
++            if (magnitude > maximumLocationPower_) {
++                maximumLocationPower_ = static_cast<int>(magnitude);
++            }
++            ++pairCount;
++            if (pairCount == 1) firstPower = power;
++            previousReference = reference;
++            if (!enterDepth(pairCount)) return false;
++            if (!charge(static_cast<uint64_t>(pairCount))) return false;
++        }
++        if (pairCount == 0) {
++            return fail("INVALID_COUNT", "Composite location contains no components");
++        }
++        if (pairCount == 1 && firstPower == 1) {
++            return fail(
++                "PROFILE_MISMATCH",
++                "Owned writer emits a single power-one datum as an elementary location");
++        }
++        return ensureUniqueCompositeLocation(oneBasedIndex, recordStart, offset_);
++    }
++
++    bool parseCurve2d(int depth) noexcept {
++        if (!enterDepth(depth) || !charge(1)) return false;
++        uint8_t type = 0;
++        if (!readByte(type)) return false;
++        switch (type) {
++        case 1: return readFiniteDoubles(4);
++        case 2: return readFiniteDoubles(7);
++        case 3: return readFiniteDoubles(8);
++        case 4: return readFiniteDoubles(7);
++        case 5: return readFiniteDoubles(8);
++        case 6: return parseBezier(2);
++        case 7: return parseBSpline(2);
++        case 8:
++            return readFiniteDoubles(2) && parseCurve2d(depth + 1);
++        case 9:
++            return readFiniteDouble() && parseCurve2d(depth + 1);
++        default:
++            return fail("INVALID_TAG", "Archive contains an unknown 2D-curve tag");
++        }
++    }
++
++    bool parseCurve(int depth) noexcept {
++        if (!enterDepth(depth) || !charge(1)) return false;
++        uint8_t type = 0;
++        if (!readByte(type)) return false;
++        switch (type) {
++        case 1: return readFiniteDoubles(6);
++        case 2: return readFiniteDoubles(13);
++        case 3: return readFiniteDoubles(14);
++        case 4: return readFiniteDoubles(13);
++        case 5: return readFiniteDoubles(14);
++        case 6: return parseBezier(3);
++        case 7: return parseBSpline(3);
++        case 8:
++            return readFiniteDoubles(2) && parseCurve(depth + 1);
++        case 9:
++            return readFiniteDoubles(4) && parseCurve(depth + 1);
++        default:
++            return fail("INVALID_TAG", "Archive contains an unknown 3D-curve tag");
++        }
++    }
++
++    bool parseBezier(int pointDimensions) noexcept {
++        bool rational = false;
++        uint16_t degree = 0;
++        if (!readBool(rational) || !readUint16(degree)) return false;
++        if (degree < 1 || degree > kMaximumSplineDegree) {
++            return fail("INVALID_COUNT", "Bezier degree is outside the pinned OCCT range");
++        }
++        const int poleCount = static_cast<int>(degree) + 1;
++        if (!charge(poleCount)) return false;
++        for (int index = 0; index < poleCount; ++index) {
++            if (!readFiniteDoubles(pointDimensions)) return false;
++            if (rational) {
++                double weight = 0.0;
++                if (!readFiniteDouble(&weight)) return false;
++                if (weight <= 0.0) {
++                    return fail("INVALID_VALUE", "Bezier weight must be positive");
++                }
++            }
++        }
++        return true;
++    }
++
++    bool parseBSpline(int pointDimensions) noexcept {
++        bool rational = false;
++        bool periodic = false;
++        uint16_t degree = 0;
++        int poleCount = 0;
++        int knotCount = 0;
++        if (!readBool(rational) || !readBool(periodic) ||
++            !readUint16(degree) || !readPositiveCount(poleCount) ||
++            !readPositiveCount(knotCount)) {
++            return false;
++        }
++        if (degree < 1 || degree > kMaximumSplineDegree ||
++            poleCount < 2 || knotCount < 2) {
++            return fail("INVALID_COUNT", "B-spline dimensions are outside the pinned OCCT range");
++        }
++        if (!charge(static_cast<uint64_t>(poleCount) +
++                    static_cast<uint64_t>(knotCount))) {
++            return false;
++        }
++        for (int index = 0; index < poleCount; ++index) {
++            if (!readFiniteDoubles(pointDimensions)) return false;
++            if (rational) {
++                double weight = 0.0;
++                if (!readFiniteDouble(&weight)) return false;
++                if (weight <= 0.0) {
++                    return fail("INVALID_VALUE", "B-spline weight must be positive");
++                }
++            }
++        }
++        return parseKnots(knotCount, degree, periodic, poleCount);
++    }
++
++    bool parseSurface(int depth) noexcept {
++        if (!enterDepth(depth) || !charge(1)) return false;
++        uint8_t type = 0;
++        if (!readByte(type)) return false;
++        switch (type) {
++        case 1: return readFiniteDoubles(12);
++        case 2: return readFiniteDoubles(13);
++        case 3: return readFiniteDoubles(14);
++        case 4: return readFiniteDoubles(13);
++        case 5: return readFiniteDoubles(14);
++        case 6:
++            return readFiniteDoubles(3) && parseCurve(depth + 1);
++        case 7:
++            return readFiniteDoubles(6) && parseCurve(depth + 1);
++        case 8: return parseBezierSurface();
++        case 9: return parseBSplineSurface();
++        case 10:
++            return readFiniteDoubles(4) && parseSurface(depth + 1);
++        case 11:
++            return readFiniteDouble() && parseSurface(depth + 1);
++        default:
++            return fail("INVALID_TAG", "Archive contains an unknown surface tag");
++        }
++    }
++
++    bool parseBezierSurface() noexcept {
++        bool uRational = false;
++        bool vRational = false;
++        uint16_t uDegree = 0;
++        uint16_t vDegree = 0;
++        if (!readBool(uRational) || !readBool(vRational) ||
++            !readUint16(uDegree) || !readUint16(vDegree)) {
++            return false;
++        }
++        if (uDegree < 1 || uDegree > kMaximumSplineDegree ||
++            vDegree < 1 || vDegree > kMaximumSplineDegree) {
++            return fail("INVALID_COUNT", "Bezier-surface degree is outside the pinned OCCT range");
++        }
++        const uint64_t poleCount =
++            static_cast<uint64_t>(uDegree + 1U) *
++            static_cast<uint64_t>(vDegree + 1U);
++        if (!charge(poleCount)) return false;
++        for (uint64_t index = 0; index < poleCount; ++index) {
++            if (!readFiniteDoubles(3)) return false;
++            if (uRational || vRational) {
++                double weight = 0.0;
++                if (!readFiniteDouble(&weight)) return false;
++                if (weight <= 0.0) {
++                    return fail("INVALID_VALUE", "Bezier-surface weight must be positive");
++                }
++            }
++        }
++        return true;
++    }
++
++    bool parseBSplineSurface() noexcept {
++        bool uRational = false;
++        bool vRational = false;
++        bool uPeriodic = false;
++        bool vPeriodic = false;
++        uint16_t uDegree = 0;
++        uint16_t vDegree = 0;
++        int uPoleCount = 0;
++        int vPoleCount = 0;
++        int uKnotCount = 0;
++        int vKnotCount = 0;
++        if (!readBool(uRational) || !readBool(vRational) ||
++            !readBool(uPeriodic) || !readBool(vPeriodic) ||
++            !readUint16(uDegree) || !readUint16(vDegree) ||
++            !readPositiveCount(uPoleCount) ||
++            !readPositiveCount(vPoleCount) ||
++            !readPositiveCount(uKnotCount) ||
++            !readPositiveCount(vKnotCount)) {
++            return false;
++        }
++        if (uDegree < 1 || uDegree > kMaximumSplineDegree ||
++            vDegree < 1 || vDegree > kMaximumSplineDegree ||
++            uPoleCount < 2 || vPoleCount < 2 ||
++            uKnotCount < 2 || vKnotCount < 2) {
++            return fail("INVALID_COUNT", "B-spline surface dimensions are outside the pinned OCCT range");
++        }
++        const uint64_t poleCount = static_cast<uint64_t>(uPoleCount) *
++                                   static_cast<uint64_t>(vPoleCount);
++        const uint64_t work = poleCount + static_cast<uint64_t>(uKnotCount) +
++                              static_cast<uint64_t>(vKnotCount);
++        if (!charge(work)) return false;
++        for (uint64_t index = 0; index < poleCount; ++index) {
++            if (!readFiniteDoubles(3)) return false;
++            if (uRational || vRational) {
++                double weight = 0.0;
++                if (!readFiniteDouble(&weight)) return false;
++                if (weight <= 0.0) {
++                    return fail("INVALID_VALUE", "B-spline surface weight must be positive");
++                }
++            }
++        }
++        if (!parseKnots(uKnotCount, uDegree, uPeriodic, uPoleCount) ||
++            !parseKnots(vKnotCount, vDegree, vPeriodic, vPoleCount)) {
++            return false;
++        }
++        return true;
++    }
++
++    bool parseKnots(int count, uint16_t degree, bool periodic,
++                    int expectedPoleCount) noexcept {
++        double previousKnot = 0.0;
++        int firstMultiplicity = 0;
++        int lastMultiplicity = 0;
++        int64_t internalMultiplicitySum = 0;
++        for (int index = 0; index < count; ++index) {
++            double knot = 0.0;
++            int multiplicity = 0;
++            if (!readFiniteDouble(&knot) || !readInt32(multiplicity)) return false;
++            if (index > 0 && !(knot > previousKnot)) {
++                return fail("INVALID_VALUE", "B-spline knots must be strictly increasing");
++            }
++            previousKnot = knot;
++            if (multiplicity <= 0) {
++                return fail("INVALID_COUNT", "Surface-knot multiplicity is outside the degree range");
++            }
++            if (index == 0) {
++                firstMultiplicity = multiplicity;
++            } else if (index == count - 1) {
++                lastMultiplicity = multiplicity;
++            } else {
++                if (multiplicity > static_cast<int>(degree)) {
++                    return fail("INVALID_COUNT", "Interior knot multiplicity exceeds the degree");
++                }
++                internalMultiplicitySum += multiplicity;
++            }
++        }
++        int64_t calculatedPoleCount = 0;
++        if (periodic) {
++            if (firstMultiplicity > static_cast<int>(degree) ||
++                lastMultiplicity > static_cast<int>(degree) ||
++                firstMultiplicity != lastMultiplicity) {
++                return fail("INVALID_COUNT", "Periodic endpoint multiplicities are invalid");
++            }
++            calculatedPoleCount = static_cast<int64_t>(firstMultiplicity) +
++                                  internalMultiplicitySum;
++        } else {
++            const int endpointMaximum = static_cast<int>(degree) + 1;
++            if (firstMultiplicity > endpointMaximum ||
++                lastMultiplicity > endpointMaximum) {
++                return fail("INVALID_COUNT", "Endpoint knot multiplicity exceeds degree plus one");
++            }
++            calculatedPoleCount = static_cast<int64_t>(firstMultiplicity) +
++                                  static_cast<int64_t>(lastMultiplicity) -
++                                  endpointMaximum + internalMultiplicitySum;
++        }
++        if (calculatedPoleCount != expectedPoleCount) {
++            return fail("INVALID_COUNT", "B-spline pole count does not match its multiplicities");
++        }
++        return true;
++    }
++
++    bool parsePolygon3d() noexcept {
++        int nodeCount = 0;
++        bool hasParameters = false;
++        if (!readPositiveCount(nodeCount) || !readBool(hasParameters) ||
++            !readFiniteDouble() || !charge(nodeCount)) {
++            return false;
++        }
++        for (int index = 0; index < nodeCount; ++index) {
++            if (!readFiniteDoubles(3)) return false;
++        }
++        if (hasParameters) {
++            if (!charge(nodeCount)) return false;
++            for (int index = 0; index < nodeCount; ++index) {
++                if (!readFiniteDouble()) return false;
++            }
++        }
++        return true;
++    }
++
++    bool parsePolygonOnTriangulation() noexcept {
++        int nodeCount = 0;
++        if (!readPositiveCount(nodeCount) || !charge(nodeCount)) return false;
++        for (int index = 0; index < nodeCount; ++index) {
++            int node = 0;
++            if (!readInt32(node)) return false;
++            if (node <= 0) {
++                return fail("INVALID_REFERENCE", "Polygon contains a non-positive node reference");
++            }
++        }
++        bool hasParameters = false;
++        if (!readFiniteDouble() || !readBool(hasParameters)) return false;
++        if (hasParameters) {
++            if (!charge(nodeCount)) return false;
++            for (int index = 0; index < nodeCount; ++index) {
++                if (!readFiniteDouble()) return false;
++            }
++        }
++        return true;
++    }
++
++    bool parseTriangulation() noexcept {
++        int nodeCount = 0;
++        int triangleCount = 0;
++        bool hasUv = false;
++        bool hasNormals = false;
++        if (!readPositiveCount(nodeCount) || !readPositiveCount(triangleCount) ||
++            !readBool(hasUv) || !readBool(hasNormals) ||
++            !readFiniteDouble()) {
++            return false;
++        }
++        const uint64_t work = static_cast<uint64_t>(nodeCount) +
++                              static_cast<uint64_t>(triangleCount);
++        if (!charge(work)) return false;
++        for (int index = 0; index < nodeCount; ++index) {
++            if (!readFiniteDoubles(3)) return false;
++        }
++        if (hasUv) {
++            if (!charge(nodeCount)) return false;
++            for (int index = 0; index < nodeCount; ++index) {
++                if (!readFiniteDoubles(2)) return false;
++            }
++        }
++        for (int index = 0; index < triangleCount; ++index) {
++            for (int corner = 0; corner < 3; ++corner) {
++                int node = 0;
++                if (!readInt32(node)) return false;
++                if (node < 1 || node > nodeCount) {
++                    return fail("INVALID_REFERENCE",
++                                "Triangle contains an out-of-range node reference");
++                }
++            }
++        }
++        if (hasNormals) {
++            if (!charge(nodeCount)) return false;
++            for (int index = 0; index < nodeCount; ++index) {
++                if (!readFiniteFloat() || !readFiniteFloat() ||
++                    !readFiniteFloat()) {
++                    return false;
++                }
++            }
++        }
++        return true;
++    }
++
++    bool addMetricWork(uint64_t& total, uint64_t amount,
++                       const char* message) noexcept {
++        const uint64_t maximum = static_cast<uint64_t>(maxWorkUnits_);
++        if (total > maximum || amount > maximum - total) {
++            return fail("WORK_LIMIT_EXCEEDED", message);
++        }
++        total += amount;
++        return true;
++    }
++
++    bool addQuadraticMetricWork(uint64_t& total, uint64_t extent,
++                                const char* message) noexcept {
++        const uint64_t maximum = static_cast<uint64_t>(maxWorkUnits_);
++        if (extent != 0 && extent > maximum / extent) {
++            return fail("WORK_LIMIT_EXCEEDED", message);
++        }
++        return addMetricWork(total, extent * extent, message);
++    }
++
++    bool isCanonicalChildType(uint8_t parentType,
++                              uint8_t childType) const noexcept {
++        if (parentType == 0) return childType <= 7;
++        if (parentType == 1) return childType == 2;
++        if (parentType == 2) {
++            return childType == 3 || childType == 6 || childType == 7;
++        }
++        if (parentType == 3) return childType == 4;
++        if (parentType == 4) return childType == 5 || childType == 7;
++        if (parentType == 5) return childType == 6;
++        if (parentType == 6) return childType == 7;
++        return false;
++    }
++
++    bool parseShape(int oneBasedIndex, int shapeCount, int locationCount,
++                    int curve2dCount, int curveCount, int surfaceCount,
++                    int triangulationCount) noexcept {
++        int shapeDepth = 1;
++        uint64_t expandedOccurrences = 1;
++        uint64_t validationWork = 1;
++        uint64_t vertexOccurrences = 0;
++        uint64_t directChildCount = 0;
++        uint64_t representationCount = 0;
++        uint64_t faceWireOccurrences = 0;
++        uint64_t faceEdgeOccurrences = 0;
++        uint8_t type = 0;
++        if (!readByte(type) || type > 7) {
++            if (!failed_) fail("INVALID_TAG", "Archive contains an unknown TShape tag");
++            return false;
++        }
++
++        if (type == 7) {
++            if (!readFiniteDoubles(4)) return false;
++            for (;;) {
++                uint8_t representation = 0;
++                if (!readByte(representation)) return false;
++                if (representation == 0) break;
++                if (!charge(1)) return false;
++                ++representationCount;
++                if (representation == 1) {
++                    if (!readVertexParameter() || !readIndex(curveCount, false) ||
++                        !readIndex(locationCount, true)) return false;
++                } else if (representation == 2) {
++                    if (!readVertexParameter() || !readIndex(curve2dCount, false) ||
++                        !readIndex(surfaceCount, false) ||
++                        !readIndex(locationCount, true)) return false;
++                } else if (representation == 3) {
++                    if (!readVertexParameter() || !readFiniteDouble() ||
++                        !readIndex(surfaceCount, false) ||
++                        !readIndex(locationCount, true)) return false;
++                } else {
++                    return fail("INVALID_TAG", "Vertex contains an unknown point representation");
++                }
++            }
++        } else if (type == 6) {
++            bool first = false;
++            bool second = false;
++            bool third = false;
++            if (!readFiniteDouble() || !readBool(first) || !readBool(second) ||
++                !readBool(third)) return false;
++            for (;;) {
++                uint8_t representation = 0;
++                if (!readByte(representation)) return false;
++                if (representation == 0) break;
++                if (!charge(1)) return false;
++                ++representationCount;
++                uint8_t continuity = 0;
++                switch (representation) {
++                case 1:
++                    if (!readIndex(curveCount, false) ||
++                        !readIndex(locationCount, true) ||
++                        !readFiniteDoubles(2)) return false;
++                    break;
++                case 2:
++                    if (!readIndex(curve2dCount, false) ||
++                        !readIndex(surfaceCount, false) ||
++                        !readIndex(locationCount, true) ||
++                        !readFiniteDoubles(2)) return false;
++                    break;
++                case 3:
++                    if (!readIndex(curve2dCount, false) ||
++                        !readIndex(curve2dCount, false) ||
++                        !readByte(continuity) || continuity > 6 ||
++                        !readIndex(surfaceCount, false) ||
++                        !readIndex(locationCount, true) ||
++                        !readFiniteDoubles(2)) {
++                        if (!failed_ && continuity > 6) {
++                            fail("INVALID_TAG", "Edge continuity tag is outside GeomAbs_Shape");
++                        }
++                        return false;
++                    }
++                    break;
++                case 4:
++                    if (!readByte(continuity) || continuity > 6 ||
++                        !readIndex(surfaceCount, false) ||
++                        !readIndex(locationCount, true) ||
++                        !readIndex(surfaceCount, false) ||
++                        !readIndex(locationCount, true)) {
++                        if (!failed_ && continuity > 6) {
++                            fail("INVALID_TAG", "Edge continuity tag is outside GeomAbs_Shape");
++                        }
++                        return false;
++                    }
++                    break;
++                case 5:
++                case 6:
++                case 7:
++                    return fail("PROFILE_MISMATCH",
++                                "Owned writer profile forbids polygon edge representations");
++                default:
++                    return fail("INVALID_TAG", "Edge contains an unknown curve representation");
++                }
++            }
++        } else if (type == 4) {
++            bool naturalRestriction = false;
++            uint8_t triangulationMarker = 0;
++            int surfaceIndex = 0;
++            if (!readBool(naturalRestriction) || !readFiniteDouble() ||
++                !readIndex(surfaceCount, true, &surfaceIndex) ||
++                !readIndex(locationCount, true) ||
++                !readByte(triangulationMarker)) return false;
++            if (triangulationMarker > 2) {
++                return fail("INVALID_TAG", "Face contains an unknown triangulation marker");
++            }
++            if (triangulationMarker == 2 &&
++                !readIndex(triangulationCount, false)) return false;
++            if ((surfaceIndex > 0 && triangulationMarker != 0) ||
++                (surfaceIndex == 0 && triangulationMarker == 0)) {
++                return fail("PROFILE_MISMATCH",
++                            "Face triangulation marker violates the owned writer profile");
++            }
++        }
++
++        if ((type == 6 || type == 7) &&
++            !addQuadraticMetricWork(
++                validationWork, representationCount,
++                "Edge/vertex representation validation exceeds the structural work limit")) {
++            return false;
++        }
++
++        bool flag = false;
++        for (int index = 0; index < 7; ++index) {
++            if (!readBool(flag)) return false;
++        }
++        for (;;) {
++            if (!require(1)) return false;
++            if (bytes_[offset_] == static_cast<uint8_t>('*')) {
++                ++offset_;
++                break;
++            }
++            int childShapeIndex = 0;
++            if (!charge(1) ||
++                !parseShapeReference(oneBasedIndex, shapeCount, locationCount,
++                                     false, false, &childShapeIndex)) {
++                return false;
++            }
++            if (childShapeIndex < 1 ||
++                childShapeIndex >= static_cast<int>(shapeMetrics_.size())) {
++                return fail("INVALID_REFERENCE",
++                            "Subshape reference has no parsed TShape metrics");
++            }
++            ShapeMetrics& child =
++                shapeMetrics_[static_cast<size_t>(childShapeIndex)];
++            if (child.depth <= 0 || child.expandedOccurrences == 0) {
++                return fail("INVALID_REFERENCE",
++                            "Subshape reference targets an incomplete TShape");
++            }
++            if (child.depth >= maxNestingDepth_) {
++                return fail("NESTING_LIMIT_EXCEEDED",
++                            "TShape graph exceeds the configured nesting limit");
++            }
++            if (!isCanonicalChildType(type, child.type)) {
++                return fail(
++                    "PROFILE_MISMATCH",
++                    "TShape child type violates the owned writer topology hierarchy");
++            }
++            child.referenced = true;
++            const int candidateDepth = child.depth + 1;
++            if (candidateDepth > shapeDepth) shapeDepth = candidateDepth;
++            if (!addMetricWork(
++                    expandedOccurrences, child.expandedOccurrences,
++                    "Expanded TShape traversal exceeds the structural work limit") ||
++                !addMetricWork(
++                    validationWork, child.validationWork,
++                    "Expanded topology validation exceeds the structural work limit") ||
++                !addMetricWork(
++                    directChildCount, 1,
++                    "TShape fanout exceeds the structural work limit") ||
++                !addMetricWork(
++                    vertexOccurrences, child.vertexOccurrences,
++                    "TShape vertex expansion exceeds the structural work limit")) {
++                return false;
++            }
++            if (type == 4 && child.type == 5) {
++                if (!addMetricWork(
++                        faceWireOccurrences, 1,
++                        "Face wire fanout exceeds the structural work limit") ||
++                    !addMetricWork(
++                        faceEdgeOccurrences, child.wireEdgeOccurrences,
++                        "Face edge fanout exceeds the structural work limit")) {
++                    return false;
++                }
++            }
++        }
++        if (!addQuadraticMetricWork(
++                validationWork, directChildCount,
++                "TShape child-pair validation exceeds the structural work limit")) {
++            return false;
++        }
++        if (!addQuadraticMetricWork(
++                validationWork, expandedOccurrences,
++                "Expanded TShape incidence validation exceeds the structural work limit")) {
++            return false;
++        }
++        uint64_t wireEdgeOccurrences = 0;
++        if (type == 7) vertexOccurrences = 1;
++        if (type == 5) {
++            wireEdgeOccurrences = directChildCount;
++        } else if (type == 4) {
++            uint64_t faceValidationExtent = faceWireOccurrences;
++            if (!addMetricWork(
++                    faceValidationExtent, faceEdgeOccurrences,
++                    "Face validation fanout exceeds the structural work limit") ||
++                !addMetricWork(
++                    faceValidationExtent, vertexOccurrences,
++                    "Face vertex validation exceeds the structural work limit") ||
++                !addQuadraticMetricWork(
++                    validationWork, faceValidationExtent,
++                    "Face wire/edge-pair validation exceeds the structural work limit")) {
++                return false;
++            }
++        }
++        if (!enterDepth(shapeDepth)) return false;
++        shapeMetrics_[static_cast<size_t>(oneBasedIndex)] =
++            ShapeMetrics{shapeDepth, type, false, expandedOccurrences,
++                         validationWork, wireEdgeOccurrences,
++                         vertexOccurrences};
++        return true;
++    }
++
++    bool parseShapeReference(int currentShapeIndex, int shapeCount,
++                             int locationCount, bool allowNull,
++                             bool requireCanonicalRoot,
++                             int* targetIndexOutput = nullptr) noexcept {
++        uint8_t orientation = 0;
++        if (!readByte(orientation)) return false;
++        if (allowNull && orientation == static_cast<uint8_t>('*')) return true;
++        if (orientation > 3) {
++            return fail("INVALID_TAG", "Shape reference has an invalid orientation");
++        }
++        int encodedIndex = 0;
++        if (!readInt32(encodedIndex)) return false;
++        if (encodedIndex < 1 || encodedIndex > shapeCount) {
++            return fail("INVALID_REFERENCE", "Shape reference index is outside the TShape table");
++        }
++        if (requireCanonicalRoot && encodedIndex != 1) {
++            return fail("PROFILE_MISMATCH",
++                        "Owned writer root must be the last-added TShape");
++        }
++        const int targetIndex = shapeCount - encodedIndex + 1;
++        if (targetIndex < 1 || targetIndex >= currentShapeIndex) {
++            return fail("INVALID_REFERENCE", "Shape reference is forward, cyclic, or self-referential");
++        }
++        if (!readIndex(locationCount, true)) return false;
++        if (targetIndexOutput != nullptr) *targetIndexOutput = targetIndex;
++        return true;
++    }
++
++    const uint8_t* bytes_ = nullptr;
++    size_t byteCount_ = 0;
++    size_t offset_ = 0;
++    size_t locationRecordsOffset_ = 0;
++    int maxTopologyItems_ = 0;
++    int maxWorkUnits_ = 0;
++    int maxNestingDepth_ = 0;
++    int maxLocationPower_ = 0;
++    int workUnits_ = 0;
++    int maximumDepth_ = 0;
++    int maximumLocationPower_ = 0;
++    std::vector<ShapeMetrics> shapeMetrics_;
++    bool ok_ = false;
++    bool failed_ = false;
++    const char* code_ = "NOT_RUN";
++    const char* message_ = "BinTools v4 preflight did not run";
++};
++
++} // namespace
++
++InvariantCadBinToolsV4PreflightResult invariantcadPreflightBinToolsV4(
++    const uint8_t* bytes, size_t byteCount, int maxTopologyItems,
++    int maxWorkUnits, int maxNestingDepth, int maxLocationPower) noexcept {
++    return BinToolsV4Preflight(bytes, byteCount, maxTopologyItems, maxWorkUnits,
++                               maxNestingDepth, maxLocationPower).run();
++}
+diff --git a/facade/src/invariantcad_facade.cpp b/facade/src/invariantcad_facade.cpp
+index fe6bfdfbe535fef061e1a42bfb3375cfa5fbb3fb..3332ec07f800736d41386f7b81b15b62e52a1474 100644
+--- a/facade/src/invariantcad_facade.cpp
++++ b/facade/src/invariantcad_facade.cpp
+@@ -6,6 +6,7 @@
+ 
+ #include "occt_kernel.h"
+ #include "invariantcad_allocation_budget.h"
++#include "invariantcad_bintools_v4_preflight.h"
+ 
+ #include <BinTools.hxx>
+ #include <BRepCheck_Analyzer.hxx>
+@@ -107,8 +108,6 @@ namespace {
+ constexpr double kHalfPi = 1.57079632679489661923;
+ constexpr int kTopologyHistoryVersion = 1;
+ constexpr size_t kArtifactChunkBytes = 64U * 1024U;
+-constexpr char kArtifactArchiveHeader[] =
+-    "\nOpen CASCADE Topology V4, (c) Open Cascade\n";
+ // Pinned OCCT's BRepOffsetAPI_DraftAngle::Add silently returns without adding
+ // a face at or below this absolute angle. Reject that range at our boundary.
+ constexpr double kKernelMinimumDraftAngle = 1.0e-4;
+@@ -257,12 +256,6 @@ bool countTopologyWithinBudget(const TopoDS_Shape& root, int maximum,
+     return true;
+ }
+ 
+-bool hasStrictArtifactArchiveHeader(const std::vector<uint8_t>& bytes) {
+-    constexpr size_t headerBytes = sizeof(kArtifactArchiveHeader) - 1;
+-    return bytes.size() >= headerBytes &&
+-           std::memcmp(bytes.data(), kArtifactArchiveHeader, headerBytes) == 0;
+-}
+-
+ struct TopologyCounts {
+     int solids = 0;
+     int shells = 0;
+@@ -1864,10 +1857,19 @@ InvariantCadArtifactWriteReport invariantcadWriteArtifactBrep(
+ 
+ InvariantCadArtifactReadReport invariantcadReadArtifactBrep(
+     OcctKernel& kernel, const emscripten::val& input, int maxInputBytes,
+-    int maxTopologyItems, int maxNativeRequestedBytes) {
++    int maxTopologyItems, int maxNativeRequestedBytes,
++    int maxPreflightWorkUnits, int maxPreflightNestingDepth,
++    int maxPreflightLocationPower) {
+     int inputByteCount = 0;
+     int consumedByteCount = 0;
+     int topologyItemCount = 0;
++    int preflightWorkUnits = 0;
++    int preflightMaximumDepth = 0;
++    int preflightMaximumLocationPower = 0;
++    int preflightConsumedByteCount = 0;
++    const char* preflightCode = "NOT_RUN";
++    bool archivePreflightComplete = false;
++    bool deserializationStarted = false;
+     InvariantCadNativeAllocationSnapshot allocation;
+     auto failure = [&](const char* stage, const char* code,
+                        const std::string& message) {
+@@ -1885,6 +1887,17 @@ InvariantCadArtifactReadReport invariantcadReadArtifactBrep(
+             static_cast<int>(allocation.requestedBytes);
+         report.nativeAllocationCalls = allocation.allocationCalls;
+         report.nativeRequestLimitExceeded = allocation.exceeded;
++        report.maxPreflightWorkUnits = maxPreflightWorkUnits;
++        report.preflightWorkUnits = preflightWorkUnits;
++        report.maxPreflightNestingDepth = maxPreflightNestingDepth;
++        report.preflightMaximumDepth = preflightMaximumDepth;
++        report.maxPreflightLocationPower = maxPreflightLocationPower;
++        report.preflightMaximumLocationPower =
++            preflightMaximumLocationPower;
++        report.preflightConsumedByteCount = preflightConsumedByteCount;
++        report.preflightCode = preflightCode;
++        report.archivePreflightComplete = archivePreflightComplete;
++        report.deserializationStarted = deserializationStarted;
+         return report;
+     };
+     if (maxInputBytes <= 0) {
+@@ -1900,6 +1913,21 @@ InvariantCadArtifactReadReport invariantcadReadArtifactBrep(
+             "validation", "INVALID_NATIVE_REQUEST_LIMIT",
+             "Artifact native-request limit must be a positive signed 32-bit integer");
+     }
++    if (maxPreflightWorkUnits <= 0) {
++        return failure(
++            "validation", "INVALID_PREFLIGHT_WORK_LIMIT",
++            "Artifact preflight work limit must be a positive signed 32-bit integer");
++    }
++    if (maxPreflightNestingDepth <= 0 || maxPreflightNestingDepth > 64) {
++        return failure(
++            "validation", "INVALID_PREFLIGHT_NESTING_LIMIT",
++            "Artifact preflight nesting limit must be between 1 and 64");
++    }
++    if (maxPreflightLocationPower <= 0) {
++        return failure(
++            "validation", "INVALID_PREFLIGHT_LOCATION_POWER_LIMIT",
++            "Artifact preflight location-power limit must be a positive signed 32-bit integer");
++    }
+ 
+     try {
+         const emscripten::val uint8Array =
+@@ -1955,15 +1983,26 @@ InvariantCadArtifactReadReport invariantcadReadArtifactBrep(
+             "copy", "INPUT_COPY_FAILED",
+             "Unknown failure while snapshotting artifact input");
+     }
+-    if (!hasStrictArtifactArchiveHeader(snapshot)) {
+-        return failAfterStop(
+-            "validation", "UNSUPPORTED_ARCHIVE",
+-            "Artifact input is not the pinned binary BREP v4 archive");
++    const InvariantCadBinToolsV4PreflightResult preflight =
++        invariantcadPreflightBinToolsV4(
++            snapshot.data(), snapshot.size(), maxTopologyItems,
++            maxPreflightWorkUnits, maxPreflightNestingDepth,
++            maxPreflightLocationPower);
++    preflightWorkUnits = preflight.workUnits;
++    preflightMaximumDepth = preflight.maximumDepth;
++    preflightMaximumLocationPower = preflight.maximumLocationPower;
++    preflightConsumedByteCount = preflight.consumedBytes;
++    preflightCode = preflight.code;
++    archivePreflightComplete = preflight.ok;
++    if (!preflight.ok) {
++        return failAfterStop("preflight", preflight.code,
++                             preflight.message);
+     }
+ 
+     TopoDS_Shape result;
+     BorrowedArtifactInputBuffer buffer(snapshot.data(), snapshot.size());
+     try {
++        deserializationStarted = true;
+         std::istream stream(&buffer);
+         BinTools::Read(result, stream);
+         consumedByteCount = static_cast<int>(buffer.consumed());
+@@ -2072,12 +2111,22 @@ InvariantCadArtifactReadReport invariantcadReadArtifactBrep(
+     report.nativeRequestedBytes = static_cast<int>(allocation.requestedBytes);
+     report.nativeAllocationCalls = allocation.allocationCalls;
+     report.nativeRequestLimitExceeded = allocation.exceeded;
++    report.maxPreflightWorkUnits = maxPreflightWorkUnits;
++    report.preflightWorkUnits = preflightWorkUnits;
++    report.maxPreflightNestingDepth = maxPreflightNestingDepth;
++    report.preflightMaximumDepth = preflightMaximumDepth;
++    report.maxPreflightLocationPower = maxPreflightLocationPower;
++    report.preflightMaximumLocationPower = preflightMaximumLocationPower;
++    report.preflightConsumedByteCount = preflightConsumedByteCount;
++    report.preflightCode = preflightCode;
++    report.archivePreflightComplete = archivePreflightComplete;
++    report.deserializationStarted = deserializationStarted;
+     report.transfer_ = std::move(transfer);
+     return report;
+ }
+ 
+ std::string invariantcadFacadeVersion() {
+-    return "invariantcad-facade@0.8.0+occt-wasm.3.7.0";
++    return "invariantcad-facade@0.9.0+occt-wasm.3.7.0";
+ }
+ 
+ InvariantCadBooleanReport invariantcadBooleanAtomic(

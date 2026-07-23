@@ -2,6 +2,9 @@ const INT32_MAX = 2_147_483_647;
 const UINT32_MAX = 4_294_967_295;
 
 export const OCCT_ARTIFACT_MAX_NATIVE_REQUESTED_BYTES = 128 * 1024 * 1024;
+export const OCCT_ARTIFACT_MAX_PREFLIGHT_WORK_UNITS = 1_000_000;
+export const OCCT_ARTIFACT_MAX_PREFLIGHT_NESTING_DEPTH = 64;
+export const OCCT_ARTIFACT_MAX_PREFLIGHT_LOCATION_POWER = 1_000_000;
 
 export interface OcctArtifactRawKernel {
   release(resultId: number): void;
@@ -37,6 +40,16 @@ export interface OcctArtifactReadRawReport {
   readonly nativeRequestedBytes?: unknown;
   readonly nativeAllocationCalls?: unknown;
   readonly nativeRequestLimitExceeded?: unknown;
+  readonly maxPreflightWorkUnits?: unknown;
+  readonly preflightWorkUnits?: unknown;
+  readonly maxPreflightNestingDepth?: unknown;
+  readonly preflightMaximumDepth?: unknown;
+  readonly maxPreflightLocationPower?: unknown;
+  readonly preflightMaximumLocationPower?: unknown;
+  readonly preflightConsumedByteCount?: unknown;
+  readonly preflightCode?: unknown;
+  readonly archivePreflightComplete?: unknown;
+  readonly deserializationStarted?: unknown;
   hasResult(): unknown;
   transferCode(kernel: OcctArtifactRawKernel): unknown;
   takeResultId(kernel: OcctArtifactRawKernel): unknown;
@@ -45,7 +58,7 @@ export interface OcctArtifactReadRawReport {
 
 /**
  * Structural view of the bounded artifact additions in owned facade ABI
- * 0.7/0.8.
+ * 0.7/0.8/0.9.
  */
 export interface OcctArtifactFacadeModule {
   readonly InvariantCadArtifactWriteReport: Function;
@@ -62,6 +75,9 @@ export interface OcctArtifactFacadeModule {
     maxInputBytes: number,
     maxTopologyItems: number,
     maxNativeRequestedBytes?: number,
+    maxPreflightWorkUnits?: number,
+    maxPreflightNestingDepth?: number,
+    maxPreflightLocationPower?: number,
   ): unknown;
 }
 
@@ -95,6 +111,16 @@ export interface OcctArtifactReadDiagnostics {
   readonly nativeRequestedBytes?: number;
   readonly nativeAllocationCalls?: number;
   readonly nativeRequestLimitExceeded?: boolean;
+  readonly maxPreflightWorkUnits?: number;
+  readonly preflightWorkUnits?: number;
+  readonly maxPreflightNestingDepth?: number;
+  readonly preflightMaximumDepth?: number;
+  readonly maxPreflightLocationPower?: number;
+  readonly preflightMaximumLocationPower?: number;
+  readonly preflightConsumedByteCount?: number;
+  readonly preflightCode?: string;
+  readonly archivePreflightComplete?: boolean;
+  readonly deserializationStarted?: boolean;
 }
 
 interface OcctArtifactNativeRequestDiagnostics {
@@ -102,6 +128,23 @@ interface OcctArtifactNativeRequestDiagnostics {
   readonly nativeRequestedBytes: number;
   readonly nativeAllocationCalls: number;
   readonly nativeRequestLimitExceeded: boolean;
+}
+
+interface OcctArtifactPreflightLimits {
+  readonly maxPreflightWorkUnits: number;
+  readonly maxPreflightNestingDepth: number;
+  readonly maxPreflightLocationPower: number;
+}
+
+interface OcctArtifactPreflightDiagnostics
+  extends OcctArtifactPreflightLimits {
+  readonly preflightWorkUnits: number;
+  readonly preflightMaximumDepth: number;
+  readonly preflightMaximumLocationPower: number;
+  readonly preflightConsumedByteCount: number;
+  readonly preflightCode: string;
+  readonly archivePreflightComplete: boolean;
+  readonly deserializationStarted: boolean;
 }
 
 export class OcctArtifactFacadeProtocolError extends Error {
@@ -293,6 +336,108 @@ function copyNativeRequestDiagnostics(
   return diagnostics;
 }
 
+function copyPreflightDiagnostics(
+  report: OcctArtifactReadRawReport,
+  requestedLimits: OcctArtifactPreflightLimits | undefined,
+  code: string,
+): OcctArtifactPreflightDiagnostics | undefined {
+  if (requestedLimits === undefined) return undefined;
+  const diagnostics: OcctArtifactPreflightDiagnostics = {
+    maxPreflightWorkUnits: readCount(
+      report.maxPreflightWorkUnits,
+      "report.maxPreflightWorkUnits",
+    ),
+    preflightWorkUnits: readCount(
+      report.preflightWorkUnits,
+      "report.preflightWorkUnits",
+    ),
+    maxPreflightNestingDepth: readCount(
+      report.maxPreflightNestingDepth,
+      "report.maxPreflightNestingDepth",
+    ),
+    preflightMaximumDepth: readCount(
+      report.preflightMaximumDepth,
+      "report.preflightMaximumDepth",
+    ),
+    maxPreflightLocationPower: readCount(
+      report.maxPreflightLocationPower,
+      "report.maxPreflightLocationPower",
+    ),
+    preflightMaximumLocationPower: readCount(
+      report.preflightMaximumLocationPower,
+      "report.preflightMaximumLocationPower",
+    ),
+    preflightConsumedByteCount: readCount(
+      report.preflightConsumedByteCount,
+      "report.preflightConsumedByteCount",
+    ),
+    preflightCode: readString(
+      report.preflightCode,
+      "report.preflightCode",
+    ),
+    archivePreflightComplete: readBoolean(
+      report.archivePreflightComplete,
+      "report.archivePreflightComplete",
+    ),
+    deserializationStarted: readBoolean(
+      report.deserializationStarted,
+      "report.deserializationStarted",
+    ),
+  };
+  if (
+    diagnostics.maxPreflightWorkUnits !==
+      requestedLimits.maxPreflightWorkUnits ||
+    diagnostics.maxPreflightNestingDepth !==
+      requestedLimits.maxPreflightNestingDepth ||
+    diagnostics.maxPreflightLocationPower !==
+      requestedLimits.maxPreflightLocationPower
+  ) {
+    protocolError("report preflight limits do not echo the request");
+  }
+  if (
+    diagnostics.preflightWorkUnits > diagnostics.maxPreflightWorkUnits ||
+    diagnostics.preflightMaximumDepth >
+      diagnostics.maxPreflightNestingDepth ||
+    diagnostics.preflightMaximumLocationPower >
+      diagnostics.maxPreflightLocationPower
+  ) {
+    protocolError("report preflight counters exceed their limits");
+  }
+  if (
+    diagnostics.archivePreflightComplete !==
+    (diagnostics.preflightCode === "OK")
+  ) {
+    protocolError(
+      "report preflight completion must exactly match report.preflightCode",
+    );
+  }
+  if (
+    diagnostics.archivePreflightComplete !==
+    diagnostics.deserializationStarted
+  ) {
+    protocolError(
+      "deserialization start must exactly match completed preflight",
+    );
+  }
+  if (
+    diagnostics.preflightCode === "NOT_RUN" &&
+    (diagnostics.preflightWorkUnits !== 0 ||
+      diagnostics.preflightMaximumDepth !== 0 ||
+      diagnostics.preflightMaximumLocationPower !== 0 ||
+      diagnostics.preflightConsumedByteCount !== 0)
+  ) {
+    protocolError("preflight counters must be zero before preflight runs");
+  }
+  if (
+    !diagnostics.archivePreflightComplete &&
+    diagnostics.preflightCode !== "NOT_RUN" &&
+    code !== diagnostics.preflightCode
+  ) {
+    protocolError("preflight failure code does not match the report code");
+  }
+  return diagnostics;
+}
+
 function copyWriteDiagnostics(
   report: OcctArtifactWriteRawReport,
   maxNativeRequestedBytes: number | undefined,
@@ -324,6 +469,7 @@ function copyReadDiagnostics(
   report: OcctArtifactReadRawReport,
   kernel: OcctArtifactRawKernel,
   maxNativeRequestedBytes: number | undefined,
+  preflightLimits: OcctArtifactPreflightLimits | undefined,
 ): OcctArtifactReadDiagnostics {
   const ok = readBoolean(report.ok, "report.ok");
   const code = readString(report.code, "report.code");
@@ -331,6 +477,11 @@ function copyReadDiagnostics(
     report,
     maxNativeRequestedBytes,
     ok,
+    code,
+  );
+  const preflight = copyPreflightDiagnostics(
+    report,
+    preflightLimits,
     code,
   );
   return Object.freeze({
@@ -361,6 +512,7 @@ function copyReadDiagnostics(
       "report.transferCode(kernel)",
     ),
     ...(nativeRequest ?? {}),
+    ...(preflight ?? {}),
   });
 }
 
@@ -461,6 +613,9 @@ export interface ReadBoundedOcctArtifactBrepOptions {
   readonly maxInputBytes: number;
   readonly maxTopologyItems: number;
   readonly maxNativeRequestedBytes?: number;
+  readonly maxPreflightWorkUnits?: number;
+  readonly maxPreflightNestingDepth?: number;
+  readonly maxPreflightLocationPower?: number;
 }
 
 /**
@@ -483,6 +638,50 @@ export function readBoundedOcctArtifactBrep(
       "maxNativeRequestedBytes",
     );
   }
+  const hasAnyPreflightLimit =
+    options.maxPreflightWorkUnits !== undefined ||
+    options.maxPreflightNestingDepth !== undefined ||
+    options.maxPreflightLocationPower !== undefined;
+  const hasEveryPreflightLimit =
+    options.maxPreflightWorkUnits !== undefined &&
+    options.maxPreflightNestingDepth !== undefined &&
+    options.maxPreflightLocationPower !== undefined;
+  if (hasAnyPreflightLimit !== hasEveryPreflightLimit) {
+    throw new TypeError("preflight limits must be supplied together");
+  }
+  if (hasEveryPreflightLimit && options.maxNativeRequestedBytes === undefined) {
+    throw new TypeError(
+      "preflight limits require maxNativeRequestedBytes",
+    );
+  }
+  const preflightLimits: OcctArtifactPreflightLimits | undefined =
+    hasEveryPreflightLimit
+      ? {
+          maxPreflightWorkUnits: options.maxPreflightWorkUnits,
+          maxPreflightNestingDepth: options.maxPreflightNestingDepth,
+          maxPreflightLocationPower: options.maxPreflightLocationPower,
+        }
+      : undefined;
+  if (preflightLimits !== undefined) {
+    assertPositiveInt32(
+      preflightLimits.maxPreflightWorkUnits,
+      "maxPreflightWorkUnits",
+    );
+    assertPositiveInt32(
+      preflightLimits.maxPreflightNestingDepth,
+      "maxPreflightNestingDepth",
+    );
+    if (
+      preflightLimits.maxPreflightNestingDepth >
+      OCCT_ARTIFACT_MAX_PREFLIGHT_NESTING_DEPTH
+    ) {
+      throw new RangeError("maxPreflightNestingDepth must not exceed 64");
+    }
+    assertPositiveInt32(
+      preflightLimits.maxPreflightLocationPower,
+      "maxPreflightLocationPower",
+    );
+  }
   if (options.input.byteLength === 0) {
     throw new RangeError("input must not be empty");
   }
@@ -491,7 +690,18 @@ export function readBoundedOcctArtifactBrep(
   }
 
   const rawReport =
-    options.maxNativeRequestedBytes === undefined
+    preflightLimits !== undefined
+      ? options.module.invariantcadReadArtifactBrep(
+          options.kernel,
+          options.input,
+          options.maxInputBytes,
+          options.maxTopologyItems,
+          options.maxNativeRequestedBytes,
+          preflightLimits.maxPreflightWorkUnits,
+          preflightLimits.maxPreflightNestingDepth,
+          preflightLimits.maxPreflightLocationPower,
+        )
+      : options.maxNativeRequestedBytes === undefined
       ? options.module.invariantcadReadArtifactBrep(
           options.kernel,
           options.input,
@@ -514,6 +724,7 @@ export function readBoundedOcctArtifactBrep(
       rawReport,
       options.kernel,
       options.maxNativeRequestedBytes,
+      preflightLimits,
     );
     if (
       diagnostics.inputByteCount !== options.input.byteLength ||
@@ -527,6 +738,48 @@ export function readBoundedOcctArtifactBrep(
       diagnostics.topologyItemCount > diagnostics.maxTopologyItems
     ) {
       protocolError("artifact read report counters exceed their limits");
+    }
+    if (preflightLimits !== undefined) {
+      const preflightConsumed = diagnostics.preflightConsumedByteCount;
+      const preflightCode = diagnostics.preflightCode;
+      const preflightComplete = diagnostics.archivePreflightComplete;
+      const deserializationStarted = diagnostics.deserializationStarted;
+      if (
+        preflightConsumed === undefined ||
+        preflightCode === undefined ||
+        preflightComplete === undefined ||
+        deserializationStarted === undefined
+      ) {
+        protocolError("artifact read report omitted preflight diagnostics");
+      }
+      if (preflightConsumed > diagnostics.inputByteCount) {
+        protocolError("preflight consumed bytes exceed the input length");
+      }
+      if (
+        preflightComplete &&
+        preflightConsumed !== diagnostics.inputByteCount
+      ) {
+        protocolError("completed preflight must consume the exact input");
+      }
+      if (
+        !preflightComplete &&
+        (diagnostics.consumedByteCount !== 0 ||
+          diagnostics.topologyItemCount !== 0)
+      ) {
+        protocolError(
+          "incomplete preflight must precede all OCCT decode counters",
+        );
+      }
+      if (
+        !preflightComplete &&
+        preflightCode !== "NOT_RUN" &&
+        diagnostics.stage !== "preflight"
+      ) {
+        protocolError("preflight rejection must use the preflight stage");
+      }
+      if (diagnostics.ok && (!preflightComplete || !deserializationStarted)) {
+        protocolError("successful artifact read must complete preflight first");
+      }
     }
     if (!diagnostics.ok) {
       if (diagnostics.hasResult || diagnostics.transferCode !== "NO_RESULT") {
