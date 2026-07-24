@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+- Hardened the staged Document v7 text boundary to reject duplicate decoded
+  JSON object member names, including escape-equivalent spellings, before
+  schema and semantic validation. Detached-value parsing and direct schemas do
+  not claim to reconstruct member occurrences already collapsed by another
+  parser, and frozen v1-v6 parsing remains unchanged.
+
 ## [0.1.1] - 2026-07-24
 
 - Added three executable reference models—an electronics enclosure, bolted

@@ -51,6 +51,7 @@ import {
   documentV7RuntimeIntrinsicsAreIntact,
   throwDocumentV7RuntimeIntegrityError,
 } from "./internal/document-v7-runtime-integrity.js";
+import { auditJsonMemberNames } from "./internal/json-member-audit.js";
 
 const SerializationIntrinsicArray = Array;
 const SerializationIntrinsicArrayPrototype = Array.prototype;
@@ -521,10 +522,10 @@ function parseDocumentValueWithLimits(
   return validateDocument(document);
 }
 
-function parseDocumentValueV7WithLimits(
+function preflightDocumentValueV7WithLimits(
   value: unknown,
   limits: DesignDocumentLimits,
-): CadResult<DesignDocumentV7> {
+): CadResult<unknown> {
   if (!documentV7RuntimeIntrinsicsAreIntact()) {
     return serializationIntegrityFailure();
   }
@@ -534,10 +535,18 @@ function parseDocumentValueV7WithLimits(
   if (!documentV7RuntimeIntrinsicsAreIntact()) {
     return serializationIntegrityFailure();
   }
-  if (!preflight.ok) return preflight;
+  return preflight;
+}
+
+function validateDocumentV7Snapshot(
+  snapshot: unknown,
+): CadResult<DesignDocumentV7> {
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return serializationIntegrityFailure();
+  }
   let parsed: ReturnType<typeof DesignDocumentV7Schema.safeParse>;
   try {
-    parsed = DesignDocumentV7Schema.safeParse(preflight.value);
+    parsed = DesignDocumentV7Schema.safeParse(snapshot);
   } catch {
     if (!documentV7RuntimeIntrinsicsAreIntact()) {
       return serializationIntegrityFailure();
@@ -565,7 +574,7 @@ function parseDocumentValueV7WithLimits(
       ),
     };
   }
-  if (!v7ParsedShapeMatchesSnapshot(preflight.value, parsed.data)) {
+  if (!v7ParsedShapeMatchesSnapshot(snapshot, parsed.data)) {
     return failure(
       diagnostic(
         "IR_INVALID",
@@ -583,6 +592,16 @@ function parseDocumentValueV7WithLimits(
   return documentV7RuntimeIntrinsicsAreIntact()
     ? validated
     : serializationIntegrityFailure();
+}
+
+function parseDocumentValueV7WithLimits(
+  value: unknown,
+  limits: DesignDocumentLimits,
+): CadResult<DesignDocumentV7> {
+  const preflight = preflightDocumentValueV7WithLimits(value, limits);
+  return preflight.ok
+    ? validateDocumentV7Snapshot(preflight.value)
+    : preflight;
 }
 
 export function parseDocument(
@@ -634,8 +653,9 @@ export function parseDocument(
 }
 
 /**
- * Parses only the isolated staged document-v7 grammar. Ordinary parsing stays
- * frozen on v1-v6 until the complete runtime switch.
+ * Parses only the isolated staged document-v7 grammar and rejects repeated
+ * object member names from the raw JSON text. Ordinary parsing stays frozen on
+ * v1-v6 until the complete runtime switch.
  */
 export function parseDocumentV7(
   text: string,
@@ -709,7 +729,65 @@ export function parseDocumentV7(
   if (!documentV7RuntimeIntrinsicsAreIntact()) {
     return serializationIntegrityFailure();
   }
-  return parseDocumentValueV7WithLimits(value, normalizedLimits.value);
+  const preflight = preflightDocumentValueV7WithLimits(
+    value,
+    normalizedLimits.value,
+  );
+  if (!preflight.ok) return preflight;
+  let memberAudit: ReturnType<typeof auditJsonMemberNames>;
+  try {
+    memberAudit = auditJsonMemberNames(source, normalizedLimits.value);
+  } catch {
+    if (!documentV7RuntimeIntrinsicsAreIntact()) {
+      return serializationIntegrityFailure();
+    }
+    return failure(
+      diagnostic(
+        "IR_INVALID",
+        "Document-v7 JSON member names could not be audited safely",
+        {
+          severity: "error",
+          details: {
+            reason: "json-member-audit-failed",
+          },
+        },
+      ),
+    );
+  }
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return serializationIntegrityFailure();
+  }
+  if (memberAudit.status === "limit-exceeded") {
+    return failure(
+      diagnostic(
+        "IR_INVALID",
+        `Design-document ${memberAudit.resource} limit ${memberAudit.limit} was exceeded by ${memberAudit.actual}`,
+        {
+          severity: "error",
+          details: {
+            resource: memberAudit.resource,
+            limit: memberAudit.limit,
+            actual: memberAudit.actual,
+          },
+        },
+      ),
+    );
+  }
+  if (memberAudit.status === "duplicate") {
+    return failure(
+      diagnostic(
+        "IR_INVALID",
+        "Document-v7 JSON contains a duplicate object member name",
+        {
+          severity: "error",
+          details: {
+            reason: "duplicate-json-member",
+          },
+        },
+      ),
+    );
+  }
+  return validateDocumentV7Snapshot(preflight.value);
 }
 
 export function parseDocumentValue(
@@ -722,7 +800,12 @@ export function parseDocumentValue(
     : normalizedLimits;
 }
 
-/** Parses a detached value as the isolated staged document-v7 grammar. */
+/**
+ * Parses a detached value as the isolated staged document-v7 grammar.
+ * Duplicate JSON member occurrences cannot be reconstructed after another
+ * parser has already collapsed them; use {@link parseDocumentV7} at text
+ * boundaries that require that guarantee.
+ */
 export function parseDocumentValueV7(
   value: unknown,
   options: ParseDocumentOptions = {},

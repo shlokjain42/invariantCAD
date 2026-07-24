@@ -293,6 +293,147 @@ describe("staged document-v7 serialization and validation", () => {
     expect(Object.isFrozen(clone)).toBe(true);
   });
 
+  it("rejects duplicate raw JSON members before v7 schema validation", () => {
+    const canonical = stringifyDocumentV7(stagedV7Document());
+    const duplicateSources = [
+      `{"version":6,${canonical.slice(1)}`,
+      String.raw`{"na\u006de":"shadowed",${canonical.slice(1)}`,
+      `{"metadata":{"label":1,"label":2},${canonical.slice(1)}`,
+      String.raw`{"metadata":{"__proto__":1,"\u005f_proto__":2},${canonical.slice(1)}`,
+    ];
+
+    for (const source of duplicateSources) {
+      const collapsed = JSON.parse(source);
+      expect(parseDocumentValueV7(collapsed).ok, source).toBe(true);
+      expect(DesignDocumentV7Schema.safeParse(collapsed).success, source).toBe(
+        true,
+      );
+      expect(parseDocumentV7(source), source).toMatchObject({
+        ok: false,
+        diagnostics: [
+          {
+            code: "IR_INVALID",
+            message:
+              "Document-v7 JSON contains a duplicate object member name",
+            details: {
+              reason: "duplicate-json-member",
+            },
+          },
+        ],
+      });
+    }
+  });
+
+  it("keeps malformed JSON and byte-limit failures ahead of member auditing", () => {
+    expect(parseDocumentV7('{"name":1,"name":2')).toMatchObject({
+      ok: false,
+      diagnostics: [
+        {
+          code: "IR_INVALID",
+          message: "The document is not valid JSON",
+          details: {
+            error: "JSON parsing failed safely",
+          },
+        },
+      ],
+    });
+
+    const canonical = stringifyDocumentV7(stagedV7Document());
+    const duplicate = `{"version":6,${canonical.slice(1)}`;
+    const bytes = new TextEncoder().encode(duplicate).byteLength;
+    expect(
+      parseDocumentV7(duplicate, {
+        limits: {
+          maxDocumentBytes: bytes - 1,
+        },
+      }),
+    ).toMatchObject({
+      ok: false,
+      diagnostics: [
+        {
+          code: "IR_INVALID",
+          details: {
+            resource: "maxDocumentBytes",
+            limit: bytes - 1,
+            actual: bytes,
+          },
+        },
+      ],
+    });
+    expect(
+      parseDocumentV7(duplicate, {
+        limits: {
+          maxDocumentBytes: bytes,
+        },
+      }),
+    ).toMatchObject({
+      ok: false,
+      diagnostics: [
+        {
+          code: "IR_INVALID",
+          details: {
+            reason: "duplicate-json-member",
+          },
+        },
+      ],
+    });
+  });
+
+  it("bounds duplicate subtrees erased by native last-key-wins parsing", () => {
+    const canonical = stringifyDocumentV7(stagedV7Document());
+    const structuralLimit = 10_000;
+    const wide = `{"metadata":{"discarded":0,"discarded":[${"0,".repeat(
+      structuralLimit,
+    )}0],"discarded":0},${canonical.slice(1)}`;
+    const collapsedWide = JSON.parse(wide);
+    expect(
+      parseDocumentValueV7(collapsedWide, {
+        limits: {
+          maxStructuralValues: structuralLimit,
+        },
+      }).ok,
+    ).toBe(true);
+    expect(
+      parseDocumentV7(wide, {
+        limits: {
+          maxStructuralValues: structuralLimit,
+        },
+      }),
+    ).toMatchObject({
+      ok: false,
+      diagnostics: [
+        {
+          code: "IR_INVALID",
+          details: {
+            resource: "maxStructuralValues",
+            limit: structuralLimit,
+            actual: structuralLimit + 1,
+          },
+        },
+      ],
+    });
+
+    const depth = 130;
+    const deep = `{"metadata":{"discarded":${"[".repeat(depth)}0${"]".repeat(
+      depth,
+    )},"discarded":0},${canonical.slice(1)}`;
+    const collapsedDeep = JSON.parse(deep);
+    expect(parseDocumentValueV7(collapsedDeep).ok).toBe(true);
+    expect(parseDocumentV7(deep)).toMatchObject({
+      ok: false,
+      diagnostics: [
+        {
+          code: "IR_INVALID",
+          details: {
+            resource: "maxNestingDepth",
+            limit: 128,
+            actual: 129,
+          },
+        },
+      ],
+    });
+  });
+
   it("rejects accessor-backed v7 inputs without invoking getters", () => {
     const source = structuredClone(stagedV7Document()) as unknown as Record<
       string,
@@ -355,9 +496,24 @@ describe("staged document-v7 serialization and validation", () => {
     const v7 = stagedV7Document();
     expect(parseDocumentValue(v7).ok).toBe(false);
     expect(parseDocument(stringifyDocumentV7(v7)).ok).toBe(false);
-    const v6 = legacyDocument(DOCUMENT_SCHEMA_V6, DOCUMENT_VERSION_V6);
-    expect(parseDocumentValue(v6).ok).toBe(true);
-    expect(parseDocumentValueV7(v6).ok).toBe(false);
+    const versions = [
+      [DOCUMENT_SCHEMA_V1, DOCUMENT_VERSION_V1],
+      [DOCUMENT_SCHEMA_V2, DOCUMENT_VERSION_V2],
+      [DOCUMENT_SCHEMA_V3, DOCUMENT_VERSION_V3],
+      [DOCUMENT_SCHEMA_V4, DOCUMENT_VERSION_V4],
+      [DOCUMENT_SCHEMA_V5, DOCUMENT_VERSION_V5],
+      [DOCUMENT_SCHEMA_V6, DOCUMENT_VERSION_V6],
+    ] as const;
+    for (const [schema, version] of versions) {
+      const legacy = legacyDocument(schema, version);
+      expect(parseDocumentValue(legacy).ok, `document v${version}`).toBe(true);
+      const text = JSON.stringify(legacy);
+      const duplicate = `{"name":"shadowed",${text.slice(1)}`;
+      const parsed = parseDocument(duplicate);
+      expect(parsed.ok, `document v${version}`).toBe(true);
+      if (parsed.ok) expect(parsed.value.name).toBe(`document-v${version}`);
+      expect(parseDocumentValueV7(legacy).ok).toBe(false);
+    }
   });
 
   it("accepts external configuration names without treating them as local", () => {
@@ -1563,6 +1719,76 @@ describe("staged document-v7 serialization and validation", () => {
     }
   });
 
+  it("contains raw member-audit intrinsic replacements", () => {
+    const source = stringifyDocumentV7(stagedV7Document());
+    const defineProperty = Object.defineProperty;
+    const mutations = [
+      {
+        label: "Set.prototype.add",
+        holder: Set.prototype,
+        key: "add",
+        value: (): never => {
+          throw new Error("poisoned Set.prototype.add");
+        },
+      },
+      {
+        label: "Set.prototype.has",
+        holder: Set.prototype,
+        key: "has",
+        value: (): false => false,
+      },
+      {
+        label: "String.prototype.charCodeAt",
+        holder: String.prototype,
+        key: "charCodeAt",
+        value: (): 0 => 0,
+      },
+      {
+        label: "String.prototype.slice",
+        holder: String.prototype,
+        key: "slice",
+        value: (): "" => "",
+      },
+    ] as const;
+
+    for (const mutation of mutations) {
+      const descriptor = Object.getOwnPropertyDescriptor(
+        mutation.holder,
+        mutation.key,
+      );
+      expect(descriptor, mutation.label).toBeDefined();
+      if (descriptor === undefined) continue;
+      let result: ReturnType<typeof parseDocumentV7> | undefined;
+      try {
+        result = parseDocumentV7(
+          source,
+          defineProperty({}, "limits", {
+            enumerable: true,
+            get(): object {
+              defineProperty(mutation.holder, mutation.key, {
+                configurable: true,
+                value: mutation.value,
+                writable: true,
+              });
+              return {};
+            },
+          }),
+        );
+      } finally {
+        defineProperty(mutation.holder, mutation.key, descriptor);
+      }
+      expect(result?.ok, mutation.label).toBe(false);
+      expect(result).toMatchObject({
+        diagnostics: [
+          {
+            message:
+              "Document-v7 runtime intrinsics changed during the operation",
+          },
+        ],
+      });
+    }
+  });
+
   it("contains call-time replacement across the v7 dependency closure", () => {
     const defineProperty = Object.defineProperty;
     const ownKeys = Reflect.ownKeys;
@@ -1628,10 +1854,28 @@ describe("staged document-v7 serialization and validation", () => {
         value: (): false => false,
       },
       {
+        label: "Set.prototype.add",
+        holder: Set.prototype,
+        key: "add",
+        value: (): Set<never> => new Set(),
+      },
+      {
         label: "RegExp.prototype.test",
         holder: RegExp.prototype,
         key: "test",
         value: (): false => false,
+      },
+      {
+        label: "String.prototype.charCodeAt",
+        holder: String.prototype,
+        key: "charCodeAt",
+        value: (): 0 => 0,
+      },
+      {
+        label: "String.prototype.slice",
+        holder: String.prototype,
+        key: "slice",
+        value: (): "" => "",
       },
       {
         label: "String.prototype.trim",
