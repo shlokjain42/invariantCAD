@@ -43,7 +43,6 @@ import {
   type MaterialDefinitionIR,
   type NodeIRV7,
   type NodeKindV7,
-  type RefIRV7,
   type ResourceDefinitionIR,
   type TopologyQueryIRV7,
   type TopologyReferenceEntryIRV7,
@@ -72,8 +71,11 @@ export const FEATURE_HASH_TOPOLOGY_REFERENCE_DOMAIN_V2 =
 export type FeatureHashV2 = Brand<string, "FeatureHashV2">;
 
 export interface FeatureHashLimitsV2 {
+  /** Expanded `(node, configuration)` states, including occurrence contexts. */
   readonly maxFeatureNodes: number;
   readonly maxDependencyLinks: number;
+  /** Selector and persistent-evidence work, independent of canonical bytes. */
+  readonly maxTopologyWork: number;
   readonly maxCanonicalBytes: number;
 }
 
@@ -81,6 +83,7 @@ export const DEFAULT_FEATURE_HASH_LIMITS_V2: FeatureHashLimitsV2 =
   Object.freeze({
     maxFeatureNodes: 100_000,
     maxDependencyLinks: 1_000_000,
+    maxTopologyWork: 2_000_000,
     maxCanonicalBytes: 256 * 1024 * 1024,
   });
 
@@ -106,12 +109,24 @@ export interface DesignFeatureHashEntryV2 {
   readonly hash: FeatureHashV2;
   /** Active local dependencies in effective node order. */
   readonly dependencies: readonly string[];
+  /**
+   * Direct dependency hashes with the effective occurrence configuration that
+   * produced each child state. Duplicates retain occurrence order.
+   */
+  readonly contextualDependencies: readonly DesignFeatureDependencyHashV2[];
   /** Effective direct parameter inputs, sorted by parameter ID. */
   readonly parameterValues: Readonly<Record<string, number>>;
   /** Persistent references actually consumed by this node, sorted by ID. */
   readonly topologyReferences: readonly string[];
   /** Semantic external resources consumed by this node, sorted and unique. */
   readonly resources: readonly string[];
+}
+
+export interface DesignFeatureDependencyHashV2 {
+  readonly node: string;
+  readonly kind: ReturnType<typeof outputKindForNodeV7>;
+  readonly configurationId: string | null;
+  readonly featureHash: FeatureHashV2;
 }
 
 export interface DesignFeatureOutputHashV2 {
@@ -166,6 +181,35 @@ interface HashMeterV2 {
   readonly limit: number;
 }
 
+interface TopologyWorkMeterV2 {
+  work: number;
+  readonly limit: number;
+}
+
+interface ResolvedFeatureContextV2 {
+  readonly configurationId: ConfigurationId | null;
+  readonly configuration?: DesignConfigurationIR;
+  readonly parameterValues: ReadonlyMap<ParameterId, number>;
+  readonly materials: ReadonlyMap<string, ResolvedMaterialV2>;
+  readonly diagnostics: readonly Diagnostic[];
+}
+
+interface ContextualDependencyV2 {
+  readonly node: NodeId;
+  readonly kind: ReturnType<typeof outputKindForNodeV7>;
+  readonly configurationId: ConfigurationId | null;
+  readonly stateKey: string;
+}
+
+interface ContextualFeatureStateV2 {
+  readonly key: string;
+  readonly node: NodeId;
+  readonly configurationId: ConfigurationId | null;
+  readonly effectiveNode: NodeIRV7;
+  readonly dependencies: readonly ContextualDependencyV2[];
+  readonly resources: readonly ResourceId[];
+}
+
 const FEATURE_HASH_LIMIT_KEYS_V2 = Object.freeze(
   Object.keys(DEFAULT_FEATURE_HASH_LIMITS_V2) as readonly (
     keyof FeatureHashLimitsV2
@@ -194,6 +238,23 @@ const typedArrayByteLengthGetter = objectGetOwnPropertyDescriptor(
   typedArrayPrototype,
   "byteLength",
 )?.get;
+const mapSizeGetter = objectGetOwnPropertyDescriptor(
+  Map.prototype,
+  "size",
+)?.get;
+const setSizeGetter = objectGetOwnPropertyDescriptor(
+  Set.prototype,
+  "size",
+)?.get;
+const arrayIteratorPrototype = objectGetPrototypeOf(
+  reflectApply(Array.prototype[Symbol.iterator], [], []) as object,
+) as object;
+const mapIteratorPrototype = objectGetPrototypeOf(
+  reflectApply(Map.prototype[Symbol.iterator], new Map(), []) as object,
+) as object;
+const setIteratorPrototype = objectGetPrototypeOf(
+  reflectApply(Set.prototype[Symbol.iterator], new Set(), []) as object,
+) as object;
 const HEX_DIGITS = "0123456789abcdef";
 
 interface CapturedIntrinsicMethod {
@@ -238,6 +299,256 @@ const capturedTextEncoder = (() => {
     return undefined;
   }
 })();
+
+type RealmMemberSnapshot = readonly [
+  label: string,
+  target: object,
+  key: PropertyKey,
+  value: unknown,
+];
+
+function captureRealmMembers(
+  label: string,
+  target: object,
+  keys: readonly PropertyKey[],
+): RealmMemberSnapshot[] {
+  return keys.map((key) => [
+    `${label}.${String(key)}`,
+    target,
+    key,
+    (target as Readonly<Record<PropertyKey, unknown>>)[key],
+  ]);
+}
+
+const REALM_MEMBER_SNAPSHOTS: readonly RealmMemberSnapshot[] = objectFreeze([
+  ...captureRealmMembers("globalThis", globalThis, [
+    "Object",
+    "Array",
+    "Map",
+    "Set",
+    "WeakMap",
+    "WeakSet",
+    "Number",
+    "String",
+    "Symbol",
+    "Promise",
+    "ArrayBuffer",
+    "Uint8Array",
+    "TextEncoder",
+    "AbortSignal",
+    "RegExp",
+    "Error",
+    "TypeError",
+    "RangeError",
+    "JSON",
+    "Reflect",
+    "Math",
+    "crypto",
+  ]),
+  ...captureRealmMembers("Object", Object, [
+    "keys",
+    "values",
+    "entries",
+    "fromEntries",
+    "hasOwn",
+    "create",
+    "freeze",
+    "getPrototypeOf",
+    "getOwnPropertyDescriptor",
+    "isFrozen",
+    "is",
+  ]),
+  ...captureRealmMembers("Array", Array, ["isArray"]),
+  ...captureRealmMembers("Array.prototype", Array.prototype, [
+    "map",
+    "flatMap",
+    "filter",
+    "find",
+    "findIndex",
+    "sort",
+    "includes",
+    "entries",
+    "keys",
+    "values",
+    "fill",
+    "forEach",
+    "some",
+    "every",
+    "push",
+    "pop",
+    "join",
+    "slice",
+    Symbol.iterator,
+  ]),
+  ...captureRealmMembers("Map.prototype", Map.prototype, [
+    "get",
+    "set",
+    "delete",
+    "has",
+    "entries",
+    "values",
+    Symbol.iterator,
+  ]),
+  ...captureRealmMembers("Set.prototype", Set.prototype, [
+    "add",
+    "has",
+    "values",
+    Symbol.iterator,
+  ]),
+  ...captureRealmMembers("WeakMap.prototype", WeakMap.prototype, [
+    "get",
+    "set",
+  ]),
+  ...captureRealmMembers("WeakSet.prototype", WeakSet.prototype, [
+    "add",
+    "delete",
+    "has",
+  ]),
+  ...captureRealmMembers(
+    "ArrayIterator.prototype",
+    arrayIteratorPrototype,
+    ["next"],
+  ),
+  ...captureRealmMembers(
+    "MapIterator.prototype",
+    mapIteratorPrototype,
+    ["next"],
+  ),
+  ...captureRealmMembers(
+    "SetIterator.prototype",
+    setIteratorPrototype,
+    ["next"],
+  ),
+  ...captureRealmMembers("Number", Number, [
+    "isFinite",
+    "isSafeInteger",
+    "isInteger",
+    "EPSILON",
+    "POSITIVE_INFINITY",
+  ]),
+  ...captureRealmMembers("JSON", JSON, ["parse", "stringify"]),
+  ...captureRealmMembers("Reflect", Reflect, ["apply", "ownKeys"]),
+  ...captureRealmMembers("Promise.prototype", Promise.prototype, ["then"]),
+  ...captureRealmMembers("String.prototype", String.prototype, [
+    "charCodeAt",
+    "trim",
+  ]),
+  ...captureRealmMembers("RegExp.prototype", RegExp.prototype, ["test"]),
+  ...captureRealmMembers("Math", Math, [
+    "abs",
+    "min",
+    "max",
+    "sin",
+    "cos",
+    "tan",
+    "atan",
+    "atan2",
+    "hypot",
+    "sqrt",
+    "PI",
+  ]),
+]);
+
+function realmIntegrityFailure(
+  label: string,
+  cause?: unknown,
+): CadResult<never> {
+  return failure(
+    diagnostic(
+      "IR_INVALID",
+      `Feature hashing refused a mutated JavaScript realm (${label})`,
+      {
+        severity: "error",
+        details: {
+          phase: "featureHashV2",
+          resource: "realmIntegrity",
+          intrinsic: label,
+          ...(cause === undefined ? {} : { cause: safeErrorMessage(cause) }),
+        },
+      },
+    ),
+  );
+}
+
+function realmIntegrityError(): CadResult<never> | undefined {
+  try {
+    for (
+      let index = 0;
+      index < REALM_MEMBER_SNAPSHOTS.length;
+      index += 1
+    ) {
+      const snapshot = REALM_MEMBER_SNAPSHOTS[index]!;
+      if (
+        (snapshot[1] as Readonly<Record<PropertyKey, unknown>>)[snapshot[2]] !==
+        snapshot[3]
+      ) {
+        return realmIntegrityFailure(snapshot[0]);
+      }
+    }
+    const abortedGetter =
+      typeof globalThis.AbortSignal === "undefined"
+        ? undefined
+        : objectGetOwnPropertyDescriptor(
+            globalThis.AbortSignal.prototype,
+            "aborted",
+          )?.get;
+    if (abortedGetter !== ABORT_SIGNAL_ABORTED_GETTER) {
+      return realmIntegrityFailure("AbortSignal.prototype.aborted");
+    }
+    const byteLengthGetter = objectGetOwnPropertyDescriptor(
+      objectGetPrototypeOf(globalThis.Uint8Array.prototype) as object,
+      "byteLength",
+    )?.get;
+    if (byteLengthGetter !== typedArrayByteLengthGetter) {
+      return realmIntegrityFailure(
+        "%TypedArray%.prototype.byteLength",
+      );
+    }
+    if (
+      objectGetOwnPropertyDescriptor(Map.prototype, "size")?.get !==
+      mapSizeGetter
+    ) {
+      return realmIntegrityFailure("Map.prototype.size");
+    }
+    if (
+      objectGetOwnPropertyDescriptor(Set.prototype, "size")?.get !==
+      setSizeGetter
+    ) {
+      return realmIntegrityFailure("Set.prototype.size");
+    }
+    const cryptoDigest = capturePrototypeMethod(
+      globalThis.crypto?.subtle,
+      "digest",
+    );
+    if (
+      capturedCryptoDigest !== undefined &&
+      (cryptoDigest === undefined ||
+        cryptoDigest.target !== capturedCryptoDigest.target ||
+        cryptoDigest.method !== capturedCryptoDigest.method)
+    ) {
+      return realmIntegrityFailure("SubtleCrypto.prototype.digest");
+    }
+    const textEncode =
+      typeof globalThis.TextEncoder === "function"
+        ? capturePrototypeMethod(new globalThis.TextEncoder(), "encode")
+        : undefined;
+    if (
+      capturedTextEncoder !== undefined &&
+      (textEncode === undefined ||
+        textEncode.method !== capturedTextEncoder.method)
+    ) {
+      return realmIntegrityFailure("TextEncoder.prototype.encode");
+    }
+    return undefined;
+  } catch (error) {
+    return realmIntegrityFailure("realm inspection", error);
+  }
+}
+
+function throwIfRealmCompromised(): void {
+  const compromised = realmIntegrityError();
+  if (compromised !== undefined) throw compromised;
+}
 
 function lexicalCompare(first: string, second: string): number {
   return first < second ? -1 : first > second ? 1 : 0;
@@ -447,15 +758,58 @@ function resolvedExpression(
   return value;
 }
 
+function consumeTopologyWork(
+  meter: TopologyWorkMeterV2,
+  amount: number,
+  signal: AbortSignal | undefined,
+): void {
+  throwIfAborted(signal);
+  throwIfRealmCompromised();
+  if (amount > meter.limit - meter.work) {
+    throw limitFailure(
+      "maxTopologyWork",
+      meter.limit,
+      meter.limit + 1,
+    );
+  }
+  meter.work += amount;
+}
+
+function accountTopologyValue(
+  value: unknown,
+  meter: TopologyWorkMeterV2,
+  signal: AbortSignal | undefined,
+): void {
+  const stack: unknown[] = [value];
+  while (stack.length > 0) {
+    consumeTopologyWork(meter, 1, signal);
+    const current = stack.pop();
+    if (Array.isArray(current)) {
+      for (let index = 0; index < current.length; index += 1) {
+        stack.push(current[index]);
+      }
+    } else if (typeof current === "object" && current !== null) {
+      for (const key of Object.keys(current)) {
+        stack.push((current as Readonly<Record<string, unknown>>)[key]);
+      }
+    }
+  }
+}
+
 function canonicalizeFeatureTopologyQuery(
   query: TopologyQueryIRV7,
+  meter: TopologyWorkMeterV2,
+  signal: AbortSignal | undefined,
 ): TopologyQueryIRV7 {
+  consumeTopologyWork(meter, 1, signal);
   switch (query.op) {
     case "and":
     case "or": {
       const op = query.op;
       const flattened = query.queries
-        .map(canonicalizeFeatureTopologyQuery)
+        .map((child) =>
+          canonicalizeFeatureTopologyQuery(child, meter, signal),
+        )
         .flatMap((child) => (child.op === op ? child.queries : [child]));
       const unique = new Map<string, TopologyQueryIRV7>();
       for (const child of flattened) {
@@ -469,11 +823,18 @@ function canonicalizeFeatureTopologyQuery(
       };
     }
     case "not":
-      return { op: "not", query: canonicalizeFeatureTopologyQuery(query.query) };
+      return {
+        op: "not",
+        query: canonicalizeFeatureTopologyQuery(query.query, meter, signal),
+      };
     case "adjacentTo":
       return {
         op: "adjacentTo",
-        selection: canonicalizeFeatureTopologySelection(query.selection),
+        selection: canonicalizeFeatureTopologySelection(
+          query.selection,
+          meter,
+          signal,
+        ),
       };
     case "all":
     case "persistentReference":
@@ -491,10 +852,18 @@ function canonicalizeFeatureTopologyQuery(
 
 function canonicalizeFeatureTopologySelection<
   K extends TopologySelectionIRV7,
->(selection: K): K {
+>(
+  selection: K,
+  meter: TopologyWorkMeterV2,
+  signal: AbortSignal | undefined,
+): K {
   return {
     ...selection,
-    query: canonicalizeFeatureTopologyQuery(selection.query),
+    query: canonicalizeFeatureTopologyQuery(
+      selection.query,
+      meter,
+      signal,
+    ),
   } as K;
 }
 
@@ -516,6 +885,7 @@ function configuredInstanceSuppression(
 function effectiveNode(
   id: NodeId,
   node: NodeIRV7,
+  configurationId: ConfigurationId | null,
   configuration: DesignConfigurationIR | undefined,
 ): NodeIRV7 {
   switch (node.kind) {
@@ -539,23 +909,11 @@ function effectiveNode(
     case "coordinateSystem":
     case "bodySet":
     case "importedBody":
-      return node;
     case "fillet":
     case "chamfer":
-      return {
-        ...node,
-        edges: canonicalizeFeatureTopologySelection(node.edges),
-      } as NodeIRV7;
     case "shell":
-      return {
-        ...node,
-        openings: canonicalizeFeatureTopologySelection(node.openings),
-      } as NodeIRV7;
     case "draft":
-      return {
-        ...node,
-        faces: canonicalizeFeatureTopologySelection(node.faces),
-      } as NodeIRV7;
+      return node;
     case "part": {
       const materialOverrides = configuration?.partMaterialOverrides;
       const materialId =
@@ -582,18 +940,120 @@ function effectiveNode(
                 ) ?? instance.suppressed
               ),
           )
-          .map((instance) => ({ ...instance, suppressed: false })),
+          .map((instance) => {
+            if (instance.component.source === "external") {
+              // External selectors belong to another document and cannot be
+              // resolved or normalized by the owner.
+              return { ...instance, suppressed: false };
+            }
+            const childConfigurationId = occurrenceConfigurationId(
+              instance.configuration,
+              configurationId,
+            );
+            return {
+              ...instance,
+              configuration:
+                childConfigurationId === null
+                  ? { mode: "base" as const }
+                  : {
+                      mode: "named" as const,
+                      id: childConfigurationId,
+                    },
+              suppressed: false,
+            };
+          }),
       };
+  }
+  return unreachableVariant(node, "document-v7 node");
+}
+
+function occurrenceConfigurationId(
+  selector: {
+    readonly mode: "inherit" | "base" | "named";
+    readonly id?: ConfigurationId;
+  },
+  parent: ConfigurationId | null,
+): ConfigurationId | null {
+  switch (selector.mode) {
+    case "inherit":
+      return parent;
+    case "base":
+      return null;
+    case "named":
+      return selector.id!;
+  }
+}
+
+function canonicalTopologyNode(
+  node: NodeIRV7,
+  meter: TopologyWorkMeterV2,
+  signal: AbortSignal | undefined,
+): NodeIRV7 {
+  switch (node.kind) {
+    case "fillet":
+    case "chamfer":
+      return {
+        ...node,
+        edges: canonicalizeFeatureTopologySelection(
+          node.edges,
+          meter,
+          signal,
+        ),
+      } as NodeIRV7;
+    case "shell":
+      return {
+        ...node,
+        openings: canonicalizeFeatureTopologySelection(
+          node.openings,
+          meter,
+          signal,
+        ),
+      } as NodeIRV7;
+    case "draft":
+      return {
+        ...node,
+        faces: canonicalizeFeatureTopologySelection(
+          node.faces,
+          meter,
+          signal,
+        ),
+      } as NodeIRV7;
+    case "box":
+    case "cylinder":
+    case "sphere":
+    case "sketch":
+    case "polylinePath":
+    case "circularArcPath":
+    case "compositePath":
+    case "extrude":
+    case "revolve":
+    case "loft":
+    case "sweep":
+    case "boolean":
+    case "transform":
+    case "offset":
+    case "part":
+    case "assembly":
+    case "datumPoint":
+    case "datumAxis":
+    case "datumPlane":
+    case "coordinateSystem":
+    case "bodySet":
+    case "importedBody":
+      return node;
   }
   return unreachableVariant(node, "document-v7 node");
 }
 
 function topologyReferenceIds(
   selection: TopologySelectionIRV7,
+  meter: TopologyWorkMeterV2,
+  signal: AbortSignal | undefined,
 ): readonly TopologyReferenceId[] {
   const output = new Set<TopologyReferenceId>();
   const stack: TopologyQueryIRV7[] = [selection.query];
   while (stack.length > 0) {
+    consumeTopologyWork(meter, 1, signal);
     const query = stack.pop()!;
     switch (query.op) {
       case "persistentReference":
@@ -627,15 +1087,17 @@ function topologyReferenceIds(
 
 function nodeTopologyReferenceIds(
   node: NodeIRV7,
+  meter: TopologyWorkMeterV2,
+  signal: AbortSignal | undefined,
 ): readonly TopologyReferenceId[] {
   switch (node.kind) {
     case "fillet":
     case "chamfer":
-      return topologyReferenceIds(node.edges);
+      return topologyReferenceIds(node.edges, meter, signal);
     case "shell":
-      return topologyReferenceIds(node.openings);
+      return topologyReferenceIds(node.openings, meter, signal);
     case "draft":
-      return topologyReferenceIds(node.faces);
+      return topologyReferenceIds(node.faces, meter, signal);
     case "box":
     case "cylinder":
     case "sphere":
@@ -665,8 +1127,12 @@ function nodeTopologyReferenceIds(
 
 function canonicalTopologyReferenceEntry(
   entry: TopologyReferenceEntryIRV7,
+  meter: TopologyWorkMeterV2,
+  signal: AbortSignal | undefined,
 ): TopologyReferenceEntryIRV7 {
+  consumeTopologyWork(meter, 1, signal);
   const variants = entry.variants.map((variant) => {
+    accountTopologyValue(variant, meter, signal);
     const normalized = normalizePersistentTopologyReference(variant);
     if (!normalized.ok) {
       throw new TypeError(
@@ -674,18 +1140,24 @@ function canonicalTopologyReferenceEntry(
           "A persistent topology reference could not be normalized",
       );
     }
-    return normalized.value;
+    return {
+      value: normalized.value,
+      canonical: canonicalStringify(normalized.value),
+    };
   });
   variants.sort(
     (first, second) =>
-      first.protocolVersion - second.protocolVersion ||
-      lexicalCompare(first.kernelFingerprint, second.kernelFingerprint) ||
-      lexicalCompare(canonicalStringify(first), canonicalStringify(second)),
+      first.value.protocolVersion - second.value.protocolVersion ||
+      lexicalCompare(
+        first.value.kernelFingerprint,
+        second.value.kernelFingerprint,
+      ) ||
+      lexicalCompare(first.canonical, second.canonical),
   );
   return {
     target: entry.target,
     topology: entry.topology,
-    variants,
+    variants: variants.map(({ value }) => value),
   };
 }
 
@@ -793,6 +1265,7 @@ async function digestEnvelope(
   meter: HashMeterV2,
   signal: AbortSignal | undefined,
 ): Promise<string> {
+  throwIfRealmCompromised();
   throwIfAborted(signal);
   const envelope = {
     algorithm: FEATURE_HASH_ALGORITHM_V2,
@@ -827,11 +1300,13 @@ async function digestEnvelope(
   if (capturedCryptoDigest === undefined) {
     throw new TypeError("WebCrypto SHA-256 is unavailable");
   }
+  throwIfRealmCompromised();
   const digest = await (reflectApply(
     capturedCryptoDigest.method,
     capturedCryptoDigest.target,
     ["SHA-256", bytes],
   ) as PromiseLike<ArrayBuffer>);
+  throwIfRealmCompromised();
   throwIfAborted(signal);
   const digestBytes = new IntrinsicUint8Array(digest);
   const digestByteLength =
@@ -847,6 +1322,7 @@ async function digestEnvelope(
     output += HEX_DIGITS[byte >>> 4]!;
     output += HEX_DIGITS[byte & 0x0f]!;
   }
+  throwIfRealmCompromised();
   return output;
 }
 
@@ -943,9 +1419,56 @@ function resourceHashPayload(
   };
 }
 
+function contextualStateKey(
+  node: NodeId,
+  configurationId: ConfigurationId | null,
+): string {
+  return `${configurationId ?? ""}\u0000${node}`;
+}
+
+function contextualNodeDependencies(
+  node: NodeIRV7,
+  configurationId: ConfigurationId | null,
+): readonly ContextualDependencyV2[] {
+  if (node.kind !== "assembly") {
+    return Object.freeze(
+      nodeDependenciesV7(node).map((reference) => ({
+        node: reference.node,
+        kind: reference.kind,
+        configurationId,
+        stateKey: contextualStateKey(reference.node, configurationId),
+      })),
+    );
+  }
+  return Object.freeze(
+    node.instances.flatMap((instance) => {
+      if (instance.component.source === "external") return [];
+      const reference = instance.component.reference;
+      const childConfigurationId = occurrenceConfigurationId(
+        instance.configuration,
+        configurationId,
+      );
+      return [
+        {
+          node: reference.node,
+          kind: reference.kind,
+          configurationId: childConfigurationId,
+          stateKey: contextualStateKey(
+            reference.node,
+            childConfigurationId,
+          ),
+        },
+      ];
+    }),
+  );
+}
+
 /**
- * Computes one kernel-independent protocol-v2 Merkle hash for every staged
- * document-v7 node under one effective evaluation context.
+ * Computes root-context protocol-v2 Merkle hashes for a staged document-v7.
+ *
+ * Local assembly occurrences expand internal `(node, configuration)` states.
+ * Only root-context entries appear in the report; contextual direct-child
+ * evidence remains observable on every reported entry.
  *
  * Equality means equal v2 effective intent. It does not mean geometric
  * equality, kernel compatibility, or protocol-v1 artifact compatibility.
@@ -954,7 +1477,11 @@ export async function hashDesignFeaturesV2(
   document: DesignDocumentV7,
   options: HashDesignFeaturesV2Options = {},
 ): Promise<CadResult<DesignFeatureHashReportV2>> {
+  let compromised = realmIntegrityError();
+  if (compromised !== undefined) return compromised;
   const capturedOptions = captureOptions(options);
+  compromised = realmIntegrityError();
+  if (compromised !== undefined) return compromised;
   if (!capturedOptions.ok) return capturedOptions;
   if (
     capturedOptions.value.signal !== undefined &&
@@ -967,20 +1494,14 @@ export async function hashDesignFeaturesV2(
       ? {}
       : { limits: capturedOptions.value.documentLimits }),
   });
+  compromised = realmIntegrityError();
+  if (compromised !== undefined) return compromised;
   if (!parsed.ok) return parsed;
   const snapshot = parsed.value;
   const nodeIds = Object.keys(snapshot.nodes).sort(lexicalCompare) as NodeId[];
   const limits = capturedOptions.value.limits;
-  if (nodeIds.length > limits.maxFeatureNodes) {
-    return limitFailure(
-      "maxFeatureNodes",
-      limits.maxFeatureNodes,
-      nodeIds.length,
-    );
-  }
 
-  let configurationId: ConfigurationId | null = null;
-  let configuration: DesignConfigurationIR | undefined;
+  let rootConfigurationId: ConfigurationId | null = null;
   if (capturedOptions.value.configuration !== undefined) {
     const requested = capturedOptions.value.configuration;
     if (!Object.hasOwn(snapshot.configurations ?? {}, requested)) {
@@ -1000,57 +1521,140 @@ export async function hashDesignFeaturesV2(
         ),
       );
     }
-    configurationId = requested as ConfigurationId;
-    configuration = snapshot.configurations![configurationId];
+    rootConfigurationId = requested as ConfigurationId;
   }
 
-  // V7 deliberately shares parameter/configuration semantics with v1-v6. The
-  // resolver only reads those common fields; this cast cannot expose v7 nodes.
-  const resolvedParameters = resolveEvaluationParameters(
-    snapshot as unknown as DesignDocument,
-    capturedOptions.value.parameters,
-    configurationId,
-    configuration,
-  );
-  if (!resolvedParameters.ok) return resolvedParameters;
-  const parameterValues = resolvedParameters.value.values;
-  const materials = resolvedMaterialDefinitions(snapshot, parameterValues);
-  if (!materials.ok) return materials;
-
-  const effectiveNodes = new Map<NodeId, NodeIRV7>();
-  const dependencies = new Map<NodeId, readonly RefIRV7[]>();
-  const resourceDependencies = new Map<NodeId, readonly ResourceId[]>();
-  const reverse = new Map<NodeId, NodeId[]>();
-  const indegrees = new Map<NodeId, number>();
-  let dependencyLinks = 0;
-  try {
-    for (const id of nodeIds) {
-      const node = effectiveNode(
-        id,
-        snapshot.nodes[id] as NodeIRV7,
-        configuration,
+  const contexts = new Map<
+    ConfigurationId | null,
+    ResolvedFeatureContextV2
+  >();
+  const resolveContext = (
+    configurationId: ConfigurationId | null,
+  ): CadResult<ResolvedFeatureContextV2> => {
+    const cached = contexts.get(configurationId);
+    if (cached !== undefined) return success(cached);
+    const configuration =
+      configurationId === null
+        ? undefined
+        : snapshot.configurations?.[configurationId];
+    if (configurationId !== null && configuration === undefined) {
+      return failure(
+        diagnostic(
+          "CONFIGURATION_MISSING",
+          `Unknown configuration '${configurationId}'`,
+          {
+            severity: "error",
+            path: `/configurations/${configurationId}`,
+          },
+        ),
       );
-      effectiveNodes.set(id, node);
-      const refs = nodeDependenciesV7(node);
+    }
+    // The shared resolver observes only parameter and configuration fields.
+    const parameters = resolveEvaluationParameters(
+      snapshot as unknown as DesignDocument,
+      capturedOptions.value.parameters,
+      configurationId,
+      configuration,
+    );
+    if (!parameters.ok) return parameters;
+    const materials = resolvedMaterialDefinitions(
+      snapshot,
+      parameters.value.values,
+    );
+    if (!materials.ok) return materials;
+    const resolved = Object.freeze({
+      configurationId,
+      ...(configuration === undefined ? {} : { configuration }),
+      parameterValues: parameters.value.values,
+      materials: materials.value,
+      diagnostics: parameters.value.diagnostics,
+    }) as ResolvedFeatureContextV2;
+    contexts.set(configurationId, resolved);
+    return success(resolved, parameters.value.diagnostics);
+  };
+
+  const requests = new Map<
+    string,
+    Readonly<{
+      node: NodeId;
+      configurationId: ConfigurationId | null;
+    }>
+  >();
+  const requestOrder: string[] = [];
+  const states = new Map<string, ContextualFeatureStateV2>();
+  const reverse = new Map<string, string[]>();
+  const indegrees = new Map<string, number>();
+  let dependencyLinks = 0;
+  const scheduleState = (
+    node: NodeId,
+    configurationId: ConfigurationId | null,
+  ): void => {
+    const key = contextualStateKey(node, configurationId);
+    if (requests.has(key)) return;
+    const actual = requests.size + 1;
+    if (actual > limits.maxFeatureNodes) {
+      throw limitFailure("maxFeatureNodes", limits.maxFeatureNodes, actual);
+    }
+    requests.set(key, Object.freeze({ node, configurationId }));
+    requestOrder.push(key);
+  };
+
+  try {
+    for (const id of nodeIds) scheduleState(id, rootConfigurationId);
+    let discoveryCursor = 0;
+    while (discoveryCursor < requestOrder.length) {
+      throwIfAborted(capturedOptions.value.signal);
+      throwIfRealmCompromised();
+      const key = requestOrder[discoveryCursor++]!;
+      const request = requests.get(key)!;
+      const context = resolveContext(request.configurationId);
+      throwIfRealmCompromised();
+      if (!context.ok) throw context;
+      const node = effectiveNode(
+        request.node,
+        snapshot.nodes[request.node] as NodeIRV7,
+        request.configurationId,
+        context.value.configuration,
+      );
+      const dependencies = contextualNodeDependencies(
+        node,
+        request.configurationId,
+      );
       const resources = nodeResourceDependenciesV7(node);
-      dependencies.set(id, refs);
-      resourceDependencies.set(id, resources);
-      indegrees.set(id, refs.length);
-      dependencyLinks += refs.length + resources.length;
+      states.set(
+        key,
+        Object.freeze({
+          key,
+          node: request.node,
+          configurationId: request.configurationId,
+          effectiveNode: node,
+          dependencies,
+          resources,
+        }),
+      );
+      indegrees.set(key, dependencies.length);
+      dependencyLinks += dependencies.length + resources.length;
       if (dependencyLinks > limits.maxDependencyLinks) {
-        return limitFailure(
+        throw limitFailure(
           "maxDependencyLinks",
           limits.maxDependencyLinks,
           dependencyLinks,
         );
       }
-      for (const reference of refs) {
-        const consumers = reverse.get(reference.node);
-        if (consumers === undefined) reverse.set(reference.node, [id]);
-        else consumers.push(id);
+      for (const dependency of dependencies) {
+        scheduleState(dependency.node, dependency.configurationId);
+        const consumers = reverse.get(dependency.stateKey);
+        if (consumers === undefined) {
+          reverse.set(dependency.stateKey, [key]);
+        } else {
+          consumers.push(key);
+        }
       }
     }
   } catch (error) {
+    const integrityFailure = realmIntegrityError();
+    if (integrityFailure !== undefined) return integrityFailure;
+    if (isCadFailure(error)) return error;
     return failure(
       diagnostic(
         "IR_INVALID",
@@ -1060,26 +1664,37 @@ export async function hashDesignFeaturesV2(
     );
   }
 
-  const ready = nodeIds.filter((id) => indegrees.get(id) === 0);
-  const hashes = new Map<NodeId, FeatureHashV2>();
-  const entries = new Map<NodeId, DesignFeatureHashEntryV2>();
+  const ready = requestOrder.filter((key) => indegrees.get(key) === 0);
+  const hashes = new Map<string, FeatureHashV2>();
+  const entries = new Map<string, DesignFeatureHashEntryV2>();
   const referenceHashes = new Map<TopologyReferenceId, string>();
   const resourceHashes = new Map<ResourceId, string>();
   const meter: HashMeterV2 = {
     bytes: 0,
     limit: limits.maxCanonicalBytes,
   };
+  const topologyMeter: TopologyWorkMeterV2 = {
+    work: 0,
+    limit: limits.maxTopologyWork,
+  };
   let cursor = 0;
   try {
     while (cursor < ready.length) {
       throwIfAborted(capturedOptions.value.signal);
-      const id = ready[cursor++]!;
-      const node = effectiveNodes.get(id)!;
-      const refs = dependencies.get(id)!;
-      const dependencyPayload = refs.map((reference) => ({
-        node: reference.node,
-        kind: reference.kind,
-        hash: hashes.get(reference.node)!,
+      throwIfRealmCompromised();
+      const key = ready[cursor++]!;
+      const state = states.get(key)!;
+      const context = contexts.get(state.configurationId)!;
+      const node = canonicalTopologyNode(
+        state.effectiveNode,
+        topologyMeter,
+        capturedOptions.value.signal,
+      );
+      const dependencyPayload = state.dependencies.map((dependency) => ({
+        node: dependency.node,
+        kind: dependency.kind,
+        configurationId: dependency.configurationId,
+        hash: hashes.get(dependency.stateKey)!,
       }));
 
       const directParameterIds = new Set(
@@ -1087,7 +1702,7 @@ export async function hashDesignFeaturesV2(
       );
       let effectiveMaterial: ResolvedMaterialV2 | undefined;
       if (node.kind === "part" && node.materialId !== undefined) {
-        effectiveMaterial = materials.value.get(node.materialId);
+        effectiveMaterial = context.materials.get(node.materialId);
         for (const parameter of
           effectiveMaterial?.parameterDependencies ?? []) {
           directParameterIds.add(parameter);
@@ -1096,10 +1711,17 @@ export async function hashDesignFeaturesV2(
       const directParameterValues = Object.fromEntries(
         [...directParameterIds]
           .sort(lexicalCompare)
-          .map((parameter) => [parameter, parameterValues.get(parameter)!]),
+          .map((parameter) => [
+            parameter,
+            context.parameterValues.get(parameter)!,
+          ]),
       ) as Readonly<Record<string, number>>;
 
-      const usedReferences = nodeTopologyReferenceIds(node);
+      const usedReferences = nodeTopologyReferenceIds(
+        node,
+        topologyMeter,
+        capturedOptions.value.signal,
+      );
       const topologyReferencePayload: {
         readonly reference: TopologyReferenceId;
         readonly hash: string;
@@ -1117,6 +1739,8 @@ export async function hashDesignFeaturesV2(
               reference,
               entry: canonicalTopologyReferenceEntry(
                 entry as TopologyReferenceEntryIRV7,
+                topologyMeter,
+                capturedOptions.value.signal,
               ),
             },
             meter,
@@ -1127,7 +1751,7 @@ export async function hashDesignFeaturesV2(
         topologyReferencePayload.push({ reference, hash });
       }
 
-      const usedResources = resourceDependencies.get(id)!;
+      const usedResources = state.resources;
       const resourcePayload: {
         readonly resource: ResourceId;
         readonly hash: string;
@@ -1153,7 +1777,7 @@ export async function hashDesignFeaturesV2(
       const digest = await digestEnvelope(
         FEATURE_HASH_DOMAIN_V2,
         {
-          node: id,
+          node: state.node,
           kind: node.kind,
           units: snapshot.units,
           local: node,
@@ -1169,27 +1793,37 @@ export async function hashDesignFeaturesV2(
         capturedOptions.value.signal,
       );
       const hash = `${FEATURE_HASH_PREFIX_V2}${digest}` as FeatureHashV2;
-      hashes.set(id, hash);
+      hashes.set(key, hash);
       entries.set(
-        id,
+        key,
         deepFreeze({
-          node: id,
+          node: state.node,
           kind: node.kind,
           outputKind: outputKindForNodeV7(node),
           hash,
-          dependencies: refs.map((reference) => reference.node),
+          dependencies: state.dependencies.map(
+            (dependency) => dependency.node,
+          ),
+          contextualDependencies: state.dependencies.map((dependency) => ({
+            node: dependency.node,
+            kind: dependency.kind,
+            configurationId: dependency.configurationId,
+            featureHash: hashes.get(dependency.stateKey)!,
+          })),
           parameterValues: directParameterValues,
           topologyReferences: usedReferences,
           resources: usedResources,
         }) as DesignFeatureHashEntryV2,
       );
-      for (const consumer of reverse.get(id) ?? []) {
+      for (const consumer of reverse.get(key) ?? []) {
         const remaining = indegrees.get(consumer)! - 1;
         indegrees.set(consumer, remaining);
         if (remaining === 0) ready.push(consumer);
       }
     }
   } catch (error) {
+    const integrityFailure = realmIntegrityError();
+    if (integrityFailure !== undefined) return integrityFailure;
     if (isCadFailure(error)) return error;
     return failure(
       diagnostic(
@@ -1200,7 +1834,7 @@ export async function hashDesignFeaturesV2(
     );
   }
 
-  if (entries.size !== nodeIds.length) {
+  if (entries.size !== states.size) {
     return failure(
       diagnostic("GRAPH_CYCLE", "The feature graph contains a cycle", {
         severity: "error",
@@ -1208,7 +1842,12 @@ export async function hashDesignFeaturesV2(
       }),
     );
   }
-  const reportEntries = nodeIds.map((id) => entries.get(id)!);
+  const rootContext = resolveContext(rootConfigurationId);
+  if (!rootContext.ok) return rootContext;
+  const reportEntries = nodeIds.map(
+    (id) =>
+      entries.get(contextualStateKey(id, rootConfigurationId))!,
+  );
   const outputs = Object.keys(snapshot.outputs)
     .sort(lexicalCompare)
     .map((name) => {
@@ -1217,24 +1856,37 @@ export async function hashDesignFeaturesV2(
         name,
         node: output.node,
         kind: output.kind,
-        featureHash: hashes.get(output.node)!,
+        featureHash: hashes.get(
+          contextualStateKey(output.node, rootConfigurationId),
+        )!,
       };
     });
   const allParameterValues = Object.fromEntries(
-    [...parameterValues.entries()].sort(([first], [second]) =>
-      lexicalCompare(first, second),
+    [...rootContext.value.parameterValues.entries()].sort(
+      ([first], [second]) => lexicalCompare(first, second),
     ),
   ) as Readonly<Record<string, number>>;
+  const contextDiagnostics = new Map<string, Diagnostic>();
+  for (const context of contexts.values()) {
+    for (const item of context.diagnostics) {
+      contextDiagnostics.set(canonicalStringify(item), item);
+    }
+  }
+  compromised = realmIntegrityError();
+  if (compromised !== undefined) return compromised;
+  const report = deepFreeze({
+    version: DESIGN_FEATURE_HASH_REPORT_VERSION_V2,
+    hashProtocolVersion: FEATURE_HASH_PROTOCOL_VERSION_V2,
+    algorithm: FEATURE_HASH_ALGORITHM_V2,
+    configurationId: rootConfigurationId,
+    parameterValues: allParameterValues,
+    nodes: reportEntries,
+    outputs,
+  }) as DesignFeatureHashReportV2;
+  compromised = realmIntegrityError();
+  if (compromised !== undefined) return compromised;
   return success(
-    deepFreeze({
-      version: DESIGN_FEATURE_HASH_REPORT_VERSION_V2,
-      hashProtocolVersion: FEATURE_HASH_PROTOCOL_VERSION_V2,
-      algorithm: FEATURE_HASH_ALGORITHM_V2,
-      configurationId,
-      parameterValues: allParameterValues,
-      nodes: reportEntries,
-      outputs,
-    }) as DesignFeatureHashReportV2,
-    resolvedParameters.value.diagnostics,
+    report,
+    Object.freeze([...contextDiagnostics.values()]),
   );
 }

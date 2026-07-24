@@ -130,6 +130,7 @@ function comprehensiveDocument(): DesignDocumentV7 {
         partMaterialOverrides: { part: "aluminum" },
         instanceSuppressions: {
           assembly: { externalOne: true, externalTwo: true },
+          subassembly: { inner: true },
         },
       },
     },
@@ -375,6 +376,21 @@ function comprehensiveDocument(): DesignDocumentV7 {
         materialId: "steel",
         metadata: { lifecycle: "prototype" },
       },
+      subassembly: {
+        kind: "assembly",
+        instances: [
+          {
+            id: "inner",
+            component: {
+              source: "local",
+              reference: { node: "part", kind: "part" },
+            },
+            configuration: { mode: "inherit" },
+            placement: [],
+            suppressed: false,
+          },
+        ],
+      },
       assembly: {
         kind: "assembly",
         instances: [
@@ -382,7 +398,7 @@ function comprehensiveDocument(): DesignDocumentV7 {
             id: "local",
             component: {
               source: "local",
-              reference: { node: "part", kind: "part" },
+              reference: { node: "subassembly", kind: "assembly" },
             },
             configuration: { mode: "inherit" },
             placement: [],
@@ -454,6 +470,15 @@ function hashFor(
   return entry.hash;
 }
 
+function entryFor(
+  report: DesignFeatureHashReportV2,
+  node: string,
+) {
+  const entry = report.nodes.find((candidate) => candidate.node === node);
+  if (entry === undefined) throw new Error(`Missing feature hash for '${node}'`);
+  return entry;
+}
+
 function expectDeeplyFrozen(
   value: unknown,
   seen = new Set<object>(),
@@ -462,6 +487,21 @@ function expectDeeplyFrozen(
   seen.add(value);
   expect(Object.isFrozen(value)).toBe(true);
   for (const child of Object.values(value)) expectDeeplyFrozen(child, seen);
+}
+
+function expectRealmFailure(
+  result: CadResult<DesignFeatureHashReportV2>,
+): void {
+  expect(result.ok).toBe(false);
+  if (!result.ok) {
+    expect(result.diagnostics[0]).toMatchObject({
+      code: "IR_INVALID",
+      details: {
+        phase: "featureHashV2",
+        resource: "realmIntegrity",
+      },
+    });
+  }
 }
 
 async function minimumCanonicalByteBudget(
@@ -702,7 +742,7 @@ describe("document-v7 feature hashes protocol v2", () => {
     ).toEqual([]);
     expect(
       configured.nodes.find(({ node }) => node === "assembly")?.dependencies,
-    ).toEqual(["part"]);
+    ).toEqual(["subassembly"]);
 
     const externalChanged = mutateResource(
       document,
@@ -719,6 +759,100 @@ describe("document-v7 feature hashes protocol v2", () => {
     expect(hashFor(configuredExternalChanged, "assembly")).toBe(
       hashFor(configured, "assembly"),
     );
+  });
+
+  it("expands local occurrence contexts while reporting only the root context", async () => {
+    const document = comprehensiveDocument();
+    const base = await reportValue(hashDesignFeaturesV2(document));
+    const configured = await reportValue(
+      hashDesignFeaturesV2(document, { configuration: "configured" }),
+    );
+
+    const explicitBase = clone(document) as unknown as {
+      nodes: {
+        assembly: {
+          instances: { configuration: { mode: string; id?: string } }[];
+        };
+      };
+    };
+    explicitBase.nodes.assembly.instances[0]!.configuration = {
+      mode: "base",
+    };
+    const explicitBaseReport = await reportValue(
+      hashDesignFeaturesV2(
+        explicitBase as unknown as DesignDocumentV7,
+      ),
+    );
+    expect(hashFor(explicitBaseReport, "assembly")).toBe(
+      hashFor(base, "assembly"),
+    );
+
+    const named = clone(document) as unknown as {
+      nodes: {
+        assembly: {
+          instances: { configuration: { mode: string; id?: string } }[];
+        };
+      };
+    };
+    named.nodes.assembly.instances[0]!.configuration = {
+      mode: "named",
+      id: "configured",
+    };
+    const namedReport = await reportValue(
+      hashDesignFeaturesV2(named as unknown as DesignDocumentV7),
+    );
+    const namedDependency =
+      entryFor(namedReport, "assembly").contextualDependencies[0]!;
+    expect(namedDependency).toEqual({
+      node: "subassembly",
+      kind: "assembly",
+      configurationId: "configured",
+      featureHash: hashFor(configured, "subassembly"),
+    });
+    expect(entryFor(namedReport, "subassembly").dependencies).toEqual([
+      "part",
+    ]);
+    expect(entryFor(configured, "subassembly").dependencies).toEqual([]);
+
+    const explicitConfigured = clone(document) as unknown as {
+      nodes: {
+        assembly: {
+          instances: { configuration: { mode: string; id?: string } }[];
+        };
+      };
+    };
+    explicitConfigured.nodes.assembly.instances[0]!.configuration = {
+      mode: "named",
+      id: "configured",
+    };
+    const explicitConfiguredReport = await reportValue(
+      hashDesignFeaturesV2(
+        explicitConfigured as unknown as DesignDocumentV7,
+        { configuration: "configured" },
+      ),
+    );
+    expect(hashFor(explicitConfiguredReport, "assembly")).toBe(
+      hashFor(configured, "assembly"),
+    );
+    expect(
+      entryFor(configured, "assembly").contextualDependencies[0],
+    ).toMatchObject({
+      configurationId: "configured",
+      featureHash: hashFor(configured, "subassembly"),
+    });
+
+    expect(namedReport.nodes).toHaveLength(base.nodes.length);
+    const expandedLimit = await hashDesignFeaturesV2(
+      named as unknown as DesignDocumentV7,
+      { limits: { maxFeatureNodes: base.nodes.length } },
+    );
+    expect(expandedLimit.ok).toBe(false);
+    if (!expandedLimit.ok) {
+      expect(expandedLimit.diagnostics[0]?.details).toMatchObject({
+        resource: "maxFeatureNodes",
+        actual: base.nodes.length + 1,
+      });
+    }
   });
 
   it("hashes only consumed persistent evidence and normalizes variant order", async () => {
@@ -834,6 +968,17 @@ describe("document-v7 feature hashes protocol v2", () => {
         resource: "maxCanonicalBytes",
       });
     }
+    const topologyLimit = await hashDesignFeaturesV2(document, {
+      limits: { maxTopologyWork: 0 },
+    });
+    expect(topologyLimit.ok).toBe(false);
+    if (!topologyLimit.ok) {
+      expect(topologyLimit.diagnostics[0]?.details).toMatchObject({
+        resource: "maxTopologyWork",
+        limit: 0,
+        actual: 1,
+      });
+    }
 
     const controller = new AbortController();
     controller.abort();
@@ -902,7 +1047,7 @@ describe("document-v7 feature hashes protocol v2", () => {
     }
   });
 
-  it("uses captured encoding and cryptographic intrinsics after global mutation", async () => {
+  it("fails closed when encoding or cryptographic intrinsics mutate", async () => {
     const document = comprehensiveDocument();
     const baseline = await reportValue(hashDesignFeaturesV2(document));
     const subtlePrototype = Object.getPrototypeOf(
@@ -921,6 +1066,7 @@ describe("document-v7 feature hashes protocol v2", () => {
     );
     expect(originalDigest?.value).toBeTypeOf("function");
     expect(originalEncode?.value).toBeTypeOf("function");
+    let result: CadResult<DesignFeatureHashReportV2>;
     try {
       Object.defineProperty(subtlePrototype, "digest", {
         ...originalDigest,
@@ -930,14 +1076,266 @@ describe("document-v7 feature hashes protocol v2", () => {
         ...originalEncode,
         value: () => new Uint8Array([0]),
       });
-
-      expect(await reportValue(hashDesignFeaturesV2(document))).toEqual(
-        baseline,
-      );
+      result = await hashDesignFeaturesV2(document);
     } finally {
       Object.defineProperty(subtlePrototype, "digest", originalDigest!);
       Object.defineProperty(encoderPrototype, "encode", originalEncode!);
     }
+    expectRealmFailure(result!);
+    expect(await reportValue(hashDesignFeaturesV2(document))).toEqual(
+      baseline,
+    );
+  });
+
+  it("rejects critical realm mutations at entry and across digest awaits", async () => {
+    const document = comprehensiveDocument();
+    const baseline = await reportValue(hashDesignFeaturesV2(document));
+    const probes: readonly {
+      readonly label: string;
+      readonly target: object;
+      readonly key: string;
+      readonly replacement: (...arguments_: unknown[]) => unknown;
+    }[] = [
+      {
+        label: "Object.entries",
+        target: Object,
+        key: "entries",
+        replacement: () => [],
+      },
+      {
+        label: "Object.fromEntries",
+        target: Object,
+        key: "fromEntries",
+        replacement: () => Object.create(null),
+      },
+      {
+        label: "Object.hasOwn",
+        target: Object,
+        key: "hasOwn",
+        replacement: () => false,
+      },
+      {
+        label: "Map.prototype.get",
+        target: Map.prototype,
+        key: "get",
+        replacement: () => undefined,
+      },
+      {
+        label: "Set.prototype.add",
+        target: Set.prototype,
+        key: "add",
+        replacement: function (this: Set<unknown>) {
+          return this;
+        },
+      },
+      {
+        label: "Array.prototype.map",
+        target: Array.prototype,
+        key: "map",
+        replacement: () => [],
+      },
+      {
+        label: "Object.keys",
+        target: Object,
+        key: "keys",
+        replacement: () => [],
+      },
+    ];
+    for (const probe of probes) {
+      const original = Object.getOwnPropertyDescriptor(
+        probe.target,
+        probe.key,
+      );
+      expect(original?.value, probe.label).toBeTypeOf("function");
+      let result: CadResult<DesignFeatureHashReportV2>;
+      try {
+        Object.defineProperty(probe.target, probe.key, {
+          ...original,
+          value: probe.replacement,
+        });
+        result = await hashDesignFeaturesV2(document);
+      } finally {
+        Object.defineProperty(probe.target, probe.key, original!);
+      }
+      expectRealmFailure(result!);
+    }
+
+    const originalKeys = Object.getOwnPropertyDescriptor(Object, "keys");
+    const pending = hashDesignFeaturesV2(document);
+    let inFlightResult: CadResult<DesignFeatureHashReportV2>;
+    try {
+      Object.defineProperty(Object, "keys", {
+        ...originalKeys,
+        value: () => [],
+      });
+      inFlightResult = await pending;
+    } finally {
+      Object.defineProperty(Object, "keys", originalKeys!);
+    }
+    expectRealmFailure(inFlightResult!);
+    expect(await reportValue(hashDesignFeaturesV2(document))).toEqual(
+      baseline,
+    );
+  });
+
+  it("pins the protocol-v2 context and feature-family vector matrix", async () => {
+    const document = comprehensiveDocument();
+    const base = await reportValue(hashDesignFeaturesV2(document));
+    const configured = await reportValue(
+      hashDesignFeaturesV2(document, { configuration: "configured" }),
+    );
+    const importedChanged = await reportValue(
+      hashDesignFeaturesV2(
+        mutateResource(document, "importedStep", (resource) => {
+          resource.digest = `sha256:${"a".repeat(64)}`;
+        }),
+      ),
+    );
+    const externalChanged = await reportValue(
+      hashDesignFeaturesV2(
+        mutateResource(document, "externalDocument", (resource) => {
+          resource.metadata = { revision: 4 };
+        }),
+      ),
+    );
+    const topologyChangedDocument = clone(document) as unknown as {
+      topologyReferences: {
+        storedEdge: {
+          variants: PersistentTopologyReference<"edge">[];
+        };
+      };
+    };
+    topologyChangedDocument.topologyReferences.storedEdge.variants.push(
+      edgeReference("feature-hash-v2/vectors@2"),
+    );
+    const topologyChanged = await reportValue(
+      hashDesignFeaturesV2(
+        topologyChangedDocument as unknown as DesignDocumentV7,
+      ),
+    );
+    const bodySetChangedDocument = clone(document) as unknown as {
+      nodes: {
+        bodySet: {
+          bodies: { metadata?: Readonly<Record<string, unknown>> }[];
+        };
+      };
+    };
+    bodySetChangedDocument.nodes.bodySet.bodies[0]!.metadata = {
+      manufacturing: "cast",
+    };
+    const bodySetChanged = await reportValue(
+      hashDesignFeaturesV2(
+        bodySetChangedDocument as unknown as DesignDocumentV7,
+      ),
+    );
+    const namedDocument = clone(document) as unknown as {
+      nodes: {
+        assembly: {
+          instances: { configuration: { mode: string; id?: string } }[];
+        };
+      };
+    };
+    namedDocument.nodes.assembly.instances[0]!.configuration = {
+      mode: "named",
+      id: "configured",
+    };
+    const named = await reportValue(
+      hashDesignFeaturesV2(namedDocument as unknown as DesignDocumentV7),
+    );
+
+    const vectors = {
+      contexts: {
+        baseBox: hashFor(base, "box"),
+        configuredBox: hashFor(configured, "box"),
+        basePart: hashFor(base, "part"),
+        configuredPart: hashFor(configured, "part"),
+        namedChild:
+          entryFor(named, "assembly").contextualDependencies[0]!.featureHash,
+      },
+      resources: {
+        externalBase: hashFor(base, "assembly"),
+        externalChanged: hashFor(externalChanged, "assembly"),
+      },
+      topology: {
+        base: hashFor(base, "fillet"),
+        changed: hashFor(topologyChanged, "fillet"),
+      },
+      importedBody: {
+        base: hashFor(base, "importedBody"),
+        changed: hashFor(importedChanged, "importedBody"),
+      },
+      bodySet: {
+        base: hashFor(base, "bodySet"),
+        changed: hashFor(bodySetChanged, "bodySet"),
+      },
+      assembly: {
+        base: hashFor(base, "assembly"),
+        configured: hashFor(configured, "assembly"),
+        named: hashFor(named, "assembly"),
+      },
+      comprehensiveOutputs: Object.fromEntries(
+        base.outputs.map((output) => [output.name, output.featureHash]),
+      ),
+    };
+
+    expect(vectors).toEqual({
+      contexts: {
+        baseBox:
+          "invariantcad:feature:v2:sha256:a6dcff003797ade7ee5aa1603dd1b6bd6c11c753524395503ae10b7b0e0d4838",
+        configuredBox:
+          "invariantcad:feature:v2:sha256:929d52bf4720bc7aae264d49c36bbaabcf2c73ca6ece7b2bc10ebdb366144286",
+        basePart:
+          "invariantcad:feature:v2:sha256:2bf63d80f6c859615f8e3298857273ffeb705a0d86c49c9eebe476edfc0f5539",
+        configuredPart:
+          "invariantcad:feature:v2:sha256:69e970c82b8aa99a1de6ecf2ae64b1679ffaab537aa64d505a77cfc430a16225",
+        namedChild:
+          "invariantcad:feature:v2:sha256:dd8335debfd95d1b1ee9a15a5f90c34ebe17ba14913e475a82600bf69a01dfb0",
+      },
+      resources: {
+        externalBase:
+          "invariantcad:feature:v2:sha256:4fcb1a0e35eaae01d57c539244667dd16df0f7f793255339a50ed617fdd89f58",
+        externalChanged:
+          "invariantcad:feature:v2:sha256:0e3384d2e336c9b690684ada02c6b401744e932a65eb012d611c0822acd36869",
+      },
+      topology: {
+        base:
+          "invariantcad:feature:v2:sha256:283971223bc5ccaf08d7f6e0589b3dc14c10fb86f83b5b525ef1534b9caf1086",
+        changed:
+          "invariantcad:feature:v2:sha256:4f47371ec4693336355f62f34b22873341b72ff611d06251ed216b91bca88e41",
+      },
+      importedBody: {
+        base:
+          "invariantcad:feature:v2:sha256:e3e27ac5c31904b9ac8166f24acbc43b3584e2afcb8b55447e7c854cc144daf3",
+        changed:
+          "invariantcad:feature:v2:sha256:11db1381bc459f1d2f094cee3303fb67475daf57fcd95cfe84a7fc6bfc0195f4",
+      },
+      bodySet: {
+        base:
+          "invariantcad:feature:v2:sha256:0ca26c045c1cf27c3d6c6ffd5b2904636e91108f01be0e241a892097aa1ad009",
+        changed:
+          "invariantcad:feature:v2:sha256:5bbfba0f241c73c2e50c281a1b8a8b5a198da8b700aa00a28ebd1e304f8f574a",
+      },
+      assembly: {
+        base:
+          "invariantcad:feature:v2:sha256:4fcb1a0e35eaae01d57c539244667dd16df0f7f793255339a50ed617fdd89f58",
+        configured:
+          "invariantcad:feature:v2:sha256:558026a1d1316875e48fb6d4a7bc94a9e1177231bb731d886d56bccb50697671",
+        named:
+          "invariantcad:feature:v2:sha256:61f8a013acd61846a083075615eec932536c1957b59683bec32069a144b9eee7",
+      },
+      comprehensiveOutputs: {
+        assembly:
+          "invariantcad:feature:v2:sha256:4fcb1a0e35eaae01d57c539244667dd16df0f7f793255339a50ed617fdd89f58",
+        bodySet:
+          "invariantcad:feature:v2:sha256:0ca26c045c1cf27c3d6c6ffd5b2904636e91108f01be0e241a892097aa1ad009",
+        imported:
+          "invariantcad:feature:v2:sha256:e3e27ac5c31904b9ac8166f24acbc43b3584e2afcb8b55447e7c854cc144daf3",
+        part:
+          "invariantcad:feature:v2:sha256:2bf63d80f6c859615f8e3298857273ffeb705a0d86c49c9eebe476edfc0f5539",
+        solid:
+          "invariantcad:feature:v2:sha256:a6dcff003797ade7ee5aa1603dd1b6bd6c11c753524395503ae10b7b0e0d4838",
+      },
+    });
   });
 
   it("preserves the protocol-v1 frozen vector and keeps v2 separately branded", async () => {
