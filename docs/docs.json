@@ -110,7 +110,8 @@
               "index",
               "get-started/installation",
               "get-started/quickstart",
-              "get-started/core-concepts"
+              "get-started/core-concepts",
+              "project/product-scope"
             ]
           },
           {
@@ -195,7 +196,8 @@
             "group": "Architecture",
             "icon": "network",
             "pages": [
-              "architecture"
+              "architecture",
+              "engineering/shape-artifact-cache-research"
             ]
           },
           {

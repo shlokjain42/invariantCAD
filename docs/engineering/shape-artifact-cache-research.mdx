@@ -1,0 +1,413 @@
+---
+title: "Shape artifact and cache research"
+description: "Repository-private OCCT artifact formats, evaluator-cache evidence, security boundaries, non-claims, and promotion gates."
+icon: "flask-conical"
+---
+
+# Shape artifact and cache research
+
+This page records a repository-private engineering program. It is deliberately
+separate from the [product roadmap](/roadmap) because the work is deep runtime
+infrastructure, not a public modeling capability.
+
+<Warning>
+  No shipped backend advertises `shapeArtifacts`. No public evaluator option
+  enables shape reuse. The direct-box cache binding and owned OCCT codec
+  described here cannot be used by ordinary `invariantcad` package consumers.
+</Warning>
+
+## Why this work exists
+
+Incremental CAD evaluation eventually needs to reuse expensive geometry across
+runs without changing any evaluator-visible behavior. Native shapes cannot be
+treated as generic byte blobs: a useful record must preserve the runtime and
+codec identity, geometry, topology graph, wrapper semantics, history, analytic
+overrides, and fresh ownership expected by downstream evaluation.
+
+The research program asks a narrower question:
+
+> Can one exact, bounded, independently checked runtime encode a solid, destroy
+> the producer, decode in a fresh compatible consumer, and reproduce every
+> admitted evaluator semantic without sharing native ownership?
+
+Passing a finite test corpus provides evidence for that question. It does not
+certify arbitrary compatibility or authorize production caching.
+
+## Public foundations
+
+The 0.1.0 package contains general protocol foundations:
+
+- Evaluator/kernel/artifact/solver-bound solid cache keys.
+- Fail-closed solver fingerprints and all-or-nothing optional codec
+  capabilities.
+- Integrity-checked detached records and explicit encode/decode ownership.
+- Bounded cancellable stores, aggregate sessions, and a copying in-memory
+  reference store.
+- A framework-neutral `invariantcad/conformance` audit boundary.
+- Semantic-observation protocol v1, which creates a bounded canonical
+  evaluator-semantic projection for a declared probe plan.
+
+These APIs can audit a candidate or represent a record. They do not confer
+certification, advertise a backend codec, or make the evaluator consume a
+cross-run cache.
+
+## Owned OCCT facade boundary
+
+The repository can reproducibly build an InvariantCAD-owned OCCT facade. The
+bundle is not published with `invariantcad` and is never an implicit download.
+
+The current facade ABI/bundle is 0.9:
+
+- ABI 0.4 added ordered multi-input Boolean operations with complete
+  face/edge/vertex evolution records.
+- ABI 0.5 added exact fillet and chamfer evolution.
+- ABI 0.6 added exact shell and whole-solid offset evolution.
+- ABI 0.7 added bounded shape-artifact transport and a capped chunked
+  BinTools-v4 writer.
+- ABI 0.8 added a fixed 128 MiB cumulative native allocation-request budget.
+- ABI 0.9 added an exact owned-profile BinTools-v4 structural preflight before
+  OCCT deserialization.
+
+ABI/bundle numbers version this private native adapter, not the npm product or
+document grammar.
+
+The reproducible bundle includes checksums, provenance, a CycloneDX SBOM,
+source and relinking information, notices, licenses, and the reviewed patch
+series. Public distribution remains deferred pending external legal, security,
+provenance, and release review plus a durable publication channel.
+
+## Candidate artifact envelope
+
+The repository-private OCCT candidate currently uses artifact format v3. It
+contains:
+
+1. The bounded native binary BREP payload.
+2. Canonical topology and wrapper-state sidecar format v2.
+3. Native identity manifest format v1.
+
+Formats v1 and v2 remain only as negative rejection fixtures for the v3
+consumer.
+
+### Topology and wrapper sidecar v2
+
+The sidecar carries canonical topology, adjacency, native orientation, lineage,
+history, analytic overrides, and wrapper-visible state. Its fixed 48-byte
+big-endian header declares exact totals before allocation.
+
+Encoding counts before allocating exact sections. Decoding:
+
+- Preflights every declared total and exact envelope length.
+- Requires closed tags, masks, and canonical finite binary64 values.
+- Enforces sorted unique references and reciprocal topology.
+- Uses bounded UTF-16BE string accounting.
+- Creates fresh evaluation-scoped topology keys.
+- Commits decoded state only after native verification succeeds.
+- Requires exact sidecar and identity-section EOF.
+
+Stock `occt-wasm` may tolerate suffix bytes after a valid native BREP archive.
+Strict EOF inside the BREP section is therefore an owned-ABI-0.7+ guarantee,
+not a stock-runtime guarantee.
+
+### Native identity manifest v1
+
+The identity section binds the serialized native structure to the sidecar
+instead of assuming that fresh topology enumeration is stable.
+
+For each unique located solid, shell, wire, face, edge, and vertex, it records
+the zero-based direct-child path to that shape's first `IsSame` occurrence. It
+also records the complete rooted pre-order occurrence stream.
+
+Every 12-byte occurrence record contains:
+
+- Shape type.
+- Composed orientation.
+- Direct-child count.
+- Canonical `IsSame` class index for the six indexed shape kinds.
+
+Compound, compsolid, and generic-shape nodes are structurally recorded but are
+not public indexed identities. Producer paths are sorted canonically per kind;
+the same permutation is applied to topology, orientations, and occurrence
+class indices.
+
+The consumer maps the serialized paths onto its fresh raw enumeration and
+rejects substitutions in:
+
+- Occurrence multiplicity or order.
+- Shape type or composed orientation.
+- Direct-child count.
+- `IsSame` class membership.
+- Geometry, incidence, or rooted structure.
+
+Only after those checks does it restore semantic state onto fresh keys.
+
+### Identity and structure ceilings
+
+Native identity v1 has a 64-byte header and fixed ceilings:
+
+| Resource | Ceiling |
+| --- | ---: |
+| Unique paths | `100,000` |
+| Aggregate first-path components | `1,000,000` |
+| Path depth | `64` |
+| Direct-child index | `999,999` |
+| Occurrence records and traversal visits | `100,000` |
+| `IsSame` comparisons | `1,000,000` |
+
+The compatibility fingerprint binds these limits, the native structure
+contract, artifact/identity format versions, exact runtime inputs, and owned
+native materialization declarations.
+
+### Native preflight and allocation controls
+
+ABI 0.9 parses the exact owned BinTools-v4 profile before invoking OCCT. It
+checks:
+
+- A maximum of `1,000,000` structural work units.
+- Maximum nesting depth `64`.
+- Location-power magnitude at most `1,000,000`.
+- Canonical locations and the complete backward TShape
+  hierarchy/reachability.
+- Bounded TShape metadata charged to the native request quota.
+- Conservative geometry, representation, expanded-topology, wire, and face
+  envelopes.
+
+The report exposes work, depth, location-power, consumed-byte, completion/code,
+deserialization-start, native requested-byte, allocation-call, and denial
+telemetry.
+
+The cumulative 128 MiB request budget is not proof of peak or live memory.
+Reviewed throwing C++ denial paths can return a report. Direct C allocator
+denial is fail-stop and requires discarding the disposable worker or process.
+
+## Cache keys and records
+
+Current hardening rejects non-canonical UTF-8 and bounds:
+
+| Field | UTF-8 ceiling |
+| --- | ---: |
+| Node ID | `1,024` bytes |
+| Runtime/kernel identity | `256` bytes |
+| Solver or codec fingerprint | `2,048` bytes |
+| Aggregate canonical key material | `16,384` bytes |
+
+Record creation snapshots non-shared bytes before its first asynchronous
+boundary. Shared backing is rejected. The private atomic encode/write
+transaction gives the codec the exact remaining budget, accounts work
+conservatively, hashes once, and publishes one record.
+
+Record SHA-256 detects corruption or accidental misrouting. It does not
+authenticate records against a trusted store that can replace both payload and
+digest.
+
+## Direct-box evaluator experiment
+
+An unexported explicit-`trusted` binding connects the private candidate to
+evaluator cache sessions for one intentionally narrow case: a requested solid
+output whose referenced feature is directly a `box`.
+
+The binding:
+
+- Snapshots the document and effective evaluation options.
+- Validates codec capability and dimensions before store access.
+- Creates a fresh session per evaluation.
+- Rejects overlapping evaluation/disposal while active.
+- Preserves ordinary status, measurements, topology, empty-result behavior,
+  diagnostics, ownership, and cleanup on cold and warm paths.
+- Models, encodes, and writes on a miss.
+- Decodes a fresh owner on a hit.
+- Deletes and recomputes read-write corruption.
+- Fails strictly on read-only poison, failed eviction, store/codec/write
+  failure, and cancellation.
+- Bypasses the optimization and models normally when key metadata is too large.
+
+This binding is box-only. Transforms and dependency-bearing features remain
+uncached because skipping their subtrees without a versioned diagnostic and
+topology-policy transcript could make warm evaluation observably different. It
+does not alter the public evaluator options, geometry-kernel contract, root
+exports, or capability report.
+
+## Conformance and isolation evidence
+
+The public conformance harness checks candidate codecs against:
+
+- Exact runtime identity and tagged semantic witnesses.
+- Golden-first decode fixtures.
+- Fresh producer and consumer instances.
+- Both producer/consumer disposal orders.
+- Ownership and mutation isolation.
+- Malformed input and byte ceilings.
+- Pre-abort behavior.
+- Round-trip and downstream operation probes.
+
+The current pinned asymmetric-box v3 fixture is `13,735` bytes. Its tagged
+fixture witness is:
+
+```text
+invariantcad:kernel-shape-artifact-fixture:v1:sha256:8ecfa6ac89142f794c2d55a78e7121ce0805b8abcb5aa64230e7722d99c8c2be
+```
+
+Its semantic witness is:
+
+```text
+invariantcad:kernel-shape-semantic:v1:sha256:40ae684e4a2fad512f54e1f1be4443acf7faf2f34fc6b281c7b816d8d3366cb2
+```
+
+A dedicated duplicate-occurrence regression replaces one occurrence with two
+uses of the same located TShape and requires transactional rejection.
+
+### Browser worker evidence
+
+The Chromium production bundle transfers a copy of the committed fixture into
+a stock-runtime module worker, checks retained-input immutability and transfer
+detachment, and returns scalar evidence only after shape/kernel cleanup.
+
+It also evaluates a real stock-OCCT box through the private trusted-store
+binding:
+
+- Cold evaluation records `miss,write` and one native box call.
+- Warm evaluation records `hit`, detached evidence parity, and no additional
+  box call.
+
+Deadline and post-kernel-start abort cases complete a native box and then stall
+without yielding. The host requests worker termination, and a fresh worker must
+reproduce the successful evaluator's detached evidence.
+
+Browser `Worker.terminate()` is not awaitable. The gate proves a termination
+request and fresh-worker recovery, not observed worker exit.
+
+### Fresh Node process evidence
+
+`pnpm test:occt-artifact-process` runs the owned candidate in one-shot child
+processes and is part of `test:occt-facade-bundle`.
+
+Each child:
+
+- Verifies packaged `metadata/release.json` against the independently
+  maintained reviewed pin.
+- Imports the exact verified JavaScript bytes through the Node module hook.
+- Receives a fresh verified WASM copy.
+- Emits successful evidence only after evaluated-design and evaluator cleanup.
+
+The gate rejects one-byte mutations in the manifest, JavaScript, or WASM before
+supplied JavaScript executes.
+
+Process protocol v3 also transfers one direct-box evaluator-cache record
+through the trusted parent:
+
+- Two independent fresh producers must emit byte-identical records and
+  evidence after `miss,write`.
+- A compatible fresh read-only consumer must hit, decode, perform zero native
+  box calls, and reproduce measurements and topology.
+- A different solver fingerprint must derive a different key, miss, and model
+  once without invoking either codec direction.
+- Tampered payload, forged key/metadata, hostile/shared views, post-start
+  abort, injected failure, and incomplete event prefixes are rejected and
+  followed by fresh-process recovery.
+
+The parent record transfer uses versioned magic, a little-endian 32-bit header
+length, a 32 KiB closed canonical-JSON header ceiling, fatal UTF-8, exact
+payload/EOF checks, key/integrity validation, SHA-256, and
+request-specific byte bounds.
+
+The trust boundary is explicitly `trusted-parent-mediated-record`. Record
+authentication remains false.
+
+## Runtime attestation boundary
+
+Public Node and browser runtime loaders verify an exact caller-supplied owned
+runtime pair:
+
+- Canonical release manifest against an independent trusted pin.
+- Exact JavaScript and WASM sizes and SHA-256 digests before JavaScript import.
+- Initialized facade marker before kernel creation.
+- A fresh verified WASM copy for every kernel.
+
+Node uses a process-global module hook without temporary executable files and
+requires worker permission under the Node Permission Model. Browser loading
+uses a revocable Blob module URL and needs a compatible `blob:` content
+security policy.
+
+The opaque matched-pair authority stays private to the evaluated InvariantCAD
+module instance. Cloning the visible attestation report does not recreate that
+authority.
+
+Runtime-pair verification says which bytes execute. It does not authenticate
+the declared build execution or publisher, and it does not protect against a
+trusted host, same-process hook chain, or same-UID process.
+
+## Explicit non-claims
+
+The current evidence does **not** establish:
+
+- Public or production evaluator caching.
+- General feature-subtree caching.
+- Compatibility certification for arbitrary inputs.
+- Operational cancellation for ordinary same-thread evaluation.
+- Live or peak native-memory proof.
+- A real OCCT trap recovery proof; the injected trap is an orchestration fault.
+- Authenticated build execution or publisher identity.
+- Protection against a trusted host or same-UID attacker.
+- Cross-edit topology identity.
+- Persistent assembly-occurrence identity.
+- Shared-TShape ancestry for distinct-location `IsSame` classes; stock
+  `occt-wasm` lacks `IsPartner`.
+- A reviewed cross-platform producer/consumer golden matrix.
+- Durable public identity for compounds, compsolids, or generic shape nodes.
+
+A killed realm cannot perform language-level cleanup. Process or worker
+destruction is the containment boundary. Ordinary public evaluation remains
+same-thread and cooperatively cancellable.
+
+## Promotion gates
+
+This research can return to active product development only after the modeling
+milestones justify incremental evaluation and all of these gates have owners:
+
+1. External legal, security, provenance, and release approval for a supported
+   owned-runtime distribution channel.
+2. A reviewed cross-platform owned-runtime golden matrix.
+3. A public worker/process isolation boundary wherever hard cancellation is
+   promised.
+4. Resource evidence that distinguishes cumulative allocation requests from
+   live and peak memory.
+5. A versioned diagnostic/topology-policy transcript so warm evaluation cannot
+   change observable behavior.
+6. Public configuration that keeps trusted-store and authentication claims
+   explicit.
+7. Dependency-bearing feature families with cold/warm parity, ownership,
+   corruption, cancellation, eviction, and concurrency gates.
+8. Published capability advertising only after all production requirements
+   pass.
+
+Until then, maintenance is limited to correctness, security, dependency, and
+release-toolchain changes.
+
+## Manifold deferral
+
+A Manifold artifact codec remains deferred. Reconstructing a translated
+`1 × 2 × 3` box from the lockfile-tested public Float32 mesh changes X bounds
+from `[-0.4, 0.6]` to approximately
+`[-0.4000000059604645, 0.6000000238418579]` and volume from `6` to
+approximately `6.000000178813934`.
+
+Restoring a tolerance does not restore the exact evaluator-visible geometry.
+Manifold artifacts require a backend-owned codec that preserves every admitted
+semantic rather than round-tripping through a lossy public mesh.
+
+## Reproducing the evidence
+
+Check the committed candidate fixture:
+
+```bash
+pnpm artifact:fixture:occt -- --check --version v3
+```
+
+Run the owned-bundle and process evidence after producing the private runtime
+bundle:
+
+```bash
+pnpm test:occt-facade-bundle
+```
+
+These commands reproduce repository evidence. Their success does not change
+the public capability report or the non-claims above.

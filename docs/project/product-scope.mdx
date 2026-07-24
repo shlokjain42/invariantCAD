@@ -1,0 +1,164 @@
+---
+title: "Product scope"
+description: "What InvariantCAD means by comprehensive mechanical CAD-as-code, how the platform is divided, and what is deliberately outside the core."
+icon: "target"
+---
+
+# Product scope
+
+InvariantCAD is a deterministic, general-purpose mechanical CAD-as-code
+platform for TypeScript.
+
+“Comprehensive” does not mean that one JavaScript file reimplements every
+geometry kernel, numerical solver, translator, renderer, and manufacturing
+system. It means that a TypeScript developer can express a complete mechanical
+design workflow through one coherent document and API ecosystem, with explicit
+semantics wherever an external engine performs specialized work.
+
+The [roadmap](/roadmap) sequences the work needed to reach that scope. The
+[support matrix](/reference/support-matrix) describes what is usable today.
+
+## The product promise
+
+InvariantCAD owns the durable design contract:
+
+- Type-safe authoring APIs and canonical, versioned documents.
+- Units, expressions, parameters, configurations, reusable components, and
+  product structure.
+- Deterministic validation, diagnostics, serialization, hashing, migration,
+  and change-impact behavior.
+- Explicit modeling intent and persistent topology references that remain
+  honest about missing or ambiguous identity.
+- Capabilities, conversion losses, cancellation, resource ceilings, ownership,
+  and cleanup across kernels and other engines.
+- Reproducible provenance for imported resources, solver inputs, analysis
+  inputs, manufacturing outputs, and exported files.
+- Conformance suites that test an integration at its real boundary.
+
+Specialized engines may own the numerical implementation. They do not get to
+silently redefine the document, discard diagnostics, invent topology identity,
+or bypass the lifecycle contract.
+
+## What complete mechanical CAD covers
+
+The target product contains these connected workflows:
+
+| Domain | Required product outcome |
+| --- | --- |
+| Parametric authoring | Typed parameters, expressions, configurations, feature history, suppression, reusable modules, and deterministic rebuilds |
+| Sketching | Industrial 2D constraint solving, construction and projected geometry, common analytic and spline curves, editing operations, and actionable constraint diagnostics |
+| Part modeling | Exact primitives, profiles, pads/pockets, holes, patterns, treatments, sweeps, lofts, shells, multibody operations, and stable downstream selection |
+| Surface and direct modeling | Curve/surface construction, trimming, sewing, healing, thickening, imported-body repair, face editing, and explicit validity/tolerance results |
+| Product structure | External components, occurrence identity, configurations, materials, properties, fixed and solved assemblies, BOMs, and effectivity |
+| Assembly mechanics | Mates, joints, degrees of freedom, limits, motion, clearance, interference, and collision evidence |
+| Interchange | Exact part and assembly exchange, mesh exchange, drawings, units, names, colors, metadata, resources, healing policy, and reported semantic losses |
+| Visualization | Geometry and topology inspection, selection, feature/assembly trees, measurements, sections, configurations, diagnostics, and scalable ownership |
+| Drawings and PMI | Associative views, dimensions, tolerances, datums, GD&T, notes, tables, revisions, and deterministic document output |
+| Sheet metal | Bend-aware modeling, reliefs, hems/seams, unfold/refold, bend policy, validated flat patterns, and manufacturing output |
+| Manufacturing | DFM and additive checks plus typed CAM setups, tools, operations, toolpaths, simulation, and postprocessor integrations |
+| Engineering analysis | Solver-neutral materials, loads, constraints, contacts, meshes, cases, result provenance, queries, comparisons, and maintained solver adapters |
+| Automation | Headless Node/browser/worker execution, batch configurations, CLI workflows, cancellation, resource limits, and reproducible builds |
+| Extensibility | Versioned kernels, solvers, translators, renderers, analysis engines, CAM strategies, and postprocessors with capability and lifecycle conformance |
+
+These domains share the same identity, units, configuration, diagnostics,
+resource, and ownership foundations. They are not independent mini-libraries
+with incompatible object models.
+
+## Core and first-party packages
+
+InvariantCAD is one platform, not necessarily one installation artifact.
+Packages split only where a real runtime, licensing, environment, or domain
+boundary justifies it.
+
+The lightweight core should contain:
+
+- Canonical document types and migrations.
+- Type-safe builders and queries.
+- Expressions, units, configurations, and product structure.
+- Validation, diagnostics, serialization, hashing, and impact analysis.
+- Kernel/solver/translator/viewer adapter contracts.
+- Backend-neutral result, topology, resource, and lifecycle semantics.
+
+First-party packages may contain:
+
+- Heavy geometry runtimes such as OpenCascade.
+- Mesh/preview kernels.
+- Industrial sketch and assembly solver integrations.
+- Viewer rendering adapters and framework bindings.
+- Drawing, sheet-metal, CAM, and CAE domain APIs.
+- File translators whose runtime or license should not burden every install.
+- Plugin development and conformance tooling.
+
+The umbrella `invariantcad` package remains the normal entry point. A split must
+reduce a concrete installation or compatibility cost; package count is not a
+goal.
+
+## Exact, approximate, and unsupported behavior
+
+InvariantCAD distinguishes three outcomes:
+
+1. **Exact:** the selected backend preserves the advertised analytic or B-Rep
+   semantics and required topology/history behavior.
+2. **Approximate or lossy:** the operation is intentionally converted, meshed,
+   tessellated, simplified, or otherwise changed, and the result reports that
+   loss.
+3. **Unsupported:** the runtime refuses the operation with a structured
+   capability diagnostic.
+
+The platform will not convert an exact operation into an approximate one
+silently. It will not claim feature parity merely because two backends can
+produce visually similar triangles.
+
+## What the core does not reimplement
+
+The project integrates established engines when reproducing them would reduce
+quality:
+
+- OpenCascade or another industrial boundary-representation kernel.
+- Industrial sketch and assembly constraint solvers.
+- General finite-element, computational-fluid-dynamics, or multiphysics
+  solvers.
+- Production CAM simulation kernels and machine-specific postprocessing
+  ecosystems.
+- Proprietary exchange translators without a redistributable SDK.
+- Browser rendering engines that already provide maintained GPU abstraction.
+
+InvariantCAD owns the typed input/output documents, adapter boundaries,
+provenance, diagnostics, cancellation, limits, and conformance. An adapter is
+not advertised until a maintained implementation passes those contracts.
+
+## Explicit non-goals
+
+The following are outside the core open-source mechanical CAD library:
+
+- Hosted accounts, billing, cloud execution, storage, or collaboration.
+- PDM/PLM servers, approval workflows, and organization administration.
+- A proprietary file-format compatibility claim without the necessary licensed
+  translator.
+- BIM, electronic-design automation, PCB, GIS, animation/DCC, or architectural
+  semantics presented as if they were ordinary mechanical CAD.
+- A renderer dependency embedded in canonical design documents.
+- Durable identity derived from native or tessellation array order.
+- Automatic repair that changes geometry without a bounded policy and a
+  diagnostic record.
+- Probabilistic validation, hidden AI corrections, or generated geometry that
+  bypasses the same deterministic contracts as hand-authored geometry.
+- Speculative plugin APIs created before a real first-party implementation
+  proves the extension boundary.
+
+Separate projects may build these systems on top of InvariantCAD. They are not
+release blockers for the library.
+
+## The 1.0 boundary
+
+Version 1.0 means a stable, production-grade general mechanical CAD platform:
+exact part and multibody modeling, surfacing and repair, solved assemblies,
+robust topology, exact interchange, a production viewer, drawings/PMI, and
+sheet metal, supported by documented runtime and performance boundaries.
+
+It does not mean that every niche CAD vertical, solver, proprietary format,
+machine controller, or CAE discipline is implemented. Manufacturing and
+analysis must have stable typed contracts and credible maintained integrations;
+their ecosystem breadth continues after 1.0.
+
+No release date is assigned before the milestone exit gates are met.
