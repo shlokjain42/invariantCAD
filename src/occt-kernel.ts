@@ -404,7 +404,7 @@ function occtArtifactCandidateCompatibilityFingerprint(
     }
     return [
       "invariantcad-occt-shape-candidate@3",
-      "occt-wasm@3.7.0",
+      "occt-wasm@3.8.0",
       `runtime=${runtime}`,
       ...(runtimePairIdentity === undefined
         ? []
@@ -964,7 +964,7 @@ class OcctKernel implements GeometryKernel {
         ? undefined
         : [
             "invariantcad-topology-descriptor@6",
-            "occt-wasm@3.7.0",
+            "occt-wasm@3.8.0",
             `runtime=${topologySignatureRuntime}`,
             `modelingTolerance=${this.modelingTolerance}`,
           ].join(";");
@@ -975,7 +975,7 @@ class OcctKernel implements GeometryKernel {
         ? undefined
         : [
             `invariantcad-topology-descriptor@${legacyTopologyDescriptorVersion}`,
-            "occt-wasm@3.7.0",
+            "occt-wasm@3.8.0",
             `runtime=${topologySignatureRuntime}`,
             `modelingTolerance=${this.modelingTolerance}`,
           ].join(";");

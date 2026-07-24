@@ -1,30 +1,16 @@
 diff --git a/facade/include/occt_kernel.h b/facade/include/occt_kernel.h
-index 4656d10..ff40fe7 100644
+index c54d514..4950bd3 100644
 --- a/facade/include/occt_kernel.h
 +++ b/facade/include/occt_kernel.h
-@@ -15,12 +15,18 @@
- #include <TDocStd_Document.hxx>
- #include <TopoDS_Shape.hxx>
- 
+@@ -17,0 +18,4 @@
 +namespace emscripten {
 +class val;
 +}
 +
- class OcctKernel;
- struct InvariantCadDraftTransferState;
- struct InvariantCadBooleanTransferState;
- struct InvariantCadEdgeTreatmentTransferState;
- struct InvariantCadSolidOffsetTransferState;
- struct InvariantCadPipeShellTransferState;
+@@ -23,0 +28,2 @@ struct InvariantCadPipeShellTransferState;
 +struct InvariantCadArtifactWriteState;
 +struct InvariantCadArtifactReadTransferState;
- 
- /// Evaluation-scoped topology kinds used by the indexed evolution ABI.
- /// These numeric values are stable across facade ABI 0.2 and later.
-@@ -377,6 +383,83 @@ struct InvariantCadSolidOffsetReport {
-         double tolerance, int maxHistoryRecords);
- };
- 
+@@ -379,0 +386,77 @@ struct InvariantCadSolidOffsetReport {
 +/// Bounded binary-BREP serialization result used by facade ABI 0.7.
 +/// The report owns chunked native bytes whose aggregate payload never exceeds
 +/// maxOutputBytes. copyBytes() creates a detached JavaScript Uint8Array only
@@ -102,13 +88,7 @@ index 4656d10..ff40fe7 100644
 +        int maxInputBytes, int maxTopologyItems);
 +};
 +
- /// Transactional result of the controlled InvariantCAD PipeShell facade.
- /// A successful untaken report owns its result outside the kernel arena.
- struct InvariantCadPipeShellReport {
-@@ -445,6 +528,17 @@ InvariantCadSolidOffsetReport invariantcadSolidOffsetAtomic(
-     std::vector<uint32_t> openingFaceIds, double amount, int direction,
-     double tolerance, int maxHistoryRecords);
- 
+@@ -447,0 +531,11 @@ InvariantCadSolidOffsetReport invariantcadSolidOffsetAtomic(
 +/// Serializes one arena-owned shape through a native chunked sink that stops
 +/// before writing a byte beyond maxOutputBytes.
 +InvariantCadArtifactWriteReport invariantcadWriteArtifactBrep(
@@ -120,37 +100,19 @@ index 4656d10..ff40fe7 100644
 +    OcctKernel& kernel, const emscripten::val& input,
 +    int maxInputBytes, int maxTopologyItems);
 +
- /// Builds one corrected-Frenet, right-corner solid PipeShell with explicit
- /// native tolerances. The report exposes OCCT's measured surface error and
- /// retains the result outside the arena until a checked one-shot transfer.
-@@ -890,6 +984,7 @@ class OcctKernel {
-     friend struct InvariantCadEdgeTreatmentReport;
-     friend struct InvariantCadSolidOffsetReport;
-     friend struct InvariantCadPipeShellReport;
+@@ -893,0 +988 @@ class OcctKernel {
 +    friend struct InvariantCadArtifactReadReport;
-     friend InvariantCadDraftReport invariantcadDraftFacesAtomic(
-         OcctKernel& kernel, uint32_t shapeId, std::vector<uint32_t> faceIds, double angleRad,
-         double pullX, double pullY, double pullZ, double neutralOriginX, double neutralOriginY,
-@@ -908,6 +1003,11 @@ class OcctKernel {
-         OcctKernel& kernel, int operation, uint32_t inputId,
-         std::vector<uint32_t> openingFaceIds, double amount, int direction,
-         double tolerance, int maxHistoryRecords);
+@@ -911,0 +1007,5 @@ class OcctKernel {
 +    friend InvariantCadArtifactWriteReport invariantcadWriteArtifactBrep(
 +        OcctKernel& kernel, uint32_t shapeId, int maxOutputBytes);
 +    friend InvariantCadArtifactReadReport invariantcadReadArtifactBrep(
 +        OcctKernel& kernel, const emscripten::val& input,
 +        int maxInputBytes, int maxTopologyItems);
-     uint32_t store(const TopoDS_Shape& shape);
-     uint32_t invariantcadStoreTransferredShape(const TopoDS_Shape& shape);
-     const TopoDS_Shape& get(uint32_t id) const;
 diff --git a/facade/src/invariantcad_bindings.cpp b/facade/src/invariantcad_bindings.cpp
 index 5f2fc25..9c700b3 100644
 --- a/facade/src/invariantcad_bindings.cpp
 +++ b/facade/src/invariantcad_bindings.cpp
-@@ -196,6 +196,36 @@ EMSCRIPTEN_BINDINGS(invariantcad_facade) {
-         .function("topologyRecord", &InvariantCadSolidOffsetReport::topologyRecord)
-         .function("takeResultId", &InvariantCadSolidOffsetReport::takeResultId);
- 
+@@ -198,0 +199,30 @@ EMSCRIPTEN_BINDINGS(invariantcad_facade) {
 +    class_<InvariantCadArtifactWriteReport>("InvariantCadArtifactWriteReport")
 +        .property("ok", &InvariantCadArtifactWriteReport::getOk)
 +        .property("stage", &InvariantCadArtifactWriteReport::getStage)
@@ -181,53 +143,24 @@ index 5f2fc25..9c700b3 100644
 +        .function("transferCode", &InvariantCadArtifactReadReport::transferCode)
 +        .function("takeResultId", &InvariantCadArtifactReadReport::takeResultId);
 +
-     class_<InvariantCadPipeShellReport>("InvariantCadPipeShellReport")
-         .property("ok", &InvariantCadPipeShellReport::getOk)
-         .property("stage", &InvariantCadPipeShellReport::getStage)
-@@ -217,5 +247,7 @@ EMSCRIPTEN_BINDINGS(invariantcad_facade) {
-     function("invariantcadBooleanAtomic", &invariantcadBooleanAtomic);
-     function("invariantcadEdgeTreatmentAtomic", &invariantcadEdgeTreatmentAtomic);
-     function("invariantcadSolidOffsetAtomic", &invariantcadSolidOffsetAtomic);
+@@ -219,0 +250,2 @@ EMSCRIPTEN_BINDINGS(invariantcad_facade) {
 +    function("invariantcadWriteArtifactBrep", &invariantcadWriteArtifactBrep);
 +    function("invariantcadReadArtifactBrep", &invariantcadReadArtifactBrep);
-     function("invariantcadPipeShellSolid", &invariantcadPipeShellSolid);
- }
 diff --git a/facade/src/invariantcad_facade.cpp b/facade/src/invariantcad_facade.cpp
 index da79888..a3443e3 100644
 --- a/facade/src/invariantcad_facade.cpp
 +++ b/facade/src/invariantcad_facade.cpp
-@@ -6,6 +6,7 @@
- 
- #include "occt_kernel.h"
- 
+@@ -8,0 +9 @@
 +#include <BinTools.hxx>
- #include <BRepCheck_Analyzer.hxx>
- #include <BRepGProp.hxx>
- #include <BRepAlgoAPI_Common.hxx>
-@@ -30,15 +31,19 @@
- #include <TopTools_ShapeMapHasher.hxx>
- #include <TopoDS.hxx>
- #include <TopoDS_Iterator.hxx>
+@@ -32,0 +34 @@
 +#include <emscripten/bind.h>
- #include <algorithm>
- #include <cmath>
+@@ -34,0 +37 @@
 +#include <cstring>
- #include <gp.hxx>
- #include <gp_Dir.hxx>
- #include <gp_Pln.hxx>
- #include <gp_Pnt.hxx>
- #include <limits>
- #include <memory>
+@@ -40,0 +44 @@
 +#include <ostream>
- #include <set>
+@@ -41,0 +46 @@
 +#include <streambuf>
- #include <tuple>
- #include <stdexcept>
- #include <utility>
-@@ -85,14 +90,178 @@ struct InvariantCadPipeShellTransferState {
-     bool transferred = false;
- };
- 
+@@ -87,0 +93,11 @@ struct InvariantCadPipeShellTransferState {
 +struct InvariantCadArtifactWriteState {
 +    std::vector<std::vector<uint8_t>> chunks;
 +    size_t byteCount = 0;
@@ -239,17 +172,11 @@ index da79888..a3443e3 100644
 +    bool transferred = false;
 +};
 +
- namespace {
- 
- constexpr double kHalfPi = 1.57079632679489661923;
- constexpr int kTopologyHistoryVersion = 1;
+@@ -91,0 +108,3 @@ constexpr int kTopologyHistoryVersion = 1;
 +constexpr size_t kArtifactChunkBytes = 64U * 1024U;
 +constexpr char kArtifactArchiveHeader[] =
 +    "\nOpen CASCADE Topology V4, (c) Open Cascade\n";
- // Pinned OCCT's BRepOffsetAPI_DraftAngle::Add silently returns without adding
- // a face at or below this absolute angle. Reject that range at our boundary.
- constexpr double kKernelMinimumDraftAngle = 1.0e-4;
- 
+@@ -95,0 +115,150 @@ constexpr double kKernelMinimumDraftAngle = 1.0e-4;
 +class BoundedArtifactOutputBuffer final : public std::streambuf {
 +  public:
 +    explicit BoundedArtifactOutputBuffer(size_t maximum)
@@ -400,13 +327,7 @@ index da79888..a3443e3 100644
 +           std::memcmp(bytes.data(), kArtifactArchiveHeader, headerBytes) == 0;
 +}
 +
- struct TopologyCounts {
-     int solids = 0;
-     int shells = 0;
-@@ -1191,6 +1360,90 @@ std::string InvariantCadSolidOffsetReport::transferCode(
-     return "READY";
- }
- 
+@@ -1193,0 +1363,84 @@ std::string InvariantCadSolidOffsetReport::transferCode(
 +bool InvariantCadArtifactWriteReport::hasBytes() const {
 +    return output_ && output_->byteCount > 0;
 +}
@@ -491,13 +412,7 @@ index da79888..a3443e3 100644
 +    return "READY";
 +}
 +
- uint32_t InvariantCadPipeShellReport::takeResultId(OcctKernel& kernel) {
-     const std::string state = transferCode(kernel);
-     if (state == "NO_RESULT") {
-@@ -1492,8 +1745,236 @@ InvariantCadTopologyEvolutionRecord InvariantCadSolidOffsetReport::topologyRecor
-     return transfer_->topologyHistory.records[static_cast<size_t>(recordIndex)];
- }
- 
+@@ -1494,0 +1748,228 @@ InvariantCadTopologyEvolutionRecord InvariantCadSolidOffsetReport::topologyRecor
 +InvariantCadArtifactWriteReport invariantcadWriteArtifactBrep(
 +    OcctKernel& kernel, uint32_t shapeId, int maxOutputBytes) {
 +    auto failure = [&](const char* stage, const char* code,
@@ -726,9 +641,6 @@ index da79888..a3443e3 100644
 +    return report;
 +}
 +
- std::string invariantcadFacadeVersion() {
--    return "invariantcad-facade@0.6.0+occt-wasm.3.7.0";
-+    return "invariantcad-facade@0.7.0+occt-wasm.3.7.0";
- }
- 
- InvariantCadBooleanReport invariantcadBooleanAtomic(
+@@ -1496 +1977 @@ std::string invariantcadFacadeVersion() {
+-    return "invariantcad-facade@0.6.0+occt-wasm.3.8.0";
++    return "invariantcad-facade@0.7.0+occt-wasm.3.8.0";

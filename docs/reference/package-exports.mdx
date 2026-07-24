@@ -46,7 +46,7 @@ const { design } = await import("invariantcad");
 
 ## Node and browser
 
-The supported Node floor is 20.19. The root module and bundled Manifold runtime
+The supported Node floor is 22.13. The root module and bundled Manifold runtime
 also target modern browsers. The OpenCascade kernel entry can run in both
 environments when its larger WASM asset is correctly served.
 
@@ -57,7 +57,7 @@ return the same opaque runtime type consumed by `createOcctKernel`. See
 [OCCT runtime attestation](/evaluation/occt-runtime-attestation) for byte
 acquisition, trust-pin, CSP, permission-model, lifetime, and non-claim details.
 
-Release CI verifies Node 20, 22, and 24 plus a production Vite build in
+Release CI verifies Node 22.13, 24, and 26 plus a production Vite build in
 Chromium.
 
 ## Side effects and tree shaking

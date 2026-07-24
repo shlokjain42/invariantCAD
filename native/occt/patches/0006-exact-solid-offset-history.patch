@@ -1,36 +1,19 @@
 diff --git a/facade/include/occt_kernel.h b/facade/include/occt_kernel.h
-index ec5d0a7c50e1341da274724fd20c0950da56705c..4656d106bf3f45d03829a31fa7ed769923e1f959 100644
+index fe6f557..c54d514 100644
 --- a/facade/include/occt_kernel.h
 +++ b/facade/include/occt_kernel.h
-@@ -19,10 +19,11 @@ class OcctKernel;
- struct InvariantCadDraftTransferState;
- struct InvariantCadBooleanTransferState;
- struct InvariantCadEdgeTreatmentTransferState;
+@@ -21,0 +22 @@ struct InvariantCadEdgeTreatmentTransferState;
 +struct InvariantCadSolidOffsetTransferState;
- struct InvariantCadPipeShellTransferState;
- 
- /// Evaluation-scoped topology kinds used by the indexed evolution ABI.
+@@ -25 +26 @@ struct InvariantCadPipeShellTransferState;
 -/// These numeric values are stable across facade ABI 0.5.x.
 +/// These numeric values are stable across facade ABI 0.2 and later.
- enum InvariantCadTopologyKind : int {
-     InvariantCadTopologyKindNone = -1,
-     InvariantCadTopologyKindFace = 0,
-@@ -32,8 +33,9 @@ enum InvariantCadTopologyKind : int {
- 
- /// Source-to-result relations used by the generic indexed evolution envelope.
- /// Atomic draft emits only Preserved and Modified records. Exact Boolean,
+@@ -35,2 +36,3 @@ enum InvariantCadTopologyKind : int {
 -/// fillet, and chamfer may emit the complete relation vocabulary, including
 -/// source-less Created for result topology that native history cannot attribute.
 +/// fillet, chamfer, shell, and offset may emit the complete relation vocabulary,
 +/// including source-less Created for result topology that native history cannot
 +/// attribute.
- enum InvariantCadTopologyRelation : int {
-     InvariantCadTopologyRelationPreserved = 0,
-     InvariantCadTopologyRelationModified = 1,
-@@ -55,6 +57,18 @@ enum InvariantCadEdgeTreatmentOperation : int {
-     InvariantCadEdgeTreatmentOperationChamfer = 1,
- };
- 
+@@ -57,0 +60,12 @@ enum InvariantCadEdgeTreatmentOperation : int {
 +/// Whole-solid offset-family operation codes used by facade ABI 0.6.
 +enum InvariantCadSolidOffsetOperation : int {
 +    InvariantCadSolidOffsetOperationShell = 0,
@@ -43,13 +26,7 @@ index ec5d0a7c50e1341da274724fd20c0950da56705c..4656d106bf3f45d03829a31fa7ed7699
 +    InvariantCadSolidOffsetDirectionOutward = 1,
 +};
 +
- /// Number of unique located subshapes indexed by TopExp::MapShapes for each
- /// topology kind. Orientation occurrences are deliberately not separate IDs;
- /// however, the canonical input/result occurrences' orientations participate
-@@ -295,6 +309,74 @@ struct InvariantCadEdgeTreatmentReport {
-         std::vector<uint32_t> edgeIds, double amount, int maxHistoryRecords);
- };
- 
+@@ -297,0 +312,68 @@ struct InvariantCadEdgeTreatmentReport {
 +/// Transactional result of one round-join whole-solid shell or offset.
 +/// Shell opening indices are canonicalized by input face index. The complete
 +/// history covers the entire single input and aggregate solid result.
@@ -118,13 +95,7 @@ index ec5d0a7c50e1341da274724fd20c0950da56705c..4656d106bf3f45d03829a31fa7ed7699
 +        double tolerance, int maxHistoryRecords);
 +};
 +
- /// Transactional result of the controlled InvariantCAD PipeShell facade.
- /// A successful untaken report owns its result outside the kernel arena.
- struct InvariantCadPipeShellReport {
-@@ -356,6 +438,13 @@ InvariantCadEdgeTreatmentReport invariantcadEdgeTreatmentAtomic(
-     OcctKernel& kernel, int operation, uint32_t inputId,
-     std::vector<uint32_t> edgeIds, double amount, int maxHistoryRecords);
- 
+@@ -358,0 +441,7 @@ InvariantCadEdgeTreatmentReport invariantcadEdgeTreatmentAtomic(
 +/// Builds one round-join shell or whole-solid offset on an isolated operand
 +/// copy and proves complete single-input face/edge/vertex evolution.
 +InvariantCadSolidOffsetReport invariantcadSolidOffsetAtomic(
@@ -132,36 +103,18 @@ index ec5d0a7c50e1341da274724fd20c0950da56705c..4656d106bf3f45d03829a31fa7ed7699
 +    std::vector<uint32_t> openingFaceIds, double amount, int direction,
 +    double tolerance, int maxHistoryRecords);
 +
- /// Builds one corrected-Frenet, right-corner solid PipeShell with explicit
- /// native tolerances. The report exposes OCCT's measured surface error and
- /// retains the result outside the arena until a checked one-shot transfer.
-@@ -799,6 +888,7 @@ class OcctKernel {
-     friend struct InvariantCadDraftReport;
-     friend struct InvariantCadBooleanReport;
-     friend struct InvariantCadEdgeTreatmentReport;
+@@ -802,0 +892 @@ class OcctKernel {
 +    friend struct InvariantCadSolidOffsetReport;
-     friend struct InvariantCadPipeShellReport;
-     friend InvariantCadDraftReport invariantcadDraftFacesAtomic(
-         OcctKernel& kernel, uint32_t shapeId, std::vector<uint32_t> faceIds, double angleRad,
-@@ -814,6 +904,10 @@ class OcctKernel {
-     friend InvariantCadEdgeTreatmentReport invariantcadEdgeTreatmentAtomic(
-         OcctKernel& kernel, int operation, uint32_t inputId,
-         std::vector<uint32_t> edgeIds, double amount, int maxHistoryRecords);
+@@ -817,0 +908,4 @@ class OcctKernel {
 +    friend InvariantCadSolidOffsetReport invariantcadSolidOffsetAtomic(
 +        OcctKernel& kernel, int operation, uint32_t inputId,
 +        std::vector<uint32_t> openingFaceIds, double amount, int direction,
 +        double tolerance, int maxHistoryRecords);
-     uint32_t store(const TopoDS_Shape& shape);
-     uint32_t invariantcadStoreTransferredShape(const TopoDS_Shape& shape);
-     const TopoDS_Shape& get(uint32_t id) const;
 diff --git a/facade/src/invariantcad_bindings.cpp b/facade/src/invariantcad_bindings.cpp
-index 0f33625a1fec6a48eae273a109e4b19ab8c205ef..5f2fc256e682ba1ebd00d3f6558651d2df4487fb 100644
+index 0f33625..5f2fc25 100644
 --- a/facade/src/invariantcad_bindings.cpp
 +++ b/facade/src/invariantcad_bindings.cpp
-@@ -35,6 +35,16 @@ EMSCRIPTEN_BINDINGS(invariantcad_facade) {
-         .value("FILLET", InvariantCadEdgeTreatmentOperationFillet)
-         .value("CHAMFER", InvariantCadEdgeTreatmentOperationChamfer);
- 
+@@ -37,0 +38,10 @@ EMSCRIPTEN_BINDINGS(invariantcad_facade) {
 +    enum_<InvariantCadSolidOffsetOperation>("InvariantCadSolidOffsetOperation",
 +                                            enum_value_type::number)
 +        .value("SHELL", InvariantCadSolidOffsetOperationShell)
@@ -172,13 +125,7 @@ index 0f33625a1fec6a48eae273a109e4b19ab8c205ef..5f2fc256e682ba1ebd00d3f6558651d2
 +        .value("INWARD", InvariantCadSolidOffsetDirectionInward)
 +        .value("OUTWARD", InvariantCadSolidOffsetDirectionOutward);
 +
-     value_object<InvariantCadTopologyCounts>("InvariantCadTopologyCounts")
-         .field("faces", &InvariantCadTopologyCounts::faces)
-         .field("edges", &InvariantCadTopologyCounts::edges)
-@@ -142,6 +152,50 @@ EMSCRIPTEN_BINDINGS(invariantcad_facade) {
-         .function("topologyRecord", &InvariantCadEdgeTreatmentReport::topologyRecord)
-         .function("takeResultId", &InvariantCadEdgeTreatmentReport::takeResultId);
- 
+@@ -144,0 +155,44 @@ EMSCRIPTEN_BINDINGS(invariantcad_facade) {
 +    class_<InvariantCadSolidOffsetReport>("InvariantCadSolidOffsetReport")
 +        .property("ok", &InvariantCadSolidOffsetReport::getOk)
 +        .property("stage", &InvariantCadSolidOffsetReport::getStage)
@@ -223,38 +170,20 @@ index 0f33625a1fec6a48eae273a109e4b19ab8c205ef..5f2fc256e682ba1ebd00d3f6558651d2
 +        .function("topologyRecord", &InvariantCadSolidOffsetReport::topologyRecord)
 +        .function("takeResultId", &InvariantCadSolidOffsetReport::takeResultId);
 +
-     class_<InvariantCadPipeShellReport>("InvariantCadPipeShellReport")
-         .property("ok", &InvariantCadPipeShellReport::getOk)
-         .property("stage", &InvariantCadPipeShellReport::getStage)
-@@ -162,5 +216,6 @@ EMSCRIPTEN_BINDINGS(invariantcad_facade) {
-     function("invariantcadDraftFacesAtomic", &invariantcadDraftFacesAtomic);
-     function("invariantcadBooleanAtomic", &invariantcadBooleanAtomic);
-     function("invariantcadEdgeTreatmentAtomic", &invariantcadEdgeTreatmentAtomic);
+@@ -164,0 +219 @@ EMSCRIPTEN_BINDINGS(invariantcad_facade) {
 +    function("invariantcadSolidOffsetAtomic", &invariantcadSolidOffsetAtomic);
-     function("invariantcadPipeShellSolid", &invariantcadPipeShellSolid);
- }
 diff --git a/facade/src/invariantcad_facade.cpp b/facade/src/invariantcad_facade.cpp
-index 2a89923e0ed6af81a3ec01e5559e0c049693cb07..da798889e40f1a02362a3ea2c50f80ed92f6b609 100644
+index 2a89923..da79888 100644
 --- a/facade/src/invariantcad_facade.cpp
 +++ b/facade/src/invariantcad_facade.cpp
-@@ -15,9 +15,13 @@
- #include <BRepBuilderAPI_TransitionMode.hxx>
- #include <BRepFilletAPI_MakeChamfer.hxx>
- #include <BRepFilletAPI_MakeFillet.hxx>
+@@ -17,0 +18,2 @@
 +#include <BRepOffsetAPI_MakeOffsetShape.hxx>
 +#include <BRepOffsetAPI_MakeThickSolid.hxx>
- #include <BRepOffsetAPI_DraftAngle.hxx>
- #include <BRepOffsetAPI_MakePipeShell.hxx>
+@@ -19,0 +22 @@
 +#include <BRepOffset_Mode.hxx>
- #include <BRepTools_History.hxx>
+@@ -20,0 +24 @@
 +#include <GeomAbs_JoinType.hxx>
- #include <GProp_GProps.hxx>
- #include <NCollection_IndexedMap.hxx>
- #include <Standard_Failure.hxx>
-@@ -68,6 +72,13 @@ struct InvariantCadEdgeTreatmentTransferState {
-     InvariantCadIndexedTopologyEvolution topologyHistory;
- };
- 
+@@ -70,0 +75,7 @@ struct InvariantCadEdgeTreatmentTransferState {
 +struct InvariantCadSolidOffsetTransferState {
 +    TopoDS_Shape result;
 +    uint64_t kernelInstanceToken = 0;
@@ -262,13 +191,7 @@ index 2a89923e0ed6af81a3ec01e5559e0c049693cb07..da798889e40f1a02362a3ea2c50f80ed
 +    InvariantCadIndexedTopologyEvolution topologyHistory;
 +};
 +
- struct InvariantCadPipeShellTransferState {
-     TopoDS_Shape result;
-     uint64_t kernelInstanceToken = 0;
-@@ -558,6 +569,36 @@ void appendNativeHistorySourceRecords(
-     }
- }
- 
+@@ -560,0 +572,30 @@ void appendNativeHistorySourceRecords(
 +void reconcileGeneratedOnlyReplacements(
 +    BRepTools_History& nativeHistory, const TopoDS_Shape& copiedInputShape,
 +    const TopoDS_Shape& resultShape) {
@@ -299,30 +222,17 @@ index 2a89923e0ed6af81a3ec01e5559e0c049693cb07..da798889e40f1a02362a3ea2c50f80ed
 +    }
 +}
 +
- void appendUnclaimedCreatedRecords(
-     int resultKind, std::vector<bool>& claimed, int maxHistoryRecords,
-     std::set<EvolutionRecordKey>& uniqueRecords,
-@@ -892,10 +933,14 @@ bool extractPureSingleSolid(const TopoDS_Shape& shape, TopoDS_Shape& solid) {
-     return !iterator.More() && extractPureSingleSolid(child, solid);
- }
- 
+@@ -895 +936 @@ bool extractPureSingleSolid(const TopoDS_Shape& shape, TopoDS_Shape& solid) {
 -bool hasPositiveVolume(const TopoDS_Shape& shape) {
 +double signedVolume(const TopoDS_Shape& shape) {
-     GProp_GProps properties;
-     BRepGProp::VolumeProperties(shape, properties);
+@@ -898 +939,5 @@ bool hasPositiveVolume(const TopoDS_Shape& shape) {
 -    const double volume = properties.Mass();
 +    return properties.Mass();
 +}
 +
 +bool hasPositiveVolume(const TopoDS_Shape& shape) {
 +    const double volume = signedVolume(shape);
-     return std::isfinite(volume) && volume > 0.0;
- }
- 
-@@ -1088,6 +1133,64 @@ std::string InvariantCadEdgeTreatmentReport::transferCode(
-     return "READY";
- }
- 
+@@ -1090,0 +1136,58 @@ std::string InvariantCadEdgeTreatmentReport::transferCode(
 +int InvariantCadSolidOffsetReport::selectedOpeningFaceCount() const {
 +    if (selectedOpeningFaceIndices_.size() >
 +        static_cast<size_t>(std::numeric_limits<int>::max())) {
@@ -381,13 +291,7 @@ index 2a89923e0ed6af81a3ec01e5559e0c049693cb07..da798889e40f1a02362a3ea2c50f80ed
 +    return "READY";
 +}
 +
- uint32_t InvariantCadPipeShellReport::takeResultId(OcctKernel& kernel) {
-     const std::string state = transferCode(kernel);
-     if (state == "NO_RESULT") {
-@@ -1320,8 +1423,77 @@ InvariantCadTopologyEvolutionRecord InvariantCadEdgeTreatmentReport::topologyRec
-     return transfer_->topologyHistory.records[static_cast<size_t>(recordIndex)];
- }
- 
+@@ -1322,0 +1426,69 @@ InvariantCadTopologyEvolutionRecord InvariantCadEdgeTreatmentReport::topologyRec
 +int InvariantCadSolidOffsetReport::topologyHistoryVersion() const {
 +    return topologyHistoryComplete() ? transfer_->topologyHistory.version : 0;
 +}
@@ -457,16 +361,10 @@ index 2a89923e0ed6af81a3ec01e5559e0c049693cb07..da798889e40f1a02362a3ea2c50f80ed
 +    return transfer_->topologyHistory.records[static_cast<size_t>(recordIndex)];
 +}
 +
- std::string invariantcadFacadeVersion() {
--    return "invariantcad-facade@0.5.0+occt-wasm.3.7.0";
-+    return "invariantcad-facade@0.6.0+occt-wasm.3.7.0";
- }
- 
- InvariantCadBooleanReport invariantcadBooleanAtomic(
-@@ -1902,6 +2074,430 @@ InvariantCadEdgeTreatmentReport invariantcadEdgeTreatmentAtomic(
-     }
- }
- 
+@@ -1324 +1496 @@ std::string invariantcadFacadeVersion() {
+-    return "invariantcad-facade@0.5.0+occt-wasm.3.8.0";
++    return "invariantcad-facade@0.6.0+occt-wasm.3.8.0";
+@@ -1904,0 +2077,424 @@ InvariantCadEdgeTreatmentReport invariantcadEdgeTreatmentAtomic(
 +InvariantCadSolidOffsetReport invariantcadSolidOffsetAtomic(
 +    OcctKernel& kernel, int operation, uint32_t inputId,
 +    std::vector<uint32_t> openingFaceIds, double amount, int direction,
@@ -891,6 +789,3 @@ index 2a89923e0ed6af81a3ec01e5559e0c049693cb07..da798889e40f1a02362a3ea2c50f80ed
 +    }
 +}
 +
- InvariantCadPipeShellReport invariantcadPipeShellSolid(
-     OcctKernel& kernel, uint32_t profileWireId, uint32_t spineWireId,
-     double tolerance3d, double boundaryTolerance, double angularTolerance) {

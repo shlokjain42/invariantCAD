@@ -283,7 +283,7 @@ function exactBooleanFactory(
       InvariantCadTopologyRelation: RELATION,
       InvariantCadBooleanOperation: BOOLEAN_OPERATION,
       invariantcadFacadeVersion: () =>
-        "invariantcad-facade@0.4.0+occt-wasm.3.7.0",
+        "invariantcad-facade@0.4.0+occt-wasm.3.8.0",
       invariantcadDraftFacesAtomic: () => {
         throw new Error("draft was not expected in this test");
       },
@@ -402,7 +402,7 @@ function legacyFactory(
       InvariantCadTopologyKind: KIND,
       InvariantCadTopologyRelation: RELATION,
       invariantcadFacadeVersion: () =>
-        `invariantcad-facade@${abi}.0+occt-wasm.3.7.0`,
+        `invariantcad-facade@${abi}.0+occt-wasm.3.8.0`,
       invariantcadDraftFacesAtomic: () => {
         throw new Error("draft was not expected in this test");
       },
@@ -464,16 +464,16 @@ describe("OCCT ABI 0.4 exact Boolean integration", () => {
       expect(kernel.capabilities.topology?.signatures).toEqual({
         protocolVersion: 2,
         fingerprint:
-          "invariantcad-topology-descriptor@6;occt-wasm@3.7.0;" +
-          "runtime=invariantcad-facade@0.4.0+occt-wasm.3.7.0;" +
+          "invariantcad-topology-descriptor@6;occt-wasm@3.8.0;" +
+          "runtime=invariantcad-facade@0.4.0+occt-wasm.3.8.0;" +
           "modelingTolerance=1e-7",
       });
       expect(kernel.capabilities.topology?.signatureProfiles).toEqual([
         {
           protocolVersion: 1,
           fingerprint:
-            "invariantcad-topology-descriptor@4;occt-wasm@3.7.0;" +
-            "runtime=invariantcad-facade@0.4.0+occt-wasm.3.7.0;" +
+            "invariantcad-topology-descriptor@4;occt-wasm@3.8.0;" +
+            "runtime=invariantcad-facade@0.4.0+occt-wasm.3.8.0;" +
             "modelingTolerance=1e-7",
         },
       ]);
@@ -849,8 +849,8 @@ describe("OCCT ABI 0.4 exact Boolean integration", () => {
             : {
                 protocolVersion: 2,
                 fingerprint:
-                  "invariantcad-topology-descriptor@6;occt-wasm@3.7.0;" +
-                  `runtime=invariantcad-facade@${abi}.0+occt-wasm.3.7.0;` +
+                  "invariantcad-topology-descriptor@6;occt-wasm@3.8.0;" +
+                  `runtime=invariantcad-facade@${abi}.0+occt-wasm.3.8.0;` +
                   "modelingTolerance=1e-7",
               },
         );
@@ -861,8 +861,8 @@ describe("OCCT ABI 0.4 exact Boolean integration", () => {
                 {
                   protocolVersion: 1,
                   fingerprint:
-                    "invariantcad-topology-descriptor@4;occt-wasm@3.7.0;" +
-                    `runtime=invariantcad-facade@${abi}.0+occt-wasm.3.7.0;` +
+                    "invariantcad-topology-descriptor@4;occt-wasm@3.8.0;" +
+                    `runtime=invariantcad-facade@${abi}.0+occt-wasm.3.8.0;` +
                     "modelingTolerance=1e-7",
                 },
               ],

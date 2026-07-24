@@ -48,9 +48,9 @@ body:
       label: Environment
       description: Include Node or browser version, operating system, architecture, package manager, TypeScript/bundler, and main-thread or worker use.
       placeholder: |
-        Node.js: 24.x
+        Node.js: 26.x
         OS/architecture: Ubuntu x64
-        Package manager: pnpm 10.x
+        Package manager: pnpm 11.x
         Runtime: Node main thread
     validations:
       required: true

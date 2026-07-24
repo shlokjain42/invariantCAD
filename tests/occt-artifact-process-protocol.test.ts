@@ -19,7 +19,7 @@ function validRuntimeEvidence(): Record<string, unknown> {
       `invariantcad-occt-runtime-pair@1:sha256:${RUNTIME_PAIR_SHA256}`,
     declaredBuildIdentity:
       `invariantcad-occt-release-manifest@1:sha256:${RELEASE_MANIFEST_SHA256}`,
-    facadeMarker: "invariantcad-facade@0.9.0+occt-wasm.3.7.0",
+    facadeMarker: "invariantcad-facade@0.9.0+occt-wasm.3.8.0",
     javascript: {
       fileName: "occt-wasm.js",
       byteLength: 1,

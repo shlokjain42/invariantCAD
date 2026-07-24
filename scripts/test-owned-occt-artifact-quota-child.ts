@@ -5,7 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import type { OcctModuleFactory } from "../src/occt-kernel.js";
 
 const projectRoot = fileURLToPath(new URL("..", import.meta.url));
-const expectedFacadeVersion = "invariantcad-facade@0.9.0+occt-wasm.3.7.0";
+const expectedFacadeVersion = "invariantcad-facade@0.9.0+occt-wasm.3.8.0";
 const tinyNativeRequestLimit = 1;
 const recoveryNativeRequestLimit = 128 * 1024 * 1024;
 const preflightWorkLimit = 1_000_000;

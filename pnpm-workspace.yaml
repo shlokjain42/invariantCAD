@@ -3,3 +3,12 @@ packages:
 
 allowBuilds:
   esbuild: true
+
+overrides:
+  "@rolldown/binding-wasm32-wasi@1.1.5>@emnapi/core": 1.11.2
+  "@rolldown/binding-wasm32-wasi@1.1.5>@emnapi/runtime": 1.11.2
+  esbuild: 0.28.1
+
+minimumReleaseAgeExclude:
+  - "@publint/pack@0.1.6"
+  - "publint@0.3.22"

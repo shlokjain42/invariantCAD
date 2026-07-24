@@ -38,11 +38,11 @@ For repeated builds, use a dedicated, credential-free Cargo cache:
 ```sh
 mkdir -p .cache/occt-facade-cargo
 ./scripts/build-occt-facade.sh \
-  --source-dir /path/to/occt-wasm-v3.7.0 \
+  --source-dir /path/to/occt-wasm-v3.8.0 \
   --cargo-cache-dir .cache/occt-facade-cargo
 
 ./scripts/build-occt-facade.sh \
-  --source-dir /path/to/occt-wasm-v3.7.0 \
+  --source-dir /path/to/occt-wasm-v3.8.0 \
   --cargo-cache-dir .cache/occt-facade-cargo \
   --skip-fetch
 ```

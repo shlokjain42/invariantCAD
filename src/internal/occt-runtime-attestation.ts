@@ -34,7 +34,7 @@ const typedArraySet = Uint8Array.prototype.set;
 declare const ATTESTED_OCCT_RUNTIME_BRAND: unique symbol;
 
 export const INVARIANTCAD_OCCT_FACADE_0_9_0_RELEASE_MANIFEST_SHA256 =
-  "3403826c60c891c132c2890e8a87d33f91883f98d53014483d7e90cd2006ab6c";
+  "9973552922d4dd67aa9c79e3a9cdfcbfe0140c52d4cc3d7b567935d7dfa4f708";
 
 export type OcctRuntimeAttestationFailureReason =
   | "invalid-trust-pin"

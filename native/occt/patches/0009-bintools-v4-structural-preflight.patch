@@ -1,6 +1,6 @@
 diff --git a/facade/include/invariantcad_bintools_v4_preflight.h b/facade/include/invariantcad_bintools_v4_preflight.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..86f48b25325fcfa0714cb957c47ecb7b9df3e750
+index 0000000..86f48b2
 --- /dev/null
 +++ b/facade/include/invariantcad_bintools_v4_preflight.h
 @@ -0,0 +1,35 @@
@@ -40,22 +40,13 @@ index 0000000000000000000000000000000000000000..86f48b25325fcfa0714cb957c47ecb7b
 +
 +#endif
 diff --git a/facade/include/occt_kernel.h b/facade/include/occt_kernel.h
-index b385dc1ac3db8c9a84a8210948f45bba695cc407..268147d03bcf894c8d358615e144b1e06800f77e 100644
+index ad72dbe..e0a69d9 100644
 --- a/facade/include/occt_kernel.h
 +++ b/facade/include/occt_kernel.h
-@@ -383,7 +383,7 @@ struct InvariantCadSolidOffsetReport {
-         double tolerance, int maxHistoryRecords);
- };
- 
+@@ -386 +386 @@ struct InvariantCadSolidOffsetReport {
 -/// Bounded binary-BREP serialization result used by facade ABI 0.8.
 +/// Bounded binary-BREP serialization result used by facade ABI 0.8/0.9.
- /// The report owns chunked native bytes whose aggregate payload never exceeds
- /// maxOutputBytes. copyBytes() creates a detached JavaScript Uint8Array only
- /// after native serialization has completed within that ceiling. Native
-@@ -430,10 +430,14 @@ struct InvariantCadArtifactWriteReport {
-         int maxNativeRequestedBytes);
- };
- 
+@@ -433,4 +433,8 @@ struct InvariantCadArtifactWriteReport {
 -/// Bounded-input binary-BREP decode result used by facade ABI 0.8.
 -/// JavaScript input is borrowed and length-checked before the facade snapshots
 -/// it into native memory. A successful decoded shape remains outside the arena
@@ -68,13 +59,7 @@ index b385dc1ac3db8c9a84a8210948f45bba695cc407..268147d03bcf894c8d358615e144b1e0
 +/// this report without the preflight fields or trailing work-limit argument.
 +/// A successful decoded shape remains outside the arena until one checked
 +/// same-kernel takeResultId() call.
- struct InvariantCadArtifactReadReport {
-     bool ok = false;
-     std::string stage = "validation";
-@@ -448,6 +452,16 @@ struct InvariantCadArtifactReadReport {
-     int nativeRequestedBytes = 0;
-     int nativeAllocationCalls = 0;
-     bool nativeRequestLimitExceeded = false;
+@@ -450,0 +455,10 @@ struct InvariantCadArtifactReadReport {
 +    int maxPreflightWorkUnits = 0;
 +    int preflightWorkUnits = 0;
 +    int maxPreflightNestingDepth = 0;
@@ -85,13 +70,7 @@ index b385dc1ac3db8c9a84a8210948f45bba695cc407..268147d03bcf894c8d358615e144b1e0
 +    std::string preflightCode = "NOT_RUN";
 +    bool archivePreflightComplete = false;
 +    bool deserializationStarted = false;
- 
-     InvariantCadArtifactReadReport() = default;
-     InvariantCadArtifactReadReport(const InvariantCadArtifactReadReport&) = default;
-@@ -470,6 +484,26 @@ struct InvariantCadArtifactReadReport {
-     bool getNativeRequestLimitExceeded() const {
-         return nativeRequestLimitExceeded;
-     }
+@@ -472,0 +487,20 @@ struct InvariantCadArtifactReadReport {
 +    int getMaxPreflightWorkUnits() const { return maxPreflightWorkUnits; }
 +    int getPreflightWorkUnits() const { return preflightWorkUnits; }
 +    int getMaxPreflightNestingDepth() const {
@@ -112,48 +91,24 @@ index b385dc1ac3db8c9a84a8210948f45bba695cc407..268147d03bcf894c8d358615e144b1e0
 +        return archivePreflightComplete;
 +    }
 +    bool getDeserializationStarted() const { return deserializationStarted; }
- 
-     uint32_t takeResultId(OcctKernel& kernel);
-     bool hasResult() const;
-@@ -481,7 +515,8 @@ struct InvariantCadArtifactReadReport {
-     friend InvariantCadArtifactReadReport invariantcadReadArtifactBrep(
-         OcctKernel& kernel, const emscripten::val& input,
-         int maxInputBytes, int maxTopologyItems,
+@@ -484 +518,2 @@ struct InvariantCadArtifactReadReport {
 -        int maxNativeRequestedBytes);
 +        int maxNativeRequestedBytes, int maxPreflightWorkUnits,
 +        int maxPreflightNestingDepth, int maxPreflightLocationPower);
- };
- 
- /// Transactional result of the controlled InvariantCAD PipeShell facade.
-@@ -562,7 +597,9 @@ InvariantCadArtifactWriteReport invariantcadWriteArtifactBrep(
- /// decodes one binary BREP, and retains the shape for one checked transfer.
- InvariantCadArtifactReadReport invariantcadReadArtifactBrep(
-     OcctKernel& kernel, const emscripten::val& input,
+@@ -565 +600,3 @@ InvariantCadArtifactReadReport invariantcadReadArtifactBrep(
 -    int maxInputBytes, int maxTopologyItems, int maxNativeRequestedBytes);
 +    int maxInputBytes, int maxTopologyItems, int maxNativeRequestedBytes,
 +    int maxPreflightWorkUnits, int maxPreflightNestingDepth,
 +    int maxPreflightLocationPower);
- 
- /// Builds one corrected-Frenet, right-corner solid PipeShell with explicit
- /// native tolerances. The report exposes OCCT's measured surface error and
-@@ -1034,7 +1071,8 @@ class OcctKernel {
-     friend InvariantCadArtifactReadReport invariantcadReadArtifactBrep(
-         OcctKernel& kernel, const emscripten::val& input,
-         int maxInputBytes, int maxTopologyItems,
+@@ -1038 +1075,2 @@ class OcctKernel {
 -        int maxNativeRequestedBytes);
 +        int maxNativeRequestedBytes, int maxPreflightWorkUnits,
 +        int maxPreflightNestingDepth, int maxPreflightLocationPower);
-     uint32_t store(const TopoDS_Shape& shape);
-     uint32_t invariantcadStoreTransferredShape(const TopoDS_Shape& shape);
-     const TopoDS_Shape& get(uint32_t id) const;
 diff --git a/facade/src/invariantcad_bindings.cpp b/facade/src/invariantcad_bindings.cpp
-index ade1afab0598e21017c11fa60d5f7b9796b35d74..572d6796f460892d238f8bb8eed4621eb984cee3 100644
+index ade1afa..572d679 100644
 --- a/facade/src/invariantcad_bindings.cpp
 +++ b/facade/src/invariantcad_bindings.cpp
-@@ -238,6 +238,26 @@ EMSCRIPTEN_BINDINGS(invariantcad_facade) {
-                   &InvariantCadArtifactReadReport::getNativeAllocationCalls)
-         .property("nativeRequestLimitExceeded",
-                   &InvariantCadArtifactReadReport::getNativeRequestLimitExceeded)
+@@ -240,0 +241,20 @@ EMSCRIPTEN_BINDINGS(invariantcad_facade) {
 +        .property("maxPreflightWorkUnits",
 +                  &InvariantCadArtifactReadReport::getMaxPreflightWorkUnits)
 +        .property("preflightWorkUnits",
@@ -174,12 +129,9 @@ index ade1afab0598e21017c11fa60d5f7b9796b35d74..572d6796f460892d238f8bb8eed4621e
 +                  &InvariantCadArtifactReadReport::getArchivePreflightComplete)
 +        .property("deserializationStarted",
 +                  &InvariantCadArtifactReadReport::getDeserializationStarted)
-         .function("hasResult", &InvariantCadArtifactReadReport::hasResult)
-         .function("transferCode", &InvariantCadArtifactReadReport::transferCode)
-         .function("takeResultId", &InvariantCadArtifactReadReport::takeResultId);
 diff --git a/facade/src/invariantcad_bintools_v4_preflight.cpp b/facade/src/invariantcad_bintools_v4_preflight.cpp
 new file mode 100644
-index 0000000000000000000000000000000000000000..075c5d9d1bc983bcd54bb0cb5c6f5e3bb3b4bddf
+index 0000000..075c5d9
 --- /dev/null
 +++ b/facade/src/invariantcad_bintools_v4_preflight.cpp
 @@ -0,0 +1,1227 @@
@@ -1411,50 +1363,27 @@ index 0000000000000000000000000000000000000000..075c5d9d1bc983bcd54bb0cb5c6f5e3b
 +                               maxNestingDepth, maxLocationPower).run();
 +}
 diff --git a/facade/src/invariantcad_facade.cpp b/facade/src/invariantcad_facade.cpp
-index fe6bfdfbe535fef061e1a42bfb3375cfa5fbb3fb..3332ec07f800736d41386f7b81b15b62e52a1474 100644
+index fe6bfdf..3332ec0 100644
 --- a/facade/src/invariantcad_facade.cpp
 +++ b/facade/src/invariantcad_facade.cpp
-@@ -6,6 +6,7 @@
- 
- #include "occt_kernel.h"
- #include "invariantcad_allocation_budget.h"
+@@ -8,0 +9 @@
 +#include "invariantcad_bintools_v4_preflight.h"
- 
- #include <BinTools.hxx>
- #include <BRepCheck_Analyzer.hxx>
-@@ -107,8 +108,6 @@ namespace {
- constexpr double kHalfPi = 1.57079632679489661923;
- constexpr int kTopologyHistoryVersion = 1;
- constexpr size_t kArtifactChunkBytes = 64U * 1024U;
+@@ -110,2 +110,0 @@ constexpr size_t kArtifactChunkBytes = 64U * 1024U;
 -constexpr char kArtifactArchiveHeader[] =
 -    "\nOpen CASCADE Topology V4, (c) Open Cascade\n";
- // Pinned OCCT's BRepOffsetAPI_DraftAngle::Add silently returns without adding
- // a face at or below this absolute angle. Reject that range at our boundary.
- constexpr double kKernelMinimumDraftAngle = 1.0e-4;
-@@ -257,12 +256,6 @@ bool countTopologyWithinBudget(const TopoDS_Shape& root, int maximum,
-     return true;
- }
- 
+@@ -260,6 +258,0 @@ bool countTopologyWithinBudget(const TopoDS_Shape& root, int maximum,
 -bool hasStrictArtifactArchiveHeader(const std::vector<uint8_t>& bytes) {
 -    constexpr size_t headerBytes = sizeof(kArtifactArchiveHeader) - 1;
 -    return bytes.size() >= headerBytes &&
 -           std::memcmp(bytes.data(), kArtifactArchiveHeader, headerBytes) == 0;
 -}
 -
- struct TopologyCounts {
-     int solids = 0;
-     int shells = 0;
-@@ -1864,10 +1857,19 @@ InvariantCadArtifactWriteReport invariantcadWriteArtifactBrep(
- 
- InvariantCadArtifactReadReport invariantcadReadArtifactBrep(
-     OcctKernel& kernel, const emscripten::val& input, int maxInputBytes,
+@@ -1867 +1860,3 @@ InvariantCadArtifactReadReport invariantcadReadArtifactBrep(
 -    int maxTopologyItems, int maxNativeRequestedBytes) {
 +    int maxTopologyItems, int maxNativeRequestedBytes,
 +    int maxPreflightWorkUnits, int maxPreflightNestingDepth,
 +    int maxPreflightLocationPower) {
-     int inputByteCount = 0;
-     int consumedByteCount = 0;
-     int topologyItemCount = 0;
+@@ -1870,0 +1866,7 @@ InvariantCadArtifactReadReport invariantcadReadArtifactBrep(
 +    int preflightWorkUnits = 0;
 +    int preflightMaximumDepth = 0;
 +    int preflightMaximumLocationPower = 0;
@@ -1462,13 +1391,7 @@ index fe6bfdfbe535fef061e1a42bfb3375cfa5fbb3fb..3332ec07f800736d41386f7b81b15b62
 +    const char* preflightCode = "NOT_RUN";
 +    bool archivePreflightComplete = false;
 +    bool deserializationStarted = false;
-     InvariantCadNativeAllocationSnapshot allocation;
-     auto failure = [&](const char* stage, const char* code,
-                        const std::string& message) {
-@@ -1885,6 +1887,17 @@ InvariantCadArtifactReadReport invariantcadReadArtifactBrep(
-             static_cast<int>(allocation.requestedBytes);
-         report.nativeAllocationCalls = allocation.allocationCalls;
-         report.nativeRequestLimitExceeded = allocation.exceeded;
+@@ -1887,0 +1890,11 @@ InvariantCadArtifactReadReport invariantcadReadArtifactBrep(
 +        report.maxPreflightWorkUnits = maxPreflightWorkUnits;
 +        report.preflightWorkUnits = preflightWorkUnits;
 +        report.maxPreflightNestingDepth = maxPreflightNestingDepth;
@@ -1480,13 +1403,7 @@ index fe6bfdfbe535fef061e1a42bfb3375cfa5fbb3fb..3332ec07f800736d41386f7b81b15b62
 +        report.preflightCode = preflightCode;
 +        report.archivePreflightComplete = archivePreflightComplete;
 +        report.deserializationStarted = deserializationStarted;
-         return report;
-     };
-     if (maxInputBytes <= 0) {
-@@ -1900,6 +1913,21 @@ InvariantCadArtifactReadReport invariantcadReadArtifactBrep(
-             "validation", "INVALID_NATIVE_REQUEST_LIMIT",
-             "Artifact native-request limit must be a positive signed 32-bit integer");
-     }
+@@ -1902,0 +1916,15 @@ InvariantCadArtifactReadReport invariantcadReadArtifactBrep(
 +    if (maxPreflightWorkUnits <= 0) {
 +        return failure(
 +            "validation", "INVALID_PREFLIGHT_WORK_LIMIT",
@@ -1502,13 +1419,7 @@ index fe6bfdfbe535fef061e1a42bfb3375cfa5fbb3fb..3332ec07f800736d41386f7b81b15b62
 +            "validation", "INVALID_PREFLIGHT_LOCATION_POWER_LIMIT",
 +            "Artifact preflight location-power limit must be a positive signed 32-bit integer");
 +    }
- 
-     try {
-         const emscripten::val uint8Array =
-@@ -1955,15 +1983,26 @@ InvariantCadArtifactReadReport invariantcadReadArtifactBrep(
-             "copy", "INPUT_COPY_FAILED",
-             "Unknown failure while snapshotting artifact input");
-     }
+@@ -1958,4 +1986,14 @@ InvariantCadArtifactReadReport invariantcadReadArtifactBrep(
 -    if (!hasStrictArtifactArchiveHeader(snapshot)) {
 -        return failAfterStop(
 -            "validation", "UNSUPPORTED_ARCHIVE",
@@ -1527,19 +1438,9 @@ index fe6bfdfbe535fef061e1a42bfb3375cfa5fbb3fb..3332ec07f800736d41386f7b81b15b62
 +    if (!preflight.ok) {
 +        return failAfterStop("preflight", preflight.code,
 +                             preflight.message);
-     }
- 
-     TopoDS_Shape result;
-     BorrowedArtifactInputBuffer buffer(snapshot.data(), snapshot.size());
-     try {
+@@ -1966,0 +2005 @@ InvariantCadArtifactReadReport invariantcadReadArtifactBrep(
 +        deserializationStarted = true;
-         std::istream stream(&buffer);
-         BinTools::Read(result, stream);
-         consumedByteCount = static_cast<int>(buffer.consumed());
-@@ -2072,12 +2111,22 @@ InvariantCadArtifactReadReport invariantcadReadArtifactBrep(
-     report.nativeRequestedBytes = static_cast<int>(allocation.requestedBytes);
-     report.nativeAllocationCalls = allocation.allocationCalls;
-     report.nativeRequestLimitExceeded = allocation.exceeded;
+@@ -2074,0 +2114,10 @@ InvariantCadArtifactReadReport invariantcadReadArtifactBrep(
 +    report.maxPreflightWorkUnits = maxPreflightWorkUnits;
 +    report.preflightWorkUnits = preflightWorkUnits;
 +    report.maxPreflightNestingDepth = maxPreflightNestingDepth;
@@ -1550,13 +1451,6 @@ index fe6bfdfbe535fef061e1a42bfb3375cfa5fbb3fb..3332ec07f800736d41386f7b81b15b62
 +    report.preflightCode = preflightCode;
 +    report.archivePreflightComplete = archivePreflightComplete;
 +    report.deserializationStarted = deserializationStarted;
-     report.transfer_ = std::move(transfer);
-     return report;
- }
- 
- std::string invariantcadFacadeVersion() {
--    return "invariantcad-facade@0.8.0+occt-wasm.3.7.0";
-+    return "invariantcad-facade@0.9.0+occt-wasm.3.7.0";
- }
- 
- InvariantCadBooleanReport invariantcadBooleanAtomic(
+@@ -2080 +2129 @@ std::string invariantcadFacadeVersion() {
+-    return "invariantcad-facade@0.8.0+occt-wasm.3.8.0";
++    return "invariantcad-facade@0.9.0+occt-wasm.3.8.0";

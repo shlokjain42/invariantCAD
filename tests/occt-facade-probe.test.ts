@@ -408,7 +408,7 @@ describe("owned OCCT facade capability probe", () => {
 
     const artifactMarkersUnknownVersion = artifactModule();
     artifactMarkersUnknownVersion.invariantcadFacadeVersion.mockReturnValue(
-      "invariantcad-facade@0.9.1+occt-wasm.3.7.0",
+      "invariantcad-facade@0.9.1+occt-wasm.3.8.0",
     );
     expect(() => probeOcctFacade(artifactMarkersUnknownVersion)).toThrow(
       `'${OCCT_BINTOOLS_PREFLIGHT_FACADE_VERSION}'`,

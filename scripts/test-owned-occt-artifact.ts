@@ -11,7 +11,7 @@ import {
 } from "../src/occt-kernel.js";
 
 const projectRoot = fileURLToPath(new URL("..", import.meta.url));
-const expectedFacadeVersion = "invariantcad-facade@0.9.0+occt-wasm.3.7.0";
+const expectedFacadeVersion = "invariantcad-facade@0.9.0+occt-wasm.3.8.0";
 const expectedNativeRequestLimit = 128 * 1024 * 1024;
 const expectedPreflightWorkLimit = 1_000_000;
 const expectedPreflightNestingDepthLimit = 64;

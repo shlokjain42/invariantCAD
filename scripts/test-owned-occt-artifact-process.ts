@@ -245,7 +245,7 @@ assert.equal(
 );
 assert.equal(
   producerA.evidence.runtime.releaseManifestSha256,
-  "3403826c60c891c132c2890e8a87d33f91883f98d53014483d7e90cd2006ab6c",
+  "9973552922d4dd67aa9c79e3a9cdfcbfe0140c52d4cc3d7b567935d7dfa4f708",
 );
 assert.match(
   producerA.evidence.runtime.runtimePairIdentity,
@@ -260,7 +260,7 @@ assert.equal(producerA.evidence.runtime.buildExecutionAuthenticated, false);
 assert.equal(producerA.evidence.runtime.publisherAuthenticated, false);
 assert.equal(
   producerA.evidence.runtime.facadeMarker,
-  "invariantcad-facade@0.9.0+occt-wasm.3.7.0",
+  "invariantcad-facade@0.9.0+occt-wasm.3.8.0",
 );
 const releaseInput = JSON.parse(
   await readFile(

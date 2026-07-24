@@ -1,7 +1,7 @@
 /**
  * Minimal structural types for the Embind objects used by OCCT history calls.
  *
- * `occt-wasm@3.7.0` omits `delete()` from its `RawEvolutionData` declaration,
+ * `occt-wasm@3.8.0` omits `delete()` from its `RawEvolutionData` declaration,
  * even though the object is an Embind class instance at runtime. Keeping this
  * boundary structural lets callers use the vendor types while this helper owns
  * every temporary deterministically.

@@ -19,7 +19,7 @@ import { OCCT_SHAPE_ARTIFACT_CANDIDATE_ACCESS } from "../src/internal/occt-artif
 
 const textEncoder = new TextEncoder();
 const STATE_KEY = "__invariantCadRuntimeAttestationTest";
-const FACADE_MARKER = "invariantcad-facade@0.2.0+occt-wasm.3.7.0";
+const FACADE_MARKER = "invariantcad-facade@0.2.0+occt-wasm.3.8.0";
 const WEBASSEMBLY = new Uint8Array([9, 8, 7, 6]);
 const JAVASCRIPT = textEncoder.encode(`
 const state = globalThis.${STATE_KEY} ??= {
@@ -113,7 +113,7 @@ function releaseManifestObject(
       marker: options.facadeMarker ?? FACADE_MARKER,
       abiVersion: options.abiVersion ?? "0.2.0",
       upstreamOcctWasmVersion:
-        options.upstreamOcctWasmVersion ?? "3.7.0",
+        options.upstreamOcctWasmVersion ?? "3.8.0",
     },
     runtime: [
       {
@@ -672,7 +672,7 @@ describe("OCCT runtime attestation", () => {
     ["layout version", { layoutVersion: 2 }],
     ["bundle/ABI version", { bundleVersion: "0.3.0" }],
     ["marker/ABI version", { abiVersion: "0.3.0" }],
-    ["marker/upstream version", { upstreamOcctWasmVersion: "3.8.0" }],
+    ["marker/upstream version", { upstreamOcctWasmVersion: "3.9.0" }],
   ] as const)(
     "rejects internally inconsistent %s metadata",
     async (_label, manifestOptions) => {
@@ -796,7 +796,7 @@ describe("OCCT runtime attestation", () => {
 
   it("fails a trusted facade mismatch before raw-kernel construction", async () => {
     const manifest = canonicalManifest(JAVASCRIPT, WEBASSEMBLY, {
-      facadeMarker: "invariantcad-facade@0.3.0+occt-wasm.3.7.0",
+      facadeMarker: "invariantcad-facade@0.3.0+occt-wasm.3.8.0",
       abiVersion: "0.3.0",
       bundleVersion: "0.3.0",
     });
@@ -818,7 +818,7 @@ describe("OCCT runtime attestation", () => {
 
   it("keeps the reviewed owned release-manifest trust pin exact", () => {
     expect(INVARIANTCAD_OCCT_FACADE_0_9_0_RELEASE_MANIFEST_SHA256).toBe(
-      "3403826c60c891c132c2890e8a87d33f91883f98d53014483d7e90cd2006ab6c",
+      "9973552922d4dd67aa9c79e3a9cdfcbfe0140c52d4cc3d7b567935d7dfa4f708",
     );
     expect(
       new OcctRuntimeAttestationError(

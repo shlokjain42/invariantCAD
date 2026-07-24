@@ -69,13 +69,13 @@
     "artifact:fixture:occt": "tsx scripts/generate-occt-artifact-fixture.ts",
     "docs:generate": "node scripts/generate-docs-export-index.mjs",
     "docs:check": "node scripts/generate-docs-export-index.mjs --check && node scripts/check-docs.mjs",
-    "docs:dev": "cd docs && pnpm dlx mint@4.2.728 dev",
-    "docs:validate": "cd docs && pnpm dlx mint@4.2.728 validate",
-    "docs:links": "cd docs && pnpm dlx mint@4.2.728 broken-links --check-anchors --check-redirects",
+    "docs:dev": "cd docs && npm exec --yes --package=mint@4.2.739 -- mint dev",
+    "docs:validate": "cd docs && npm exec --yes --package=mint@4.2.739 -- mint validate",
+    "docs:links": "cd docs && npm exec --yes --package=mint@4.2.739 -- mint broken-links --check-anchors --check-redirects",
     "docs:release-check": "pnpm docs:validate && pnpm docs:links",
     "coverage": "vitest run --coverage",
     "audit:release": "node scripts/check-production-audit.mjs",
-    "lint:package": "pnpm build && node scripts/check-package-bin.mjs && publint && attw --pack . --profile esm-only",
+    "lint:package": "pnpm build && node scripts/check-package-bin.mjs && publint && node scripts/check-package-types.mjs",
     "test:package": "pnpm pack --pack-destination .artifacts && node scripts/package-smoke.mjs",
     "example:bracket": "tsx examples/bracket.ts",
     "build:occt-facade": "./scripts/build-occt-facade.sh",
@@ -93,7 +93,7 @@
     "release:check": "pnpm verify && pnpm audit:release && pnpm docs:release-check && pnpm test:browser"
   },
   "engines": {
-    "node": ">=20.19"
+    "node": ">=22.13"
   },
   "publishConfig": {
     "access": "public",
@@ -108,29 +108,21 @@
     "wasm"
   ],
   "dependencies": {
-    "occt-wasm": "3.7.0",
+    "occt-wasm": "3.8.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@arethetypeswrong/cli": "^0.18.5",
+    "@arethetypeswrong/core": "0.18.5",
     "@playwright/test": "^1.61.1",
     "@types/node": "^26.1.1",
     "@vitest/coverage-v8": "^4.1.10",
     "oxlint": "1.75.0",
-    "publint": "^0.3.21",
+    "publint": "^0.3.22",
     "tsup": "^8.5.1",
     "tsx": "^4.23.1",
-    "typescript": "^6.0.3",
+    "typescript": "^7.0.2",
     "vite": "^8.1.5",
     "vitest": "^4.1.10"
   },
-  "packageManager": "pnpm@10.34.5",
-  "pnpm": {
-    "overrides": {
-      "@rolldown/binding-wasm32-wasi@1.1.5>@emnapi/core": "1.11.2",
-      "@rolldown/binding-wasm32-wasi@1.1.5>@emnapi/runtime": "1.11.2",
-      "cli-highlight@2.1.11>highlight.js": "11.11.1",
-      "esbuild": "0.28.1"
-    }
-  }
+  "packageManager": "pnpm@11.17.0"
 }

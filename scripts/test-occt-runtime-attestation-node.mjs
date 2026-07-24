@@ -9,9 +9,9 @@ import {
 import { createOcctKernel } from "../dist/occt-kernel.js";
 
 const STATE_KEY = "__invariantCadNodeAttestationGate";
-const FACADE_MARKER = "invariantcad-facade@0.2.0+occt-wasm.3.7.0";
+const FACADE_MARKER = "invariantcad-facade@0.2.0+occt-wasm.3.8.0";
 const EXPECTED_RUNTIME_PAIR_IDENTITY =
-  "invariantcad-occt-runtime-pair@1:sha256:722b07c01b7260f4b10c06e85aab4c5f7e4189b95d374e425104e687559bd822";
+  "invariantcad-occt-runtime-pair@1:sha256:7433d0aa92ebd4e264985a10c7cdb0729d287028cb6782e605e34a81c055ab48";
 const encoder = new TextEncoder();
 const webassembly = new Uint8Array([9, 8, 7, 6]);
 const javascript = encoder.encode(`
@@ -86,7 +86,7 @@ function manifestBytes(
     facade: {
       marker: FACADE_MARKER,
       abiVersion: "0.2.0",
-      upstreamOcctWasmVersion: "3.7.0",
+      upstreamOcctWasmVersion: "3.8.0",
     },
     runtime: [
       {

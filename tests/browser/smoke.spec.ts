@@ -95,7 +95,7 @@ test("loads both WASM kernels and confines artifact/evaluator native work to dis
   expect(attestation.draftAdvertised).toBe(true);
   expect(attestation.shapeArtifactsAbsent).toBe(true);
   expect(attestation.topologyFingerprint).toContain(
-    "runtime=invariantcad-facade@0.2.0+occt-wasm.3.7.0",
+    "runtime=invariantcad-facade@0.2.0+occt-wasm.3.8.0",
   );
   expect(attestation.topologyFingerprint).not.toContain(
     "runtimeAttestation=",

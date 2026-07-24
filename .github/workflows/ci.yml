@@ -18,17 +18,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node: [20.19.0, 22.x, 24.x]
+        node: [22.13.0, 24.x, 26.x]
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install pnpm
         uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
 
       - name: Install Node.js
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ matrix.node }}
           cache: pnpm
@@ -41,15 +41,15 @@ jobs:
         run: pnpm verify
 
       - name: Measure coverage
-        if: matrix.node == '24.x'
+        if: matrix.node == '26.x'
         run: pnpm coverage
 
       - name: Enforce dependency advisory policy
-        if: matrix.node == '24.x'
+        if: matrix.node == '26.x'
         run: pnpm audit:release
 
       - name: Validate Mintlify site
-        if: matrix.node == '24.x'
+        if: matrix.node == '26.x'
         run: pnpm docs:release-check
 
   browser:
@@ -59,15 +59,15 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install pnpm
         uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
 
       - name: Install Node.js
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22.x
+          node-version: 26.x
           cache: pnpm
           package-manager-cache: false
 

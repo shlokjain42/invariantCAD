@@ -35,7 +35,7 @@ for deterministic builds.
 pnpm add invariantcad
 ```
 
-InvariantCAD is ESM-only and requires Node.js 20.19 or newer. npm, Yarn, and
+InvariantCAD is ESM-only and requires Node.js 22.13 or newer. npm, Yarn, and
 Bun can consume the package as well; pnpm is used for repository development.
 
 ## Quick start

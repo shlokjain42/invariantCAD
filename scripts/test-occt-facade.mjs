@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-const EXPECTED_FACADE_VERSION = "invariantcad-facade@0.9.0+occt-wasm.3.7.0";
+const EXPECTED_FACADE_VERSION = "invariantcad-facade@0.9.0+occt-wasm.3.8.0";
 const EXPECTED_TOPOLOGY_HISTORY_VERSION = 1;
 const ARTIFACT_NATIVE_REQUEST_LIMIT = 128 * 1024 * 1024;
 const ARTIFACT_PREFLIGHT_WORK_LIMIT = 1_000_000;

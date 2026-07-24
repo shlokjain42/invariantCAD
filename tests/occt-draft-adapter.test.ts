@@ -213,7 +213,7 @@ describe("owned OCCT draft facade probe", () => {
   it("rejects unknown versions and non-numeric or mismatched enums", () => {
     const first = exactModule().module;
     first.invariantcadFacadeVersion.mockReturnValue(
-      "invariantcad-facade@0.3.0+occt-wasm.3.7.0",
+      "invariantcad-facade@0.3.0+occt-wasm.3.8.0",
     );
     expect(() => probeOcctDraftFacade(first)).toThrow("version is");
 
