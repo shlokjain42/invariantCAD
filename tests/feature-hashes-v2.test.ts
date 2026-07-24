@@ -1067,39 +1067,44 @@ describe("document-v7 feature hashes protocol v2", () => {
     expect(exact.ok, JSON.stringify(exact.diagnostics)).toBe(true);
   });
 
-  it("enforces the exact cumulative canonical-byte boundary and in-flight cancellation", async () => {
-    const document = comprehensiveDocument();
-    const exact = await minimumCanonicalByteBudget(document);
-    expect(
-      (
-        await hashDesignFeaturesV2(document, {
-          limits: { maxCanonicalBytes: exact },
-        })
-      ).ok,
-    ).toBe(true);
-    const short = await hashDesignFeaturesV2(document, {
-      limits: { maxCanonicalBytes: exact - 1 },
-    });
-    expect(short.ok).toBe(false);
-    if (!short.ok) {
-      expect(short.diagnostics[0]?.details).toMatchObject({
-        resource: "maxCanonicalBytes",
-        limit: exact - 1,
-        actual: exact,
+  it(
+    "enforces the exact cumulative canonical-byte boundary and in-flight cancellation",
+    async () => {
+      const document = comprehensiveDocument();
+      const exact = await minimumCanonicalByteBudget(document);
+      expect(
+        (
+          await hashDesignFeaturesV2(document, {
+            limits: { maxCanonicalBytes: exact },
+          })
+        ).ok,
+      ).toBe(true);
+      const short = await hashDesignFeaturesV2(document, {
+        limits: { maxCanonicalBytes: exact - 1 },
       });
-    }
+      expect(short.ok).toBe(false);
+      if (!short.ok) {
+        expect(short.diagnostics[0]?.details).toMatchObject({
+          resource: "maxCanonicalBytes",
+          limit: exact - 1,
+          actual: exact,
+        });
+      }
 
-    const controller = new AbortController();
-    const pending = hashDesignFeaturesV2(document, {
-      signal: controller.signal,
-    });
-    controller.abort();
-    const aborted = await pending;
-    expect(aborted.ok).toBe(false);
-    if (!aborted.ok) {
-      expect(aborted.diagnostics[0]?.code).toBe("EVALUATION_ABORTED");
-    }
-  });
+      const controller = new AbortController();
+      const pending = hashDesignFeaturesV2(document, {
+        signal: controller.signal,
+      });
+      controller.abort();
+      const aborted = await pending;
+      expect(aborted.ok).toBe(false);
+      if (!aborted.ok) {
+        expect(aborted.diagnostics[0]?.code).toBe("EVALUATION_ABORTED");
+      }
+    },
+    // V8 coverage roughly doubles this bounded search beyond Vitest's 5 s default.
+    15_000,
+  );
 
   it("fails closed when encoding or cryptographic intrinsics mutate", async () => {
     const document = comprehensiveDocument();
