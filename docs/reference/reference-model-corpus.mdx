@@ -1,0 +1,61 @@
+---
+title: "Reference model corpus"
+description: "Build, test, and measure InvariantCAD against a small set of real mechanical models."
+icon: "boxes"
+---
+
+The repository reference corpus is a deliberately small outcome harness. Each
+model is authored with the same public APIs available to a library consumer,
+has one named part output, and records analytical default-volume and bounds
+expectations. It does not stand in for features that InvariantCAD does not yet
+support.
+
+| Model | Construction | Default output |
+| --- | --- | --- |
+| Electronics enclosure | Box subtraction plus four cylindrical mounting bosses | `enclosure` |
+| Six-bolt flange | Overlapping cylinders, a through bore, and a six-hole bolt circle | `flange` |
+| Hollow stepped shaft | Three overlapping shaft stages and a continuous axial bore | `shaft` |
+
+All three models are parameterized, material-backed parts and use only the
+common Manifold and stock OCCT modeling subset: boxes, cylinders, transforms,
+Booleans, parts, and materials. The corpus therefore exercises mesh-first and
+exact evaluation without pretending that unsupported sketch, surfacing, or
+assembly workflows exist.
+
+## Deterministic outcome tests
+
+`tests/reference-models.test.ts` rebuilds every document twice, checks canonical
+serialization, validates the document, and evaluates compatible cases on both
+shipped kernels. The assertions cover analytical volume, world bounds,
+non-empty mesh structure, and density-derived mass. Manifold receives a small
+relative tolerance for segmented circles; stock OCCT is checked against the
+analytic values.
+
+Run the focused test directly:
+
+```bash
+pnpm exec vitest run tests/reference-models.test.ts
+```
+
+## Measurement-only benchmark
+
+The benchmark emits JSON and intentionally has no pass/fail performance
+thresholds. Timings vary by host, runtime, warm-up state, and kernel, so the
+report preserves raw samples plus minimum, median, and maximum values instead
+of declaring a universal target.
+
+```bash
+pnpm exec tsx scripts/benchmark-reference-models.ts \
+  --kernel manifold \
+  --iterations 3
+
+pnpm exec tsx scripts/benchmark-reference-models.ts \
+  --kernel all \
+  --iterations 1 > .artifacts/reference-models.json
+```
+
+Each row reports document bytes, node and parameter counts, measured volume and
+surface area, bounds, mass, mesh vertex and triangle counts, mesh byte size,
+and separate build, evaluation, measurement, and tessellation timings. Compare
+reports produced on equivalent hardware and runtime versions; do not use this
+script as a cross-machine leaderboard.
