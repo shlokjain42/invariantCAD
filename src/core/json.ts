@@ -5,8 +5,9 @@ export type JsonValue =
   | readonly JsonValue[]
   | { readonly [key: string]: JsonValue };
 
-const intrinsicArrayIsArray = Array.isArray;
-const intrinsicArraySort = Array.prototype.sort;
+const IntrinsicArray = Array;
+const intrinsicArrayIsArray = IntrinsicArray.isArray;
+const intrinsicArraySort = IntrinsicArray.prototype.sort;
 const intrinsicJsonStringify = JSON.stringify;
 const intrinsicNumberIsFinite = Number.isFinite;
 const intrinsicObjectCreate = Object.create;
@@ -64,7 +65,7 @@ function canonicalizeValue(
   }
   if (reflectApply(intrinsicArrayIsArray, Array, [value])) {
     const input = value as readonly unknown[];
-    const output = new Array<unknown>(input.length);
+    const output = new IntrinsicArray<unknown>(input.length);
     for (let index = 0; index < input.length; index += 1) {
       output[index] = canonicalizeValue(input[index], createRecord);
     }

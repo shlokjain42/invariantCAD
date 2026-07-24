@@ -32,11 +32,13 @@ describe("canonical JSON", () => {
     const expected = canonicalStringifyProtocol(source);
     const originalStringify = JSON.stringify;
     const originalKeys = Object.keys;
+    const originalArray = globalThis.Array;
     const originalSort = Array.prototype.sort;
     const originalFreeze = Object.freeze;
     const originalIsFrozen = Object.isFrozen;
     const originalValues = Object.values;
     let serialized: string | undefined;
+    let serializedArray: string | undefined;
     const frozen = { nested: { value: true } };
     try {
       JSON.stringify = (() => '{"forged":true}') as typeof JSON.stringify;
@@ -47,9 +49,16 @@ describe("canonical JSON", () => {
       Object.freeze = ((value: object) => value) as typeof Object.freeze;
       Object.isFrozen = (() => false) as typeof Object.isFrozen;
       Object.values = (() => []) as typeof Object.values;
+      globalThis.Array = (function (length: number): unknown[] {
+        return new Proxy(new originalArray<unknown>(length), {
+          set: () => true,
+        });
+      }) as ArrayConstructor;
       serialized = canonicalStringifyProtocol(source);
+      serializedArray = canonicalStringifyProtocol([1, 2]);
       deepFreeze(frozen);
     } finally {
+      globalThis.Array = originalArray;
       JSON.stringify = originalStringify;
       Object.keys = originalKeys;
       Array.prototype.sort = originalSort;
@@ -59,6 +68,7 @@ describe("canonical JSON", () => {
     }
 
     expect(serialized).toBe(expected);
+    expect(serializedArray).toBe("[1,2]");
     expect(Object.isFrozen(frozen)).toBe(true);
     expect(Object.isFrozen(frozen.nested)).toBe(true);
   });
