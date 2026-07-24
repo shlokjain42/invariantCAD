@@ -111,6 +111,14 @@ protocol v2 are also staged internally. They are correctness-tested design
 inputs for Milestone 1, but they are not public authoring or evaluation
 capabilities. The public document alias and migration target remain v6.
 
+The staged v7 text parser rejects duplicate decoded JSON object members,
+including escape-equivalent names, and applies structural and nesting ceilings
+to raw values even when native last-key-wins parsing would discard them.
+Detached-value and direct-schema boundaries cannot reconstruct member
+occurrences already collapsed by another parser. A bounded canonical
+writer/counter is still required before v7 is promoted as a public untrusted
+document boundary.
+
 ## Development rules
 
 Every product feature must be a complete vertical slice. It is not done until
