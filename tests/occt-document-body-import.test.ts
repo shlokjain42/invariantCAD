@@ -14,6 +14,7 @@ interface ImportFixtures {
   readonly brep: Uint8Array;
   readonly brepBinary: Uint8Array;
   readonly step: Uint8Array;
+  readonly centimeterStep: Uint8Array;
   readonly nestedBrep: Uint8Array;
   readonly reversedBrep: Uint8Array;
   readonly multipleSolidsBrep: Uint8Array;
@@ -41,10 +42,16 @@ async function createFixtures(): Promise<ImportFixtures> {
     faceHandles = raw.getSubShapes(translated, "face");
     const loose = own(raw.makeCompound([box, faceHandles[0]!]));
 
+    const stepText = raw.exportStep(box);
+    const centimeterStep = stepText.replaceAll(".MILLI.", ".CENTI.");
+    if (centimeterStep === stepText) {
+      throw new Error("OCCT STEP fixture did not declare millimeter units");
+    }
     return {
       brep: encoder.encode(raw.toBREP(box)),
       brepBinary: raw.toBREPBinary(box).slice(),
-      step: encoder.encode(raw.exportStep(box)),
+      step: encoder.encode(stepText),
+      centimeterStep: encoder.encode(centimeterStep),
       nestedBrep: encoder.encode(raw.toBREP(outer)),
       reversedBrep: encoder.encode(raw.toBREP(reversed)),
       multipleSolidsBrep: encoder.encode(raw.toBREP(multiple)),
@@ -134,6 +141,19 @@ describe("OCCT document-body import protocol", () => {
       } finally {
         kernel.disposeShape(imported);
       }
+    }
+  });
+
+  it("honors a non-millimeter STEP file unit declaration", () => {
+    const imported = kernel.importDocumentBody!(
+      fixtures.centimeterStep,
+      fromStep,
+    );
+    try {
+      expect(kernel.measure(imported).volume).toBeCloseTo(24_000, 6);
+      expect(kernel.measure(imported).boundingBox.max).toEqual([20, 30, 40]);
+    } finally {
+      kernel.disposeShape(imported);
     }
   });
 
@@ -283,6 +303,36 @@ describe("OCCT document-body import protocol", () => {
     } finally {
       raw.fromBREP = originalFromBrep;
       raw.release = originalRelease;
+    }
+  });
+
+  it("rejects a non-finite final native volume without adopting the shape", () => {
+    const raw = (
+      kernel as GeometryKernel & {
+        readonly raw: {
+          getVolume(handle: ShapeHandle): number;
+        };
+      }
+    ).raw;
+    const originalGetVolume = raw.getVolume.bind(raw);
+    const nativeBefore = nativeHandleCount(kernel);
+    let calls = 0;
+    try {
+      raw.getVolume = (handle: ShapeHandle): number => {
+        calls += 1;
+        return calls === 2 ? Number.POSITIVE_INFINITY : originalGetVolume(handle);
+      };
+      expect(() =>
+        kernel.importDocumentBody!(
+          fixtures.reversedBrep,
+          declared("brep", "mm"),
+        ),
+      ).toThrow("positive-volume solid");
+      expect(calls).toBe(2);
+      expect(liveShapeCount(kernel)).toBe(0);
+      expect(nativeHandleCount(kernel)).toBe(nativeBefore);
+    } finally {
+      raw.getVolume = originalGetVolume;
     }
   });
 });

@@ -4459,9 +4459,14 @@ class OcctKernel implements GeometryKernel {
       if (
         this.raw.isNull(solid) ||
         this.raw.getShapeType(solid) !== "solid" ||
-        !this.raw.isValid(solid) ||
-        !(this.raw.getVolume(solid) > 0)
+        !this.raw.isValid(solid)
       ) {
+        throw new TypeError(
+          "Document body import must produce one valid positive-volume solid",
+        );
+      }
+      const finalVolume = this.raw.getVolume(solid);
+      if (!Number.isFinite(finalVolume) || !(finalVolume > 0)) {
         throw new TypeError(
           "Document body import must produce one valid positive-volume solid",
         );
