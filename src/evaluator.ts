@@ -90,6 +90,7 @@ import {
   type CompositeSweepRefinementClassificationSuccess,
 } from "./protocol/sweep.js";
 import { createManifoldKernel, type ManifoldKernelOptions } from "./manifold-kernel.js";
+import type { OcctKernelOptions } from "./occt-kernel.js";
 import {
   combineMassProperties,
   transformMassProperties,
@@ -144,6 +145,22 @@ import { parseDocumentValue } from "./serialization.js";
 export type ParameterOverride = EvaluationParameterOverride;
 export type ShapeExportFormat = MeshExportFormat | KernelExchangeFormat;
 
+export const EVALUATOR_PROFILES = Object.freeze([
+  "mesh-preview",
+  "mechanical-exact",
+] as const);
+export type EvaluatorProfile = (typeof EVALUATOR_PROFILES)[number];
+
+export interface EvaluatorProfileInspection {
+  readonly profile: EvaluatorProfile;
+  readonly compatible: boolean;
+  /**
+   * Stable capability paths that the kernel does not satisfy. An empty array
+   * means the kernel meets the complete profile contract.
+   */
+  readonly missing: readonly string[];
+}
+
 export interface EvaluationOptions {
   /** Exact document-owned configuration ID; omitted selects the base design. */
   readonly configuration?: string;
@@ -156,9 +173,180 @@ export interface EvaluationOptions {
 }
 
 export interface CreateEvaluatorOptions {
+  /**
+   * Optional complete runtime contract. When omitted, the legacy behavior is
+   * preserved: a supplied kernel is accepted as-is and otherwise Manifold is
+   * created.
+   *
+   * `mesh-preview` creates Manifold by default. `mechanical-exact` creates the
+   * stock OCCT backend by default.
+   */
+  readonly profile?: EvaluatorProfile;
   readonly kernel?: GeometryKernel;
   readonly manifold?: ManifoldKernelOptions;
+  readonly occt?: OcctKernelOptions;
   readonly sketchSolver?: SketchSolverBackend;
+}
+
+const PROFILE_PRIMITIVES = Object.freeze([
+  "box",
+  "cylinder",
+  "sphere",
+] as const satisfies readonly KernelPrimitive[]);
+
+const MESH_PREVIEW_FEATURES = Object.freeze([
+  "extrude",
+  "revolve",
+  "boolean",
+  "transform",
+] as const satisfies readonly KernelFeature[]);
+
+const MECHANICAL_EXACT_FEATURES = Object.freeze([
+  "extrude",
+  "revolve",
+  "loft",
+  "sweep",
+  "circularArcSweep",
+  "compositeSweep",
+  "boolean",
+  "transform",
+  "fillet",
+  "chamfer",
+  "shell",
+  "offset",
+] as const satisfies readonly KernelFeature[]);
+
+const MECHANICAL_EXACT_EXCHANGE = Object.freeze([
+  "step",
+  "brep",
+  "brep-binary",
+] as const satisfies readonly KernelExchangeFormat[]);
+
+const FEATURE_METHODS = {
+  extrude: "extrude",
+  revolve: "revolve",
+  loft: "loft",
+  sweep: "sweep",
+  circularArcSweep: "circularArcSweep",
+  compositeSweep: "compositeSweep",
+  boolean: "boolean",
+  transform: "transform",
+  fillet: "fillet",
+  chamfer: "chamfer",
+  shell: "shell",
+  offset: "offset",
+  draft: "draft",
+} as const satisfies Readonly<Record<KernelFeature, keyof GeometryKernel>>;
+
+function hasCallableKernelMember(
+  kernel: GeometryKernel,
+  member: keyof GeometryKernel,
+): boolean {
+  return typeof kernel[member] === "function";
+}
+
+/**
+ * Checks the complete baseline promised by one named evaluator profile.
+ *
+ * This is deliberately stronger than testing a representation string: it
+ * checks capability metadata and the callable operations needed by the
+ * profile, so applications can reject an incompatible runtime before model
+ * evaluation begins.
+ */
+export function inspectEvaluatorProfile(
+  kernel: GeometryKernel,
+  profile: EvaluatorProfile,
+): EvaluatorProfileInspection {
+  if (!(EVALUATOR_PROFILES as readonly string[]).includes(profile)) {
+    throw new TypeError(`Unknown evaluator profile '${String(profile)}'`);
+  }
+
+  const missing: string[] = [];
+  const capabilities = kernel.capabilities;
+  if (capabilities.protocolVersion !== GEOMETRY_KERNEL_PROTOCOL_VERSION) {
+    missing.push(
+      `protocolVersion:${GEOMETRY_KERNEL_PROTOCOL_VERSION}`,
+    );
+  }
+
+  const expectedRepresentation =
+    profile === "mesh-preview" ? "mesh" : "brep";
+  if (capabilities.representation !== expectedRepresentation) {
+    missing.push(`representation:${expectedRepresentation}`);
+  }
+  if (
+    profile === "mechanical-exact" &&
+    capabilities.exact !== true
+  ) {
+    missing.push("exact:true");
+  }
+
+  for (const primitive of PROFILE_PRIMITIVES) {
+    if (
+      !capabilities.primitives.includes(primitive) ||
+      !hasCallableKernelMember(kernel, primitive)
+    ) {
+      missing.push(`primitive:${primitive}`);
+    }
+  }
+
+  const features =
+    profile === "mesh-preview"
+      ? MESH_PREVIEW_FEATURES
+      : MECHANICAL_EXACT_FEATURES;
+  for (const feature of features) {
+    if (
+      !capabilities.features.includes(feature) ||
+      !hasCallableKernelMember(kernel, FEATURE_METHODS[feature])
+    ) {
+      missing.push(`feature:${feature}`);
+    }
+  }
+
+  if (profile === "mechanical-exact") {
+    for (const format of MECHANICAL_EXACT_EXCHANGE) {
+      if (
+        !capabilities.nativeImports.includes(format) ||
+        !hasCallableKernelMember(kernel, "importShape")
+      ) {
+        missing.push(`nativeImport:${format}`);
+      }
+      if (
+        !capabilities.nativeExports.includes(format) ||
+        !hasCallableKernelMember(kernel, "exportShape")
+      ) {
+        missing.push(`nativeExport:${format}`);
+      }
+    }
+
+    const topology = capabilities.topology;
+    for (const kind of ["face", "edge", "vertex"] as const) {
+      if (topology?.kinds.includes(kind) !== true) {
+        missing.push(`topology:${kind}`);
+      }
+    }
+    if (topology?.semanticRoles !== true) {
+      missing.push("topology:semanticRoles");
+    }
+    if (topology?.sketchSources !== true) {
+      missing.push("topology:sketchSources");
+    }
+    if (topology?.geometry !== true) {
+      missing.push("topology:geometry");
+    }
+    if (topology?.adjacency !== true) {
+      missing.push("topology:adjacency");
+    }
+    if (!hasCallableKernelMember(kernel, "topology")) {
+      missing.push("topology:snapshot");
+    }
+  }
+
+  return Object.freeze({
+    profile,
+    compatible: missing.length === 0,
+    missing: Object.freeze(missing),
+  });
 }
 
 function snapshotPrivateEvaluationOptions(
@@ -3207,9 +3395,53 @@ export class Evaluator {
 export async function createEvaluator(
   options: CreateEvaluatorOptions = {},
 ): Promise<Evaluator> {
-  const kernel = options.kernel ?? (await createManifoldKernel(options.manifold));
-  return new Evaluator(
-    kernel,
-    options.sketchSolver ?? createReferenceSketchSolver(),
-  );
+  const profile = options.profile;
+  if (profile !== undefined) {
+    if (!(EVALUATOR_PROFILES as readonly string[]).includes(profile)) {
+      throw new TypeError(`Unknown evaluator profile '${String(profile)}'`);
+    }
+    if (profile === "mesh-preview" && options.occt !== undefined) {
+      throw new TypeError(
+        "OCCT options require the 'mechanical-exact' evaluator profile",
+      );
+    }
+    if (profile === "mechanical-exact" && options.manifold !== undefined) {
+      throw new TypeError(
+        "Manifold options require the 'mesh-preview' evaluator profile",
+      );
+    }
+  } else if (options.occt !== undefined) {
+    throw new TypeError(
+      "OCCT options require profile: 'mechanical-exact'",
+    );
+  }
+
+  const createdKernel = options.kernel === undefined;
+  let kernel: GeometryKernel;
+  if (options.kernel !== undefined) {
+    kernel = options.kernel;
+  } else if (profile === "mechanical-exact") {
+    const { createOcctKernel } = await import("./occt-kernel.js");
+    kernel = await createOcctKernel(options.occt);
+  } else {
+    kernel = await createManifoldKernel(options.manifold);
+  }
+
+  try {
+    if (profile !== undefined) {
+      const inspection = inspectEvaluatorProfile(kernel, profile);
+      if (!inspection.compatible) {
+        throw new TypeError(
+          `Kernel '${kernel.id}' does not satisfy evaluator profile '${profile}': ${inspection.missing.join(", ")}`,
+        );
+      }
+    }
+    return new Evaluator(
+      kernel,
+      options.sketchSolver ?? createReferenceSketchSolver(),
+    );
+  } catch (error) {
+    if (createdKernel) kernel.dispose();
+    throw error;
+  }
 }

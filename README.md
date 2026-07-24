@@ -73,8 +73,17 @@ try {
 }
 ```
 
-The default evaluator uses the bundled Manifold runtime. Every evaluated design
-and evaluator owns native resources, so dispose them as shown.
+The default evaluator uses the bundled Manifold runtime. Select a named profile
+when the runtime contract matters:
+
+```ts
+const preview = await createEvaluator({ profile: "mesh-preview" });
+const exact = await createEvaluator({ profile: "mechanical-exact" });
+```
+
+The exact profile loads the stock OCCT backend and verifies its complete
+mechanical baseline before returning. Every evaluated design and evaluator owns
+native resources, so dispose them as shown.
 
 ## Geometry backends
 
@@ -83,19 +92,19 @@ and evaluator owns native resources, so dispose them as shown.
 | Manifold | Watertight triangle mesh | Fast default modeling and STL/OBJ workflows | STL, ASCII STL, OBJ |
 | OpenCascade | Exact B-Rep | Analytic geometry, topology, STEP, and BREP workflows | STL, OBJ, STEP, BREP |
 
-Select the exact backend explicitly:
+Use the exact profile for the supported stock OCCT baseline:
 
 ```ts
 import { createEvaluator } from "invariantcad";
-import { createOcctKernel } from "invariantcad/kernels/occt";
 
 const evaluator = await createEvaluator({
-  kernel: await createOcctKernel(),
+  profile: "mechanical-exact",
 });
 ```
 
-See the [kernel guide](docs/evaluation/kernels.mdx) for the complete capability
-and deployment differences.
+Pass an explicit kernel when custom OCCT loading, an owned runtime, or another
+backend is required. See the [kernel guide](docs/evaluation/kernels.mdx) for the
+complete capability and deployment differences.
 
 ## Capability snapshot
 

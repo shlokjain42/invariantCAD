@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+- Added named `mesh-preview` and `mechanical-exact` evaluator profiles. Profile
+  creation now loads the appropriate bundled/stock backend by default and
+  verifies its complete baseline—including callable features, exchange, and
+  topology for exact mechanical work—before returning an evaluator. Custom
+  kernels can be checked independently with an immutable capability report,
+  while profile-rejected caller-owned kernels remain caller-owned.
 - Advanced the maintained toolchain and exact backend to their latest stable
   releases: TypeScript 7.0.2, pnpm 11.17.0, Publint 0.3.22, Mint 4.2.739, and
   `occt-wasm` 3.8.0. The Node.js floor is now 22.13, with release coverage on

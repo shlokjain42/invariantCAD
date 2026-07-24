@@ -312,6 +312,7 @@ export {
   EvaluatedPart,
   EvaluatedSolid,
   Evaluator,
+  EVALUATOR_PROFILES,
   createEvaluator,
   type CreateEvaluatorOptions,
   type BillOfMaterials,
@@ -319,10 +320,13 @@ export {
   type EvaluatedMaterial,
   type EvaluatedOccurrence,
   type EvaluatedOutput,
+  type EvaluatorProfile,
+  type EvaluatorProfileInspection,
   type EvaluationOptions,
   type ParameterOverride,
   type MassDensitySource,
   type ShapeExportFormat,
+  inspectEvaluatorProfile,
 } from "./evaluator.js";
 export type {
   ConfigurationId,

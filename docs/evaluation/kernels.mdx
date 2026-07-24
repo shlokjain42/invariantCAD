@@ -26,6 +26,7 @@ and deployment needs.
 
 ```ts
 const evaluator = await createEvaluator();
+const gatedPreview = await createEvaluator({ profile: "mesh-preview" });
 ```
 
 Choose Manifold for fast, robust mesh-first workflows, ordinary parametric
@@ -35,13 +36,25 @@ extrusion, which the exact backend does not currently advertise.
 ## Stock OpenCascade
 
 ```ts
-const kernel = await createOcctKernel();
-const evaluator = await createEvaluator({ kernel });
+const evaluator = await createEvaluator({ profile: "mechanical-exact" });
 ```
 
 Choose stock OCCT for analytic B-Rep geometry, topology snapshots, exact bounded
 lofts/sweeps, fillets/chamfers/shells/offsets, and STEP/BREP exchange. Stock
 history for several complex features remains partial.
+
+The profile is stronger than checking `representation === "brep"`: creation
+also requires the documented primitive and feature baseline, native exchange
+methods, exactness, and face/edge/vertex topology. For custom loading, create
+the kernel explicitly and request the same preflight:
+
+```ts
+const kernel = await createOcctKernel({ wasm: customWasmSource });
+const evaluator = await createEvaluator({
+  profile: "mechanical-exact",
+  kernel,
+});
+```
 
 ## Owned OCCT facade
 
