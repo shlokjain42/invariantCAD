@@ -49,7 +49,7 @@ jobs:
         run: pnpm audit:release
 
       - name: Validate Mintlify site
-        if: matrix.node == '26.x'
+        if: matrix.node == '24.x'
         run: pnpm docs:release-check
 
   browser:
