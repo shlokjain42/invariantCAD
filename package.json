@@ -69,6 +69,7 @@
     "test:docs-examples": "tsx --tsconfig tsconfig.docs-examples.json scripts/test-docs-examples.ts",
     "test:browser": "pnpm build && vite build --config tests/browser/vite.config.ts && playwright test --config tests/browser/playwright.config.ts",
     "benchmark:reference-models": "tsx scripts/benchmark-reference-models.ts",
+    "benchmark:reference-models:ci": "tsx scripts/benchmark-reference-models.ts --kernel all --repeat-runs 1",
     "artifact:fixture:occt": "tsx scripts/generate-occt-artifact-fixture.ts",
     "api:generate": "pnpm build && node scripts/check-public-api.mjs --write",
     "api:check": "pnpm build && node scripts/check-public-api.mjs --check",

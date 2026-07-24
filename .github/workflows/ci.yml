@@ -44,6 +44,12 @@ jobs:
         if: matrix.node == '26.x'
         run: pnpm coverage
 
+      - name: Execute the reference benchmark protocol
+        if: matrix.node == '26.x'
+        run: |
+          mkdir -p .artifacts
+          pnpm benchmark:reference-models:ci > .artifacts/reference-models-v2.json
+
       - name: Enforce dependency advisory policy
         if: matrix.node == '26.x'
         run: pnpm audit:release

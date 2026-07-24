@@ -39,23 +39,56 @@ pnpm exec vitest run tests/reference-models.test.ts
 
 ## Measurement-only benchmark
 
-The benchmark emits JSON and intentionally has no pass/fail performance
-thresholds. Timings vary by host, runtime, warm-up state, and kernel, so the
-report preserves raw samples plus minimum, median, and maximum values instead
-of declaring a universal target.
+Benchmark schema v2 emits JSON and intentionally has no pass/fail performance
+thresholds. It launches one fresh child process for every model/kernel pair.
+The first run in that process is labeled `fresh-runtime-first-run`: it creates
+a new kernel and evaluator, builds a fresh document, and performs the first
+evaluation. It is not a claim that the machine, filesystem cache, WebAssembly
+compiler cache, CPU frequency, or surrounding host is cold.
+
+Every `same-runtime-repeat` builds a new document with byte-identical canonical
+serialization, reuses that case's kernel and evaluator, and starts only after
+the previous result is disposed. No evaluator artifact cache is enabled, so a
+repeat is not described as a cache hit.
 
 ```bash
 pnpm exec tsx scripts/benchmark-reference-models.ts \
   --kernel manifold \
-  --iterations 3
+  --repeat-runs 3
 
+mkdir -p .artifacts
 pnpm exec tsx scripts/benchmark-reference-models.ts \
   --kernel all \
-  --iterations 1 > .artifacts/reference-models.json
+  --repeat-runs 1 > .artifacts/reference-models-v2.json
 ```
 
-Each row reports document bytes, node and parameter counts, measured volume and
-surface area, bounds, mass, mesh vertex and triangle counts, mesh byte size,
-and separate build, evaluation, measurement, and tessellation timings. Compare
-reports produced on equivalent hardware and runtime versions; do not use this
-script as a cross-machine leaderboard.
+Use one or more `--model <id>` options to measure a subset. The complete
+one-repeat corpus also executes in Node 26 CI as a protocol and correctness
+check, without comparing performance values.
+
+Each run records canonical document bytes and SHA-256, node and parameter
+counts, measured geometry and mass, tessellation counts and buffer sizes,
+binary STL size, and STEP size when the kernel advertises STEP export. OCCT
+uses the explicit `0.1` linear deflection, `0.3` angular deflection, absolute
+tessellation profile recorded in the report. Manifold records that its mesh is
+controlled by authored primitive segmentation and its kernel default; the
+report does not imply triangle-count parity between backends.
+
+Timings remain separated into document construction, canonical serialization,
+evaluation, measurement, physical mass properties, tessellation, STL
+serialization, optional STEP serialization, result disposal, and total
+workflow time. Repeat samples also receive minimum, median, and maximum
+summaries.
+
+Memory evidence is Node's `process.resourceUsage().maxRSS` high-water value in
+KiB at named lifecycle boundaries inside the dedicated case process. It
+includes Node.js, loaded modules, JavaScript, WebAssembly, and native kernel
+state. It is process-wide, cannot attribute allocations to the model, and is
+not instantaneous RSS. The public kernel protocol does not expose native
+allocation counters, so current reports explicitly record native-handle
+telemetry as `unsupported`; private adapter bookkeeping is not mislabeled as a
+native-handle count.
+
+Compare reports produced from the same source revision on equivalent hardware,
+operating system, and runtime versions. Do not use this script as a
+cross-machine leaderboard.

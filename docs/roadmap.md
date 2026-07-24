@@ -141,10 +141,11 @@ measurable product program.
   executable: the production enclosure, shaft/flange, and pipe manifold in
   Milestone 2; imported STEP repair in Milestone 3; a mated gearbox in
   Milestone 4; and associative drawing and sheet-metal models in Milestone 5.
-- Establish a versioned benchmark format for every executable reference model.
-  It must distinguish first and repeated rebuilds, report memory and native
-  ownership evidence only at boundaries that can measure them, and record
-  tessellation and output sizes without unstable universal timing thresholds.
+- Benchmark schema v2 runs every executable reference model in a dedicated
+  process, distinguishes a fresh-runtime first run from same-runtime repeats,
+  reports process-wide high-water memory with exact caveats, records native
+  handle telemetry as unsupported until a real kernel protocol exists, and
+  captures tessellation and output sizes without universal timing thresholds.
 - Compile documentation examples as release tests and add one end-to-end
   example for every supported workflow.
 - Raise checked coverage floors toward demonstrated coverage without treating
