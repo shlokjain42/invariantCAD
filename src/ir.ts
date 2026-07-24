@@ -934,18 +934,33 @@ export type ImportedBodyUnitsIRV7 =
  * after their cross-kernel semantics are specified.
  */
 export interface ImportedBodyHealingIRV7 {
-  readonly mode: "reader-default";
+  /** Protocol v1 admits no geometry-changing healing operation. */
+  readonly mode: "none";
 }
 
-export interface ImportedBodyNodeIRV7 {
+interface ImportedBodyNodeBaseIRV7 {
   readonly kind: "importedBody";
   readonly resource: ResourceId;
-  readonly format: "step" | "brep" | "brep-binary";
-  readonly units: ImportedBodyUnitsIRV7;
   readonly healing: ImportedBodyHealingIRV7;
   /** Never silently choose one body from a compound import. */
   readonly expected: "single-solid";
 }
+
+/**
+ * Canonical imported-body combinations supported by document-body import
+ * protocol v1. STEP carries authoritative units; BREP coordinates are unitless.
+ */
+export type ImportedBodyNodeIRV7 = ImportedBodyNodeBaseIRV7 &
+  (
+    | {
+        readonly format: "step";
+        readonly units: Extract<ImportedBodyUnitsIRV7, { readonly mode: "from-file" }>;
+      }
+    | {
+        readonly format: "brep" | "brep-binary";
+        readonly units: Extract<ImportedBodyUnitsIRV7, { readonly mode: "declared" }>;
+      }
+  );
 
 export type PartNodeIRV7 = Omit<PartNodeIR, "solid"> & {
   readonly geometry: RefIRV7<"solid" | "bodySet">;

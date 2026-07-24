@@ -26,6 +26,7 @@ import {
   parseDocumentValueV7,
   stringifyDocumentV7,
 } from "../src/serialization.js";
+import { validateDocumentV7 } from "../src/validation.js";
 
 const length = (value: number) =>
   ({ op: "literal", dimension: "length", value }) as const;
@@ -94,7 +95,7 @@ function stagedV7Document(): DesignDocumentV7 {
         resource: "importedStep",
         format: "step",
         units: { mode: "from-file" },
-        healing: { mode: "reader-default" },
+        healing: { mode: "none" },
         expected: "single-solid",
       },
       bodies: {
@@ -427,6 +428,220 @@ describe("staged document-v7 serialization and validation", () => {
     );
   });
 
+  it("matches the strong document-body import protocol exactly", () => {
+    const source = stagedV7Document();
+    const imported = source.nodes[nodeId("imported")];
+    expect(imported?.kind).toBe("importedBody");
+    if (imported?.kind !== "importedBody") return;
+
+    for (const candidate of [
+      {
+        ...imported,
+        format: "step",
+        units: { mode: "declared", length: "mm" },
+      },
+      {
+        ...imported,
+        format: "brep",
+        units: { mode: "from-file" },
+      },
+      {
+        ...imported,
+        healing: { mode: "reader-default" },
+      },
+    ]) {
+      expect(
+        parseDocumentValueV7({
+          ...source,
+          nodes: { ...source.nodes, imported: candidate },
+        }).ok,
+      ).toBe(false);
+    }
+
+    expect(
+      parseDocumentValueV7({
+        ...source,
+        nodes: {
+          ...source.nodes,
+          imported: {
+            ...imported,
+            format: "brep-binary",
+            units: { mode: "declared", length: "in" },
+          },
+        },
+      }).ok,
+    ).toBe(true);
+  });
+
+  it("rejects unknown nested fields and invalid v7 reference IDs", () => {
+    const source = stagedV7Document();
+    const primitive = source.nodes[nodeId("primitive")];
+    expect(primitive?.kind).toBe("box");
+    if (primitive?.kind !== "box") return;
+
+    expect(
+      parseDocumentValueV7({
+        ...source,
+        units: { ...source.units, unexpected: true },
+      }).ok,
+    ).toBe(false);
+    expect(
+      parseDocumentValueV7({
+        ...source,
+        nodes: {
+          ...source.nodes,
+          primitive: {
+            ...primitive,
+            size: [
+              { ...primitive.size[0], unexpected: true },
+              primitive.size[1],
+              primitive.size[2],
+            ],
+          },
+        },
+      }).ok,
+    ).toBe(false);
+    expect(
+      parseDocumentValueV7({
+        ...source,
+        parameters: {
+          "bad/id": {
+            dimension: "length",
+            default: length(1),
+          },
+        },
+      }).ok,
+    ).toBe(false);
+    expect(
+      parseDocumentValueV7({
+        ...source,
+        parameters: {
+          valid: {
+            dimension: "length",
+            default: {
+              op: "parameter",
+              dimension: "length",
+              id: "bad/id",
+            },
+          },
+        },
+      }).ok,
+    ).toBe(false);
+  });
+
+  it("preserves every JSON metadata key through parse, clone, and serialization", () => {
+    const source = stagedV7Document();
+    const metadata = JSON.parse(
+      '{"__proto__":{"document":true},"nested":{"__proto__":"kept"}}',
+    ) as Readonly<Record<string, unknown>>;
+    const resourceMetadata = JSON.parse(
+      '{"__proto__":{"resource":true}}',
+    ) as Readonly<Record<string, unknown>>;
+    const candidate = {
+      ...source,
+      metadata,
+      resources: {
+        ...source.resources,
+        importedStep: {
+          ...source.resources?.[resourceId("importedStep")],
+          metadata: resourceMetadata,
+        },
+      },
+    } as unknown as DesignDocumentV7;
+
+    const parsed = parseDocumentValueV7(candidate);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(Object.hasOwn(parsed.value.metadata ?? {}, "__proto__")).toBe(true);
+    expect(
+      Object.hasOwn(
+        (parsed.value.metadata?.nested ?? {}) as object,
+        "__proto__",
+      ),
+    ).toBe(true);
+    expect(
+      Object.hasOwn(
+        parsed.value.resources?.[resourceId("importedStep")]?.metadata ?? {},
+        "__proto__",
+      ),
+    ).toBe(true);
+
+    const text = stringifyDocumentV7(parsed.value);
+    expect(text.match(/"__proto__"/g)).toHaveLength(3);
+    const reparsed = parseDocumentV7(text);
+    expect(reparsed.ok).toBe(true);
+    const clone = cloneDocumentV7(parsed.value);
+    expect(Object.hasOwn(clone.metadata ?? {}, "__proto__")).toBe(true);
+  });
+
+  it("enforces maxDocumentBytes for staged stringify and clone", () => {
+    const source = stagedV7Document();
+    const text = stringifyDocumentV7(source);
+    const bytes = new TextEncoder().encode(text).byteLength;
+    const baseline = parseDocumentValueV7(source);
+    expect(baseline.ok).toBe(true);
+    if (!baseline.ok) return;
+
+    expect(
+      stringifyDocumentV7(source, {
+        limits: { maxDocumentBytes: bytes },
+      }),
+    ).toBe(text);
+    expect(() =>
+      stringifyDocumentV7(source, {
+        limits: { maxDocumentBytes: bytes - 1 },
+      }),
+    ).toThrow(/maxDocumentBytes/);
+    expect(
+      cloneDocumentV7(source, {
+        limits: { maxDocumentBytes: bytes },
+      }),
+    ).toEqual(baseline.value);
+    expect(() =>
+      cloneDocumentV7(source, {
+        limits: { maxDocumentBytes: bytes - 1 },
+      }),
+    ).toThrow(/maxDocumentBytes/);
+  });
+
+  it("reads staged serialization options once before detaching the document", () => {
+    const source = stagedV7Document();
+    const baseline = parseDocumentValueV7(source);
+    expect(baseline.ok).toBe(true);
+    if (!baseline.ok) return;
+    let stringifyReads = 0;
+    const stringifyOptions = Object.defineProperty({}, "limits", {
+      enumerable: true,
+      get(): object {
+        stringifyReads += 1;
+        return {};
+      },
+    });
+    expect(
+      stringifyDocumentV7(
+        source,
+        stringifyOptions as Parameters<typeof stringifyDocumentV7>[1],
+      ),
+    ).toContain('"version":7');
+    expect(stringifyReads).toBe(1);
+
+    let cloneReads = 0;
+    const cloneOptions = Object.defineProperty({}, "limits", {
+      enumerable: true,
+      get(): object {
+        cloneReads += 1;
+        return {};
+      },
+    });
+    expect(
+      cloneDocumentV7(
+        source,
+        cloneOptions as Parameters<typeof cloneDocumentV7>[1],
+      ),
+    ).toEqual(baseline.value);
+    expect(cloneReads).toBe(1);
+  });
+
   it("validates new expression dimensions, outputs, configurations, and cycles", () => {
     const source = stagedV7Document();
     expect(
@@ -528,6 +743,54 @@ describe("staged document-v7 serialization and validation", () => {
     expect(() => cloneDocumentV7(invalid)).toThrow(
       "missing resource 'externalDocument'",
     );
+  });
+
+  it("contains ancestry checks for graphs deeper than the JavaScript stack", () => {
+    const scalarOne = scalar(1);
+    const nodes: Record<string, unknown> = {
+      node0: {
+        kind: "box",
+        size: [length(1), length(1), length(1)],
+        center: false,
+      },
+    };
+    const depth = 15_000;
+    for (let index = 1; index < depth; index += 1) {
+      nodes[`node${index}`] = {
+        kind: "transform",
+        input: { node: `node${index - 1}`, kind: "solid" },
+        operations: [
+          {
+            kind: "scale",
+            value: [scalarOne, scalarOne, scalarOne],
+          },
+        ],
+      };
+    }
+    nodes.final = {
+      kind: "fillet",
+      input: { node: `node${depth - 1}`, kind: "solid" },
+      edges: {
+        topology: "edge",
+        query: {
+          op: "origin",
+          feature: "node0",
+          relation: "created",
+        },
+        cardinality: { min: 1 },
+      },
+      radius: length(1),
+    };
+    const result = validateDocumentV7({
+      schema: DOCUMENT_SCHEMA_V7,
+      version: DOCUMENT_VERSION_V7,
+      name: "deep-flat-graph",
+      units: { length: "mm", angle: "rad" },
+      parameters: {},
+      nodes,
+      outputs: { main: { node: "final", kind: "solid" } },
+    } as unknown as DesignDocumentV7);
+    expect(result.ok).toBe(true);
   });
 });
 

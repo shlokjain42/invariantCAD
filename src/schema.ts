@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { JsonValue } from "./core/json.js";
 import {
   DOCUMENT_SCHEMA_V1,
   DOCUMENT_SCHEMA_V2,
@@ -133,11 +134,65 @@ export const ExpressionSchema: z.ZodType<ExpressionIR> = z.lazy(() =>
   ]),
 ) as z.ZodType<ExpressionIR>;
 
+/**
+ * Document v7 is a closed protocol. It cannot reuse the permissive legacy
+ * expression objects because those intentionally strip unknown properties.
+ */
+const ExpressionV7Schema: z.ZodType<ExpressionIR> = z.lazy(() =>
+  z.discriminatedUnion("op", [
+    z
+      .object({
+        op: z.literal("literal"),
+        dimension: DimensionSchema,
+        value: z.number().finite(),
+      })
+      .strict(),
+    z
+      .object({
+        op: z.literal("parameter"),
+        dimension: DimensionSchema,
+        id: IdSchema,
+      })
+      .strict(),
+    z
+      .object({
+        op: z.enum(["neg", "abs", "sin", "cos", "tan"]),
+        dimension: DimensionSchema,
+        value: ExpressionV7Schema,
+      })
+      .strict(),
+    z
+      .object({
+        op: z.enum(["add", "sub", "mul", "div"]),
+        dimension: DimensionSchema,
+        left: ExpressionV7Schema,
+        right: ExpressionV7Schema,
+      })
+      .strict(),
+    z
+      .object({
+        op: z.enum(["min", "max"]),
+        dimension: DimensionSchema,
+        values: z.array(ExpressionV7Schema).min(1),
+      })
+      .strict(),
+  ]),
+) as z.ZodType<ExpressionIR>;
+
 const Vec2ExpressionSchema = z.tuple([ExpressionSchema, ExpressionSchema]);
 const Vec3ExpressionSchema = z.tuple([
   ExpressionSchema,
   ExpressionSchema,
   ExpressionSchema,
+]);
+const Vec2ExpressionV7Schema = z.tuple([
+  ExpressionV7Schema,
+  ExpressionV7Schema,
+]);
+const Vec3ExpressionV7Schema = z.tuple([
+  ExpressionV7Schema,
+  ExpressionV7Schema,
+  ExpressionV7Schema,
 ]);
 
 const RefSchema = z.object({
@@ -173,7 +228,13 @@ const PlaneSchema = z.object({
 });
 
 const PlaneV7Schema = z.discriminatedUnion("type", [
-  PlaneSchema.strict(),
+  z
+    .object({
+      type: z.literal("principal"),
+      plane: z.enum(["XY", "XZ", "YZ"]),
+      origin: Vec3ExpressionV7Schema,
+    })
+    .strict(),
   z
     .object({
       type: z.literal("datum"),
@@ -292,6 +353,241 @@ const TransformOperationSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("mirror"), normal: Vec3ExpressionSchema }),
 ]);
 
+const EntityV7Schema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("point"),
+      x: ExpressionV7Schema,
+      y: ExpressionV7Schema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("line"),
+      start: IdSchema,
+      end: IdSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("circle"),
+      center: IdSchema,
+      radius: ExpressionV7Schema,
+      segments: z.number().int().min(3).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("arc"),
+      center: IdSchema,
+      radius: ExpressionV7Schema,
+      startAngle: ExpressionV7Schema,
+      endAngle: ExpressionV7Schema,
+      clockwise: z.boolean(),
+      segments: z.number().int().min(2).optional(),
+    })
+    .strict(),
+]);
+
+const ConstraintV7Schema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("coincident"),
+      first: IdSchema,
+      second: IdSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.enum(["horizontal", "vertical", "fixed"]),
+      entity: IdSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.enum(["distance", "distanceX", "distanceY"]),
+      first: IdSchema,
+      second: IdSchema,
+      value: ExpressionV7Schema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("length"),
+      entity: IdSchema,
+      value: ExpressionV7Schema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.enum(["parallel", "perpendicular", "equalLength"]),
+      first: IdSchema,
+      second: IdSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("angle"),
+      first: IdSchema,
+      second: IdSchema,
+      value: ExpressionV7Schema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.enum(["radius", "diameter"]),
+      entity: IdSchema,
+      value: ExpressionV7Schema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("equalRadius"),
+      first: IdSchema,
+      second: IdSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("midpoint"),
+      point: IdSchema,
+      line: IdSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("tangent"),
+      line: IdSchema,
+      circle: IdSchema,
+    })
+    .strict(),
+]);
+
+const EdgeLoopV7Schema = z
+  .object({
+    kind: z.literal("edges"),
+    edges: z
+      .array(
+        z
+          .object({
+            entity: IdSchema,
+            reversed: z.boolean().optional(),
+          })
+          .strict(),
+      )
+      .min(1),
+  })
+  .strict();
+const CircleLoopV7Schema = z
+  .object({
+    kind: z.literal("circle"),
+    entity: IdSchema,
+    reversed: z.boolean().optional(),
+  })
+  .strict();
+const LoopV7Schema = z.discriminatedUnion("kind", [
+  EdgeLoopV7Schema,
+  CircleLoopV7Schema,
+]);
+
+const TransformOperationV7Schema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("translate"),
+      value: Vec3ExpressionV7Schema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("rotate"),
+      value: Vec3ExpressionV7Schema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("scale"),
+      value: Vec3ExpressionV7Schema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("mirror"),
+      normal: Vec3ExpressionV7Schema,
+    })
+    .strict(),
+]);
+
+function copyProtocolJsonValue(
+  value: unknown,
+  active: WeakSet<object>,
+): JsonValue {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean"
+  ) {
+    return value;
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw new TypeError("Protocol metadata numbers must be finite");
+    }
+    return Object.is(value, -0) ? 0 : value;
+  }
+  if (typeof value !== "object") {
+    throw new TypeError("Protocol metadata must contain only JSON values");
+  }
+  if (active.has(value)) {
+    throw new TypeError("Protocol metadata cannot contain object cycles");
+  }
+  active.add(value);
+  try {
+    if (Array.isArray(value)) {
+      const output: JsonValue[] = [];
+      for (let index = 0; index < value.length; index += 1) {
+        if (!Object.hasOwn(value, index)) {
+          throw new TypeError("Protocol metadata arrays cannot be sparse");
+        }
+        output.push(copyProtocolJsonValue(value[index], active));
+      }
+      return output;
+    }
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new TypeError("Protocol metadata objects must be plain records");
+    }
+    const output = Object.create(null) as Record<string, JsonValue>;
+    for (const key of Object.keys(value)) {
+      output[key] = copyProtocolJsonValue(
+        (value as Readonly<Record<string, unknown>>)[key],
+        active,
+      );
+    }
+    return output;
+  } finally {
+    active.delete(value);
+  }
+}
+
+const ProtocolJsonRecordV7Schema = z.unknown().transform((value, context) => {
+  try {
+    const output = copyProtocolJsonValue(value, new WeakSet());
+    if (output === null || Array.isArray(output) || typeof output !== "object") {
+      throw new TypeError("Protocol metadata must be a JSON object");
+    }
+    return output as Readonly<Record<string, JsonValue>>;
+  } catch (error) {
+    context.addIssue({
+      code: "custom",
+      message:
+        error instanceof Error
+          ? error.message
+          : "Protocol metadata is malformed",
+    });
+    return z.NEVER;
+  }
+});
+
 const TopologyCardinalitySchema = z
   .object({
     min: z.number().int().min(1),
@@ -313,6 +609,13 @@ const TopologySourceSchema = z
     kind: z.literal("sketch-entity"),
     sketch: z.string(),
     entity: z.string(),
+  })
+  .strict();
+const TopologySourceV7Schema = z
+  .object({
+    kind: z.literal("sketch-entity"),
+    sketch: IdSchema,
+    entity: IdSchema,
   })
   .strict();
 
@@ -337,6 +640,10 @@ function createTopologySchemas<
   allowPersistent: AllowPersistent,
   roles: readonly R[],
   topologyKinds: readonly K[],
+  expressionSchema: z.ZodType<ExpressionIR> = ExpressionSchema,
+  vec3ExpressionSchema: z.ZodType = Vec3ExpressionSchema,
+  topologySourceSchema: z.ZodType = TopologySourceSchema,
+  nodeIdSchema: z.ZodType<string> = z.string(),
 ): {
   readonly query: z.ZodType<TopologyQueryIRFor<AllowPersistent, R, K>>;
   readonly selection: z.ZodType<
@@ -359,10 +666,10 @@ function createTopologySchemas<
       z
         .object({
           op: z.literal("origin"),
-          feature: z.string(),
+          feature: nodeIdSchema,
           relation: z.enum(["created", "modified"]),
           role: z.enum(roles as [R, ...R[]]).optional(),
-          source: TopologySourceSchema.optional(),
+          source: topologySourceSchema.optional(),
         })
         .strict(),
       z
@@ -380,15 +687,15 @@ function createTopologySchemas<
       z
         .object({
           op: z.enum(["normal", "direction"]),
-          value: Vec3ExpressionSchema,
-          tolerance: ExpressionSchema,
+          value: vec3ExpressionSchema,
+          tolerance: expressionSchema,
         })
         .strict(),
       z
         .object({
           op: z.literal("radius"),
-          value: ExpressionSchema,
-          tolerance: ExpressionSchema,
+          value: expressionSchema,
+          tolerance: expressionSchema,
         })
         .strict(),
       ...(topologyKinds.includes("vertex" as K)
@@ -396,8 +703,8 @@ function createTopologySchemas<
             z
               .object({
                 op: z.literal("position"),
-                value: Vec3ExpressionSchema,
-                tolerance: ExpressionSchema,
+                value: vec3ExpressionSchema,
+                tolerance: expressionSchema,
               })
               .strict(),
           ]
@@ -495,6 +802,22 @@ const topologySchemasV6 = createTopologySchemas<
   TOPOLOGY_ROLES_V6,
   TOPOLOGY_KINDS_V2,
 );
+const topologySchemasV7 = createTopologySchemas<
+  boolean,
+  TopologyRoleV6,
+  TopologyKind
+>(
+  true,
+  TOPOLOGY_ROLES_V6,
+  TOPOLOGY_KINDS_V2,
+  ExpressionV7Schema,
+  Vec3ExpressionV7Schema,
+  TopologySourceV7Schema,
+  IdSchema,
+);
+const TopologySelectionV7Schema = topologySchemasV7.selection as z.ZodType<
+  TopologySelectionIRV6
+>;
 
 export const TopologyQueryV1Schema: z.ZodType<TopologyQueryIRV1> =
   topologySchemasV1.query;
@@ -640,6 +963,12 @@ const SolidRefSchema = z
     kind: z.literal("solid"),
   })
   .strict();
+const SolidRefV7Schema = z
+  .object({
+    node: IdSchema,
+    kind: z.literal("solid"),
+  })
+  .strict();
 
 function createTopologyReferenceEntrySchema<
   K extends TopologyKind,
@@ -647,10 +976,11 @@ function createTopologyReferenceEntrySchema<
 >(
   referenceSchema: z.ZodType<PersistentTopologyReference<K, R>>,
   topologyKinds: readonly K[],
+  targetSchema: z.ZodType = SolidRefSchema,
 ): z.ZodType<TopologyReferenceEntryIR<K, R>> {
   return z
     .object({
-      target: SolidRefSchema,
+      target: targetSchema,
       topology: z.enum(topologyKinds as [K, ...K[]]),
       variants: z.array(referenceSchema).min(1),
     })
@@ -709,7 +1039,56 @@ export const TopologyReferenceEntryV7Schema: z.ZodType<TopologyReferenceEntryIRV
   createTopologyReferenceEntrySchema(
     PersistentTopologyReferenceV6Schema,
     TOPOLOGY_KINDS_V2,
-  ) as z.ZodType<TopologyReferenceEntryIRV7>;
+    SolidRefV7Schema,
+  )
+    .superRefine((entry, context) => {
+      const validateLineage = (
+        lineage: PersistentTopologyReference["lineage"],
+        path: readonly (string | number)[],
+      ): void => {
+        lineage.forEach((item, index) => {
+          if (!IdSchema.safeParse(item.feature).success) {
+            context.addIssue({
+              code: "custom",
+              message: "Topology lineage feature must be a valid ID",
+              path: [...path, index, "feature"],
+            });
+          }
+          if (item.source !== undefined) {
+            if (!IdSchema.safeParse(item.source.sketch).success) {
+              context.addIssue({
+                code: "custom",
+                message: "Topology source sketch must be a valid ID",
+                path: [...path, index, "source", "sketch"],
+              });
+            }
+            if (!IdSchema.safeParse(item.source.entity).success) {
+              context.addIssue({
+                code: "custom",
+                message: "Topology source entity must be a valid ID",
+                path: [...path, index, "source", "entity"],
+              });
+            }
+          }
+        });
+      };
+      entry.variants.forEach((variant, variantIndex) => {
+        validateLineage(variant.lineage, [
+          "variants",
+          variantIndex,
+          "lineage",
+        ]);
+        variant.adjacency.forEach((neighbor, neighborIndex) => {
+          validateLineage(neighbor.lineage, [
+            "variants",
+            variantIndex,
+            "adjacency",
+            neighborIndex,
+            "lineage",
+          ]);
+        });
+      });
+    }) as z.ZodType<TopologyReferenceEntryIRV7>;
 /** Current document-v6 topology-reference registry entry schema. */
 export const TopologyReferenceEntrySchema: z.ZodType<TopologyReferenceEntryIR> =
   TopologyReferenceEntryV6Schema;
@@ -995,7 +1374,7 @@ function createNodeV7Schema(): z.ZodType<NodeIRV7> {
               id: IdSchema,
               solid: solidRef,
               name: z.string().min(1).optional(),
-              metadata: z.record(z.string(), z.json()).optional(),
+              metadata: ProtocolJsonRecordV7Schema.optional(),
             })
             .strict(),
         )
@@ -1030,16 +1409,25 @@ function createNodeV7Schema(): z.ZodType<NodeIRV7> {
           })
           .strict(),
       ]),
-      healing: z.object({ mode: z.literal("reader-default") }).strict(),
+      healing: z.object({ mode: z.literal("none") }).strict(),
       expected: z.literal("single-solid"),
     })
     .strict()
     .superRefine((node, context) => {
-      if (node.units.mode === "from-file" && node.format !== "step") {
+      if (node.format === "step" && node.units.mode !== "from-file") {
         context.addIssue({
           code: "custom",
           path: ["units"],
-          message: "Only STEP imports can read length units from the source file",
+          message: "STEP imports must read length units from the source file",
+        });
+      } else if (
+        node.format !== "step" &&
+        node.units.mode !== "declared"
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["units"],
+          message: "BREP imports require explicitly declared length units",
         });
       }
     });
@@ -1052,8 +1440,8 @@ function createNodeV7Schema(): z.ZodType<NodeIRV7> {
       description: z.string().optional(),
       material: z.string().optional(),
       materialId: IdSchema.optional(),
-      massDensity: ExpressionSchema.optional(),
-      metadata: z.record(z.string(), z.json()).optional(),
+      massDensity: ExpressionV7Schema.optional(),
+      metadata: ProtocolJsonRecordV7Schema.optional(),
     })
     .strict();
 
@@ -1092,7 +1480,7 @@ function createNodeV7Schema(): z.ZodType<NodeIRV7> {
             id: IdSchema,
             component: assemblyComponentSchema,
             configuration: occurrenceConfigurationSchema,
-            placement: z.array(TransformOperationSchema),
+            placement: z.array(TransformOperationV7Schema),
             suppressed: z.boolean(),
           })
           .strict(),
@@ -1117,16 +1505,16 @@ function createNodeV7Schema(): z.ZodType<NodeIRV7> {
     z
       .object({
         kind: z.literal("box"),
-        size: Vec3ExpressionSchema,
+        size: Vec3ExpressionV7Schema,
         center: z.boolean(),
       })
       .strict(),
     z
       .object({
         kind: z.literal("cylinder"),
-        height: ExpressionSchema,
-        radiusBottom: ExpressionSchema,
-        radiusTop: ExpressionSchema,
+        height: ExpressionV7Schema,
+        radiusBottom: ExpressionV7Schema,
+        radiusTop: ExpressionV7Schema,
         center: z.boolean(),
         segments: z.number().int().min(3).optional(),
       })
@@ -1134,7 +1522,7 @@ function createNodeV7Schema(): z.ZodType<NodeIRV7> {
     z
       .object({
         kind: z.literal("sphere"),
-        radius: ExpressionSchema,
+        radius: ExpressionV7Schema,
         segments: z.number().int().min(4).optional(),
       })
       .strict(),
@@ -1142,16 +1530,21 @@ function createNodeV7Schema(): z.ZodType<NodeIRV7> {
       .object({
         kind: z.literal("sketch"),
         plane: PlaneV7Schema,
-        entities: z.record(IdSchema, EntitySchema),
-        constraints: z.record(IdSchema, ConstraintSchema),
-        profile: z.object({ outer: LoopSchema, holes: z.array(LoopSchema) }).strict(),
+        entities: z.record(IdSchema, EntityV7Schema),
+        constraints: z.record(IdSchema, ConstraintV7Schema),
+        profile: z
+          .object({
+            outer: LoopV7Schema,
+            holes: z.array(LoopV7Schema),
+          })
+          .strict(),
         tolerance: z.number().positive(),
       })
       .strict(),
     z
       .object({
         kind: z.literal("polylinePath"),
-        points: z.array(Vec3ExpressionSchema).min(2),
+        points: z.array(Vec3ExpressionV7Schema).min(2),
         closed: z.literal(false),
         tolerance: z.number().positive(),
       })
@@ -1159,9 +1552,9 @@ function createNodeV7Schema(): z.ZodType<NodeIRV7> {
     z
       .object({
         kind: z.literal("circularArcPath"),
-        start: Vec3ExpressionSchema,
-        through: Vec3ExpressionSchema,
-        end: Vec3ExpressionSchema,
+        start: Vec3ExpressionV7Schema,
+        through: Vec3ExpressionV7Schema,
+        end: Vec3ExpressionV7Schema,
         closed: z.literal(false),
         tolerance: z.number().positive(),
       })
@@ -1169,21 +1562,21 @@ function createNodeV7Schema(): z.ZodType<NodeIRV7> {
     z
       .object({
         kind: z.literal("compositePath"),
-        start: Vec3ExpressionSchema,
+        start: Vec3ExpressionV7Schema,
         segments: z
           .array(
             z.discriminatedUnion("kind", [
               z
                 .object({
                   kind: z.literal("line"),
-                  end: Vec3ExpressionSchema,
+                  end: Vec3ExpressionV7Schema,
                 })
                 .strict(),
               z
                 .object({
                   kind: z.literal("circularArc"),
-                  through: Vec3ExpressionSchema,
-                  end: Vec3ExpressionSchema,
+                  through: Vec3ExpressionV7Schema,
+                  end: Vec3ExpressionV7Schema,
                 })
                 .strict(),
             ]),
@@ -1197,10 +1590,10 @@ function createNodeV7Schema(): z.ZodType<NodeIRV7> {
       .object({
         kind: z.literal("extrude"),
         profile: profileRef,
-        distance: ExpressionSchema,
+        distance: ExpressionV7Schema,
         symmetric: z.boolean(),
-        twist: ExpressionSchema,
-        scaleTop: Vec2ExpressionSchema,
+        twist: ExpressionV7Schema,
+        scaleTop: Vec2ExpressionV7Schema,
         divisions: z.number().int().nonnegative(),
       })
       .strict(),
@@ -1208,7 +1601,7 @@ function createNodeV7Schema(): z.ZodType<NodeIRV7> {
       .object({
         kind: z.literal("revolve"),
         profile: profileRef,
-        angle: ExpressionSchema,
+        angle: ExpressionV7Schema,
         segments: z.number().int().min(3).optional(),
       })
       .strict(),
@@ -1240,55 +1633,55 @@ function createNodeV7Schema(): z.ZodType<NodeIRV7> {
       .object({
         kind: z.literal("transform"),
         input: solidRef,
-        operations: z.array(TransformOperationSchema).min(1),
+        operations: z.array(TransformOperationV7Schema).min(1),
       })
       .strict(),
     z
       .object({
         kind: z.literal("fillet"),
         input: solidRef,
-        edges: TopologySelectionV6Schema,
-        radius: ExpressionSchema,
+        edges: TopologySelectionV7Schema,
+        radius: ExpressionV7Schema,
       })
       .strict(),
     z
       .object({
         kind: z.literal("chamfer"),
         input: solidRef,
-        edges: TopologySelectionV6Schema,
-        distance: ExpressionSchema,
+        edges: TopologySelectionV7Schema,
+        distance: ExpressionV7Schema,
       })
       .strict(),
     z
       .object({
         kind: z.literal("shell"),
         input: solidRef,
-        openings: TopologySelectionV6Schema,
-        thickness: ExpressionSchema,
+        openings: TopologySelectionV7Schema,
+        thickness: ExpressionV7Schema,
         direction: z.enum(SHELL_DIRECTIONS),
-        tolerance: ExpressionSchema,
+        tolerance: ExpressionV7Schema,
       })
       .strict(),
     z
       .object({
         kind: z.literal("offset"),
         input: solidRef,
-        distance: ExpressionSchema,
+        distance: ExpressionV7Schema,
         direction: z.enum(OFFSET_DIRECTIONS),
-        tolerance: ExpressionSchema,
+        tolerance: ExpressionV7Schema,
       })
       .strict(),
     z
       .object({
         kind: z.literal("draft"),
         input: solidRef,
-        faces: TopologySelectionV6Schema,
-        angle: ExpressionSchema,
-        pullDirection: Vec3ExpressionSchema,
+        faces: TopologySelectionV7Schema,
+        angle: ExpressionV7Schema,
+        pullDirection: Vec3ExpressionV7Schema,
         neutralPlane: z
           .object({
-            origin: Vec3ExpressionSchema,
-            normal: Vec3ExpressionSchema,
+            origin: Vec3ExpressionV7Schema,
+            normal: Vec3ExpressionV7Schema,
           })
           .strict(),
       })
@@ -1298,30 +1691,30 @@ function createNodeV7Schema(): z.ZodType<NodeIRV7> {
     z
       .object({
         kind: z.literal("datumPoint"),
-        position: Vec3ExpressionSchema,
+        position: Vec3ExpressionV7Schema,
       })
       .strict(),
     z
       .object({
         kind: z.literal("datumAxis"),
-        origin: Vec3ExpressionSchema,
-        direction: Vec3ExpressionSchema,
+        origin: Vec3ExpressionV7Schema,
+        direction: Vec3ExpressionV7Schema,
       })
       .strict(),
     z
       .object({
         kind: z.literal("datumPlane"),
-        origin: Vec3ExpressionSchema,
-        xDirection: Vec3ExpressionSchema,
-        normal: Vec3ExpressionSchema,
+        origin: Vec3ExpressionV7Schema,
+        xDirection: Vec3ExpressionV7Schema,
+        normal: Vec3ExpressionV7Schema,
       })
       .strict(),
     z
       .object({
         kind: z.literal("coordinateSystem"),
-        origin: Vec3ExpressionSchema,
-        xDirection: Vec3ExpressionSchema,
-        yDirection: Vec3ExpressionSchema,
+        origin: Vec3ExpressionV7Schema,
+        xDirection: Vec3ExpressionV7Schema,
+        yDirection: Vec3ExpressionV7Schema,
       })
       .strict(),
     bodySetSchema,
@@ -1392,6 +1785,49 @@ const ConfigurationSchema = z
     "A configuration requires at least one override",
   );
 
+const ConfigurationV7Schema = z
+  .object({
+    description: z.string().optional(),
+    parameterOverrides: z
+      .record(IdSchema, ExpressionV7Schema)
+      .refine(
+        (parameters) => Object.keys(parameters).length > 0,
+        "Configuration parameter overrides cannot be empty; omit them instead",
+      )
+      .optional(),
+    instanceSuppressions: z
+      .record(
+        IdSchema,
+        z
+          .record(IdSchema, z.boolean())
+          .refine(
+            (instances) => Object.keys(instances).length > 0,
+            "Configuration assembly instance overrides cannot be empty",
+          ),
+      )
+      .refine(
+        (assemblies) => Object.keys(assemblies).length > 0,
+        "Configuration assembly overrides cannot be empty; omit them instead",
+      )
+      .optional(),
+    partMaterialOverrides: z
+      .record(IdSchema, IdSchema)
+      .refine(
+        (parts) => Object.keys(parts).length > 0,
+        "Configuration part material overrides cannot be empty; omit them instead",
+      )
+      .optional(),
+    metadata: ProtocolJsonRecordV7Schema.optional(),
+  })
+  .strict()
+  .refine(
+    (configuration) =>
+      configuration.parameterOverrides !== undefined ||
+      configuration.instanceSuppressions !== undefined ||
+      configuration.partMaterialOverrides !== undefined,
+    "A configuration requires at least one override",
+  );
+
 const DocumentNameSchema = z.string().min(1);
 const DocumentUnitsSchema = z.object({
   length: z.literal("mm"),
@@ -1437,9 +1873,60 @@ const DocumentConfigurationsSchema = z
     "Configuration registry cannot be empty; omit it instead",
   )
   .optional();
+const DocumentUnitsV7Schema = z
+  .object({
+    length: z.literal("mm"),
+    angle: z.literal("rad"),
+    mass: z.literal("kg").optional(),
+  })
+  .strict();
+const DocumentParametersV7Schema = z.record(
+  IdSchema,
+  z
+    .object({
+      dimension: DimensionSchema,
+      default: ExpressionV7Schema,
+      min: ExpressionV7Schema.optional(),
+      max: ExpressionV7Schema.optional(),
+      label: z.string().optional(),
+      description: z.string().optional(),
+    })
+    .strict(),
+);
+const DocumentMaterialsV7Schema = z
+  .record(
+    IdSchema,
+    z
+      .object({
+        name: z
+          .string()
+          .min(1)
+          .refine(
+            (value) => value.trim().length > 0,
+            "Material name cannot be blank",
+          ),
+        description: z.string().optional(),
+        massDensity: ExpressionV7Schema,
+        metadata: ProtocolJsonRecordV7Schema.optional(),
+      })
+      .strict(),
+  )
+  .refine(
+    (materials) => Object.keys(materials).length > 0,
+    "Material registry cannot be empty; omit it instead",
+  )
+  .optional();
+const DocumentConfigurationsV7Schema = z
+  .record(IdSchema, ConfigurationV7Schema)
+  .refine(
+    (configurations) => Object.keys(configurations).length > 0,
+    "Configuration registry cannot be empty; omit it instead",
+  )
+  .optional();
 const DocumentOutputsSchema = z.record(z.string(), DesignOutputRefSchema);
 const DocumentOutputsV7Schema = z.record(IdSchema, DesignOutputRefV7Schema);
 const DocumentMetadataSchema = z.record(z.string(), z.json()).optional();
+const DocumentMetadataV7Schema = ProtocolJsonRecordV7Schema.optional();
 const DocumentResourcesV7Schema = z
   .record(
     IdSchema,
@@ -1468,7 +1955,7 @@ const DocumentResourcesV7Schema = z
             "Resource locations cannot contain duplicates",
           )
           .optional(),
-        metadata: z.record(z.string(), z.json()).optional(),
+        metadata: ProtocolJsonRecordV7Schema.optional(),
       })
       .strict(),
   )
@@ -1593,14 +2080,14 @@ const DesignDocumentBodyShapeV6 = {
 
 const DesignDocumentBodyShapeV7 = {
   name: DocumentNameSchema,
-  units: DocumentUnitsSchema,
-  parameters: DocumentParametersSchema,
-  materials: DocumentMaterialsSchema,
-  configurations: DocumentConfigurationsSchema,
+  units: DocumentUnitsV7Schema,
+  parameters: DocumentParametersV7Schema,
+  materials: DocumentMaterialsV7Schema,
+  configurations: DocumentConfigurationsV7Schema,
   resources: DocumentResourcesV7Schema,
   nodes: z.record(IdSchema, NodeV7Schema),
   outputs: DocumentOutputsV7Schema,
-  metadata: DocumentMetadataSchema,
+  metadata: DocumentMetadataV7Schema,
   topologyReferences: DocumentTopologyReferencesV7Schema,
 } as const;
 

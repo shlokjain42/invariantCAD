@@ -272,7 +272,7 @@ function stagedNodes(): Readonly<Record<NodeKindV7, NodeIRV7>> {
       resource: resourceId("import"),
       format: "step",
       units: { mode: "from-file" },
-      healing: { mode: "reader-default" },
+      healing: { mode: "none" },
       expected: "single-solid",
     },
   } as unknown as Readonly<Record<NodeKindV7, NodeIRV7>>;

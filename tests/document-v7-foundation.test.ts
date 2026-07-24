@@ -129,7 +129,7 @@ function stagedV7Document(): DesignDocumentV7 {
         resource: "importedStep",
         format: "step",
         units: { mode: "from-file" },
-        healing: { mode: "reader-default" },
+        healing: { mode: "none" },
         expected: "single-solid",
       },
       primitive: {
@@ -298,7 +298,7 @@ describe("staged document-v7 foundation", () => {
         resource: "importedStep",
         format: "brep",
         units: { mode: "from-file" },
-        healing: { mode: "reader-default" },
+        healing: { mode: "none" },
         expected: "single-solid",
       }).success,
     ).toBe(false);

@@ -723,21 +723,22 @@ function nodeIsAncestor(
   possibleAncestor: NodeId,
 ): boolean {
   const visited = new Set<NodeId>();
-  const visit = (id: NodeId): boolean => {
+  const pending: NodeId[] = [descendant];
+  while (pending.length > 0) {
+    const id = pending.pop()!;
     if (id === possibleAncestor) return true;
-    if (visited.has(id)) return false;
+    if (visited.has(id)) continue;
     visited.add(id);
     const node = Object.hasOwn(document.nodes, id)
       ? document.nodes[id]
       : undefined;
-    return (
-      node !== undefined &&
-      nodeDependenciesForDocument(node, document).some((dependency) =>
-        visit(dependency.node),
-      )
-    );
-  };
-  return visit(descendant);
+    if (node === undefined) continue;
+    const dependencies = nodeDependenciesForDocument(node, document);
+    for (let index = dependencies.length - 1; index >= 0; index -= 1) {
+      pending.push(dependencies[index]!.node);
+    }
+  }
+  return false;
 }
 
 function validateTopologySelection(

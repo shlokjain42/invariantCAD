@@ -349,6 +349,38 @@ describe("frozen document-version grammar", () => {
     },
   );
 
+  it.each(versionCases())(
+    "$label preserves its legacy nested unknown-field stripping behavior",
+    ({ schema, document }) => {
+      const legacy = mutable(document);
+      legacy.units.legacyNestedField = true;
+      legacy.nodes.box.size[0].legacyExpressionField = true;
+
+      const schemaResult = schema.safeParse(legacy);
+      expect(schemaResult.success).toBe(true);
+      const parsed = parseDocumentValue(legacy);
+      expect(parsed.ok).toBe(true);
+      if (!parsed.ok) return;
+      expect(
+        Object.hasOwn(
+          parsed.value.units as unknown as object,
+          "legacyNestedField",
+        ),
+      ).toBe(false);
+      const node = (
+        parsed.value.nodes as unknown as Readonly<Record<string, NodeIR>>
+      ).box;
+      expect(node?.kind).toBe("box");
+      if (node?.kind !== "box") return;
+      expect(
+        Object.hasOwn(
+          node.size[0] as unknown as object,
+          "legacyExpressionField",
+        ),
+      ).toBe(false);
+    },
+  );
+
   it("keeps all current runtime and authoring aliases on document v6", () => {
     expect(DOCUMENT_SCHEMA).toBe(DOCUMENT_SCHEMA_V6);
     expect(DOCUMENT_VERSION).toBe(DOCUMENT_VERSION_V6);

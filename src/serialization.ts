@@ -1,4 +1,8 @@
-import { canonicalStringify, deepFreeze } from "./core/json.js";
+import {
+  canonicalStringify,
+  canonicalStringifyProtocol,
+  deepFreeze,
+} from "./core/json.js";
 import {
   diagnostic,
   failure,
@@ -153,9 +157,20 @@ export function stringifyDocumentV7(
   document: DesignDocumentV7,
   options: StringifyDocumentV7Options = {},
 ): string {
-  const parsed = parseDocumentValueV7(
+  const limits = options.limits;
+  const pretty = options.pretty === true;
+  const normalizedLimits = parseLimits(
+    limits === undefined ? {} : { limits },
+  );
+  if (!normalizedLimits.ok) {
+    throw new TypeError(
+      normalizedLimits.diagnostics[0]?.message ??
+        "Cannot normalize InvariantCAD document-v7 serialization limits",
+    );
+  }
+  const parsed = parseDocumentValueV7WithLimits(
     document,
-    options.limits === undefined ? {} : { limits: options.limits },
+    normalizedLimits.value,
   );
   if (!parsed.ok) {
     throw new TypeError(
@@ -163,10 +178,17 @@ export function stringifyDocumentV7(
         "Cannot serialize an invalid InvariantCAD document-v7 value",
     );
   }
-  return canonicalStringify(
+  const text = canonicalStringifyProtocol(
     canonicalizeDocumentTopology(parsed.value),
-    options.pretty ? 2 : undefined,
+    pretty ? 2 : undefined,
   );
+  const documentBytes = new TextEncoder().encode(text).byteLength;
+  if (documentBytes > normalizedLimits.value.maxDocumentBytes) {
+    throw new TypeError(
+      `Design-document maxDocumentBytes limit ${normalizedLimits.value.maxDocumentBytes} was exceeded by ${documentBytes}`,
+    );
+  }
+  return text;
 }
 
 function parseLimits(
@@ -445,11 +467,33 @@ export function cloneDocumentV7(
   document: DesignDocumentV7,
   options: ParseDocumentOptions = {},
 ): DesignDocumentV7 {
-  const parsed = parseDocumentValueV7(document, options);
+  const limits = options.limits;
+  const normalizedLimits = parseLimits(
+    limits === undefined ? {} : { limits },
+  );
+  if (!normalizedLimits.ok) {
+    throw new TypeError(
+      normalizedLimits.diagnostics[0]?.message ??
+        "Cannot normalize InvariantCAD document-v7 clone limits",
+    );
+  }
+  const parsed = parseDocumentValueV7WithLimits(
+    document,
+    normalizedLimits.value,
+  );
   if (!parsed.ok) {
     throw new TypeError(
       parsed.diagnostics[0]?.message ??
         "Cannot clone an invalid InvariantCAD document-v7 value",
+    );
+  }
+  const text = canonicalStringifyProtocol(
+    canonicalizeDocumentTopology(parsed.value),
+  );
+  const documentBytes = new TextEncoder().encode(text).byteLength;
+  if (documentBytes > normalizedLimits.value.maxDocumentBytes) {
+    throw new TypeError(
+      `Design-document maxDocumentBytes limit ${normalizedLimits.value.maxDocumentBytes} was exceeded by ${documentBytes}`,
     );
   }
   return parsed.value;
