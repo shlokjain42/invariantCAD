@@ -2,13 +2,31 @@ packages:
   - .
 
 allowBuilds:
+  "@scarf/scarf": false
   esbuild: true
+  keytar: false
+  puppeteer: false
+  sharp: false
 
 overrides:
   "@rolldown/binding-wasm32-wasi@1.1.5>@emnapi/core": 1.11.2
   "@rolldown/binding-wasm32-wasi@1.1.5>@emnapi/runtime": 1.11.2
+  "adm-zip@0.5.16": 0.6.0
+  "axios@1.16.1": 1.18.1
   esbuild: 0.28.1
+  "js-yaml@4.1.1": 4.3.0
+  "qs@6.14.2": 6.15.3
+  "sharp@0.33.5": 0.35.3
+  "tar@7.5.15": 7.5.21
 
 minimumReleaseAgeExclude:
   - "@publint/pack@0.1.6"
   - "publint@0.3.22"
+  - "@mintlify/cli@4.0.1343"
+  - "@mintlify/common@1.0.1045"
+  - "@mintlify/link-rot@3.0.1238"
+  - "@mintlify/prebuild@1.0.1193"
+  - "@mintlify/previewing@4.0.1262"
+  - "@mintlify/scraping@4.0.910"
+  - "@mintlify/validation@0.1.800"
+  - "mint@4.2.740"

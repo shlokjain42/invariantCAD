@@ -39,7 +39,7 @@
   kernels can be checked independently with an immutable capability report,
   while profile-rejected caller-owned kernels remain caller-owned.
 - Advanced the maintained toolchain and exact backend to their latest stable
-  releases: TypeScript 7.0.2, pnpm 11.17.0, Publint 0.3.22, Mint 4.2.739, and
+  releases: TypeScript 7.0.2, pnpm 11.17.0, Publint 0.3.22, Mint 4.2.740, and
   `occt-wasm` 3.8.0. The Node.js floor is now 22.13, with release coverage on
   22.13, 24, and 26. Package-type validation uses the current
   `@arethetypeswrong/core` API directly, avoiding the unrelated
