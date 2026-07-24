@@ -35,9 +35,8 @@ Mintlify validation and links, and the production browser bundle.
 
 The one-time bootstrap completed with `invariantcad@0.1.0` on 2026-07-22.
 The public registry artifact, provenance, owner, files, CLI, entry points,
-geometry kernels, and `latest` tag were independently verified. The temporary
-`NPM_TOKEN` GitHub environment secret was then deleted, and the release
-workflow no longer reads a registry token.
+geometry kernels, and `latest` tag were independently verified. The release
+workflow does not read or require a registry token.
 
 Never commit an npm token or copy it into a workflow file, shell history, issue,
 release note, or CI log. The npm-side bootstrap token must also be revoked.
@@ -65,12 +64,13 @@ do not restore a long-lived publish secret.
 
 Dispatch the workflow on the tag, never on a branch:
 
-    gh workflow run release.yml --ref v0.1.0
+    VERSION="$(node -p 'require("./package.json").version')"
+    gh workflow run release.yml --ref "v${VERSION}"
 
 After it succeeds, verify independently:
 
-    npm view invariantcad@0.1.0 version dist-tags repository --json
-    npm pack invariantcad@0.1.0 --dry-run
+    npm view "invariantcad@${VERSION}" version dist-tags repository --json
+    npm pack "invariantcad@${VERSION}" --dry-run
 
 Install the registry artifact into an empty temporary project and exercise its
 ESM entry points and CLI. Only then publish the GitHub release using the body of
