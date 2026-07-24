@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Added declaration-level public API reports for every supported package entry
+  point. CI now rejects unreviewed changes to exported signatures while the
+  generated export index continues to reject undocumented exported names.
 - Added named `mesh-preview` and `mechanical-exact` evaluator profiles. Profile
   creation now loads the appropriate bundled/stock backend by default and
   verifies its complete baseline—including callable features, exchange, and

@@ -214,6 +214,7 @@
             "icon": "folder-kanban",
             "pages": [
               "roadmap",
+              "project/api-compatibility",
               "project/security",
               "project/contributing",
               "releasing",

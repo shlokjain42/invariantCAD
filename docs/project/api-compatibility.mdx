@@ -1,0 +1,56 @@
+---
+title: "Public API compatibility"
+description: "How InvariantCAD records and reviews declaration-level changes across every supported package entry point."
+icon: "code-compare"
+---
+
+# Public API compatibility
+
+InvariantCAD records the complete emitted TypeScript API for every supported
+package entry point:
+
+- `invariantcad`
+- `invariantcad/conformance`
+- `invariantcad/kernels/occt`
+- `invariantcad/kernels/occt/browser`
+- `invariantcad/kernels/occt/node`
+
+The committed reports under `etc/api/` contain declaration signatures, not just
+export names. A changed parameter, return type, property, overload, literal
+value, or reachable supporting type therefore produces a reviewable diff.
+
+## Check the current API
+
+```bash
+pnpm api:check
+```
+
+This builds declarations and compares them with the committed reports. Ordinary
+release verification uses the already-built declarations and runs the same
+comparison.
+
+When a public API change is intentional:
+
+```bash
+pnpm api:generate
+git diff -- etc/api
+```
+
+Review the report diff before committing it. Updating a report is an approval
+record, not evidence that a change is compatible.
+
+## Compatibility policy
+
+During `0.x`, a minor release may change the TypeScript convenience API when
+the changelog and migration path make the impact explicit. Frozen document and
+protocol versions have a stronger rule: their existing bytes and meaning may
+not change.
+
+Adding a symbol is usually source-compatible but still expands the supported
+surface. Removing or renaming a symbol, narrowing an accepted input, widening a
+result in a way callers must handle, or changing an ownership contract requires
+an explicit compatibility decision.
+
+The generated [export index](/reference/export-index) answers “what names are
+available?” The API reports answer “what are their exact TypeScript
+signatures?” Both gates are required because they detect different drift.

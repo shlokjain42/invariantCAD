@@ -1,0 +1,7 @@
+{
+  "extends": "./base.json",
+  "mainEntryPointFilePath": "<projectFolder>/dist/index.d.ts",
+  "apiReport": {
+    "reportFileName": "invariantcad"
+  }
+}

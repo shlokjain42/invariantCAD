@@ -1,0 +1,7 @@
+{
+  "extends": "./base.json",
+  "mainEntryPointFilePath": "<projectFolder>/dist/occt-runtime-node.d.ts",
+  "apiReport": {
+    "reportFileName": "kernels-occt-node"
+  }
+}

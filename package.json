@@ -69,6 +69,9 @@
     "test:browser": "pnpm build && vite build --config tests/browser/vite.config.ts && playwright test --config tests/browser/playwright.config.ts",
     "benchmark:reference-models": "tsx scripts/benchmark-reference-models.ts",
     "artifact:fixture:occt": "tsx scripts/generate-occt-artifact-fixture.ts",
+    "api:generate": "pnpm build && node scripts/check-public-api.mjs --write",
+    "api:check": "pnpm build && node scripts/check-public-api.mjs --check",
+    "api:check:built": "node scripts/check-public-api.mjs --check",
     "docs:generate": "node scripts/generate-docs-export-index.mjs",
     "docs:check": "node scripts/generate-docs-export-index.mjs --check && node scripts/check-docs.mjs",
     "docs:dev": "cd docs && npm exec --yes --package=mint@4.2.739 -- mint dev",
@@ -91,7 +94,7 @@
     "test:occt-runtime-attestation-node": "node scripts/test-occt-runtime-attestation-node.mjs",
     "test:occt-facade-bundle": "pnpm bundle:occt-facade && pnpm verify:occt-facade-bundle && pnpm pack --pack-destination .artifacts && node scripts/package-smoke.mjs --owned-facade-runtime-dir .artifacts/occt-facade-bundle/invariantcad-occt-facade-0.9.0/runtime && pnpm test:occt-persistence-public -- --runtime-dir .artifacts/occt-facade-bundle/invariantcad-occt-facade-0.9.0/runtime && pnpm test:occt-artifact-owned -- --runtime-dir .artifacts/occt-facade-bundle/invariantcad-occt-facade-0.9.0/runtime && pnpm test:occt-artifact-process -- --runtime-dir .artifacts/occt-facade-bundle/invariantcad-occt-facade-0.9.0/runtime",
     "prepack": "pnpm build",
-    "verify": "pnpm check && pnpm lint && pnpm test && pnpm artifact:fixture:occt -- --version v3 --check && pnpm docs:check && pnpm lint:package && pnpm test:package",
+    "verify": "pnpm check && pnpm api:check:built && pnpm lint && pnpm test && pnpm artifact:fixture:occt -- --version v3 --check && pnpm docs:check && pnpm lint:package && pnpm test:package",
     "release:check": "pnpm verify && pnpm audit:release && pnpm docs:release-check && pnpm test:browser"
   },
   "engines": {
@@ -115,6 +118,7 @@
   },
   "devDependencies": {
     "@arethetypeswrong/core": "0.18.5",
+    "@microsoft/api-extractor": "7.58.12",
     "@playwright/test": "^1.61.1",
     "@types/node": "^26.1.1",
     "@vitest/coverage-v8": "^4.1.10",

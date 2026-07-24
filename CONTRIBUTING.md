@@ -81,6 +81,7 @@ to the change before opening a pull request.
 | --- | --- |
 | Documentation only | `pnpm docs:check` |
 | Type or implementation | `pnpm check`, `pnpm lint`, and `pnpm test` |
+| Public TypeScript API | `pnpm api:generate`, review `etc/api/`, and `pnpm api:check` |
 | Package exports or CLI | `pnpm lint:package` and `pnpm test:package` |
 | Browser or WASM loading | `pnpm test:browser` |
 | Dependency or release boundary | `pnpm audit:release` and `pnpm release:check` |
@@ -113,7 +114,8 @@ Protocol changes require more than a type edit. Include:
 
 New public exports must remain visible in the generated export index. Run
 `pnpm docs:generate` when the public surface changes and commit the resulting
-documentation update.
+documentation update. Any public signature change must also update and review
+the declaration-level reports with `pnpm api:generate`.
 
 ## Native OCCT facade
 
