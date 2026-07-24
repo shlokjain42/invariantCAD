@@ -7,17 +7,55 @@ permissions:
   contents: read
   id-token: write
 
+concurrency:
+  group: invariantcad-npm-publish
+  cancel-in-progress: false
+
 jobs:
   publish:
     name: Publish tagged package
-    if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
     environment: npm
 
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Verify annotated release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="v$(node -p "require('./package.json').version")"
+          if [[ "$GITHUB_REF_TYPE" != "tag" ]]; then
+            echo "::error::Publish must be dispatched from an annotated release tag."
+            exit 1
+          fi
+          if [[ "$GITHUB_REF_NAME" != "$expected" ]]; then
+            echo "::error::Expected tag $expected, received $GITHUB_REF_NAME."
+            exit 1
+          fi
+
+          tag_ref="refs/tags/$GITHUB_REF_NAME"
+          if [[ "$(git cat-file -t "$tag_ref")" != "tag" ]]; then
+            echo "::error::$GITHUB_REF_NAME is not an annotated tag."
+            exit 1
+          fi
+          tag_commit="$(git rev-parse --verify "$tag_ref^{commit}")"
+          if [[ "$tag_commit" != "$(git rev-parse HEAD)" ]]; then
+            echo "::error::$GITHUB_REF_NAME does not point at the checked-out release commit."
+            exit 1
+          fi
+
+          git fetch --no-tags origin \
+            "+refs/heads/main:refs/remotes/origin/main"
+          if ! git merge-base --is-ancestor \
+            "$tag_commit" refs/remotes/origin/main; then
+            echo "::error::The tagged release commit is not contained in origin/main."
+            exit 1
+          fi
 
       - name: Install pnpm
         uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
@@ -37,13 +75,6 @@ jobs:
 
       - name: Install Chromium
         run: pnpm exec playwright install --with-deps chromium
-
-      - name: Verify tag matches package version
-        run: >-
-          node -e "const expected = 'v' + require('./package.json').version;
-          if (process.env.GITHUB_REF_NAME !== expected)
-          throw new Error('Expected tag ' + expected + ', received ' +
-          process.env.GITHUB_REF_NAME)"
 
       - name: Run release acceptance suite
         run: pnpm release:check

@@ -2,6 +2,10 @@ import { mkdir } from "node:fs/promises";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { Extractor, ExtractorConfig } from "@microsoft/api-extractor";
+import {
+  PUBLIC_ENTRYPOINTS,
+  validatePublicEntrypoints,
+} from "./public-entrypoints.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const update = process.argv.includes("--write");
@@ -12,13 +16,7 @@ if (update === check) {
   process.exit(2);
 }
 
-const configurations = [
-  "root.json",
-  "conformance.json",
-  "occt.json",
-  "occt-browser.json",
-  "occt-node.json",
-];
+await validatePublicEntrypoints({ allowMissingReports: update });
 
 await Promise.all([
   mkdir(new URL("../etc/api/", import.meta.url), { recursive: true }),
@@ -27,9 +25,9 @@ await Promise.all([
 
 let errorCount = 0;
 let warningCount = 0;
-for (const file of configurations) {
+for (const entrypoint of PUBLIC_ENTRYPOINTS) {
   const configPath = fileURLToPath(
-    new URL(`../config/api-extractor/${file}`, import.meta.url),
+    new URL(`../${entrypoint.apiExtractorConfig}`, import.meta.url),
   );
   const extractorConfig = ExtractorConfig.loadFileAndPrepare(configPath);
   const result = Extractor.invoke(extractorConfig, {
@@ -52,10 +50,12 @@ if (check && warningCount > 0) {
   process.exit(1);
 }
 
+if (update) await validatePublicEntrypoints();
+
 console.log(
   update
-    ? `Updated ${configurations.length} public API reports under ${root}etc/api${
+    ? `Updated ${PUBLIC_ENTRYPOINTS.length} public API reports under ${root}etc/api${
         warningCount === 0 ? "." : ` (${warningCount} expected update warning(s)).`
       }`
-    : `Verified ${configurations.length} public API reports.`,
+    : `Verified ${PUBLIC_ENTRYPOINTS.length} public API reports.`,
 );

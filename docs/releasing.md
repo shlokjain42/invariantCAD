@@ -18,18 +18,24 @@ Before creating a tag:
 2. set the same version in `package.json` and the release notes;
 3. review the committed `etc/api/` diff against the previous release;
 4. run `pnpm release:check`;
-5. run `pnpm coverage` and review material regressions;
+5. review the checked coverage report and all six kernel/model reference
+   benchmark results emitted by that command;
 6. inspect `pnpm pack --dry-run` for secrets, local artifacts, and omissions;
 7. push the release commit and wait for every required GitHub check to pass;
    and
 8. create the annotated `v<package-version>` tag from that exact commit.
 
-The release workflow independently installs from the frozen lockfile, checks
-that the tag and package version match, reruns the full package and Chromium
-acceptance suite, and publishes from a GitHub-hosted runner with provenance.
-The acceptance suite includes strict TypeScript, source correctness and format
-hygiene, package metadata/types, clean-consumer installation, dependency audit,
-Mintlify validation and links, and the production browser bundle.
+The release workflow serializes publication attempts and independently installs
+from the frozen lockfile after a full-history checkout. Before acceptance or
+publication, it proves that the dispatch ref is the exact annotated
+`v<package-version>` tag, that the tag points at the checked-out commit, and
+that the commit is contained in `origin/main`. It then reruns the full
+acceptance suite and publishes from a GitHub-hosted runner with provenance.
+The suite includes strict TypeScript, source correctness and format hygiene,
+public-entrypoint and API-report consistency, package metadata/types,
+clean-consumer installation, checked coverage, the complete six-case reference
+benchmark, dependency audit, Mintlify validation and links, and the production
+browser bundle.
 
 ## One-time npm bootstrap
 

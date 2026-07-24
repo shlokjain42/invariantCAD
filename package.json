@@ -74,6 +74,7 @@
     "api:generate": "pnpm build && node scripts/check-public-api.mjs --write",
     "api:check": "pnpm build && node scripts/check-public-api.mjs --check",
     "api:check:built": "node scripts/check-public-api.mjs --check",
+    "api:entrypoints:check": "node scripts/check-public-entrypoints.mjs",
     "docs:examples:generate": "node scripts/sync-doc-examples.mjs --write",
     "docs:examples:check": "node scripts/sync-doc-examples.mjs --check && tsc -p tsconfig.docs-examples.json",
     "docs:generate": "pnpm docs:examples:generate && node scripts/generate-docs-export-index.mjs",
@@ -99,7 +100,7 @@
     "test:occt-facade-bundle": "pnpm bundle:occt-facade && pnpm verify:occt-facade-bundle && pnpm pack --pack-destination .artifacts && node scripts/package-smoke.mjs --owned-facade-runtime-dir .artifacts/occt-facade-bundle/invariantcad-occt-facade-0.9.0/runtime && pnpm test:occt-persistence-public -- --runtime-dir .artifacts/occt-facade-bundle/invariantcad-occt-facade-0.9.0/runtime && pnpm test:occt-artifact-owned -- --runtime-dir .artifacts/occt-facade-bundle/invariantcad-occt-facade-0.9.0/runtime && pnpm test:occt-artifact-process -- --runtime-dir .artifacts/occt-facade-bundle/invariantcad-occt-facade-0.9.0/runtime",
     "prepack": "pnpm build",
     "verify": "pnpm check && pnpm api:check:built && pnpm lint && pnpm test && pnpm test:docs-examples && pnpm artifact:fixture:occt -- --version v3 --check && pnpm docs:check && pnpm lint:package && pnpm test:package",
-    "release:check": "pnpm verify && pnpm audit:release && pnpm docs:release-check && pnpm test:browser"
+    "release:check": "pnpm verify && pnpm coverage && pnpm benchmark:reference-models:ci && pnpm audit:release && pnpm docs:release-check && pnpm test:browser"
   },
   "engines": {
     "node": ">=22.13"
