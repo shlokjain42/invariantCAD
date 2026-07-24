@@ -176,7 +176,8 @@
             "pages": [
               "reference/cli",
               "reference/support-matrix",
-              "reference/document-schema"
+              "reference/document-schema",
+              "reference/reference-model-corpus"
             ]
           },
           {
