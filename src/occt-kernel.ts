@@ -1744,17 +1744,30 @@ class OcctKernel implements GeometryKernel {
     shape: ShapeHandle,
     solid: ShapeHandle,
   ): boolean {
-    const type = this.raw.getShapeType(shape);
-    if (type === "solid") return this.raw.isSame(shape, solid);
-    if (type !== "compound" && type !== "compsolid") return false;
-    const children = this.raw.iterShapes(shape);
+    let current = shape;
+    let ownsCurrent = false;
     try {
-      return (
-        children.length === 1 &&
-        this.isPureSingleSolidShape(children[0]!, solid)
-      );
+      while (true) {
+        const type = this.raw.getShapeType(current);
+        if (type === "solid") return this.raw.isSame(current, solid);
+        if (type !== "compound" && type !== "compsolid") return false;
+
+        const children = this.raw.iterShapes(current);
+        if (children.length !== 1) {
+          this.releaseHandles(children);
+          return false;
+        }
+        const child = children[0]!;
+        if (this.raw.isSame(current, child)) {
+          this.raw.release(child);
+          return false;
+        }
+        if (ownsCurrent) this.raw.release(current);
+        current = child;
+        ownsCurrent = true;
+      }
     } finally {
-      this.releaseHandles(children);
+      if (ownsCurrent) this.raw.release(current);
     }
   }
 

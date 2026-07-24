@@ -199,6 +199,53 @@ describe("OCCT document-body import protocol", () => {
     }
   });
 
+  it("checks deeply nested compound ancestry without recursive stack growth", () => {
+    const internal = kernel as unknown as {
+      readonly raw: {
+        getShapeType(handle: ShapeHandle): string;
+        iterShapes(handle: ShapeHandle): ShapeHandle[];
+        isSame(left: ShapeHandle, right: ShapeHandle): boolean;
+        release(handle: ShapeHandle): void;
+      };
+      isPureSingleSolidShape(
+        shape: ShapeHandle,
+        solid: ShapeHandle,
+      ): boolean;
+    };
+    const raw = internal.raw;
+    const originalGetShapeType = raw.getShapeType.bind(raw);
+    const originalIterShapes = raw.iterShapes.bind(raw);
+    const originalIsSame = raw.isSame.bind(raw);
+    const originalRelease = raw.release.bind(raw);
+    const depth = 20_000;
+    const handles = Array.from(
+      { length: depth },
+      (_, index) => ({ index }) as unknown as ShapeHandle,
+    );
+    let releases = 0;
+    try {
+      raw.getShapeType = (handle): string =>
+        handle === handles.at(-1) ? "solid" : "compound";
+      raw.iterShapes = (handle): ShapeHandle[] => {
+        const index = (handle as unknown as { readonly index: number }).index;
+        return [handles[index + 1]!];
+      };
+      raw.isSame = (left, right): boolean => left === right;
+      raw.release = (): void => {
+        releases += 1;
+      };
+      expect(
+        internal.isPureSingleSolidShape(handles[0]!, handles.at(-1)!),
+      ).toBe(true);
+      expect(releases).toBe(depth - 1);
+    } finally {
+      raw.getShapeType = originalGetShapeType;
+      raw.iterShapes = originalIterShapes;
+      raw.isSame = originalIsSame;
+      raw.release = originalRelease;
+    }
+  });
+
   it("rejects multiple solids, loose topology, and non-solid roots without leaks", () => {
     for (const bytes of [
       fixtures.multipleSolidsBrep,
