@@ -198,6 +198,7 @@
             "icon": "network",
             "pages": [
               "architecture",
+              "engineering/sketch-solver-evaluation",
               "engineering/shape-artifact-cache-research"
             ]
           },

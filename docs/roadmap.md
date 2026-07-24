@@ -182,7 +182,11 @@ later CAD domain.
   possible.
 - A supported distribution decision for the owned OCCT runtime after legal,
   security, provenance, and release review.
-- An audited industrial sketch-solver selection.
+- The conditionally selected industrial sketch-solver path: an
+  InvariantCAD-owned, maintained PlaneGCS fork and replaceable runtime. Direct
+  shipping of `@salusoft89/planegcs` remains rejected until the
+  [solver promotion gates](/engineering/sketch-solver-evaluation#promotion-gates)
+  pass.
 - A minimal diagnostic viewer for geometry, topology, diagnostics, and
   selector inspection.
 
