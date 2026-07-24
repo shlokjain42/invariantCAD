@@ -27,6 +27,7 @@ export type ResourceResolverV7 = (
   | PromiseLike<ArrayBuffer | Uint8Array>;
 
 export interface ResourceResolutionLimitsV7 {
+  readonly maxRequestedResourceIds: number;
   readonly maxResolvedResources: number;
   readonly maxResourceBytes: number;
   readonly maxTotalResourceBytes: number;
@@ -34,6 +35,7 @@ export interface ResourceResolutionLimitsV7 {
 
 export const DEFAULT_RESOURCE_RESOLUTION_LIMITS_V7: ResourceResolutionLimitsV7 =
   Object.freeze({
+    maxRequestedResourceIds: 4_096,
     maxResolvedResources: 1_024,
     maxResourceBytes: 64 * 1024 * 1024,
     maxTotalResourceBytes: 256 * 1024 * 1024,
@@ -379,6 +381,13 @@ function captureRequestedIds(
     if (!Number.isSafeInteger(length) || length < 0) {
       return invalidInput("Requested resource ID array length is invalid");
     }
+    if (length > limits.maxRequestedResourceIds) {
+      return limitFailure(
+        "maxRequestedResourceIds",
+        limits.maxRequestedResourceIds,
+        { actual: length },
+      );
+    }
     const ids = new Set<ResourceId>();
     for (let index = 0; index < length; index += 1) {
       if (isAborted(signal)) return abortFailure();
@@ -623,7 +632,14 @@ function captureDefinitions(
           ),
         );
       }
-      const rawDefinition = definitions[id];
+      const definitionProperty = ownDataProperty(definitions, id);
+      if (definitionProperty.kind !== "data") {
+        return invalidInput(
+          `Resource '${id}' registry entry must be an own data property`,
+          `/resources/${id}`,
+        );
+      }
+      const rawDefinition = definitionProperty.value;
       if (isAborted(signal)) return abortFailure();
       const definition = captureDefinition(id, rawDefinition, signal);
       if (!definition.ok) return definition;

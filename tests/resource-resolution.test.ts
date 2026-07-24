@@ -65,6 +65,7 @@ describe("staged v7 resource resolution", () => {
   it("normalizes immutable closed resource limits", () => {
     expect(Object.isFrozen(DEFAULT_RESOURCE_RESOLUTION_LIMITS_V7)).toBe(true);
     expect(DEFAULT_RESOURCE_RESOLUTION_LIMITS_V7).toEqual({
+      maxRequestedResourceIds: 4_096,
       maxResolvedResources: 1_024,
       maxResourceBytes: 64 * 1024 * 1024,
       maxTotalResourceBytes: 256 * 1024 * 1024,
@@ -85,6 +86,7 @@ describe("staged v7 resource resolution", () => {
       null,
       [],
       { unknown: 1 },
+      { maxRequestedResourceIds: -1 },
       { maxResolvedResources: -1 },
       { maxResourceBytes: 1.5 },
       { maxTotalResourceBytes: Number.POSITIVE_INFINITY },
@@ -623,6 +625,34 @@ describe("staged v7 resource resolution", () => {
     expect(resolver).not.toHaveBeenCalled();
   });
 
+  it("bounds duplicate request references before reading entries", async () => {
+    const id = resourceId("duplicate");
+    const requested = [id, id, id];
+    let reads = 0;
+    for (let index = 0; index < requested.length; index += 1) {
+      Object.defineProperty(requested, index, {
+        configurable: true,
+        enumerable: true,
+        get: () => {
+          reads += 1;
+          return id;
+        },
+      });
+    }
+    const result = await resolveResourcesV7({}, requested, {
+      limits: { maxRequestedResourceIds: 2 },
+    });
+    expectFailure(result, "RESOURCE_LIMIT_EXCEEDED");
+    expect(reads).toBe(0);
+    if (!result.ok) {
+      expect(result.diagnostics[0]?.details).toMatchObject({
+        resource: "maxRequestedResourceIds",
+        limit: 2,
+        actual: 3,
+      });
+    }
+  });
+
   it("stops ID and definition capture as soon as declared limits are exceeded", async () => {
     const first = resourceId("captureA");
     const second = resourceId("captureB");
@@ -715,6 +745,22 @@ describe("staged v7 resource resolution", () => {
     );
     expectFailure(result, "EVALUATION_ABORTED");
     expect(requestedReads).toEqual([0, 1]);
+  });
+
+  it("rejects accessor-backed resource registry entries without invoking them", async () => {
+    const id = resourceId("registryAccessor");
+    let reads = 0;
+    const definitions = Object.defineProperty({}, id, {
+      configurable: true,
+      enumerable: true,
+      get: () => {
+        reads += 1;
+        return {};
+      },
+    }) as Readonly<Record<string, ResourceDefinitionIR>>;
+    const result = await resolveResourcesV7(definitions, [id]);
+    expectFailure(result, "IR_INVALID");
+    expect(reads).toBe(0);
   });
 
   it("uses subtraction-based aggregate preflight without unsafe integer addition", async () => {
