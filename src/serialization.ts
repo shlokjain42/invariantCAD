@@ -41,10 +41,203 @@ import { canonicalizeTopologySelectionIR } from "./topology.js";
 import { normalizePersistentTopologyReference } from "./topology-signatures.js";
 import { validateDocument, validateDocumentV7 } from "./validation.js";
 import {
+  DEFAULT_DESIGN_DOCUMENT_LIMITS,
   normalizeDesignDocumentLimits,
   preflightDesignDocumentValue,
   type DesignDocumentLimits,
 } from "./document-limits.js";
+
+const SerializationIntrinsicArray = Array;
+const SerializationIntrinsicArrayPrototype = Array.prototype;
+const SerializationIntrinsicJson = JSON;
+const SerializationIntrinsicObject = Object;
+const SerializationIntrinsicReflect = Reflect;
+const SerializationIntrinsicTextEncoder = TextEncoder;
+const serializationIntrinsicArrayIsArray =
+  SerializationIntrinsicArray.isArray;
+const serializationIntrinsicArrayMap =
+  SerializationIntrinsicArrayPrototype.map;
+const serializationIntrinsicArraySort =
+  SerializationIntrinsicArrayPrototype.sort;
+const serializationIntrinsicJsonParse = SerializationIntrinsicJson.parse;
+const serializationIntrinsicJsonStringify =
+  SerializationIntrinsicJson.stringify;
+const serializationIntrinsicObjectCreate =
+  SerializationIntrinsicObject.create;
+const serializationIntrinsicObjectEntries =
+  SerializationIntrinsicObject.entries;
+const serializationIntrinsicObjectFromEntries =
+  SerializationIntrinsicObject.fromEntries;
+const serializationIntrinsicObjectGetPrototypeOf =
+  SerializationIntrinsicObject.getPrototypeOf;
+const serializationIntrinsicObjectHasOwn =
+  SerializationIntrinsicObject.hasOwn;
+const serializationIntrinsicObjectKeys = SerializationIntrinsicObject.keys;
+const serializationIntrinsicReflectOwnKeys =
+  SerializationIntrinsicReflect.ownKeys;
+const serializationIntrinsicTextEncoderEncode =
+  SerializationIntrinsicTextEncoder.prototype.encode;
+const serializationReflectApply = SerializationIntrinsicReflect.apply;
+const serializationTextEncoder = new SerializationIntrinsicTextEncoder();
+
+function serializationIntrinsicsAreIntact(): boolean {
+  return (
+    Array === SerializationIntrinsicArray &&
+    SerializationIntrinsicArray.isArray === serializationIntrinsicArrayIsArray &&
+    SerializationIntrinsicArray.prototype ===
+      SerializationIntrinsicArrayPrototype &&
+    SerializationIntrinsicArrayPrototype.map ===
+      serializationIntrinsicArrayMap &&
+    SerializationIntrinsicArrayPrototype.sort ===
+      serializationIntrinsicArraySort &&
+    Object === SerializationIntrinsicObject &&
+    SerializationIntrinsicObject.create ===
+      serializationIntrinsicObjectCreate &&
+    SerializationIntrinsicObject.entries ===
+      serializationIntrinsicObjectEntries &&
+    SerializationIntrinsicObject.fromEntries ===
+      serializationIntrinsicObjectFromEntries &&
+    SerializationIntrinsicObject.getPrototypeOf ===
+      serializationIntrinsicObjectGetPrototypeOf &&
+    SerializationIntrinsicObject.hasOwn ===
+      serializationIntrinsicObjectHasOwn &&
+    SerializationIntrinsicObject.keys === serializationIntrinsicObjectKeys &&
+    JSON === SerializationIntrinsicJson &&
+    SerializationIntrinsicJson.parse === serializationIntrinsicJsonParse &&
+    SerializationIntrinsicJson.stringify ===
+      serializationIntrinsicJsonStringify &&
+    Reflect === SerializationIntrinsicReflect &&
+    SerializationIntrinsicReflect.apply === serializationReflectApply &&
+    SerializationIntrinsicReflect.ownKeys ===
+      serializationIntrinsicReflectOwnKeys &&
+    TextEncoder === SerializationIntrinsicTextEncoder &&
+    SerializationIntrinsicTextEncoder.prototype.encode ===
+      serializationIntrinsicTextEncoderEncode
+  );
+}
+
+function serializationIntegrityFailure<T>(): CadResult<T> {
+  return failure(
+    diagnostic(
+      "IR_INVALID",
+      "Document-v7 runtime intrinsics changed during the operation",
+      { severity: "error" },
+    ),
+  );
+}
+
+function serializationObjectKeys(value: object): string[] {
+  return serializationReflectApply(
+    serializationIntrinsicObjectKeys,
+    SerializationIntrinsicObject,
+    [value],
+  ) as string[];
+}
+
+function serializationArrayIsArray(
+  value: unknown,
+): value is readonly unknown[] {
+  return serializationReflectApply(
+    serializationIntrinsicArrayIsArray,
+    SerializationIntrinsicArray,
+    [value],
+  ) as boolean;
+}
+
+function serializationObjectHasOwn(
+  value: object,
+  key: PropertyKey,
+): boolean {
+  return serializationReflectApply(
+    serializationIntrinsicObjectHasOwn,
+    SerializationIntrinsicObject,
+    [value, key],
+  ) as boolean;
+}
+
+function serializationObjectCreateNull<T>(): Record<string, T> {
+  return serializationReflectApply(
+    serializationIntrinsicObjectCreate,
+    SerializationIntrinsicObject,
+    [null],
+  ) as Record<string, T>;
+}
+
+function serializationSort<T>(
+  value: T[],
+  compare: (first: T, second: T) => number,
+): void {
+  serializationReflectApply(serializationIntrinsicArraySort, value, [compare]);
+}
+
+function serializationUtf8ByteLength(value: string): number {
+  const bytes = serializationReflectApply(
+    serializationIntrinsicTextEncoderEncode,
+    serializationTextEncoder,
+    [value],
+  ) as Uint8Array;
+  return bytes.byteLength;
+}
+
+function serializationJsonParse(value: string): unknown {
+  return serializationReflectApply(
+    serializationIntrinsicJsonParse,
+    SerializationIntrinsicJson,
+    [value],
+  );
+}
+
+function v7ParsedShapeMatchesSnapshot(
+  snapshot: unknown,
+  parsed: unknown,
+): boolean {
+  const pending = new SerializationIntrinsicArray<{
+    readonly snapshot: unknown;
+    readonly parsed: unknown;
+  }>(1);
+  pending[0] = { snapshot, parsed };
+  while (pending.length > 0) {
+    const pair = pending[pending.length - 1]!;
+    pending.length -= 1;
+    if (typeof pair.snapshot !== "object" || pair.snapshot === null) {
+      if (typeof pair.parsed === "object" && pair.parsed !== null) return false;
+      continue;
+    }
+    if (typeof pair.parsed !== "object" || pair.parsed === null) return false;
+    const snapshotIsArray = serializationArrayIsArray(pair.snapshot);
+    if (snapshotIsArray !== serializationArrayIsArray(pair.parsed)) {
+      return false;
+    }
+    if (snapshotIsArray) {
+      if (pair.snapshot.length !== (pair.parsed as readonly unknown[]).length) {
+        return false;
+      }
+      for (let index = 0; index < pair.snapshot.length; index += 1) {
+        pending[pending.length] = {
+          snapshot: pair.snapshot[index],
+          parsed: (pair.parsed as readonly unknown[])[index],
+        };
+      }
+      continue;
+    }
+    const snapshotRecord = pair.snapshot as Readonly<
+      Record<string, unknown>
+    >;
+    const parsedRecord = pair.parsed as Readonly<Record<string, unknown>>;
+    const snapshotKeys = serializationObjectKeys(snapshotRecord);
+    const parsedKeys = serializationObjectKeys(parsedRecord);
+    if (snapshotKeys.length !== parsedKeys.length) return false;
+    for (let index = 0; index < snapshotKeys.length; index += 1) {
+      const key = snapshotKeys[index]!;
+      if (!serializationObjectHasOwn(parsedRecord, key)) return false;
+      pending[pending.length] = {
+        snapshot: snapshotRecord[key],
+        parsed: parsedRecord[key],
+      };
+    }
+  }
+  return true;
+}
 
 export interface StringifyOptions {
   readonly pretty?: boolean;
@@ -65,7 +258,11 @@ function lexicalCompare(first: string, second: string): number {
 function canonicalizeTopologyReferenceEntry(
   entry: TopologyReferenceEntryIR,
 ): TopologyReferenceEntryIR {
-  const variants = entry.variants.map((variant) => {
+  const variants = new SerializationIntrinsicArray<
+    TopologyReferenceEntryIR["variants"][number]
+  >(entry.variants.length);
+  for (let index = 0; index < entry.variants.length; index += 1) {
+    const variant = entry.variants[index]!;
     const normalized = normalizePersistentTopologyReference(variant);
     if (!normalized.ok) {
       throw new TypeError(
@@ -73,9 +270,10 @@ function canonicalizeTopologyReferenceEntry(
           "Cannot serialize a malformed persistent topology reference",
       );
     }
-    return normalized.value;
-  });
-  variants.sort(
+    variants[index] = normalized.value;
+  }
+  serializationSort(
+    variants,
     (first, second) =>
       first.protocolVersion - second.protocolVersion ||
       lexicalCompare(first.kernelFingerprint, second.kernelFingerprint) ||
@@ -93,29 +291,35 @@ type SerializableDocument = DesignDocument | DesignDocumentV7;
 function canonicalizeDocumentTopology<T extends SerializableDocument>(
   document: T,
 ): T {
-  const canonicalDocument = {
-    ...document,
-    nodes: Object.fromEntries(
-      Object.entries(document.nodes).map(([id, node]) => [
-        id,
-        node.kind === "fillet" || node.kind === "chamfer"
+  const sourceNodes = document.nodes as unknown as Readonly<
+    Record<string, NodeIR | NodeIRV7>
+  >;
+  const nodes = serializationObjectCreateNull<NodeIR | NodeIRV7>();
+  const nodeIds = serializationObjectKeys(sourceNodes);
+  for (let index = 0; index < nodeIds.length; index += 1) {
+    const id = nodeIds[index]!;
+    const node = sourceNodes[id]!;
+    nodes[id] =
+      node.kind === "fillet" || node.kind === "chamfer"
+        ? {
+            ...node,
+            edges: canonicalizeTopologySelectionIR(node.edges),
+          }
+        : node.kind === "shell"
           ? {
               ...node,
-              edges: canonicalizeTopologySelectionIR(node.edges),
+              openings: canonicalizeTopologySelectionIR(node.openings),
             }
-          : node.kind === "shell"
-            ? {
-                ...node,
-                openings: canonicalizeTopologySelectionIR(node.openings),
-              }
           : node.kind === "draft"
             ? {
                 ...node,
                 faces: canonicalizeTopologySelectionIR(node.faces),
               }
-          : node,
-      ]),
-    ) as T["nodes"],
+            : node;
+  }
+  const canonicalDocument = {
+    ...document,
+    nodes: nodes as T["nodes"],
   } as T;
   if (
     (canonicalDocument.version !== DOCUMENT_VERSION_V2 &&
@@ -128,14 +332,23 @@ function canonicalizeDocumentTopology<T extends SerializableDocument>(
   ) {
     return canonicalDocument;
   }
+  const topologyReferences = serializationObjectCreateNull<
+    TopologyReferenceEntryIR
+  >();
+  const sourceReferences =
+    canonicalDocument.topologyReferences as unknown as Readonly<
+      Record<string, TopologyReferenceEntryIR>
+    >;
+  const referenceIds = serializationObjectKeys(sourceReferences);
+  for (let index = 0; index < referenceIds.length; index += 1) {
+    const id = referenceIds[index]!;
+    topologyReferences[id] = canonicalizeTopologyReferenceEntry(
+      sourceReferences[id]!,
+    );
+  }
   return {
     ...canonicalDocument,
-    topologyReferences: Object.fromEntries(
-      Object.entries(canonicalDocument.topologyReferences).map(([id, entry]) => [
-        id,
-        canonicalizeTopologyReferenceEntry(entry),
-      ]),
-    ),
+    topologyReferences,
   } as T;
 }
 
@@ -157,15 +370,22 @@ export function stringifyDocumentV7(
   document: DesignDocumentV7,
   options: StringifyDocumentV7Options = {},
 ): string {
-  const limits = options.limits;
-  const pretty = options.pretty === true;
-  const normalizedLimits = parseLimits(
-    limits === undefined ? {} : { limits },
-  );
+  const normalizedLimits = parseV7Limits(options);
   if (!normalizedLimits.ok) {
     throw new TypeError(
       normalizedLimits.diagnostics[0]?.message ??
         "Cannot normalize InvariantCAD document-v7 serialization limits",
+    );
+  }
+  let pretty: boolean;
+  try {
+    pretty = options.pretty === true;
+  } catch (error) {
+    throw new TypeError(
+      safeErrorMessage(
+        error,
+        "Cannot read InvariantCAD document-v7 serialization options safely",
+      ),
     );
   }
   const parsed = parseDocumentValueV7WithLimits(
@@ -182,7 +402,7 @@ export function stringifyDocumentV7(
     canonicalizeDocumentTopology(parsed.value),
     pretty ? 2 : undefined,
   );
-  const documentBytes = new TextEncoder().encode(text).byteLength;
+  const documentBytes = serializationUtf8ByteLength(text);
   if (documentBytes > normalizedLimits.value.maxDocumentBytes) {
     throw new TypeError(
       `Design-document maxDocumentBytes limit ${normalizedLimits.value.maxDocumentBytes} was exceeded by ${documentBytes}`,
@@ -212,6 +432,44 @@ function parseLimits(
         safeErrorMessage(
           error,
           "Design-document parse limits could not be read safely",
+        ),
+        { severity: "error" },
+      ),
+    );
+  }
+}
+
+function parseV7Limits(
+  options: ParseDocumentOptions,
+): CadResult<DesignDocumentLimits> {
+  try {
+    const rawLimits = options.limits;
+    if (rawLimits === undefined) {
+      return success(DEFAULT_DESIGN_DOCUMENT_LIMITS);
+    }
+    const captured = preflightDesignDocumentValue(
+      rawLimits,
+      DEFAULT_DESIGN_DOCUMENT_LIMITS,
+      { strictV7Snapshot: true },
+    );
+    if (!captured.ok) return captured;
+    const limits = normalizeDesignDocumentLimits(captured.value);
+    return limits === undefined
+      ? failure(
+          diagnostic(
+            "IR_INVALID",
+            "Design-document-v7 parse limits are malformed or unsupported",
+            { severity: "error" },
+          ),
+        )
+      : success(limits);
+  } catch (error) {
+    return failure(
+      diagnostic(
+        "IR_INVALID",
+        safeErrorMessage(
+          error,
+          "Design-document-v7 parse limits could not be read safely",
         ),
         { severity: "error" },
       ),
@@ -278,8 +536,16 @@ function parseDocumentValueV7WithLimits(
   value: unknown,
   limits: DesignDocumentLimits,
 ): CadResult<DesignDocumentV7> {
-  const preflight = preflightDesignDocumentValue(value, limits);
+  if (!serializationIntrinsicsAreIntact()) {
+    return serializationIntegrityFailure();
+  }
+  const preflight = preflightDesignDocumentValue(value, limits, {
+    strictV7Snapshot: true,
+  });
   if (!preflight.ok) return preflight;
+  if (!serializationIntrinsicsAreIntact()) {
+    return serializationIntegrityFailure();
+  }
   let parsed: ReturnType<typeof DesignDocumentV7Schema.safeParse>;
   try {
     parsed = DesignDocumentV7Schema.safeParse(preflight.value);
@@ -307,7 +573,21 @@ function parseDocumentValueV7WithLimits(
       ),
     };
   }
-  return validateDocumentV7(deepFreeze(parsed.data) as DesignDocumentV7);
+  if (!v7ParsedShapeMatchesSnapshot(preflight.value, parsed.data)) {
+    return failure(
+      diagnostic(
+        "IR_INVALID",
+        "Document-v7 schema parsing changed the protocol key shape",
+        { severity: "error" },
+      ),
+    );
+  }
+  const validated = validateDocumentV7(
+    deepFreeze(parsed.data) as DesignDocumentV7,
+  );
+  return serializationIntrinsicsAreIntact()
+    ? validated
+    : serializationIntegrityFailure();
 }
 
 export function parseDocument(
@@ -366,11 +646,24 @@ export function parseDocumentV7(
   text: string,
   options: ParseDocumentOptions = {},
 ): CadResult<DesignDocumentV7> {
-  const normalizedLimits = parseLimits(options);
+  if (typeof text !== "string") {
+    return failure(
+      diagnostic(
+        "IR_INVALID",
+        "Document-v7 text must be a primitive string",
+        { severity: "error" },
+      ),
+    );
+  }
+  const source = text;
+  const normalizedLimits = parseV7Limits(options);
   if (!normalizedLimits.ok) return normalizedLimits;
+  if (!serializationIntrinsicsAreIntact()) {
+    return serializationIntegrityFailure();
+  }
   let documentBytes: number;
   try {
-    documentBytes = new TextEncoder().encode(text).byteLength;
+    documentBytes = serializationUtf8ByteLength(source);
   } catch (error) {
     return failure(
       diagnostic(
@@ -398,16 +691,19 @@ export function parseDocumentV7(
   }
   let value: unknown;
   try {
-    value = JSON.parse(text);
+    value = serializationJsonParse(source);
   } catch (error) {
     return failure(
       diagnostic("IR_INVALID", "The document is not valid JSON", {
         severity: "error",
         details: {
-          error: error instanceof Error ? error.message : String(error),
+          error: safeErrorMessage(error, "JSON parsing failed safely"),
         },
       }),
     );
+  }
+  if (!serializationIntrinsicsAreIntact()) {
+    return serializationIntegrityFailure();
   }
   return parseDocumentValueV7WithLimits(value, normalizedLimits.value);
 }
@@ -427,7 +723,7 @@ export function parseDocumentValueV7(
   value: unknown,
   options: ParseDocumentOptions = {},
 ): CadResult<DesignDocumentV7> {
-  const normalizedLimits = parseLimits(options);
+  const normalizedLimits = parseV7Limits(options);
   return normalizedLimits.ok
     ? parseDocumentValueV7WithLimits(value, normalizedLimits.value)
     : normalizedLimits;
@@ -467,10 +763,7 @@ export function cloneDocumentV7(
   document: DesignDocumentV7,
   options: ParseDocumentOptions = {},
 ): DesignDocumentV7 {
-  const limits = options.limits;
-  const normalizedLimits = parseLimits(
-    limits === undefined ? {} : { limits },
-  );
+  const normalizedLimits = parseV7Limits(options);
   if (!normalizedLimits.ok) {
     throw new TypeError(
       normalizedLimits.diagnostics[0]?.message ??
@@ -490,7 +783,7 @@ export function cloneDocumentV7(
   const text = canonicalStringifyProtocol(
     canonicalizeDocumentTopology(parsed.value),
   );
-  const documentBytes = new TextEncoder().encode(text).byteLength;
+  const documentBytes = serializationUtf8ByteLength(text);
   if (documentBytes > normalizedLimits.value.maxDocumentBytes) {
     throw new TypeError(
       `Design-document maxDocumentBytes limit ${normalizedLimits.value.maxDocumentBytes} was exceeded by ${documentBytes}`,

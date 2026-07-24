@@ -1,6 +1,10 @@
 import { z } from "zod";
 import type { JsonValue } from "./core/json.js";
 import {
+  DEFAULT_DESIGN_DOCUMENT_LIMITS,
+  preflightDesignDocumentValue,
+} from "./document-limits.js";
+import {
   DOCUMENT_SCHEMA_V1,
   DOCUMENT_SCHEMA_V2,
   DOCUMENT_SCHEMA_V3,
@@ -94,6 +98,516 @@ import {
   type PersistentTopologyReferenceV5,
   type PersistentTopologyReferenceV6,
 } from "./topology-signatures.js";
+
+const V7IntrinsicArray = Array;
+const V7IntrinsicNumber = Number;
+const V7IntrinsicObject = Object;
+const V7IntrinsicReflect = Reflect;
+const V7IntrinsicString = String;
+const V7IntrinsicWeakSet = WeakSet;
+const v7IntrinsicArrayIsArray = V7IntrinsicArray.isArray;
+const v7IntrinsicArrayPrototype = V7IntrinsicArray.prototype;
+const v7IntrinsicNumberIsFinite = Number.isFinite;
+const v7IntrinsicNumberIsSafeInteger = Number.isSafeInteger;
+const v7IntrinsicObjectCreate = Object.create;
+const v7IntrinsicObjectEntries = Object.entries;
+const v7IntrinsicObjectFromEntries = Object.fromEntries;
+const v7IntrinsicObjectGetOwnPropertyDescriptor =
+  Object.getOwnPropertyDescriptor;
+const v7IntrinsicObjectGetPrototypeOf = Object.getPrototypeOf;
+const v7IntrinsicObjectHasOwn = Object.hasOwn;
+const v7IntrinsicObjectIs = Object.is;
+const v7IntrinsicObjectKeys = Object.keys;
+const v7IntrinsicObjectPrototype = Object.prototype;
+const v7IntrinsicReflectOwnKeys = V7IntrinsicReflect.ownKeys;
+const v7IntrinsicStringCharCodeAt = String.prototype.charCodeAt;
+const v7IntrinsicWeakSetAdd = V7IntrinsicWeakSet.prototype.add;
+const v7IntrinsicWeakSetDelete = V7IntrinsicWeakSet.prototype.delete;
+const v7IntrinsicWeakSetHas = V7IntrinsicWeakSet.prototype.has;
+const v7ReflectApply = Reflect.apply;
+
+function v7RuntimeIntrinsicsAreIntact(): boolean {
+  return (
+    Array === V7IntrinsicArray &&
+    V7IntrinsicArray.isArray === v7IntrinsicArrayIsArray &&
+    V7IntrinsicArray.prototype === v7IntrinsicArrayPrototype &&
+    Number === V7IntrinsicNumber &&
+    V7IntrinsicNumber.isFinite === v7IntrinsicNumberIsFinite &&
+    V7IntrinsicNumber.isSafeInteger === v7IntrinsicNumberIsSafeInteger &&
+    Object === V7IntrinsicObject &&
+    V7IntrinsicObject.create === v7IntrinsicObjectCreate &&
+    V7IntrinsicObject.entries === v7IntrinsicObjectEntries &&
+    V7IntrinsicObject.fromEntries === v7IntrinsicObjectFromEntries &&
+    V7IntrinsicObject.getOwnPropertyDescriptor ===
+      v7IntrinsicObjectGetOwnPropertyDescriptor &&
+    V7IntrinsicObject.getPrototypeOf === v7IntrinsicObjectGetPrototypeOf &&
+    V7IntrinsicObject.hasOwn === v7IntrinsicObjectHasOwn &&
+    V7IntrinsicObject.is === v7IntrinsicObjectIs &&
+    V7IntrinsicObject.keys === v7IntrinsicObjectKeys &&
+    V7IntrinsicObject.prototype === v7IntrinsicObjectPrototype &&
+    Reflect === V7IntrinsicReflect &&
+    V7IntrinsicReflect.apply === v7ReflectApply &&
+    V7IntrinsicReflect.ownKeys === v7IntrinsicReflectOwnKeys &&
+    String === V7IntrinsicString &&
+    V7IntrinsicString.prototype.charCodeAt ===
+      v7IntrinsicStringCharCodeAt &&
+    WeakSet === V7IntrinsicWeakSet &&
+    V7IntrinsicWeakSet.prototype.add === v7IntrinsicWeakSetAdd &&
+    V7IntrinsicWeakSet.prototype.delete === v7IntrinsicWeakSetDelete &&
+    V7IntrinsicWeakSet.prototype.has === v7IntrinsicWeakSetHas
+  );
+}
+
+function v7ArrayIsArray(value: unknown): value is readonly unknown[] {
+  return v7ReflectApply(v7IntrinsicArrayIsArray, V7IntrinsicArray, [
+    value,
+  ]) as boolean;
+}
+
+function v7NumberIsFinite(value: unknown): value is number {
+  return v7ReflectApply(v7IntrinsicNumberIsFinite, Number, [value]) as boolean;
+}
+
+function v7NumberIsSafeInteger(value: unknown): value is number {
+  return v7ReflectApply(v7IntrinsicNumberIsSafeInteger, Number, [
+    value,
+  ]) as boolean;
+}
+
+function v7ObjectCreateNull(): Record<string, JsonValue> {
+  return v7ReflectApply(v7IntrinsicObjectCreate, Object, [
+    null,
+  ]) as Record<string, JsonValue>;
+}
+
+function v7ObjectGetPrototypeOf(value: object): object | null {
+  return v7ReflectApply(v7IntrinsicObjectGetPrototypeOf, Object, [value]) as
+    | object
+    | null;
+}
+
+function v7ObjectGetOwnPropertyDescriptor(
+  value: object,
+  key: PropertyKey,
+): PropertyDescriptor | undefined {
+  return v7ReflectApply(v7IntrinsicObjectGetOwnPropertyDescriptor, Object, [
+    value,
+    key,
+  ]) as PropertyDescriptor | undefined;
+}
+
+function v7ObjectHasOwn(value: object, key: PropertyKey): boolean {
+  return v7ReflectApply(v7IntrinsicObjectHasOwn, Object, [
+    value,
+    key,
+  ]) as boolean;
+}
+
+function v7ObjectIs(first: unknown, second: unknown): boolean {
+  return v7ReflectApply(v7IntrinsicObjectIs, Object, [first, second]) as boolean;
+}
+
+function v7ObjectKeys(value: object): string[] {
+  return v7ReflectApply(v7IntrinsicObjectKeys, Object, [value]) as string[];
+}
+
+function v7ReflectOwnKeys(value: object): (string | symbol)[] {
+  return v7ReflectApply(v7IntrinsicReflectOwnKeys, V7IntrinsicReflect, [
+    value,
+  ]) as (string | symbol)[];
+}
+
+function v7StringCharCodeAt(value: string, index: number): number {
+  return v7ReflectApply(v7IntrinsicStringCharCodeAt, value, [index]) as number;
+}
+
+function v7WeakSetAdd(value: WeakSet<object>, entry: object): void {
+  v7ReflectApply(v7IntrinsicWeakSetAdd, value, [entry]);
+}
+
+function v7WeakSetDelete(value: WeakSet<object>, entry: object): void {
+  v7ReflectApply(v7IntrinsicWeakSetDelete, value, [entry]);
+}
+
+function v7WeakSetHas(value: WeakSet<object>, entry: object): boolean {
+  return v7ReflectApply(v7IntrinsicWeakSetHas, value, [entry]) as boolean;
+}
+
+type V7RawAuditContract = "document" | "node" | "topology-reference-entry";
+type V7RawAuditLocation =
+  | V7RawAuditContract
+  | "parameters"
+  | "parameter"
+  | "materials"
+  | "material"
+  | "configurations"
+  | "configuration"
+  | "resources"
+  | "resource"
+  | "nodes"
+  | "outputs"
+  | "topology-references"
+  | "body-list"
+  | "body"
+  | "metadata"
+  | "generic";
+
+interface V7RawAuditPath {
+  readonly parent: V7RawAuditPath | undefined;
+  readonly segment: string | number;
+}
+
+interface V7RawAuditFrame {
+  readonly value: unknown;
+  readonly location: V7RawAuditLocation;
+  readonly path: V7RawAuditPath | undefined;
+  readonly depth: number;
+}
+
+interface V7RawAuditIssue {
+  readonly message: string;
+  readonly path: readonly (string | number)[];
+}
+
+const V7_RAW_AUDIT_MAX_VALUES = 1_000_000;
+const V7_RAW_AUDIT_MAX_DEPTH = 128;
+
+function v7RawArrayIndex(
+  key: string,
+  length: number,
+): number | undefined {
+  if (key.length === 0 || (key.length > 1 && key[0] === "0")) return undefined;
+  let index = 0;
+  for (let offset = 0; offset < key.length; offset += 1) {
+    const code = v7StringCharCodeAt(key, offset);
+    if (code < 0x30 || code > 0x39) return undefined;
+    index = index * 10 + code - 0x30;
+    if (index > 0xffff_fffe) return undefined;
+  }
+  return index < length ? index : undefined;
+}
+
+function v7AuditPath(
+  path: V7RawAuditPath | undefined,
+  leaf?: string | number,
+): readonly (string | number)[] {
+  let length = leaf === undefined ? 0 : 1;
+  for (let current = path; current !== undefined; current = current.parent) {
+    length += 1;
+  }
+  const output = new V7IntrinsicArray<string | number>(length);
+  let index = length - 1;
+  if (leaf !== undefined) {
+    output[index] = leaf;
+    index -= 1;
+  }
+  for (let current = path; current !== undefined; current = current.parent) {
+    output[index] = current.segment;
+    index -= 1;
+  }
+  return output;
+}
+
+function v7MetadataIsAllowed(
+  location: V7RawAuditLocation,
+  key: string,
+): boolean {
+  return (
+    key === "metadata" &&
+    (location === "document" ||
+      location === "material" ||
+      location === "configuration" ||
+      location === "resource" ||
+      location === "node" ||
+      location === "body")
+  );
+}
+
+function v7ChildAuditLocation(
+  location: V7RawAuditLocation,
+  key: string,
+): V7RawAuditLocation {
+  if (location === "metadata") return "metadata";
+  if (v7MetadataIsAllowed(location, key)) return "metadata";
+  if (location === "document") {
+    if (key === "parameters") return "parameters";
+    if (key === "materials") return "materials";
+    if (key === "configurations") return "configurations";
+    if (key === "resources") return "resources";
+    if (key === "nodes") return "nodes";
+    if (key === "outputs") return "outputs";
+    if (key === "topologyReferences") return "topology-references";
+  } else if (location === "parameters") {
+    return "parameter";
+  } else if (location === "materials") {
+    return "material";
+  } else if (location === "configurations") {
+    return "configuration";
+  } else if (location === "resources") {
+    return "resource";
+  } else if (location === "nodes") {
+    return "node";
+  } else if (location === "topology-references") {
+    return "topology-reference-entry";
+  } else if (location === "node" && key === "bodies") {
+    return "body-list";
+  } else if (location === "body-list") {
+    return "body";
+  }
+  return "generic";
+}
+
+/**
+ * Zod's object copier treats `__proto__` specially. Inspect the raw protocol
+ * graph first so a forbidden own key can never be accepted and then omitted.
+ * Metadata is the sole semantic JSON escape hatch and is copied separately.
+ */
+function auditV7RawKeys(
+  value: unknown,
+  contract: V7RawAuditContract,
+): V7RawAuditIssue | undefined {
+  try {
+    const seenOutsideMetadata = new V7IntrinsicWeakSet<object>();
+    const seenInsideMetadata = new V7IntrinsicWeakSet<object>();
+    const stack = new V7IntrinsicArray<V7RawAuditFrame>(1);
+    stack[0] = {
+      value,
+      location: contract,
+      path: undefined,
+      depth: 0,
+    };
+    let scheduled = 1;
+    while (stack.length > 0) {
+      const frame = stack[stack.length - 1]!;
+      stack.length -= 1;
+      if (frame.depth > V7_RAW_AUDIT_MAX_DEPTH) {
+        return {
+          message: `Document-v7 raw key audit exceeded nesting depth ${V7_RAW_AUDIT_MAX_DEPTH}`,
+          path: v7AuditPath(frame.path),
+        };
+      }
+      if (typeof frame.value !== "object" || frame.value === null) continue;
+      const insideMetadata = frame.location === "metadata";
+      if (!insideMetadata && v7ObjectHasOwn(frame.value, "__proto__")) {
+        return {
+          message:
+            "Own '__proto__' keys are forbidden outside document-v7 metadata",
+          path: v7AuditPath(frame.path, "__proto__"),
+        };
+      }
+      const seen = insideMetadata
+        ? seenInsideMetadata
+        : seenOutsideMetadata;
+      if (v7WeakSetHas(seen, frame.value)) continue;
+      v7WeakSetAdd(seen, frame.value);
+
+      if (v7ArrayIsArray(frame.value)) {
+        if (
+          v7ObjectGetPrototypeOf(frame.value) !== v7IntrinsicArrayPrototype
+        ) {
+          return {
+            message:
+              "Document-v7 arrays must use the intrinsic array prototype",
+            path: v7AuditPath(frame.path),
+          };
+        }
+        const lengthDescriptor = v7ObjectGetOwnPropertyDescriptor(
+          frame.value,
+          "length",
+        );
+        const length =
+          lengthDescriptor !== undefined &&
+          lengthDescriptor.enumerable === false &&
+          v7ObjectHasOwn(lengthDescriptor, "value") &&
+          v7NumberIsSafeInteger(lengthDescriptor.value) &&
+          lengthDescriptor.value >= 0 &&
+          lengthDescriptor.value <= 0xffff_ffff
+            ? lengthDescriptor.value
+            : undefined;
+        if (length === undefined) {
+          return {
+            message: "Document-v7 array length is malformed",
+            path: v7AuditPath(frame.path),
+          };
+        }
+        const keys = v7ReflectOwnKeys(frame.value);
+        if (keys.length !== length + 1) {
+          return {
+            message:
+              "Document-v7 arrays cannot contain sparse, hidden, symbolic, or extra properties",
+            path: v7AuditPath(frame.path),
+          };
+        }
+        const descriptors = new V7IntrinsicArray<PropertyDescriptor>(length);
+        for (let keyIndex = 0; keyIndex < keys.length; keyIndex += 1) {
+          const key = keys[keyIndex]!;
+          if (typeof key !== "string") {
+            return {
+              message: "Document-v7 arrays cannot contain symbol properties",
+              path: v7AuditPath(frame.path),
+            };
+          }
+          if (key === "length") continue;
+          const index = v7RawArrayIndex(key, length);
+          const descriptor =
+            index === undefined
+              ? undefined
+              : v7ObjectGetOwnPropertyDescriptor(frame.value, key);
+          if (
+            index === undefined ||
+            descriptor === undefined ||
+            descriptor.enumerable !== true ||
+            !v7ObjectHasOwn(descriptor, "value") ||
+            descriptors[index] !== undefined
+          ) {
+            return {
+              message:
+                "Document-v7 arrays require dense enumerable data indices and no extra properties",
+              path: v7AuditPath(frame.path, key),
+            };
+          }
+          descriptors[index] = descriptor;
+        }
+        for (let index = 0; index < length; index += 1) {
+          const descriptor = descriptors[index];
+          if (descriptor === undefined) {
+            return {
+              message: "Document-v7 arrays cannot be sparse",
+              path: v7AuditPath(frame.path, index),
+            };
+          }
+          scheduled += 1;
+          if (scheduled > V7_RAW_AUDIT_MAX_VALUES) {
+            return {
+              message: `Document-v7 raw key audit exceeded ${V7_RAW_AUDIT_MAX_VALUES} structural values`,
+              path: v7AuditPath(frame.path, index),
+            };
+          }
+          stack[stack.length] = {
+            value: descriptor.value,
+            location:
+              frame.location === "body-list"
+                ? "body"
+                : frame.location === "metadata"
+                  ? "metadata"
+                  : "generic",
+            path: { parent: frame.path, segment: index },
+            depth: frame.depth + 1,
+          };
+        }
+        continue;
+      }
+
+      const prototype = v7ObjectGetPrototypeOf(frame.value);
+      if (prototype !== v7IntrinsicObjectPrototype && prototype !== null) {
+        return {
+          message: "Document-v7 objects must be plain JSON records",
+          path: v7AuditPath(frame.path),
+        };
+      }
+      const keys = v7ReflectOwnKeys(frame.value);
+      for (let index = 0; index < keys.length; index += 1) {
+        const key = keys[index];
+        if (typeof key !== "string") {
+          return {
+            message: "Document-v7 objects cannot contain symbol properties",
+            path: v7AuditPath(frame.path),
+          };
+        }
+        const descriptor = v7ObjectGetOwnPropertyDescriptor(frame.value, key);
+        if (
+          descriptor === undefined ||
+          descriptor.enumerable !== true ||
+          !v7ObjectHasOwn(descriptor, "value")
+        ) {
+          return {
+            message:
+              "Document-v7 objects require enumerable data properties",
+            path: v7AuditPath(frame.path, key),
+          };
+        }
+        scheduled += 1;
+        if (scheduled > V7_RAW_AUDIT_MAX_VALUES) {
+          return {
+            message: `Document-v7 raw key audit exceeded ${V7_RAW_AUDIT_MAX_VALUES} structural values`,
+            path: v7AuditPath(frame.path, key),
+          };
+        }
+        stack[stack.length] = {
+          value: descriptor.value,
+          location: v7ChildAuditLocation(frame.location, key),
+          path: { parent: frame.path, segment: key },
+          depth: frame.depth + 1,
+        };
+      }
+    }
+    return undefined;
+  } catch {
+    return {
+      message: "Document-v7 raw keys could not be inspected safely",
+      path: [],
+    };
+  }
+}
+
+function withV7RawKeyAudit<T>(
+  schema: z.ZodType<T>,
+  contract: V7RawAuditContract,
+): z.ZodType<T> {
+  return z
+    .unknown()
+    .transform((value, context) => {
+      if (!v7RuntimeIntrinsicsAreIntact()) {
+        context.addIssue({
+          code: "custom",
+          message:
+            "Document-v7 runtime intrinsics changed during schema parsing",
+        });
+        return z.NEVER;
+      }
+      const captured = preflightDesignDocumentValue(
+        value,
+        DEFAULT_DESIGN_DOCUMENT_LIMITS,
+        { strictV7Snapshot: true },
+      );
+      if (!captured.ok) {
+        for (const item of captured.diagnostics) {
+          context.addIssue({
+            code: "custom",
+            message: item.message,
+          });
+        }
+        return z.NEVER;
+      }
+      if (!v7RuntimeIntrinsicsAreIntact()) {
+        context.addIssue({
+          code: "custom",
+          message:
+            "Document-v7 runtime intrinsics changed during schema parsing",
+        });
+        return z.NEVER;
+      }
+      const issue = auditV7RawKeys(captured.value, contract);
+      if (issue === undefined) {
+        if (!v7RuntimeIntrinsicsAreIntact()) {
+          context.addIssue({
+            code: "custom",
+            message:
+              "Document-v7 runtime intrinsics changed during schema parsing",
+          });
+          return z.NEVER;
+        }
+        return captured.value;
+      }
+      context.addIssue({
+        code: "custom",
+        message: issue.message,
+        path: [...issue.path],
+      });
+      return z.NEVER;
+    })
+    .pipe(schema) as z.ZodType<T>;
+}
 
 const DimensionSchema = z.enum(["scalar", "length", "angle", "massDensity"]);
 const IdSchema = z
@@ -529,35 +1043,37 @@ function copyProtocolJsonValue(
     return value;
   }
   if (typeof value === "number") {
-    if (!Number.isFinite(value)) {
+    if (!v7NumberIsFinite(value)) {
       throw new TypeError("Protocol metadata numbers must be finite");
     }
-    return Object.is(value, -0) ? 0 : value;
+    return v7ObjectIs(value, -0) ? 0 : value;
   }
   if (typeof value !== "object") {
     throw new TypeError("Protocol metadata must contain only JSON values");
   }
-  if (active.has(value)) {
+  if (v7WeakSetHas(active, value)) {
     throw new TypeError("Protocol metadata cannot contain object cycles");
   }
-  active.add(value);
+  v7WeakSetAdd(active, value);
   try {
-    if (Array.isArray(value)) {
+    if (v7ArrayIsArray(value)) {
       const output: JsonValue[] = [];
       for (let index = 0; index < value.length; index += 1) {
-        if (!Object.hasOwn(value, index)) {
+        if (!v7ObjectHasOwn(value, index)) {
           throw new TypeError("Protocol metadata arrays cannot be sparse");
         }
         output.push(copyProtocolJsonValue(value[index], active));
       }
       return output;
     }
-    const prototype = Object.getPrototypeOf(value);
-    if (prototype !== Object.prototype && prototype !== null) {
+    const prototype = v7ObjectGetPrototypeOf(value);
+    if (prototype !== v7IntrinsicObjectPrototype && prototype !== null) {
       throw new TypeError("Protocol metadata objects must be plain records");
     }
-    const output = Object.create(null) as Record<string, JsonValue>;
-    for (const key of Object.keys(value)) {
+    const output = v7ObjectCreateNull();
+    const keys = v7ObjectKeys(value);
+    for (let index = 0; index < keys.length; index += 1) {
+      const key = keys[index]!;
       output[key] = copyProtocolJsonValue(
         (value as Readonly<Record<string, unknown>>)[key],
         active,
@@ -565,14 +1081,21 @@ function copyProtocolJsonValue(
     }
     return output;
   } finally {
-    active.delete(value);
+    v7WeakSetDelete(active, value);
   }
 }
 
 const ProtocolJsonRecordV7Schema = z.unknown().transform((value, context) => {
   try {
-    const output = copyProtocolJsonValue(value, new WeakSet());
-    if (output === null || Array.isArray(output) || typeof output !== "object") {
+    const output = copyProtocolJsonValue(
+      value,
+      new V7IntrinsicWeakSet<object>(),
+    );
+    if (
+      output === null ||
+      v7ArrayIsArray(output) ||
+      typeof output !== "object"
+    ) {
       throw new TypeError("Protocol metadata must be a JSON object");
     }
     return output as Readonly<Record<string, JsonValue>>;
@@ -1035,7 +1558,7 @@ export const TopologyReferenceEntryV6Schema: z.ZodType<TopologyReferenceEntryIRV
     PersistentTopologyReferenceV6Schema,
     TOPOLOGY_KINDS_V2,
   ) as z.ZodType<TopologyReferenceEntryIRV6>;
-export const TopologyReferenceEntryV7Schema: z.ZodType<TopologyReferenceEntryIRV7> =
+const TopologyReferenceEntryV7BaseSchema: z.ZodType<TopologyReferenceEntryIRV7> =
   createTopologyReferenceEntrySchema(
     PersistentTopologyReferenceV6Schema,
     TOPOLOGY_KINDS_V2,
@@ -1089,6 +1612,11 @@ export const TopologyReferenceEntryV7Schema: z.ZodType<TopologyReferenceEntryIRV
         });
       });
     }) as z.ZodType<TopologyReferenceEntryIRV7>;
+export const TopologyReferenceEntryV7Schema: z.ZodType<TopologyReferenceEntryIRV7> =
+  withV7RawKeyAudit(
+    TopologyReferenceEntryV7BaseSchema,
+    "topology-reference-entry",
+  );
 /** Current document-v6 topology-reference registry entry schema. */
 export const TopologyReferenceEntrySchema: z.ZodType<TopologyReferenceEntryIR> =
   TopologyReferenceEntryV6Schema;
@@ -1735,7 +2263,11 @@ function createNodeV7Schema(): z.ZodType<NodeIRV7> {
   ) as unknown as z.ZodType<NodeIRV7>;
 }
 
-export const NodeV7Schema: z.ZodType<NodeIRV7> = createNodeV7Schema();
+const NodeV7BaseSchema: z.ZodType<NodeIRV7> = createNodeV7Schema();
+export const NodeV7Schema: z.ZodType<NodeIRV7> = withV7RawKeyAudit(
+  NodeV7BaseSchema,
+  "node",
+);
 /** Current document-v6 node schema. */
 export const NodeSchema: z.ZodType<NodeIR> = NodeV6Schema;
 
@@ -2000,7 +2532,7 @@ const DocumentTopologyReferencesV6Schema = z
   )
   .optional();
 const DocumentTopologyReferencesV7Schema = z
-  .record(IdSchema, TopologyReferenceEntryV7Schema)
+  .record(IdSchema, TopologyReferenceEntryV7BaseSchema)
   .refine(
     (references) => Object.keys(references).length > 0,
     "Topology reference registry cannot be empty; omit it instead",
@@ -2085,7 +2617,7 @@ const DesignDocumentBodyShapeV7 = {
   materials: DocumentMaterialsV7Schema,
   configurations: DocumentConfigurationsV7Schema,
   resources: DocumentResourcesV7Schema,
-  nodes: z.record(IdSchema, NodeV7Schema),
+  nodes: z.record(IdSchema, NodeV7BaseSchema),
   outputs: DocumentOutputsV7Schema,
   metadata: DocumentMetadataV7Schema,
   topologyReferences: DocumentTopologyReferencesV7Schema,
@@ -2143,13 +2675,15 @@ export const DesignDocumentV6Schema: z.ZodType<DesignDocumentV6> = z
  * Staged v7 schema. It is intentionally not part of DesignDocumentSchema until
  * every ordinary public document consumer supports v7.
  */
-export const DesignDocumentV7Schema: z.ZodType<DesignDocumentV7> = z
+const DesignDocumentV7BaseSchema: z.ZodType<DesignDocumentV7> = z
   .object({
     schema: z.literal(DOCUMENT_SCHEMA_V7),
     version: z.literal(DOCUMENT_VERSION_V7),
     ...DesignDocumentBodyShapeV7,
   })
   .strict() as unknown as z.ZodType<DesignDocumentV7>;
+export const DesignDocumentV7Schema: z.ZodType<DesignDocumentV7> =
+  withV7RawKeyAudit(DesignDocumentV7BaseSchema, "document");
 
 export const DesignDocumentSchema: z.ZodType<DesignDocument> = z.union([
   DesignDocumentV1Schema,

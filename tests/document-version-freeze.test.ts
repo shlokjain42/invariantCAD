@@ -381,6 +381,38 @@ describe("frozen document-version grammar", () => {
     },
   );
 
+  it.each(versionCases())(
+    "$label preserves legacy own __proto__ stripping",
+    ({ schema, document }) => {
+      const legacy = mutable(document);
+      for (const value of [
+        legacy,
+        legacy.units,
+        legacy.nodes.box.size[0],
+      ]) {
+        Object.defineProperty(value, "__proto__", {
+          configurable: true,
+          enumerable: true,
+          value: { legacy: true },
+          writable: true,
+        });
+      }
+
+      expect(schema.safeParse(legacy).success).toBe(true);
+      const parsed = parseDocumentValue(legacy);
+      expect(parsed.ok).toBe(true);
+      if (!parsed.ok) return;
+      expect(Object.hasOwn(parsed.value, "__proto__")).toBe(false);
+      expect(Object.hasOwn(parsed.value.units, "__proto__")).toBe(false);
+      const node = (
+        parsed.value.nodes as unknown as Readonly<Record<string, NodeIR>>
+      ).box;
+      expect(node?.kind).toBe("box");
+      if (node?.kind !== "box") return;
+      expect(Object.hasOwn(node.size[0] as object, "__proto__")).toBe(false);
+    },
+  );
+
   it("keeps all current runtime and authoring aliases on document v6", () => {
     expect(DOCUMENT_SCHEMA).toBe(DOCUMENT_SCHEMA_V6);
     expect(DOCUMENT_VERSION).toBe(DOCUMENT_VERSION_V6);

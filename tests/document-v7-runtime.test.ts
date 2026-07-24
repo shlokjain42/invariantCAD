@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { nodeId, resourceId } from "../src/core/ids.js";
+import {
+  nodeId,
+  resourceId,
+  topologyReferenceId,
+} from "../src/core/ids.js";
 import type { Diagnostic } from "../src/core/result.js";
 import {
   DOCUMENT_SCHEMA_V1,
@@ -19,6 +23,11 @@ import {
   type DesignDocumentV7,
 } from "../src/ir.js";
 import {
+  DesignDocumentV7Schema,
+  NodeV7Schema,
+  TopologyReferenceEntryV7Schema,
+} from "../src/schema.js";
+import {
   cloneDocumentV7,
   parseDocument,
   parseDocumentV7,
@@ -32,6 +41,40 @@ const length = (value: number) =>
   ({ op: "literal", dimension: "length", value }) as const;
 const scalar = (value: number) =>
   ({ op: "literal", dimension: "scalar", value }) as const;
+const density = (value: number) =>
+  ({ op: "literal", dimension: "massDensity", value }) as const;
+
+function defineOwnDataProperty<T extends object>(
+  value: T,
+  key: PropertyKey,
+  child: unknown,
+  enumerable = true,
+): T {
+  Object.defineProperty(value, key, {
+    configurable: true,
+    enumerable,
+    value: child,
+    writable: true,
+  });
+  return value;
+}
+
+function objectAt(value: unknown, path: readonly (string | number)[]): object {
+  let current = value;
+  for (const segment of path) {
+    current = (current as Readonly<Record<PropertyKey, unknown>>)[segment];
+  }
+  if (typeof current !== "object" || current === null) {
+    throw new TypeError(`Expected object at ${path.join("/")}`);
+  }
+  return current;
+}
+
+function protocolMetadata(label: string): Readonly<Record<string, unknown>> {
+  return JSON.parse(
+    `{"__proto__":{"label":${JSON.stringify(label)}},"constructor":"constructor","prototype":"prototype","toString":"toString"}`,
+  ) as Readonly<Record<string, unknown>>;
+}
 
 function stagedV7Document(): DesignDocumentV7 {
   return {
@@ -249,7 +292,7 @@ describe("staged document-v7 serialization and validation", () => {
     expect(Object.isFrozen(clone)).toBe(true);
   });
 
-  it("captures stateful inputs once and validates the detached snapshot", () => {
+  it("rejects accessor-backed v7 inputs without invoking getters", () => {
     const source = structuredClone(stagedV7Document()) as unknown as Record<
       string,
       unknown
@@ -264,8 +307,35 @@ describe("staged document-v7 serialization and validation", () => {
       },
     });
     const parsed = parseDocumentValueV7(source);
-    expect(parsed.ok).toBe(true);
-    expect(reads).toBe(1);
+    expect(parsed.ok).toBe(false);
+    expect(reads).toBe(0);
+  });
+
+  it("captures data-only proxies through descriptors without invoking get traps", () => {
+    const source = structuredClone(stagedV7Document());
+    let reads = 0;
+    const proxied = new Proxy(source, {
+      get(): never {
+        reads += 1;
+        throw new Error("the get trap must not run");
+      },
+    });
+    expect(parseDocumentValueV7(proxied).ok).toBe(true);
+    expect(DesignDocumentV7Schema.safeParse(proxied).success).toBe(true);
+    expect(stringifyDocumentV7(proxied)).toContain('"version":7');
+    expect(cloneDocumentV7(proxied)).toMatchObject({
+      version: DOCUMENT_VERSION_V7,
+    });
+    expect(reads).toBe(0);
+
+    const revoked = Proxy.revocable({}, {});
+    revoked.revoke();
+    expect(() => parseDocumentValueV7(revoked.proxy)).not.toThrow();
+    expect(parseDocumentValueV7(revoked.proxy).ok).toBe(false);
+    expect(() =>
+      DesignDocumentV7Schema.safeParse(revoked.proxy),
+    ).not.toThrow();
+    expect(DesignDocumentV7Schema.safeParse(revoked.proxy).success).toBe(false);
   });
 
   it("keeps ordinary parsing frozen on v1-v6 and v7 parsing strict", () => {
@@ -529,49 +599,303 @@ describe("staged document-v7 serialization and validation", () => {
     ).toBe(false);
   });
 
-  it("preserves every JSON metadata key through parse, clone, and serialization", () => {
+  it("rejects own __proto__ at every protocol registry and nested contract", () => {
+    const paths = [
+      ["root", []],
+      ["parameters", ["parameters"]],
+      ["materials", ["materials"]],
+      ["configurations", ["configurations"]],
+      ["resources", ["resources"]],
+      ["nodes", ["nodes"]],
+      ["outputs", ["outputs"]],
+      ["topology references", ["topologyReferences"]],
+      ["units", ["units"]],
+      ["expression", ["nodes", "primitive", "size", 0]],
+      ["reference", ["outputs", "part"]],
+    ] as const;
+
+    for (const [label, path] of paths) {
+      const candidate = structuredClone(
+        stagedV7Document(),
+      ) as unknown as Record<string, unknown>;
+      candidate.materials = {
+        steel: {
+          name: "Steel",
+          massDensity: density(7.85e-6),
+        },
+      };
+      (objectAt(candidate, ["units"]) as Record<string, unknown>).mass = "kg";
+      defineOwnDataProperty(objectAt(candidate, path), "__proto__", {
+        rejected: label,
+      });
+
+      expect(
+        parseDocumentValueV7(candidate).ok,
+        `${label} parser`,
+      ).toBe(false);
+      expect(
+        DesignDocumentV7Schema.safeParse(candidate).success,
+        `${label} direct schema`,
+      ).toBe(false);
+    }
+  });
+
+  it("fails closed on hidden, symbolic, accessor, and extra-array input state", () => {
+    const candidates: Record<string, DesignDocumentV7> = {};
+
+    const hidden = structuredClone(stagedV7Document());
+    defineOwnDataProperty(hidden, "hidden", true, false);
+    candidates.hidden = hidden;
+
+    const symbolic = structuredClone(stagedV7Document());
+    defineOwnDataProperty(symbolic.units, Symbol("hidden"), true);
+    candidates.symbolic = symbolic;
+
+    const hiddenMetadata = structuredClone(stagedV7Document());
+    const metadataWithHidden = protocolMetadata("hidden");
+    defineOwnDataProperty(metadataWithHidden, "hidden", true, false);
+    (
+      hiddenMetadata as unknown as Record<string, unknown>
+    ).metadata = metadataWithHidden;
+    candidates.hiddenMetadata = hiddenMetadata;
+
+    const metadataArray = structuredClone(stagedV7Document());
+    const values = [1, 2, 3];
+    defineOwnDataProperty(values, "extra", true);
+    (
+      metadataArray as unknown as Record<string, unknown>
+    ).metadata = { values };
+    candidates.metadataArray = metadataArray;
+
+    const explicitUndefined = structuredClone(
+      stagedV7Document(),
+    ) as unknown as Record<string, unknown>;
+    explicitUndefined.metadata = undefined;
+    candidates.explicitUndefined =
+      explicitUndefined as unknown as DesignDocumentV7;
+
+    const extraArray = structuredClone(stagedV7Document());
+    const primitive = extraArray.nodes[nodeId("primitive")];
+    expect(primitive?.kind).toBe("box");
+    if (primitive?.kind !== "box") return;
+    defineOwnDataProperty(primitive.size as unknown as object, "extra", true);
+    candidates.extraArray = extraArray;
+
+    let accessorReads = 0;
+    const accessor = structuredClone(
+      stagedV7Document(),
+    ) as unknown as Record<string, unknown>;
+    Object.defineProperty(accessor, "name", {
+      configurable: true,
+      enumerable: true,
+      get(): string {
+        accessorReads += 1;
+        return "must-not-run";
+      },
+    });
+    candidates.accessor = accessor as unknown as DesignDocumentV7;
+
+    const accessorMetadata = structuredClone(
+      stagedV7Document(),
+    ) as unknown as Record<string, unknown>;
+    const statefulMetadata: Record<string, unknown> = {};
+    Object.defineProperty(statefulMetadata, "volatile", {
+      configurable: true,
+      enumerable: true,
+      get(): string {
+        accessorReads += 1;
+        return "must-not-run";
+      },
+    });
+    accessorMetadata.metadata = statefulMetadata;
+    candidates.accessorMetadata =
+      accessorMetadata as unknown as DesignDocumentV7;
+
+    for (const [label, candidate] of Object.entries(candidates)) {
+      expect(parseDocumentValueV7(candidate).ok, `${label} parser`).toBe(false);
+      expect(
+        DesignDocumentV7Schema.safeParse(candidate).success,
+        `${label} schema`,
+      ).toBe(false);
+      expect(
+        () => stringifyDocumentV7(candidate),
+        `${label} stringify`,
+      ).toThrow();
+      expect(() => cloneDocumentV7(candidate), `${label} clone`).toThrow();
+    }
+    expect(accessorReads).toBe(0);
+  });
+
+  it("applies the raw boundary to direct node and topology-entry schemas", () => {
     const source = stagedV7Document();
-    const metadata = JSON.parse(
-      '{"__proto__":{"document":true},"nested":{"__proto__":"kept"}}',
-    ) as Readonly<Record<string, unknown>>;
-    const resourceMetadata = JSON.parse(
-      '{"__proto__":{"resource":true}}',
+    const primitive = structuredClone(source.nodes[nodeId("primitive")]);
+    expect(primitive?.kind).toBe("box");
+    if (primitive?.kind !== "box") return;
+    defineOwnDataProperty(primitive, "__proto__", { rejected: true });
+    expect(NodeV7Schema.safeParse(primitive).success).toBe(false);
+
+    const arrayNode = structuredClone(source.nodes[nodeId("primitive")]);
+    expect(arrayNode?.kind).toBe("box");
+    if (arrayNode?.kind !== "box") return;
+    defineOwnDataProperty(arrayNode.size as unknown as object, "extra", true);
+    expect(NodeV7Schema.safeParse(arrayNode).success).toBe(false);
+
+    let reads = 0;
+    const accessorNode = structuredClone(
+      source.nodes[nodeId("primitive")],
+    ) as unknown as Record<string, unknown>;
+    Object.defineProperty(accessorNode, "center", {
+      configurable: true,
+      enumerable: true,
+      get(): boolean {
+        reads += 1;
+        return false;
+      },
+    });
+    expect(NodeV7Schema.safeParse(accessorNode).success).toBe(false);
+    expect(reads).toBe(0);
+
+    const entry = structuredClone(
+      source.topologyReferences?.[topologyReferenceId("corner")],
+    );
+    expect(entry).toBeDefined();
+    if (entry === undefined) return;
+    defineOwnDataProperty(entry.target, "__proto__", { rejected: true });
+    expect(TopologyReferenceEntryV7Schema.safeParse(entry).success).toBe(false);
+
+    const symbolicEntry = structuredClone(
+      source.topologyReferences?.[topologyReferenceId("corner")],
+    );
+    expect(symbolicEntry).toBeDefined();
+    if (symbolicEntry === undefined) return;
+    defineOwnDataProperty(symbolicEntry, Symbol("hidden"), true);
+    expect(
+      TopologyReferenceEntryV7Schema.safeParse(symbolicEntry).success,
+    ).toBe(false);
+  });
+
+  it("preserves every JSON metadata key through parse, clone, and serialization", () => {
+    const candidate = structuredClone(
+      stagedV7Document(),
+    ) as unknown as Record<string, unknown>;
+    candidate.metadata = protocolMetadata("document");
+    candidate.materials = {
+      steel: {
+        name: "Steel",
+        massDensity: density(7.85e-6),
+        metadata: protocolMetadata("material"),
+      },
+    };
+    (objectAt(candidate, ["units"]) as Record<string, unknown>).mass = "kg";
+    (
+      objectAt(candidate, [
+        "configurations",
+        "manufacturing",
+      ]) as Record<string, unknown>
+    ).metadata = protocolMetadata("configuration");
+    (
+      objectAt(candidate, [
+        "resources",
+        "importedStep",
+      ]) as Record<string, unknown>
+    ).metadata = protocolMetadata("resource");
+    (
+      objectAt(candidate, ["nodes", "part"]) as Record<string, unknown>
+    ).metadata = protocolMetadata("part");
+    (
+      objectAt(candidate, [
+        "nodes",
+        "bodies",
+        "bodies",
+        0,
+      ]) as Record<string, unknown>
+    ).metadata = protocolMetadata("body");
+    candidate.parameters = Object.fromEntries(
+      ["constructor", "prototype", "toString"].map((id, index) => [
+        id,
+        {
+          dimension: "length",
+          default: length(index + 1),
+        },
+      ]),
+    );
+    const outputs = objectAt(candidate, ["outputs"]) as Record<string, unknown>;
+    for (const id of ["constructor", "prototype", "toString"]) {
+      outputs[id] = { node: "part", kind: "part" };
+    }
+
+    expect(DesignDocumentV7Schema.safeParse(candidate).success).toBe(true);
+    expect(
+      NodeV7Schema.safeParse(objectAt(candidate, ["nodes", "part"])).success,
+    ).toBe(true);
+    const parsed = parseDocumentValueV7(candidate);
+    expect(
+      parsed.ok,
+      parsed.ok ? undefined : JSON.stringify(parsed.diagnostics),
+    ).toBe(true);
+    if (!parsed.ok) return;
+    const metadataPaths = [
+      ["metadata"],
+      ["materials", "steel", "metadata"],
+      ["configurations", "manufacturing", "metadata"],
+      ["resources", "importedStep", "metadata"],
+      ["nodes", "part", "metadata"],
+      ["nodes", "bodies", "bodies", 0, "metadata"],
+    ] as const;
+    for (const path of metadataPaths) {
+      const metadata = objectAt(parsed.value, path);
+      expect(Object.hasOwn(metadata, "__proto__"), path.join("/")).toBe(true);
+      expect(Object.hasOwn(metadata, "constructor")).toBe(true);
+      expect(Object.hasOwn(metadata, "prototype")).toBe(true);
+      expect(Object.hasOwn(metadata, "toString")).toBe(true);
+    }
+    expect(Object.keys(parsed.value.parameters)).toEqual([
+      "constructor",
+      "prototype",
+      "toString",
+    ]);
+    expect(
+      Object.keys(parsed.value.outputs).filter((id) =>
+        ["constructor", "prototype", "toString"].includes(id),
+      ),
+    ).toEqual(["constructor", "prototype", "toString"]);
+
+    const text = stringifyDocumentV7(parsed.value);
+    expect(text.match(/"__proto__"/g)).toHaveLength(6);
+    const reparsed = parseDocumentV7(text);
+    expect(reparsed.ok).toBe(true);
+    const clone = cloneDocumentV7(parsed.value);
+    for (const path of metadataPaths) {
+      expect(Object.hasOwn(objectAt(clone, path), "__proto__")).toBe(true);
+    }
+  });
+
+  it("does not let a metadata alias launder forbidden protocol keys", () => {
+    const source = stagedV7Document();
+    const shared = JSON.parse(
+      '{"length":"mm","angle":"rad","__proto__":{"forbidden":true}}',
     ) as Readonly<Record<string, unknown>>;
     const candidate = {
       ...source,
-      metadata,
+      units: shared,
+      metadata: shared,
+    } as unknown as DesignDocumentV7;
+    expect(parseDocumentValueV7(candidate).ok).toBe(false);
+    expect(DesignDocumentV7Schema.safeParse(candidate).success).toBe(false);
+
+    const allowed = protocolMetadata("shared");
+    const metadataOnly = {
+      ...source,
+      metadata: allowed,
       resources: {
         ...source.resources,
         importedStep: {
           ...source.resources?.[resourceId("importedStep")],
-          metadata: resourceMetadata,
+          metadata: allowed,
         },
       },
     } as unknown as DesignDocumentV7;
-
-    const parsed = parseDocumentValueV7(candidate);
-    expect(parsed.ok).toBe(true);
-    if (!parsed.ok) return;
-    expect(Object.hasOwn(parsed.value.metadata ?? {}, "__proto__")).toBe(true);
-    expect(
-      Object.hasOwn(
-        (parsed.value.metadata?.nested ?? {}) as object,
-        "__proto__",
-      ),
-    ).toBe(true);
-    expect(
-      Object.hasOwn(
-        parsed.value.resources?.[resourceId("importedStep")]?.metadata ?? {},
-        "__proto__",
-      ),
-    ).toBe(true);
-
-    const text = stringifyDocumentV7(parsed.value);
-    expect(text.match(/"__proto__"/g)).toHaveLength(3);
-    const reparsed = parseDocumentV7(text);
-    expect(reparsed.ok).toBe(true);
-    const clone = cloneDocumentV7(parsed.value);
-    expect(Object.hasOwn(clone.metadata ?? {}, "__proto__")).toBe(true);
+    expect(parseDocumentValueV7(metadataOnly).ok).toBe(true);
   });
 
   it("enforces maxDocumentBytes for staged stringify and clone", () => {
@@ -640,6 +964,209 @@ describe("staged document-v7 serialization and validation", () => {
       ),
     ).toEqual(baseline.value);
     expect(cloneReads).toBe(1);
+  });
+
+  it("requires one primitive text input without coercing hostile values", () => {
+    const text = stringifyDocumentV7(stagedV7Document());
+    let coercions = 0;
+    const stringLike = {
+      [Symbol.toPrimitive](): string {
+        coercions += 1;
+        return text;
+      },
+      toString(): string {
+        coercions += 1;
+        return text;
+      },
+    };
+    const revoked = Proxy.revocable({}, {});
+    revoked.revoke();
+
+    for (const candidate of [
+      new String(text),
+      stringLike,
+      revoked.proxy,
+    ]) {
+      let result: ReturnType<typeof parseDocumentV7> | undefined;
+      expect(() => {
+        result = parseDocumentV7(candidate as unknown as string);
+      }).not.toThrow();
+      expect(result?.ok).toBe(false);
+    }
+    expect(coercions).toBe(0);
+
+    let optionReads = 0;
+    const options = Object.defineProperty({}, "limits", {
+      enumerable: true,
+      get(): object {
+        optionReads += 1;
+        throw new Error("non-string inputs must fail before options");
+      },
+    });
+    expect(
+      parseDocumentV7(
+        stringLike as unknown as string,
+        options,
+      ).ok,
+    ).toBe(false);
+    expect(optionReads).toBe(0);
+  });
+
+  it("fails closed when options or raw traps replace runtime intrinsics", () => {
+    const text = stringifyDocumentV7(stagedV7Document());
+    let limitReads = 0;
+    const accessorLimits = Object.defineProperty({}, "maxDocumentBytes", {
+      enumerable: true,
+      get(): number {
+        limitReads += 1;
+        return 0;
+      },
+    });
+    expect(
+      parseDocumentV7(text, {
+        limits: accessorLimits,
+      }).ok,
+    ).toBe(false);
+    expect(limitReads).toBe(0);
+
+    const textEncoderDescriptor = Object.getOwnPropertyDescriptor(
+      globalThis,
+      "TextEncoder",
+    );
+    expect(textEncoderDescriptor).toBeDefined();
+    if (textEncoderDescriptor === undefined) return;
+    try {
+      const result = parseDocumentV7(
+        text,
+        Object.defineProperty({}, "limits", {
+          enumerable: true,
+          get(): object {
+            Object.defineProperty(globalThis, "TextEncoder", {
+              configurable: true,
+              value: class PoisonedTextEncoder {
+                encode(): Uint8Array {
+                  return new Uint8Array();
+                }
+              },
+              writable: true,
+            });
+            return { maxDocumentBytes: 0 };
+          },
+        }),
+      );
+      expect(result.ok).toBe(false);
+    } finally {
+      Object.defineProperty(
+        globalThis,
+        "TextEncoder",
+        textEncoderDescriptor,
+      );
+    }
+
+    const parseDescriptor = Object.getOwnPropertyDescriptor(JSON, "parse");
+    expect(parseDescriptor).toBeDefined();
+    if (parseDescriptor === undefined) return;
+    try {
+      const result = parseDocumentV7(
+        "{}",
+        Object.defineProperty({}, "limits", {
+          enumerable: true,
+          get(): object {
+            Object.defineProperty(JSON, "parse", {
+              configurable: true,
+              value: (): unknown => stagedV7Document(),
+              writable: true,
+            });
+            return {};
+          },
+        }),
+      );
+      expect(result.ok).toBe(false);
+    } finally {
+      Object.defineProperty(JSON, "parse", parseDescriptor);
+    }
+
+    const entriesDescriptor = Object.getOwnPropertyDescriptor(
+      Object,
+      "entries",
+    );
+    expect(entriesDescriptor).toBeDefined();
+    if (entriesDescriptor === undefined) return;
+    const trapped = new Proxy(structuredClone(stagedV7Document()), {
+      ownKeys(target): (string | symbol)[] {
+        Object.defineProperty(Object, "entries", {
+          configurable: true,
+          value: (): readonly [] => [],
+          writable: true,
+        });
+        return Reflect.ownKeys(target);
+      },
+    });
+    try {
+      expect(() =>
+        stringifyDocumentV7(trapped as unknown as DesignDocumentV7),
+      ).toThrow(/intrinsics/);
+    } finally {
+      Object.defineProperty(Object, "entries", entriesDescriptor);
+    }
+  });
+
+  it("contains call-time replacement of preflight identity primitives", () => {
+    const defineProperty = Object.defineProperty;
+    const ownKeys = Reflect.ownKeys;
+    const mutations = [
+      {
+        holder: Object,
+        key: "keys",
+        value: (): readonly [] => [],
+      },
+      {
+        holder: Object,
+        key: "hasOwn",
+        value: (): false => false,
+      },
+      {
+        holder: Object,
+        key: "getPrototypeOf",
+        value: (): null => null,
+      },
+      {
+        holder: Array,
+        key: "isArray",
+        value: (): false => false,
+      },
+      {
+        holder: globalThis,
+        key: "Object",
+        value: function PoisonedObject(): void {},
+      },
+    ] as const;
+
+    for (const mutation of mutations) {
+      const descriptor = Object.getOwnPropertyDescriptor(
+        mutation.holder,
+        mutation.key,
+      );
+      expect(descriptor, mutation.key).toBeDefined();
+      if (descriptor === undefined) continue;
+      const trapped = new Proxy(structuredClone(stagedV7Document()), {
+        ownKeys(target): (string | symbol)[] {
+          defineProperty(mutation.holder, mutation.key, {
+            configurable: true,
+            value: mutation.value,
+            writable: true,
+          });
+          return ownKeys(target);
+        },
+      });
+      let result: ReturnType<typeof parseDocumentValueV7> | undefined;
+      try {
+        result = parseDocumentValueV7(trapped);
+      } finally {
+        defineProperty(mutation.holder, mutation.key, descriptor);
+      }
+      expect(result?.ok, mutation.key).toBe(false);
+    }
   });
 
   it("validates new expression dimensions, outputs, configurations, and cycles", () => {
