@@ -40,6 +40,8 @@ Bun can consume the package as well; pnpm is used for repository development.
 
 ## Quick start
 
+<!-- docs-example:start parametric-box-default -->
+
 ```ts
 import { createEvaluator, design, mm, vec3 } from "invariantcad";
 
@@ -52,38 +54,44 @@ const body = cad.box("body", {
 });
 cad.output("body", body);
 
-const evaluator = await createEvaluator();
-try {
-  const result = await evaluator.evaluate(cad.build(), {
-    parameters: { width: 60 },
-  });
-  if (!result.ok) {
-    throw new Error(result.diagnostics.map((item) => item.message).join("\n"));
-  }
-
+async function evaluateParametricBox() {
+  const evaluator = await createEvaluator();
   try {
-    const output = result.value.output("body");
-    console.log(output.measure());
-    const stl = output.export("stl"); // Uint8Array
+    const result = await evaluator.evaluate(cad.build(), {
+      parameters: { width: 60 },
+      outputs: ["body"],
+    });
+    if (!result.ok) {
+      throw new Error(
+        result.diagnostics.map((item) => item.message).join("\n"),
+      );
+    }
+
+    try {
+      const output = result.value.output("body");
+      return {
+        volume: output.measure().volume,
+        stlBytes: output.export("stl").byteLength,
+      };
+    } finally {
+      result.value.dispose();
+    }
   } finally {
-    result.value.dispose();
+    evaluator.dispose();
   }
-} finally {
-  evaluator.dispose();
 }
+
+export const parametricBoxSummary = await evaluateParametricBox();
+console.log(parametricBoxSummary);
 ```
 
-The default evaluator uses the bundled Manifold runtime. Select a named profile
-when the runtime contract matters:
+<!-- docs-example:end parametric-box-default -->
 
-```ts
-const preview = await createEvaluator({ profile: "mesh-preview" });
-const exact = await createEvaluator({ profile: "mechanical-exact" });
-```
-
-The exact profile loads the stock OCCT backend and verifies its complete
-mechanical baseline before returning. Every evaluated design and evaluator owns
-native resources, so dispose them as shown.
+The default evaluator uses the bundled Manifold runtime. Pass
+`profile: "mesh-preview"` when that mesh contract must be checked explicitly,
+or `profile: "mechanical-exact"` to load stock OCCT and verify the complete
+exact-mechanical baseline before creation succeeds. Every evaluated design and
+evaluator owns native resources, so use the `finally` boundaries shown above.
 
 ## Geometry backends
 
@@ -92,15 +100,11 @@ native resources, so dispose them as shown.
 | Manifold | Watertight triangle mesh | Fast default modeling and STL/OBJ workflows | STL, ASCII STL, OBJ |
 | OpenCascade | Exact B-Rep | Analytic geometry, topology, STEP, and BREP workflows | STL, OBJ, STEP, BREP |
 
-Use the exact profile for the supported stock OCCT baseline:
-
-```ts
-import { createEvaluator } from "invariantcad";
-
-const evaluator = await createEvaluator({
-  profile: "mechanical-exact",
-});
-```
+Use `createEvaluator({ profile: "mechanical-exact" })` for the supported stock
+OCCT baseline. The
+[mounting-plate quickstart](docs/get-started/quickstart.mdx) shows complete
+default and exact lifecycles, including STEP export and the caller-owned-kernel
+failure path.
 
 Pass an explicit kernel when custom OCCT loading, an owned runtime, or another
 backend is required. See the [kernel guide](docs/evaluation/kernels.mdx) for the

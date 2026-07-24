@@ -64,6 +64,14 @@ The Mintlify source lives in `/docs`. Every navigated page needs `title` and
 `description` frontmatter. Keep examples compilable, distinguish tested from
 planned behavior, and link to one canonical support matrix.
 
+Selected complete fences are synchronized from strict TypeScript regions under
+`examples/docs/`. Edit the canonical source rather than content between
+`docs-example` markers, then run `pnpm docs:generate`. `pnpm docs:check`
+verifies exact synchronization and source-mapped public imports without
+starting native runtimes; run `pnpm test:docs-examples` for the separate
+Manifold and OCCT execution gate. Unmarked illustrative fences remain
+hand-maintained.
+
 ## Security reports
 
 Do not open a normal issue for a vulnerability. Follow the

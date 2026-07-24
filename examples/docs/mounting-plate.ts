@@ -1,18 +1,4 @@
----
-title: "Quickstart"
-description: "Author, evaluate, inspect, and export a parameterized mounting plate."
-icon: "rocket"
----
-
-This walkthrough builds a plate with a parameterized rectangular outline and a
-circular hole. The same immutable document is evaluated first with the default
-Manifold backend for STL and then with stock OCCT for exact STEP export.
-
-## Run the complete workflow
-
-{/* docs-example:start mounting-plate-default-and-exact */}
-
-```ts
+// docs-example:start mounting-plate-default-and-exact
 import {
   EvaluatedSolid,
   createEvaluator,
@@ -140,72 +126,4 @@ export const mountingPlateSummary = {
   stepHeader: new TextDecoder().decode(exact.step.subarray(0, 32)),
 };
 console.log(mountingPlateSummary);
-```
-
-{/* docs-example:end mounting-plate-default-and-exact */}
-
-The example is a complete executable module. `build()` returns a deeply frozen
-current-version document; builder references such as `profile`, `solid`, and
-`part` never enter the serialized data.
-
-Parameter override numbers use base units: millimetres for length, radians for
-angle, unitless scalar values, and kilograms per cubic millimetre for mass
-density.
-
-## Understand the ownership boundary
-
-Each successful `evaluate()` call owns every native shape created for that
-evaluation, so its `EvaluatedDesign` is disposed in a `finally` block. Each
-evaluator is also disposed in `finally`.
-
-The exact path has one additional edge: `createOcctKernel()` returns a
-caller-owned kernel, while a successfully created evaluator adopts it. If
-`createEvaluator({ kernel })` rejects before that transfer, the caller still
-disposes the kernel. The example's `evaluatorOwnsKernel` guard covers both
-paths without relying on a partially created evaluator.
-
-Exports are detached JavaScript values. The returned STL and STEP
-`Uint8Array`s remain usable after their evaluated designs and evaluators have
-been disposed.
-
-## Save the results
-
-The runtime example deliberately performs no filesystem writes. A Node.js
-application can persist its detached values:
-
-```ts
-import { writeFile } from "node:fs/promises";
-import { stringifyDocument } from "invariantcad";
-
-await writeFile(
-  "mounting-plate.invariantcad.json",
-  stringifyDocument(document, { pretty: true }),
-);
-await writeFile("mounting-plate.stl", defaultMesh.stl);
-await writeFile("mounting-plate.step", exact.step);
-```
-
-`stringifyDocument()` canonicalizes values according to the document protocol.
-Use `parseDocument()` when loading untrusted text; do not cast parsed JSON to a
-`DesignDocument`.
-
-Read [kernels](/evaluation/kernels) before assuming every feature or topology
-history guarantee is identical between Manifold, stock OCCT, and the optional
-owned facade.
-
-## What to learn next
-
-<CardGroup cols={2}>
-  <Card title="Expressions and parameters" icon="variable" href="/modeling/parameters-and-expressions">
-    Build dimension-safe formulas and understand evaluation overrides.
-  </Card>
-  <Card title="Sketches and constraints" icon="pen-tool" href="/modeling/sketches-and-constraints">
-    Author reusable profiles with explicit loops and holes.
-  </Card>
-  <Card title="Assemblies and BOMs" icon="boxes" href="/modeling/assemblies">
-    Define reusable parts, nested occurrences, materials, and quantities.
-  </Card>
-  <Card title="Diagnostics" icon="triangle-alert" href="/evaluation/diagnostics-and-limits">
-    Handle structured failures, cancellation, and resource limits.
-  </Card>
-</CardGroup>
+// docs-example:end mounting-plate-default-and-exact

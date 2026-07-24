@@ -36,22 +36,31 @@ InvariantCAD never downloads one implicitly.
 
 ## Quick start
 
+{/* docs-example:start mounting-plate-default-and-exact */}
+
 ```ts
 import {
+  EvaluatedSolid,
   createEvaluator,
   design,
   mm,
   plane,
   vec2,
-  vec3,
 } from "invariantcad";
+import { createOcctKernel } from "invariantcad/kernels/occt";
 
-const cad = design("mounting-plate");
+const cad = design("mounting-plate", {
+  metadata: { description: "Parameterized plate with one mounting hole" },
+});
 
-const width = cad.parameter.length("width", mm(80), { min: mm(1) });
-const height = cad.parameter.length("height", mm(50), { min: mm(1) });
+const width = cad.parameter.length("width", mm(80), {
+  min: mm(20),
+  max: mm(200),
+  description: "Overall plate width",
+});
+const height = cad.parameter.length("height", mm(50), { min: mm(10) });
 const thickness = cad.parameter.length("thickness", mm(6), { min: mm(1) });
-const holeRadius = cad.parameter.length("holeRadius", mm(4));
+const holeRadius = cad.parameter.length("holeRadius", mm(4), { min: mm(1) });
 
 const profile = cad.sketch("plate-profile", plane.xy(), (sketch) => {
   const outline = sketch.rectangle("outline", { width, height });
@@ -59,7 +68,6 @@ const profile = cad.sketch("plate-profile", plane.xy(), (sketch) => {
     center: vec2(width.mul(0.25), mm(0)),
     radius: holeRadius,
   });
-
   return sketch.profile(outline, { holes: [hole.loop()] });
 });
 
@@ -67,57 +75,110 @@ const solid = cad.extrude("plate-solid", profile, {
   distance: thickness,
   symmetric: true,
 });
-const part = cad.part("plate", solid, { partNumber: "PLATE-001" });
+const part = cad.part("plate", solid, {
+  partNumber: "PLATE-001",
+  description: "Machined mounting plate",
+});
 cad.output("plate", part);
 
 const document = cad.build();
-const evaluator = await createEvaluator();
-const result = await evaluator.evaluate(document, {
-  parameters: { width: 100 }, // base length unit is millimetres
-});
+const parameters = {
+  width: 100,
+  holeRadius: 5,
+};
 
-if (!result.ok) {
-  console.error(result.diagnostics);
-} else {
+async function evaluateDefaultMesh() {
+  const evaluator = await createEvaluator();
   try {
-    const plate = result.value.output("plate");
-    console.log(plate.measure());
+    const result = await evaluator.evaluate(document, {
+      parameters,
+      outputs: ["plate"],
+    });
+    if (!result.ok) {
+      throw new Error(
+        result.diagnostics.map((item) => item.message).join("\n"),
+      );
+    }
 
-    const stl = plate.export("stl");
-    // `stl` is a Uint8Array ready for a file, response, or object store.
+    try {
+      const plate = result.value.output("plate");
+      if (!(plate instanceof EvaluatedSolid)) {
+        throw new Error("Expected the 'plate' output to be a solid part");
+      }
+      return {
+        volume: plate.measure().volume,
+        stl: plate.export("stl"),
+      };
+    } finally {
+      result.value.dispose();
+    }
   } finally {
-    result.value.dispose();
+    evaluator.dispose();
   }
 }
 
-evaluator.dispose();
+async function exportExactStep() {
+  const kernel = await createOcctKernel();
+  let evaluatorOwnsKernel = false;
+  try {
+    const evaluator = await createEvaluator({ kernel });
+    evaluatorOwnsKernel = true;
+    try {
+      const result = await evaluator.evaluate(document, {
+        parameters,
+        outputs: ["plate"],
+      });
+      if (!result.ok) {
+        throw new Error(
+          result.diagnostics.map((item) => item.message).join("\n"),
+        );
+      }
+
+      try {
+        const plate = result.value.output("plate");
+        if (!(plate instanceof EvaluatedSolid)) {
+          throw new Error("Expected the 'plate' output to be a solid part");
+        }
+        return {
+          volume: plate.measure().volume,
+          step: plate.export("step"),
+        };
+      } finally {
+        result.value.dispose();
+      }
+    } finally {
+      evaluator.dispose();
+    }
+  } finally {
+    // A rejected caller-supplied kernel remains caller-owned.
+    if (!evaluatorOwnsKernel) kernel.dispose();
+  }
+}
+
+const defaultMesh = await evaluateDefaultMesh();
+const exact = await exportExactStep();
+
+export const mountingPlateSummary = {
+  defaultVolume: defaultMesh.volume,
+  defaultStlBytes: defaultMesh.stl.byteLength,
+  exactVolume: exact.volume,
+  stepBytes: exact.step.byteLength,
+  stepHeader: new TextDecoder().decode(exact.step.subarray(0, 32)),
+};
+console.log(mountingPlateSummary);
 ```
+
+{/* docs-example:end mounting-plate-default-and-exact */}
 
 Every feature, entity, constraint, parameter, instance, output, and stored topology reference has an explicit stable ID. Those IDs are the basis for reproducible diffs, diagnostics, and durable design intent.
 
 ### Exact B-Rep evaluation
 
-Use the OCCT backend when the result must retain exact analytic geometry or be exported through STEP/BREP:
-
-```ts
-import { createEvaluator } from "invariantcad";
-import { createOcctKernel } from "invariantcad/kernels/occt";
-
-const evaluator = await createEvaluator({
-  kernel: await createOcctKernel(),
-});
-
-const result = await evaluator.evaluate(document);
-if (result.ok) {
-  try {
-    const step = result.value.output("plate").export("step");
-    // Uint8Array containing an ISO-10303-21 STEP file.
-  } finally {
-    result.value.dispose();
-  }
-}
-evaluator.dispose();
-```
+Use the OCCT backend when the result must retain exact analytic geometry or be
+exported through STEP/BREP. The complete example above evaluates one document
+with both backends, exports a detached STEP `Uint8Array`, disposes each
+successful evaluated design, and handles the caller-owned-kernel failure path
+before evaluator ownership transfers.
 
 The backend is explicitly selected; a design document never contains OCCT handles or backend-specific objects. The default `createOcctKernel()` loads stock `occt-wasm` and supports the exact geometry features listed below except draft, but its Boolean, fillet/chamfer, and shell/offset topology history is partial. Draft, complete exact multi-input Boolean, fillet/chamfer, and shell/offset evolution, plus the stronger major multi-arc/eccentric-profile composite guarantees, are advertised only when the matched InvariantCAD-owned facade ABI 0.9 build passes the exact facade probe. A caller can supply that pair directly through `moduleFactory` plus optional `wasm`, or preferably verify a reviewed bundle first with the Node/browser attested loader and pass its opaque `attestedRuntime`. ABI 0.9 retains the complete ABI 0.6 modeling/history surface, ABI 0.7's bounded artifact transport, and ABI 0.8's private cumulative native allocation-request budget, then adds exact owned-profile BinTools-v4 structural preflight only for the repository-private candidate; it does not advertise a shape-artifact codec. The repository can turn that local build into a verified, package-neutral bundle, but applications must still acquire and supply its runtime explicitly. See [Browser initialization](#browser-initialization) and [OCCT runtime attestation](/evaluation/occt-runtime-attestation).
 

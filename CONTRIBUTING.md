@@ -137,6 +137,14 @@ and `description` frontmatter. Keep examples complete enough to copy, clearly
 separate tested behavior from roadmap work, and use the support matrix as the
 canonical feature boundary.
 
+Selected complete code fences are generated from strict TypeScript regions in
+`examples/docs/`. Do not edit content between `docs-example` markers directly:
+edit the canonical source and run `pnpm docs:generate`. `pnpm docs:check`
+verifies byte-for-byte synchronization and compiles those sources through the
+public package specifiers without running a native backend.
+`pnpm test:docs-examples` is the separate Manifold/OCCT runtime gate.
+Illustrative fences without markers remain hand-maintained.
+
 User-visible changes should update `CHANGELOG.md`. New releases receive a page
 under `docs/releases/`; ordinary pull requests must not create tags or publish
 packages.
