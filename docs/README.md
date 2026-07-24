@@ -3,7 +3,7 @@
 This directory is the source root for the public Mintlify documentation site.
 It is also included in the npm package for offline reading.
 
-Public site: <https://invariant-cad.mintlify.app>
+Public site: <https://invariant-cad.mintlify.site>
 
 ## Start here
 

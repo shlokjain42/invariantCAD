@@ -37,8 +37,8 @@ CAD data, proprietary files, or personal information in a public issue.
 ## Before opening an issue
 
 1. Search existing issues and pull requests.
-2. Read the [documentation](https://invariant-cad.mintlify.app) and the
-   [support matrix](https://invariant-cad.mintlify.app/reference/support-matrix).
+2. Read the [documentation](https://invariant-cad.mintlify.site) and the
+   [support matrix](https://invariant-cad.mintlify.site/reference/support-matrix).
 3. Confirm that the selected kernel advertises the required capability.
 4. Reduce the problem to the smallest design document or TypeScript example
    that still fails.

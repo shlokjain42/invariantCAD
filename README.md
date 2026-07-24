@@ -1,7 +1,7 @@
 # InvariantCAD
 
 [![CI](https://github.com/shlokjain42/invariantCAD/actions/workflows/ci.yml/badge.svg)](https://github.com/shlokjain42/invariantCAD/actions/workflows/ci.yml)
-[![Documentation](https://img.shields.io/badge/docs-Mintlify-2563EB.svg)](https://invariant-cad.mintlify.app)
+[![Documentation](https://img.shields.io/badge/docs-Mintlify-2563EB.svg)](https://invariant-cad.mintlify.site)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 
 Comprehensive, type-safe CAD-as-code for TypeScript.
@@ -141,7 +141,7 @@ overrides, output selection, formats, and exit behavior.
 
 ## Documentation
 
-Read the [hosted documentation](https://invariant-cad.mintlify.app), or browse
+Read the [hosted documentation](https://invariant-cad.mintlify.site), or browse
 its versioned source under [`docs/`](docs/README.md):
 
 - [Installation](docs/get-started/installation.mdx)
