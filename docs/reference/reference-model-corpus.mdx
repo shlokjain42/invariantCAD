@@ -41,6 +41,8 @@ pnpm exec vitest run tests/reference-models.test.ts
 
 Benchmark schema v2 emits JSON and intentionally has no pass/fail performance
 thresholds. It launches one fresh child process for every model/kernel pair.
+Each case has a 120-second process timeout; a timed-out worker is killed and
+reaped with its kernel/model context included in the failure.
 The first run in that process is labeled `fresh-runtime-first-run`: it creates
 a new kernel and evaluator, builds a fresh document, and performs the first
 evaluation. It is not a claim that the machine, filesystem cache, WebAssembly

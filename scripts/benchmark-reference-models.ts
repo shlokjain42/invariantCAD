@@ -2,7 +2,8 @@ import { execFile, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { cpus, totalmem } from "node:os";
-import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { performance } from "node:perf_hooks";
 import process from "node:process";
 import { parseArgs } from "node:util";
@@ -25,6 +26,7 @@ import {
 
 const REPORT_KIND = "invariantcad-reference-model-benchmark" as const;
 const REPORT_SCHEMA_VERSION = 2 as const;
+const CASE_WORKER_TIMEOUT_MS = 120_000 as const;
 const TESSELLATION_OPTIONS = Object.freeze({
   linearDeflection: 0.1,
   angularDeflection: 0.3,
@@ -122,7 +124,7 @@ interface RepeatTimingSummary {
   readonly workflowTotal: TimingSummary;
 }
 
-interface BenchmarkCase {
+export interface BenchmarkCase {
   readonly kernel: {
     readonly id: ReferenceKernelId;
     readonly protocolVersion: number;
@@ -173,7 +175,7 @@ interface BenchmarkCase {
   };
 }
 
-interface BenchmarkReport {
+export interface BenchmarkReport {
   readonly kind: typeof REPORT_KIND;
   readonly schemaVersion: typeof REPORT_SCHEMA_VERSION;
   readonly generatedAt: string;
@@ -210,8 +212,16 @@ interface BenchmarkReport {
     readonly kernels: readonly ReferenceKernelId[];
     readonly models: readonly string[];
     readonly repeatRuns: number;
+    readonly caseWorkerTimeoutMs: typeof CASE_WORKER_TIMEOUT_MS;
   };
   readonly cases: readonly BenchmarkCase[];
+}
+
+export interface BenchmarkCaseExpectation {
+  readonly kernelId: ReferenceKernelId;
+  readonly modelId: string;
+  readonly outputName: string;
+  readonly repeatRuns: number;
 }
 
 interface Timed<T> {
@@ -596,12 +606,34 @@ async function executeCase(
         "GeometryKernel protocol v1 exposes disposal but no native allocation counter",
     },
   };
-  validateCase(result, repeatRuns);
+  validateBenchmarkCase(result, {
+    kernelId,
+    modelId: model.id,
+    outputName: model.outputName,
+    repeatRuns,
+  });
   return result;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function requireExactKeys(
+  value: Record<string, unknown>,
+  expected: readonly string[],
+  label: string,
+): void {
+  const actual = Object.keys(value).sort();
+  const sortedExpected = [...expected].sort();
+  if (
+    actual.length !== sortedExpected.length ||
+    actual.some((key, index) => key !== sortedExpected[index])
+  ) {
+    throw new TypeError(
+      `${label} keys must be exactly ${sortedExpected.join(", ")}`,
+    );
+  }
 }
 
 function nonNegativeFinite(value: unknown): value is number {
@@ -631,18 +663,34 @@ function finiteVector3(
 
 function validateTimingSummary(
   value: unknown,
-  expectedSamples: number,
+  expectedSamples: readonly number[],
 ): asserts value is TimingSummary {
+  if (!isRecord(value)) {
+    throw new TypeError("Benchmark repeat timing summary must be an object");
+  }
+  requireExactKeys(
+    value,
+    ["samples", "min", "median", "max"],
+    "Benchmark repeat timing summary",
+  );
   if (
-    !isRecord(value) ||
     !Array.isArray(value.samples) ||
-    value.samples.length !== expectedSamples ||
+    value.samples.length !== expectedSamples.length ||
     value.samples.some((sample) => !nonNegativeFinite(sample)) ||
     !nonNegativeFinite(value.min) ||
     !nonNegativeFinite(value.median) ||
     !nonNegativeFinite(value.max)
   ) {
     throw new TypeError("Benchmark repeat timing summary is invalid");
+  }
+  if (
+    value.samples.some(
+      (sample, index) => sample !== expectedSamples[index],
+    )
+  ) {
+    throw new TypeError(
+      "Benchmark repeat timing samples do not match the repeated runs",
+    );
   }
   const expected = summarize(value.samples as number[]);
   if (
@@ -654,23 +702,39 @@ function validateTimingSummary(
   }
 }
 
-function validateRun(value: unknown): asserts value is BenchmarkRun {
+function validateRun(
+  value: unknown,
+  expectedClass: BenchmarkRun["class"],
+  expectedOrdinal: number,
+  expectedKernelId: ReferenceKernelId,
+): asserts value is BenchmarkRun {
   if (!isRecord(value)) throw new TypeError("Benchmark run must be an object");
-  if (
-    value.class !== "fresh-runtime-first-run" &&
-    value.class !== "same-runtime-repeat"
-  ) {
-    throw new TypeError("Benchmark run class is invalid");
-  }
-  if (
-    !Number.isSafeInteger(value.ordinal) ||
-    (value.ordinal as number) < 0
-  ) {
-    throw new TypeError("Benchmark run ordinal is invalid");
+  requireExactKeys(
+    value,
+    [
+      "class",
+      "ordinal",
+      "document",
+      "geometry",
+      "tessellation",
+      "outputs",
+      "timingsMs",
+    ],
+    "Benchmark run",
+  );
+  if (value.class !== expectedClass || value.ordinal !== expectedOrdinal) {
+    throw new TypeError(
+      `Benchmark run must be ${expectedClass} with ordinal ${expectedOrdinal}`,
+    );
   }
   if (!isRecord(value.document)) {
     throw new TypeError("Benchmark document evidence is invalid");
   }
+  requireExactKeys(
+    value.document,
+    ["canonicalUtf8Bytes", "canonicalSha256", "nodes", "parameters"],
+    "Benchmark document evidence",
+  );
   if (
     !positiveSafeInteger(value.document.canonicalUtf8Bytes) ||
     typeof value.document.canonicalSha256 !== "string" ||
@@ -683,6 +747,11 @@ function validateRun(value: unknown): asserts value is BenchmarkRun {
   if (!isRecord(value.geometry)) {
     throw new TypeError("Benchmark geometry evidence is invalid");
   }
+  requireExactKeys(
+    value.geometry,
+    ["volumeMm3", "surfaceAreaMm2", "boundingBox", "massKg"],
+    "Benchmark geometry evidence",
+  );
   for (const field of ["volumeMm3", "surfaceAreaMm2", "massKg"] as const) {
     if (
       !nonNegativeFinite(value.geometry[field]) ||
@@ -698,9 +767,25 @@ function validateRun(value: unknown): asserts value is BenchmarkRun {
   ) {
     throw new TypeError("Benchmark geometry bounds are invalid");
   }
+  requireExactKeys(
+    value.geometry.boundingBox,
+    ["min", "max"],
+    "Benchmark geometry bounds",
+  );
   if (!isRecord(value.tessellation)) {
     throw new TypeError("Benchmark tessellation evidence is invalid");
   }
+  requireExactKeys(
+    value.tessellation,
+    [
+      "vertices",
+      "triangles",
+      "positionsBytes",
+      "indicesBytes",
+      "totalBufferBytes",
+    ],
+    "Benchmark tessellation evidence",
+  );
   for (const field of [
     "vertices",
     "triangles",
@@ -730,6 +815,16 @@ function validateRun(value: unknown): asserts value is BenchmarkRun {
   if (!isRecord(value.outputs) || !isRecord(value.outputs.binaryStl)) {
     throw new TypeError("Benchmark output evidence is invalid");
   }
+  requireExactKeys(
+    value.outputs,
+    ["binaryStl", "step"],
+    "Benchmark output evidence",
+  );
+  requireExactKeys(
+    value.outputs.binaryStl,
+    ["status", "byteLength"],
+    "Benchmark binary STL evidence",
+  );
   if (
     value.outputs.binaryStl.status !== "observed" ||
     !positiveSafeInteger(value.outputs.binaryStl.byteLength) ||
@@ -741,16 +836,33 @@ function validateRun(value: unknown): asserts value is BenchmarkRun {
   if (!isRecord(value.outputs.step)) {
     throw new TypeError("Benchmark STEP evidence is invalid");
   }
-  if (
-    value.outputs.step.status === "observed"
-      ? !positiveSafeInteger(value.outputs.step.byteLength)
-      : value.outputs.step.status !== "unsupported" ||
-        (value.outputs.step.reason !==
-          "kernel-does-not-advertise-step-export" &&
-          value.outputs.step.reason !==
-            "output-does-not-support-native-export")
-  ) {
-    throw new TypeError("Benchmark STEP evidence is invalid");
+  if (expectedKernelId === "occt") {
+    requireExactKeys(
+      value.outputs.step,
+      ["status", "byteLength"],
+      "Benchmark STEP evidence",
+    );
+    if (
+      value.outputs.step.status !== "observed" ||
+      !positiveSafeInteger(value.outputs.step.byteLength)
+    ) {
+      throw new TypeError("OCCT benchmark STEP evidence must be observed");
+    }
+  } else {
+    requireExactKeys(
+      value.outputs.step,
+      ["status", "reason"],
+      "Benchmark STEP evidence",
+    );
+    if (
+      value.outputs.step.status !== "unsupported" ||
+      value.outputs.step.reason !==
+        "kernel-does-not-advertise-step-export"
+    ) {
+      throw new TypeError(
+        "Manifold benchmark STEP evidence must be explicitly unsupported",
+      );
+    }
   }
   if (!isRecord(value.timingsMs)) {
     throw new TypeError("Benchmark timing evidence is invalid");
@@ -767,6 +879,11 @@ function validateRun(value: unknown): asserts value is BenchmarkRun {
     "resultDisposal",
     "workflowTotal",
   ] as const;
+  requireExactKeys(
+    value.timingsMs,
+    timingFields,
+    "Benchmark timing evidence",
+  );
   for (const field of timingFields) {
     const timing = value.timingsMs[field];
     if (field === "stepSerialization" && timing === null) continue;
@@ -782,50 +899,140 @@ function validateRun(value: unknown): asserts value is BenchmarkRun {
   }
 }
 
-function validateCase(
+export function validateBenchmarkCase(
   value: unknown,
-  expectedRepeatRuns: number,
+  expected: BenchmarkCaseExpectation,
 ): asserts value is BenchmarkCase {
   if (!isRecord(value)) throw new TypeError("Benchmark case must be an object");
+  requireExactKeys(
+    value,
+    [
+      "kernel",
+      "model",
+      "tessellationControl",
+      "initializationMs",
+      "evaluatorDisposalMs",
+      "runs",
+      "memory",
+      "nativeHandles",
+    ],
+    "Benchmark case",
+  );
   if (
     !isRecord(value.kernel) ||
-    (value.kernel.id !== "manifold" && value.kernel.id !== "occt") ||
-    !positiveSafeInteger(value.kernel.protocolVersion) ||
-    typeof value.kernel.representation !== "string" ||
-    typeof value.kernel.exact !== "boolean" ||
     !isRecord(value.model) ||
-    typeof value.model.id !== "string" ||
-    typeof value.model.output !== "string" ||
     !isRecord(value.tessellationControl) ||
     !nonNegativeFinite(value.initializationMs) ||
     !nonNegativeFinite(value.evaluatorDisposalMs)
   ) {
     throw new TypeError("Benchmark kernel evidence is invalid");
   }
+  requireExactKeys(
+    value.kernel,
+    ["id", "protocolVersion", "representation", "exact"],
+    "Benchmark kernel evidence",
+  );
+  const expectedRepresentation =
+    expected.kernelId === "manifold" ? "mesh" : "brep";
+  const expectedExact = expected.kernelId === "occt";
   if (
-    value.kernel.id === "manifold"
-      ? value.tessellationControl.mode !==
-        "authored-segmentation-and-kernel-default"
-      : value.tessellationControl.mode !== "explicit-mesh-options"
+    value.kernel.id !== expected.kernelId ||
+    value.kernel.protocolVersion !== 1 ||
+    value.kernel.representation !== expectedRepresentation ||
+    value.kernel.exact !== expectedExact
   ) {
-    throw new TypeError("Benchmark tessellation control is inconsistent");
+    throw new TypeError(
+      `Benchmark worker output does not match requested kernel '${expected.kernelId}'`,
+    );
+  }
+  requireExactKeys(
+    value.model,
+    ["id", "output"],
+    "Benchmark model evidence",
+  );
+  if (
+    value.model.id !== expected.modelId ||
+    value.model.output !== expected.outputName
+  ) {
+    throw new TypeError(
+      `Benchmark worker output does not match requested model/output '${expected.modelId}/${expected.outputName}'`,
+    );
+  }
+  if (expected.kernelId === "manifold") {
+    requireExactKeys(
+      value.tessellationControl,
+      ["mode", "requestedOptions", "note"],
+      "Manifold tessellation control",
+    );
+    if (!isRecord(value.tessellationControl.requestedOptions)) {
+      throw new TypeError("Manifold tessellation options must be an object");
+    }
+    requireExactKeys(
+      value.tessellationControl.requestedOptions,
+      [],
+      "Manifold tessellation options",
+    );
+    if (
+      value.tessellationControl.mode !==
+        "authored-segmentation-and-kernel-default" ||
+      value.tessellationControl.note !==
+        "Manifold primitive segmentation is authored in the document"
+    ) {
+      throw new TypeError("Manifold tessellation control is inconsistent");
+    }
+  } else {
+    requireExactKeys(
+      value.tessellationControl,
+      ["mode", "requestedOptions"],
+      "OCCT tessellation control",
+    );
+    if (!isRecord(value.tessellationControl.requestedOptions)) {
+      throw new TypeError("OCCT tessellation options must be an object");
+    }
+    requireExactKeys(
+      value.tessellationControl.requestedOptions,
+      ["linearDeflection", "angularDeflection", "relative"],
+      "OCCT tessellation options",
+    );
+    if (
+      value.tessellationControl.mode !== "explicit-mesh-options" ||
+      value.tessellationControl.requestedOptions.linearDeflection !==
+        TESSELLATION_OPTIONS.linearDeflection ||
+      value.tessellationControl.requestedOptions.angularDeflection !==
+        TESSELLATION_OPTIONS.angularDeflection ||
+      value.tessellationControl.requestedOptions.relative !==
+        TESSELLATION_OPTIONS.relative
+    ) {
+      throw new TypeError("OCCT tessellation control is inconsistent");
+    }
   }
   if (!isRecord(value.runs) || !Array.isArray(value.runs.repeats)) {
     throw new TypeError("Benchmark runs are invalid");
   }
-  validateRun(value.runs.first);
-  if (value.runs.first.class !== "fresh-runtime-first-run") {
-    throw new TypeError("Benchmark first run has the wrong class");
-  }
-  if (value.runs.repeats.length !== expectedRepeatRuns) {
+  requireExactKeys(
+    value.runs,
+    ["first", "repeats", "repeatTimingSummaryMs"],
+    "Benchmark runs",
+  );
+  validateRun(
+    value.runs.first,
+    "fresh-runtime-first-run",
+    0,
+    expected.kernelId,
+  );
+  if (value.runs.repeats.length !== expected.repeatRuns) {
     throw new TypeError("Benchmark repeat count is inconsistent");
   }
+  const repeats: BenchmarkRun[] = [];
   for (let index = 0; index < value.runs.repeats.length; index += 1) {
     const repeat = value.runs.repeats[index];
-    validateRun(repeat);
+    validateRun(
+      repeat,
+      "same-runtime-repeat",
+      index + 1,
+      expected.kernelId,
+    );
     if (
-      repeat.class !== "same-runtime-repeat" ||
-      repeat.ordinal !== index + 1 ||
       repeat.document.canonicalSha256 !==
         value.runs.first.document.canonicalSha256 ||
       repeat.document.canonicalUtf8Bytes !==
@@ -833,11 +1040,12 @@ function validateCase(
     ) {
       throw new TypeError("Benchmark repeated-run evidence is inconsistent");
     }
+    repeats.push(repeat);
   }
   if (!isRecord(value.runs.repeatTimingSummaryMs)) {
     throw new TypeError("Benchmark repeat timing summaries are invalid");
   }
-  for (const field of [
+  const summarizedTimingFields = [
     "documentBuild",
     "canonicalSerialization",
     "evaluation",
@@ -847,44 +1055,99 @@ function validateCase(
     "stlSerialization",
     "resultDisposal",
     "workflowTotal",
-  ] as const) {
+  ] as const;
+  requireExactKeys(
+    value.runs.repeatTimingSummaryMs,
+    [...summarizedTimingFields, "stepSerialization"],
+    "Benchmark repeat timing summaries",
+  );
+  for (const field of summarizedTimingFields) {
     validateTimingSummary(
       value.runs.repeatTimingSummaryMs[field],
-      expectedRepeatRuns,
+      repeats.map((repeat) => repeat.timingsMs[field]),
     );
   }
   const stepSummary = value.runs.repeatTimingSummaryMs.stepSerialization;
   if (value.runs.first.outputs.step.status === "observed") {
-    validateTimingSummary(stepSummary, expectedRepeatRuns);
+    validateTimingSummary(
+      stepSummary,
+      repeats.map((repeat) => {
+        const timing = repeat.timingsMs.stepSerialization;
+        if (timing === null) {
+          throw new TypeError(
+            "Observed STEP output requires a repeated STEP timing",
+          );
+        }
+        return timing;
+      }),
+    );
   } else if (stepSummary !== null) {
     throw new TypeError("Benchmark STEP timing summary is inconsistent");
   }
+  const memory = value.memory;
+  if (!isRecord(memory)) {
+    throw new TypeError("Benchmark memory evidence must be an object");
+  }
+  requireExactKeys(
+    memory,
+    [
+      "status",
+      "metric",
+      "source",
+      "unit",
+      "scope",
+      "boundaries",
+      "caveats",
+    ],
+    "Benchmark memory evidence",
+  );
   if (
-    !isRecord(value.memory) ||
-    value.memory.status !== "observed" ||
-    value.memory.metric !== "process-max-rss-high-water" ||
-    value.memory.source !== "process.resourceUsage().maxRSS" ||
-    value.memory.unit !== "KiB" ||
-    value.memory.scope !==
-      "dedicated model worker process, including Node.js, modules, JavaScript, WebAssembly, and kernel state" ||
-    !Array.isArray(value.memory.caveats) ||
-    value.memory.caveats.length !== MEMORY_CAVEATS.length ||
-    !MEMORY_CAVEATS.every(
-      (caveat, index) => value.memory.caveats[index] === caveat,
-    ) ||
-    !isRecord(value.memory.boundaries) ||
-    !Array.isArray(value.memory.boundaries.afterRepeatRunDisposals) ||
-    value.memory.boundaries.afterRepeatRunDisposals.length !==
-      expectedRepeatRuns
+    memory.status !== "observed" ||
+    memory.metric !== "process-max-rss-high-water" ||
+    memory.source !== "process.resourceUsage().maxRSS" ||
+    memory.unit !== "KiB" ||
+    memory.scope !==
+      "dedicated model worker process, including Node.js, modules, JavaScript, WebAssembly, and kernel state"
   ) {
     throw new TypeError("Benchmark memory evidence is invalid");
   }
+  const caveats = memory.caveats;
+  if (
+    !Array.isArray(caveats) ||
+    caveats.length !== MEMORY_CAVEATS.length ||
+    !MEMORY_CAVEATS.every(
+      (caveat, index) => caveats[index] === caveat,
+    )
+  ) {
+    throw new TypeError("Benchmark memory caveats are invalid");
+  }
+  const memoryBoundaries = memory.boundaries;
+  if (!isRecord(memoryBoundaries)) {
+    throw new TypeError("Benchmark memory boundaries must be an object");
+  }
+  requireExactKeys(
+    memoryBoundaries,
+    [
+      "afterImports",
+      "afterKernelInitialization",
+      "afterFirstRunDisposal",
+      "afterRepeatRunDisposals",
+      "afterEvaluatorDisposal",
+    ],
+    "Benchmark memory boundaries",
+  );
+  if (
+    !Array.isArray(memoryBoundaries.afterRepeatRunDisposals) ||
+    memoryBoundaries.afterRepeatRunDisposals.length !== expected.repeatRuns
+  ) {
+    throw new TypeError("Benchmark repeat memory boundaries are invalid");
+  }
   const boundaries = [
-    value.memory.boundaries.afterImports,
-    value.memory.boundaries.afterKernelInitialization,
-    value.memory.boundaries.afterFirstRunDisposal,
-    ...value.memory.boundaries.afterRepeatRunDisposals,
-    value.memory.boundaries.afterEvaluatorDisposal,
+    memoryBoundaries.afterImports,
+    memoryBoundaries.afterKernelInitialization,
+    memoryBoundaries.afterFirstRunDisposal,
+    ...memoryBoundaries.afterRepeatRunDisposals,
+    memoryBoundaries.afterEvaluatorDisposal,
   ];
   if (
     boundaries.some((boundary) => !positiveSafeInteger(boundary)) ||
@@ -906,6 +1169,44 @@ function validateCase(
       "GeometryKernel protocol v1 exposes disposal but no native allocation counter"
   ) {
     throw new TypeError("Benchmark native-handle evidence is invalid");
+  }
+  requireExactKeys(
+    value.nativeHandles,
+    ["status", "metric", "reasonCode", "detail"],
+    "Benchmark native-handle evidence",
+  );
+}
+
+export function enforceCrossKernelCanonicalIdentity(
+  cases: readonly BenchmarkCase[],
+): void {
+  const byModel = new Map<
+    string,
+    {
+      readonly kernelId: ReferenceKernelId;
+      readonly canonicalUtf8Bytes: number;
+      readonly canonicalSha256: string;
+    }
+  >();
+  for (const benchmarkCase of cases) {
+    const document = benchmarkCase.runs.first.document;
+    const previous = byModel.get(benchmarkCase.model.id);
+    if (previous === undefined) {
+      byModel.set(benchmarkCase.model.id, {
+        kernelId: benchmarkCase.kernel.id,
+        canonicalUtf8Bytes: document.canonicalUtf8Bytes,
+        canonicalSha256: document.canonicalSha256,
+      });
+      continue;
+    }
+    if (
+      document.canonicalUtf8Bytes !== previous.canonicalUtf8Bytes ||
+      document.canonicalSha256 !== previous.canonicalSha256
+    ) {
+      throw new TypeError(
+        `Reference model '${benchmarkCase.model.id}' canonical document differs between kernels '${previous.kernelId}' and '${benchmarkCase.kernel.id}'`,
+      );
+    }
   }
 }
 
@@ -961,21 +1262,47 @@ function sourceRevision(): BenchmarkReport["source"]["revision"] {
   }
 }
 
-function executeChild(args: readonly string[]): Promise<string> {
+function executeChild(
+  kernelId: ReferenceKernelId,
+  modelId: string,
+  repeatRuns: number,
+): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(
       process.execPath,
-      ["--import", "tsx", fileURLToPath(import.meta.url), ...args],
+      [
+        "--import",
+        "tsx",
+        fileURLToPath(import.meta.url),
+        "--worker",
+        "--kernel",
+        kernelId,
+        "--model",
+        modelId,
+        "--repeat-runs",
+        String(repeatRuns),
+      ],
       {
         cwd: process.cwd(),
         encoding: "utf8",
         maxBuffer: 16 * 1024 * 1024,
+        timeout: CASE_WORKER_TIMEOUT_MS,
+        killSignal: "SIGKILL",
       },
       (error, stdout, stderr) => {
         if (error !== null) {
+          const context = `${kernelId}/${modelId}`;
+          const reason =
+            error.killed || error.signal === "SIGKILL"
+              ? `exceeded ${CASE_WORKER_TIMEOUT_MS} ms and was killed`
+              : `failed: ${error.message}`;
+          // execFile invokes this callback after child exit and stdio close, so
+          // a timed-out worker has been killed and reaped before rejection.
           reject(
             new Error(
-              `Reference benchmark worker failed: ${error.message}\n${stderr}`,
+              `Reference benchmark worker '${context}' ${reason}${
+                stderr.trim().length === 0 ? "" : `\n${stderr}`
+              }`,
               { cause: error },
             ),
           );
@@ -987,33 +1314,36 @@ function executeChild(args: readonly string[]): Promise<string> {
   });
 }
 
-const { values } = parseArgs({
-  options: {
-    kernel: { type: "string", default: "manifold" },
-    model: { type: "string", multiple: true },
-    "repeat-runs": { type: "string", default: "2" },
-    worker: { type: "boolean", default: false },
-  },
-  strict: true,
-});
+async function main(): Promise<void> {
+  const { values } = parseArgs({
+    options: {
+      kernel: { type: "string", default: "manifold" },
+      model: { type: "string", multiple: true },
+      "repeat-runs": { type: "string", default: "2" },
+      worker: { type: "boolean", default: false },
+    },
+    strict: true,
+  });
 
-const repeatRuns = parsePositiveInteger(
-  values["repeat-runs"],
-  "--repeat-runs",
-  20,
-);
+  const repeatRuns = parsePositiveInteger(
+    values["repeat-runs"],
+    "--repeat-runs",
+    20,
+  );
 
-if (values.worker) {
-  const kernels = selectedKernels(values.kernel);
-  const models = selectedModels(values.model);
-  if (kernels.length !== 1 || models.length !== 1) {
-    throw new RangeError(
-      "A benchmark worker requires exactly one kernel and one model",
-    );
+  if (values.worker) {
+    const kernels = selectedKernels(values.kernel);
+    const models = selectedModels(values.model);
+    if (kernels.length !== 1 || models.length !== 1) {
+      throw new RangeError(
+        "A benchmark worker requires exactly one kernel and one model",
+      );
+    }
+    const result = await executeCase(kernels[0]!, models[0]!, repeatRuns);
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    return;
   }
-  const result = await executeCase(kernels[0]!, models[0]!, repeatRuns);
-  process.stdout.write(`${JSON.stringify(result)}\n`);
-} else {
+
   const kernels = selectedKernels(values.kernel);
   const models = selectedModels(values.model);
   const cases: BenchmarkCase[] = [];
@@ -1021,28 +1351,23 @@ if (values.worker) {
     for (const modelId of models) {
       const model = modelById(modelId);
       if (!model.supportedKernels.includes(kernelId)) continue;
-      const stdout = await executeChild([
-        "--worker",
-        "--kernel",
-        kernelId,
-        "--model",
-        modelId,
-        "--repeat-runs",
-        String(repeatRuns),
-      ]);
+      const stdout = await executeChild(kernelId, modelId, repeatRuns);
       const parsed: unknown = JSON.parse(stdout);
-      validateCase(parsed, repeatRuns);
+      validateBenchmarkCase(parsed, {
+        kernelId,
+        modelId,
+        outputName: model.outputName,
+        repeatRuns,
+      });
       cases.push(parsed);
     }
   }
+  enforceCrossKernelCanonicalIdentity(cases);
 
   const packageJson: unknown = JSON.parse(
     await readFile(new URL("../package.json", import.meta.url), "utf8"),
   );
-  if (
-    !isRecord(packageJson) ||
-    typeof packageJson.version !== "string"
-  ) {
+  if (!isRecord(packageJson) || typeof packageJson.version !== "string") {
     throw new TypeError("package.json does not contain a package version");
   }
   const cpuList = cpus();
@@ -1077,8 +1402,21 @@ if (values.worker) {
       kernels,
       models,
       repeatRuns,
+      caseWorkerTimeoutMs: CASE_WORKER_TIMEOUT_MS,
     },
     cases,
   };
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+}
+
+function isMainModule(): boolean {
+  const entryPoint = process.argv[1];
+  return (
+    entryPoint !== undefined &&
+    pathToFileURL(resolve(entryPoint)).href === import.meta.url
+  );
+}
+
+if (isMainModule()) {
+  await main();
 }
