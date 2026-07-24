@@ -19,8 +19,8 @@ models.
 
 ## Status vocabulary
 
-- **Published** means available in the public `invariantcad` 0.1.0 npm package.
-- **Unreleased** means implemented on the main branch after 0.1.0 but not yet
+- **Published** means available in the public `invariantcad` 0.1.1 npm package.
+- **Unreleased** means implemented on the main branch after 0.1.1 but not yet
   present in a public npm release.
 - **Repository-only** means source or evidence exists for development, but the
   capability is deliberately inaccessible to package consumers.
@@ -70,13 +70,20 @@ The public release is useful for deterministic parametric solids and fixed
 assemblies. It is not yet an industrial sketcher, multibody modeler, assembly
 solver, drawing system, sheet-metal system, CAM system, or CAE system.
 
-### Unreleased on main
+### Published in 0.1.1
 
-Main currently adds work that must pass a coherent release gate before it
-becomes an npm capability:
+The foundation-hardening release added:
 
 - Public Node and browser loaders for a caller-supplied, independently attested
   owned OCCT JavaScript/WASM runtime pair.
+- Named `mesh-preview` and `mechanical-exact` evaluator profiles with immutable
+  capability reports and fail-before-ownership behavior.
+- A versioned strong kernel-level document-body import contract for STEP and
+  declared-unit text/binary BREP.
+- Three executable reference models and a six-case Manifold/OCCT benchmark
+  protocol with explicit measurement and interpretation boundaries.
+- Six canonical documentation modules covering 22 declared workflows, plus
+  checked public API reports for every JavaScript entry point.
 - Stronger package, dependency, source-format, governance, browser, process
   isolation, runtime-attestation, and release checks.
 - Updated supported toolchain and OCCT dependency versions.
@@ -86,7 +93,7 @@ becomes an npm capability:
 The owned runtime still requires the caller to provide reviewed runtime files.
 The repository does not silently download or distribute that bundle.
 
-### Repository-only research
+### Repository-only research and staged work
 
 The repository contains a private owned-OCCT shape-artifact candidate and a
 direct-box evaluator-cache experiment. No public backend advertises
@@ -97,6 +104,12 @@ This research is now maintenance-only while product modeling catches up. Its
 formats, threat boundary, evidence, non-claims, and promotion gates live in the
 [shape artifact and cache engineering note](/engineering/shape-artifact-cache-research),
 not in the product roadmap.
+
+Document v7 resource resolution, datums, richer shape algebra, body-set and
+multibody results, imported-body nodes, external occurrences, and feature-hash
+protocol v2 are also staged internally. They are correctness-tested design
+inputs for Milestone 1, but they are not public authoring or evaluation
+capabilities. The public document alias and migration target remain v6.
 
 ## Development rules
 
@@ -120,7 +133,7 @@ preserve the exact feature semantics.
 
 ## Milestone 0 — product and API reset
 
-**Status: Next**
+**Status: Completed in 0.1.1**
 
 The goal is to turn the current infrastructure-heavy foundation into a
 measurable product program.
@@ -165,7 +178,7 @@ artifacts.
 
 ## Milestone 1 — Document v7 modeling foundation
 
-**Status: Planned after Milestone 0**
+**Status: Next**
 
 This milestone introduces the algebra and resource graph needed by nearly every
 later CAD domain.
@@ -186,9 +199,6 @@ later CAD domain.
 
 ### Runtime outcomes
 
-- Explicit evaluator profiles such as exact mechanical modeling and fast mesh
-  preview, with failures reported before unsupported work begins where
-  possible.
 - A supported distribution decision for the owned OCCT runtime after legal,
   security, provenance, and release review.
 - The conditionally selected industrial sketch-solver path: an

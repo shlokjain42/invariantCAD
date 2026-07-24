@@ -25,7 +25,7 @@ body:
     attributes:
       label: InvariantCAD version
       description: Output of `npm view invariantcad version` or the exact git commit.
-      placeholder: 0.1.0
+      placeholder: 0.1.1
     validations:
       required: true
 

@@ -62,9 +62,9 @@ Future releases use the workflow's short-lived OIDC identity; no npm secret is
 needed. npm automatically emits provenance for a public package published from
 this public repository through trusted publishing.
 
-The first post-0.1.0 release is the end-to-end confirmation of this tokenless
-path. If npm returns `ENEEDAUTH`, verify every trusted-publisher field exactly;
-do not restore a long-lived publish secret.
+InvariantCAD 0.1.1 is the first post-bootstrap, end-to-end confirmation of this
+tokenless path. If npm returns `ENEEDAUTH`, verify every trusted-publisher field
+exactly; do not restore a long-lived publish secret.
 
 ## Publishing and verification
 

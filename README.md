@@ -11,11 +11,12 @@ B-Rep geometry. Designs stay independent of WebAssembly pointers and
 kernel-specific objects, so they remain serializable, testable, and suitable
 for deterministic builds.
 
-> **Status:** `0.1.0` is the first public foundation. Parametric modeling,
-> sketches, assemblies, configurations, topology-aware features, analysis, and
-> interchange are usable today. Some complete exact topology-history guarantees
-> require the separately built owned OCCT facade. Drawings, GD&T, sheet metal,
-> mates, CAM, and CAE remain [roadmap work](docs/roadmap.md).
+> **Status:** `0.1.1` is the current public foundation release. Parametric
+> modeling, sketches, assemblies, configurations, topology-aware features,
+> analysis, and interchange are usable today. Some complete exact
+> topology-history guarantees require the separately built owned OCCT facade.
+> Drawings, GD&T, sheet metal, mates, CAM, and CAE remain
+> [roadmap work](docs/roadmap.md).
 
 ## Why InvariantCAD
 
