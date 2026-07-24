@@ -6,18 +6,21 @@ import {
   DOCUMENT_SCHEMA_V4,
   DOCUMENT_SCHEMA_V5,
   DOCUMENT_SCHEMA_V6,
+  DOCUMENT_SCHEMA_V7,
   DOCUMENT_VERSION_V1,
   DOCUMENT_VERSION_V2,
   DOCUMENT_VERSION_V3,
   DOCUMENT_VERSION_V4,
   DOCUMENT_VERSION_V5,
   DOCUMENT_VERSION_V6,
+  DOCUMENT_VERSION_V7,
   NODE_KINDS_V1,
   NODE_KINDS_V2,
   NODE_KINDS_V3,
   NODE_KINDS_V4,
   NODE_KINDS_V5,
   NODE_KINDS_V6,
+  NODE_KINDS_V7,
   type DesignDocument,
   type DesignDocumentV1,
   type DesignDocumentV2,
@@ -25,6 +28,7 @@ import {
   type DesignDocumentV4,
   type DesignDocumentV5,
   type DesignDocumentV6,
+  type DesignDocumentV7,
   type NodeIR,
   type NodeIRV1,
   type NodeIRV2,
@@ -32,12 +36,14 @@ import {
   type NodeIRV4,
   type NodeIRV5,
   type NodeIRV6,
+  type NodeIRV7,
   type TopologyReferenceEntryIR,
   type TopologyReferenceEntryIRV2,
   type TopologyReferenceEntryIRV3,
   type TopologyReferenceEntryIRV4,
   type TopologyReferenceEntryIRV5,
   type TopologyReferenceEntryIRV6,
+  type TopologyReferenceEntryIRV7,
   type TopologyQueryIR,
   type TopologyQueryIRFor,
   type TopologyQueryIRV1,
@@ -144,11 +150,42 @@ const DesignOutputRefSchema = z.object({
   kind: z.enum(["solid", "part", "assembly"]),
 });
 
+const DesignOutputRefV7Schema = z
+  .object({
+    node: IdSchema,
+    kind: z.enum([
+      "curve",
+      "wire",
+      "face",
+      "shell",
+      "solid",
+      "bodySet",
+      "part",
+      "assembly",
+    ]),
+  })
+  .strict();
+
 const PlaneSchema = z.object({
   type: z.literal("principal"),
   plane: z.enum(["XY", "XZ", "YZ"]),
   origin: Vec3ExpressionSchema,
 });
+
+const PlaneV7Schema = z.discriminatedUnion("type", [
+  PlaneSchema.strict(),
+  z
+    .object({
+      type: z.literal("datum"),
+      datum: z
+        .object({
+          node: IdSchema,
+          kind: z.literal("datumPlane"),
+        })
+        .strict(),
+    })
+    .strict(),
+]);
 
 const EntitySchema = z.discriminatedUnion("kind", [
   z.object({
@@ -668,6 +705,11 @@ export const TopologyReferenceEntryV6Schema: z.ZodType<TopologyReferenceEntryIRV
     PersistentTopologyReferenceV6Schema,
     TOPOLOGY_KINDS_V2,
   ) as z.ZodType<TopologyReferenceEntryIRV6>;
+export const TopologyReferenceEntryV7Schema: z.ZodType<TopologyReferenceEntryIRV7> =
+  createTopologyReferenceEntrySchema(
+    PersistentTopologyReferenceV6Schema,
+    TOPOLOGY_KINDS_V2,
+  ) as z.ZodType<TopologyReferenceEntryIRV7>;
 /** Current document-v6 topology-reference registry entry schema. */
 export const TopologyReferenceEntrySchema: z.ZodType<TopologyReferenceEntryIR> =
   TopologyReferenceEntryV6Schema;
@@ -912,6 +954,395 @@ export const NodeV6Schema = createNodeSchema(
   TopologySelectionV6Schema,
   NODE_KINDS_V6,
 ) as unknown as z.ZodType<NodeIRV6>;
+
+/**
+ * Isolated staged-v7 grammar.
+ *
+ * Do not widen RefSchema, PlaneSchema, or createNodeSchema for v7: every frozen
+ * v1-v6 node grammar shares those values. Keeping the new grammar physically
+ * separate prevents future kinds and reference values from leaking backwards.
+ */
+function createNodeV7Schema(): z.ZodType<NodeIRV7> {
+  const solidRef = z
+    .object({ node: IdSchema, kind: z.literal("solid") })
+    .strict();
+  const profileRef = z
+    .object({ node: IdSchema, kind: z.literal("profile") })
+    .strict();
+  const pathRef = z
+    .object({ node: IdSchema, kind: z.literal("path") })
+    .strict();
+  const partOrAssemblyRef = z
+    .object({
+      node: IdSchema,
+      kind: z.enum(["part", "assembly"]),
+    })
+    .strict();
+  const solidOrBodySetRef = z
+    .object({
+      node: IdSchema,
+      kind: z.enum(["solid", "bodySet"]),
+    })
+    .strict();
+
+  const bodySetSchema = z
+    .object({
+      kind: z.literal("bodySet"),
+      bodies: z
+        .array(
+          z
+            .object({
+              id: IdSchema,
+              solid: solidRef,
+              name: z.string().min(1).optional(),
+              metadata: z.record(z.string(), z.json()).optional(),
+            })
+            .strict(),
+        )
+        .min(1),
+    })
+    .strict()
+    .superRefine((node, context) => {
+      const seen = new Set<string>();
+      node.bodies.forEach((body, index) => {
+        if (seen.has(body.id)) {
+          context.addIssue({
+            code: "custom",
+            path: ["bodies", index, "id"],
+            message: `Body-set member ID '${body.id}' is duplicated`,
+          });
+        }
+        seen.add(body.id);
+      });
+    });
+
+  const importedBodySchema = z
+    .object({
+      kind: z.literal("importedBody"),
+      resource: IdSchema,
+      format: z.enum(["step", "brep", "brep-binary"]),
+      units: z.discriminatedUnion("mode", [
+        z.object({ mode: z.literal("from-file") }).strict(),
+        z
+          .object({
+            mode: z.literal("declared"),
+            length: z.enum(["mm", "cm", "m", "in"]),
+          })
+          .strict(),
+      ]),
+      healing: z.object({ mode: z.literal("reader-default") }).strict(),
+      expected: z.literal("single-solid"),
+    })
+    .strict()
+    .superRefine((node, context) => {
+      if (node.units.mode === "from-file" && node.format !== "step") {
+        context.addIssue({
+          code: "custom",
+          path: ["units"],
+          message: "Only STEP imports can read length units from the source file",
+        });
+      }
+    });
+
+  const partSchema = z
+    .object({
+      kind: z.literal("part"),
+      geometry: solidOrBodySetRef,
+      partNumber: z.string().optional(),
+      description: z.string().optional(),
+      material: z.string().optional(),
+      materialId: IdSchema.optional(),
+      massDensity: ExpressionSchema.optional(),
+      metadata: z.record(z.string(), z.json()).optional(),
+    })
+    .strict();
+
+  const occurrenceConfigurationSchema = z.discriminatedUnion("mode", [
+    z.object({ mode: z.literal("inherit") }).strict(),
+    z.object({ mode: z.literal("base") }).strict(),
+    z
+      .object({
+        mode: z.literal("named"),
+        id: IdSchema,
+      })
+      .strict(),
+  ]);
+  const assemblyComponentSchema = z.discriminatedUnion("source", [
+    z
+      .object({
+        source: z.literal("local"),
+        reference: partOrAssemblyRef,
+      })
+      .strict(),
+    z
+      .object({
+        source: z.literal("external"),
+        resource: IdSchema,
+        output: IdSchema,
+        outputKind: z.enum(["part", "assembly"]),
+      })
+      .strict(),
+  ]);
+  const assemblySchema = z
+    .object({
+      kind: z.literal("assembly"),
+      instances: z.array(
+        z
+          .object({
+            id: IdSchema,
+            component: assemblyComponentSchema,
+            configuration: occurrenceConfigurationSchema,
+            placement: z.array(TransformOperationSchema),
+            suppressed: z.boolean(),
+          })
+          .strict(),
+      ),
+    })
+    .strict()
+    .superRefine((node, context) => {
+      const seen = new Set<string>();
+      node.instances.forEach((instance, index) => {
+        if (seen.has(instance.id)) {
+          context.addIssue({
+            code: "custom",
+            path: ["instances", index, "id"],
+            message: `Assembly occurrence ID '${instance.id}' is duplicated`,
+          });
+        }
+        seen.add(instance.id);
+      });
+    });
+
+  const schemas = [
+    z
+      .object({
+        kind: z.literal("box"),
+        size: Vec3ExpressionSchema,
+        center: z.boolean(),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("cylinder"),
+        height: ExpressionSchema,
+        radiusBottom: ExpressionSchema,
+        radiusTop: ExpressionSchema,
+        center: z.boolean(),
+        segments: z.number().int().min(3).optional(),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("sphere"),
+        radius: ExpressionSchema,
+        segments: z.number().int().min(4).optional(),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("sketch"),
+        plane: PlaneV7Schema,
+        entities: z.record(IdSchema, EntitySchema),
+        constraints: z.record(IdSchema, ConstraintSchema),
+        profile: z.object({ outer: LoopSchema, holes: z.array(LoopSchema) }).strict(),
+        tolerance: z.number().positive(),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("polylinePath"),
+        points: z.array(Vec3ExpressionSchema).min(2),
+        closed: z.literal(false),
+        tolerance: z.number().positive(),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("circularArcPath"),
+        start: Vec3ExpressionSchema,
+        through: Vec3ExpressionSchema,
+        end: Vec3ExpressionSchema,
+        closed: z.literal(false),
+        tolerance: z.number().positive(),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("compositePath"),
+        start: Vec3ExpressionSchema,
+        segments: z
+          .array(
+            z.discriminatedUnion("kind", [
+              z
+                .object({
+                  kind: z.literal("line"),
+                  end: Vec3ExpressionSchema,
+                })
+                .strict(),
+              z
+                .object({
+                  kind: z.literal("circularArc"),
+                  through: Vec3ExpressionSchema,
+                  end: Vec3ExpressionSchema,
+                })
+                .strict(),
+            ]),
+          )
+          .min(2),
+        closed: z.literal(false),
+        tolerance: z.number().positive(),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("extrude"),
+        profile: profileRef,
+        distance: ExpressionSchema,
+        symmetric: z.boolean(),
+        twist: ExpressionSchema,
+        scaleTop: Vec2ExpressionSchema,
+        divisions: z.number().int().nonnegative(),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("revolve"),
+        profile: profileRef,
+        angle: ExpressionSchema,
+        segments: z.number().int().min(3).optional(),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("loft"),
+        profiles: z.array(profileRef).min(2),
+        ruled: z.literal(true),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("sweep"),
+        profile: profileRef,
+        path: pathRef,
+        transition: z.literal("right-corner"),
+        frame: z.literal("corrected-frenet"),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("boolean"),
+        operation: z.enum(["union", "subtract", "intersect"]),
+        target: solidRef,
+        tools: z.array(solidRef).min(1),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("transform"),
+        input: solidRef,
+        operations: z.array(TransformOperationSchema).min(1),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("fillet"),
+        input: solidRef,
+        edges: TopologySelectionV6Schema,
+        radius: ExpressionSchema,
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("chamfer"),
+        input: solidRef,
+        edges: TopologySelectionV6Schema,
+        distance: ExpressionSchema,
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("shell"),
+        input: solidRef,
+        openings: TopologySelectionV6Schema,
+        thickness: ExpressionSchema,
+        direction: z.enum(SHELL_DIRECTIONS),
+        tolerance: ExpressionSchema,
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("offset"),
+        input: solidRef,
+        distance: ExpressionSchema,
+        direction: z.enum(OFFSET_DIRECTIONS),
+        tolerance: ExpressionSchema,
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("draft"),
+        input: solidRef,
+        faces: TopologySelectionV6Schema,
+        angle: ExpressionSchema,
+        pullDirection: Vec3ExpressionSchema,
+        neutralPlane: z
+          .object({
+            origin: Vec3ExpressionSchema,
+            normal: Vec3ExpressionSchema,
+          })
+          .strict(),
+      })
+      .strict(),
+    partSchema,
+    assemblySchema,
+    z
+      .object({
+        kind: z.literal("datumPoint"),
+        position: Vec3ExpressionSchema,
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("datumAxis"),
+        origin: Vec3ExpressionSchema,
+        direction: Vec3ExpressionSchema,
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("datumPlane"),
+        origin: Vec3ExpressionSchema,
+        xDirection: Vec3ExpressionSchema,
+        normal: Vec3ExpressionSchema,
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("coordinateSystem"),
+        origin: Vec3ExpressionSchema,
+        xDirection: Vec3ExpressionSchema,
+        yDirection: Vec3ExpressionSchema,
+      })
+      .strict(),
+    bodySetSchema,
+    importedBodySchema,
+  ] as const;
+
+  const kinds = schemas.map((schema) => schema.shape.kind.value);
+  if (
+    kinds.length !== NODE_KINDS_V7.length ||
+    new Set(kinds).size !== kinds.length ||
+    NODE_KINDS_V7.some((kind) => !kinds.includes(kind))
+  ) {
+    throw new Error("Document-v7 node-kind grammar has no matching node schema");
+  }
+  return z.discriminatedUnion(
+    "kind",
+    schemas as unknown as Parameters<typeof z.discriminatedUnion>[1],
+  ) as unknown as z.ZodType<NodeIRV7>;
+}
+
+export const NodeV7Schema: z.ZodType<NodeIRV7> = createNodeV7Schema();
 /** Current document-v6 node schema. */
 export const NodeSchema: z.ZodType<NodeIR> = NodeV6Schema;
 
@@ -1007,7 +1438,45 @@ const DocumentConfigurationsSchema = z
   )
   .optional();
 const DocumentOutputsSchema = z.record(z.string(), DesignOutputRefSchema);
+const DocumentOutputsV7Schema = z.record(IdSchema, DesignOutputRefV7Schema);
 const DocumentMetadataSchema = z.record(z.string(), z.json()).optional();
+const DocumentResourcesV7Schema = z
+  .record(
+    IdSchema,
+    z
+      .object({
+        digest: z
+          .string()
+          .regex(/^sha256:[0-9a-f]{64}$/, "Resource digest must be lowercase SHA-256"),
+        byteLength: z.number().int().nonnegative().safe(),
+        mediaType: z
+          .string()
+          .min(1)
+          .refine(
+            (value) =>
+              value.trim() === value &&
+              /^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+(?:\s*;.*)?$/.test(
+                value,
+              ),
+            "Resource mediaType must be a non-empty MIME type",
+          ),
+        locations: z
+          .array(z.string().min(1))
+          .min(1)
+          .refine(
+            (locations) => new Set(locations).size === locations.length,
+            "Resource locations cannot contain duplicates",
+          )
+          .optional(),
+        metadata: z.record(z.string(), z.json()).optional(),
+      })
+      .strict(),
+  )
+  .refine(
+    (resources) => Object.keys(resources).length > 0,
+    "Resource registry cannot be empty; omit it instead",
+  )
+  .optional();
 const DocumentTopologyReferencesV2Schema = z
   .record(IdSchema, TopologyReferenceEntryV2Schema)
   .refine(
@@ -1038,6 +1507,13 @@ const DocumentTopologyReferencesV5Schema = z
   .optional();
 const DocumentTopologyReferencesV6Schema = z
   .record(IdSchema, TopologyReferenceEntryV6Schema)
+  .refine(
+    (references) => Object.keys(references).length > 0,
+    "Topology reference registry cannot be empty; omit it instead",
+  )
+  .optional();
+const DocumentTopologyReferencesV7Schema = z
+  .record(IdSchema, TopologyReferenceEntryV7Schema)
   .refine(
     (references) => Object.keys(references).length > 0,
     "Topology reference registry cannot be empty; omit it instead",
@@ -1115,6 +1591,19 @@ const DesignDocumentBodyShapeV6 = {
   topologyReferences: DocumentTopologyReferencesV6Schema,
 } as const;
 
+const DesignDocumentBodyShapeV7 = {
+  name: DocumentNameSchema,
+  units: DocumentUnitsSchema,
+  parameters: DocumentParametersSchema,
+  materials: DocumentMaterialsSchema,
+  configurations: DocumentConfigurationsSchema,
+  resources: DocumentResourcesV7Schema,
+  nodes: z.record(IdSchema, NodeV7Schema),
+  outputs: DocumentOutputsV7Schema,
+  metadata: DocumentMetadataSchema,
+  topologyReferences: DocumentTopologyReferencesV7Schema,
+} as const;
+
 export const DesignDocumentV1Schema: z.ZodType<DesignDocumentV1> = z
   .object({
     schema: z.literal(DOCUMENT_SCHEMA_V1),
@@ -1162,6 +1651,18 @@ export const DesignDocumentV6Schema: z.ZodType<DesignDocumentV6> = z
     ...DesignDocumentBodyShapeV6,
   })
   .strict() as unknown as z.ZodType<DesignDocumentV6>;
+
+/**
+ * Staged v7 schema. It is intentionally not part of DesignDocumentSchema until
+ * every ordinary public document consumer supports v7.
+ */
+export const DesignDocumentV7Schema: z.ZodType<DesignDocumentV7> = z
+  .object({
+    schema: z.literal(DOCUMENT_SCHEMA_V7),
+    version: z.literal(DOCUMENT_VERSION_V7),
+    ...DesignDocumentBodyShapeV7,
+  })
+  .strict() as unknown as z.ZodType<DesignDocumentV7>;
 
 export const DesignDocumentSchema: z.ZodType<DesignDocument> = z.union([
   DesignDocumentV1Schema,

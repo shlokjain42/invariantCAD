@@ -52,6 +52,17 @@ import {
   type NodeIRV6,
   type PersistentTopologyReferenceV2,
 } from "../src/index.js";
+import {
+  DOCUMENT_SCHEMA_V7,
+  DOCUMENT_VERSION_V7,
+  NODE_KINDS_V7,
+  type DesignDocumentV7,
+  type NodeIRV7,
+} from "../src/ir.js";
+import {
+  DesignDocumentV7Schema,
+  NodeV7Schema,
+} from "../src/schema.js";
 
 const frozenNodeKinds = [
   "assembly",
@@ -256,6 +267,33 @@ function withoutEnvelope(serialized: string): Readonly<Record<string, unknown>> 
 }
 
 describe("frozen document-version grammar", () => {
+  it("stages v7 without advancing or widening any current public alias", () => {
+    expect(DOCUMENT_SCHEMA).toBe(DOCUMENT_SCHEMA_V6);
+    expect(DOCUMENT_VERSION).toBe(DOCUMENT_VERSION_V6);
+    expect(NodeSchema).toBe(NodeV6Schema);
+    expect(NODE_KINDS_V7).toContain("datumPlane");
+    expect(NODE_KINDS_V7).toContain("bodySet");
+    expect(NODE_KINDS_V7).toContain("importedBody");
+    expect(NodeV7Schema.safeParse({ kind: "datumPoint", position: [] }).success).toBe(
+      false,
+    );
+    expect(
+      DesignDocumentV7Schema.safeParse({
+        schema: DOCUMENT_SCHEMA_V7,
+        version: DOCUMENT_VERSION_V7,
+      }).success,
+    ).toBe(false);
+    if (false) {
+      const stagedNode = {} as NodeIRV7;
+      const stagedDocument = {} as DesignDocumentV7;
+      // @ts-expect-error Current NodeIR remains the frozen v6 union.
+      const currentNode: NodeIR = stagedNode;
+      // @ts-expect-error Current DesignDocument remains the v1-v6 union.
+      const currentDocument: DesignDocumentV6 = stagedDocument;
+      void [currentNode, currentDocument];
+    }
+  });
+
   it("pins exact node-kind membership independently for v1 through v6", () => {
     expect(nodeKinds(NodeV1Schema)).toEqual(frozenNodeKinds);
     expect(nodeKinds(NodeV2Schema)).toEqual(frozenNodeKinds);

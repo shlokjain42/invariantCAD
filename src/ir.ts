@@ -4,6 +4,7 @@ import type {
   MaterialId,
   NodeId,
   ParameterId,
+  ResourceId,
   TopologyReferenceId,
 } from "./core/ids.js";
 import type { JsonValue } from "./core/json.js";
@@ -49,6 +50,16 @@ export const DOCUMENT_VERSION_V5 = 5 as const;
 export const DOCUMENT_SCHEMA_V6 =
   "https://invariantcad.dev/schema/document/v6" as const;
 export const DOCUMENT_VERSION_V6 = 6 as const;
+/**
+ * Reserved foundation grammar for the atomic Document v7 rollout.
+ *
+ * V7 is deliberately not the current public authoring grammar yet. The
+ * authoring, evaluator, hashing, and impact-analysis surfaces must switch
+ * together before `DOCUMENT_SCHEMA` and `DOCUMENT_VERSION` advance.
+ */
+export const DOCUMENT_SCHEMA_V7 =
+  "https://invariantcad.dev/schema/document/v7" as const;
+export const DOCUMENT_VERSION_V7 = 7 as const;
 
 /** Schema emitted by the current authoring API. */
 export const DOCUMENT_SCHEMA = DOCUMENT_SCHEMA_V6;
@@ -172,6 +183,19 @@ export const NODE_KINDS_V5 = Object.freeze([
 ] as const);
 /** Document v6 does not expand the node-kind vocabulary. */
 export const NODE_KINDS_V6 = NODE_KINDS_V5;
+/**
+ * Foundation-only v7 vocabulary. These discriminants remain outside the
+ * current `NODE_KINDS` alias until the complete v7 runtime lands.
+ */
+export const NODE_KINDS_V7 = Object.freeze([
+  ...NODE_KINDS_V6,
+  "datumPoint",
+  "datumAxis",
+  "datumPlane",
+  "coordinateSystem",
+  "bodySet",
+  "importedBody",
+] as const);
 /** Node discriminants accepted by the current authoring grammar. */
 export const NODE_KINDS = NODE_KINDS_V6;
 
@@ -181,13 +205,42 @@ export type NodeKindV3 = (typeof NODE_KINDS_V3)[number];
 export type NodeKindV4 = (typeof NODE_KINDS_V4)[number];
 export type NodeKindV5 = (typeof NODE_KINDS_V5)[number];
 export type NodeKindV6 = (typeof NODE_KINDS_V6)[number];
+export type NodeKindV7 = (typeof NODE_KINDS_V7)[number];
 /** Current node discriminant vocabulary. */
 export type NodeKind = NodeKindV6;
 
 export type OutputKind = "profile" | "path" | "solid" | "part" | "assembly";
 export type DesignOutputKind = Exclude<OutputKind, "profile" | "path">;
 
+/** Explicit topological shape algebra reserved by the v7 foundation. */
+export type ShapeOutputKindV7 =
+  | "curve"
+  | "wire"
+  | "face"
+  | "shell"
+  | "solid"
+  | "bodySet";
+export type DatumOutputKindV7 =
+  | "datumPoint"
+  | "datumAxis"
+  | "datumPlane"
+  | "coordinateSystem";
+export type OutputKindV7 =
+  | "profile"
+  | "path"
+  | ShapeOutputKindV7
+  | DatumOutputKindV7
+  | "part"
+  | "assembly";
+export type DesignOutputKindV7 = ShapeOutputKindV7 | "part" | "assembly";
+
 export interface RefIR<K extends OutputKind = OutputKind> {
+  readonly node: NodeId;
+  readonly kind: K;
+}
+
+/** V7-only reference type; kept separate so frozen RefIR consumers stay closed. */
+export interface RefIRV7<K extends OutputKindV7 = OutputKindV7> {
   readonly node: NodeId;
   readonly kind: K;
 }
@@ -207,6 +260,24 @@ export interface MaterialDefinitionIR {
   readonly description?: string;
   /** Explicit physical density expression in kg/mm^3. */
   readonly massDensity: ExpressionIR;
+  readonly metadata?: Readonly<Record<string, JsonValue>>;
+}
+
+/** Lowercase SHA-256 content commitment serialized as `sha256:<64 hex>`. */
+export type ResourceDigestIR = `sha256:${string}`;
+
+/**
+ * A document-owned commitment to bytes supplied by an application resolver.
+ *
+ * `locations` are ordered operational hints only. Core code never dereferences
+ * them, and later semantic hashing must exclude them while binding `digest`,
+ * `byteLength`, and `mediaType`.
+ */
+export interface ResourceDefinitionIR {
+  readonly digest: ResourceDigestIR;
+  readonly byteLength: number;
+  readonly mediaType: string;
+  readonly locations?: readonly string[];
   readonly metadata?: Readonly<Record<string, JsonValue>>;
 }
 
@@ -234,6 +305,47 @@ export interface PlaneIR {
   readonly type: "principal";
   readonly plane: PrincipalPlane;
   readonly origin: Vec3ExpressionIR;
+}
+
+export interface DatumPlaneReferenceIRV7 {
+  readonly type: "datum";
+  readonly datum: RefIRV7<"datumPlane">;
+}
+
+/** V7 sketch-plane grammar: frozen principal planes or a parametric datum. */
+export type PlaneIRV7 = PlaneIR | DatumPlaneReferenceIRV7;
+
+export interface DatumPointNodeIRV7 {
+  readonly kind: "datumPoint";
+  readonly position: Vec3ExpressionIR;
+}
+
+export interface DatumAxisNodeIRV7 {
+  readonly kind: "datumAxis";
+  readonly origin: Vec3ExpressionIR;
+  /** Scalar direction; evaluation normalizes it and rejects a zero vector. */
+  readonly direction: Vec3ExpressionIR;
+}
+
+export interface DatumPlaneNodeIRV7 {
+  readonly kind: "datumPlane";
+  readonly origin: Vec3ExpressionIR;
+  /**
+   * Scalar in-plane positive-X direction. Evaluation normalizes it and requires
+   * it to be perpendicular to `normal`.
+   */
+  readonly xDirection: Vec3ExpressionIR;
+  /** Scalar plane normal; together with xDirection it defines handedness. */
+  readonly normal: Vec3ExpressionIR;
+}
+
+export interface CoordinateSystemNodeIRV7 {
+  readonly kind: "coordinateSystem";
+  readonly origin: Vec3ExpressionIR;
+  /** Scalar positive-X direction. */
+  readonly xDirection: Vec3ExpressionIR;
+  /** Scalar positive-Y direction; positive Z is X cross Y. */
+  readonly yDirection: Vec3ExpressionIR;
 }
 
 export interface PointEntityIR {
@@ -374,6 +486,10 @@ export interface SketchNodeIR {
   readonly profile: SketchProfileIR;
   readonly tolerance: number;
 }
+
+export type SketchNodeIRV7 = Omit<SketchNodeIR, "plane"> & {
+  readonly plane: PlaneIRV7;
+};
 
 export interface PolylinePathNodeIR {
   readonly kind: "polylinePath";
@@ -544,6 +660,10 @@ export type TopologyReferenceEntryIRV5<
 export type TopologyReferenceEntryIRV6<
   K extends TopologyKind = TopologyKind,
 > = TopologyReferenceEntryIR<K, TopologyRoleV6>;
+/** V7 retains document-v6 persistent topology evidence unchanged. */
+export type TopologyReferenceEntryIRV7<
+  K extends TopologyKind = TopologyKind,
+> = TopologyReferenceEntryIRV6<K>;
 
 /**
  * Version-aware topology query grammar. Persistent-reference atoms were added
@@ -671,6 +791,8 @@ export type TopologyQueryIRV6 = TopologyQueryIRFor<
   TopologyRoleV6,
   TopologyKind
 >;
+/** V7 retains the document-v6 topology query grammar unchanged. */
+export type TopologyQueryIRV7 = TopologyQueryIRV6;
 /** Current topology query grammar. */
 export type TopologyQueryIR = TopologyQueryIRV6;
 
@@ -692,6 +814,9 @@ export type TopologySelectionIRV5<
 export type TopologySelectionIRV6<
   K extends TopologyKind = TopologyKind,
 > = TopologySelectionIRFor<K, boolean, TopologyRoleV6, TopologyKind>;
+export type TopologySelectionIRV7<
+  K extends TopologyKind = TopologyKind,
+> = TopologySelectionIRV6<K>;
 /** Current topology selection grammar. */
 export type TopologySelectionIR<
   K extends TopologyKind = TopologyKind,
@@ -775,6 +900,94 @@ export interface AssemblyInstanceIR {
 export interface AssemblyNodeIR {
   readonly kind: "assembly";
   readonly instances: readonly AssemblyInstanceIR[];
+}
+
+export interface BodySetMemberIRV7 {
+  /** Stable part-local body identity, independent of array position. */
+  readonly id: EntityId;
+  readonly solid: RefIRV7<"solid">;
+  readonly name?: string;
+  readonly metadata?: Readonly<Record<string, JsonValue>>;
+}
+
+export interface BodySetNodeIRV7 {
+  readonly kind: "bodySet";
+  readonly bodies: readonly BodySetMemberIRV7[];
+}
+
+export type ImportedBodyLengthUnitV7 = "mm" | "cm" | "m" | "in";
+
+export type ImportedBodyUnitsIRV7 =
+  | {
+      /** Read and preserve the native file unit declaration. Valid for STEP. */
+      readonly mode: "from-file";
+    }
+  | {
+      /** Interpret unitless source coordinates in this explicit length unit. */
+      readonly mode: "declared";
+      readonly length: ImportedBodyLengthUnitV7;
+    };
+
+/**
+ * V7 initially exposes only the reader behavior already supplied by a backend.
+ * Explicit healing operations can be added as separate, hashable feature nodes
+ * after their cross-kernel semantics are specified.
+ */
+export interface ImportedBodyHealingIRV7 {
+  readonly mode: "reader-default";
+}
+
+export interface ImportedBodyNodeIRV7 {
+  readonly kind: "importedBody";
+  readonly resource: ResourceId;
+  readonly format: "step" | "brep" | "brep-binary";
+  readonly units: ImportedBodyUnitsIRV7;
+  readonly healing: ImportedBodyHealingIRV7;
+  /** Never silently choose one body from a compound import. */
+  readonly expected: "single-solid";
+}
+
+export type PartNodeIRV7 = Omit<PartNodeIR, "solid"> & {
+  readonly geometry: RefIRV7<"solid" | "bodySet">;
+};
+
+export interface LocalAssemblyComponentIRV7 {
+  readonly source: "local";
+  readonly reference: RefIRV7<"part" | "assembly">;
+}
+
+export interface ExternalAssemblyComponentIRV7 {
+  readonly source: "external";
+  /** Must name an InvariantCAD document resource in the owning v7 document. */
+  readonly resource: ResourceId;
+  readonly output: string;
+  readonly outputKind: "part" | "assembly";
+}
+
+export type AssemblyComponentIRV7 =
+  | LocalAssemblyComponentIRV7
+  | ExternalAssemblyComponentIRV7;
+
+export type OccurrenceConfigurationIRV7 =
+  | { readonly mode: "inherit" }
+  | { readonly mode: "base" }
+  | { readonly mode: "named"; readonly id: ConfigurationId };
+
+export interface AssemblyInstanceIRV7 {
+  /**
+   * Stable path segment. A complete nested occurrence identity is the ordered
+   * sequence of these IDs from the selected root assembly.
+   */
+  readonly id: EntityId;
+  readonly component: AssemblyComponentIRV7;
+  readonly configuration: OccurrenceConfigurationIRV7;
+  readonly placement: readonly TransformOperationIR[];
+  readonly suppressed: boolean;
+}
+
+export interface AssemblyNodeIRV7 {
+  readonly kind: "assembly";
+  readonly instances: readonly AssemblyInstanceIRV7[];
 }
 
 /** Nodes accepted by the frozen document-v3 grammar. */
@@ -947,6 +1160,39 @@ export type NodeIRV6 =
   | PartNodeIR
   | AssemblyNodeIR;
 
+/**
+ * Staged document-v7 node grammar. It is intentionally not the current NodeIR
+ * alias until authoring, evaluation, hashing, and impact analysis switch
+ * atomically.
+ */
+export type NodeIRV7 =
+  | BoxNodeIR
+  | CylinderNodeIR
+  | SphereNodeIR
+  | SketchNodeIRV7
+  | PolylinePathNodeIR
+  | CircularArcPathNodeIR
+  | CompositePathNodeIR
+  | ExtrudeNodeIR
+  | RevolveNodeIR
+  | LoftNodeIR
+  | SweepNodeIR
+  | BooleanNodeIR
+  | TransformNodeIR
+  | FilletNodeIRV6
+  | ChamferNodeIRV6
+  | ShellNodeIRV6
+  | OffsetNodeIR
+  | DraftNodeIRV6
+  | PartNodeIRV7
+  | AssemblyNodeIRV7
+  | DatumPointNodeIRV7
+  | DatumAxisNodeIRV7
+  | DatumPlaneNodeIRV7
+  | CoordinateSystemNodeIRV7
+  | BodySetNodeIRV7
+  | ImportedBodyNodeIRV7;
+
 /** Current node grammar. */
 export type NodeIR = NodeIRV6;
 
@@ -1019,6 +1265,9 @@ type NodeKindsV5AreExact = AssertExact<
 >;
 type NodeKindsV6AreExact = AssertExact<
   ExactType<NodeKindV6, NodeIRV6["kind"]>
+>;
+type NodeKindsV7AreExact = AssertExact<
+  ExactType<NodeKindV7, NodeIRV7["kind"]>
 >;
 
 interface DesignDocumentBodyV1 {
@@ -1135,6 +1384,28 @@ interface DesignDocumentBodyV6 {
   readonly metadata?: Readonly<Record<string, JsonValue>>;
 }
 
+interface DesignDocumentBodyV7 {
+  readonly name: string;
+  readonly units: {
+    readonly length: "mm";
+    readonly angle: "rad";
+    readonly mass?: "kg";
+  };
+  readonly parameters: Readonly<Record<ParameterId, ParameterIR>>;
+  readonly materials?: Readonly<Record<MaterialId, MaterialDefinitionIR>>;
+  readonly configurations?: Readonly<
+    Record<ConfigurationId, DesignConfigurationIR>
+  >;
+  /**
+   * Content-addressed external bytes. Locations are resolver hints, never an
+   * instruction for the core library to perform I/O.
+   */
+  readonly resources?: Readonly<Record<ResourceId, ResourceDefinitionIR>>;
+  readonly nodes: Readonly<Record<NodeId, NodeIRV7>>;
+  readonly outputs: Readonly<Record<string, RefIRV7<DesignOutputKindV7>>>;
+  readonly metadata?: Readonly<Record<string, JsonValue>>;
+}
+
 /** Original document grammar, retained for parsing and direct evaluation. */
 export interface DesignDocumentV1 extends DesignDocumentBodyV1 {
   readonly schema: typeof DOCUMENT_SCHEMA_V1;
@@ -1184,6 +1455,18 @@ export interface DesignDocumentV6 extends DesignDocumentBodyV6 {
   readonly version: typeof DOCUMENT_VERSION_V6;
   readonly topologyReferences?: Readonly<
     Record<TopologyReferenceId, TopologyReferenceEntryIRV6>
+  >;
+}
+
+/**
+ * Staged v7 grammar. It is intentionally excluded from `DesignDocument` until
+ * every ordinary public consumer supports it.
+ */
+export interface DesignDocumentV7 extends DesignDocumentBodyV7 {
+  readonly schema: typeof DOCUMENT_SCHEMA_V7;
+  readonly version: typeof DOCUMENT_VERSION_V7;
+  readonly topologyReferences?: Readonly<
+    Record<TopologyReferenceId, TopologyReferenceEntryIRV7>
   >;
 }
 

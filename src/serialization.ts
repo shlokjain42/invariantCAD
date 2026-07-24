@@ -9,13 +9,18 @@ import {
 } from "./core/result.js";
 import {
   DOCUMENT_SCHEMA_V6,
+  DOCUMENT_SCHEMA_V7,
   DOCUMENT_VERSION_V2,
   DOCUMENT_VERSION_V3,
   DOCUMENT_VERSION_V4,
   DOCUMENT_VERSION_V5,
   DOCUMENT_VERSION_V6,
+  DOCUMENT_VERSION_V7,
   type DesignDocument,
   type DesignDocumentV6,
+  type DesignDocumentV7,
+  type NodeIR,
+  type NodeIRV7,
   type TopologyReferenceEntryIR,
 } from "./ir.js";
 import {
@@ -26,6 +31,7 @@ import {
   DesignDocumentV4Schema,
   DesignDocumentV5Schema,
   DesignDocumentV6Schema,
+  DesignDocumentV7Schema,
 } from "./schema.js";
 import { canonicalizeTopologySelectionIR } from "./topology.js";
 import { normalizePersistentTopologyReference } from "./topology-signatures.js";
@@ -349,4 +355,102 @@ export function migrateDocument(
           path: "/version",
         }),
       );
+}
+
+function migrateNodeToV7(node: NodeIR): NodeIRV7 {
+  if (node.kind === "part") {
+    const { solid, ...definition } = node;
+    return {
+      ...definition,
+      geometry: solid,
+    };
+  }
+  if (node.kind === "assembly") {
+    return {
+      kind: "assembly",
+      instances: node.instances.map((instance) => {
+        const { component, ...definition } = instance;
+        return {
+          ...definition,
+          component: {
+            source: "local",
+            reference: component,
+          },
+          configuration: { mode: "inherit" },
+        };
+      }),
+    };
+  }
+  // Every other v1-v6 node is a structural member of NodeIRV7. In particular,
+  // a principal PlaneIR is one arm of PlaneIRV7.
+  return node;
+}
+
+/**
+ * Internal staging migration from any frozen public grammar to the reserved v7
+ * foundation.
+ *
+ * This helper is intentionally not re-exported from the root package while
+ * ordinary authoring, parsing, evaluation, hashes, and impact analysis remain
+ * on v6. Its input still travels through the bounded public v1-v6 parser, and
+ * the transformed result must satisfy the isolated strict v7 schema.
+ */
+export function migrateDocumentToV7(
+  value: unknown,
+  options: ParseDocumentOptions = {},
+): CadResult<DesignDocumentV7> {
+  const parsed = parseDocumentValue(value, options);
+  if (!parsed.ok) return parsed;
+  const source = parsed.value;
+  const candidate = {
+    schema: DOCUMENT_SCHEMA_V7,
+    version: DOCUMENT_VERSION_V7,
+    name: source.name,
+    units: source.units,
+    parameters: source.parameters,
+    ...(Object.hasOwn(source, "materials")
+      ? { materials: source.materials }
+      : {}),
+    ...(Object.hasOwn(source, "configurations")
+      ? { configurations: source.configurations }
+      : {}),
+    nodes: Object.fromEntries(
+      Object.entries(source.nodes).map(([id, node]) => [
+        id,
+        migrateNodeToV7(node),
+      ]),
+    ),
+    outputs: source.outputs,
+    ...(Object.hasOwn(source, "metadata")
+      ? { metadata: source.metadata }
+      : {}),
+    ...((source.version === DOCUMENT_VERSION_V2 ||
+      source.version === DOCUMENT_VERSION_V3 ||
+      source.version === DOCUMENT_VERSION_V4 ||
+      source.version === DOCUMENT_VERSION_V5 ||
+      source.version === DOCUMENT_VERSION_V6) &&
+    Object.hasOwn(source, "topologyReferences")
+      ? { topologyReferences: source.topologyReferences }
+      : {}),
+  };
+  const migrated = DesignDocumentV7Schema.safeParse(candidate);
+  if (!migrated.success) {
+    return {
+      ok: false,
+      diagnostics: migrated.error.issues.map((issue) =>
+        diagnostic("IR_INVALID", issue.message, {
+          severity: "error",
+          path: `/${issue.path.map(String).join("/")}`,
+          details: {
+            code: issue.code,
+            phase: "document-v7-foundation-migration",
+          },
+        }),
+      ),
+    };
+  }
+  return success(
+    deepFreeze(migrated.data) as DesignDocumentV7,
+    parsed.diagnostics,
+  );
 }
