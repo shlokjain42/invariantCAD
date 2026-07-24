@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+- Advanced the maintained toolchain and exact backend to their latest stable
+  releases: TypeScript 7.0.2, pnpm 11.17.0, Publint 0.3.22, Mint 4.2.739, and
+  `occt-wasm` 3.8.0. The Node.js floor is now 22.13, with release coverage on
+  22.13, 24, and 26. Package-type validation uses the current
+  `@arethetypeswrong/core` API directly, avoiding the unrelated
+  terminal-rendering dependency tree, and the owned OCCT facade was rebuilt
+  and re-attested against the 3.8.0 source and builder.
 - Added the first repository-private evaluator consumption of the unadvertised
   OCCT shape-artifact candidate. An unexported, explicit-`trusted` binding
   caches only requested solid outputs whose referenced feature is directly a

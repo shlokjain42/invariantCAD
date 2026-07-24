@@ -784,7 +784,7 @@ try {
         ");",
         "assert.equal(",
         "  attestedRuntime.attestation.facade.marker,",
-        '  "invariantcad-facade@0.9.0+occt-wasm.3.7.0",',
+        '  "invariantcad-facade@0.9.0+occt-wasm.3.8.0",',
         '  "Packed Node loader reported an unexpected facade marker",',
         ");",
         "assert.equal(",

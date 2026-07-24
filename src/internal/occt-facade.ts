@@ -12,28 +12,28 @@ import type { OcctSolidOffsetFacadeModule } from "./occt-solid-offset.js";
 import type { OcctArtifactFacadeModule } from "./occt-artifact-facade.js";
 
 export const OCCT_DRAFT_FACADE_VERSION =
-  "invariantcad-facade@0.2.0+occt-wasm.3.7.0";
+  "invariantcad-facade@0.2.0+occt-wasm.3.8.0";
 
 export const OCCT_CONTROLLED_PIPE_SHELL_FACADE_VERSION =
-  "invariantcad-facade@0.3.0+occt-wasm.3.7.0";
+  "invariantcad-facade@0.3.0+occt-wasm.3.8.0";
 
 export const OCCT_BOOLEAN_FACADE_VERSION =
-  "invariantcad-facade@0.4.0+occt-wasm.3.7.0";
+  "invariantcad-facade@0.4.0+occt-wasm.3.8.0";
 
 export const OCCT_EDGE_TREATMENT_FACADE_VERSION =
-  "invariantcad-facade@0.5.0+occt-wasm.3.7.0";
+  "invariantcad-facade@0.5.0+occt-wasm.3.8.0";
 
 export const OCCT_SOLID_OFFSET_FACADE_VERSION =
-  "invariantcad-facade@0.6.0+occt-wasm.3.7.0";
+  "invariantcad-facade@0.6.0+occt-wasm.3.8.0";
 
 export const OCCT_ARTIFACT_FACADE_VERSION =
-  "invariantcad-facade@0.7.0+occt-wasm.3.7.0";
+  "invariantcad-facade@0.7.0+occt-wasm.3.8.0";
 
 export const OCCT_NATIVE_REQUEST_BUDGET_FACADE_VERSION =
-  "invariantcad-facade@0.8.0+occt-wasm.3.7.0";
+  "invariantcad-facade@0.8.0+occt-wasm.3.8.0";
 
 export const OCCT_BINTOOLS_PREFLIGHT_FACADE_VERSION =
-  "invariantcad-facade@0.9.0+occt-wasm.3.7.0";
+  "invariantcad-facade@0.9.0+occt-wasm.3.8.0";
 
 const DRAFT_FACADE_MARKERS = Object.freeze([
   "InvariantCadDraftReport",

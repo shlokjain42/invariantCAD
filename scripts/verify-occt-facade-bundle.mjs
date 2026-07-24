@@ -11,22 +11,22 @@ const BUNDLE_NAME = "invariantcad-occt-facade";
 const BUNDLE_VERSION = "0.9.0";
 const BUNDLE_DIRECTORY = `${BUNDLE_NAME}-${BUNDLE_VERSION}`;
 const FACADE_MARKER =
-  "invariantcad-facade@0.9.0+occt-wasm.3.7.0";
+  "invariantcad-facade@0.9.0+occt-wasm.3.8.0";
 const DRAFT_FACADE_MARKER =
-  "invariantcad-facade@0.2.0+occt-wasm.3.7.0";
+  "invariantcad-facade@0.2.0+occt-wasm.3.8.0";
 const CONTROLLED_PIPE_SHELL_FACADE_MARKER =
-  "invariantcad-facade@0.3.0+occt-wasm.3.7.0";
+  "invariantcad-facade@0.3.0+occt-wasm.3.8.0";
 const BOOLEAN_FACADE_MARKER =
-  "invariantcad-facade@0.4.0+occt-wasm.3.7.0";
+  "invariantcad-facade@0.4.0+occt-wasm.3.8.0";
 const EDGE_TREATMENT_FACADE_MARKER =
-  "invariantcad-facade@0.5.0+occt-wasm.3.7.0";
+  "invariantcad-facade@0.5.0+occt-wasm.3.8.0";
 const SOLID_OFFSET_FACADE_MARKER =
-  "invariantcad-facade@0.6.0+occt-wasm.3.7.0";
+  "invariantcad-facade@0.6.0+occt-wasm.3.8.0";
 const BOUNDED_ARTIFACT_FACADE_MARKER =
-  "invariantcad-facade@0.7.0+occt-wasm.3.7.0";
+  "invariantcad-facade@0.7.0+occt-wasm.3.8.0";
 const HARDENED_ARTIFACT_FACADE_MARKER =
-  "invariantcad-facade@0.8.0+occt-wasm.3.7.0";
-const UPSTREAM_OCCT_WASM_VERSION = "3.7.0";
+  "invariantcad-facade@0.8.0+occt-wasm.3.8.0";
+const UPSTREAM_OCCT_WASM_VERSION = "3.8.0";
 const RELEASE_INPUT_URL = new URL(
   "../native/occt/bundle/release-input.json",
   import.meta.url,
@@ -888,12 +888,12 @@ function verifySourceInputs(files) {
   const toolchain = asObject(lock.toolchain, "source lock toolchain");
   const builder = asObject(lock.builder, "source lock builder");
   if (
-    upstream.tag !== "v3.7.0" ||
-    upstream.commit !== "fe3d5effdaa1ca9a4007a86fde46abd62722fbba" ||
-    occt.commit !== "6e1fe656bf028bf0004482c389661587b269fc65" ||
+    upstream.tag !== "v3.8.0" ||
+    upstream.commit !== "cf37f4dad07adbc2691f2122a6461a87c7acd748" ||
+    occt.commit !== "c16749358fff7c2fef240096a628e0d4050dc0d4" ||
     toolchain.emscripten !== "5.0.3" ||
     toolchain.rust !== "1.95" ||
-    builder.digest !== "sha256:d4d9b7232c92eda68e478aba5bbf1e8880e0f6c8aeeee627d8296f994642848b" ||
+    builder.digest !== "sha256:bac126c570537bd8100da368ee30845d8d267ce4b14776bfd68c5afed22ad859" ||
     builder.platform !== "linux/amd64"
   ) {
     fail("source lock does not match the audited OCCT facade build inputs");
@@ -1315,8 +1315,8 @@ function verifySbom(files, manifest, runtimePins, releaseInput, lock) {
   }
   const components = asArray(sbom.components, "SBOM components");
   const wrapperRef = `pkg:generic/occt-wasm@${UPSTREAM_OCCT_WASM_VERSION}`;
-  const occtRef = "pkg:generic/opencascade-technology@6e1fe656bf028bf0004482c389661587b269fc65";
-  const builderRef = "oci:ghcr.io/andymai/occt-wasm-builder@sha256:d4d9b7232c92eda68e478aba5bbf1e8880e0f6c8aeeee627d8296f994642848b";
+  const occtRef = "pkg:generic/opencascade-technology@c16749358fff7c2fef240096a628e0d4050dc0d4";
+  const builderRef = "oci:ghcr.io/andymai/occt-wasm-builder@sha256:bac126c570537bd8100da368ee30845d8d267ce4b14776bfd68c5afed22ad859";
   const expectedRefs = [
     "file:runtime/occt-wasm.js",
     "file:runtime/occt-wasm.wasm",
@@ -1374,7 +1374,7 @@ function verifySbom(files, manifest, runtimePins, releaseInput, lock) {
     emscripten.scope !== "excluded" ||
     rust?.version !== "1.95" ||
     rust.scope !== "excluded" ||
-    builder?.version !== "sha256:d4d9b7232c92eda68e478aba5bbf1e8880e0f6c8aeeee627d8296f994642848b" ||
+    builder?.version !== "sha256:bac126c570537bd8100da368ee30845d8d267ce4b14776bfd68c5afed22ad859" ||
     builder.scope !== "excluded"
   ) {
     fail("SBOM build-tool inventory does not match the audited build lock");
@@ -1455,14 +1455,14 @@ function verifyProvenance(files, manifest, release, releaseInput, runtimePins, l
   const externalBuilder = asObject(external.builder, "provenance builder parameters");
   if (
     upstream.repository !== "https://github.com/andymai/occt-wasm.git" ||
-    upstream.tag !== "v3.7.0" ||
-    upstream.commit !== "fe3d5effdaa1ca9a4007a86fde46abd62722fbba" ||
+    upstream.tag !== "v3.8.0" ||
+    upstream.commit !== "cf37f4dad07adbc2691f2122a6461a87c7acd748" ||
     occt.repository !== "https://github.com/andymai/OCCT.git" ||
-    occt.commit !== "6e1fe656bf028bf0004482c389661587b269fc65" ||
+    occt.commit !== "c16749358fff7c2fef240096a628e0d4050dc0d4" ||
     toolchain.emscripten !== "5.0.3" ||
     toolchain.rust !== "1.95" ||
     externalBuilder.image !== "ghcr.io/andymai/occt-wasm-builder" ||
-    externalBuilder.digest !== "sha256:d4d9b7232c92eda68e478aba5bbf1e8880e0f6c8aeeee627d8296f994642848b" ||
+    externalBuilder.digest !== "sha256:bac126c570537bd8100da368ee30845d8d267ce4b14776bfd68c5afed22ad859" ||
     externalBuilder.platform !== "linux/amd64"
   ) {
     fail("provenance external parameters do not match the audited build lock");
@@ -1481,9 +1481,9 @@ function verifyProvenance(files, manifest, release, releaseInput, runtimePins, l
   }
   const dependencies = asArray(buildDefinition.resolvedDependencies, "provenance resolvedDependencies");
   for (const required of [
-    "fe3d5effdaa1ca9a4007a86fde46abd62722fbba",
-    "6e1fe656bf028bf0004482c389661587b269fc65",
-    "sha256:d4d9b7232c92eda68e478aba5bbf1e8880e0f6c8aeeee627d8296f994642848b",
+    "cf37f4dad07adbc2691f2122a6461a87c7acd748",
+    "c16749358fff7c2fef240096a628e0d4050dc0d4",
+    "sha256:bac126c570537bd8100da368ee30845d8d267ce4b14776bfd68c5afed22ad859",
     ...PATCH_PATHS,
     "source/native/occt/upstream.lock.json",
     "source/scripts/build-occt-facade.sh",
@@ -1509,7 +1509,7 @@ function verifyProvenance(files, manifest, release, releaseInput, runtimePins, l
   const builder = asObject(runDetails.builder, "provenance runDetails.builder");
   if (
     builder.id !== "https://invariantcad.dev/builders/rootless-podman-occt-facade/v1" ||
-    builder.image !== "ghcr.io/andymai/occt-wasm-builder@sha256:d4d9b7232c92eda68e478aba5bbf1e8880e0f6c8aeeee627d8296f994642848b" ||
+    builder.image !== "ghcr.io/andymai/occt-wasm-builder@sha256:bac126c570537bd8100da368ee30845d8d267ce4b14776bfd68c5afed22ad859" ||
     builder.platform !== "linux/amd64"
   ) {
     fail("provenance builder does not match the digest-pinned build boundary");

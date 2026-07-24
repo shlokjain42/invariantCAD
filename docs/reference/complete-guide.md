@@ -24,7 +24,7 @@ InvariantCAD represents a design as immutable, versioned JSON and evaluates it t
 pnpm add invariantcad
 ```
 
-Node.js 20.19 or newer is required. The core API is ESM and also targets modern
+Node.js 22.13 or newer is required. The core API is ESM and also targets modern
 browsers. Release CI executes a production Vite bundle in Chromium and loads
 both the Manifold and stock OpenCascade WebAssembly backends through their
 public package entry points.
@@ -947,7 +947,7 @@ import { createOcctKernel } from "invariantcad/kernels/occt";
 const kernel = await createOcctKernel({ wasm: occtWasmUrl });
 ```
 
-Add `occt-wasm@3.7.0` as a direct application dependency when using that asset
+Add `occt-wasm@3.8.0` as a direct application dependency when using that asset
 subpath under a strict dependency-isolating package manager. The default
 `createOcctKernel()` path does not require an application-level import from
 `occt-wasm`.

@@ -1,50 +1,27 @@
 diff --git a/facade/include/occt_kernel.h b/facade/include/occt_kernel.h
-index b57d67c..ec5d0a7 100644
+index decd3de..fe6f557 100644
 --- a/facade/include/occt_kernel.h
 +++ b/facade/include/occt_kernel.h
-@@ -18,10 +18,11 @@
- class OcctKernel;
- struct InvariantCadDraftTransferState;
- struct InvariantCadBooleanTransferState;
+@@ -20,0 +21 @@ struct InvariantCadBooleanTransferState;
 +struct InvariantCadEdgeTreatmentTransferState;
- struct InvariantCadPipeShellTransferState;
- 
- /// Evaluation-scoped topology kinds used by the indexed evolution ABI.
+@@ -24 +25 @@ struct InvariantCadPipeShellTransferState;
 -/// These numeric values are stable across facade ABI 0.4.x.
 +/// These numeric values are stable across facade ABI 0.5.x.
- enum InvariantCadTopologyKind : int {
-     InvariantCadTopologyKindNone = -1,
-     InvariantCadTopologyKindFace = 0,
-@@ -30,9 +31,9 @@ enum InvariantCadTopologyKind : int {
- };
- 
- /// Source-to-result relations used by the generic indexed evolution envelope.
+@@ -33,3 +34,3 @@ enum InvariantCadTopologyKind : int {
 -/// Atomic draft emits only Preserved and Modified records. Exact Boolean emits
 -/// Preserved, Modified, Generated, Deleted, and source-less Created for result
 -/// topology that emerges only from higher-order interactions among operands.
 +/// Atomic draft emits only Preserved and Modified records. Exact Boolean,
 +/// fillet, and chamfer may emit the complete relation vocabulary, including
 +/// source-less Created for result topology that native history cannot attribute.
- enum InvariantCadTopologyRelation : int {
-     InvariantCadTopologyRelationPreserved = 0,
-     InvariantCadTopologyRelationModified = 1,
-@@ -48,6 +49,12 @@ enum InvariantCadBooleanOperation : int {
-     InvariantCadBooleanOperationIntersect = 2,
- };
- 
+@@ -50,0 +52,6 @@ enum InvariantCadBooleanOperation : int {
 +/// Constant-radius edge-treatment operation codes used by facade ABI 0.5.
 +enum InvariantCadEdgeTreatmentOperation : int {
 +    InvariantCadEdgeTreatmentOperationFillet = 0,
 +    InvariantCadEdgeTreatmentOperationChamfer = 1,
 +};
 +
- /// Number of unique located subshapes indexed by TopExp::MapShapes for each
- /// topology kind. Orientation occurrences are deliberately not separate IDs;
- /// however, the canonical input/result occurrences' orientations participate
-@@ -221,6 +228,73 @@ struct InvariantCadBooleanReport {
-         std::vector<uint32_t> toolIds, int maxHistoryRecords);
- };
- 
+@@ -223,0 +231,67 @@ struct InvariantCadBooleanReport {
 +/// Transactional result of one exact constant-radius fillet or equal-distance
 +/// chamfer. Selected edge indices remain evaluation-scoped diagnostics; the
 +/// complete history covers the entire single input shape and aggregate result.
@@ -112,60 +89,30 @@ index b57d67c..ec5d0a7 100644
 +        std::vector<uint32_t> edgeIds, double amount, int maxHistoryRecords);
 +};
 +
- /// Transactional result of the controlled InvariantCAD PipeShell facade.
- /// A successful untaken report owns its result outside the kernel arena.
- struct InvariantCadPipeShellReport {
-@@ -276,6 +350,12 @@ InvariantCadBooleanReport invariantcadBooleanAtomic(
-     OcctKernel& kernel, int operation, uint32_t targetId,
-     std::vector<uint32_t> toolIds, int maxHistoryRecords);
- 
+@@ -278,0 +353,6 @@ InvariantCadBooleanReport invariantcadBooleanAtomic(
 +/// Builds one constant-radius fillet or equal-distance chamfer on the authored
 +/// edge seeds and proves complete single-input face/edge/vertex evolution.
 +InvariantCadEdgeTreatmentReport invariantcadEdgeTreatmentAtomic(
 +    OcctKernel& kernel, int operation, uint32_t inputId,
 +    std::vector<uint32_t> edgeIds, double amount, int maxHistoryRecords);
 +
- /// Builds one corrected-Frenet, right-corner solid PipeShell with explicit
- /// native tolerances. The report exposes OCCT's measured surface error and
- /// retains the result outside the arena until a checked one-shot transfer.
-@@ -718,6 +798,7 @@ class OcctKernel {
-   private:
-     friend struct InvariantCadDraftReport;
-     friend struct InvariantCadBooleanReport;
+@@ -721,0 +802 @@ class OcctKernel {
 +    friend struct InvariantCadEdgeTreatmentReport;
-     friend struct InvariantCadPipeShellReport;
-     friend InvariantCadDraftReport invariantcadDraftFacesAtomic(
-         OcctKernel& kernel, uint32_t shapeId, std::vector<uint32_t> faceIds, double angleRad,
-@@ -730,6 +811,9 @@ class OcctKernel {
-     friend InvariantCadBooleanReport invariantcadBooleanAtomic(
-         OcctKernel& kernel, int operation, uint32_t targetId,
-         std::vector<uint32_t> toolIds, int maxHistoryRecords);
+@@ -733,0 +815,3 @@ class OcctKernel {
 +    friend InvariantCadEdgeTreatmentReport invariantcadEdgeTreatmentAtomic(
 +        OcctKernel& kernel, int operation, uint32_t inputId,
 +        std::vector<uint32_t> edgeIds, double amount, int maxHistoryRecords);
-     uint32_t store(const TopoDS_Shape& shape);
-     uint32_t invariantcadStoreTransferredShape(const TopoDS_Shape& shape);
-     const TopoDS_Shape& get(uint32_t id) const;
 diff --git a/facade/src/invariantcad_bindings.cpp b/facade/src/invariantcad_bindings.cpp
 index 83e44ee..0f33625 100644
 --- a/facade/src/invariantcad_bindings.cpp
 +++ b/facade/src/invariantcad_bindings.cpp
-@@ -30,6 +30,11 @@ EMSCRIPTEN_BINDINGS(invariantcad_facade) {
-         .value("SUBTRACT", InvariantCadBooleanOperationSubtract)
-         .value("INTERSECT", InvariantCadBooleanOperationIntersect);
- 
+@@ -32,0 +33,5 @@ EMSCRIPTEN_BINDINGS(invariantcad_facade) {
 +    enum_<InvariantCadEdgeTreatmentOperation>("InvariantCadEdgeTreatmentOperation",
 +                                              enum_value_type::number)
 +        .value("FILLET", InvariantCadEdgeTreatmentOperationFillet)
 +        .value("CHAMFER", InvariantCadEdgeTreatmentOperationChamfer);
 +
-     value_object<InvariantCadTopologyCounts>("InvariantCadTopologyCounts")
-         .field("faces", &InvariantCadTopologyCounts::faces)
-         .field("edges", &InvariantCadTopologyCounts::edges)
-@@ -97,6 +102,46 @@ EMSCRIPTEN_BINDINGS(invariantcad_facade) {
-         .function("topologyRecord", &InvariantCadBooleanReport::topologyRecord)
-         .function("takeResultId", &InvariantCadBooleanReport::takeResultId);
- 
+@@ -99,0 +105,40 @@ EMSCRIPTEN_BINDINGS(invariantcad_facade) {
 +    class_<InvariantCadEdgeTreatmentReport>("InvariantCadEdgeTreatmentReport")
 +        .property("ok", &InvariantCadEdgeTreatmentReport::getOk)
 +        .property("stage", &InvariantCadEdgeTreatmentReport::getStage)
@@ -206,41 +153,18 @@ index 83e44ee..0f33625 100644
 +        .function("topologyRecord", &InvariantCadEdgeTreatmentReport::topologyRecord)
 +        .function("takeResultId", &InvariantCadEdgeTreatmentReport::takeResultId);
 +
-     class_<InvariantCadPipeShellReport>("InvariantCadPipeShellReport")
-         .property("ok", &InvariantCadPipeShellReport::getOk)
-         .property("stage", &InvariantCadPipeShellReport::getStage)
-@@ -116,5 +161,6 @@ EMSCRIPTEN_BINDINGS(invariantcad_facade) {
-     function("invariantcadFacadeVersion", &invariantcadFacadeVersion);
-     function("invariantcadDraftFacesAtomic", &invariantcadDraftFacesAtomic);
-     function("invariantcadBooleanAtomic", &invariantcadBooleanAtomic);
+@@ -118,0 +164 @@ EMSCRIPTEN_BINDINGS(invariantcad_facade) {
 +    function("invariantcadEdgeTreatmentAtomic", &invariantcadEdgeTreatmentAtomic);
-     function("invariantcadPipeShellSolid", &invariantcadPipeShellSolid);
- }
 diff --git a/facade/src/invariantcad_facade.cpp b/facade/src/invariantcad_facade.cpp
 index 9b369da..2a89923 100644
 --- a/facade/src/invariantcad_facade.cpp
 +++ b/facade/src/invariantcad_facade.cpp
-@@ -13,6 +13,8 @@
- #include <BRepAlgoAPI_Fuse.hxx>
- #include <BRepBuilderAPI_Copy.hxx>
- #include <BRepBuilderAPI_TransitionMode.hxx>
+@@ -15,0 +16,2 @@
 +#include <BRepFilletAPI_MakeChamfer.hxx>
 +#include <BRepFilletAPI_MakeFillet.hxx>
- #include <BRepOffsetAPI_DraftAngle.hxx>
- #include <BRepOffsetAPI_MakePipeShell.hxx>
- #include <BRepTools_History.hxx>
-@@ -23,6 +25,7 @@
- #include <TopExp.hxx>
- #include <TopTools_ShapeMapHasher.hxx>
- #include <TopoDS.hxx>
+@@ -25,0 +28 @@
 +#include <TopoDS_Iterator.hxx>
- #include <algorithm>
- #include <cmath>
- #include <gp.hxx>
-@@ -58,6 +61,13 @@ struct InvariantCadBooleanTransferState {
-     InvariantCadIndexedTopologyEvolution topologyHistory;
- };
- 
+@@ -60,0 +64,7 @@ struct InvariantCadBooleanTransferState {
 +struct InvariantCadEdgeTreatmentTransferState {
 +    TopoDS_Shape result;
 +    uint64_t kernelInstanceToken = 0;
@@ -248,335 +172,147 @@ index 9b369da..2a89923 100644
 +    InvariantCadIndexedTopologyEvolution topologyHistory;
 +};
 +
- struct InvariantCadPipeShellTransferState {
-     TopoDS_Shape result;
-     uint64_t kernelInstanceToken = 0;
-@@ -304,7 +314,7 @@ struct IndexedOperandTopology {
-     IndexedShapeMap vertices;
- };
- 
+@@ -307 +317 @@ struct IndexedOperandTopology {
 -struct BooleanOperandCopy {
 +struct TopologyOperandCopy {
-     std::unique_ptr<BRepBuilderAPI_Copy> copier;
-     TopoDS_Shape shape;
- };
-@@ -315,7 +325,7 @@ struct ClaimedResultTopology {
-     std::vector<bool> vertices;
- };
- 
+@@ -318 +328 @@ struct ClaimedResultTopology {
 -IndexedOperandTopology indexBooleanOperand(const TopoDS_Shape& shape,
 +IndexedOperandTopology indexOperandTopology(const TopoDS_Shape& shape,
-                                             int sourceShapeIndex,
-                                             const char* problemDomain) {
-     IndexedOperandTopology topology;
-@@ -341,13 +351,13 @@ const IndexedShapeMap& mapForKind(const IndexedOperandTopology& topology, int ki
- 
- int kindForShape(const TopoDS_Shape& shape);
- 
+@@ -344,2 +354,2 @@ int kindForShape(const TopoDS_Shape& shape);
 -TopoDS_Shape copiedBooleanSource(
 -    const BooleanOperandCopy& operandCopy, const TopoDS_Shape& originalSource,
 +TopoDS_Shape copiedTopologySource(
 +    const TopologyOperandCopy& operandCopy, const TopoDS_Shape& originalSource,
-     int sourceShapeIndex, int sourceKind, int sourceIndex) {
-     if (operandCopy.copier == nullptr) {
-         throw HistoryContractError(
-             "HISTORY_COPY_UNAVAILABLE",
+@@ -350 +360 @@ TopoDS_Shape copiedBooleanSource(
 -            "Boolean operand copy mapping is unavailable", sourceKind,
 +            "Topology operand copy mapping is unavailable", sourceKind,
-             sourceIndex, "source", sourceShapeIndex);
-     }
- 
-@@ -357,36 +367,36 @@ TopoDS_Shape copiedBooleanSource(
-     } catch (const Standard_Failure&) {
-         throw HistoryContractError(
-             "HISTORY_COPY_SUCCESSOR_OCCT_EXCEPTION",
+@@ -360 +370 @@ TopoDS_Shape copiedBooleanSource(
 -            "OCCT raised while resolving a copied Boolean source", sourceKind,
 +            "OCCT raised while resolving a copied topology source", sourceKind,
-             sourceIndex, "source", sourceShapeIndex);
-     } catch (const std::exception&) {
-         throw HistoryContractError(
-             "HISTORY_COPY_SUCCESSOR_NATIVE_EXCEPTION",
+@@ -365 +375 @@ TopoDS_Shape copiedBooleanSource(
 -            "Native code raised while resolving a copied Boolean source",
 +            "Native code raised while resolving a copied topology source",
-             sourceKind, sourceIndex, "source", sourceShapeIndex);
-     } catch (...) {
-         throw HistoryContractError(
-             "HISTORY_COPY_SUCCESSOR_NATIVE_EXCEPTION",
+@@ -370 +380 @@ TopoDS_Shape copiedBooleanSource(
 -            "Unknown native failure while resolving a copied Boolean source",
 +            "Unknown native failure while resolving a copied topology source",
-             sourceKind, sourceIndex, "source", sourceShapeIndex);
-     }
- 
-     if (copiedSource.IsNull()) {
-         throw HistoryContractError(
-             "HISTORY_COPY_NULL_SUCCESSOR",
+@@ -377 +387 @@ TopoDS_Shape copiedBooleanSource(
 -            "Boolean operand copy returned a null topology successor",
 +            "Operand copy returned a null topology successor",
-             sourceKind, sourceIndex, "source", sourceShapeIndex);
-     }
-     if (copiedSource.IsSame(originalSource)) {
-         throw HistoryContractError(
-             "HISTORY_COPY_NOT_ISOLATED",
+@@ -383 +393 @@ TopoDS_Shape copiedBooleanSource(
 -            "Boolean operand copy shares topology with its source", sourceKind,
 +            "Operand copy shares topology with its source", sourceKind,
-             sourceIndex, "source", sourceShapeIndex);
-     }
-     if (kindForShape(copiedSource) != sourceKind) {
-         throw HistoryContractError(
-             "HISTORY_COPY_KIND_CHANGED",
+@@ -389 +399 @@ TopoDS_Shape copiedBooleanSource(
 -            "Boolean operand copy changed topology kind", sourceKind,
 +            "Operand copy changed topology kind", sourceKind,
-             sourceIndex, "source", sourceShapeIndex);
-     }
-     return copiedSource;
-@@ -401,45 +411,45 @@ int kindForShape(const TopoDS_Shape& shape) {
-     }
- }
- 
+@@ -404 +414 @@ int kindForShape(const TopoDS_Shape& shape) {
 -using BooleanEvolutionRecordKey = std::tuple<int, int, int, int, int, int>;
 +using EvolutionRecordKey = std::tuple<int, int, int, int, int, int>;
- 
+@@ -406 +416 @@ using BooleanEvolutionRecordKey = std::tuple<int, int, int, int, int, int>;
 -BooleanEvolutionRecordKey booleanEvolutionRecordKey(
 +EvolutionRecordKey evolutionRecordKey(
-     const InvariantCadTopologyEvolutionRecord& record) {
-     return std::make_tuple(record.sourceShapeIndex, record.sourceKind,
-                            record.sourceIndex, record.relation,
-                            record.resultKind, record.resultIndex);
- }
- 
+@@ -413 +423 @@ BooleanEvolutionRecordKey booleanEvolutionRecordKey(
 -void appendBooleanRecord(
 +void appendEvolutionRecord(
-     const InvariantCadTopologyEvolutionRecord& record, int maxHistoryRecords,
+@@ -415 +425 @@ void appendBooleanRecord(
 -    std::set<BooleanEvolutionRecordKey>& uniqueRecords,
 +    std::set<EvolutionRecordKey>& uniqueRecords,
-     std::vector<InvariantCadTopologyEvolutionRecord>& records) {
+@@ -417 +427 @@ void appendBooleanRecord(
 -    const BooleanEvolutionRecordKey key = booleanEvolutionRecordKey(record);
 +    const EvolutionRecordKey key = evolutionRecordKey(record);
-     if (uniqueRecords.find(key) != uniqueRecords.end()) {
-         return;
-     }
-     if (records.size() >= static_cast<size_t>(maxHistoryRecords)) {
-         throw HistoryContractError(
-             "HISTORY_RECORD_LIMIT_EXCEEDED",
+@@ -424 +434 @@ void appendBooleanRecord(
 -            "Boolean indexed topology history exceeds the configured record limit");
 +            "Indexed topology history exceeds the configured record limit");
-     }
-     uniqueRecords.insert(key);
-     records.push_back(record);
- }
- 
+@@ -430 +440 @@ void appendBooleanRecord(
 -void claimBooleanResult(const IndexedOperandTopology& result, int resultKind,
 +void claimEvolutionResult(const IndexedOperandTopology& result, int resultKind,
-                         const TopoDS_Shape& successor, int sourceShapeIndex,
-                         int sourceKind, int sourceIndex, int relation,
-                         ClaimedResultTopology& claimed,
-                         int maxHistoryRecords,
+@@ -435 +445 @@ void claimBooleanResult(const IndexedOperandTopology& result, int resultKind,
 -                        std::set<BooleanEvolutionRecordKey>& uniqueRecords,
 +                        std::set<EvolutionRecordKey>& uniqueRecords,
-                         std::vector<InvariantCadTopologyEvolutionRecord>& records) {
-     const IndexedShapeMap& resultMap = mapForKind(result, resultKind);
-     const int oneBasedResultIndex = resultMap.FindIndex(successor);
-     if (oneBasedResultIndex <= 0) {
-         throw HistoryContractError(
-             "HISTORY_SUCCESSOR_NOT_IN_RESULT",
+@@ -442 +452 @@ void claimBooleanResult(const IndexedOperandTopology& result, int resultKind,
 -            "Boolean history successor is absent from the final result", sourceKind,
 +            "Topology history successor is absent from the final result", sourceKind,
-             sourceIndex, "source", sourceShapeIndex);
-     }
-     const int resultIndex = oneBasedResultIndex - 1;
-@@ -453,22 +463,22 @@ void claimBooleanResult(const IndexedOperandTopology& result, int resultKind,
-     if (claimedKind == nullptr || static_cast<size_t>(resultIndex) >= claimedKind->size()) {
-         throw HistoryContractError(
-             "HISTORY_RESULT_INDEX_INVALID",
+@@ -456 +466 @@ void claimBooleanResult(const IndexedOperandTopology& result, int resultKind,
 -            "Boolean history resolved an invalid result topology index", resultKind,
 +            "Topology history resolved an invalid result topology index", resultKind,
-             resultIndex, "result", -1);
-     }
-     (*claimedKind)[static_cast<size_t>(resultIndex)] = true;
+@@ -460 +470 @@ void claimBooleanResult(const IndexedOperandTopology& result, int resultKind,
 -    appendBooleanRecord(
 +    appendEvolutionRecord(
-         {sourceShapeIndex, sourceKind, sourceIndex, relation, resultKind,
-          resultIndex},
-         maxHistoryRecords, uniqueRecords, records);
- }
- 
+@@ -466 +476 @@ void claimBooleanResult(const IndexedOperandTopology& result, int resultKind,
 -void appendBooleanSourceRecords(
 +void appendNativeHistorySourceRecords(
-     const BRepTools_History& nativeHistory, const IndexedOperandTopology& result,
-     int sourceShapeIndex, int sourceKind, int sourceIndex,
-     const TopoDS_Shape& source, ClaimedResultTopology& claimed,
-     int maxHistoryRecords,
+@@ -471 +481 @@ void appendBooleanSourceRecords(
 -    std::set<BooleanEvolutionRecordKey>& uniqueRecords,
 +    std::set<EvolutionRecordKey>& uniqueRecords,
-     std::vector<InvariantCadTopologyEvolutionRecord>& records) {
-     const IndexedShapeMap& sameKindResult = mapForKind(result, sourceKind);
-     const int oneBasedDirectResultIndex = sameKindResult.FindIndex(source);
-@@ -493,7 +503,7 @@ void appendBooleanSourceRecords(
-                 break;
-             }
-         }
+@@ -496 +506 @@ void appendBooleanSourceRecords(
 -        claimBooleanResult(
 +        claimEvolutionResult(
-             result, sourceKind, canonicalResult, sourceShapeIndex, sourceKind,
-             sourceIndex,
-             source.IsEqual(canonicalResult) && !directReportedModified
-@@ -509,10 +519,10 @@ void appendBooleanSourceRecords(
-         if (resultKind == InvariantCadTopologyKindNone || resultKind != sourceKind) {
-             throw HistoryContractError(
-                 "HISTORY_MODIFIED_KIND_CHANGED",
+@@ -512 +522 @@ void appendBooleanSourceRecords(
 -                "Boolean modified successor changed topology kind", sourceKind,
 +                "Native modified successor changed topology kind", sourceKind,
-                 sourceIndex, "source", sourceShapeIndex);
-         }
+@@ -515 +525 @@ void appendBooleanSourceRecords(
 -        claimBooleanResult(result, resultKind, successor, sourceShapeIndex,
 +        claimEvolutionResult(result, resultKind, successor, sourceShapeIndex,
-                            sourceKind, sourceIndex,
-                            InvariantCadTopologyRelationModified, claimed,
-                            maxHistoryRecords, uniqueRecords, records);
-@@ -525,17 +535,17 @@ void appendBooleanSourceRecords(
-         if (resultKind == InvariantCadTopologyKindNone) {
-             throw HistoryContractError(
-                 "HISTORY_GENERATED_KIND_UNSUPPORTED",
+@@ -528 +538 @@ void appendBooleanSourceRecords(
 -                "Boolean generated successor has an unsupported topology kind",
 +                "Native generated successor has an unsupported topology kind",
-                 sourceKind, sourceIndex, "source", sourceShapeIndex);
-         }
+@@ -531 +541 @@ void appendBooleanSourceRecords(
 -        claimBooleanResult(result, resultKind, successor, sourceShapeIndex,
 +        claimEvolutionResult(result, resultKind, successor, sourceShapeIndex,
-                            sourceKind, sourceIndex,
-                            InvariantCadTopologyRelationGenerated, claimed,
-                            maxHistoryRecords, uniqueRecords, records);
-     }
- 
-     if (removed && !hasIdentitySuccessor) {
+@@ -538 +548 @@ void appendBooleanSourceRecords(
 -        appendBooleanRecord(
 +        appendEvolutionRecord(
-             {sourceShapeIndex, sourceKind, sourceIndex,
-              InvariantCadTopologyRelationDeleted,
-              InvariantCadTopologyKindNone, -1},
-@@ -543,20 +553,20 @@ void appendBooleanSourceRecords(
-     } else if (!hasIdentitySuccessor) {
-         throw HistoryContractError(
-             "HISTORY_SOURCE_UNCLAIMED",
+@@ -546 +556 @@ void appendBooleanSourceRecords(
 -            "Boolean source has no identity successor or deleted record", sourceKind,
 +            "Source has no identity successor or deleted record", sourceKind,
-             sourceIndex, "source", sourceShapeIndex);
-     }
- }
- 
+@@ -551 +561 @@ void appendBooleanSourceRecords(
 -void appendUnclaimedBooleanCreatedRecords(
 +void appendUnclaimedCreatedRecords(
-     int resultKind, std::vector<bool>& claimed, int maxHistoryRecords,
+@@ -553 +563 @@ void appendUnclaimedBooleanCreatedRecords(
 -    std::set<BooleanEvolutionRecordKey>& uniqueRecords,
 +    std::set<EvolutionRecordKey>& uniqueRecords,
-     std::vector<InvariantCadTopologyEvolutionRecord>& records) {
-     for (size_t resultIndex = 0; resultIndex < claimed.size(); ++resultIndex) {
-         if (claimed[resultIndex]) {
-             continue;
-         }
+@@ -559 +569 @@ void appendUnclaimedBooleanCreatedRecords(
 -        appendBooleanRecord(
 +        appendEvolutionRecord(
-             {-1, InvariantCadTopologyKindNone, -1,
-              InvariantCadTopologyRelationCreated, resultKind,
-              static_cast<int>(resultIndex)},
-@@ -573,15 +583,15 @@ bool topologyEvolutionRecordLess(const InvariantCadTopologyEvolutionRecord& firs
-                     second.relation, second.resultKind, second.resultIndex);
- }
- 
+@@ -576 +586 @@ bool topologyEvolutionRecordLess(const InvariantCadTopologyEvolutionRecord& firs
 -InvariantCadIndexedTopologyEvolution buildBooleanTopologyHistory(
 +InvariantCadIndexedTopologyEvolution buildCompleteTopologyHistory(
-     const BRepTools_History& nativeHistory,
-     const std::vector<TopoDS_Shape>& inputShapes,
+@@ -579 +589 @@ InvariantCadIndexedTopologyEvolution buildBooleanTopologyHistory(
 -    const std::vector<BooleanOperandCopy>& operandCopies,
 +    const std::vector<TopologyOperandCopy>& operandCopies,
-     const TopoDS_Shape& resultShape, int maxHistoryRecords) {
-     if (inputShapes.size() != operandCopies.size()) {
-         throw HistoryContractError(
-             "HISTORY_COPY_COUNT_MISMATCH",
+@@ -584 +594 @@ InvariantCadIndexedTopologyEvolution buildBooleanTopologyHistory(
 -            "Boolean operand copy count does not match the source count");
 +            "Operand copy count does not match the source count");
-     }
-     std::vector<IndexedOperandTopology> inputs;
-     inputs.reserve(inputShapes.size());
-@@ -594,12 +604,12 @@ InvariantCadIndexedTopologyEvolution buildBooleanTopologyHistory(
-         if (sourceShapeIndex > static_cast<size_t>(std::numeric_limits<int>::max())) {
-             throw HistoryContractError(
-                 "HISTORY_INPUT_COUNT_OVERFLOW",
+@@ -597 +607 @@ InvariantCadIndexedTopologyEvolution buildBooleanTopologyHistory(
 -                "Boolean input shape count exceeds the ABI range");
 +                "Input shape count exceeds the ABI range");
-         }
+@@ -599 +609 @@ InvariantCadIndexedTopologyEvolution buildBooleanTopologyHistory(
 -        inputs.push_back(indexBooleanOperand(
 +        inputs.push_back(indexOperandTopology(
-             inputShapes[sourceShapeIndex], static_cast<int>(sourceShapeIndex),
-             "source"));
+@@ -602 +612 @@ InvariantCadIndexedTopologyEvolution buildBooleanTopologyHistory(
 -        copiedInputs.push_back(indexBooleanOperand(
 +        copiedInputs.push_back(indexOperandTopology(
-             operandCopies[sourceShapeIndex].shape,
-             static_cast<int>(sourceShapeIndex), "source"));
-         const IndexedOperandTopology& input = inputs.back();
-@@ -607,7 +617,7 @@ InvariantCadIndexedTopologyEvolution buildBooleanTopologyHistory(
-             {input.faces.Extent(), input.edges.Extent(), input.vertices.Extent()});
-     }
-     const IndexedOperandTopology result =
+@@ -610 +620 @@ InvariantCadIndexedTopologyEvolution buildBooleanTopologyHistory(
 -        indexBooleanOperand(resultShape, -1, "result");
 +        indexOperandTopology(resultShape, -1, "result");
-     history.resultCounts =
-         {result.faces.Extent(), result.edges.Extent(), result.vertices.Extent()};
-     ClaimedResultTopology claimed{
-@@ -615,7 +625,7 @@ InvariantCadIndexedTopologyEvolution buildBooleanTopologyHistory(
-         std::vector<bool>(static_cast<size_t>(result.edges.Extent()), false),
-         std::vector<bool>(static_cast<size_t>(result.vertices.Extent()), false),
-     };
+@@ -618 +628 @@ InvariantCadIndexedTopologyEvolution buildBooleanTopologyHistory(
 -    std::set<BooleanEvolutionRecordKey> uniqueRecords;
 +    std::set<EvolutionRecordKey> uniqueRecords;
- 
-     for (size_t sourceShapeIndex = 0; sourceShapeIndex < inputs.size();
-          ++sourceShapeIndex) {
-@@ -630,7 +640,7 @@ InvariantCadIndexedTopologyEvolution buildBooleanTopologyHistory(
-             if (sourceMap.Extent() != copiedSourceMap.Extent()) {
-                 throw HistoryContractError(
-                     "HISTORY_COPY_COUNT_CHANGED",
+@@ -633 +643 @@ InvariantCadIndexedTopologyEvolution buildBooleanTopologyHistory(
 -                    std::string("Boolean operand copy changed the indexed ") +
 +                    std::string("Operand copy changed the indexed ") +
-                         topologyKindName(sourceKind) + " count",
-                     sourceKind, -1, "source", sourceShape);
-             }
-@@ -639,7 +649,7 @@ InvariantCadIndexedTopologyEvolution buildBooleanTopologyHistory(
-             for (int oneBasedSourceIndex = 1;
-                  oneBasedSourceIndex <= sourceMap.Extent(); ++oneBasedSourceIndex) {
-                 const int sourceIndex = oneBasedSourceIndex - 1;
+@@ -642 +652 @@ InvariantCadIndexedTopologyEvolution buildBooleanTopologyHistory(
 -                const TopoDS_Shape copiedSource = copiedBooleanSource(
 +                const TopoDS_Shape copiedSource = copiedTopologySource(
-                     operandCopies[sourceShapeIndex],
-                     sourceMap.FindKey(oneBasedSourceIndex), sourceShape,
-                     sourceKind, sourceIndex);
-@@ -648,7 +658,7 @@ InvariantCadIndexedTopologyEvolution buildBooleanTopologyHistory(
-                 if (oneBasedCopiedSourceIndex <= 0) {
-                     throw HistoryContractError(
-                         "HISTORY_COPY_SUCCESSOR_NOT_IN_COPY",
+@@ -651 +661 @@ InvariantCadIndexedTopologyEvolution buildBooleanTopologyHistory(
 -                        "Copied Boolean source is absent from the copied operand",
 +                        "Copied source is absent from the operand copy",
-                         sourceKind, sourceIndex, "source", sourceShape);
-                 }
-                 const size_t copiedSourceIndex =
-@@ -656,11 +666,11 @@ InvariantCadIndexedTopologyEvolution buildBooleanTopologyHistory(
-                 if (claimedCopiedSources[copiedSourceIndex]) {
-                     throw HistoryContractError(
-                         "HISTORY_COPY_SUCCESSOR_NOT_UNIQUE",
+@@ -659 +669 @@ InvariantCadIndexedTopologyEvolution buildBooleanTopologyHistory(
 -                        "Multiple Boolean sources resolve to one copied topology item",
 +                        "Multiple sources resolve to one copied topology item",
-                         sourceKind, sourceIndex, "source", sourceShape);
-                 }
-                 claimedCopiedSources[copiedSourceIndex] = true;
+@@ -663 +673 @@ InvariantCadIndexedTopologyEvolution buildBooleanTopologyHistory(
 -                appendBooleanSourceRecords(
 +                appendNativeHistorySourceRecords(
-                     nativeHistory, result, sourceShape, sourceKind,
-                     sourceIndex, copiedSource,
-                     claimed, maxHistoryRecords, uniqueRecords, history.records);
-@@ -668,17 +678,17 @@ InvariantCadIndexedTopologyEvolution buildBooleanTopologyHistory(
-         }
-     }
- 
+@@ -671,5 +681,5 @@ InvariantCadIndexedTopologyEvolution buildBooleanTopologyHistory(
 -    // OCCT can produce higher-order topology from the interaction of multiple
 -    // tools without attributing it to any one operand. Preserve every available
 -    // native P/M/G claim first, then mark only the residual result items as
@@ -587,30 +323,16 @@ index 9b369da..2a89923 100644
 +    // mark only the residual result items as source-less CREATED by the current
 +    // topology-changing operation.
 +    appendUnclaimedCreatedRecords(
-         InvariantCadTopologyKindFace, claimed.faces, maxHistoryRecords,
-         uniqueRecords, history.records);
+@@ -678 +688 @@ InvariantCadIndexedTopologyEvolution buildBooleanTopologyHistory(
 -    appendUnclaimedBooleanCreatedRecords(
 +    appendUnclaimedCreatedRecords(
-         InvariantCadTopologyKindEdge, claimed.edges, maxHistoryRecords,
-         uniqueRecords, history.records);
+@@ -681 +691 @@ InvariantCadIndexedTopologyEvolution buildBooleanTopologyHistory(
 -    appendUnclaimedBooleanCreatedRecords(
 +    appendUnclaimedCreatedRecords(
-         InvariantCadTopologyKindVertex, claimed.vertices, maxHistoryRecords,
-         uniqueRecords, history.records);
- 
-@@ -696,7 +706,7 @@ InvariantCadIndexedTopologyEvolution buildBooleanTopologyHistory(
-         if (!insertion.second && insertion.first->second != record.relation) {
-             throw HistoryContractError(
-                 "HISTORY_LINK_CONTRADICTION",
+@@ -699 +709 @@ InvariantCadIndexedTopologyEvolution buildBooleanTopologyHistory(
 -                "Boolean source/result link has conflicting relations",
 +                "Source/result link has conflicting relations",
-                 record.sourceKind, record.sourceIndex, "source",
-                 record.sourceShapeIndex);
-         }
-@@ -705,7 +715,127 @@ InvariantCadIndexedTopologyEvolution buildBooleanTopologyHistory(
-         static_cast<size_t>(std::numeric_limits<int>::max())) {
-         throw HistoryContractError(
-             "HISTORY_RECORD_COUNT_OVERFLOW",
+@@ -708 +718,121 @@ InvariantCadIndexedTopologyEvolution buildBooleanTopologyHistory(
 -            "Boolean indexed topology history exceeds the ABI record range");
 +            "Indexed topology history exceeds the ABI record range");
 +    }
@@ -733,13 +455,7 @@ index 9b369da..2a89923 100644
 +        throw HistoryContractError(
 +            "HISTORY_RECORD_COUNT_OVERFLOW",
 +            "Edge-treatment indexed topology history exceeds the ABI record range");
-     }
-     history.complete = true;
-     return history;
-@@ -741,6 +871,27 @@ TopologyCounts topologyCounts(const TopoDS_Shape& shape) {
-     };
- }
- 
+@@ -743,0 +874,21 @@ TopologyCounts topologyCounts(const TopoDS_Shape& shape) {
 +bool extractPureSingleSolid(const TopoDS_Shape& shape, TopoDS_Shape& solid) {
 +    if (shape.IsNull()) {
 +        return false;
@@ -761,13 +477,7 @@ index 9b369da..2a89923 100644
 +    return !iterator.More() && extractPureSingleSolid(child, solid);
 +}
 +
- bool hasPositiveVolume(const TopoDS_Shape& shape) {
-     GProp_GProps properties;
-     BRepGProp::VolumeProperties(shape, properties);
-@@ -880,6 +1031,63 @@ std::string InvariantCadBooleanReport::transferCode(const OcctKernel& kernel) co
-     return "READY";
- }
- 
+@@ -882,0 +1034,57 @@ std::string InvariantCadBooleanReport::transferCode(const OcctKernel& kernel) co
 +int InvariantCadEdgeTreatmentReport::selectedEdgeCount() const {
 +    if (selectedEdgeIndices_.size() >
 +        static_cast<size_t>(std::numeric_limits<int>::max())) {
@@ -825,13 +535,7 @@ index 9b369da..2a89923 100644
 +    return "READY";
 +}
 +
- uint32_t InvariantCadPipeShellReport::takeResultId(OcctKernel& kernel) {
-     const std::string state = transferCode(kernel);
-     if (state == "NO_RESULT") {
-@@ -1042,8 +1250,78 @@ InvariantCadTopologyEvolutionRecord InvariantCadBooleanReport::topologyRecord(
-     return transfer_->topologyHistory.records[static_cast<size_t>(recordIndex)];
- }
- 
+@@ -1044,0 +1253,70 @@ InvariantCadTopologyEvolutionRecord InvariantCadBooleanReport::topologyRecord(
 +int InvariantCadEdgeTreatmentReport::topologyHistoryVersion() const {
 +    return topologyHistoryComplete() ? transfer_->topologyHistory.version : 0;
 +}
@@ -902,36 +606,18 @@ index 9b369da..2a89923 100644
 +    return transfer_->topologyHistory.records[static_cast<size_t>(recordIndex)];
 +}
 +
- std::string invariantcadFacadeVersion() {
--    return "invariantcad-facade@0.4.0+occt-wasm.3.7.0";
-+    return "invariantcad-facade@0.5.0+occt-wasm.3.7.0";
- }
- 
- InvariantCadBooleanReport invariantcadBooleanAtomic(
-@@ -1121,7 +1399,7 @@ InvariantCadBooleanReport invariantcadBooleanAtomic(
-     // stable. Geometry and triangulations are shared: non-destructive Boolean
-     // construction does not mutate them, while the copied TShapes isolate the
-     // status flags that TopoDS_Builder::Add changes.
+@@ -1046 +1324 @@ std::string invariantcadFacadeVersion() {
+-    return "invariantcad-facade@0.4.0+occt-wasm.3.8.0";
++    return "invariantcad-facade@0.5.0+occt-wasm.3.8.0";
+@@ -1124 +1402 @@ InvariantCadBooleanReport invariantcadBooleanAtomic(
 -    std::vector<BooleanOperandCopy> operandCopies;
 +    std::vector<TopologyOperandCopy> operandCopies;
-     operandCopies.reserve(inputShapes.size());
-     try {
-         for (size_t sourceShapeIndex = 0; sourceShapeIndex < inputShapes.size();
-@@ -1233,8 +1511,8 @@ InvariantCadBooleanReport invariantcadBooleanAtomic(
-     InvariantCadIndexedTopologyEvolution topologyHistory;
-     try {
-         topologyHistory =
+@@ -1236,2 +1514,2 @@ InvariantCadBooleanReport invariantcadBooleanAtomic(
 -            buildBooleanTopologyHistory(*nativeHistory, inputShapes,
 -                                        operandCopies, result, maxHistoryRecords);
 +            buildCompleteTopologyHistory(*nativeHistory, inputShapes,
 +                                         operandCopies, result, maxHistoryRecords);
-     } catch (const HistoryContractError& error) {
-         InvariantCadBooleanReport report = failure("history", error.code().c_str(),
-                                                    error.what());
-@@ -1269,6 +1547,361 @@ InvariantCadBooleanReport invariantcadBooleanAtomic(
-     return report;
- }
- 
+@@ -1271,0 +1550,355 @@ InvariantCadBooleanReport invariantcadBooleanAtomic(
 +InvariantCadEdgeTreatmentReport invariantcadEdgeTreatmentAtomic(
 +    OcctKernel& kernel, int operation, uint32_t inputId,
 +    std::vector<uint32_t> edgeIds, double amount, int maxHistoryRecords) {
@@ -1287,6 +973,3 @@ index 9b369da..2a89923 100644
 +    }
 +}
 +
- InvariantCadPipeShellReport invariantcadPipeShellSolid(
-     OcctKernel& kernel, uint32_t profileWireId, uint32_t spineWireId,
-     double tolerance3d, double boundaryTolerance, double angularTolerance) {

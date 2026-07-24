@@ -8,13 +8,13 @@
   },
   "archive": {
     "format": "ustar+gzip",
-    "size": 7193004,
-    "sha256": "db18c94517e09f0f7a62b8a22bb36d046f1daaf76973153b003884762bf97c3c"
+    "size": 7187467,
+    "sha256": "2bc1c3fd180353639baf24d0a289d900c53eedf4b951dffd3d6ae1d6608194dd"
   },
   "facade": {
-    "marker": "invariantcad-facade@0.9.0+occt-wasm.3.7.0",
+    "marker": "invariantcad-facade@0.9.0+occt-wasm.3.8.0",
     "abiVersion": "0.9.0",
-    "upstreamOcctWasmVersion": "3.7.0"
+    "upstreamOcctWasmVersion": "3.8.0"
   },
   "runtime": [
     {
@@ -28,8 +28,8 @@
       "source": "occt-wasm.wasm",
       "target": "runtime/occt-wasm.wasm",
       "mediaType": "application/wasm",
-      "size": 22304689,
-      "sha256": "ee2bc82eaf80ff450ecf191126bb42480cf5bcf40e2bca697aa521771eb3503d"
+      "size": 22307017,
+      "sha256": "184ddf4446786307da82310191ec2136f04b87c1797a38fd8b4a7708af67d8ca"
     }
   ],
   "inputs": [
@@ -39,7 +39,7 @@
       "role": "source-lock",
       "mode": "0644",
       "size": 574,
-      "sha256": "69667cf9cf1f434bc5e9fa80d9a4be347f54296ce1d887580716008d1f2150e8"
+      "sha256": "abc445730708e3c871eefe3319481fd8b38a4b98d4b22dcbc42132971e0e494c"
     },
     {
       "source": "native/occt/patches/0001-atomic-multi-face-draft.patch",
@@ -47,7 +47,7 @@
       "role": "source-patch",
       "mode": "0644",
       "size": 30631,
-      "sha256": "c533f7d0fd1a26f62fc92acdbd680d590abb868a637201239035d06151924a20"
+      "sha256": "dbc912cf0416110e4189ce9478b1156b6f9a15a459fd0a7152c262fb8f9489ed"
     },
     {
       "source": "native/occt/patches/0002-indexed-draft-history.patch",
@@ -55,63 +55,63 @@
       "role": "source-patch",
       "mode": "0644",
       "size": 22296,
-      "sha256": "e436c3f7380d05e567a7fee27760d3620eee53cf3a1b4327102261100347cd48"
+      "sha256": "f662e0e9c1902319a141c4050ca12a78f54c90245ae8f7d61040c2d4abb12a9f"
     },
     {
       "source": "native/occt/patches/0003-controlled-pipe-shell.patch",
       "target": "source/native/occt/patches/0003-controlled-pipe-shell.patch",
       "role": "source-patch",
       "mode": "0644",
-      "size": 19452,
-      "sha256": "5e960b2601f5851b14bc6b47409bced023ca36aecc59ec926d705b763c1914e4"
+      "size": 17495,
+      "sha256": "de469ed0ef23dc46566f12031c147c353aa8c5e7d89b5181f710f8683ae08b47"
     },
     {
       "source": "native/occt/patches/0004-exact-boolean-history.patch",
       "target": "source/native/occt/patches/0004-exact-boolean-history.patch",
       "role": "source-patch",
       "mode": "0644",
-      "size": 47081,
-      "sha256": "04948e51032c7668bbfe0608afc9e6ce02880b90a69e743d3e5bd7aceb9f8f29"
+      "size": 43032,
+      "sha256": "0c602e29d8c8e0a19adc792bf5000384aed960d5818d31626f9a6957bc69dc2d"
     },
     {
       "source": "native/occt/patches/0005-exact-edge-treatment-history.patch",
       "target": "source/native/occt/patches/0005-exact-edge-treatment-history.patch",
       "role": "source-patch",
       "mode": "0644",
-      "size": 63115,
-      "sha256": "ac71881bc484da50d6dd88d3f14cd7420863cf1101827a7ffac26cb3c68d2a4a"
+      "size": 49953,
+      "sha256": "5bdf56660320bcd5b6045dd9f5f203c2c9e4e13e2f0787f67f57d1d9be8abc4d"
     },
     {
       "source": "native/occt/patches/0006-exact-solid-offset-history.patch",
       "target": "source/native/occt/patches/0006-exact-solid-offset-history.patch",
       "role": "source-patch",
       "mode": "0644",
-      "size": 43443,
-      "sha256": "c29cd7c8c465debacfe1d49360f932f34300cb74af469ad64029bd08cea5a4bf"
+      "size": 38610,
+      "sha256": "95f1876e9d21e6933bf1dce9bae286c58be1264912bdfc9b31f091eafc23b42d"
     },
     {
       "source": "native/occt/patches/0007-bounded-shape-artifacts.patch",
       "target": "source/native/occt/patches/0007-bounded-shape-artifacts.patch",
       "role": "source-patch",
       "mode": "0644",
-      "size": 30866,
-      "sha256": "74ea1ec6a9c92df03a2af8fca6bf4eefcec1b816814b09adb44ee2450c0615b6"
+      "size": 27389,
+      "sha256": "16cd4f024ec6e3659e749c4e8d239e6552f30a4fb19c492db1daf1bd689b2b21"
     },
     {
       "source": "native/occt/patches/0008-hardened-shape-artifact-budgets.patch",
       "target": "source/native/occt/patches/0008-hardened-shape-artifact-budgets.patch",
       "role": "source-patch",
       "mode": "0644",
-      "size": 36896,
-      "sha256": "234407c5736f8066ce7403a5509c07330ef1fb6a9179fcbe6a212ee8db943105"
+      "size": 31319,
+      "sha256": "a264fdde79ea89f12e87ed3d4d52126d41419e5de1fd596d371af3bb8016387e"
     },
     {
       "source": "native/occt/patches/0009-bintools-v4-structural-preflight.patch",
       "target": "source/native/occt/patches/0009-bintools-v4-structural-preflight.patch",
       "role": "source-patch",
       "mode": "0644",
-      "size": 67642,
-      "sha256": "b9a0f4e5d64cdba52748adc295489afc4dbe901d3bb954d7fc68e94ed957802e"
+      "size": 63047,
+      "sha256": "f818879df7471355bbb6d8fb5bd6566936c797db880654cfa4a6911a6dbfb5b3"
     },
     {
       "source": "scripts/build-occt-facade.sh",
@@ -127,7 +127,7 @@
       "role": "source-relink-guide",
       "mode": "0644",
       "size": 18143,
-      "sha256": "d6422e247ceda890facf7a78fae323a5923936aa4086454eadbb9631a766db6e"
+      "sha256": "c0b1ce492cb283fa4990774f2dcf20d665bff18c84f50d170d38df57f2db68eb"
     },
     {
       "source": "LICENSE",
@@ -143,7 +143,7 @@
       "role": "third-party-notices",
       "mode": "0644",
       "size": 8579,
-      "sha256": "f10dd60d01fdbddb5ab829d626413c3943fcba7b8b34c9524acd0e5d49d0f088"
+      "sha256": "81cbfd3f0697884a3b2f5d89b174ba7f6497881d812db0f2fedaece07dc21c18"
     },
     {
       "source": "licenses/LGPL-2.1.txt",

@@ -99,13 +99,13 @@ the three redistributed core artifacts.
 
 InvariantCAD's exact B-Rep backend loads [occt-wasm](https://github.com/andymai/occt-wasm) as a separate npm dependency.
 
-- Package: `occt-wasm@3.7.0` (pinned exactly)
+- Package: `occt-wasm@3.8.0` (pinned exactly)
 - Wrapper copyright: Copyright (c) 2026 Andy Mai
 - Wrapper license: MIT
-- Wrapper source and build scripts: <https://github.com/andymai/occt-wasm/tree/v3.7.0>
+- Wrapper source and build scripts: <https://github.com/andymai/occt-wasm/tree/v3.8.0>
 - Compiled kernel: OpenCascade Technology
-- OCCT source fork commit: `6e1fe656bf028bf0004482c389661587b269fc65`
-- OCCT source: <https://github.com/andymai/OCCT/tree/6e1fe656bf028bf0004482c389661587b269fc65>
+- OCCT source fork commit: `c16749358fff7c2fef240096a628e0d4050dc0d4`
+- OCCT source: <https://github.com/andymai/OCCT/tree/c16749358fff7c2fef240096a628e0d4050dc0d4>
 - OCCT license: GNU Lesser General Public License 2.1 with the Open CASCADE exception
 
 The full relevant texts are distributed in:
@@ -114,7 +114,7 @@ The full relevant texts are distributed in:
 - `licenses/OCCT_LGPL_EXCEPTION.txt`
 - `licenses/occt-wasm-MIT.txt`
 
-The current npm backend consumes the published `occt-wasm@3.7.0` JavaScript and
+The current npm backend consumes the published `occt-wasm@3.8.0` JavaScript and
 WebAssembly pair unchanged. Rebuild instructions and the wrapper toolchain are
 available in the tagged wrapper source above; the corresponding OCCT source is
 available at the pinned fork commit.

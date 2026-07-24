@@ -198,7 +198,7 @@ function installLegacyMarkers(module: Record<string, unknown>): void {
     InvariantCadBooleanOperation: BOOLEAN_OPERATION,
     InvariantCadEdgeTreatmentOperation: EDGE_TREATMENT_OPERATION,
     invariantcadFacadeVersion: () =>
-      "invariantcad-facade@0.5.0+occt-wasm.3.7.0",
+      "invariantcad-facade@0.5.0+occt-wasm.3.8.0",
     invariantcadDraftFacesAtomic: vi.fn(),
     invariantcadPipeShellSolid: vi.fn(),
     invariantcadBooleanAtomic: vi.fn(),
@@ -226,7 +226,7 @@ function exactSolidOffsetFactory(
       InvariantCadSolidOffsetDirection: SOLID_OFFSET_DIRECTION,
       InvariantCadSolidOffsetReport: class {},
       invariantcadFacadeVersion: () =>
-        "invariantcad-facade@0.6.0+occt-wasm.3.7.0",
+        "invariantcad-facade@0.6.0+occt-wasm.3.8.0",
       invariantcadSolidOffsetAtomic: (
         rawValue: unknown,
         operation: number,

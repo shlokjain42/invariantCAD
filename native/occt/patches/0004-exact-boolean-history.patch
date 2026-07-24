@@ -1,36 +1,19 @@
 diff --git a/facade/include/occt_kernel.h b/facade/include/occt_kernel.h
-index 4189bc3..b57d67c 100644
+index e87c300..decd3de 100644
 --- a/facade/include/occt_kernel.h
 +++ b/facade/include/occt_kernel.h
-@@ -17,10 +17,11 @@
- 
- class OcctKernel;
- struct InvariantCadDraftTransferState;
+@@ -19,0 +20 @@ struct InvariantCadDraftTransferState;
 +struct InvariantCadBooleanTransferState;
- struct InvariantCadPipeShellTransferState;
- 
- /// Evaluation-scoped topology kinds used by the indexed evolution ABI.
+@@ -23 +24 @@ struct InvariantCadPipeShellTransferState;
 -/// These numeric values are stable across facade ABI 0.3.x.
 +/// These numeric values are stable across facade ABI 0.4.x.
- enum InvariantCadTopologyKind : int {
-     InvariantCadTopologyKindNone = -1,
-     InvariantCadTopologyKindFace = 0,
-@@ -29,8 +30,9 @@ enum InvariantCadTopologyKind : int {
- };
- 
- /// Source-to-result relations used by the generic indexed evolution envelope.
+@@ -32,2 +33,3 @@ enum InvariantCadTopologyKind : int {
 -/// Atomic draft emits only Preserved and Modified records. Generated, Deleted,
 -/// and Created are reserved for later topology-changing facade operations.
 +/// Atomic draft emits only Preserved and Modified records. Exact Boolean emits
 +/// Preserved, Modified, Generated, Deleted, and source-less Created for result
 +/// topology that emerges only from higher-order interactions among operands.
- enum InvariantCadTopologyRelation : int {
-     InvariantCadTopologyRelationPreserved = 0,
-     InvariantCadTopologyRelationModified = 1,
-@@ -39,6 +41,13 @@ enum InvariantCadTopologyRelation : int {
-     InvariantCadTopologyRelationCreated = 4,
- };
- 
+@@ -41,0 +44,7 @@ enum InvariantCadTopologyRelation : int {
 +/// Boolean operation codes used by the exact indexed-history facade.
 +enum InvariantCadBooleanOperation : int {
 +    InvariantCadBooleanOperationUnion = 0,
@@ -38,13 +21,7 @@ index 4189bc3..b57d67c 100644
 +    InvariantCadBooleanOperationIntersect = 2,
 +};
 +
- /// Number of unique located subshapes indexed by TopExp::MapShapes for each
- /// topology kind. Orientation occurrences are deliberately not separate IDs;
- /// however, the canonical input/result occurrences' orientations participate
-@@ -156,6 +165,62 @@ struct InvariantCadDraftReport {
-         double neutralNormalZ);
- };
- 
+@@ -158,0 +168,56 @@ struct InvariantCadDraftReport {
 +/// Transactional result of one exact, potentially multi-tool Boolean.
 +/// A successful report owns both the result and its immutable complete indexed
 +/// history outside the kernel arena until takeResultId() succeeds.
@@ -101,13 +78,7 @@ index 4189bc3..b57d67c 100644
 +        std::vector<uint32_t> toolIds, int maxHistoryRecords);
 +};
 +
- /// Transactional result of the controlled InvariantCAD PipeShell facade.
- /// A successful untaken report owns its result outside the kernel arena.
- struct InvariantCadPipeShellReport {
-@@ -204,6 +269,13 @@ struct InvariantCadPipeShellReport {
- /// Versioned InvariantCAD extension probe, independent of occt-wasm's API.
- std::string invariantcadFacadeVersion();
- 
+@@ -206,0 +272,7 @@ std::string invariantcadFacadeVersion();
 +/// Executes the ordered Boolean geometry contract and proves complete
 +/// face/edge/vertex evolution for the target (source 0) and tools (1..N),
 +/// subject to the caller's explicit record-materialization budget.
@@ -115,48 +86,24 @@ index 4189bc3..b57d67c 100644
 +    OcctKernel& kernel, int operation, uint32_t targetId,
 +    std::vector<uint32_t> toolIds, int maxHistoryRecords);
 +
- /// Builds one corrected-Frenet, right-corner solid PipeShell with explicit
- /// native tolerances. The report exposes OCCT's measured surface error and
- /// retains the result outside the arena until a checked one-shot transfer.
-@@ -645,6 +717,7 @@ class OcctKernel {
- 
-   private:
-     friend struct InvariantCadDraftReport;
+@@ -648,0 +721 @@ class OcctKernel {
 +    friend struct InvariantCadBooleanReport;
-     friend struct InvariantCadPipeShellReport;
-     friend InvariantCadDraftReport invariantcadDraftFacesAtomic(
-         OcctKernel& kernel, uint32_t shapeId, std::vector<uint32_t> faceIds, double angleRad,
-@@ -654,6 +727,9 @@ class OcctKernel {
-     friend InvariantCadPipeShellReport invariantcadPipeShellSolid(
-         OcctKernel& kernel, uint32_t profileWireId, uint32_t spineWireId,
-         double tolerance3d, double boundaryTolerance, double angularTolerance);
+@@ -657,0 +731,3 @@ class OcctKernel {
 +    friend InvariantCadBooleanReport invariantcadBooleanAtomic(
 +        OcctKernel& kernel, int operation, uint32_t targetId,
 +        std::vector<uint32_t> toolIds, int maxHistoryRecords);
-     uint32_t store(const TopoDS_Shape& shape);
-     uint32_t invariantcadStoreTransferredShape(const TopoDS_Shape& shape);
-     const TopoDS_Shape& get(uint32_t id) const;
 diff --git a/facade/src/invariantcad_bindings.cpp b/facade/src/invariantcad_bindings.cpp
 index b99a14e..83e44ee 100644
 --- a/facade/src/invariantcad_bindings.cpp
 +++ b/facade/src/invariantcad_bindings.cpp
-@@ -24,6 +24,12 @@ EMSCRIPTEN_BINDINGS(invariantcad_facade) {
-         .value("DELETED", InvariantCadTopologyRelationDeleted)
-         .value("CREATED", InvariantCadTopologyRelationCreated);
- 
+@@ -26,0 +27,6 @@ EMSCRIPTEN_BINDINGS(invariantcad_facade) {
 +    enum_<InvariantCadBooleanOperation>("InvariantCadBooleanOperation",
 +                                        enum_value_type::number)
 +        .value("UNION", InvariantCadBooleanOperationUnion)
 +        .value("SUBTRACT", InvariantCadBooleanOperationSubtract)
 +        .value("INTERSECT", InvariantCadBooleanOperationIntersect);
 +
-     value_object<InvariantCadTopologyCounts>("InvariantCadTopologyCounts")
-         .field("faces", &InvariantCadTopologyCounts::faces)
-         .field("edges", &InvariantCadTopologyCounts::edges)
-@@ -66,6 +72,31 @@ EMSCRIPTEN_BINDINGS(invariantcad_facade) {
-         .function("topologyRecord", &InvariantCadDraftReport::topologyRecord)
-         .function("takeResultId", &InvariantCadDraftReport::takeResultId);
- 
+@@ -68,0 +75,25 @@ EMSCRIPTEN_BINDINGS(invariantcad_facade) {
 +    class_<InvariantCadBooleanReport>("InvariantCadBooleanReport")
 +        .property("ok", &InvariantCadBooleanReport::getOk)
 +        .property("stage", &InvariantCadBooleanReport::getStage)
@@ -182,56 +129,25 @@ index b99a14e..83e44ee 100644
 +        .function("topologyRecord", &InvariantCadBooleanReport::topologyRecord)
 +        .function("takeResultId", &InvariantCadBooleanReport::takeResultId);
 +
-     class_<InvariantCadPipeShellReport>("InvariantCadPipeShellReport")
-         .property("ok", &InvariantCadPipeShellReport::getOk)
-         .property("stage", &InvariantCadPipeShellReport::getStage)
-@@ -84,5 +115,6 @@ EMSCRIPTEN_BINDINGS(invariantcad_facade) {
- 
-     function("invariantcadFacadeVersion", &invariantcadFacadeVersion);
-     function("invariantcadDraftFacesAtomic", &invariantcadDraftFacesAtomic);
+@@ -86,0 +118 @@ EMSCRIPTEN_BINDINGS(invariantcad_facade) {
 +    function("invariantcadBooleanAtomic", &invariantcadBooleanAtomic);
-     function("invariantcadPipeShellSolid", &invariantcadPipeShellSolid);
- }
 diff --git a/facade/src/invariantcad_facade.cpp b/facade/src/invariantcad_facade.cpp
 index 9c52765..9b369da 100644
 --- a/facade/src/invariantcad_facade.cpp
 +++ b/facade/src/invariantcad_facade.cpp
-@@ -8,9 +8,14 @@
- 
- #include <BRepCheck_Analyzer.hxx>
- #include <BRepGProp.hxx>
+@@ -10,0 +11,4 @@
 +#include <BRepAlgoAPI_Common.hxx>
 +#include <BRepAlgoAPI_Cut.hxx>
 +#include <BRepAlgoAPI_Fuse.hxx>
 +#include <BRepBuilderAPI_Copy.hxx>
- #include <BRepBuilderAPI_TransitionMode.hxx>
- #include <BRepOffsetAPI_DraftAngle.hxx>
- #include <BRepOffsetAPI_MakePipeShell.hxx>
+@@ -13,0 +18 @@
 +#include <BRepTools_History.hxx>
- #include <GProp_GProps.hxx>
- #include <NCollection_IndexedMap.hxx>
- #include <Standard_Failure.hxx>
-@@ -18,6 +23,7 @@
- #include <TopExp.hxx>
- #include <TopTools_ShapeMapHasher.hxx>
- #include <TopoDS.hxx>
+@@ -20,0 +26 @@
 +#include <algorithm>
- #include <cmath>
- #include <gp.hxx>
- #include <gp_Dir.hxx>
-@@ -25,6 +31,8 @@
- #include <gp_Pnt.hxx>
- #include <limits>
- #include <memory>
+@@ -27,0 +34,2 @@
 +#include <set>
 +#include <tuple>
- #include <stdexcept>
- #include <utility>
- 
-@@ -43,6 +51,13 @@ struct InvariantCadDraftTransferState {
-     InvariantCadIndexedTopologyEvolution topologyHistory;
- };
- 
+@@ -45,0 +54,7 @@ struct InvariantCadDraftTransferState {
 +struct InvariantCadBooleanTransferState {
 +    TopoDS_Shape result;
 +    uint64_t kernelInstanceToken = 0;
@@ -239,13 +155,7 @@ index 9c52765..9b369da 100644
 +    InvariantCadIndexedTopologyEvolution topologyHistory;
 +};
 +
- struct InvariantCadPipeShellTransferState {
-     TopoDS_Shape result;
-     uint64_t kernelInstanceToken = 0;
-@@ -283,6 +298,419 @@ InvariantCadIndexedTopologyEvolution buildDraftTopologyHistory(
-     return history;
- }
- 
+@@ -285,0 +301,413 @@ InvariantCadIndexedTopologyEvolution buildDraftTopologyHistory(
 +struct IndexedOperandTopology {
 +    IndexedShapeMap faces;
 +    IndexedShapeMap edges;
@@ -659,13 +569,7 @@ index 9c52765..9b369da 100644
 +    return history;
 +}
 +
- bool finite3(double x, double y, double z) {
-     return std::isfinite(x) && std::isfinite(y) && std::isfinite(z);
- }
-@@ -417,6 +845,41 @@ std::string InvariantCadDraftReport::transferCode(const OcctKernel& kernel) cons
-     return "READY";
- }
- 
+@@ -419,0 +848,35 @@ std::string InvariantCadDraftReport::transferCode(const OcctKernel& kernel) cons
 +uint32_t InvariantCadBooleanReport::takeResultId(OcctKernel& kernel) {
 +    const std::string state = transferCode(kernel);
 +    if (state == "NO_RESULT") {
@@ -701,13 +605,7 @@ index 9c52765..9b369da 100644
 +    return "READY";
 +}
 +
- uint32_t InvariantCadPipeShellReport::takeResultId(OcctKernel& kernel) {
-     const std::string state = transferCode(kernel);
-     if (state == "NO_RESULT") {
-@@ -513,8 +976,297 @@ InvariantCadTopologyEvolutionRecord InvariantCadDraftReport::topologyRecord(
-     return transfer_->topologyHistory.records[static_cast<size_t>(recordIndex)];
- }
- 
+@@ -515,0 +979,66 @@ InvariantCadTopologyEvolutionRecord InvariantCadDraftReport::topologyRecord(
 +int InvariantCadBooleanReport::topologyHistoryVersion() const {
 +    return topologyHistoryComplete() ? transfer_->topologyHistory.version : 0;
 +}
@@ -774,9 +672,9 @@ index 9c52765..9b369da 100644
 +    return transfer_->topologyHistory.records[static_cast<size_t>(recordIndex)];
 +}
 +
- std::string invariantcadFacadeVersion() {
--    return "invariantcad-facade@0.3.0+occt-wasm.3.7.0";
-+    return "invariantcad-facade@0.4.0+occt-wasm.3.7.0";
+@@ -517 +1046,224 @@ std::string invariantcadFacadeVersion() {
+-    return "invariantcad-facade@0.3.0+occt-wasm.3.8.0";
++    return "invariantcad-facade@0.4.0+occt-wasm.3.8.0";
 +}
 +
 +InvariantCadBooleanReport invariantcadBooleanAtomic(
@@ -1000,6 +898,3 @@ index 9c52765..9b369da 100644
 +    report.transfer_->kernelInstanceToken = kernel.invariantcadInstanceToken_;
 +    report.transfer_->topologyHistory = std::move(topologyHistory);
 +    return report;
- }
- 
- InvariantCadPipeShellReport invariantcadPipeShellSolid(

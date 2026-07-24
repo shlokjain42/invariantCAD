@@ -153,7 +153,7 @@ interface BrowserAttestationState {
 const BROWSER_ATTESTATION_STATE =
   "__invariantCadBrowserRuntimeAttestation";
 const BROWSER_ATTESTATION_FACADE =
-  "invariantcad-facade@0.2.0+occt-wasm.3.7.0";
+  "invariantcad-facade@0.2.0+occt-wasm.3.8.0";
 const browserAttestationWasm = new Uint8Array([9, 8, 7, 6]);
 const browserAttestationJavascript = new TextEncoder().encode(`
 const state = globalThis.${BROWSER_ATTESTATION_STATE} ??= {
@@ -240,7 +240,7 @@ async function browserAttestationManifest(
     facade: {
       marker: BROWSER_ATTESTATION_FACADE,
       abiVersion: "0.2.0",
-      upstreamOcctWasmVersion: "3.7.0",
+      upstreamOcctWasmVersion: "3.8.0",
     },
     runtime: [
       {

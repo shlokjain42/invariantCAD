@@ -28,7 +28,7 @@ const descriptorPath = join(repoRoot, "native/occt/bundle/release-input.json");
 const lockPath = join(repoRoot, "native/occt/upstream.lock.json");
 const bundleVersion = "0.9.0";
 const bundleName = `invariantcad-occt-facade-${bundleVersion}`;
-const facadeMarker = `invariantcad-facade@${bundleVersion}+occt-wasm.3.7.0`;
+const facadeMarker = `invariantcad-facade@${bundleVersion}+occt-wasm.3.8.0`;
 const pipeShellPatchSource =
   "native/occt/patches/0003-controlled-pipe-shell.patch";
 const pipeShellPatchTarget = `source/${pipeShellPatchSource}`;
@@ -1070,7 +1070,7 @@ describe("OCCT facade compliance bundle verification", () => {
       (metadata: any) => {
         const dependency = metadata.predicate.buildDefinition.resolvedDependencies[0];
         dependency.uri = "git+https://attacker.invalid/source@deadbeef";
-        dependency.note = "fe3d5effdaa1ca9a4007a86fde46abd62722fbba";
+        dependency.note = "cf37f4dad07adbc2691f2122a6461a87c7acd748";
       },
     ],
     [
@@ -1079,7 +1079,7 @@ describe("OCCT facade compliance bundle verification", () => {
       (metadata: any) => {
         const dependency = metadata.predicate.buildDefinition.resolvedDependencies[1];
         dependency.digest.sha1 = "0".repeat(40);
-        dependency.note = "6e1fe656bf028bf0004482c389661587b269fc65";
+        dependency.note = "c16749358fff7c2fef240096a628e0d4050dc0d4";
       },
     ],
     [

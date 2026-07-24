@@ -1,5 +1,5 @@
 diff --git a/facade/include/occt_kernel.h b/facade/include/occt_kernel.h
-index b708e71..8a1da20 100644
+index ed9d76b..f618b23 100644
 --- a/facade/include/occt_kernel.h
 +++ b/facade/include/occt_kernel.h
 @@ -20,0 +21,45 @@ struct InvariantCadDraftTransferState;
@@ -412,8 +412,8 @@ index 18c0a2f..5ef594e 100644
 +}
 +
 @@ -190 +474 @@ std::string invariantcadFacadeVersion() {
--    return "invariantcad-facade@0.1.0+occt-wasm.3.7.0";
-+    return "invariantcad-facade@0.2.0+occt-wasm.3.7.0";
+-    return "invariantcad-facade@0.1.0+occt-wasm.3.8.0";
++    return "invariantcad-facade@0.2.0+occt-wasm.3.8.0";
 @@ -514,0 +799,28 @@ InvariantCadDraftReport invariantcadDraftFacesAtomic(
 +    InvariantCadIndexedTopologyEvolution topologyHistory;
 +    try {

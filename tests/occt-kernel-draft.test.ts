@@ -58,7 +58,7 @@ function minimalModule(exactFacade: boolean): Record<string, unknown> {
     InvariantCadTopologyKind: TOPOLOGY_KIND,
     InvariantCadTopologyRelation: TOPOLOGY_RELATION,
     invariantcadFacadeVersion: () =>
-      "invariantcad-facade@0.2.0+occt-wasm.3.7.0",
+      "invariantcad-facade@0.2.0+occt-wasm.3.8.0",
     invariantcadDraftFacesAtomic: () => {
       throw new Error("not invoked by this loader test");
     },
@@ -164,7 +164,7 @@ function facadeFactory(options: FacadeOptions = {}): {
       InvariantCadTopologyKind: TOPOLOGY_KIND,
       InvariantCadTopologyRelation: TOPOLOGY_RELATION,
       invariantcadFacadeVersion: () =>
-        "invariantcad-facade@0.2.0+occt-wasm.3.7.0",
+        "invariantcad-facade@0.2.0+occt-wasm.3.8.0",
       invariantcadDraftFacesAtomic: (
         rawValue: unknown,
         shapeId: number,

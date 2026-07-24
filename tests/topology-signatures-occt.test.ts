@@ -283,12 +283,12 @@ describe("OCCT persistent topology reference integration", () => {
       expect(primary).toEqual({
         protocolVersion: 2,
         fingerprint:
-          "invariantcad-topology-descriptor@6;occt-wasm@3.7.0;runtime=stock;modelingTolerance=1e-7",
+          "invariantcad-topology-descriptor@6;occt-wasm@3.8.0;runtime=stock;modelingTolerance=1e-7",
       });
       expect(legacy).toEqual({
         protocolVersion: 1,
         fingerprint:
-          "invariantcad-topology-descriptor@4;occt-wasm@3.7.0;runtime=stock;modelingTolerance=1e-7",
+          "invariantcad-topology-descriptor@4;occt-wasm@3.8.0;runtime=stock;modelingTolerance=1e-7",
       });
       if (primary === undefined || legacy === undefined) return;
 
@@ -350,7 +350,7 @@ describe("OCCT persistent topology reference integration", () => {
       expect(signatureCapabilities).toEqual({
         protocolVersion: 2,
         fingerprint:
-          "invariantcad-topology-descriptor@6;occt-wasm@3.7.0;runtime=stock;modelingTolerance=1e-7",
+          "invariantcad-topology-descriptor@6;occt-wasm@3.8.0;runtime=stock;modelingTolerance=1e-7",
       });
       if (signatureCapabilities === undefined) return;
 

@@ -66,17 +66,17 @@ describe("owned OCCT facade build boundary", () => {
       expect.objectContaining({
         schemaVersion: 1,
         upstream: expect.objectContaining({
-          tag: "v3.7.0",
-          commit: "fe3d5effdaa1ca9a4007a86fde46abd62722fbba",
+          tag: "v3.8.0",
+          commit: "cf37f4dad07adbc2691f2122a6461a87c7acd748",
         }),
         occt: {
-          commit: "6e1fe656bf028bf0004482c389661587b269fc65",
+          commit: "c16749358fff7c2fef240096a628e0d4050dc0d4",
           repository: "https://github.com/andymai/OCCT.git",
         },
         toolchain: { emscripten: "5.0.3", rust: "1.95" },
         builder: expect.objectContaining({
           digest:
-            "sha256:d4d9b7232c92eda68e478aba5bbf1e8880e0f6c8aeeee627d8296f994642848b",
+            "sha256:bac126c570537bd8100da368ee30845d8d267ce4b14776bfd68c5afed22ad859",
           platform: "linux/amd64",
         }),
       }),
@@ -129,7 +129,7 @@ describe("owned OCCT facade build boundary", () => {
     expect(pipeShellPatch).toContain("InvariantCadPipeShellReport");
     expect(pipeShellPatch).toContain("invariantcadPipeShellSolid");
     expect(pipeShellPatch).toContain(
-      "invariantcad-facade@0.3.0+occt-wasm.3.7.0",
+      "invariantcad-facade@0.3.0+occt-wasm.3.8.0",
     );
 
     const booleanPatch = await readFile(booleanPatchUrl, "utf8");
@@ -143,7 +143,7 @@ describe("owned OCCT facade build boundary", () => {
     expect(booleanPatch).toContain("HISTORY_RECORD_LIMIT_EXCEEDED");
     expect(booleanPatch).toContain("maxHistoryRecords");
     expect(booleanPatch).toContain(
-      "invariantcad-facade@0.4.0+occt-wasm.3.7.0",
+      "invariantcad-facade@0.4.0+occt-wasm.3.8.0",
     );
 
     const edgeTreatmentPatch = await readFile(edgeTreatmentPatchUrl, "utf8");
@@ -157,9 +157,10 @@ describe("owned OCCT facade build boundary", () => {
     );
     expect(edgeTreatmentPatch).toContain("maker.Contour");
     expect(edgeTreatmentPatch).toContain("skippedSeedCount");
-    expect(edgeTreatmentPatch).toContain("HISTORY_RECORD_LIMIT_EXCEEDED");
+    expect(edgeTreatmentPatch).toContain("buildEdgeTreatmentTopologyHistory");
+    expect(edgeTreatmentPatch).toContain("maxHistoryRecords");
     expect(edgeTreatmentPatch).toContain(
-      "invariantcad-facade@0.5.0+occt-wasm.3.7.0",
+      "invariantcad-facade@0.5.0+occt-wasm.3.8.0",
     );
 
     const solidOffsetPatch = await readFile(solidOffsetPatchUrl, "utf8");
@@ -171,7 +172,7 @@ describe("owned OCCT facade build boundary", () => {
     expect(solidOffsetPatch).toContain("reconcileGeneratedOnlyReplacements");
     expect(solidOffsetPatch).toContain("maxHistoryRecords");
     expect(solidOffsetPatch).toContain(
-      "invariantcad-facade@0.6.0+occt-wasm.3.7.0",
+      "invariantcad-facade@0.6.0+occt-wasm.3.8.0",
     );
 
     const artifactPatch = await readFile(artifactPatchUrl, "utf8");
@@ -184,7 +185,7 @@ describe("owned OCCT facade build boundary", () => {
     expect(artifactPatch).toContain("TOPOLOGY_LIMIT_EXCEEDED");
     expect(artifactPatch).toContain("BinTools_FormatVersion_VERSION_4");
     expect(artifactPatch).toContain(
-      "invariantcad-facade@0.7.0+occt-wasm.3.7.0",
+      "invariantcad-facade@0.7.0+occt-wasm.3.8.0",
     );
 
     const hardenedArtifactPatch = await readFile(
@@ -221,7 +222,7 @@ describe("owned OCCT facade build boundary", () => {
       "NATIVE_REQUEST_LIMIT_EXCEEDED",
     );
     expect(hardenedArtifactPatch).toContain(
-      "invariantcad-facade@0.8.0+occt-wasm.3.7.0",
+      "invariantcad-facade@0.8.0+occt-wasm.3.8.0",
     );
 
     const artifactPreflightPatch = await readFile(
@@ -248,7 +249,7 @@ describe("owned OCCT facade build boundary", () => {
     expect(artifactPreflightPatch).toContain("archivePreflightComplete");
     expect(artifactPreflightPatch).toContain("deserializationStarted");
     expect(artifactPreflightPatch).toContain(
-      "invariantcad-facade@0.9.0+occt-wasm.3.7.0",
+      "invariantcad-facade@0.9.0+occt-wasm.3.8.0",
     );
 
     const releaseInput = JSON.parse(await readFile(releaseInputUrl, "utf8")) as {

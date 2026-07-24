@@ -63,9 +63,9 @@ in that lock file, then verify the full commit IDs before applying any patch.
 For this release the locked references are:
 
 - `occt-wasm`: `https://github.com/andymai/occt-wasm.git`, commit
-  `fe3d5effdaa1ca9a4007a86fde46abd62722fbba`
+  `cf37f4dad07adbc2691f2122a6461a87c7acd748`
 - OCCT fork: `https://github.com/andymai/OCCT.git`, commit
-  `6e1fe656bf028bf0004482c389661587b269fc65`
+  `c16749358fff7c2fef240096a628e0d4050dc0d4`
 
 Those public URLs are convenient retrieval locations, not an availability
 guarantee. A distributor should preserve the complete corresponding source and
@@ -79,7 +79,7 @@ temporary tree. It applies all `*.patch` files in bytewise filename order.
 
 ```sh
 git clone https://github.com/andymai/occt-wasm.git occt-wasm
-git -C occt-wasm checkout --detach fe3d5effdaa1ca9a4007a86fde46abd62722fbba
+git -C occt-wasm checkout --detach cf37f4dad07adbc2691f2122a6461a87c7acd748
 git -C occt-wasm submodule update --init occt
 
 git -C occt-wasm rev-parse HEAD
