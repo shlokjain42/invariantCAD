@@ -10,7 +10,7 @@ Comprehensive, type-safe CAD-as-code for TypeScript.
 
 InvariantCAD represents a design as immutable, versioned JSON and evaluates it through replaceable geometry and sketch-solver backends. The public API never exposes WASM pointers or kernel-specific objects.
 
-> **Project status:** `0.1.0` is the first public foundation release. It includes named definition-scoped configurations and variant-aware BOMs, kernel-independent effective-feature Merkle hashes, a strict kernel-shape artifact/cache protocol foundation with a canonical semantic-observation audit surface, an exact OpenCascade B-Rep backend, analytic sketch-profile transfer, STEP/BREP exchange, bounded ruled solid lofts, explicit 3D polyline, circular-arc, and ordered line/arc composite paths with bounded exact solid sweeps, closed semantic face/edge roles through those bounded sweeps, sketch-boundary provenance, document-owned persistent face/edge/vertex selectors, exact selector-driven fillets and equal-distance chamfers, exact face-selected inward/outward shells, exact whole-solid inward/outward offsets, atomic semantic-face draft, and owned exact multi-input Boolean, fillet/chamfer, and shell/offset evolution when the matched InvariantCAD-owned OCCT facade is loaded. No shipped geometry backend advertises the artifact codec yet, the semantic observer confers no eligibility, and the evaluator does not consume a cross-run cache. Complete topology history outside those owned feature slices is still under active development; see the [support matrix](#support-matrix) and [roadmap](/roadmap).
+> **Project status:** `0.1.1` is the current public foundation release. It includes named definition-scoped configurations and variant-aware BOMs, kernel-independent effective-feature Merkle hashes, a strict kernel-shape artifact/cache protocol foundation with a canonical semantic-observation audit surface, an exact OpenCascade B-Rep backend, analytic sketch-profile transfer, STEP/BREP exchange, bounded ruled solid lofts, explicit 3D polyline, circular-arc, and ordered line/arc composite paths with bounded exact solid sweeps, closed semantic face/edge roles through those bounded sweeps, sketch-boundary provenance, document-owned persistent face/edge/vertex selectors, exact selector-driven fillets and equal-distance chamfers, exact face-selected inward/outward shells, exact whole-solid inward/outward offsets, atomic semantic-face draft, and owned exact multi-input Boolean, fillet/chamfer, and shell/offset evolution when the matched InvariantCAD-owned OCCT facade is loaded. No shipped geometry backend advertises the artifact codec yet, the semantic observer confers no eligibility, and the evaluator does not consume a cross-run cache. Complete topology history outside those owned feature slices is still under active development; see the [support matrix](#support-matrix) and [roadmap](/roadmap).
 
 <Note>
   This is the exhaustive single-page reference retained for readers who prefer
@@ -1042,8 +1042,11 @@ short-lived Blob URL. `attestedRuntime` is mutually exclusive with `wasm` and
 evaluated InvariantCAD internal module instance that created it, and requires
 `blob:` in the browser CSP. Cloning its visible report does not reproduce the
 executable authority. Node applications use
-`invariantcad/kernels/occt/node`, whose process-global module hook requires
-worker permission and leaves no temporary executable file. See
+`invariantcad/kernels/occt/node`, which uses an isolated, short-lived
+`node:module.registerHooks()` hook on Node 22.15 and newer. Node 22.13 and 22.14
+retain the compatible process-wide `node:module.register()` worker-hook
+fallback, for which the Permission Model must allow workers. Neither path
+writes a temporary executable file. See
 [OCCT runtime attestation](/evaluation/occt-runtime-attestation) for complete
 acquisition examples and lifecycle/security boundaries.
 
@@ -1120,7 +1123,7 @@ relinking information, and applicable notices for review. Those materials are
 engineering compliance inputs, not legal certification. Public distribution
 remains pending external legal, release, and security review; until then,
 consumers must build the pinned recipe in
-[native/occt](https://github.com/shlokjain42/invariantCAD/tree/v0.1.0/native/occt)
+[native/occt](https://github.com/shlokjain42/invariantCAD/tree/v0.1.1/native/occt)
 or obtain an equivalently reviewed matching pair through an explicit channel.
 
 ## Architecture

@@ -620,11 +620,13 @@ evidence. Before kernel creation, each child bounds and reads the supplied
 canonical `metadata/release.json`, `occt-wasm.js`, and `occt-wasm.wasm` once.
 The public Node attested loader checks the manifest against the independently
 maintained reviewed SHA-256 pin, checks both runtime sizes and digests against
-that trusted manifest, imports the verified JavaScript snapshot through one
-process-global `node:module.register()` hook, and passes a fresh verified
-WebAssembly copy as `wasmBinary`. No temporary executable JavaScript file is
-created. A one-byte mutation to the manifest or either runtime file is rejected
-before supplied JavaScript executes.
+that trusted manifest, and passes a fresh verified WebAssembly copy as
+`wasmBinary`. Node 22.15 and newer import the JavaScript snapshot through an
+isolated `node:module.registerHooks()` hook that is deregistered after import;
+Node 22.13 and 22.14 use the compatible process-wide
+`node:module.register()` worker-hook fallback. No temporary executable
+JavaScript file is created. A one-byte mutation to the manifest or either
+runtime file is rejected before supplied JavaScript executes.
 
 The parent uses a closed versioned request/start/result protocol with exact
 request IDs and bounded request, stdout/stderr, result, and artifact files. A

@@ -65,8 +65,10 @@ Chromium.
 The package declares `sideEffects: false`. Importing the OCCT subpaths is
 separate so ordinary Manifold consumers need not execute exact-backend module
 initialization. WASM initialization occurs only when a kernel factory is called.
-The Node attestation loader installs its process-wide module hook only when
-`loadAttestedOcctRuntime` is called.
+The Node attestation loader installs a module hook only when
+`loadAttestedOcctRuntime` is called. Node 22.15 and newer use an isolated,
+short-lived hook per load; Node 22.13 and 22.14 retain the compatible
+process-wide worker-hook fallback.
 
 ## Type compatibility
 

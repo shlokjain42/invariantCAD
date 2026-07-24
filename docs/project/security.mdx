@@ -61,12 +61,14 @@ fresh verified WASM copy, checks the initialized facade marker, and binds the
 exact pair identity only into the repository-private artifact fingerprint. It
 still does not advertise `shapeArtifacts`.
 
-In Node.js, the loader installs one process-global `node:module.register()` hook
-and leaves the evaluated module cache in place for the process lifetime; it
-does not create a temporary executable file. Node's Permission Model must allow
-the hook worker. In browsers, the loader imports a unique Blob module URL and
-requires `blob:` in the applicable `script-src` policy. A Worker or child
-process remains the hard reclamation boundary.
+In Node.js, the loader creates no temporary executable file. Node 22.15 and
+newer use an isolated `node:module.registerHooks()` hook per load and
+deregister it after import. Node 22.13 and 22.14 retain the compatible
+process-wide `node:module.register()` worker-hook fallback, for which the
+Permission Model must allow workers. The evaluated module cache remains for
+the process lifetime on either path. In browsers, the loader imports a unique
+Blob module URL and requires `blob:` in the applicable `script-src` policy. A
+Worker or child process remains the hard reclamation boundary.
 
 The report's separate declared-build identity hashes the exact release manifest,
 but `buildExecutionObserved`, `buildExecutionAuthenticated`,

@@ -1,6 +1,6 @@
 {
   "name": "invariantcad",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Comprehensive, type-safe CAD-as-code for TypeScript",
   "author": {
     "name": "Shlok Jain",

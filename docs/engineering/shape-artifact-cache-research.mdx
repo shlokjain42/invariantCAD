@@ -322,10 +322,12 @@ runtime pair:
 - Initialized facade marker before kernel creation.
 - A fresh verified WASM copy for every kernel.
 
-Node uses a process-global module hook without temporary executable files and
-requires worker permission under the Node Permission Model. Browser loading
-uses a revocable Blob module URL and needs a compatible `blob:` content
-security policy.
+Node 22.15 and newer use an isolated, short-lived
+`node:module.registerHooks()` hook per load. Node 22.13 and 22.14 use the
+compatible process-wide `node:module.register()` worker-hook fallback, for
+which the Permission Model must allow workers. Neither path writes temporary
+executable files. Browser loading uses a revocable Blob module URL and needs a
+compatible `blob:` content security policy.
 
 The opaque matched-pair authority stays private to the evaluated InvariantCAD
 module instance. Cloning the visible attestation report does not recreate that

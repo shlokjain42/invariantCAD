@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-07-24
+
+- Added three executable reference models—an electronics enclosure, bolted
+  flange, and hollow stepped shaft—and a six-case Manifold/OCCT benchmark
+  protocol v2. The protocol reports bounded measurements and process evidence
+  without presenting development-run timings as universal performance claims.
+- Expanded the canonical documentation gate to six executable modules covering
+  22 declared workflows across parametric evaluation, exact modeling and STEP
+  export, assemblies and configurations, document migration and hashing,
+  persistent topology, and structured diagnostics and limits.
+- Staged feature-hash protocol v2 and hardened the internal Document v7
+  resource/runtime boundary against mutable JavaScript intrinsics, hostile
+  descriptors, prototype pollution, opaque thrown values, and direct-schema
+  bypasses. Both protocols remain internal and do not widen the v1-v6 public
+  document aliases.
+- Raised the checked coverage floors to 84% statements, 78% branches, 90%
+  functions, and 85% lines after measuring 88.35%, 83.61%, 95.14%, and 89.40%
+  respectively across the release suite.
 - Migrated the Node OCCT attestation loader to isolated, short-lived
   `node:module.registerHooks()` hooks on Node 22.15 and newer, avoiding
   `DEP0205` on Node 26 while retaining the asynchronous worker-hook fallback
@@ -116,13 +134,15 @@
   runtime-pair identity is bound only into the repository-private artifact
   compatibility fingerprint; the separate declared-build identity records the
   manifest while explicitly leaving build execution, publisher identity, and
-  compatibility uncertified. The Node loader uses a process-global
-  `node:module.register()` hook without temporary executable files and requires
-  worker permission under Node's Permission Model. The browser loader imports a
-  short-lived Blob URL and therefore requires `blob:` in the applicable CSP.
-  Executable pair authority remains private to the evaluated InvariantCAD
-  internal module instance that created it, and no backend now advertises
-  `shapeArtifacts`.
+  compatibility uncertified. On Node 22.15 and newer, each load uses an
+  isolated, short-lived `node:module.registerHooks()` hook that is deregistered
+  after import. Node 22.13 and 22.14 use the compatible process-wide
+  `node:module.register()` worker-hook fallback and require worker permission
+  under Node's Permission Model. Neither path writes a temporary executable
+  file. The browser loader imports a short-lived Blob URL and therefore requires
+  `blob:` in the applicable CSP. Executable pair authority remains private to
+  the evaluated InvariantCAD internal module instance that created it, and no
+  backend now advertises `shapeArtifacts`.
 - Reworked the roadmap into explicit shipped, repository-only, in-progress,
   planned, and deferred tracks, including everyday modeling, visualization,
   CAE, plugins, performance, runtime coverage, and measurable 1.0 criteria.
@@ -385,5 +405,6 @@
 - Parts and nested fixed-placement assemblies
 - Measurement, STL/OBJ export, canonical JSON, semantic hashes, CLI, and tests
 
-[Unreleased]: https://github.com/shlokjain42/invariantCAD/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/shlokjain42/invariantCAD/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/shlokjain42/invariantCAD/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/shlokjain42/invariantCAD/releases/tag/v0.1.0
