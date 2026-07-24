@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+- Migrated the Node OCCT attestation loader to isolated, short-lived
+  `node:module.registerHooks()` hooks on Node 22.15 and newer, avoiding
+  `DEP0205` on Node 26 while retaining the asynchronous worker-hook fallback
+  required by Node 22.13 and 22.14. The runtime gate now covers distinct
+  concurrent sources, mixed failure/success recovery, hook deregistration, and
+  an explicitly forced fallback path.
 - Added a versioned strong document-body import contract to the geometry-kernel
   API. Stock OCCT now advertises and enforces STEP file units plus declared
   text/binary BREP units, accepts only one valid positive solid without loose

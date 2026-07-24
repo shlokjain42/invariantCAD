@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { register } from "node:module";
+import * as NodeModule from "node:module";
 import { MessageChannel, type MessagePort } from "node:worker_threads";
 import {
   finishLoadingAttestedOcctRuntime,
@@ -23,6 +23,11 @@ export {
 
 const HOOK_READY_TIMEOUT_MS = 10_000;
 const HOOK_EXPORT = "export";
+const registerAsynchronousHooks = NodeModule.register;
+const registerSynchronousHooks =
+  typeof NodeModule.registerHooks === "function"
+    ? NodeModule.registerHooks
+    : undefined;
 const HOOK_SOURCE = String.raw`
 let port;
 const bySpecifier = new Map();
@@ -78,6 +83,11 @@ interface HookWaiter {
   readonly timeout: ReturnType<typeof setTimeout>;
 }
 
+interface InstalledVerifiedModule {
+  readonly specifier: string;
+  readonly cleanup: () => void;
+}
+
 let hookPort: MessagePort | undefined;
 const hookWaiters = new Map<string, HookWaiter>();
 
@@ -118,7 +128,7 @@ function nodeHookPort(): MessagePort {
     `data:text/javascript;charset=utf-8,${encodeURIComponent(HOOK_SOURCE)}`,
   );
   try {
-    register(hookUrl, {
+    registerAsynchronousHooks(hookUrl, {
       parentURL: import.meta.url,
       data: { port: port2 },
       transferList: [port2],
@@ -133,12 +143,9 @@ function nodeHookPort(): MessagePort {
   return port1;
 }
 
-async function installVerifiedModule(
+async function installVerifiedModuleWithAsynchronousHooks(
   source: Uint8Array,
-): Promise<{
-  readonly id: string;
-  readonly specifier: string;
-}> {
+): Promise<InstalledVerifiedModule> {
   const port = nodeHookPort();
   const id = randomUUID();
   const specifier = `invariantcad-attested:${id}`;
@@ -170,7 +177,19 @@ async function installVerifiedModule(
       [source.buffer as ArrayBuffer],
     );
     await ready;
-    return { id, specifier };
+    let active = true;
+    return {
+      specifier,
+      cleanup: () => {
+        if (!active) return;
+        active = false;
+        try {
+          port.postMessage({ kind: "cancel", id, specifier });
+        } catch {
+          // Source cleanup is best effort once the hook port itself has failed.
+        }
+      },
+    };
   } catch (error) {
     const waiter = hookWaiters.get(id);
     if (waiter !== undefined) {
@@ -192,22 +211,78 @@ async function installVerifiedModule(
   }
 }
 
+function installVerifiedModuleWithSynchronousHooks(
+  source: Uint8Array,
+): InstalledVerifiedModule {
+  if (registerSynchronousHooks === undefined) {
+    throw new Error("synchronous Node.js module hooks are unavailable");
+  }
+  const id = randomUUID();
+  const specifier = `invariantcad-attested:${id}`;
+  const url = new URL(
+    `./.invariantcad-attested/${id}/occt-wasm.mjs`,
+    import.meta.url,
+  ).href;
+  let pendingSource: Uint8Array | undefined = source;
+  let active = true;
+  const hooks = registerSynchronousHooks({
+    resolve(candidate, context, nextResolve) {
+      if (candidate !== specifier) return nextResolve(candidate, context);
+      return { url, shortCircuit: true };
+    },
+    load(candidate, context, nextLoad) {
+      if (candidate !== url) return nextLoad(candidate, context);
+      const verifiedSource = pendingSource;
+      pendingSource = undefined;
+      if (verifiedSource === undefined) {
+        throw new Error(
+          "OCCT attestation loader source was already consumed",
+        );
+      }
+      return {
+        format: "module",
+        source: verifiedSource,
+        shortCircuit: true,
+      };
+    },
+  });
+  return {
+    specifier,
+    cleanup: () => {
+      if (!active) return;
+      active = false;
+      pendingSource = undefined;
+      try {
+        hooks.deregister();
+      } catch {
+        // Cleanup must not replace the typed module import result.
+      }
+    },
+  };
+}
+
+async function installVerifiedModule(
+  source: Uint8Array,
+): Promise<InstalledVerifiedModule> {
+  return registerSynchronousHooks === undefined
+    ? installVerifiedModuleWithAsynchronousHooks(source)
+    : installVerifiedModuleWithSynchronousHooks(source);
+}
+
 /**
  * Verifies and imports an OCCT facade runtime in Node.js without writing the
  * verified JavaScript to a temporary file.
  *
- * Node's process-global module hook and evaluated module remain installed for
- * the lifetime of the process. The hook releases its raw source copy after one
- * load. Node's permission model requires worker permission for module hooks.
+ * Node 22.15 and newer use a short-lived synchronous, in-thread hook that is
+ * deregistered after the import settles. Node 22.13 and 22.14 fall back to the
+ * process-global asynchronous hook, which releases its raw source copy after
+ * one load and requires worker permission under Node's permission model.
  */
 export async function loadAttestedOcctRuntime(
   options: LoadAttestedOcctRuntimeOptions,
 ): Promise<AttestedOcctRuntime> {
   const verified = await verifyOcctRuntimeRelease(options);
-  let installed: {
-    readonly id: string;
-    readonly specifier: string;
-  };
+  let installed: InstalledVerifiedModule;
   try {
     installed = await installVerifiedModule(verified.javascript);
   } catch (error) {
@@ -221,17 +296,7 @@ export async function loadAttestedOcctRuntime(
   } catch (error) {
     throw moduleImportFailure(error);
   } finally {
-    if (hookPort !== undefined) {
-      try {
-        hookPort.postMessage({
-          kind: "cancel",
-          id: installed.id,
-          specifier: installed.specifier,
-        });
-      } catch {
-        // Source cleanup is best effort once the hook port itself has failed.
-      }
-    }
+    installed.cleanup();
   }
   return finishLoadingAttestedOcctRuntime(verified, namespace);
 }
