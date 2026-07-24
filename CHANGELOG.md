@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Corrected evaluated-output and standalone mesh-export overloads so literal
+  binary formats infer `Uint8Array` and literal text mesh formats infer
+  `string`; assembly exports now accept only the mesh formats they support.
 - Added declaration-level public API reports for every supported package entry
   point. CI now rejects unreviewed changes to exported signatures while the
   generated export index continues to reject undocumented exported names.

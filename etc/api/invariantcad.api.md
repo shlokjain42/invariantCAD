@@ -383,6 +383,9 @@ export interface BillOfMaterialsItem {
 }
 
 // @public (undocumented)
+export type BinaryShapeExportFormat = "stl" | KernelExchangeFormat;
+
+// @public (undocumented)
 export interface BooleanNodeIR {
     // (undocumented)
     readonly kind: "boolean";
@@ -1801,6 +1804,10 @@ export class EvaluatedAssembly {
     // (undocumented)
     billOfMaterials(): CadResult<BillOfMaterials>;
     // (undocumented)
+    export(format: "stl"): Uint8Array;
+    // (undocumented)
+    export(format: TextShapeExportFormat): string;
+    // (undocumented)
     export(format: ShapeExportFormat): Uint8Array | string;
     // (undocumented)
     readonly instances: readonly EvaluatedOccurrence[];
@@ -1899,6 +1906,10 @@ export class EvaluatedPart extends EvaluatedSolid {
 // @public (undocumented)
 export class EvaluatedSolid {
     constructor(name: string, owner: EvaluationOwner, shape: KernelShape);
+    // (undocumented)
+    export(format: BinaryShapeExportFormat): Uint8Array;
+    // (undocumented)
+    export(format: TextShapeExportFormat): string;
     // (undocumented)
     export(format: ShapeExportFormat): Uint8Array | string;
     // (undocumented)
@@ -2015,6 +2026,12 @@ export function exportAsciiStl(mesh: MeshData, name?: string): string;
 
 // @public (undocumented)
 export function exportBinaryStl(mesh: MeshData, name?: string): Uint8Array;
+
+// @public (undocumented)
+export function exportMesh(mesh: MeshData, format: "stl", name?: string): Uint8Array;
+
+// @public (undocumented)
+export function exportMesh(mesh: MeshData, format: "stl-ascii" | "obj", name?: string): string;
 
 // @public (undocumented)
 export function exportMesh(mesh: MeshData, format: MeshExportFormat, name?: string): Uint8Array | string;
@@ -5089,6 +5106,9 @@ export function tessellateProfile(profile: ResolvedProfile, tolerance?: number):
 
 // @public (undocumented)
 export function tessellateResolvedLoop(loop: ResolvedLoop, tolerance?: number): readonly Vec2[];
+
+// @public (undocumented)
+export type TextShapeExportFormat = Exclude<MeshExportFormat, "stl">;
 
 // @public (undocumented)
 export const tf: {

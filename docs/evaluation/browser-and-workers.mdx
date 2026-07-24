@@ -135,7 +135,7 @@ self.onmessage = async (event) => {
 
   try {
     const stl = result.value.output(event.data.output).export("stl");
-    self.postMessage({ ok: true, stl }, [stl.buffer]);
+    self.postMessage({ ok: true, stl }, { transfer: [stl.buffer] });
   } finally {
     result.value.dispose();
   }

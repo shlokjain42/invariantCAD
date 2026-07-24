@@ -144,6 +144,8 @@ import { parseDocumentValue } from "./serialization.js";
 
 export type ParameterOverride = EvaluationParameterOverride;
 export type ShapeExportFormat = MeshExportFormat | KernelExchangeFormat;
+export type BinaryShapeExportFormat = "stl" | KernelExchangeFormat;
+export type TextShapeExportFormat = Exclude<MeshExportFormat, "stl">;
 
 export const EVALUATOR_PROFILES = Object.freeze([
   "mesh-preview",
@@ -755,6 +757,9 @@ export class EvaluatedSolid {
     }
   }
 
+  export(format: BinaryShapeExportFormat): Uint8Array;
+  export(format: TextShapeExportFormat): string;
+  export(format: ShapeExportFormat): Uint8Array | string;
   export(format: ShapeExportFormat): Uint8Array | string {
     if (
       format === "stl" ||
@@ -1267,6 +1272,9 @@ export class EvaluatedAssembly {
     }
   }
 
+  export(format: "stl"): Uint8Array;
+  export(format: TextShapeExportFormat): string;
+  export(format: ShapeExportFormat): Uint8Array | string;
   export(format: ShapeExportFormat): Uint8Array | string {
     if (
       format !== "stl" &&

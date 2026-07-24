@@ -325,7 +325,9 @@ export {
   type EvaluationOptions,
   type ParameterOverride,
   type MassDensitySource,
+  type BinaryShapeExportFormat,
   type ShapeExportFormat,
+  type TextShapeExportFormat,
   inspectEvaluatorProfile,
 } from "./evaluator.js";
 export type {

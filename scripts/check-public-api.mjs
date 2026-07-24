@@ -45,7 +45,7 @@ if (errorCount > 0) {
   process.exit(1);
 }
 
-if (warningCount > 0) {
+if (check && warningCount > 0) {
   console.error(
     `Public API analysis produced ${warningCount} warning(s); warnings are release-blocking.`,
   );
@@ -54,6 +54,8 @@ if (warningCount > 0) {
 
 console.log(
   update
-    ? `Updated ${configurations.length} public API reports under ${root}etc/api.`
+    ? `Updated ${configurations.length} public API reports under ${root}etc/api${
+        warningCount === 0 ? "." : ` (${warningCount} expected update warning(s)).`
+      }`
     : `Verified ${configurations.length} public API reports.`,
 );

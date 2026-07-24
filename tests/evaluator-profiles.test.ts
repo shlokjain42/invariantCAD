@@ -92,10 +92,13 @@ describe("named evaluator profiles", () => {
       try {
         const output = result.value.output("box");
         expect(output).toBeInstanceOf(EvaluatedSolid);
+        if (!(output instanceof EvaluatedSolid)) {
+          throw new Error("Expected an evaluated solid");
+        }
         expect(output.measure().volume).toBeCloseTo(6_000, 6);
         const step = output.export("step");
         expect(step).toBeInstanceOf(Uint8Array);
-        expect(new TextDecoder().decode(step as Uint8Array)).toContain(
+        expect(new TextDecoder().decode(step)).toContain(
           "ISO-10303-21",
         );
       } finally {
