@@ -35,7 +35,7 @@ import {
 } from "./schema.js";
 import { canonicalizeTopologySelectionIR } from "./topology.js";
 import { normalizePersistentTopologyReference } from "./topology-signatures.js";
-import { validateDocument } from "./validation.js";
+import { validateDocument, validateDocumentV7 } from "./validation.js";
 import {
   normalizeDesignDocumentLimits,
   preflightDesignDocumentValue,
@@ -49,6 +49,10 @@ export interface StringifyOptions {
 export interface ParseDocumentOptions {
   readonly limits?: Partial<DesignDocumentLimits>;
 }
+
+export interface StringifyDocumentV7Options
+  extends StringifyOptions,
+    ParseDocumentOptions {}
 
 function lexicalCompare(first: string, second: string): number {
   return first < second ? -1 : first > second ? 1 : 0;
@@ -80,9 +84,11 @@ function canonicalizeTopologyReferenceEntry(
   };
 }
 
-function canonicalizeDocumentTopology(
-  document: DesignDocument,
-): DesignDocument {
+type SerializableDocument = DesignDocument | DesignDocumentV7;
+
+function canonicalizeDocumentTopology<T extends SerializableDocument>(
+  document: T,
+): T {
   const canonicalDocument = {
     ...document,
     nodes: Object.fromEntries(
@@ -105,14 +111,15 @@ function canonicalizeDocumentTopology(
               }
           : node,
       ]),
-    ) as DesignDocument["nodes"],
-  } as DesignDocument;
+    ) as T["nodes"],
+  } as T;
   if (
     (canonicalDocument.version !== DOCUMENT_VERSION_V2 &&
       canonicalDocument.version !== DOCUMENT_VERSION_V3 &&
       canonicalDocument.version !== DOCUMENT_VERSION_V4 &&
       canonicalDocument.version !== DOCUMENT_VERSION_V5 &&
-      canonicalDocument.version !== DOCUMENT_VERSION_V6) ||
+      canonicalDocument.version !== DOCUMENT_VERSION_V6 &&
+      canonicalDocument.version !== DOCUMENT_VERSION_V7) ||
     canonicalDocument.topologyReferences === undefined
   ) {
     return canonicalDocument;
@@ -125,7 +132,7 @@ function canonicalizeDocumentTopology(
         canonicalizeTopologyReferenceEntry(entry),
       ]),
     ),
-  } as DesignDocument;
+  } as T;
 }
 
 export function stringifyDocument(
@@ -134,6 +141,30 @@ export function stringifyDocument(
 ): string {
   return canonicalStringify(
     canonicalizeDocumentTopology(document),
+    options.pretty ? 2 : undefined,
+  );
+}
+
+/**
+ * Validates, detaches, and canonically serializes an isolated staged v7
+ * document. This is intentionally not re-exported from the package root.
+ */
+export function stringifyDocumentV7(
+  document: DesignDocumentV7,
+  options: StringifyDocumentV7Options = {},
+): string {
+  const parsed = parseDocumentValueV7(
+    document,
+    options.limits === undefined ? {} : { limits: options.limits },
+  );
+  if (!parsed.ok) {
+    throw new TypeError(
+      parsed.diagnostics[0]?.message ??
+        "Cannot serialize an invalid InvariantCAD document-v7 value",
+    );
+  }
+  return canonicalStringify(
+    canonicalizeDocumentTopology(parsed.value),
     options.pretty ? 2 : undefined,
   );
 }
@@ -221,6 +252,42 @@ function parseDocumentValueWithLimits(
   return validateDocument(document);
 }
 
+function parseDocumentValueV7WithLimits(
+  value: unknown,
+  limits: DesignDocumentLimits,
+): CadResult<DesignDocumentV7> {
+  const preflight = preflightDesignDocumentValue(value, limits);
+  if (!preflight.ok) return preflight;
+  let parsed: ReturnType<typeof DesignDocumentV7Schema.safeParse>;
+  try {
+    parsed = DesignDocumentV7Schema.safeParse(preflight.value);
+  } catch (error) {
+    return failure(
+      diagnostic(
+        "IR_INVALID",
+        safeErrorMessage(
+          error,
+          "The document-v7 value could not be parsed safely",
+        ),
+        { severity: "error" },
+      ),
+    );
+  }
+  if (!parsed.success) {
+    return {
+      ok: false,
+      diagnostics: parsed.error.issues.map((issue) =>
+        diagnostic("IR_INVALID", issue.message, {
+          severity: "error",
+          path: `/${issue.path.map(String).join("/")}`,
+          details: { code: issue.code },
+        }),
+      ),
+    };
+  }
+  return validateDocumentV7(deepFreeze(parsed.data) as DesignDocumentV7);
+}
+
 export function parseDocument(
   text: string,
   options: ParseDocumentOptions = {},
@@ -269,6 +336,60 @@ export function parseDocument(
   return parseDocumentValueWithLimits(value, normalizedLimits.value);
 }
 
+/**
+ * Parses only the isolated staged document-v7 grammar. Ordinary parsing stays
+ * frozen on v1-v6 until the complete runtime switch.
+ */
+export function parseDocumentV7(
+  text: string,
+  options: ParseDocumentOptions = {},
+): CadResult<DesignDocumentV7> {
+  const normalizedLimits = parseLimits(options);
+  if (!normalizedLimits.ok) return normalizedLimits;
+  let documentBytes: number;
+  try {
+    documentBytes = new TextEncoder().encode(text).byteLength;
+  } catch (error) {
+    return failure(
+      diagnostic(
+        "IR_INVALID",
+        safeErrorMessage(error, "The document text could not be read safely"),
+        { severity: "error" },
+      ),
+    );
+  }
+  if (documentBytes > normalizedLimits.value.maxDocumentBytes) {
+    return failure(
+      diagnostic(
+        "IR_INVALID",
+        `Design-document maxDocumentBytes limit ${normalizedLimits.value.maxDocumentBytes} was exceeded by ${documentBytes}`,
+        {
+          severity: "error",
+          details: {
+            resource: "maxDocumentBytes",
+            limit: normalizedLimits.value.maxDocumentBytes,
+            actual: documentBytes,
+          },
+        },
+      ),
+    );
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch (error) {
+    return failure(
+      diagnostic("IR_INVALID", "The document is not valid JSON", {
+        severity: "error",
+        details: {
+          error: error instanceof Error ? error.message : String(error),
+        },
+      }),
+    );
+  }
+  return parseDocumentValueV7WithLimits(value, normalizedLimits.value);
+}
+
 export function parseDocumentValue(
   value: unknown,
   options: ParseDocumentOptions = {},
@@ -276,6 +397,17 @@ export function parseDocumentValue(
   const normalizedLimits = parseLimits(options);
   return normalizedLimits.ok
     ? parseDocumentValueWithLimits(value, normalizedLimits.value)
+    : normalizedLimits;
+}
+
+/** Parses a detached value as the isolated staged document-v7 grammar. */
+export function parseDocumentValueV7(
+  value: unknown,
+  options: ParseDocumentOptions = {},
+): CadResult<DesignDocumentV7> {
+  const normalizedLimits = parseLimits(options);
+  return normalizedLimits.ok
+    ? parseDocumentValueV7WithLimits(value, normalizedLimits.value)
     : normalizedLimits;
 }
 
@@ -304,6 +436,21 @@ export function cloneDocument(
   const parsed = parseDocument(stringifyDocument(document), options);
   if (!parsed.ok) {
     throw new TypeError("Cannot clone an invalid InvariantCAD document");
+  }
+  return parsed.value;
+}
+
+/** Returns a detached, deeply frozen clone of a valid staged v7 document. */
+export function cloneDocumentV7(
+  document: DesignDocumentV7,
+  options: ParseDocumentOptions = {},
+): DesignDocumentV7 {
+  const parsed = parseDocumentValueV7(document, options);
+  if (!parsed.ok) {
+    throw new TypeError(
+      parsed.diagnostics[0]?.message ??
+        "Cannot clone an invalid InvariantCAD document-v7 value",
+    );
   }
   return parsed.value;
 }
@@ -433,24 +580,10 @@ export function migrateDocumentToV7(
       ? { topologyReferences: source.topologyReferences }
       : {}),
   };
-  const migrated = DesignDocumentV7Schema.safeParse(candidate);
-  if (!migrated.success) {
-    return {
-      ok: false,
-      diagnostics: migrated.error.issues.map((issue) =>
-        diagnostic("IR_INVALID", issue.message, {
-          severity: "error",
-          path: `/${issue.path.map(String).join("/")}`,
-          details: {
-            code: issue.code,
-            phase: "document-v7-foundation-migration",
-          },
-        }),
-      ),
-    };
-  }
-  return success(
-    deepFreeze(migrated.data) as DesignDocumentV7,
-    parsed.diagnostics,
-  );
+  const migrated = parseDocumentValueV7(candidate, options);
+  if (!migrated.ok) return migrated;
+  return success(migrated.value, [
+    ...parsed.diagnostics,
+    ...migrated.diagnostics,
+  ]);
 }

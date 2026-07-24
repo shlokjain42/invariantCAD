@@ -15,6 +15,9 @@ export interface DesignDocumentLimits {
   readonly maxStoredAdjacencyLinks: number;
   readonly maxStoredEvidenceRecords: number;
   readonly maxTopologyQueryNodes: number;
+  readonly maxResourceDefinitions: number;
+  readonly maxResourceLocations: number;
+  readonly maxResourceLocationBytes: number;
 }
 
 export const DEFAULT_DESIGN_DOCUMENT_LIMITS: DesignDocumentLimits =
@@ -27,6 +30,9 @@ export const DEFAULT_DESIGN_DOCUMENT_LIMITS: DesignDocumentLimits =
     maxStoredAdjacencyLinks: 1_000_000,
     maxStoredEvidenceRecords: 1_000_000,
     maxTopologyQueryNodes: 100_000,
+    maxResourceDefinitions: 10_000,
+    maxResourceLocations: 100_000,
+    maxResourceLocationBytes: 16 * 1024 * 1024,
   });
 
 const LIMIT_KEYS = Object.freeze(
@@ -425,6 +431,86 @@ function checkTopologyReferenceResources(
   }
 }
 
+function utf8ByteLength(value: string): number {
+  let bytes = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit <= 0x7f) {
+      bytes += 1;
+    } else if (codeUnit <= 0x7ff) {
+      bytes += 2;
+    } else if (
+      codeUnit >= 0xd800 &&
+      codeUnit <= 0xdbff &&
+      index + 1 < value.length
+    ) {
+      const trailing = value.charCodeAt(index + 1);
+      if (trailing >= 0xdc00 && trailing <= 0xdfff) {
+        bytes += 4;
+        index += 1;
+      } else {
+        bytes += 3;
+      }
+    } else {
+      bytes += 3;
+    }
+  }
+  return bytes;
+}
+
+function checkResourceDefinitionResources(
+  value: unknown,
+  limits: DesignDocumentLimits,
+): void {
+  const root = record(value);
+  // Resource registries are staged document-v7 grammar. Version-gating these
+  // checks preserves the frozen diagnostic order and behavior of v1-v6.
+  if (root?.version !== 7) return;
+  const resources = record(root.resources);
+  if (resources === undefined) return;
+  const resourceIds = Object.keys(resources);
+  if (resourceIds.length > limits.maxResourceDefinitions) {
+    stopAtLimit(
+      "maxResourceDefinitions",
+      limits.maxResourceDefinitions,
+      resourceIds.length,
+    );
+  }
+  let locations = 0;
+  let locationBytes = 0;
+  for (const id of resourceIds) {
+    const definition = record(resources[id]);
+    const definitionLocations = definition?.locations;
+    const locationCount = arrayLength(definitionLocations);
+    if (
+      locationCount === undefined ||
+      !Array.isArray(definitionLocations)
+    ) {
+      continue;
+    }
+    locations += locationCount;
+    if (locations > limits.maxResourceLocations) {
+      stopAtLimit(
+        "maxResourceLocations",
+        limits.maxResourceLocations,
+        locations,
+      );
+    }
+    for (let index = 0; index < locationCount; index += 1) {
+      const location = definitionLocations[index];
+      if (typeof location !== "string") continue;
+      locationBytes += utf8ByteLength(location);
+      if (locationBytes > limits.maxResourceLocationBytes) {
+        stopAtLimit(
+          "maxResourceLocationBytes",
+          limits.maxResourceLocationBytes,
+          locationBytes,
+        );
+      }
+    }
+  }
+}
+
 /**
  * Detaches and bounds untrusted document structure before recursive schemas or
  * freezing can consume it. The returned plain snapshot is the value that must
@@ -439,6 +525,7 @@ export function preflightDesignDocumentValue(
     checkStructuralOccurrences(snapshot, limits);
     checkTopologyQueryOccurrences(snapshot, limits);
     checkTopologyReferenceResources(snapshot, limits);
+    checkResourceDefinitionResources(snapshot, limits);
     return success(snapshot);
   } catch (error) {
     if (error instanceof DocumentPreflightFailure) return error.result;

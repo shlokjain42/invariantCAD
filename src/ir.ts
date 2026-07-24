@@ -1733,6 +1733,87 @@ export function nodeParameterDependencies(
   return Object.freeze([...output].sort());
 }
 
+/**
+ * V7 counterpart to `nodeParameterDependencies`.
+ *
+ * This stays separate from the current helper so adding the staged datum,
+ * body-set, import, and occurrence grammar cannot widen current consumers.
+ */
+export function nodeParameterDependenciesV7(
+  node: NodeIRV7,
+): readonly ParameterId[] {
+  const output = new Set<ParameterId>();
+  switch (node.kind) {
+    case "sketch":
+      if (node.plane.type === "principal") {
+        collectVecParameterDependencies(node.plane.origin, output);
+      }
+      for (const entity of Object.values(node.entities)) {
+        collectSketchEntityParameterDependencies(entity, output);
+      }
+      for (const constraint of Object.values(node.constraints)) {
+        collectSketchConstraintParameterDependencies(constraint, output);
+      }
+      break;
+    case "datumPoint":
+      collectVecParameterDependencies(node.position, output);
+      break;
+    case "datumAxis":
+      collectVecParameterDependencies(node.origin, output);
+      collectVecParameterDependencies(node.direction, output);
+      break;
+    case "datumPlane":
+      collectVecParameterDependencies(node.origin, output);
+      collectVecParameterDependencies(node.xDirection, output);
+      collectVecParameterDependencies(node.normal, output);
+      break;
+    case "coordinateSystem":
+      collectVecParameterDependencies(node.origin, output);
+      collectVecParameterDependencies(node.xDirection, output);
+      collectVecParameterDependencies(node.yDirection, output);
+      break;
+    case "bodySet":
+    case "importedBody":
+      break;
+    case "part":
+      if (node.massDensity !== undefined) {
+        expressionDependencies(node.massDensity, output);
+      }
+      break;
+    case "assembly":
+      for (const instance of node.instances) {
+        for (const operation of instance.placement) {
+          collectTransformParameterDependencies(operation, output);
+        }
+      }
+      break;
+    case "box":
+    case "cylinder":
+    case "sphere":
+    case "polylinePath":
+    case "circularArcPath":
+    case "compositePath":
+    case "extrude":
+    case "revolve":
+    case "loft":
+    case "sweep":
+    case "boolean":
+    case "transform":
+    case "fillet":
+    case "chamfer":
+    case "shell":
+    case "offset":
+    case "draft":
+      for (const dependency of nodeParameterDependencies(node)) {
+        output.add(dependency);
+      }
+      break;
+    default:
+      return unreachableIrVariant(node, "document-v7 node");
+  }
+  return Object.freeze([...output].sort());
+}
+
 export function nodeDependencies(node: NodeIR): readonly RefIR[] {
   switch (node.kind) {
     case "box":
@@ -1767,6 +1848,122 @@ export function nodeDependencies(node: NodeIR): readonly RefIR[] {
   }
 }
 
+/**
+ * Returns local feature-graph dependencies for the staged v7 grammar.
+ *
+ * External document resources are intentionally excluded; callers that need
+ * those commitments must also use `nodeResourceDependenciesV7`.
+ */
+export function nodeDependenciesV7(node: NodeIRV7): readonly RefIRV7[] {
+  let dependencies: readonly RefIRV7[];
+  switch (node.kind) {
+    case "box":
+    case "cylinder":
+    case "sphere":
+    case "polylinePath":
+    case "circularArcPath":
+    case "compositePath":
+    case "datumPoint":
+    case "datumAxis":
+    case "datumPlane":
+    case "coordinateSystem":
+    case "importedBody":
+      dependencies = [];
+      break;
+    case "sketch":
+      dependencies =
+        node.plane.type === "datum" ? [node.plane.datum] : [];
+      break;
+    case "extrude":
+    case "revolve":
+      dependencies = [node.profile];
+      break;
+    case "loft":
+      dependencies = node.profiles;
+      break;
+    case "sweep":
+      dependencies = [node.profile, node.path];
+      break;
+    case "boolean":
+      dependencies = [node.target, ...node.tools];
+      break;
+    case "transform":
+      dependencies = [node.input];
+      break;
+    case "fillet":
+    case "chamfer":
+    case "shell":
+    case "offset":
+    case "draft":
+      dependencies = [node.input];
+      break;
+    case "bodySet":
+      dependencies = node.bodies.map((body) => body.solid);
+      break;
+    case "part":
+      dependencies = [node.geometry];
+      break;
+    case "assembly":
+      dependencies = node.instances.flatMap((instance) =>
+        instance.component.source === "local"
+          ? [instance.component.reference]
+          : [],
+      );
+      break;
+    default:
+      return unreachableIrVariant(node, "document-v7 node");
+  }
+  return Object.freeze([...dependencies]);
+}
+
+/** Returns sorted, unique document resources owned by a staged v7 node. */
+export function nodeResourceDependenciesV7(
+  node: NodeIRV7,
+): readonly ResourceId[] {
+  let dependencies: readonly ResourceId[];
+  switch (node.kind) {
+    case "importedBody":
+      dependencies = [node.resource];
+      break;
+    case "assembly":
+      dependencies = node.instances.flatMap((instance) =>
+        instance.component.source === "external"
+          ? [instance.component.resource]
+          : [],
+      );
+      break;
+    case "box":
+    case "cylinder":
+    case "sphere":
+    case "sketch":
+    case "polylinePath":
+    case "circularArcPath":
+    case "compositePath":
+    case "extrude":
+    case "revolve":
+    case "loft":
+    case "sweep":
+    case "boolean":
+    case "transform":
+    case "fillet":
+    case "chamfer":
+    case "shell":
+    case "offset":
+    case "draft":
+    case "part":
+    case "datumPoint":
+    case "datumAxis":
+    case "datumPlane":
+    case "coordinateSystem":
+    case "bodySet":
+      dependencies = [];
+      break;
+    default:
+      return unreachableIrVariant(node, "document-v7 node");
+  }
+  return Object.freeze([...new Set(dependencies)].sort());
+}
+
 export function outputKindForNode(node: NodeIR): OutputKind {
   switch (node.kind) {
     case "sketch":
@@ -1781,5 +1978,49 @@ export function outputKindForNode(node: NodeIR): OutputKind {
       return "assembly";
     default:
       return "solid";
+  }
+}
+
+/** Returns the exact output kind produced by a staged v7 node. */
+export function outputKindForNodeV7(node: NodeIRV7): OutputKindV7 {
+  switch (node.kind) {
+    case "sketch":
+      return "profile";
+    case "polylinePath":
+    case "circularArcPath":
+    case "compositePath":
+      return "path";
+    case "datumPoint":
+      return "datumPoint";
+    case "datumAxis":
+      return "datumAxis";
+    case "datumPlane":
+      return "datumPlane";
+    case "coordinateSystem":
+      return "coordinateSystem";
+    case "bodySet":
+      return "bodySet";
+    case "part":
+      return "part";
+    case "assembly":
+      return "assembly";
+    case "box":
+    case "cylinder":
+    case "sphere":
+    case "extrude":
+    case "revolve":
+    case "loft":
+    case "sweep":
+    case "boolean":
+    case "transform":
+    case "fillet":
+    case "chamfer":
+    case "shell":
+    case "offset":
+    case "draft":
+    case "importedBody":
+      return "solid";
+    default:
+      return unreachableIrVariant(node, "document-v7 node");
   }
 }
