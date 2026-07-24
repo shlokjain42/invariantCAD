@@ -37,6 +37,11 @@ clean-consumer installation, checked coverage, the complete six-case reference
 benchmark, dependency audit, Mintlify validation and links, and the production
 browser bundle.
 
+The publication job uses Node.js 24 because the pinned Mint CLI accepts Node
+20.17 through 24 and rejects Node 25 and newer. Independent CI continues to
+gate InvariantCAD on Node 26, so this tooling ceiling is not a package runtime
+ceiling.
+
 ## One-time npm bootstrap
 
 The one-time bootstrap completed with `invariantcad@0.1.0` on 2026-07-22.
