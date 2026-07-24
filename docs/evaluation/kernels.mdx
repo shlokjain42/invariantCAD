@@ -26,6 +26,7 @@ and deployment needs.
 
 ```ts
 const evaluator = await createEvaluator();
+const gatedPreview = await createEvaluator({ profile: "mesh-preview" });
 ```
 
 Choose Manifold for fast, robust mesh-first workflows, ordinary parametric
@@ -35,13 +36,25 @@ extrusion, which the exact backend does not currently advertise.
 ## Stock OpenCascade
 
 ```ts
-const kernel = await createOcctKernel();
-const evaluator = await createEvaluator({ kernel });
+const evaluator = await createEvaluator({ profile: "mechanical-exact" });
 ```
 
 Choose stock OCCT for analytic B-Rep geometry, topology snapshots, exact bounded
 lofts/sweeps, fillets/chamfers/shells/offsets, and STEP/BREP exchange. Stock
 history for several complex features remains partial.
+
+The profile is stronger than checking `representation === "brep"`: creation
+also requires the documented primitive and feature baseline, native exchange
+methods, exactness, and face/edge/vertex topology. For custom loading, create
+the kernel explicitly and request the same preflight:
+
+```ts
+const kernel = await createOcctKernel({ wasm: customWasmSource });
+const evaluator = await createEvaluator({
+  profile: "mechanical-exact",
+  kernel,
+});
+```
 
 ## Owned OCCT facade
 
@@ -69,17 +82,36 @@ feature, it checks:
 - primitive or feature name
 - exact composite-sweep refinements
 - native import/export format
+- strong single-body import format and unit mode
 - topology evidence surfaces and signature fingerprint
 - exact indexed topology evolution when a stronger contract is required
 
 Malformed metadata fails separately from absent support. A kernel cannot obtain
 behavior merely by defining an unadvertised method.
 
+`nativeImports` is the weak exchange declaration. Document-backed imported
+bodies require the separate versioned `documentBodyImport` envelope and a
+callable `importDocumentBody(...)` method. Stock OCCT currently makes only
+these stronger promises:
+
+| Format | Unit mode | Strong result |
+| --- | --- | --- |
+| STEP | `from-file` | One valid positive solid, using the file's units |
+| Text BREP | `declared` | One valid positive solid, scaled from the declared unit |
+| Binary BREP | `declared` | One valid positive solid, scaled from the declared unit |
+
+The strong path rejects multiple solids, shells, and wrappers containing loose
+topology. It unwraps a pure one-solid compound, normalizes reversed orientation,
+uses fatal UTF-8 for text BREP, and releases provisional native handles on
+failure or cancellation. It does not claim healing, assembly import, stable
+feature lineage, or containment of an untrusted native parser.
+
 ## Do not equate these guarantees
 
 - A B-Rep kernel is not automatically exact for every authored feature.
 - Construction support does not imply complete topology history.
 - STEP/BREP exchange does not imply safe backend-owned shape artifact caching.
+- Weak native import does not imply the strong document-body import contract.
 - A topology snapshot does not imply persistent signature support.
 - Successful tessellation does not make mesh coordinates analytically exact.
 

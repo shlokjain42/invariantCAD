@@ -16,27 +16,33 @@ Before creating a tag:
 
 1. move shipped changes from `Unreleased` into a dated changelog section;
 2. set the same version in `package.json` and the release notes;
-3. run `pnpm release:check`;
-4. run `pnpm coverage` and review material regressions;
-5. inspect `pnpm pack --dry-run` for secrets, local artifacts, and omissions;
-6. push the release commit and wait for every required GitHub check to pass;
+3. review the committed `etc/api/` diff against the previous release;
+4. run `pnpm release:check`;
+5. review the checked coverage report and all six kernel/model reference
+   benchmark results emitted by that command;
+6. inspect `pnpm pack --dry-run` for secrets, local artifacts, and omissions;
+7. push the release commit and wait for every required GitHub check to pass;
    and
-7. create the annotated `v<package-version>` tag from that exact commit.
+8. create the annotated `v<package-version>` tag from that exact commit.
 
-The release workflow independently installs from the frozen lockfile, checks
-that the tag and package version match, reruns the full package and Chromium
-acceptance suite, and publishes from a GitHub-hosted runner with provenance.
-The acceptance suite includes strict TypeScript, source correctness and format
-hygiene, package metadata/types, clean-consumer installation, dependency audit,
-Mintlify validation and links, and the production browser bundle.
+The release workflow serializes publication attempts and independently installs
+from the frozen lockfile after a full-history checkout. Before acceptance or
+publication, it proves that the dispatch ref is the exact annotated
+`v<package-version>` tag, that the tag points at the checked-out commit, and
+that the commit is contained in `origin/main`. It then reruns the full
+acceptance suite and publishes from a GitHub-hosted runner with provenance.
+The suite includes strict TypeScript, source correctness and format hygiene,
+public-entrypoint and API-report consistency, package metadata/types,
+clean-consumer installation, checked coverage, the complete six-case reference
+benchmark, dependency audit, Mintlify validation and links, and the production
+browser bundle.
 
 ## One-time npm bootstrap
 
 The one-time bootstrap completed with `invariantcad@0.1.0` on 2026-07-22.
 The public registry artifact, provenance, owner, files, CLI, entry points,
-geometry kernels, and `latest` tag were independently verified. The temporary
-`NPM_TOKEN` GitHub environment secret was then deleted, and the release
-workflow no longer reads a registry token.
+geometry kernels, and `latest` tag were independently verified. The release
+workflow does not read or require a registry token.
 
 Never commit an npm token or copy it into a workflow file, shell history, issue,
 release note, or CI log. The npm-side bootstrap token must also be revoked.
@@ -64,12 +70,13 @@ do not restore a long-lived publish secret.
 
 Dispatch the workflow on the tag, never on a branch:
 
-    gh workflow run release.yml --ref v0.1.0
+    VERSION="$(node -p 'require("./package.json").version')"
+    gh workflow run release.yml --ref "v${VERSION}"
 
 After it succeeds, verify independently:
 
-    npm view invariantcad@0.1.0 version dist-tags repository --json
-    npm pack invariantcad@0.1.0 --dry-run
+    npm view "invariantcad@${VERSION}" version dist-tags repository --json
+    npm pack "invariantcad@${VERSION}" --dry-run
 
 Install the registry artifact into an empty temporary project and exercise its
 ESM entry points and CLI. Only then publish the GitHub release using the body of

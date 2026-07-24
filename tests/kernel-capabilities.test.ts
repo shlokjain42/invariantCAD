@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   COMPOSITE_SWEEP_REFINEMENT_PROTOCOL_VERSION,
+  KERNEL_DOCUMENT_BODY_IMPORT_PROTOCOL_VERSION,
   createEvaluator,
   createManifoldKernel,
   design,
   inspectKernelCompositeSweepCapabilities,
+  inspectKernelDocumentBodyImportCapabilities,
   kernelSupports,
+  kernelSupportsDocumentBodyImport,
   mm,
   type GeometryKernel,
   type KernelCapabilities,
@@ -128,6 +131,173 @@ describe("kernel capability negotiation", () => {
             : { details: expect.objectContaining(testCase.details) }),
         }),
       );
+    }
+  });
+
+  it("validates strong document-body import metadata and snapshots it", () => {
+    const base: KernelCapabilities = {
+      protocolVersion: 1,
+      representation: "brep",
+      exact: true,
+      primitives: [],
+      features: [],
+      nativeImports: [],
+      nativeExports: [],
+    };
+    expect(inspectKernelDocumentBodyImportCapabilities(base)).toEqual({
+      status: "absent",
+    });
+
+    const unitModes = ["declared"] as ("declared" | "from-file")[];
+    const valid = inspectKernelDocumentBodyImportCapabilities({
+      ...base,
+      documentBodyImport: {
+        protocolVersion: KERNEL_DOCUMENT_BODY_IMPORT_PROTOCOL_VERSION,
+        formats: [{ format: "brep", unitModes }],
+      },
+    });
+    expect(valid).toEqual({
+      status: "valid",
+      capabilities: {
+        protocolVersion: KERNEL_DOCUMENT_BODY_IMPORT_PROTOCOL_VERSION,
+        formats: [{ format: "brep", unitModes: ["declared"] }],
+      },
+    });
+    expect(valid.status === "valid" && Object.isFrozen(valid.capabilities)).toBe(
+      true,
+    );
+    expect(
+      valid.status === "valid" &&
+        Object.isFrozen(valid.capabilities.formats),
+    ).toBe(true);
+    expect(
+      valid.status === "valid" &&
+        Object.isFrozen(valid.capabilities.formats[0]?.unitModes),
+    ).toBe(true);
+    unitModes.push("from-file");
+    expect(
+      valid.status === "valid"
+        ? valid.capabilities.formats[0]?.unitModes
+        : [],
+    ).toEqual(["declared"]);
+    if (valid.status !== "valid") {
+      throw new Error("Expected valid document-body import capabilities");
+    }
+    const capable: KernelCapabilities = {
+      ...base,
+      documentBodyImport: valid.capabilities,
+    };
+    expect(
+      kernelSupportsDocumentBodyImport(
+        capable,
+        "brep",
+        "declared",
+      ),
+    ).toBe(true);
+    expect(
+      kernelSupportsDocumentBodyImport(
+        capable,
+        "brep",
+        "from-file",
+      ),
+    ).toBe(false);
+
+    const sparseFormats = new Array(1);
+    const sparseModes = new Array(1);
+    const malformedCases: readonly {
+      readonly envelope: unknown;
+      readonly reason: string;
+    }[] = [
+      { envelope: null, reason: "not-object" },
+      {
+        envelope: { protocolVersion: 2, formats: [] },
+        reason: "unsupported-protocol-version",
+      },
+      {
+        envelope: {
+          protocolVersion: KERNEL_DOCUMENT_BODY_IMPORT_PROTOCOL_VERSION,
+          formats: "brep",
+        },
+        reason: "formats-not-array",
+      },
+      {
+        envelope: {
+          protocolVersion: KERNEL_DOCUMENT_BODY_IMPORT_PROTOCOL_VERSION,
+          formats: sparseFormats,
+        },
+        reason: "invalid-format-entry",
+      },
+      {
+        envelope: {
+          protocolVersion: KERNEL_DOCUMENT_BODY_IMPORT_PROTOCOL_VERSION,
+          formats: [{ format: "iges", unitModes: ["declared"] }],
+        },
+        reason: "unknown-format",
+      },
+      {
+        envelope: {
+          protocolVersion: KERNEL_DOCUMENT_BODY_IMPORT_PROTOCOL_VERSION,
+          formats: [
+            { format: "brep", unitModes: ["declared"] },
+            { format: "brep", unitModes: ["declared"] },
+          ],
+        },
+        reason: "duplicate-format",
+      },
+      {
+        envelope: {
+          protocolVersion: KERNEL_DOCUMENT_BODY_IMPORT_PROTOCOL_VERSION,
+          formats: [{ format: "brep", unitModes: "declared" }],
+        },
+        reason: "unit-modes-not-array",
+      },
+      {
+        envelope: {
+          protocolVersion: KERNEL_DOCUMENT_BODY_IMPORT_PROTOCOL_VERSION,
+          formats: [{ format: "brep", unitModes: [] }],
+        },
+        reason: "empty-unit-modes",
+      },
+      {
+        envelope: {
+          protocolVersion: KERNEL_DOCUMENT_BODY_IMPORT_PROTOCOL_VERSION,
+          formats: [{ format: "brep", unitModes: sparseModes }],
+        },
+        reason: "invalid-unit-mode",
+      },
+      {
+        envelope: {
+          protocolVersion: KERNEL_DOCUMENT_BODY_IMPORT_PROTOCOL_VERSION,
+          formats: [{ format: "brep", unitModes: ["future"] }],
+        },
+        reason: "invalid-unit-mode",
+      },
+      {
+        envelope: {
+          protocolVersion: KERNEL_DOCUMENT_BODY_IMPORT_PROTOCOL_VERSION,
+          formats: [
+            { format: "brep", unitModes: ["declared", "declared"] },
+          ],
+        },
+        reason: "duplicate-unit-mode",
+      },
+    ];
+    for (const testCase of malformedCases) {
+      const capabilities = {
+        ...base,
+        documentBodyImport: testCase.envelope,
+      } as unknown as KernelCapabilities;
+      expect(
+        inspectKernelDocumentBodyImportCapabilities(capabilities),
+      ).toEqual(
+        expect.objectContaining({
+          status: "malformed",
+          reason: testCase.reason,
+        }),
+      );
+      expect(
+        kernelSupportsDocumentBodyImport(capabilities, "brep", "declared"),
+      ).toBe(false);
     }
   });
 

@@ -32,11 +32,14 @@ pnpm test           # unit/integration suite
 pnpm test:browser   # production Vite bundle in Chromium
 pnpm lint:package   # package export/type lint
 pnpm test:package   # packed clean-consumer smoke
-pnpm release:check  # complete release gate
+pnpm api:entrypoints:check # export/source/report/target manifest
+pnpm release:check  # full gate, including coverage + six benchmarks
 ```
 
 Run the smallest relevant loop while developing, then the proportional full
-gate before handing off a change.
+gate before handing off a change. `release:check` is the canonical release
+acceptance command; coverage and the complete reference benchmark corpus are
+part of it rather than optional follow-up steps.
 
 The canonical [support policy](https://github.com/shlokjain42/invariantCAD/blob/main/SUPPORT.md),
 [governance model](https://github.com/shlokjain42/invariantCAD/blob/main/GOVERNANCE.md),
@@ -63,6 +66,27 @@ history, failure rollback, resource ceilings, and disposal.
 The Mintlify source lives in `/docs`. Every navigated page needs `title` and
 `description` frontmatter. Keep examples compilable, distinguish tested from
 planned behavior, and link to one canonical support matrix.
+
+Selected complete fences are synchronized from strict TypeScript regions under
+`examples/docs/`. The
+[`manifest.json`](https://github.com/shlokjain42/invariantCAD/blob/main/examples/docs/manifest.json)
+lists every canonical TypeScript module, the public workflows it covers, and
+each synchronized placement. Edit the canonical source rather than content
+between `docs-example` markers, then run `pnpm docs:generate`.
+
+`pnpm docs:check` verifies exact synchronization, manifest-complete TypeScript
+coverage, and source-mapped public imports without starting native runtimes.
+`pnpm test:docs-examples` independently checks that no canonical module is
+missing from the manifest, imports every listed module, runs its Manifold or
+OCCT workflow, and requires all named behavioral checks to pass.
+
+The current executable matrix covers portable parametric modeling and STL,
+sketch/extrude plus exact STEP, fixed assemblies with configurations and BOMs,
+canonical document migration and hashing, persistent topology
+capture/resolution/explanation, and bounded parsing with structured
+diagnostics. Unmarked fences are intentionally illustrative fragments: keep
+them accurate and type-aligned, but do not imply that they are independently
+compiled or executed.
 
 ## Security reports
 

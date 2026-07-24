@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   COMPOSITE_SWEEP_REFINEMENT_PROTOCOL_VERSION,
+  inspectKernelDocumentBodyImportCapabilities,
   inspectKernelShapeArtifactSupport,
   kernelSupports,
+  kernelSupportsDocumentBodyImport,
   momentOfInertiaAboutAxis,
   principalInertia,
   principalRadiiOfGyration,
@@ -251,6 +253,28 @@ export function geometryKernelConformance(
               refinement,
             ),
           ).toBe(true);
+        }
+      }
+      const documentBodyImport =
+        inspectKernelDocumentBodyImportCapabilities(kernel.capabilities);
+      expect(documentBodyImport.status).not.toBe("malformed");
+      if (documentBodyImport.status === "valid") {
+        expect(kernel.importDocumentBody).toBeTypeOf("function");
+        const formats = documentBodyImport.capabilities.formats;
+        expect(new Set(formats.map((entry) => entry.format)).size).toBe(
+          formats.length,
+        );
+        for (const entry of formats) {
+          expect(new Set(entry.unitModes).size).toBe(entry.unitModes.length);
+          for (const mode of entry.unitModes) {
+            expect(
+              kernelSupportsDocumentBodyImport(
+                kernel.capabilities,
+                entry.format,
+                mode,
+              ),
+            ).toBe(true);
+          }
         }
       }
       if (kernelSupports(kernel.capabilities, "feature", "draft")) {

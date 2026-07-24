@@ -14,8 +14,26 @@ owned outputs.
 const evaluator = await createEvaluator();
 ```
 
-The default uses the bundled Manifold kernel and built-in reference sketch
-solver. Both boundaries can be replaced:
+The default preserves the original behavior: it uses the bundled Manifold
+kernel and built-in reference sketch solver. Named profiles add a complete
+creation-time runtime gate:
+
+```ts
+const preview = await createEvaluator({ profile: "mesh-preview" });
+const exact = await createEvaluator({ profile: "mechanical-exact" });
+```
+
+`mesh-preview` creates Manifold and requires its common mesh-modeling baseline.
+`mechanical-exact` creates stock OCCT and requires exact B-Rep, the common exact
+feature set, STEP/BREP import and export, and face/edge/vertex topology. A
+supplied custom kernel is checked against the same profile before an evaluator
+is returned.
+
+Use `inspectEvaluatorProfile(kernel, profile)` when an application needs to
+show missing capabilities without attempting evaluator creation. The returned
+report is immutable and contains stable capability paths.
+
+Both kernel and solver boundaries can still be replaced:
 
 ```ts
 const evaluator = await createEvaluator({
@@ -26,6 +44,10 @@ const evaluator = await createEvaluator({
 
 If you supply a kernel or solver, the evaluator takes ownership of it and
 disposes it when `evaluator.dispose()` is called.
+
+If a supplied kernel fails profile preflight, no evaluator takes ownership and
+the caller remains responsible for disposing that kernel. A profile-created
+kernel is disposed automatically if creation fails.
 
 ## Evaluation options
 

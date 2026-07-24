@@ -3,7 +3,7 @@
 This directory is the source root for the public Mintlify documentation site.
 It is also included in the npm package for offline reading.
 
-Public site: <https://invariant-cad.mintlify.app>
+Public site: <https://invariant-cad.mintlify.site>
 
 ## Start here
 
@@ -11,6 +11,7 @@ Public site: <https://invariant-cad.mintlify.app>
 - [Installation](get-started/installation.mdx)
 - [Quickstart](get-started/quickstart.mdx)
 - [Core concepts](get-started/core-concepts.mdx)
+- [Product scope](project/product-scope.mdx)
 - [0.1 support matrix](reference/support-matrix.mdx)
 - [Complete single-page 0.1 guide](reference/complete-guide.md)
 - [Release process](releasing.md)
@@ -26,7 +27,10 @@ Public site: <https://invariant-cad.mintlify.app>
   complete legacy guide.
 - Root specifications preserve the normative architecture, topology torture,
   artifact-conformance, and roadmap contracts.
-- `project/` contains public security and contribution guidance.
+- `project/` contains product scope, public security, and contribution
+  guidance.
+- `engineering/` records repository-internal research boundaries that are
+  useful to contributors but are not public product capabilities.
 
 `docs.json` defines the hosted navigation, branding, and metadata. Mintlify
 should be connected to this repository as a monorepo with `/docs` as the

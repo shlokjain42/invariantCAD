@@ -1,7 +1,7 @@
 # InvariantCAD
 
 [![CI](https://github.com/shlokjain42/invariantCAD/actions/workflows/ci.yml/badge.svg)](https://github.com/shlokjain42/invariantCAD/actions/workflows/ci.yml)
-[![Documentation](https://img.shields.io/badge/docs-Mintlify-2563EB.svg)](https://invariant-cad.mintlify.app)
+[![Documentation](https://img.shields.io/badge/docs-Mintlify-2563EB.svg)](https://invariant-cad.mintlify.site)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 
 Comprehensive, type-safe CAD-as-code for TypeScript.
@@ -40,6 +40,8 @@ Bun can consume the package as well; pnpm is used for repository development.
 
 ## Quick start
 
+<!-- docs-example:start parametric-box-default -->
+
 ```ts
 import { createEvaluator, design, mm, vec3 } from "invariantcad";
 
@@ -52,29 +54,44 @@ const body = cad.box("body", {
 });
 cad.output("body", body);
 
-const evaluator = await createEvaluator();
-try {
-  const result = await evaluator.evaluate(cad.build(), {
-    parameters: { width: 60 },
-  });
-  if (!result.ok) {
-    throw new Error(result.diagnostics.map((item) => item.message).join("\n"));
-  }
-
+async function evaluateParametricBox() {
+  const evaluator = await createEvaluator();
   try {
-    const output = result.value.output("body");
-    console.log(output.measure());
-    const stl = output.export("stl"); // Uint8Array
+    const result = await evaluator.evaluate(cad.build(), {
+      parameters: { width: 60 },
+      outputs: ["body"],
+    });
+    if (!result.ok) {
+      throw new Error(
+        result.diagnostics.map((item) => item.message).join("\n"),
+      );
+    }
+
+    try {
+      const output = result.value.output("body");
+      return {
+        volume: output.measure().volume,
+        stlBytes: output.export("stl").byteLength,
+      };
+    } finally {
+      result.value.dispose();
+    }
   } finally {
-    result.value.dispose();
+    evaluator.dispose();
   }
-} finally {
-  evaluator.dispose();
 }
+
+export const parametricBoxSummary = await evaluateParametricBox();
+console.log(parametricBoxSummary);
 ```
 
-The default evaluator uses the bundled Manifold runtime. Every evaluated design
-and evaluator owns native resources, so dispose them as shown.
+<!-- docs-example:end parametric-box-default -->
+
+The default evaluator uses the bundled Manifold runtime. Pass
+`profile: "mesh-preview"` when that mesh contract must be checked explicitly,
+or `profile: "mechanical-exact"` to load stock OCCT and verify the complete
+exact-mechanical baseline before creation succeeds. Every evaluated design and
+evaluator owns native resources, so use the `finally` boundaries shown above.
 
 ## Geometry backends
 
@@ -83,19 +100,15 @@ and evaluator owns native resources, so dispose them as shown.
 | Manifold | Watertight triangle mesh | Fast default modeling and STL/OBJ workflows | STL, ASCII STL, OBJ |
 | OpenCascade | Exact B-Rep | Analytic geometry, topology, STEP, and BREP workflows | STL, OBJ, STEP, BREP |
 
-Select the exact backend explicitly:
+Use `createEvaluator({ profile: "mechanical-exact" })` for the supported stock
+OCCT baseline. The
+[mounting-plate quickstart](docs/get-started/quickstart.mdx) shows complete
+default and exact lifecycles, including STEP export and the caller-owned-kernel
+failure path.
 
-```ts
-import { createEvaluator } from "invariantcad";
-import { createOcctKernel } from "invariantcad/kernels/occt";
-
-const evaluator = await createEvaluator({
-  kernel: await createOcctKernel(),
-});
-```
-
-See the [kernel guide](docs/evaluation/kernels.mdx) for the complete capability
-and deployment differences.
+Pass an explicit kernel when custom OCCT loading, an owned runtime, or another
+backend is required. See the [kernel guide](docs/evaluation/kernels.mdx) for the
+complete capability and deployment differences.
 
 ## Capability snapshot
 
@@ -128,7 +141,7 @@ overrides, output selection, formats, and exit behavior.
 
 ## Documentation
 
-Read the [hosted documentation](https://invariant-cad.mintlify.app), or browse
+Read the [hosted documentation](https://invariant-cad.mintlify.site), or browse
 its versioned source under [`docs/`](docs/README.md):
 
 - [Installation](docs/get-started/installation.mdx)
@@ -175,10 +188,12 @@ pnpm release:check
 ```
 
 `release:check` builds the package, runs the complete Node test suite, validates
-source correctness and format hygiene, validates package exports, installs the
-packed tarball into a clean consumer, validates the Mintlify site and links,
-audits production and development dependencies, and executes the production
-browser bundle in Chromium.
+source correctness and format hygiene, locks every JavaScript export to its
+source, declaration, API report, and package target, installs the packed tarball
+into a clean consumer, measures checked coverage, executes all six kernel/model
+reference benchmarks, validates the Mintlify site and links, audits production
+and development dependencies, and executes the production browser bundle in
+Chromium.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) before submitting a change. Project
 support and decision-making are documented in [SUPPORT.md](SUPPORT.md) and

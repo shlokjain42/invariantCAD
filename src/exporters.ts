@@ -96,6 +96,21 @@ export function exportObj(mesh: MeshData, name = "InvariantCAD"): string {
 
 export function exportMesh(
   mesh: MeshData,
+  format: "stl",
+  name?: string,
+): Uint8Array;
+export function exportMesh(
+  mesh: MeshData,
+  format: "stl-ascii" | "obj",
+  name?: string,
+): string;
+export function exportMesh(
+  mesh: MeshData,
+  format: MeshExportFormat,
+  name?: string,
+): Uint8Array | string;
+export function exportMesh(
+  mesh: MeshData,
   format: MeshExportFormat,
   name?: string,
 ): Uint8Array | string {

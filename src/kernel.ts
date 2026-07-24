@@ -46,11 +46,14 @@ export type KernelCapabilityKind =
   | "nativeImport"
   | "nativeExport";
 export type KernelExchangeFormat = "step" | "brep" | "brep-binary";
+export type KernelDocumentBodyLengthUnit = "mm" | "cm" | "m" | "in";
+export type KernelDocumentBodyUnitMode = "from-file" | "declared";
 
 export const GEOMETRY_KERNEL_PROTOCOL_VERSION = 1 as const;
 export const COMPOSITE_SWEEP_REFINEMENT_PROTOCOL_VERSION = 1 as const;
 export const EXACT_INDEXED_TOPOLOGY_EVOLUTION_PROTOCOL_VERSION = 1 as const;
 export const KERNEL_SHAPE_ARTIFACT_PROTOCOL_VERSION = 1 as const;
+export const KERNEL_DOCUMENT_BODY_IMPORT_PROTOCOL_VERSION = 1 as const;
 export const KERNEL_SHAPE_ARTIFACT_MAX_COMPATIBILITY_FINGERPRINT_BYTES =
   2_048 as const;
 
@@ -74,6 +77,42 @@ export interface KernelShapeArtifactContext {
   readonly feature: string;
   readonly signal?: AbortSignal;
   readonly maxArtifactBytes: number;
+}
+
+export interface KernelDocumentBodyImportFormatCapabilities {
+  readonly format: KernelExchangeFormat;
+  readonly unitModes: readonly KernelDocumentBodyUnitMode[];
+}
+
+/**
+ * Strong imported-body support for canonical design documents.
+ *
+ * Unlike `nativeImports`, this capability promises that successful import
+ * yields exactly one valid, positive-volume solid with no loose topology.
+ */
+export interface KernelDocumentBodyImportCapabilities {
+  readonly protocolVersion: typeof KERNEL_DOCUMENT_BODY_IMPORT_PROTOCOL_VERSION;
+  readonly formats: readonly KernelDocumentBodyImportFormatCapabilities[];
+}
+
+export type KernelDocumentBodyImportUnits =
+  | {
+      /** Read units from a format that carries authoritative unit metadata. */
+      readonly mode: "from-file";
+    }
+  | {
+      /** Treat unitless source coordinates as this declared length unit. */
+      readonly mode: "declared";
+      readonly length: KernelDocumentBodyLengthUnit;
+    };
+
+export interface KernelDocumentBodyImportOptions {
+  readonly format: KernelExchangeFormat;
+  readonly units: KernelDocumentBodyImportUnits;
+  /** Protocol v1 admits no geometry-changing healing operation. */
+  readonly healing: {
+    readonly mode: "none";
+  };
 }
 
 /**
@@ -117,6 +156,40 @@ export type KernelCompositeSweepCapabilitiesInspection =
   | KernelCompositeSweepCapabilitiesValid
   | KernelCompositeSweepCapabilitiesMalformed;
 
+export type KernelDocumentBodyImportCapabilitiesMalformedReason =
+  | "not-object"
+  | "unsupported-protocol-version"
+  | "formats-not-array"
+  | "invalid-format-entry"
+  | "unknown-format"
+  | "duplicate-format"
+  | "unit-modes-not-array"
+  | "invalid-unit-mode"
+  | "duplicate-unit-mode"
+  | "empty-unit-modes";
+
+export interface KernelDocumentBodyImportCapabilitiesAbsent {
+  readonly status: "absent";
+}
+
+export interface KernelDocumentBodyImportCapabilitiesValid {
+  readonly status: "valid";
+  /** A validated snapshot, isolated from later mutation of kernel metadata. */
+  readonly capabilities: KernelDocumentBodyImportCapabilities;
+}
+
+export interface KernelDocumentBodyImportCapabilitiesMalformed {
+  readonly status: "malformed";
+  readonly reason: KernelDocumentBodyImportCapabilitiesMalformedReason;
+  readonly message: string;
+  readonly details: Readonly<Record<string, unknown>>;
+}
+
+export type KernelDocumentBodyImportCapabilitiesInspection =
+  | KernelDocumentBodyImportCapabilitiesAbsent
+  | KernelDocumentBodyImportCapabilitiesValid
+  | KernelDocumentBodyImportCapabilitiesMalformed;
+
 /**
  * Feature-scoped support for complete, exact, indexed topology evolution.
  *
@@ -142,6 +215,8 @@ export interface KernelCapabilities {
   readonly exactIndexedTopologyEvolution?: KernelExactIndexedTopologyEvolutionCapabilities;
   /** Optional strong shape round-trip contract; ordinary import/export is weaker. */
   readonly shapeArtifacts?: KernelShapeArtifactCapabilities;
+  /** Optional strong single-solid import contract for document resources. */
+  readonly documentBodyImport?: KernelDocumentBodyImportCapabilities;
 }
 
 function metadataType(value: unknown): string {
@@ -245,6 +320,201 @@ export function inspectKernelCompositeSweepCapabilities(
       refinements: Object.freeze(refinements),
     }),
   };
+}
+
+/**
+ * Validates and snapshots the optional strong document-body import envelope.
+ *
+ * Malformed metadata fails closed instead of being confused with an
+ * unsupported format or unit combination.
+ */
+export function inspectKernelDocumentBodyImportCapabilities(
+  capabilities: KernelCapabilities,
+): KernelDocumentBodyImportCapabilitiesInspection {
+  const raw: unknown = capabilities.documentBodyImport;
+  if (raw === undefined) return { status: "absent" };
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return {
+      status: "malformed",
+      reason: "not-object",
+      message: "Document-body import capability metadata must be an object",
+      details: { actualType: metadataType(raw) },
+    };
+  }
+
+  const metadata = raw as {
+    readonly protocolVersion?: unknown;
+    readonly formats?: unknown;
+  };
+  const protocolVersion: unknown = metadata.protocolVersion;
+  const formatsValue: unknown = metadata.formats;
+  if (
+    protocolVersion !== KERNEL_DOCUMENT_BODY_IMPORT_PROTOCOL_VERSION
+  ) {
+    return {
+      status: "malformed",
+      reason: "unsupported-protocol-version",
+      message:
+        "Document-body import capability metadata uses an unsupported protocol version",
+      details: {
+        expectedProtocolVersion: KERNEL_DOCUMENT_BODY_IMPORT_PROTOCOL_VERSION,
+        actualProtocolVersion: protocolVersion,
+      },
+    };
+  }
+  if (!Array.isArray(formatsValue)) {
+    return {
+      status: "malformed",
+      reason: "formats-not-array",
+      message: "Document-body import formats must be an array",
+      details: { actualType: metadataType(formatsValue) },
+    };
+  }
+
+  const knownFormats = new Set<KernelExchangeFormat>([
+    "step",
+    "brep",
+    "brep-binary",
+  ]);
+  const knownModes = new Set<KernelDocumentBodyUnitMode>([
+    "from-file",
+    "declared",
+  ]);
+  const seenFormats = new Set<KernelExchangeFormat>();
+  const formats: KernelDocumentBodyImportFormatCapabilities[] = [];
+  for (let index = 0; index < formatsValue.length; index += 1) {
+    if (!Object.hasOwn(formatsValue, index)) {
+      return {
+        status: "malformed",
+        reason: "invalid-format-entry",
+        message: "Document-body import formats must be a dense array",
+        details: { index, actualType: "missing" },
+      };
+    }
+    const entry: unknown = formatsValue[index];
+    if (
+      typeof entry !== "object" ||
+      entry === null ||
+      Array.isArray(entry)
+    ) {
+      return {
+        status: "malformed",
+        reason: "invalid-format-entry",
+        message: "Each document-body import format must be an object",
+        details: { index, actualType: metadataType(entry) },
+      };
+    }
+    const candidate = entry as {
+      readonly format?: unknown;
+      readonly unitModes?: unknown;
+    };
+    const formatValue: unknown = candidate.format;
+    const unitModesValue: unknown = candidate.unitModes;
+    if (
+      typeof formatValue !== "string" ||
+      !knownFormats.has(formatValue as KernelExchangeFormat)
+    ) {
+      return {
+        status: "malformed",
+        reason: "unknown-format",
+        message: "Document-body import capability contains an unknown format",
+        details: { index, format: formatValue },
+      };
+    }
+    const format = formatValue as KernelExchangeFormat;
+    if (seenFormats.has(format)) {
+      return {
+        status: "malformed",
+        reason: "duplicate-format",
+        message: `Document-body import format '${format}' is duplicated`,
+        details: { index, format },
+      };
+    }
+    if (!Array.isArray(unitModesValue)) {
+      return {
+        status: "malformed",
+        reason: "unit-modes-not-array",
+        message: `Document-body import unit modes for '${format}' must be an array`,
+        details: { index, actualType: metadataType(unitModesValue) },
+      };
+    }
+    if (unitModesValue.length === 0) {
+      return {
+        status: "malformed",
+        reason: "empty-unit-modes",
+        message: `Document-body import format '${format}' must support at least one unit mode`,
+        details: { index, format },
+      };
+    }
+
+    const seenModes = new Set<KernelDocumentBodyUnitMode>();
+    const unitModes: KernelDocumentBodyUnitMode[] = [];
+    for (
+      let modeIndex = 0;
+      modeIndex < unitModesValue.length;
+      modeIndex += 1
+    ) {
+      if (!Object.hasOwn(unitModesValue, modeIndex)) {
+        return {
+          status: "malformed",
+          reason: "invalid-unit-mode",
+          message: `Document-body import unit modes for '${format}' must be a dense array`,
+          details: { index, modeIndex, actualType: "missing" },
+        };
+      }
+      const mode: unknown = unitModesValue[modeIndex];
+      if (
+        typeof mode !== "string" ||
+        !knownModes.has(mode as KernelDocumentBodyUnitMode)
+      ) {
+        return {
+          status: "malformed",
+          reason: "invalid-unit-mode",
+          message: `Document-body import format '${format}' contains an unknown unit mode`,
+          details: { index, modeIndex, mode },
+        };
+      }
+      const knownMode = mode as KernelDocumentBodyUnitMode;
+      if (seenModes.has(knownMode)) {
+        return {
+          status: "malformed",
+          reason: "duplicate-unit-mode",
+          message: `Document-body import unit mode '${knownMode}' is duplicated for '${format}'`,
+          details: { index, modeIndex, format, mode: knownMode },
+        };
+      }
+      seenModes.add(knownMode);
+      unitModes.push(knownMode);
+    }
+    seenFormats.add(format);
+    formats.push(
+      Object.freeze({ format, unitModes: Object.freeze(unitModes) }),
+    );
+  }
+
+  return {
+    status: "valid",
+    capabilities: Object.freeze({
+      protocolVersion: KERNEL_DOCUMENT_BODY_IMPORT_PROTOCOL_VERSION,
+      formats: Object.freeze(formats),
+    }),
+  };
+}
+
+export function kernelSupportsDocumentBodyImport(
+  capabilities: KernelCapabilities,
+  format: KernelExchangeFormat,
+  unitMode: KernelDocumentBodyUnitMode,
+): boolean {
+  const inspection = inspectKernelDocumentBodyImportCapabilities(capabilities);
+  return (
+    inspection.status === "valid" &&
+    inspection.capabilities.formats.some(
+      (candidate) =>
+        candidate.format === format &&
+        candidate.unitModes.includes(unitMode),
+    )
+  );
 }
 
 function supportedCompositeSweepRefinements(
@@ -485,6 +755,18 @@ export interface GeometryKernel {
   importShape?(
     data: string | ArrayBuffer | Uint8Array,
     format: KernelExchangeFormat,
+    context?: KernelFeatureContext,
+  ): KernelShape;
+  /**
+   * Imports verified resource bytes as exactly one valid positive solid.
+   *
+   * `data` is borrowed for this call. The kernel must neither mutate nor retain
+   * it. A successful result owns no loose topology and is disposed through
+   * `disposeShape`; every failure releases all provisional native state.
+   */
+  importDocumentBody?(
+    data: Uint8Array,
+    options: KernelDocumentBodyImportOptions,
     context?: KernelFeatureContext,
   ): KernelShape;
   exportShape?(

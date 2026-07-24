@@ -1,0 +1,20 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "declaration": false,
+    "declarationMap": false,
+    "noEmit": true,
+    "paths": {
+      "invariantcad": ["./src/index.ts"],
+      "invariantcad/kernels/occt": ["./src/occt-kernel.ts"]
+    },
+    "skipLibCheck": false,
+    "sourceMap": false,
+    "types": ["node"]
+  },
+  "include": [
+    "examples/docs/**/*.ts",
+    "scripts/test-docs-examples.ts",
+    "src/types/**/*.d.ts"
+  ]
+}

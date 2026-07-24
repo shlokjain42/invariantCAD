@@ -52,6 +52,17 @@ import {
   type NodeIRV6,
   type PersistentTopologyReferenceV2,
 } from "../src/index.js";
+import {
+  DOCUMENT_SCHEMA_V7,
+  DOCUMENT_VERSION_V7,
+  NODE_KINDS_V7,
+  type DesignDocumentV7,
+  type NodeIRV7,
+} from "../src/ir.js";
+import {
+  DesignDocumentV7Schema,
+  NodeV7Schema,
+} from "../src/schema.js";
 
 const frozenNodeKinds = [
   "assembly",
@@ -256,6 +267,33 @@ function withoutEnvelope(serialized: string): Readonly<Record<string, unknown>> 
 }
 
 describe("frozen document-version grammar", () => {
+  it("stages v7 without advancing or widening any current public alias", () => {
+    expect(DOCUMENT_SCHEMA).toBe(DOCUMENT_SCHEMA_V6);
+    expect(DOCUMENT_VERSION).toBe(DOCUMENT_VERSION_V6);
+    expect(NodeSchema).toBe(NodeV6Schema);
+    expect(NODE_KINDS_V7).toContain("datumPlane");
+    expect(NODE_KINDS_V7).toContain("bodySet");
+    expect(NODE_KINDS_V7).toContain("importedBody");
+    expect(NodeV7Schema.safeParse({ kind: "datumPoint", position: [] }).success).toBe(
+      false,
+    );
+    expect(
+      DesignDocumentV7Schema.safeParse({
+        schema: DOCUMENT_SCHEMA_V7,
+        version: DOCUMENT_VERSION_V7,
+      }).success,
+    ).toBe(false);
+    if (false) {
+      const stagedNode = {} as NodeIRV7;
+      const stagedDocument = {} as DesignDocumentV7;
+      // @ts-expect-error Current NodeIR remains the frozen v6 union.
+      const currentNode: NodeIR = stagedNode;
+      // @ts-expect-error Current DesignDocument remains the v1-v6 union.
+      const currentDocument: DesignDocumentV6 = stagedDocument;
+      void [currentNode, currentDocument];
+    }
+  });
+
   it("pins exact node-kind membership independently for v1 through v6", () => {
     expect(nodeKinds(NodeV1Schema)).toEqual(frozenNodeKinds);
     expect(nodeKinds(NodeV2Schema)).toEqual(frozenNodeKinds);
@@ -308,6 +346,70 @@ describe("frozen document-version grammar", () => {
 
       expect(schema.safeParse(future).success).toBe(false);
       expect(parseDocumentValue(future).ok).toBe(false);
+    },
+  );
+
+  it.each(versionCases())(
+    "$label preserves its legacy nested unknown-field stripping behavior",
+    ({ schema, document }) => {
+      const legacy = mutable(document);
+      legacy.units.legacyNestedField = true;
+      legacy.nodes.box.size[0].legacyExpressionField = true;
+
+      const schemaResult = schema.safeParse(legacy);
+      expect(schemaResult.success).toBe(true);
+      const parsed = parseDocumentValue(legacy);
+      expect(parsed.ok).toBe(true);
+      if (!parsed.ok) return;
+      expect(
+        Object.hasOwn(
+          parsed.value.units as unknown as object,
+          "legacyNestedField",
+        ),
+      ).toBe(false);
+      const node = (
+        parsed.value.nodes as unknown as Readonly<Record<string, NodeIR>>
+      ).box;
+      expect(node?.kind).toBe("box");
+      if (node?.kind !== "box") return;
+      expect(
+        Object.hasOwn(
+          node.size[0] as unknown as object,
+          "legacyExpressionField",
+        ),
+      ).toBe(false);
+    },
+  );
+
+  it.each(versionCases())(
+    "$label preserves legacy own __proto__ stripping",
+    ({ schema, document }) => {
+      const legacy = mutable(document);
+      for (const value of [
+        legacy,
+        legacy.units,
+        legacy.nodes.box.size[0],
+      ]) {
+        Object.defineProperty(value, "__proto__", {
+          configurable: true,
+          enumerable: true,
+          value: { legacy: true },
+          writable: true,
+        });
+      }
+
+      expect(schema.safeParse(legacy).success).toBe(true);
+      const parsed = parseDocumentValue(legacy);
+      expect(parsed.ok).toBe(true);
+      if (!parsed.ok) return;
+      expect(Object.hasOwn(parsed.value, "__proto__")).toBe(false);
+      expect(Object.hasOwn(parsed.value.units, "__proto__")).toBe(false);
+      const node = (
+        parsed.value.nodes as unknown as Readonly<Record<string, NodeIR>>
+      ).box;
+      expect(node?.kind).toBe("box");
+      if (node?.kind !== "box") return;
+      expect(Object.hasOwn(node.size[0] as object, "__proto__")).toBe(false);
     },
   );
 

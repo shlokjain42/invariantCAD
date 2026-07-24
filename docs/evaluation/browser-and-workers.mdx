@@ -135,7 +135,7 @@ self.onmessage = async (event) => {
 
   try {
     const stl = result.value.output(event.data.output).export("stl");
-    self.postMessage({ ok: true, stl }, [stl.buffer]);
+    self.postMessage({ ok: true, stl }, { transfer: [stl.buffer] });
   } finally {
     result.value.dispose();
   }
@@ -219,9 +219,9 @@ The separate Node owned-runtime gate is repository tooling rather than browser
 deployment support. `pnpm test:occt-artifact-process` runs fresh ABI 0.9
 producer and consumer child processes, verifies packaged
 `metadata/release.json` against the independently maintained reviewed pin,
-imports the exact verified JavaScript through a process-global Node module hook,
-passes a fresh verified WASM copy, covers `SIGKILL` deadline/abort and
-injected-trap recovery, and explicitly reports
+imports the exact verified JavaScript through the runtime-selected Node module
+hook path, passes a fresh verified WASM copy, covers `SIGKILL` deadline/abort
+and injected-trap recovery, and explicitly reports
 `certifiesCompatibility: false`. Additional children evaluate a deterministic
 two-box Boolean union through the real evaluator. Their exact
 `operation-started` then `kernel-operation-started` protocol proves entry into

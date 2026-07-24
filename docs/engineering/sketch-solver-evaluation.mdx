@@ -1,0 +1,310 @@
+---
+title: "Sketch solver evaluation"
+description: "PlaneGCS adapter evidence, the conditional owned-runtime decision, rejected direct-package path, and production promotion gates."
+icon: "drafting-compass"
+---
+
+# Sketch solver evaluation
+
+This engineering decision record evaluates PlaneGCS as the industrial sketch
+solver behind InvariantCAD's existing replaceable solver protocol. The
+implementation-grade bakeoff was completed on July 24, 2026 against
+[`@salusoft89/planegcs@1.2.0`](https://www.npmjs.com/package/@salusoft89/planegcs/v/1.2.0).
+
+<Warning>
+  This is a conditional implementation selection, not a shipped capability,
+  compatibility certification, or license approval. InvariantCAD still ships
+  its dependency-free reference solver. No PlaneGCS runtime or adapter package
+  is currently published by InvariantCAD.
+</Warning>
+
+## Decision
+
+InvariantCAD will use an **owned, maintained PlaneGCS fork and replaceable WASM
+runtime** as the selected industrial-solver path, subject to the
+[promotion gates](#promotion-gates).
+
+InvariantCAD will **not** ship, repackage, or make
+`@salusoft89/planegcs@1.2.0` the production backend directly. The numerical
+solver is a credible basis, but the published wrapper and its vendored solver
+snapshot do not meet the project's packaging, lifecycle, diagnostics,
+cancellation, provenance, or distribution requirements.
+
+The decision separates three claims:
+
+| Claim | Decision |
+| --- | --- |
+| PlaneGCS is a viable numerical basis | Supported by the finite bakeoff |
+| The published npm wrapper is production-ready for InvariantCAD | Rejected |
+| An InvariantCAD-owned runtime is ready to publish | Not yet; gated below |
+
+## Evaluated inputs
+
+The current InvariantCAD sketch contract has four entity kinds—point, line,
+circle, and arc—and 17 constraint kinds. Its result contract also requires
+status, solved geometry, degrees of freedom, iteration count, residual, and
+structured diagnostics.
+
+The evaluated upstream package was the exact
+[`1.2.0` release](https://github.com/Salusoft89/planegcs/releases/tag/1.2.0)
+at verified commit
+[`ee9b156da9827a91a56a888a53520f63d5cffaa6`](https://github.com/Salusoft89/planegcs/commit/ee9b156da9827a91a56a888a53520f63d5cffaa6).
+The npm tarball reported that same `gitHead`, had no runtime npm dependencies,
+and passed its published npm integrity check.
+
+The wrapper vendors FreeCAD PlaneGCS commit
+[`5f8eac49f31626354ee69bf40616bac801ca5560`](https://github.com/Salusoft89/planegcs/blob/ee9b156da9827a91a56a888a53520f63d5cffaa6/planegcs/commit.txt),
+dated April 25, 2025. Its build uses
+[Emscripten 3.1.45](https://github.com/Salusoft89/planegcs/blob/ee9b156da9827a91a56a888a53520f63d5cffaa6/Dockerfile)
+and the published
+[link flags](https://github.com/Salusoft89/planegcs/blob/ee9b156da9827a91a56a888a53520f63d5cffaa6/planegcs/CMakeLists.txt).
+
+## Adapter result
+
+Every current constraint kind has a direct or controlled synthetic mapping:
+
+| InvariantCAD constraint | PlaneGCS mapping |
+| --- | --- |
+| `coincident` | `p2p_coincident` |
+| `horizontal`, `vertical` | `horizontal_l`, `vertical_l` |
+| `fixed` | Stable synthetic `coordinate_x` and `coordinate_y` constraints |
+| `distance`, `length` | `p2p_distance` |
+| `distanceX`, `distanceY` | `difference` over the selected coordinates |
+| `parallel`, `perpendicular` | `parallel`, `perpendicular_ll` |
+| `equalLength` | `equal_length` |
+| `angle` | `l2l_angle_ll` |
+| `radius`, `diameter` | Circle/arc-specific radius or diameter constraint |
+| `equalRadius` | Dispatch to circle-circle, circle-arc, or arc-arc form |
+| `midpoint` | `p2p_symmetric_ppp` |
+| `tangent` | `tangent_lc` |
+
+Point, line, and circle entities map directly. An InvariantCAD arc needs hidden
+start and end points plus PlaneGCS `arc_rules`. It also needs two hidden equal
+constraints that freeze its start and end angles. Without those constraints,
+PlaneGCS introduces two degrees of freedom that do not exist in the current
+InvariantCAD IR.
+
+The production adapter must emit authored IDs in lexical order, then points,
+higher geometries, hidden arc helpers, and constraints in a fixed topological
+order. Synthetic numeric tags must map back to authored IDs, with hidden
+implementation tags excluded from public diagnostics.
+
+## Measured evidence
+
+All results below are finite observations from the bakeoff, not universal
+solver guarantees.
+
+| Probe | Observed result |
+| --- | --- |
+| Constraint mapping | 21 cases covering all 17 current kinds solved successfully |
+| Degrees of freedom | Free point `2`; fixed point `0`; coordinate-constrained point `0` |
+| Conflict reporting | Contradictory X-coordinate constraints failed and returned both authored IDs |
+| Redundancy | A duplicate same-X constraint solved and returned the redundant authored ID |
+| Drag primitive | Two successive temporary target updates preserved permanent horizontal and length constraints; temporary constraints did not reduce DOF |
+| Same-module determinism | 100 Node runs produced one exact output |
+| Fresh-process determinism | 20 fresh Node processes produced one exact output |
+| Browser parity | 100 Chromium runs produced one exact output; a nontrivial angle result exactly matched Node |
+| Node runtime | Native ESM initialization and solving passed on Node `24.18.0` |
+| Browser runtime | A Vite `8.1.5` production build passed in Chromium `149` on the main thread and in ES-module workers |
+| Worker loading | Both default WASM loading and caller-supplied WASM bytes passed |
+| Lifecycle loop | 2,000 create/solve/delete cycles and 2,000 clear/reuse cycles completed |
+
+The determinism sample does not justify an
+`artifactCompatibilityFingerprint`. That field claims exact numeric semantics
+for every runtime represented by the fingerprint, which requires a broader
+reviewed golden matrix.
+
+### Size and memory
+
+| Artifact or observation | Measured value |
+| --- | ---: |
+| npm tarball | `241,064` bytes |
+| npm unpacked package | `892,495` bytes across 54 files |
+| WASM binary | `508,141` bytes |
+| WASM SHA-256 | `039601df53b11cd06d0f8626cd2e9422b07aca31b18db9ba437b7d26cf5594c5` |
+| WASM in the Vite build | `176.53 kB` gzip |
+| Emscripten glue | `28,493` bytes |
+| Glue SHA-256 | `5d5fe10097d757e7b4df2ee65f3804e3b32f9a09459b50634afe9a3bbc6b174d` |
+| Browser main chunk | `59.74 kB`, `16.91 kB` gzip |
+| Declared WASM memory | Minimum and maximum both `16,777,216` bytes |
+
+The lifecycle loop finished with zero outstanding Emscripten value handles and
+unchanged WASM memory. In one warmed run, host RSS still increased by about
+18 MiB. That is neither proof of a leak nor proof of leak freedom; production
+promotion needs longer bounded-memory and large-sketch evidence.
+
+## Why the npm wrapper is rejected
+
+### Solver snapshot
+
+The wrapper release is current, but its PlaneGCS core is not. Compared with the
+April 2025 pin, the latest stable FreeCAD release at the evaluation cutoff,
+[`1.1.2`](https://github.com/FreeCAD/FreeCAD/releases/tag/1.1.2) contains 11
+later commits in the PlaneGCS path and changes 8 of its 11 files. FreeCAD main
+contained 23 later path commits at the evaluation cutoff.
+
+Those later changes include material solver work such as
+[small-sketch DenseQR](https://github.com/FreeCAD/FreeCAD/commit/c8106982de865075e44dd9a7e8a58713755ae4f0),
+[concentric-circle tangent handling](https://github.com/FreeCAD/FreeCAD/commit/7023e83843794e3a658d9da9826c1a7cdbf83396),
+[line-circle tangent orientation](https://github.com/FreeCAD/FreeCAD/commit/f432d1c6a726e7f7a017f4872db7a7381a24816d),
+and
+[arc constraint orientation](https://github.com/FreeCAD/FreeCAD/commit/5a6be36bc32900ea0d041b92792b0ae07ea31400).
+Adopting the package version alone would therefore not adopt a current solver
+core.
+
+### Package and runtime boundaries
+
+- Strict TypeScript 7 `NodeNext` checking with `skipLibCheck: false` failed.
+  The tarball omits the declaration beside `dist/planegcs_dist/planegcs.js`,
+  and several emitted declarations use extensionless ESM imports.
+- The package has no `exports` map. Vite worked with warnings, while upstream
+  still tracks an open
+  [Webpack packaging issue](https://github.com/Salusoft89/planegcs/issues/2).
+- The WASM module has a fixed 16 MiB memory. `ALLOW_MEMORY_GROWTH` is absent,
+  and 5 MiB is reserved for the stack.
+- The build remains on Emscripten 3.1.45; the upstream
+  [toolchain-upgrade issue](https://github.com/Salusoft89/planegcs/issues/8)
+  records a blocker around the current configuration.
+- The API is synchronous and cannot observe an `AbortSignal` during native
+  solving. Hard cancellation therefore requires terminating a worker or
+  process.
+- The binding exposes neither actual iteration count nor final residual.
+  InvariantCAD can independently recompute residuals, but it must not invent an
+  iteration count.
+- Conflict and redundancy IDs are flat. PlaneGCS has richer native conflict
+  groups, but the wrapper has an open
+  [group-export issue](https://github.com/Salusoft89/planegcs/issues/1).
+- Redundancy diagnosis emitted unsolicited native console output in the
+  bakeoff; the wrapper has no injectable logger.
+
+### Ownership boundary
+
+`destroy_gcs_module()` is not idempotent: a second call and post-disposal use
+both throw an Emscripten binding error. Returned native vectors also require
+explicit deletion.
+
+Inspection of the upstream
+[`GcsWrapper`](https://github.com/Salusoft89/planegcs/blob/ee9b156da9827a91a56a888a53520f63d5cffaa6/sketch/gcs_wrapper.ts)
+found another future-facing ownership problem in the B-spline path: four
+temporary native integer vectors passed to
+`make_bspline()` are not deleted, and cached native B-spline geometry is
+removed from the JavaScript map without deletion. Current InvariantCAD sketches
+do not author B-splines, but the leak risk blocks using that path for the
+comprehensive sketch milestone.
+
+## License and package boundary
+
+This section is an engineering distribution requirement, not legal advice or
+legal approval.
+
+The upstream
+[`package.json`](https://github.com/Salusoft89/planegcs/blob/ee9b156da9827a91a56a888a53520f63d5cffaa6/package.json)
+declares `LGPL-2.0-or-later`, its included
+[`LICENSE`](https://github.com/Salusoft89/planegcs/blob/ee9b156da9827a91a56a888a53520f63d5cffaa6/LICENSE)
+is LGPL 2.1, the wrapper source headers say LGPL 2.1-or-later, and the vendored
+FreeCAD PlaneGCS headers say GNU Library GPL v2-or-later. An owned combined
+runtime should use the safe common outbound expression
+`LGPL-2.1-or-later`, subject to external legal review.
+
+The intended publication boundary is:
+
+| Package | Contents and license |
+| --- | --- |
+| `@invariantcad/solver-planegcs` | Apache-2.0 TypeScript adapter, protocol mapping, worker client, detached results, and conformance tests |
+| `@invariantcad/solver-planegcs-runtime` | Replaceable LGPL-2.1-or-later JavaScript/WASM runtime and the materials needed to inspect, modify, rebuild, and relink it |
+
+The runtime distribution must include:
+
+- Exact wrapper-fork and FreeCAD source commits.
+- Complete corresponding native and binding source.
+- Every InvariantCAD patch with notices.
+- Build scripts and a toolchain container pinned by immutable digest.
+- License texts, attribution, source archive, checksums, and SBOM.
+- Documented runtime-byte replacement and relinking instructions.
+- No terms or technical controls that prohibit permitted reverse engineering
+  for modification and debugging.
+
+The inspected npm tarball includes TypeScript/JavaScript, declarations, the
+WASM binary, and a license, but not the vendored C++ source or build scripts.
+InvariantCAD must not republish that archive as its compliance boundary. The
+WASM linking and replacement design requires external legal review before any
+public runtime release.
+
+## Target integration
+
+The owned implementation should use a worker-first boundary:
+
+```text
+invariantcad evaluator
+  -> Apache-2.0 PlaneGCS adapter and stable protocol
+    -> disposable worker or process
+      -> replaceable LGPL-2.1-or-later JS/WASM runtime
+```
+
+The TypeScript adapter owns canonical IR mapping and public diagnostics. The
+runtime owns one PlaneGCS system per solve session and returns detached numeric
+data only. Terminating the realm is the hard-cancellation and native-failure
+containment boundary.
+
+Before integration, the core solver contract needs an asynchronous result path,
+structured conflict and redundancy data, optional native metrics rather than
+fabricated values, an explicit drag session, and idempotent asynchronous
+disposal.
+
+A future compatibility fingerprint must bind at least:
+
+- Adapter protocol and runtime package version.
+- InvariantCAD fork and exact FreeCAD source commits.
+- Emscripten version and build flags.
+- WASM SHA-256.
+- Algorithm, tolerance, convergence, and iteration-limit semantics.
+- Entity/constraint mapping protocol.
+- Exact runtime matrix covered by the claim.
+
+## Promotion gates
+
+The conditional selection becomes a supported industrial backend only when all
+of these gates pass:
+
+1. **Modern solver source:** pin a reviewed current FreeCAD snapshot or stable
+   snapshot plus explicit reviewed backports, then pass the complete regression
+   corpus.
+2. **Owned binding:** expose real iterations, residual, grouped conflicts,
+   redundancy, controlled logging, and closed status semantics.
+3. **Package correctness:** publish strict ESM declarations and exports that
+   pass supported TypeScript and package-lint matrices without consumer
+   workarounds.
+4. **Lifecycle correctness:** make disposal idempotent, close all native vector
+   and geometry ownership, and prove fresh-session recovery after failures.
+5. **Cancellation and isolation:** make worker/process execution the supported
+   hard-cancellation boundary and test pre-start, in-flight, timeout, crash, and
+   recovery behavior.
+6. **Bounded scale:** establish explicit entity, constraint, iteration, time,
+   WASM-memory, and host-memory limits with representative large and degenerate
+   sketches.
+7. **Conformance matrix:** pass all current constraints, mixed sketches,
+   conflict/redundancy/drag cases, invalid and non-finite inputs, and the future
+   construction/conic/spline corpus across supported Node and browser engines.
+8. **Determinism:** pass reviewed fresh-process and cross-runtime golden tests
+   before advertising any artifact-compatibility fingerprint.
+9. **Supply chain:** reproduce exact runtime bytes from pinned inputs, verify
+   checksums and provenance before execution, and ship an SBOM.
+10. **Distribution approval:** complete external legal, security, provenance,
+    and release review for the LGPL runtime and its source/relink channel.
+
+## Explicit non-claims
+
+The bakeoff does not establish:
+
+- Arbitrary-sketch correctness or numerical robustness.
+- Browser support beyond the tested Chromium build.
+- Compatibility across Node, operating-system, CPU, or browser matrices.
+- Leak freedom, peak-memory bounds, or large-sketch capacity.
+- Reliable partial-redundancy classification or conflict grouping.
+- Safe use of the current B-spline wrapper.
+- A valid cross-runtime artifact fingerprint.
+- Public-release readiness or LGPL compliance approval.
+
+Until the promotion gates pass, the built-in reference solver remains the only
+shipped InvariantCAD solver and this record remains an implementation decision,
+not capability advertising.

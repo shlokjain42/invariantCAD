@@ -1,4 +1,11 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  expect,
+  expectTypeOf,
+  it,
+} from "vitest";
 import {
   EvaluatedAssembly,
   EvaluatedSolid,
@@ -449,8 +456,10 @@ describe("geometry evaluation", () => {
       const output = result.output("solid");
       const stl = output.export("stl");
       const obj = output.export("obj");
+      expectTypeOf(stl).toEqualTypeOf<Uint8Array>();
+      expectTypeOf(obj).toEqualTypeOf<string>();
       expect(stl).toBeInstanceOf(Uint8Array);
-      expect((stl as Uint8Array).byteLength).toBe(84 + 12 * 50);
+      expect(stl.byteLength).toBe(84 + 12 * 50);
       expect(obj).toContain("o solid");
       expect(obj).toContain("f ");
     } finally {

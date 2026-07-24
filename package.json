@@ -10,7 +10,7 @@
     "type": "git",
     "url": "git+https://github.com/shlokjain42/invariantCAD.git"
   },
-  "homepage": "https://invariant-cad.mintlify.app",
+  "homepage": "https://invariant-cad.mintlify.site",
   "bugs": {
     "url": "https://github.com/shlokjain42/invariantCAD/issues"
   },
@@ -65,13 +65,23 @@
     "format:check": "node scripts/check-source-format.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:reference-models": "vitest run tests/reference-models.test.ts",
+    "test:docs-examples": "tsx --tsconfig tsconfig.docs-examples.json scripts/test-docs-examples.ts",
     "test:browser": "pnpm build && vite build --config tests/browser/vite.config.ts && playwright test --config tests/browser/playwright.config.ts",
+    "benchmark:reference-models": "tsx scripts/benchmark-reference-models.ts",
+    "benchmark:reference-models:ci": "tsx scripts/benchmark-reference-models.ts --kernel all --repeat-runs 1",
     "artifact:fixture:occt": "tsx scripts/generate-occt-artifact-fixture.ts",
-    "docs:generate": "node scripts/generate-docs-export-index.mjs",
-    "docs:check": "node scripts/generate-docs-export-index.mjs --check && node scripts/check-docs.mjs",
-    "docs:dev": "cd docs && npm exec --yes --package=mint@4.2.739 -- mint dev",
-    "docs:validate": "cd docs && npm exec --yes --package=mint@4.2.739 -- mint validate",
-    "docs:links": "cd docs && npm exec --yes --package=mint@4.2.739 -- mint broken-links --check-anchors --check-redirects",
+    "api:generate": "pnpm build && node scripts/check-public-api.mjs --write",
+    "api:check": "pnpm build && node scripts/check-public-api.mjs --check",
+    "api:check:built": "node scripts/check-public-api.mjs --check",
+    "api:entrypoints:check": "node scripts/check-public-entrypoints.mjs",
+    "docs:examples:generate": "node scripts/sync-doc-examples.mjs --write",
+    "docs:examples:check": "node scripts/sync-doc-examples.mjs --check && tsc -p tsconfig.docs-examples.json",
+    "docs:generate": "pnpm docs:examples:generate && node scripts/generate-docs-export-index.mjs",
+    "docs:check": "pnpm docs:examples:check && node scripts/generate-docs-export-index.mjs --check && node scripts/check-docs.mjs",
+    "docs:dev": "cd docs && pnpm exec mint dev",
+    "docs:validate": "cd docs && pnpm exec mint validate",
+    "docs:links": "cd docs && pnpm exec mint broken-links --check-anchors --check-redirects",
     "docs:release-check": "pnpm docs:validate && pnpm docs:links",
     "coverage": "vitest run --coverage",
     "audit:release": "node scripts/check-production-audit.mjs",
@@ -89,8 +99,8 @@
     "test:occt-runtime-attestation-node": "node scripts/test-occt-runtime-attestation-node.mjs",
     "test:occt-facade-bundle": "pnpm bundle:occt-facade && pnpm verify:occt-facade-bundle && pnpm pack --pack-destination .artifacts && node scripts/package-smoke.mjs --owned-facade-runtime-dir .artifacts/occt-facade-bundle/invariantcad-occt-facade-0.9.0/runtime && pnpm test:occt-persistence-public -- --runtime-dir .artifacts/occt-facade-bundle/invariantcad-occt-facade-0.9.0/runtime && pnpm test:occt-artifact-owned -- --runtime-dir .artifacts/occt-facade-bundle/invariantcad-occt-facade-0.9.0/runtime && pnpm test:occt-artifact-process -- --runtime-dir .artifacts/occt-facade-bundle/invariantcad-occt-facade-0.9.0/runtime",
     "prepack": "pnpm build",
-    "verify": "pnpm check && pnpm lint && pnpm test && pnpm artifact:fixture:occt -- --version v3 --check && pnpm docs:check && pnpm lint:package && pnpm test:package",
-    "release:check": "pnpm verify && pnpm audit:release && pnpm docs:release-check && pnpm test:browser"
+    "verify": "pnpm check && pnpm api:check:built && pnpm lint && pnpm test && pnpm test:docs-examples && pnpm artifact:fixture:occt -- --version v3 --check && pnpm docs:check && pnpm lint:package && pnpm test:package",
+    "release:check": "pnpm verify && pnpm coverage && pnpm benchmark:reference-models:ci && pnpm audit:release && pnpm docs:release-check && pnpm test:browser"
   },
   "engines": {
     "node": ">=22.13"
@@ -113,9 +123,11 @@
   },
   "devDependencies": {
     "@arethetypeswrong/core": "0.18.5",
+    "@microsoft/api-extractor": "7.58.12",
     "@playwright/test": "^1.61.1",
     "@types/node": "^26.1.1",
     "@vitest/coverage-v8": "^4.1.10",
+    "mint": "4.2.740",
     "oxlint": "1.75.0",
     "publint": "^0.3.22",
     "tsup": "^8.5.1",

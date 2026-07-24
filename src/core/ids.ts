@@ -8,6 +8,7 @@ export type EntityId = Brand<string, "EntityId">;
 export type MaterialId = Brand<string, "MaterialId">;
 export type ConfigurationId = Brand<string, "ConfigurationId">;
 export type TopologyReferenceId = Brand<string, "TopologyReferenceId">;
+export type ResourceId = Brand<string, "ResourceId">;
 export type OutputName = Brand<string, "OutputName">;
 
 const ID_PATTERN = /^[A-Za-z][A-Za-z0-9_.:-]*$/;
@@ -48,6 +49,11 @@ export function configurationId(id: string): ConfigurationId {
 export function topologyReferenceId(id: string): TopologyReferenceId {
   assertValidId(id, "Topology reference ID");
   return id as TopologyReferenceId;
+}
+
+export function resourceId(id: string): ResourceId {
+  assertValidId(id, "Resource ID");
+  return id as ResourceId;
 }
 
 export function outputName(id: string): OutputName {

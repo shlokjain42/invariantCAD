@@ -2,6 +2,7 @@
 
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import * as NodeModule from "node:module";
 import {
   loadAttestedOcctRuntime,
   OcctRuntimeAttestationError,
@@ -14,6 +15,10 @@ const EXPECTED_RUNTIME_PAIR_IDENTITY =
   "invariantcad-occt-runtime-pair@1:sha256:7433d0aa92ebd4e264985a10c7cdb0729d287028cb6782e605e34a81c055ab48";
 const encoder = new TextEncoder();
 const webassembly = new Uint8Array([9, 8, 7, 6]);
+const dep0205Warnings = [];
+process.on("warning", (warning) => {
+  if (warning.code === "DEP0205") dep0205Warnings.push(warning);
+});
 const javascript = encoder.encode(`
 const state = globalThis.${STATE_KEY} ??= {
   imports: 0,
@@ -145,13 +150,29 @@ const options = {
   webassembly,
 };
 
+const concurrentMarker = "__invariantCadConcurrentRuntimeVariant";
+const concurrentJavascript = encoder.encode(`
+globalThis.${concurrentMarker} = (globalThis.${concurrentMarker} ?? 0) + 1;
+${new TextDecoder().decode(javascript)}
+`);
+const concurrentManifest = manifestBytes(
+  concurrentJavascript,
+  webassembly,
+);
+const concurrentOptions = {
+  releaseManifest: concurrentManifest,
+  expectedReleaseManifestSha256: digest(concurrentManifest),
+  javascript: concurrentJavascript,
+  webassembly,
+};
 const [firstRuntime, secondRuntime] = await Promise.all([
   loadAttestedOcctRuntime(options),
-  loadAttestedOcctRuntime(options),
+  loadAttestedOcctRuntime(concurrentOptions),
 ]);
-assert.equal(
+assert.notEqual(
   firstRuntime.attestation.runtimePairIdentity,
   secondRuntime.attestation.runtimePairIdentity,
+  "Concurrent distinct runtime sources must retain distinct identities",
 );
 assert.equal(
   firstRuntime.attestation.runtimePairIdentity,
@@ -159,6 +180,11 @@ assert.equal(
   "Runtime-pair protocol v1 identity changed",
 );
 assert.equal(globalThis[STATE_KEY].imports, 2);
+assert.equal(
+  globalThis[concurrentMarker],
+  1,
+  "Concurrent module hooks must not cross-wire distinct verified sources",
+);
 
 const firstKernel = await createOcctKernel({
   attestedRuntime: firstRuntime,
@@ -239,6 +265,105 @@ await assert.rejects(
     error.reason === "javascript-digest-mismatch",
 );
 assert.equal(globalThis[STATE_KEY].imports, 4);
+
+const nodeModule = NodeModule.createRequire(import.meta.url)("node:module");
+const originalRegisterHooks = nodeModule.registerHooks;
+if (typeof originalRegisterHooks === "function") {
+  let registerCalls = 0;
+  let deregisterCalls = 0;
+  nodeModule.registerHooks = (...arguments_) => {
+    registerCalls += 1;
+    const hooks = Reflect.apply(
+      originalRegisterHooks,
+      nodeModule,
+      arguments_,
+    );
+    return {
+      deregister() {
+        deregisterCalls += 1;
+        hooks.deregister();
+      },
+    };
+  };
+  NodeModule.syncBuiltinESMExports();
+  let instrumentedLoader;
+  try {
+    instrumentedLoader = await import(
+      `../dist/occt-runtime-node.js?instrument-register-hooks=${Date.now()}`
+    );
+  } finally {
+    nodeModule.registerHooks = originalRegisterHooks;
+    NodeModule.syncBuiltinESMExports();
+  }
+
+  const instrumentedInvalidLoad =
+    instrumentedLoader.loadAttestedOcctRuntime({
+      releaseManifest: invalidManifest,
+      expectedReleaseManifestSha256: digest(invalidManifest),
+      javascript: invalidJavascript,
+      webassembly,
+    });
+  const instrumentedValidLoad =
+    instrumentedLoader.loadAttestedOcctRuntime(options);
+  await assert.rejects(
+    instrumentedInvalidLoad,
+    (error) =>
+      error instanceof OcctRuntimeAttestationError &&
+      error.reason === "module-import-failed",
+  );
+  await instrumentedValidLoad;
+  await instrumentedLoader.loadAttestedOcctRuntime(options);
+  assert.equal(
+    registerCalls,
+    3,
+    "Every supported-runtime load must install an isolated synchronous hook",
+  );
+  assert.equal(
+    deregisterCalls,
+    3,
+    "Every synchronous hook must be deregistered after success or failure",
+  );
+}
+
+const nodeMajor = Number.parseInt(process.versions.node.split(".", 1)[0], 10);
+if (nodeMajor < 25) {
+  const originalRegister = nodeModule.register;
+  let asynchronousRegisterCalls = 0;
+  nodeModule.registerHooks = undefined;
+  nodeModule.register = (...arguments_) => {
+    asynchronousRegisterCalls += 1;
+    return Reflect.apply(originalRegister, nodeModule, arguments_);
+  };
+  NodeModule.syncBuiltinESMExports();
+  let fallbackLoader;
+  try {
+    fallbackLoader = await import(
+      `../dist/occt-runtime-node.js?force-asynchronous-hooks=${Date.now()}`
+    );
+  } finally {
+    nodeModule.register = originalRegister;
+    if (originalRegisterHooks === undefined) {
+      Reflect.deleteProperty(nodeModule, "registerHooks");
+    } else {
+      nodeModule.registerHooks = originalRegisterHooks;
+    }
+    NodeModule.syncBuiltinESMExports();
+  }
+
+  await fallbackLoader.loadAttestedOcctRuntime(options);
+  assert.equal(
+    asynchronousRegisterCalls,
+    1,
+    "The Node 22.13-compatible loader must use module.register when registerHooks is unavailable",
+  );
+}
+
+await new Promise((resolve) => setImmediate(resolve));
+assert.deepEqual(
+  dep0205Warnings,
+  [],
+  "Supported runtimes must not invoke deprecated module.register when registerHooks is available",
+);
 
 process.stdout.write(
   `[occt-runtime-attestation-node] verified ${firstRuntime.attestation.runtimePairIdentity}\n`,

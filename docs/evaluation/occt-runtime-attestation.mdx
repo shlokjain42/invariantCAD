@@ -55,21 +55,25 @@ const kernel = await createOcctKernel({ attestedRuntime });
 ```
 
 The Node loader does not write verified JavaScript to a temporary file. It
-installs one process-wide `node:module.register()` hook, transfers the verified
-snapshot to that hook, resolves one unpredictable private specifier to a
-synthetic `file:` URL, and returns the exact bytes from the hook's `load`
-callback. The synthetic file URL is required by the current Emscripten glue's
-Node initialization. The hook deletes its raw source entry after the one load.
+resolves one unpredictable private specifier to a synthetic `file:` URL and
+returns the exact bytes from a module hook's `load` callback. The synthetic file
+URL is required by the current Emscripten glue's Node initialization. On Node
+22.15 and newer, each load gets an isolated synchronous
+`node:module.registerHooks()` hook. Its raw source reference is released when
+`load` runs, and the hook is deregistered after the import settles.
 
-Node's evaluated module cache and the process-wide hook remain for the life of
-the process. A runtime pair can create multiple kernels; every kernel receives a
-fresh copy of the verified WASM master bytes. Disposing a kernel does not unload
-JavaScript or invalidate the pair. Use a disposable child process when hard
-code/runtime reclamation is required.
+Node 22.13 and 22.14 do not provide `registerHooks()`, so the loader retains the
+compatible process-wide `node:module.register()` worker hook on those releases.
+That fallback transfers each verified snapshot to the hook and deletes its raw
+source entry after the one load. Node's Permission Model must allow the fallback
+loader-hook worker, for example with the appropriate `--allow-worker` policy.
 
-Node's Permission Model must allow the loader-hook worker, for example with the
-appropriate `--allow-worker` policy. InvariantCAD supports Node 22.13, 24, and
-26 and exercises the loader on all three release-CI lines.
+Node's evaluated module cache remains for the life of the process. A runtime
+pair can create multiple kernels; every kernel receives a fresh copy of the
+verified WASM master bytes. Disposing a kernel does not unload JavaScript or
+invalidate the pair. Use a disposable child process when hard code/runtime
+reclamation is required. InvariantCAD supports Node 22.13, 24, and 26 and
+exercises the loader on all three release-CI lines.
 
 ## Browser and module workers
 

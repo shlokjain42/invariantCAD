@@ -5,19 +5,23 @@ icon: "rocket"
 ---
 
 This walkthrough builds a plate with a parameterized rectangular outline and a
-circular hole, evaluates a wider variant, measures it, and exports a binary
-STL.
+circular hole. The same immutable document is evaluated first with the default
+Manifold backend for STL and then with stock OCCT for exact STEP export.
 
-## 1. Author the design
+## Run the complete workflow
+
+{/* docs-example:start mounting-plate-default-and-exact */}
 
 ```ts
 import {
+  EvaluatedSolid,
   createEvaluator,
   design,
   mm,
   plane,
   vec2,
 } from "invariantcad";
+import { createOcctKernel } from "invariantcad/kernels/occt";
 
 const cad = design("mounting-plate", {
   metadata: { description: "Parameterized plate with one mounting hole" },
@@ -38,7 +42,6 @@ const profile = cad.sketch("plate-profile", plane.xy(), (sketch) => {
     center: vec2(width.mul(0.25), mm(0)),
     radius: holeRadius,
   });
-
   return sketch.profile(outline, { holes: [hole.loop()] });
 });
 
@@ -50,59 +53,125 @@ const part = cad.part("plate", solid, {
   partNumber: "PLATE-001",
   description: "Machined mounting plate",
 });
-
 cad.output("plate", part);
+
 const document = cad.build();
-```
+const parameters = {
+  width: 100,
+  holeRadius: 5,
+};
 
-`build()` returns a deeply frozen current-version document. Builder references
-such as `profile`, `solid`, and `part` are authoring handles; the serialized
-document contains stable IDs and JSON data, not those class instances.
-
-## 2. Evaluate a variant
-
-```ts
-const evaluator = await createEvaluator();
-
-try {
-  const result = await evaluator.evaluate(document, {
-    parameters: {
-      width: 100, // base length unit is millimetres
-      holeRadius: 5,
-    },
-    outputs: ["plate"],
-  });
-
-  if (!result.ok) {
-    for (const diagnostic of result.diagnostics) {
-      console.error(diagnostic.code, diagnostic.path, diagnostic.message);
-    }
-    throw new Error("Evaluation failed");
-  }
-
+async function evaluateDefaultMesh() {
+  const evaluator = await createEvaluator();
   try {
-    const plate = result.value.output("plate");
-    console.log(plate.measure());
-    const mesh = plate.mesh();
-    const stl = plate.export("stl");
-
-    console.log({
-      triangles: mesh.indices.length / 3,
-      stlBytes: stl.byteLength,
+    const result = await evaluator.evaluate(document, {
+      parameters,
+      outputs: ["plate"],
     });
+    if (!result.ok) {
+      throw new Error(
+        result.diagnostics.map((item) => item.message).join("\n"),
+      );
+    }
+
+    try {
+      const plate = result.value.output("plate");
+      if (!(plate instanceof EvaluatedSolid)) {
+        throw new Error("Expected the 'plate' output to be a solid part");
+      }
+      return {
+        volume: plate.measure().volume,
+        stl: plate.export("stl"),
+      };
+    } finally {
+      result.value.dispose();
+    }
   } finally {
-    result.value.dispose();
+    evaluator.dispose();
   }
-} finally {
-  evaluator.dispose();
 }
+
+async function exportExactStep() {
+  const kernel = await createOcctKernel();
+  let evaluatorOwnsKernel = false;
+  try {
+    const evaluator = await createEvaluator({ kernel });
+    evaluatorOwnsKernel = true;
+    try {
+      const result = await evaluator.evaluate(document, {
+        parameters,
+        outputs: ["plate"],
+      });
+      if (!result.ok) {
+        throw new Error(
+          result.diagnostics.map((item) => item.message).join("\n"),
+        );
+      }
+
+      try {
+        const plate = result.value.output("plate");
+        if (!(plate instanceof EvaluatedSolid)) {
+          throw new Error("Expected the 'plate' output to be a solid part");
+        }
+        return {
+          volume: plate.measure().volume,
+          step: plate.export("step"),
+        };
+      } finally {
+        result.value.dispose();
+      }
+    } finally {
+      evaluator.dispose();
+    }
+  } finally {
+    // A rejected caller-supplied kernel remains caller-owned.
+    if (!evaluatorOwnsKernel) kernel.dispose();
+  }
+}
+
+const defaultMesh = await evaluateDefaultMesh();
+const exact = await exportExactStep();
+
+export const mountingPlateSummary = {
+  defaultVolume: defaultMesh.volume,
+  defaultStlBytes: defaultMesh.stl.byteLength,
+  exactVolume: exact.volume,
+  stepBytes: exact.step.byteLength,
+  stepHeader: new TextDecoder().decode(exact.step.subarray(0, 32)),
+};
+console.log(mountingPlateSummary);
 ```
 
-Parameter override numbers are expressed in base units: millimetres for length,
-radians for angle, unitless values for scalar parameters, and kilograms per
-cubic millimetre for mass density.
+{/* docs-example:end mounting-plate-default-and-exact */}
 
-## 3. Save the document and STL
+The example is a complete executable module. `build()` returns a deeply frozen
+current-version document; builder references such as `profile`, `solid`, and
+`part` never enter the serialized data.
+
+Parameter override numbers use base units: millimetres for length, radians for
+angle, unitless scalar values, and kilograms per cubic millimetre for mass
+density.
+
+## Understand the ownership boundary
+
+Each successful `evaluate()` call owns every native shape created for that
+evaluation, so its `EvaluatedDesign` is disposed in a `finally` block. Each
+evaluator is also disposed in `finally`.
+
+The exact path has one additional edge: `createOcctKernel()` returns a
+caller-owned kernel, while a successfully created evaluator adopts it. If
+`createEvaluator({ kernel })` rejects before that transfer, the caller still
+disposes the kernel. The example's `evaluatorOwnsKernel` guard covers both
+paths without relying on a partially created evaluator.
+
+Exports are detached JavaScript values. The returned STL and STEP
+`Uint8Array`s remain usable after their evaluated designs and evaluators have
+been disposed.
+
+## Save the results
+
+The runtime example deliberately performs no filesystem writes. A Node.js
+application can persist its detached values:
 
 ```ts
 import { writeFile } from "node:fs/promises";
@@ -112,36 +181,13 @@ await writeFile(
   "mounting-plate.invariantcad.json",
   stringifyDocument(document, { pretty: true }),
 );
-```
-
-Inside the successful evaluation block, save the exported bytes with:
-
-```ts
-await writeFile("mounting-plate.stl", plate.export("stl"));
+await writeFile("mounting-plate.stl", defaultMesh.stl);
+await writeFile("mounting-plate.step", exact.step);
 ```
 
 `stringifyDocument()` canonicalizes values according to the document protocol.
 Use `parseDocument()` when loading untrusted text; do not cast parsed JSON to a
 `DesignDocument`.
-
-## 4. Switch to exact B-Rep
-
-The design document does not change when you change kernels:
-
-```ts
-import { createOcctKernel } from "invariantcad/kernels/occt";
-
-const exactEvaluator = await createEvaluator({
-  kernel: await createOcctKernel(),
-});
-```
-
-An exact evaluated output can export STEP or BREP:
-
-```ts
-const step = exactOutput.export("step");
-const binaryBrep = exactOutput.export("brep-binary");
-```
 
 Read [kernels](/evaluation/kernels) before assuming every feature or topology
 history guarantee is identical between Manifold, stock OCCT, and the optional

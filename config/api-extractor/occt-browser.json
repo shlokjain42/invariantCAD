@@ -1,0 +1,7 @@
+{
+  "extends": "./base.json",
+  "mainEntryPointFilePath": "<projectFolder>/dist/occt-runtime-browser.d.ts",
+  "apiReport": {
+    "reportFileName": "kernels-occt-browser"
+  }
+}

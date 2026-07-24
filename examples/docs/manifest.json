@@ -1,0 +1,105 @@
+{
+  "version": 1,
+  "infrastructure": ["example-contract.ts"],
+  "examples": [
+    {
+      "id": "parametric-box-default",
+      "source": "parametric-box.ts",
+      "workflows": [
+        "portable parametric authoring",
+        "default evaluation",
+        "binary STL export"
+      ],
+      "targets": [
+        { "path": "README.md", "style": "html" },
+        {
+          "path": "docs/get-started/installation.mdx",
+          "style": "mdx"
+        }
+      ]
+    },
+    {
+      "id": "mounting-plate-default-and-exact",
+      "source": "mounting-plate.ts",
+      "workflows": [
+        "planar sketch with a hole",
+        "symmetric extrusion",
+        "default and exact evaluation",
+        "STEP export"
+      ],
+      "targets": [
+        {
+          "path": "docs/get-started/quickstart.mdx",
+          "style": "mdx"
+        },
+        {
+          "path": "docs/reference/complete-guide.md",
+          "style": "mdx"
+        }
+      ]
+    },
+    {
+      "id": "assembly-configuration-bom",
+      "source": "assembly-configuration-bom.ts",
+      "workflows": [
+        "fixed-placement assembly",
+        "named configuration",
+        "instance suppression",
+        "material override",
+        "deterministic BOM"
+      ],
+      "targets": [
+        {
+          "path": "docs/modeling/configurations-and-bom.mdx",
+          "style": "mdx"
+        }
+      ]
+    },
+    {
+      "id": "document-canonicalization-and-migration",
+      "source": "document-canonicalization-and-migration.ts",
+      "workflows": [
+        "legacy document migration",
+        "canonical serialization",
+        "validated parsing",
+        "semantic hashing"
+      ],
+      "targets": [
+        {
+          "path": "docs/interchange/documents-and-migrations.mdx",
+          "style": "mdx"
+        }
+      ]
+    },
+    {
+      "id": "persistent-topology-capture-resolve-explain",
+      "source": "persistent-topology.ts",
+      "workflows": [
+        "exact topology snapshot",
+        "persistent reference capture",
+        "cross-snapshot resolution",
+        "resolution explanation"
+      ],
+      "targets": [
+        {
+          "path": "docs/modeling/persistent-topology.mdx",
+          "style": "mdx"
+        }
+      ]
+    },
+    {
+      "id": "structured-diagnostics-and-resource-limits",
+      "source": "diagnostics-and-resource-limits.ts",
+      "workflows": [
+        "bounded untrusted document parsing",
+        "structured diagnostic handling"
+      ],
+      "targets": [
+        {
+          "path": "docs/evaluation/diagnostics-and-limits.mdx",
+          "style": "mdx"
+        }
+      ]
+    }
+  ]
+}

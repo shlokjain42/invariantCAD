@@ -1,0 +1,7 @@
+{
+  "extends": "./base.json",
+  "mainEntryPointFilePath": "<projectFolder>/dist/conformance.d.ts",
+  "apiReport": {
+    "reportFileName": "conformance"
+  }
+}

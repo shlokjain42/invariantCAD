@@ -4,6 +4,7 @@ import type {
   MaterialId,
   NodeId,
   ParameterId,
+  ResourceId,
   TopologyReferenceId,
 } from "./core/ids.js";
 import {
@@ -22,21 +23,29 @@ import {
   DOCUMENT_SCHEMA_V4,
   DOCUMENT_SCHEMA_V5,
   DOCUMENT_SCHEMA_V6,
+  DOCUMENT_SCHEMA_V7,
   DOCUMENT_VERSION_V1,
   DOCUMENT_VERSION_V2,
   DOCUMENT_VERSION_V3,
   DOCUMENT_VERSION_V4,
   DOCUMENT_VERSION_V5,
   DOCUMENT_VERSION_V6,
+  DOCUMENT_VERSION_V7,
   nodeDependencies,
+  nodeDependenciesV7,
   outputKindForNode,
+  outputKindForNodeV7,
   type DesignDocument,
+  type DesignDocumentV7,
   type DesignConfigurationIR,
   type NodeIR,
-  type OutputKind,
+  type NodeIRV7,
+  type OutputKindV7,
   type RefIR,
+  type RefIRV7,
   type SketchLoopIR,
   type SketchNodeIR,
+  type SketchNodeIRV7,
   type TopologyQueryIR,
   type TopologyReferenceEntryIR,
   type TopologySelectionIR,
@@ -57,8 +66,30 @@ import { SHELL_DIRECTIONS } from "./protocol/shell.js";
 import { OFFSET_DIRECTIONS } from "./protocol/offset.js";
 import { normalizePersistentTopologyReference } from "./topology-signatures.js";
 
+type ValidatableDocument = DesignDocument | DesignDocumentV7;
+type ValidatableNode = NodeIR | NodeIRV7;
+type ValidatableRef = RefIR | RefIRV7;
+
+function nodeDependenciesForDocument(
+  node: ValidatableNode,
+  document: ValidatableDocument,
+): readonly ValidatableRef[] {
+  return document.version === DOCUMENT_VERSION_V7
+    ? nodeDependenciesV7(node as NodeIRV7)
+    : nodeDependencies(node as NodeIR);
+}
+
+function outputKindForDocumentNode(
+  node: ValidatableNode,
+  document: ValidatableDocument,
+): OutputKindV7 {
+  return document.version === DOCUMENT_VERSION_V7
+    ? outputKindForNodeV7(node as NodeIRV7)
+    : outputKindForNode(node as NodeIR);
+}
+
 function topologyRolesForDocumentVersion(
-  version: DesignDocument["version"],
+  version: ValidatableDocument["version"],
 ): readonly string[] {
   switch (version) {
     case DOCUMENT_VERSION_V1:
@@ -72,6 +103,7 @@ function topologyRolesForDocumentVersion(
     case DOCUMENT_VERSION_V5:
       return TOPOLOGY_ROLES_V5;
     case DOCUMENT_VERSION_V6:
+    case DOCUMENT_VERSION_V7:
       return TOPOLOGY_ROLES_V6;
   }
 }
@@ -79,7 +111,7 @@ function topologyRolesForDocumentVersion(
 function validateExpression(
   expression: ExpressionIR,
   expected: Dimension,
-  document: DesignDocument,
+  document: ValidatableDocument,
   path: string,
   diagnostics: Diagnostic[],
 ): void {
@@ -228,7 +260,7 @@ function validateExpression(
 function validateConfiguration(
   id: ConfigurationId,
   configuration: DesignConfigurationIR,
-  document: DesignDocument,
+  document: ValidatableDocument,
   diagnostics: Diagnostic[],
 ): void {
   const path = `/configurations/${id}`;
@@ -346,9 +378,9 @@ function validateConfiguration(
 }
 
 function validateRef(
-  reference: RefIR,
-  expected: OutputKind | readonly OutputKind[],
-  document: DesignDocument,
+  reference: ValidatableRef,
+  expected: OutputKindV7 | readonly OutputKindV7[],
+  document: ValidatableDocument,
   path: string,
   diagnostics: Diagnostic[],
 ): void {
@@ -366,7 +398,7 @@ function validateRef(
     return;
   }
   const expectedKinds = Array.isArray(expected) ? expected : [expected];
-  const actual = outputKindForNode(target);
+  const actual = outputKindForDocumentNode(target, document);
   if (!expectedKinds.includes(reference.kind) || reference.kind !== actual) {
     diagnostics.push(
       diagnostic(
@@ -378,9 +410,52 @@ function validateRef(
   }
 }
 
+function validateResourceReference(
+  resource: ResourceId,
+  document: ValidatableDocument,
+  path: string,
+  diagnostics: Diagnostic[],
+  expectedMediaType?: string,
+): void {
+  const definition =
+    document.version === DOCUMENT_VERSION_V7 &&
+    Object.hasOwn(document.resources ?? {}, resource)
+      ? document.resources?.[resource]
+      : undefined;
+  if (definition === undefined) {
+    diagnostics.push(
+      diagnostic(
+        "REFERENCE_MISSING",
+        `Reference targets missing resource '${resource}'`,
+        { severity: "error", path },
+      ),
+    );
+    return;
+  }
+  if (
+    expectedMediaType !== undefined &&
+    definition.mediaType !== expectedMediaType
+  ) {
+    diagnostics.push(
+      diagnostic(
+        "REFERENCE_KIND_MISMATCH",
+        `Resource '${resource}' has media type '${definition.mediaType}', not '${expectedMediaType}'`,
+        {
+          severity: "error",
+          path,
+          details: {
+            expectedMediaType,
+            actualMediaType: definition.mediaType,
+          },
+        },
+      ),
+    );
+  }
+}
+
 function validateLoop(
   loop: SketchLoopIR,
-  sketch: SketchNodeIR,
+  sketch: SketchNodeIR | SketchNodeIRV7,
   path: string,
   diagnostics: Diagnostic[],
 ): void {
@@ -420,7 +495,10 @@ function validateLoop(
   }
 }
 
-function profileUsesEntity(sketch: SketchNodeIR, entity: EntityId): boolean {
+function profileUsesEntity(
+  sketch: SketchNodeIR | SketchNodeIRV7,
+  entity: EntityId,
+): boolean {
   return [sketch.profile.outer, ...sketch.profile.holes].some((loop) =>
     loop.kind === "circle"
       ? loop.entity === entity
@@ -430,7 +508,7 @@ function profileUsesEntity(sketch: SketchNodeIR, entity: EntityId): boolean {
 
 function validateTransform(
   operation: TransformOperationIR,
-  document: DesignDocument,
+  document: ValidatableDocument,
   path: string,
   diagnostics: Diagnostic[],
 ): void {
@@ -447,20 +525,30 @@ function validateTransform(
 }
 
 function validateSketch(
-  node: SketchNodeIR,
-  document: DesignDocument,
+  node: SketchNodeIR | SketchNodeIRV7,
+  document: ValidatableDocument,
   path: string,
   diagnostics: Diagnostic[],
 ): void {
-  node.plane.origin.forEach((value, index) =>
-    validateExpression(
-      value,
-      "length",
+  if (node.plane.type === "principal") {
+    node.plane.origin.forEach((value, index) =>
+      validateExpression(
+        value,
+        "length",
+        document,
+        `${path}/plane/origin/${index}`,
+        diagnostics,
+      ),
+    );
+  } else {
+    validateRef(
+      node.plane.datum,
+      "datumPlane",
       document,
-      `${path}/plane/origin/${index}`,
+      `${path}/plane/datum`,
       diagnostics,
-    ),
-  );
+    );
+  }
   for (const [id, entity] of Object.entries(node.entities)) {
     const entityPath = `${path}/entities/${id}`;
     switch (entity.kind) {
@@ -630,34 +718,41 @@ function validateSketch(
 }
 
 function nodeIsAncestor(
-  document: DesignDocument,
+  document: ValidatableDocument,
   descendant: NodeId,
   possibleAncestor: NodeId,
 ): boolean {
   const visited = new Set<NodeId>();
-  const visit = (id: NodeId): boolean => {
+  const pending: NodeId[] = [descendant];
+  while (pending.length > 0) {
+    const id = pending.pop()!;
     if (id === possibleAncestor) return true;
-    if (visited.has(id)) return false;
+    if (visited.has(id)) continue;
     visited.add(id);
     const node = Object.hasOwn(document.nodes, id)
       ? document.nodes[id]
       : undefined;
-    return node !== undefined && nodeDependencies(node).some((dependency) => visit(dependency.node));
-  };
-  return visit(descendant);
+    if (node === undefined) continue;
+    const dependencies = nodeDependenciesForDocument(node, document);
+    for (let index = dependencies.length - 1; index >= 0; index -= 1) {
+      pending.push(dependencies[index]!.node);
+    }
+  }
+  return false;
 }
 
 function validateTopologySelection(
   selection: TopologySelectionIR,
   expected: TopologyKind,
   input: NodeId,
-  document: DesignDocument,
+  document: ValidatableDocument,
   path: string,
   diagnostics: Diagnostic[],
 ): void {
   if (
     selection.topology === "vertex" &&
-    document.version !== DOCUMENT_VERSION_V6
+    document.version !== DOCUMENT_VERSION_V6 &&
+    document.version !== DOCUMENT_VERSION_V7
   ) {
     diagnostics.push(
       diagnostic(
@@ -722,7 +817,9 @@ function validateTopologySelection(
             (document.schema === DOCUMENT_SCHEMA_V5 &&
               document.version === DOCUMENT_VERSION_V5) ||
             (document.schema === DOCUMENT_SCHEMA_V6 &&
-              document.version === DOCUMENT_VERSION_V6)
+              document.version === DOCUMENT_VERSION_V6) ||
+            (document.schema === DOCUMENT_SCHEMA_V7 &&
+              document.version === DOCUMENT_VERSION_V7)
           )
         ) {
           diagnostics.push(
@@ -817,7 +914,9 @@ function validateTopologySelection(
               { severity: "error", path: `${queryPath}/feature` },
             ),
           );
-        } else if (outputKindForNode(feature) !== "solid") {
+        } else if (
+          outputKindForDocumentNode(feature, document) !== "solid"
+        ) {
           diagnostics.push(
             diagnostic(
               "REFERENCE_KIND_MISMATCH",
@@ -885,11 +984,13 @@ function validateTopologySelection(
             document.version === DOCUMENT_VERSION_V3 ||
             document.version === DOCUMENT_VERSION_V4 ||
             document.version === DOCUMENT_VERSION_V5 ||
-            document.version === DOCUMENT_VERSION_V6;
+            document.version === DOCUMENT_VERSION_V6 ||
+            document.version === DOCUMENT_VERSION_V7;
           const supportsSweepSources =
             document.version === DOCUMENT_VERSION_V4 ||
             document.version === DOCUMENT_VERSION_V5 ||
-            document.version === DOCUMENT_VERSION_V6;
+            document.version === DOCUMENT_VERSION_V6 ||
+            document.version === DOCUMENT_VERSION_V7;
           const profileProducer =
             feature?.kind === "extrude" ||
             feature?.kind === "revolve" ||
@@ -903,7 +1004,8 @@ function validateTopologySelection(
                 "TOPOLOGY_SELECTOR_INVALID",
                 document.version === DOCUMENT_VERSION_V4 ||
                   document.version === DOCUMENT_VERSION_V5 ||
-                  document.version === DOCUMENT_VERSION_V6
+                  document.version === DOCUMENT_VERSION_V6 ||
+                  document.version === DOCUMENT_VERSION_V7
                   ? "Sketch-entity topology sources require topology created by an extrusion, revolution, loft, or sweep"
                   : document.version === DOCUMENT_VERSION_V3
                     ? "Sketch-entity topology sources require topology created by an extrusion, revolution, or loft"
@@ -1059,7 +1161,10 @@ function validateTopologySelection(
         );
         break;
       case "position":
-        if (document.version !== DOCUMENT_VERSION_V6) {
+        if (
+          document.version !== DOCUMENT_VERSION_V6 &&
+          document.version !== DOCUMENT_VERSION_V7
+        ) {
           diagnostics.push(
             diagnostic(
               "TOPOLOGY_SELECTOR_INVALID",
@@ -1141,8 +1246,8 @@ function validateTopologySelection(
 
 function validateNode(
   id: NodeId,
-  node: NodeIR,
-  document: DesignDocument,
+  node: ValidatableNode,
+  document: ValidatableDocument,
   diagnostics: Diagnostic[],
 ): void {
   const path = `/nodes/${id}`;
@@ -1165,6 +1270,41 @@ function validateNode(
       break;
     case "sketch":
       validateSketch(node, document, path, diagnostics);
+      break;
+    case "datumPoint":
+      node.position.forEach((value, index) =>
+        expression(value, "length", `position/${index}`),
+      );
+      break;
+    case "datumAxis":
+      node.origin.forEach((value, index) =>
+        expression(value, "length", `origin/${index}`),
+      );
+      node.direction.forEach((value, index) =>
+        expression(value, "scalar", `direction/${index}`),
+      );
+      break;
+    case "datumPlane":
+      node.origin.forEach((value, index) =>
+        expression(value, "length", `origin/${index}`),
+      );
+      node.xDirection.forEach((value, index) =>
+        expression(value, "scalar", `xDirection/${index}`),
+      );
+      node.normal.forEach((value, index) =>
+        expression(value, "scalar", `normal/${index}`),
+      );
+      break;
+    case "coordinateSystem":
+      node.origin.forEach((value, index) =>
+        expression(value, "length", `origin/${index}`),
+      );
+      node.xDirection.forEach((value, index) =>
+        expression(value, "scalar", `xDirection/${index}`),
+      );
+      node.yDirection.forEach((value, index) =>
+        expression(value, "scalar", `yDirection/${index}`),
+      );
       break;
     case "polylinePath":
       if (node.points.length < 2) {
@@ -1478,8 +1618,37 @@ function validateNode(
         expression(value, "scalar", `neutralPlane/normal/${index}`),
       );
       break;
+    case "bodySet":
+      node.bodies.forEach((body, index) =>
+        validateRef(
+          body.solid,
+          "solid",
+          document,
+          `${path}/bodies/${index}/solid`,
+          diagnostics,
+        ),
+      );
+      break;
+    case "importedBody":
+      validateResourceReference(
+        node.resource,
+        document,
+        `${path}/resource`,
+        diagnostics,
+      );
+      break;
     case "part":
-      validateRef(node.solid, "solid", document, `${path}/solid`, diagnostics);
+      if ("geometry" in node) {
+        validateRef(
+          node.geometry,
+          ["solid", "bodySet"],
+          document,
+          `${path}/geometry`,
+          diagnostics,
+        );
+      } else {
+        validateRef(node.solid, "solid", document, `${path}/solid`, diagnostics);
+      }
       if (node.material !== undefined && node.materialId !== undefined) {
         diagnostics.push(
           diagnostic(
@@ -1518,18 +1687,58 @@ function validateNode(
       break;
     case "assembly":
       node.instances.forEach((instance, index) => {
-        validateRef(
-          instance.component,
-          ["part", "assembly"],
-          document,
-          `${path}/instances/${index}/component`,
-          diagnostics,
-        );
+        const instancePath = `${path}/instances/${index}`;
+        if ("configuration" in instance) {
+          if (instance.component.source === "local") {
+            validateRef(
+              instance.component.reference,
+              ["part", "assembly"],
+              document,
+              `${instancePath}/component/reference`,
+              diagnostics,
+            );
+            if (
+              instance.configuration.mode === "named" &&
+              !Object.hasOwn(
+                document.configurations ?? {},
+                instance.configuration.id,
+              )
+            ) {
+              diagnostics.push(
+                diagnostic(
+                  "REFERENCE_MISSING",
+                  `Occurrence references missing configuration '${instance.configuration.id}'`,
+                  {
+                    severity: "error",
+                    node: id,
+                    path: `${instancePath}/configuration/id`,
+                  },
+                ),
+              );
+            }
+          } else {
+            validateResourceReference(
+              instance.component.resource,
+              document,
+              `${instancePath}/component/resource`,
+              diagnostics,
+              "application/vnd.invariantcad.document+json",
+            );
+          }
+        } else {
+          validateRef(
+            instance.component,
+            ["part", "assembly"],
+            document,
+            `${instancePath}/component`,
+            diagnostics,
+          );
+        }
         instance.placement.forEach((operation, operationIndex) =>
           validateTransform(
             operation,
             document,
-            `${path}/instances/${index}/placement/${operationIndex}`,
+            `${instancePath}/placement/${operationIndex}`,
             diagnostics,
           ),
         );
@@ -1539,7 +1748,7 @@ function validateNode(
 }
 
 function validateTopologyReferences(
-  document: DesignDocument,
+  document: ValidatableDocument,
   diagnostics: Diagnostic[],
 ): void {
   const documentIdentity = document as {
@@ -1560,13 +1769,16 @@ function validateTopologyReferences(
     schema === DOCUMENT_SCHEMA_V5 && version === DOCUMENT_VERSION_V5;
   const isVersion6 =
     schema === DOCUMENT_SCHEMA_V6 && version === DOCUMENT_VERSION_V6;
+  const isVersion7 =
+    schema === DOCUMENT_SCHEMA_V7 && version === DOCUMENT_VERSION_V7;
   if (
     !isVersion1 &&
     !isVersion2 &&
     !isVersion3 &&
     !isVersion4 &&
     !isVersion5 &&
-    !isVersion6
+    !isVersion6 &&
+    !isVersion7
   ) {
     diagnostics.push(
       diagnostic(
@@ -1585,6 +1797,15 @@ function validateTopologyReferences(
               { schema: DOCUMENT_SCHEMA_V4, version: DOCUMENT_VERSION_V4 },
               { schema: DOCUMENT_SCHEMA_V5, version: DOCUMENT_VERSION_V5 },
               { schema: DOCUMENT_SCHEMA_V6, version: DOCUMENT_VERSION_V6 },
+              ...(schema === DOCUMENT_SCHEMA_V7 ||
+              version === DOCUMENT_VERSION_V7
+                ? [
+                    {
+                      schema: DOCUMENT_SCHEMA_V7,
+                      version: DOCUMENT_VERSION_V7,
+                    },
+                  ]
+                : []),
             ],
           },
         },
@@ -1593,7 +1814,7 @@ function validateTopologyReferences(
   }
 
   const topologyReferences = (
-    document as DesignDocument & {
+    document as ValidatableDocument & {
       readonly topologyReferences?: Readonly<
         Record<TopologyReferenceId, TopologyReferenceEntryIR>
       >;
@@ -1605,7 +1826,8 @@ function validateTopologyReferences(
     !isVersion3 &&
     !isVersion4 &&
     !isVersion5 &&
-    !isVersion6
+    !isVersion6 &&
+    !isVersion7
   ) {
     diagnostics.push(
       diagnostic(
@@ -1639,7 +1861,7 @@ function validateTopologyReferences(
     if (
       entry.topology !== "face" &&
       entry.topology !== "edge" &&
-      (!isVersion6 || entry.topology !== "vertex")
+      ((!isVersion6 && !isVersion7) || entry.topology !== "vertex")
     ) {
       diagnostics.push(
         diagnostic(
@@ -1691,7 +1913,11 @@ function validateTopologyReferences(
         );
         continue;
       }
-      if (!isVersion6 && normalized.value.protocolVersion !== 1) {
+      if (
+        !isVersion6 &&
+        !isVersion7 &&
+        normalized.value.protocolVersion !== 1
+      ) {
         diagnostics.push(
           diagnostic(
             "TOPOLOGY_SIGNATURE_INVALID",
@@ -1778,7 +2004,7 @@ function validateTopologyReferences(
 }
 
 function detectGraphCycles(
-  document: DesignDocument,
+  document: ValidatableDocument,
   diagnostics: Diagnostic[],
 ): void {
   const states = new Map<NodeId, "visiting" | "visited">();
@@ -1786,7 +2012,7 @@ function detectGraphCycles(
   const pathIndices = new Map<NodeId, number>();
   interface Frame {
     readonly id: NodeId;
-    readonly dependencies: readonly RefIR[];
+    readonly dependencies: readonly ValidatableRef[];
     next: number;
   }
   for (const root of Object.keys(document.nodes) as NodeId[]) {
@@ -1794,7 +2020,11 @@ function detectGraphCycles(
     const rootNode = document.nodes[root];
     if (rootNode === undefined) continue;
     const frames: Frame[] = [
-      { id: root, dependencies: nodeDependencies(rootNode), next: 0 },
+      {
+        id: root,
+        dependencies: nodeDependenciesForDocument(rootNode, document),
+        next: 0,
+      },
     ];
     states.set(root, "visiting");
     pathIndices.set(root, 0);
@@ -1836,16 +2066,16 @@ function detectGraphCycles(
       path.push(dependency);
       frames.push({
         id: dependency,
-        dependencies: nodeDependencies(dependencyNode),
+        dependencies: nodeDependenciesForDocument(dependencyNode, document),
         next: 0,
       });
     }
   }
 }
 
-export function validateDocument(
-  document: DesignDocument,
-): CadResult<DesignDocument> {
+function validateDocumentInternal<T extends ValidatableDocument>(
+  document: T,
+): CadResult<T> {
   const diagnostics: Diagnostic[] = [];
   validateTopologyReferences(document, diagnostics);
   const usesMassDensity =
@@ -1867,7 +2097,7 @@ export function validateDocument(
   }
   for (const [id, parameter] of Object.entries(document.parameters) as [
     ParameterId,
-    DesignDocument["parameters"][ParameterId],
+    ValidatableDocument["parameters"][ParameterId],
   ][]) {
     const path = `/parameters/${id}`;
     validateExpression(parameter.default, parameter.dimension, document, `${path}/default`, diagnostics);
@@ -1880,7 +2110,7 @@ export function validateDocument(
   }
   for (const [id, material] of Object.entries(document.materials ?? {}) as [
     MaterialId,
-    NonNullable<DesignDocument["materials"]>[MaterialId],
+    NonNullable<ValidatableDocument["materials"]>[MaterialId],
   ][]) {
     validateExpression(
       material.massDensity,
@@ -1895,13 +2125,29 @@ export function validateDocument(
   ) as [ConfigurationId, DesignConfigurationIR][]) {
     validateConfiguration(id, configuration, document, diagnostics);
   }
-  for (const [id, node] of Object.entries(document.nodes) as [NodeId, NodeIR][]) {
+  for (const [id, node] of Object.entries(document.nodes) as [
+    NodeId,
+    ValidatableNode,
+  ][]) {
     validateNode(id, node, document, diagnostics);
   }
+  const expectedOutputKinds: readonly OutputKindV7[] =
+    document.version === DOCUMENT_VERSION_V7
+      ? [
+          "curve",
+          "wire",
+          "face",
+          "shell",
+          "solid",
+          "bodySet",
+          "part",
+          "assembly",
+        ]
+      : ["solid", "part", "assembly"];
   for (const [name, output] of Object.entries(document.outputs)) {
     validateRef(
       output,
-      ["solid", "part", "assembly"],
+      expectedOutputKinds,
       document,
       `/outputs/${name}`,
       diagnostics,
@@ -1910,4 +2156,17 @@ export function validateDocument(
   detectGraphCycles(document, diagnostics);
   if (hasErrors(diagnostics)) return { ok: false, diagnostics };
   return success(document, diagnostics);
+}
+
+export function validateDocument(
+  document: DesignDocument,
+): CadResult<DesignDocument> {
+  return validateDocumentInternal(document);
+}
+
+/** Strict semantic validation for the isolated staged document-v7 grammar. */
+export function validateDocumentV7(
+  document: DesignDocumentV7,
+): CadResult<DesignDocumentV7> {
+  return validateDocumentInternal(document);
 }

@@ -102,14 +102,69 @@ try {
 
 ## Native import status
 
-The kernel protocol defines exact native-import capability, but the current
-public authoring grammar does not expose an imported-shape feature node. This is
-therefore a backend protocol foundation, not a documented end-user 0.1 modeling
-workflow.
+The current public authoring grammar does not yet expose an imported-body
+feature node. Import is therefore a kernel and staged Document v7 foundation,
+not an end-user 0.1 modeling workflow.
 
-Generic STEP/BREP import also would not create InvariantCAD feature lineage or
-stable authored topology roles automatically. A future import feature must
-specify those semantics explicitly.
+There are deliberately two kernel boundaries:
+
+- `nativeImports` plus `importShape(...)` is weak exchange support. It may
+  return any shape accepted by the backend.
+- `documentBodyImport` plus `importDocumentBody(...)` is the versioned strong
+  boundary required by a canonical imported-body node.
+
+Stock OCCT admits STEP only with `{ mode: "from-file" }`. Text and binary BREP
+are unitless, so they require `{ mode: "declared", length: "mm" | "cm" | "m" |
+"in" }`. Protocol v1 requires `{ healing: { mode: "none" } }`.
+
+```ts
+import {
+  inspectKernelDocumentBodyImportCapabilities,
+  kernelSupportsDocumentBodyImport,
+} from "invariantcad";
+import { createOcctKernel } from "invariantcad/kernels/occt";
+
+const kernel = await createOcctKernel();
+try {
+  const inspection = inspectKernelDocumentBodyImportCapabilities(
+    kernel.capabilities,
+  );
+  if (
+    inspection.status !== "valid" ||
+    !kernelSupportsDocumentBodyImport(
+      kernel.capabilities,
+      "brep-binary",
+      "declared",
+    ) ||
+    kernel.importDocumentBody === undefined
+  ) {
+    throw new Error("The selected kernel cannot import this document body");
+  }
+
+  const shape = kernel.importDocumentBody(brepBytes, {
+    format: "brep-binary",
+    units: { mode: "declared", length: "mm" },
+    healing: { mode: "none" },
+  });
+  try {
+    console.log(kernel.measure(shape).volume);
+  } finally {
+    kernel.disposeShape(shape);
+  }
+} finally {
+  kernel.dispose();
+}
+```
+
+This low-level call snapshots the supplied bytes but does not verify a document
+resource digest. The staged resolver performs byte-length and SHA-256 admission
+before calling the kernel. The strong importer then requires exactly one valid,
+positive-volume solid with no loose topology and reports only partial imported
+history. It does not invent stable feature lineage or authored topology roles.
+
+Native STEP/BREP parsers can allocate or execute beyond JavaScript byte limits.
+Applications handling hostile files still need a disposable worker or process
+boundary; cooperative cancellation cannot preempt a synchronous native parser.
 
 ## Exchange is not artifact caching
 
