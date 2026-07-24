@@ -1013,6 +1013,60 @@ describe("document-v7 feature hashes protocol v2", () => {
     expect((await hashDesignFeaturesV2(document, crossRealm)).ok).toBe(true);
   });
 
+  it("counts consumed topology-reference hash edges in the dependency-link boundary", async () => {
+    const document = {
+      schema: DOCUMENT_SCHEMA_V7,
+      version: DOCUMENT_VERSION_V7,
+      name: "feature-hash-v2-link-budget",
+      units: { length: "mm", angle: "rad" },
+      parameters: {},
+      nodes: {
+        box: {
+          kind: "box",
+          size: [length(1), length(2), length(3)],
+          center: false,
+        },
+        fillet: {
+          kind: "fillet",
+          input: { node: "box", kind: "solid" },
+          edges: {
+            topology: "edge",
+            query: {
+              op: "persistentReference",
+              reference: "storedEdge",
+            },
+            cardinality: { min: 1 },
+          },
+          radius: length(0.1),
+        },
+      },
+      outputs: { result: { node: "fillet", kind: "solid" } },
+      topologyReferences: {
+        storedEdge: {
+          target: { node: "box", kind: "solid" },
+          topology: "edge",
+          variants: [edgeReference()],
+        },
+      },
+    } as unknown as DesignDocumentV7;
+    const rejected = await hashDesignFeaturesV2(document, {
+      limits: { maxDependencyLinks: 1 },
+    });
+    expect(rejected.ok).toBe(false);
+    if (!rejected.ok) {
+      expect(rejected.diagnostics[0]?.details).toMatchObject({
+        resource: "maxDependencyLinks",
+        limit: 1,
+        actual: 2,
+      });
+    }
+
+    const exact = await hashDesignFeaturesV2(document, {
+      limits: { maxDependencyLinks: 2 },
+    });
+    expect(exact.ok, JSON.stringify(exact.diagnostics)).toBe(true);
+  });
+
   it("enforces the exact cumulative canonical-byte boundary and in-flight cancellation", async () => {
     const document = comprehensiveDocument();
     const exact = await minimumCanonicalByteBudget(document);
@@ -1174,6 +1228,73 @@ describe("document-v7 feature hashes protocol v2", () => {
     }
     expectRealmFailure(inFlightResult!);
     expect(await reportValue(hashDesignFeaturesV2(document))).toEqual(
+      baseline,
+    );
+  });
+
+  it("rejects an accessor that lies only between integrity checks", async () => {
+    const document = comprehensiveDocument();
+    const baseline = await reportValue(hashDesignFeaturesV2(document));
+    const original = Object.getOwnPropertyDescriptor(Object, "entries");
+    expect(original?.value).toBeTypeOf("function");
+    let reads = 0;
+    let result: CadResult<DesignFeatureHashReportV2>;
+    try {
+      Object.defineProperty(Object, "entries", {
+        configurable: original!.configurable === true,
+        enumerable: original!.enumerable === true,
+        get() {
+          reads += 1;
+          return reads === 2 ? () => [] : original!.value;
+        },
+      });
+      result = await hashDesignFeaturesV2(document, {
+        parameters: { width: 20 },
+      });
+    } finally {
+      Object.defineProperty(Object, "entries", original!);
+    }
+
+    expectRealmFailure(result!);
+    expect(reads).toBe(0);
+    expect(await reportValue(hashDesignFeaturesV2(document))).toEqual(
+      baseline,
+    );
+  });
+
+  it("rejects inherited semantic properties added to Object.prototype", async () => {
+    const document = comprehensiveDocument();
+    const absent = clone(document) as unknown as {
+      nodes: { part: { materialId?: string } };
+    };
+    delete absent.nodes.part.materialId;
+    const absentDocument = absent as unknown as DesignDocumentV7;
+    const baseline = await reportValue(hashDesignFeaturesV2(absentDocument));
+    const explicit = await reportValue(hashDesignFeaturesV2(document));
+    expect(hashFor(baseline, "part")).not.toBe(hashFor(explicit, "part"));
+
+    const original = Object.getOwnPropertyDescriptor(
+      Object.prototype,
+      "materialId",
+    );
+    expect(original).toBeUndefined();
+    let result: CadResult<DesignFeatureHashReportV2>;
+    try {
+      Object.defineProperty(Object.prototype, "materialId", {
+        configurable: true,
+        value: "steel",
+      });
+      result = await hashDesignFeaturesV2(absentDocument);
+    } finally {
+      if (original === undefined) {
+        delete (Object.prototype as { materialId?: string }).materialId;
+      } else {
+        Object.defineProperty(Object.prototype, "materialId", original);
+      }
+    }
+
+    expectRealmFailure(result!);
+    expect(await reportValue(hashDesignFeaturesV2(absentDocument))).toEqual(
       baseline,
     );
   });

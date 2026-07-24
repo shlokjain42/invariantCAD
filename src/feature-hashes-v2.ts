@@ -227,24 +227,19 @@ const ABORT_SIGNAL_ABORTED_GETTER =
     ? undefined
     : Object.getOwnPropertyDescriptor(AbortSignal.prototype, "aborted")?.get;
 const IntrinsicUint8Array = Uint8Array;
+const IntrinsicReflect = Reflect;
 const reflectApply = Reflect.apply;
+const reflectOwnKeys = Reflect.ownKeys;
 const objectFreeze = Object.freeze;
 const objectGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
 const objectGetPrototypeOf = Object.getPrototypeOf;
+const objectIs = Object.is;
 const typedArrayPrototype = objectGetPrototypeOf(
   IntrinsicUint8Array.prototype,
 ) as object;
 const typedArrayByteLengthGetter = objectGetOwnPropertyDescriptor(
   typedArrayPrototype,
   "byteLength",
-)?.get;
-const mapSizeGetter = objectGetOwnPropertyDescriptor(
-  Map.prototype,
-  "size",
-)?.get;
-const setSizeGetter = objectGetOwnPropertyDescriptor(
-  Set.prototype,
-  "size",
 )?.get;
 const arrayIteratorPrototype = objectGetPrototypeOf(
   reflectApply(Array.prototype[Symbol.iterator], [], []) as object,
@@ -254,6 +249,9 @@ const mapIteratorPrototype = objectGetPrototypeOf(
 ) as object;
 const setIteratorPrototype = objectGetPrototypeOf(
   reflectApply(Set.prototype[Symbol.iterator], new Set(), []) as object,
+) as object;
+const iteratorPrototype = objectGetPrototypeOf(
+  arrayIteratorPrototype,
 ) as object;
 const HEX_DIGITS = "0123456789abcdef";
 
@@ -283,9 +281,16 @@ function capturePrototypeMethod(
   return undefined;
 }
 
+const capturedCrypto = (() => {
+  try {
+    return globalThis.crypto;
+  } catch {
+    return undefined;
+  }
+})();
 const capturedCryptoDigest = (() => {
   try {
-    return capturePrototypeMethod(globalThis.crypto?.subtle, "digest");
+    return capturePrototypeMethod(capturedCrypto?.subtle, "digest");
   } catch {
     return undefined;
   }
@@ -300,28 +305,178 @@ const capturedTextEncoder = (() => {
   }
 })();
 
-type RealmMemberSnapshot = readonly [
-  label: string,
+type CapturedRealmDescriptor =
+  | Readonly<{
+      kind: "data";
+      configurable: boolean;
+      enumerable: boolean;
+      writable: boolean;
+      value: unknown;
+    }>
+  | Readonly<{
+      kind: "accessor";
+      configurable: boolean;
+      enumerable: boolean;
+      get: (() => unknown) | undefined;
+      set: ((value: unknown) => void) | undefined;
+    }>;
+
+interface RealmMemberSnapshot {
+  readonly label: string;
+  readonly key: PropertyKey;
+  readonly descriptor: CapturedRealmDescriptor | undefined;
+}
+
+interface RealmOwnerSnapshot {
+  readonly label: string;
+  readonly target: object;
+  readonly prototype: object | null;
+  /** Present only when additions, removals, and key reordering are forbidden. */
+  readonly exactOwnKeys?: readonly PropertyKey[];
+  readonly members: readonly RealmMemberSnapshot[];
+}
+
+function descriptorField(
+  descriptor: PropertyDescriptor,
+  key: keyof PropertyDescriptor,
+): unknown {
+  return objectGetOwnPropertyDescriptor(descriptor, key)?.value;
+}
+
+function captureRealmDescriptor(
   target: object,
   key: PropertyKey,
-  value: unknown,
-];
+): CapturedRealmDescriptor | undefined {
+  const descriptor = objectGetOwnPropertyDescriptor(target, key);
+  if (descriptor === undefined) return undefined;
+  const configurable = descriptorField(descriptor, "configurable") === true;
+  const enumerable = descriptorField(descriptor, "enumerable") === true;
+  if (objectGetOwnPropertyDescriptor(descriptor, "value") !== undefined) {
+    return objectFreeze({
+      kind: "data" as const,
+      configurable,
+      enumerable,
+      writable: descriptorField(descriptor, "writable") === true,
+      value: descriptorField(descriptor, "value"),
+    });
+  }
+  return objectFreeze({
+    kind: "accessor" as const,
+    configurable,
+    enumerable,
+    get: descriptorField(descriptor, "get") as (() => unknown) | undefined,
+    set: descriptorField(descriptor, "set") as
+      | ((value: unknown) => void)
+      | undefined,
+  });
+}
 
-function captureRealmMembers(
+function capturedOwnKeys(target: object): readonly PropertyKey[] {
+  return reflectApply(reflectOwnKeys, IntrinsicReflect, [
+    target,
+  ]) as PropertyKey[];
+}
+
+function captureRealmMember(
+  ownerLabel: string,
+  target: object,
+  key: PropertyKey,
+): RealmMemberSnapshot {
+  return objectFreeze({
+    label: `${ownerLabel}.${String(key)}`,
+    key,
+    descriptor: captureRealmDescriptor(target, key),
+  });
+}
+
+function captureSelectedRealmOwner(
   label: string,
   target: object,
   keys: readonly PropertyKey[],
-): RealmMemberSnapshot[] {
-  return keys.map((key) => [
-    `${label}.${String(key)}`,
+): RealmOwnerSnapshot {
+  return objectFreeze({
+    label,
     target,
-    key,
-    (target as Readonly<Record<PropertyKey, unknown>>)[key],
-  ]);
+    prototype: objectGetPrototypeOf(target),
+    members: objectFreeze(
+      keys.map((key) => captureRealmMember(label, target, key)),
+    ),
+  });
 }
 
-const REALM_MEMBER_SNAPSHOTS: readonly RealmMemberSnapshot[] = objectFreeze([
-  ...captureRealmMembers("globalThis", globalThis, [
+function captureFullRealmOwner(
+  label: string,
+  target: object,
+): RealmOwnerSnapshot {
+  const keys = objectFreeze([...capturedOwnKeys(target)]);
+  return objectFreeze({
+    label,
+    target,
+    prototype: objectGetPrototypeOf(target),
+    exactOwnKeys: keys,
+    members: objectFreeze(
+      keys.map((key) => captureRealmMember(label, target, key)),
+    ),
+  });
+}
+
+function capturePresentFullRealmOwners(
+  inputs: readonly (readonly [label: string, target: object | undefined])[],
+): readonly RealmOwnerSnapshot[] {
+  const snapshots: RealmOwnerSnapshot[] = [];
+  for (const [label, target] of inputs) {
+    if (target !== undefined) {
+      snapshots.push(captureFullRealmOwner(label, target));
+    }
+  }
+  return objectFreeze(snapshots);
+}
+
+const REALM_OWNER_SNAPSHOTS: readonly RealmOwnerSnapshot[] = objectFreeze([
+  ...capturePresentFullRealmOwners([
+    ["Object.prototype", Object.prototype],
+    ["Array.prototype", Array.prototype],
+    ["Map.prototype", Map.prototype],
+    ["Set.prototype", Set.prototype],
+    ["WeakMap.prototype", WeakMap.prototype],
+    ["WeakSet.prototype", WeakSet.prototype],
+    ["Promise.prototype", Promise.prototype],
+    ["String.prototype", String.prototype],
+    ["RegExp.prototype", RegExp.prototype],
+    ["Error.prototype", Error.prototype],
+    ["TypeError.prototype", TypeError.prototype],
+    ["RangeError.prototype", RangeError.prototype],
+    ["ArrayBuffer.prototype", ArrayBuffer.prototype],
+    ["Uint8Array.prototype", IntrinsicUint8Array.prototype],
+    ["%TypedArray%.prototype", typedArrayPrototype],
+    ["%IteratorPrototype%", iteratorPrototype],
+    ["ArrayIterator.prototype", arrayIteratorPrototype],
+    ["MapIterator.prototype", mapIteratorPrototype],
+    ["SetIterator.prototype", setIteratorPrototype],
+    [
+      "AbortSignal.prototype",
+      typeof AbortSignal === "undefined" ? undefined : AbortSignal.prototype,
+    ],
+    [
+      "Crypto.prototype",
+      capturedCrypto === undefined
+        ? undefined
+        : (objectGetPrototypeOf(capturedCrypto) as object),
+    ],
+    [
+      "SubtleCrypto.prototype",
+      capturedCryptoDigest === undefined
+        ? undefined
+        : (objectGetPrototypeOf(capturedCryptoDigest.target) as object),
+    ],
+    [
+      "TextEncoder.prototype",
+      capturedTextEncoder === undefined
+        ? undefined
+        : (objectGetPrototypeOf(capturedTextEncoder.target) as object),
+    ],
+  ]),
+  captureSelectedRealmOwner("globalThis", globalThis, [
     "Object",
     "Array",
     "Map",
@@ -345,96 +500,55 @@ const REALM_MEMBER_SNAPSHOTS: readonly RealmMemberSnapshot[] = objectFreeze([
     "Math",
     "crypto",
   ]),
-  ...captureRealmMembers("Object", Object, [
-    "keys",
-    "values",
-    "entries",
-    "fromEntries",
-    "hasOwn",
+  captureSelectedRealmOwner("Object", Object, [
+    "assign",
     "create",
-    "freeze",
-    "getPrototypeOf",
-    "getOwnPropertyDescriptor",
-    "isFrozen",
-    "is",
-  ]),
-  ...captureRealmMembers("Array", Array, ["isArray"]),
-  ...captureRealmMembers("Array.prototype", Array.prototype, [
-    "map",
-    "flatMap",
-    "filter",
-    "find",
-    "findIndex",
-    "sort",
-    "includes",
+    "defineProperty",
     "entries",
+    "freeze",
+    "fromEntries",
+    "getOwnPropertyDescriptor",
+    "getOwnPropertyDescriptors",
+    "getPrototypeOf",
+    "hasOwn",
+    "is",
+    "isFrozen",
     "keys",
     "values",
-    "fill",
-    "forEach",
-    "some",
-    "every",
-    "push",
-    "pop",
-    "join",
-    "slice",
-    Symbol.iterator,
   ]),
-  ...captureRealmMembers("Map.prototype", Map.prototype, [
-    "get",
-    "set",
-    "delete",
-    "has",
-    "entries",
-    "values",
-    Symbol.iterator,
-  ]),
-  ...captureRealmMembers("Set.prototype", Set.prototype, [
-    "add",
-    "has",
-    "values",
-    Symbol.iterator,
-  ]),
-  ...captureRealmMembers("WeakMap.prototype", WeakMap.prototype, [
-    "get",
-    "set",
-  ]),
-  ...captureRealmMembers("WeakSet.prototype", WeakSet.prototype, [
-    "add",
-    "delete",
-    "has",
-  ]),
-  ...captureRealmMembers(
-    "ArrayIterator.prototype",
-    arrayIteratorPrototype,
-    ["next"],
-  ),
-  ...captureRealmMembers(
-    "MapIterator.prototype",
-    mapIteratorPrototype,
-    ["next"],
-  ),
-  ...captureRealmMembers(
-    "SetIterator.prototype",
-    setIteratorPrototype,
-    ["next"],
-  ),
-  ...captureRealmMembers("Number", Number, [
+  captureSelectedRealmOwner("Array", Array, ["isArray"]),
+  captureSelectedRealmOwner("Map", Map, []),
+  captureSelectedRealmOwner("Set", Set, []),
+  captureSelectedRealmOwner("WeakMap", WeakMap, []),
+  captureSelectedRealmOwner("WeakSet", WeakSet, []),
+  captureSelectedRealmOwner("Number", Number, [
     "isFinite",
     "isSafeInteger",
     "isInteger",
     "EPSILON",
     "POSITIVE_INFINITY",
   ]),
-  ...captureRealmMembers("JSON", JSON, ["parse", "stringify"]),
-  ...captureRealmMembers("Reflect", Reflect, ["apply", "ownKeys"]),
-  ...captureRealmMembers("Promise.prototype", Promise.prototype, ["then"]),
-  ...captureRealmMembers("String.prototype", String.prototype, [
-    "charCodeAt",
-    "trim",
+  captureSelectedRealmOwner("String", String, []),
+  captureSelectedRealmOwner("Symbol", Symbol, []),
+  captureSelectedRealmOwner("Promise", Promise, []),
+  captureSelectedRealmOwner("ArrayBuffer", ArrayBuffer, []),
+  captureSelectedRealmOwner("Uint8Array", IntrinsicUint8Array, []),
+  ...(typeof TextEncoder === "undefined"
+    ? []
+    : [captureSelectedRealmOwner("TextEncoder", TextEncoder, [])]),
+  ...(typeof AbortSignal === "undefined"
+    ? []
+    : [captureSelectedRealmOwner("AbortSignal", AbortSignal, [])]),
+  captureSelectedRealmOwner("RegExp", RegExp, []),
+  captureSelectedRealmOwner("Error", Error, []),
+  captureSelectedRealmOwner("TypeError", TypeError, []),
+  captureSelectedRealmOwner("RangeError", RangeError, []),
+  captureSelectedRealmOwner("JSON", JSON, ["parse", "stringify"]),
+  captureSelectedRealmOwner("Reflect", IntrinsicReflect, [
+    "apply",
+    "ownKeys",
   ]),
-  ...captureRealmMembers("RegExp.prototype", RegExp.prototype, ["test"]),
-  ...captureRealmMembers("Math", Math, [
+  captureSelectedRealmOwner("Math", Math, [
     "abs",
     "min",
     "max",
@@ -470,74 +584,72 @@ function realmIntegrityFailure(
   );
 }
 
+function realmDescriptorsEqual(
+  first: CapturedRealmDescriptor | undefined,
+  second: CapturedRealmDescriptor | undefined,
+): boolean {
+  if (first === undefined || second === undefined) return first === second;
+  if (
+    first.kind !== second.kind ||
+    first.configurable !== second.configurable ||
+    first.enumerable !== second.enumerable
+  ) {
+    return false;
+  }
+  if (first.kind === "data" && second.kind === "data") {
+    return (
+      first.writable === second.writable && objectIs(first.value, second.value)
+    );
+  }
+  return (
+    first.kind === "accessor" &&
+    second.kind === "accessor" &&
+    first.get === second.get &&
+    first.set === second.set
+  );
+}
+
 function realmIntegrityError(): CadResult<never> | undefined {
   try {
     for (
       let index = 0;
-      index < REALM_MEMBER_SNAPSHOTS.length;
+      index < REALM_OWNER_SNAPSHOTS.length;
       index += 1
     ) {
-      const snapshot = REALM_MEMBER_SNAPSHOTS[index]!;
-      if (
-        (snapshot[1] as Readonly<Record<PropertyKey, unknown>>)[snapshot[2]] !==
-        snapshot[3]
-      ) {
-        return realmIntegrityFailure(snapshot[0]);
+      const owner = REALM_OWNER_SNAPSHOTS[index]!;
+      if (objectGetPrototypeOf(owner.target) !== owner.prototype) {
+        return realmIntegrityFailure(`${owner.label}.[[Prototype]]`);
       }
-    }
-    const abortedGetter =
-      typeof globalThis.AbortSignal === "undefined"
-        ? undefined
-        : objectGetOwnPropertyDescriptor(
-            globalThis.AbortSignal.prototype,
-            "aborted",
-          )?.get;
-    if (abortedGetter !== ABORT_SIGNAL_ABORTED_GETTER) {
-      return realmIntegrityFailure("AbortSignal.prototype.aborted");
-    }
-    const byteLengthGetter = objectGetOwnPropertyDescriptor(
-      objectGetPrototypeOf(globalThis.Uint8Array.prototype) as object,
-      "byteLength",
-    )?.get;
-    if (byteLengthGetter !== typedArrayByteLengthGetter) {
-      return realmIntegrityFailure(
-        "%TypedArray%.prototype.byteLength",
-      );
-    }
-    if (
-      objectGetOwnPropertyDescriptor(Map.prototype, "size")?.get !==
-      mapSizeGetter
-    ) {
-      return realmIntegrityFailure("Map.prototype.size");
-    }
-    if (
-      objectGetOwnPropertyDescriptor(Set.prototype, "size")?.get !==
-      setSizeGetter
-    ) {
-      return realmIntegrityFailure("Set.prototype.size");
-    }
-    const cryptoDigest = capturePrototypeMethod(
-      globalThis.crypto?.subtle,
-      "digest",
-    );
-    if (
-      capturedCryptoDigest !== undefined &&
-      (cryptoDigest === undefined ||
-        cryptoDigest.target !== capturedCryptoDigest.target ||
-        cryptoDigest.method !== capturedCryptoDigest.method)
-    ) {
-      return realmIntegrityFailure("SubtleCrypto.prototype.digest");
-    }
-    const textEncode =
-      typeof globalThis.TextEncoder === "function"
-        ? capturePrototypeMethod(new globalThis.TextEncoder(), "encode")
-        : undefined;
-    if (
-      capturedTextEncoder !== undefined &&
-      (textEncode === undefined ||
-        textEncode.method !== capturedTextEncoder.method)
-    ) {
-      return realmIntegrityFailure("TextEncoder.prototype.encode");
+      if (owner.exactOwnKeys !== undefined) {
+        const currentKeys = capturedOwnKeys(owner.target);
+        if (currentKeys.length !== owner.exactOwnKeys.length) {
+          return realmIntegrityFailure(`${owner.label}.[[OwnKeys]]`);
+        }
+        for (
+          let keyIndex = 0;
+          keyIndex < currentKeys.length;
+          keyIndex += 1
+        ) {
+          if (!objectIs(currentKeys[keyIndex], owner.exactOwnKeys[keyIndex])) {
+            return realmIntegrityFailure(`${owner.label}.[[OwnKeys]]`);
+          }
+        }
+      }
+      for (
+        let memberIndex = 0;
+        memberIndex < owner.members.length;
+        memberIndex += 1
+      ) {
+        const member = owner.members[memberIndex]!;
+        if (
+          !realmDescriptorsEqual(
+            captureRealmDescriptor(owner.target, member.key),
+            member.descriptor,
+          )
+        ) {
+          return realmIntegrityFailure(member.label);
+        }
+      }
     }
     return undefined;
   } catch (error) {
@@ -1722,6 +1834,15 @@ export async function hashDesignFeaturesV2(
         topologyMeter,
         capturedOptions.value.signal,
       );
+      const dependencyLinkActual = dependencyLinks + usedReferences.length;
+      if (dependencyLinkActual > limits.maxDependencyLinks) {
+        throw limitFailure(
+          "maxDependencyLinks",
+          limits.maxDependencyLinks,
+          dependencyLinkActual,
+        );
+      }
+      dependencyLinks = dependencyLinkActual;
       const topologyReferencePayload: {
         readonly reference: TopologyReferenceId;
         readonly hash: string;
