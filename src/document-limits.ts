@@ -7,25 +7,30 @@ import {
 } from "./core/result.js";
 
 const IntrinsicArray = Array;
+const IntrinsicNumber = Number;
+const IntrinsicObject = Object;
 const IntrinsicReflect = Reflect;
 const IntrinsicWeakMap = WeakMap;
+const IntrinsicWeakSet = WeakSet;
 const intrinsicArrayIsArray = IntrinsicArray.isArray;
 const intrinsicArrayPrototype = IntrinsicArray.prototype;
-const intrinsicNumberIsFinite = Number.isFinite;
-const intrinsicNumberIsSafeInteger = Number.isSafeInteger;
-const intrinsicObjectCreate = Object.create;
-const intrinsicObjectFreeze = Object.freeze;
+const intrinsicNumberIsFinite = IntrinsicNumber.isFinite;
+const intrinsicNumberIsSafeInteger = IntrinsicNumber.isSafeInteger;
+const intrinsicObjectCreate = IntrinsicObject.create;
+const intrinsicObjectFreeze = IntrinsicObject.freeze;
 const intrinsicObjectGetOwnPropertyDescriptor =
-  Object.getOwnPropertyDescriptor;
-const intrinsicObjectGetPrototypeOf = Object.getPrototypeOf;
-const intrinsicObjectHasOwn = Object.hasOwn;
-const intrinsicObjectKeys = Object.keys;
-const intrinsicObjectPrototype = Object.prototype;
-const intrinsicObjectValues = Object.values;
+  IntrinsicObject.getOwnPropertyDescriptor;
+const intrinsicObjectGetPrototypeOf = IntrinsicObject.getPrototypeOf;
+const intrinsicObjectHasOwn = IntrinsicObject.hasOwn;
+const intrinsicObjectKeys = IntrinsicObject.keys;
+const intrinsicObjectPrototype = IntrinsicObject.prototype;
+const intrinsicObjectValues = IntrinsicObject.values;
 const intrinsicStringCharCodeAt = String.prototype.charCodeAt;
 const intrinsicReflectOwnKeys = IntrinsicReflect.ownKeys;
 const intrinsicWeakMapGet = IntrinsicWeakMap.prototype.get;
 const intrinsicWeakMapSet = IntrinsicWeakMap.prototype.set;
+const intrinsicWeakSetAdd = IntrinsicWeakSet.prototype.add;
+const intrinsicWeakSetHas = IntrinsicWeakSet.prototype.has;
 const reflectApply = Reflect.apply;
 
 function arrayIsArray(value: unknown): value is readonly unknown[] {
@@ -33,49 +38,65 @@ function arrayIsArray(value: unknown): value is readonly unknown[] {
 }
 
 function numberIsSafeInteger(value: unknown): value is number {
-  return reflectApply(intrinsicNumberIsSafeInteger, Number, [value]) as boolean;
+  return reflectApply(intrinsicNumberIsSafeInteger, IntrinsicNumber, [
+    value,
+  ]) as boolean;
 }
 
 function numberIsFinite(value: unknown): value is number {
-  return reflectApply(intrinsicNumberIsFinite, Number, [value]) as boolean;
+  return reflectApply(intrinsicNumberIsFinite, IntrinsicNumber, [
+    value,
+  ]) as boolean;
 }
 
 function objectCreateNull(): Record<string, unknown> {
-  return reflectApply(intrinsicObjectCreate, Object, [
+  return reflectApply(intrinsicObjectCreate, IntrinsicObject, [
     null,
   ]) as Record<string, unknown>;
 }
 
 function objectFreeze<T>(value: T): Readonly<T> {
-  return reflectApply(intrinsicObjectFreeze, Object, [value]) as Readonly<T>;
+  return reflectApply(intrinsicObjectFreeze, IntrinsicObject, [
+    value,
+  ]) as Readonly<T>;
 }
 
 function objectGetPrototypeOf(value: object): object | null {
-  return reflectApply(intrinsicObjectGetPrototypeOf, Object, [value]) as
-    | object
-    | null;
+  return reflectApply(
+    intrinsicObjectGetPrototypeOf,
+    IntrinsicObject,
+    [value],
+  ) as object | null;
 }
 
 function objectGetOwnPropertyDescriptor(
   value: object,
   key: PropertyKey,
 ): PropertyDescriptor | undefined {
-  return reflectApply(intrinsicObjectGetOwnPropertyDescriptor, Object, [
-    value,
-    key,
-  ]) as PropertyDescriptor | undefined;
+  return reflectApply(
+    intrinsicObjectGetOwnPropertyDescriptor,
+    IntrinsicObject,
+    [value, key],
+  ) as PropertyDescriptor | undefined;
 }
 
 function objectHasOwn(value: object, key: PropertyKey): boolean {
-  return reflectApply(intrinsicObjectHasOwn, Object, [value, key]) as boolean;
+  return reflectApply(intrinsicObjectHasOwn, IntrinsicObject, [
+    value,
+    key,
+  ]) as boolean;
 }
 
 function objectKeys(value: object): string[] {
-  return reflectApply(intrinsicObjectKeys, Object, [value]) as string[];
+  return reflectApply(intrinsicObjectKeys, IntrinsicObject, [
+    value,
+  ]) as string[];
 }
 
 function objectValues(value: object): unknown[] {
-  return reflectApply(intrinsicObjectValues, Object, [value]) as unknown[];
+  return reflectApply(intrinsicObjectValues, IntrinsicObject, [
+    value,
+  ]) as unknown[];
 }
 
 function reflectOwnKeys(value: object): (string | symbol)[] {
@@ -101,6 +122,14 @@ function weakMapSet<K extends object, V>(
   entry: V,
 ): void {
   reflectApply(intrinsicWeakMapSet, value, [key, entry]);
+}
+
+function weakSetAdd<K extends object>(value: WeakSet<K>, key: K): void {
+  reflectApply(intrinsicWeakSetAdd, value, [key]);
+}
+
+function weakSetHas<K extends object>(value: WeakSet<K>, key: K): boolean {
+  return reflectApply(intrinsicWeakSetHas, value, [key]) as boolean;
 }
 
 export interface DesignDocumentLimits {
@@ -193,8 +222,12 @@ function limitFailure<T = never>(
   );
 }
 
+const documentPreflightFailures = new IntrinsicWeakSet<object>();
+
 class DocumentPreflightFailure {
-  constructor(readonly result: CadResult<never>) {}
+  constructor(readonly result: CadResult<never>) {
+    weakSetAdd(documentPreflightFailures, this);
+  }
 }
 
 function stopWith(result: CadResult<never>): never {
@@ -800,8 +833,9 @@ export function preflightDesignDocumentValue(
   limits: DesignDocumentLimits,
   options: { readonly strictV7Snapshot?: boolean } = {},
 ): CadResult<unknown> {
+  let strictV7Snapshot = false;
   try {
-    const strictV7Snapshot = options.strictV7Snapshot === true;
+    strictV7Snapshot = options.strictV7Snapshot === true;
     const snapshot = captureDocumentValue(
       value,
       limits,
@@ -813,14 +847,22 @@ export function preflightDesignDocumentValue(
     checkResourceDefinitionResources(snapshot, limits);
     return success(snapshot);
   } catch (error) {
-    if (error instanceof DocumentPreflightFailure) return error.result;
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      weakSetHas(documentPreflightFailures, error)
+    ) {
+      return (error as DocumentPreflightFailure).result;
+    }
     return failure(
       diagnostic(
         "IR_INVALID",
-        safeErrorMessage(
-          error,
-          "Design-document input could not be read safely",
-        ),
+        strictV7Snapshot
+          ? "Design-document input could not be read safely"
+          : safeErrorMessage(
+              error,
+              "Design-document input could not be read safely",
+            ),
         { severity: "error" },
       ),
     );

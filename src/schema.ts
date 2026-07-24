@@ -5,6 +5,11 @@ import {
   preflightDesignDocumentValue,
 } from "./document-limits.js";
 import {
+  captureDocumentV7RuntimeOwnerIntegrityChecker,
+  DOCUMENT_V7_RUNTIME_INTEGRITY_MESSAGE,
+  documentV7RuntimeIntrinsicsAreIntact,
+} from "./internal/document-v7-runtime-integrity.js";
+import {
   DOCUMENT_SCHEMA_V1,
   DOCUMENT_SCHEMA_V2,
   DOCUMENT_SCHEMA_V3,
@@ -103,15 +108,12 @@ const V7IntrinsicArray = Array;
 const V7IntrinsicNumber = Number;
 const V7IntrinsicObject = Object;
 const V7IntrinsicReflect = Reflect;
-const V7IntrinsicString = String;
 const V7IntrinsicWeakSet = WeakSet;
 const v7IntrinsicArrayIsArray = V7IntrinsicArray.isArray;
 const v7IntrinsicArrayPrototype = V7IntrinsicArray.prototype;
 const v7IntrinsicNumberIsFinite = Number.isFinite;
 const v7IntrinsicNumberIsSafeInteger = Number.isSafeInteger;
 const v7IntrinsicObjectCreate = Object.create;
-const v7IntrinsicObjectEntries = Object.entries;
-const v7IntrinsicObjectFromEntries = Object.fromEntries;
 const v7IntrinsicObjectGetOwnPropertyDescriptor =
   Object.getOwnPropertyDescriptor;
 const v7IntrinsicObjectGetPrototypeOf = Object.getPrototypeOf;
@@ -126,38 +128,6 @@ const v7IntrinsicWeakSetDelete = V7IntrinsicWeakSet.prototype.delete;
 const v7IntrinsicWeakSetHas = V7IntrinsicWeakSet.prototype.has;
 const v7ReflectApply = Reflect.apply;
 
-function v7RuntimeIntrinsicsAreIntact(): boolean {
-  return (
-    Array === V7IntrinsicArray &&
-    V7IntrinsicArray.isArray === v7IntrinsicArrayIsArray &&
-    V7IntrinsicArray.prototype === v7IntrinsicArrayPrototype &&
-    Number === V7IntrinsicNumber &&
-    V7IntrinsicNumber.isFinite === v7IntrinsicNumberIsFinite &&
-    V7IntrinsicNumber.isSafeInteger === v7IntrinsicNumberIsSafeInteger &&
-    Object === V7IntrinsicObject &&
-    V7IntrinsicObject.create === v7IntrinsicObjectCreate &&
-    V7IntrinsicObject.entries === v7IntrinsicObjectEntries &&
-    V7IntrinsicObject.fromEntries === v7IntrinsicObjectFromEntries &&
-    V7IntrinsicObject.getOwnPropertyDescriptor ===
-      v7IntrinsicObjectGetOwnPropertyDescriptor &&
-    V7IntrinsicObject.getPrototypeOf === v7IntrinsicObjectGetPrototypeOf &&
-    V7IntrinsicObject.hasOwn === v7IntrinsicObjectHasOwn &&
-    V7IntrinsicObject.is === v7IntrinsicObjectIs &&
-    V7IntrinsicObject.keys === v7IntrinsicObjectKeys &&
-    V7IntrinsicObject.prototype === v7IntrinsicObjectPrototype &&
-    Reflect === V7IntrinsicReflect &&
-    V7IntrinsicReflect.apply === v7ReflectApply &&
-    V7IntrinsicReflect.ownKeys === v7IntrinsicReflectOwnKeys &&
-    String === V7IntrinsicString &&
-    V7IntrinsicString.prototype.charCodeAt ===
-      v7IntrinsicStringCharCodeAt &&
-    WeakSet === V7IntrinsicWeakSet &&
-    V7IntrinsicWeakSet.prototype.add === v7IntrinsicWeakSetAdd &&
-    V7IntrinsicWeakSet.prototype.delete === v7IntrinsicWeakSetDelete &&
-    V7IntrinsicWeakSet.prototype.has === v7IntrinsicWeakSetHas
-  );
-}
-
 function v7ArrayIsArray(value: unknown): value is readonly unknown[] {
   return v7ReflectApply(v7IntrinsicArrayIsArray, V7IntrinsicArray, [
     value,
@@ -165,50 +135,58 @@ function v7ArrayIsArray(value: unknown): value is readonly unknown[] {
 }
 
 function v7NumberIsFinite(value: unknown): value is number {
-  return v7ReflectApply(v7IntrinsicNumberIsFinite, Number, [value]) as boolean;
+  return v7ReflectApply(v7IntrinsicNumberIsFinite, V7IntrinsicNumber, [
+    value,
+  ]) as boolean;
 }
 
 function v7NumberIsSafeInteger(value: unknown): value is number {
-  return v7ReflectApply(v7IntrinsicNumberIsSafeInteger, Number, [
+  return v7ReflectApply(v7IntrinsicNumberIsSafeInteger, V7IntrinsicNumber, [
     value,
   ]) as boolean;
 }
 
 function v7ObjectCreateNull(): Record<string, JsonValue> {
-  return v7ReflectApply(v7IntrinsicObjectCreate, Object, [
+  return v7ReflectApply(v7IntrinsicObjectCreate, V7IntrinsicObject, [
     null,
   ]) as Record<string, JsonValue>;
 }
 
 function v7ObjectGetPrototypeOf(value: object): object | null {
-  return v7ReflectApply(v7IntrinsicObjectGetPrototypeOf, Object, [value]) as
-    | object
-    | null;
+  return v7ReflectApply(v7IntrinsicObjectGetPrototypeOf, V7IntrinsicObject, [
+    value,
+  ]) as object | null;
 }
 
 function v7ObjectGetOwnPropertyDescriptor(
   value: object,
   key: PropertyKey,
 ): PropertyDescriptor | undefined {
-  return v7ReflectApply(v7IntrinsicObjectGetOwnPropertyDescriptor, Object, [
-    value,
-    key,
-  ]) as PropertyDescriptor | undefined;
+  return v7ReflectApply(
+    v7IntrinsicObjectGetOwnPropertyDescriptor,
+    V7IntrinsicObject,
+    [value, key],
+  ) as PropertyDescriptor | undefined;
 }
 
 function v7ObjectHasOwn(value: object, key: PropertyKey): boolean {
-  return v7ReflectApply(v7IntrinsicObjectHasOwn, Object, [
+  return v7ReflectApply(v7IntrinsicObjectHasOwn, V7IntrinsicObject, [
     value,
     key,
   ]) as boolean;
 }
 
 function v7ObjectIs(first: unknown, second: unknown): boolean {
-  return v7ReflectApply(v7IntrinsicObjectIs, Object, [first, second]) as boolean;
+  return v7ReflectApply(v7IntrinsicObjectIs, V7IntrinsicObject, [
+    first,
+    second,
+  ]) as boolean;
 }
 
 function v7ObjectKeys(value: object): string[] {
-  return v7ReflectApply(v7IntrinsicObjectKeys, Object, [value]) as string[];
+  return v7ReflectApply(v7IntrinsicObjectKeys, V7IntrinsicObject, [
+    value,
+  ]) as string[];
 }
 
 function v7ReflectOwnKeys(value: object): (string | symbol)[] {
@@ -550,63 +528,303 @@ function auditV7RawKeys(
   }
 }
 
+const DOCUMENT_V7_SCHEMA_OPTIONS_MESSAGE =
+  "Document-v7 direct schema parse options are unsupported";
+
+function createFrozenV7ZodError(message: string): z.ZodError<unknown> {
+  const parsed = z
+    .custom<never>(() => false, { error: message })
+    .safeParse(undefined);
+  if (parsed.success) {
+    throw new TypeError("Document-v7 Zod failure could not be initialized");
+  }
+  const error = parsed.error;
+  for (const issue of error.issues) {
+    Object.freeze(issue.path);
+    Object.freeze(issue);
+  }
+  Object.freeze(error.issues);
+  return Object.freeze(error);
+}
+
+const V7_RUNTIME_INTEGRITY_ZOD_ERROR = createFrozenV7ZodError(
+  DOCUMENT_V7_RUNTIME_INTEGRITY_MESSAGE,
+);
+const V7_SCHEMA_OPTIONS_ZOD_ERROR = createFrozenV7ZodError(
+  DOCUMENT_V7_SCHEMA_OPTIONS_MESSAGE,
+);
+const V7_SCHEMA_EXECUTION_ZOD_ERROR = createFrozenV7ZodError(
+  "Document-v7 direct schema execution failed safely",
+);
+const V7_ZOD_PARSE_CONTEXT = Object.freeze({
+  error: (): string => "Invalid document-v7 value",
+  jitless: true,
+}) satisfies z.core.ParseContext<z.core.$ZodIssue>;
+// Zod's documented process-global configuration is part of this boundary.
+// Other exported Zod internals are not trusted inputs; safe methods contain
+// their unexpected throws without claiming to freeze or own the dependency.
+const v7ZodConfigIsIntact =
+  captureDocumentV7RuntimeOwnerIntegrityChecker(z.config());
+
+function v7RuntimeDependenciesAreIntact(): boolean {
+  return (
+    documentV7RuntimeIntrinsicsAreIntact() && v7ZodConfigIsIntact()
+  );
+}
+
+function assertV7RuntimeIntegrity(): void {
+  if (!v7RuntimeDependenciesAreIntact()) {
+    throw V7_RUNTIME_INTEGRITY_ZOD_ERROR;
+  }
+}
+
+/**
+ * Zod checks live globals such as Promise before and after a schema's internal
+ * transform. Guard direct parse-family calls outside that machinery so a
+ * corrupted realm cannot run ahead of the descriptor checker.
+ */
+function guardV7SchemaParseBoundary<T>(
+  schema: z.ZodType<T>,
+): z.ZodType<T> {
+  const integrityError = V7_RUNTIME_INTEGRITY_ZOD_ERROR as z.ZodError<T>;
+  const optionsError = V7_SCHEMA_OPTIONS_ZOD_ERROR as z.ZodError<T>;
+  const executionError = V7_SCHEMA_EXECUTION_ZOD_ERROR as z.ZodError<T>;
+  const entryError = (
+    arguments_: readonly unknown[],
+  ): z.ZodError<T> | undefined => {
+    if (!v7RuntimeDependenciesAreIntact()) return integrityError;
+    return arguments_.length > 1 && arguments_[1] !== undefined
+      ? optionsError
+      : undefined;
+  };
+  const trustedArguments = <Arguments extends unknown[]>(
+    arguments_: Arguments,
+  ): Arguments =>
+    [
+      arguments_[0],
+      V7_ZOD_PARSE_CONTEXT,
+    ] as unknown as Arguments;
+  const safeFailure = <Result>(error: z.ZodError<T>): Result =>
+    ({ success: false, error }) as Result;
+  const guardThrowingSync = <Arguments extends unknown[], Result>(
+    original: (...arguments_: Arguments) => Result,
+  ): ((...arguments_: Arguments) => Result) => {
+    return (...arguments_: Arguments): Result => {
+      const errorAtEntry = entryError(arguments_);
+      if (errorAtEntry !== undefined) throw errorAtEntry;
+      try {
+        const result = original(...trustedArguments(arguments_));
+        assertV7RuntimeIntegrity();
+        return result;
+      } catch (error) {
+        if (!v7RuntimeDependenciesAreIntact()) throw integrityError;
+        throw error;
+      }
+    };
+  };
+  const guardSafeSync = <Arguments extends unknown[], Result>(
+    original: (...arguments_: Arguments) => Result,
+  ): ((...arguments_: Arguments) => Result) => {
+    return (...arguments_: Arguments): Result => {
+      const errorAtEntry = entryError(arguments_);
+      if (errorAtEntry !== undefined) return safeFailure(errorAtEntry);
+      try {
+        const result = original(...trustedArguments(arguments_));
+        return v7RuntimeDependenciesAreIntact()
+          ? result
+          : safeFailure(integrityError);
+      } catch {
+        if (!v7RuntimeDependenciesAreIntact()) {
+          return safeFailure(integrityError);
+        }
+        return safeFailure(executionError);
+      }
+    };
+  };
+  const guardThrowingAsync = <Arguments extends unknown[], Result>(
+    original: (...arguments_: Arguments) => Promise<Result>,
+  ): ((...arguments_: Arguments) => Promise<Result>) => {
+    return async (...arguments_: Arguments): Promise<Result> => {
+      const errorAtEntry = entryError(arguments_);
+      if (errorAtEntry !== undefined) throw errorAtEntry;
+      try {
+        const result = await original(...trustedArguments(arguments_));
+        assertV7RuntimeIntegrity();
+        return result;
+      } catch (error) {
+        if (!v7RuntimeDependenciesAreIntact()) throw integrityError;
+        throw error;
+      }
+    };
+  };
+  const guardSafeAsync = <Arguments extends unknown[], Result>(
+    original: (...arguments_: Arguments) => Promise<Result>,
+  ): ((...arguments_: Arguments) => Promise<Result>) => {
+    return async (...arguments_: Arguments): Promise<Result> => {
+      const errorAtEntry = entryError(arguments_);
+      if (errorAtEntry !== undefined) return safeFailure(errorAtEntry);
+      try {
+        const result = await original(...trustedArguments(arguments_));
+        return v7RuntimeDependenciesAreIntact()
+          ? result
+          : safeFailure(integrityError);
+      } catch {
+        if (!v7RuntimeDependenciesAreIntact()) {
+          return safeFailure(integrityError);
+        }
+        return safeFailure(executionError);
+      }
+    };
+  };
+  const guardedParse = guardThrowingSync(schema.parse);
+  const guardedSafeParse = guardSafeSync(schema.safeParse);
+  const guardedParseAsync = guardThrowingAsync(schema.parseAsync);
+  const guardedSafeParseAsync = guardSafeAsync(schema.safeParseAsync);
+  const guardedEncode = guardThrowingSync(schema.encode);
+  const guardedDecode = guardThrowingSync(schema.decode);
+  const guardedSafeEncode = guardSafeSync(schema.safeEncode);
+  const guardedSafeDecode = guardSafeSync(schema.safeDecode);
+  const guardedEncodeAsync = guardThrowingAsync(schema.encodeAsync);
+  const guardedDecodeAsync = guardThrowingAsync(schema.decodeAsync);
+  const guardedSafeEncodeAsync = guardSafeAsync(schema.safeEncodeAsync);
+  const guardedSafeDecodeAsync = guardSafeAsync(schema.safeDecodeAsync);
+  Object.defineProperties(schema, {
+    decode: {
+      configurable: true,
+      enumerable: true,
+      value: guardedDecode,
+      writable: true,
+    },
+    decodeAsync: {
+      configurable: true,
+      enumerable: true,
+      value: guardedDecodeAsync,
+      writable: true,
+    },
+    encode: {
+      configurable: true,
+      enumerable: true,
+      value: guardedEncode,
+      writable: true,
+    },
+    encodeAsync: {
+      configurable: true,
+      enumerable: true,
+      value: guardedEncodeAsync,
+      writable: true,
+    },
+    parse: {
+      configurable: true,
+      enumerable: true,
+      value: guardedParse,
+      writable: true,
+    },
+    parseAsync: {
+      configurable: true,
+      enumerable: true,
+      value: guardedParseAsync,
+      writable: true,
+    },
+    safeDecode: {
+      configurable: true,
+      enumerable: true,
+      value: guardedSafeDecode,
+      writable: true,
+    },
+    safeDecodeAsync: {
+      configurable: true,
+      enumerable: true,
+      value: guardedSafeDecodeAsync,
+      writable: true,
+    },
+    safeEncode: {
+      configurable: true,
+      enumerable: true,
+      value: guardedSafeEncode,
+      writable: true,
+    },
+    safeEncodeAsync: {
+      configurable: true,
+      enumerable: true,
+      value: guardedSafeEncodeAsync,
+      writable: true,
+    },
+    safeParse: {
+      configurable: true,
+      enumerable: true,
+      value: guardedSafeParse,
+      writable: true,
+    },
+    safeParseAsync: {
+      configurable: true,
+      enumerable: true,
+      value: guardedSafeParseAsync,
+      writable: true,
+    },
+    spa: {
+      configurable: true,
+      enumerable: true,
+      value: guardedSafeParseAsync,
+      writable: true,
+    },
+  });
+  const standard = schema["~standard"];
+  Object.defineProperty(standard, "validate", {
+    configurable: true,
+    enumerable: true,
+    value: (value: unknown) => {
+      const parsed = guardedSafeParse(value);
+      return parsed.success
+        ? { value: parsed.data }
+        : { issues: parsed.error.issues };
+    },
+    writable: true,
+  });
+  return schema;
+}
+
 function withV7RawKeyAudit<T>(
   schema: z.ZodType<T>,
   contract: V7RawAuditContract,
 ): z.ZodType<T> {
-  return z
-    .unknown()
-    .transform((value, context) => {
-      if (!v7RuntimeIntrinsicsAreIntact()) {
-        context.addIssue({
-          code: "custom",
-          message:
-            "Document-v7 runtime intrinsics changed during schema parsing",
-        });
-        return z.NEVER;
-      }
-      const captured = preflightDesignDocumentValue(
-        value,
-        DEFAULT_DESIGN_DOCUMENT_LIMITS,
-        { strictV7Snapshot: true },
-      );
-      if (!captured.ok) {
-        for (const item of captured.diagnostics) {
-          context.addIssue({
-            code: "custom",
-            message: item.message,
-          });
-        }
-        return z.NEVER;
-      }
-      if (!v7RuntimeIntrinsicsAreIntact()) {
-        context.addIssue({
-          code: "custom",
-          message:
-            "Document-v7 runtime intrinsics changed during schema parsing",
-        });
-        return z.NEVER;
-      }
-      const issue = auditV7RawKeys(captured.value, contract);
-      if (issue === undefined) {
-        if (!v7RuntimeIntrinsicsAreIntact()) {
-          context.addIssue({
-            code: "custom",
-            message:
-              "Document-v7 runtime intrinsics changed during schema parsing",
-          });
+  return guardV7SchemaParseBoundary(
+    z
+      .unknown()
+      .transform((value, context) => {
+        assertV7RuntimeIntegrity();
+        const captured = preflightDesignDocumentValue(
+          value,
+          DEFAULT_DESIGN_DOCUMENT_LIMITS,
+          { strictV7Snapshot: true },
+        );
+        assertV7RuntimeIntegrity();
+        if (!captured.ok) {
+          for (const item of captured.diagnostics) {
+            context.addIssue({
+              code: "custom",
+              message: item.message,
+            });
+          }
           return z.NEVER;
         }
-        return captured.value;
-      }
-      context.addIssue({
-        code: "custom",
-        message: issue.message,
-        path: [...issue.path],
-      });
-      return z.NEVER;
-    })
-    .pipe(schema) as z.ZodType<T>;
+        const issue = auditV7RawKeys(captured.value, contract);
+        if (issue === undefined) {
+          assertV7RuntimeIntegrity();
+          return captured.value;
+        }
+        context.addIssue({
+          code: "custom",
+          message: issue.message,
+          path: [...issue.path],
+        });
+        return z.NEVER;
+      })
+      .pipe(schema)
+      .transform((value) => {
+        assertV7RuntimeIntegrity();
+        return value;
+      }) as z.ZodType<T>,
+  );
 }
 
 const DimensionSchema = z.enum(["scalar", "length", "angle", "massDensity"]);

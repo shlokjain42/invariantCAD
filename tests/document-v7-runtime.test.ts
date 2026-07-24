@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import {
   nodeId,
   resourceId,
@@ -336,6 +337,18 @@ describe("staged document-v7 serialization and validation", () => {
       DesignDocumentV7Schema.safeParse(revoked.proxy),
     ).not.toThrow();
     expect(DesignDocumentV7Schema.safeParse(revoked.proxy).success).toBe(false);
+
+    const opaque = Proxy.revocable({}, {});
+    opaque.revoke();
+    const throwing = new Proxy(structuredClone(source), {
+      ownKeys(): never {
+        throw opaque.proxy;
+      },
+    });
+    expect(() => parseDocumentValueV7(throwing)).not.toThrow();
+    expect(parseDocumentValueV7(throwing).ok).toBe(false);
+    expect(() => DesignDocumentV7Schema.safeParse(throwing)).not.toThrow();
+    expect(DesignDocumentV7Schema.safeParse(throwing).success).toBe(false);
   });
 
   it("keeps ordinary parsing frozen on v1-v6 and v7 parsing strict", () => {
@@ -774,6 +787,445 @@ describe("staged document-v7 serialization and validation", () => {
     ).toBe(false);
   });
 
+  it("hardens every direct v7 schema entry before Zod or accessors run", () => {
+    const source = stagedV7Document();
+    const primitive = source.nodes[nodeId("primitive")];
+    const entry =
+      source.topologyReferences?.[topologyReferenceId("corner")];
+    expect(primitive?.kind).toBe("box");
+    expect(entry).toBeDefined();
+    if (primitive?.kind !== "box" || entry === undefined) return;
+
+    const boundaries = [
+      {
+        label: "document",
+        property: "name",
+        value: source,
+        parse: (value: unknown, context?: unknown) =>
+          DesignDocumentV7Schema.safeParse(
+            value,
+            context as Parameters<
+              typeof DesignDocumentV7Schema.safeParse
+            >[1],
+          ),
+      },
+      {
+        label: "node",
+        property: "center",
+        value: primitive,
+        parse: (value: unknown, context?: unknown) =>
+          NodeV7Schema.safeParse(
+            value,
+            context as Parameters<typeof NodeV7Schema.safeParse>[1],
+          ),
+      },
+      {
+        label: "topology entry",
+        property: "topology",
+        value: entry,
+        parse: (value: unknown, context?: unknown) =>
+          TopologyReferenceEntryV7Schema.safeParse(
+            value,
+            context as Parameters<
+              typeof TopologyReferenceEntryV7Schema.safeParse
+            >[1],
+          ),
+      },
+    ] as const;
+
+    for (const boundary of boundaries) {
+      const accessorValue = structuredClone(
+        boundary.value,
+      ) as unknown as Record<string, unknown>;
+      let inputReads = 0;
+      Object.defineProperty(accessorValue, boundary.property, {
+        configurable: true,
+        enumerable: true,
+        get(): never {
+          inputReads += 1;
+          throw new Error("direct schemas must not invoke input accessors");
+        },
+      });
+      expect(boundary.parse(accessorValue).success, boundary.label).toBe(false);
+      expect(inputReads, boundary.label).toBe(0);
+
+      const inheritedValue = structuredClone(boundary.value);
+      Object.setPrototypeOf(inheritedValue, Object.create(null));
+      expect(boundary.parse(inheritedValue).success, boundary.label).toBe(
+        false,
+      );
+
+      let optionReads = 0;
+      const context = Object.defineProperty({}, "error", {
+        configurable: true,
+        enumerable: true,
+        get(): never {
+          optionReads += 1;
+          throw new Error("direct schema options must not be inspected");
+        },
+      });
+      const optionResult = boundary.parse(boundary.value, context);
+      expect(optionResult.success, boundary.label).toBe(false);
+      expect(optionReads, boundary.label).toBe(0);
+      expect(
+        optionResult.success
+          ? undefined
+          : optionResult.error.issues[0]?.message,
+        boundary.label,
+      ).toBe("Document-v7 direct schema parse options are unsupported");
+    }
+
+    const promiseDescriptor = Object.getOwnPropertyDescriptor(
+      globalThis,
+      "Promise",
+    );
+    expect(promiseDescriptor).toBeDefined();
+    if (promiseDescriptor === undefined) return;
+    let promiseReads = 0;
+    const promiseResults: boolean[] = [];
+    try {
+      Object.defineProperty(globalThis, "Promise", {
+        configurable: true,
+        get(): never {
+          promiseReads += 1;
+          throw { opaque: "Promise accessor must not run" };
+        },
+      });
+      for (const boundary of boundaries) {
+        promiseResults[promiseResults.length] = boundary.parse(
+          boundary.value,
+        ).success;
+      }
+    } finally {
+      Object.defineProperty(globalThis, "Promise", promiseDescriptor);
+    }
+    expect(promiseReads).toBe(0);
+    expect(promiseResults).toEqual([false, false, false]);
+
+    const regexpPrototype = Object.getPrototypeOf(RegExp.prototype);
+    const prototypeResults: boolean[] = [];
+    try {
+      Object.setPrototypeOf(RegExp.prototype, null);
+      for (const boundary of boundaries) {
+        prototypeResults[prototypeResults.length] = boundary.parse(
+          boundary.value,
+        ).success;
+      }
+    } finally {
+      Object.setPrototypeOf(RegExp.prototype, regexpPrototype);
+    }
+    expect(prototypeResults).toEqual([false, false, false]);
+
+    const inheritedKey = "__invariantcadV7DirectSchemaMutation__";
+    const inheritedResults: boolean[] = [];
+    try {
+      Object.defineProperty(Object.prototype, inheritedKey, {
+        configurable: true,
+        enumerable: true,
+        value: true,
+        writable: true,
+      });
+      for (const boundary of boundaries) {
+        inheritedResults[inheritedResults.length] = boundary.parse(
+          boundary.value,
+        ).success;
+      }
+    } finally {
+      Reflect.deleteProperty(Object.prototype, inheritedKey);
+    }
+    expect(inheritedResults).toEqual([false, false, false]);
+  });
+
+  it("contains opaque failures before direct-schema diagnostic iteration", () => {
+    const source = stagedV7Document();
+    const primitive = source.nodes[nodeId("primitive")];
+    const entry =
+      source.topologyReferences?.[topologyReferenceId("corner")];
+    expect(primitive?.kind).toBe("box");
+    expect(entry).toBeDefined();
+    if (primitive?.kind !== "box" || entry === undefined) return;
+    const boundaries = [
+      {
+        value: source,
+        parse: (value: unknown) => DesignDocumentV7Schema.safeParse(value),
+      },
+      {
+        value: primitive,
+        parse: (value: unknown) => NodeV7Schema.safeParse(value),
+      },
+      {
+        value: entry,
+        parse: (value: unknown) =>
+          TopologyReferenceEntryV7Schema.safeParse(value),
+      },
+    ] as const;
+    const iteratorDescriptor = Object.getOwnPropertyDescriptor(
+      Array.prototype,
+      Symbol.iterator,
+    );
+    expect(iteratorDescriptor).toBeDefined();
+    if (iteratorDescriptor === undefined) return;
+
+    for (const boundary of boundaries) {
+      let iteratorReads = 0;
+      let result: ReturnType<typeof boundary.parse> | undefined;
+      let thrown: unknown;
+      const opaque = Proxy.revocable({}, {});
+      opaque.revoke();
+      const trapped = new Proxy(structuredClone(boundary.value), {
+        ownKeys(): never {
+          Object.defineProperty(Array.prototype, Symbol.iterator, {
+            configurable: true,
+            get(): never {
+              iteratorReads += 1;
+              throw { opaque: "iterator accessor must not run" };
+            },
+          });
+          throw opaque.proxy;
+        },
+      });
+      try {
+        result = boundary.parse(trapped);
+      } catch (error) {
+        thrown = error;
+      } finally {
+        Object.defineProperty(
+          Array.prototype,
+          Symbol.iterator,
+          iteratorDescriptor,
+        );
+      }
+      expect(thrown).toBeUndefined();
+      expect(result?.success).toBe(false);
+      expect(iteratorReads).toBe(0);
+    }
+  });
+
+  it("never reads global intrinsic accessors installed during capture", () => {
+    const source = stagedV7Document();
+    const primitive = source.nodes[nodeId("primitive")];
+    const entry =
+      source.topologyReferences?.[topologyReferenceId("corner")];
+    expect(primitive?.kind).toBe("box");
+    expect(entry).toBeDefined();
+    if (primitive?.kind !== "box" || entry === undefined) return;
+    const boundaries = [
+      {
+        value: source,
+        parse: (value: unknown) => parseDocumentValueV7(value).ok,
+      },
+      {
+        value: source,
+        parse: (value: unknown) =>
+          DesignDocumentV7Schema.safeParse(value).success,
+      },
+      {
+        value: primitive,
+        parse: (value: unknown) => NodeV7Schema.safeParse(value).success,
+      },
+      {
+        value: entry,
+        parse: (value: unknown) =>
+          TopologyReferenceEntryV7Schema.safeParse(value).success,
+      },
+    ] as const;
+    const realm = globalThis;
+    const objectDescriptor = Object.getOwnPropertyDescriptor(
+      realm,
+      "Object",
+    );
+    expect(objectDescriptor).toBeDefined();
+    if (objectDescriptor === undefined) return;
+    const defineProperty = Object.defineProperty;
+    const ownKeys = Reflect.ownKeys;
+
+    for (const boundary of boundaries) {
+      let reads = 0;
+      let success: boolean | undefined;
+      let thrown: unknown;
+      const trapped = new Proxy(structuredClone(boundary.value), {
+        ownKeys(target): (string | symbol)[] {
+          defineProperty(realm, "Object", {
+            configurable: true,
+            get(): never {
+              reads += 1;
+              throw { opaque: "Object accessor must not run" };
+            },
+          });
+          return ownKeys(target);
+        },
+      });
+      try {
+        success = boundary.parse(trapped);
+      } catch (error) {
+        thrown = error;
+      } finally {
+        defineProperty(realm, "Object", objectDescriptor);
+      }
+      expect(thrown).toBeUndefined();
+      expect(reads).toBe(0);
+      expect(success).toBe(false);
+    }
+
+    const errorDescriptor = Object.getOwnPropertyDescriptor(realm, "Error");
+    expect(errorDescriptor).toBeDefined();
+    if (errorDescriptor === undefined) return;
+    for (const boundary of boundaries) {
+      let reads = 0;
+      let success: boolean | undefined;
+      let thrown: unknown;
+      const opaque = Proxy.revocable({}, {});
+      opaque.revoke();
+      const trapped = new Proxy(structuredClone(boundary.value), {
+        ownKeys(): never {
+          defineProperty(realm, "Error", {
+            configurable: true,
+            get(): never {
+              reads += 1;
+              throw { opaque: "Error accessor must not run" };
+            },
+          });
+          throw opaque.proxy;
+        },
+      });
+      try {
+        success = boundary.parse(trapped);
+      } catch (error) {
+        thrown = error;
+      } finally {
+        defineProperty(realm, "Error", errorDescriptor);
+      }
+      expect(thrown).toBeUndefined();
+      expect(reads).toBe(0);
+      expect(success).toBe(false);
+    }
+  });
+
+  it("guards codec and Standard Schema entrypoints before live Promise access", () => {
+    const source = stagedV7Document();
+    const primitive = source.nodes[nodeId("primitive")];
+    expect(primitive?.kind).toBe("box");
+    if (primitive?.kind !== "box") return;
+    const promiseDescriptor = Object.getOwnPropertyDescriptor(
+      globalThis,
+      "Promise",
+    );
+    expect(promiseDescriptor).toBeDefined();
+    if (promiseDescriptor === undefined) return;
+    let reads = 0;
+    let safeDecode: ReturnType<typeof NodeV7Schema.safeDecode> | undefined;
+    let safeEncode: ReturnType<typeof NodeV7Schema.safeEncode> | undefined;
+    let standard: unknown;
+    let thrown: unknown;
+    try {
+      Object.defineProperty(globalThis, "Promise", {
+        configurable: true,
+        get(): never {
+          reads += 1;
+          throw { opaque: "Promise accessor must not run" };
+        },
+      });
+      safeDecode = NodeV7Schema.safeDecode(primitive);
+      safeEncode = NodeV7Schema.safeEncode(primitive);
+      standard = NodeV7Schema["~standard"].validate(primitive);
+      try {
+        NodeV7Schema.decode(primitive);
+      } catch (error) {
+        thrown = error;
+      }
+    } finally {
+      Object.defineProperty(globalThis, "Promise", promiseDescriptor);
+    }
+    expect(reads).toBe(0);
+    expect(safeDecode?.success).toBe(false);
+    expect(safeEncode?.success).toBe(false);
+    expect(standard).toHaveProperty("issues");
+    expect(thrown).toMatchObject({
+      issues: [
+        {
+          message:
+            "Document-v7 runtime intrinsics changed during the operation",
+        },
+      ],
+    });
+  });
+
+  it("never invokes mutable Zod global configuration", () => {
+    const source = stagedV7Document();
+    const primitive = source.nodes[nodeId("primitive")];
+    expect(primitive?.kind).toBe("box");
+    if (primitive?.kind !== "box") return;
+    const config = z.config();
+    const keys = ["jitless", "customError"] as const;
+    for (const key of keys) {
+      const descriptor = Object.getOwnPropertyDescriptor(config, key);
+      let reads = 0;
+      let result: ReturnType<typeof NodeV7Schema.safeParse> | undefined;
+      try {
+        Object.defineProperty(config, key, {
+          configurable: true,
+          enumerable: true,
+          get(): never {
+            reads += 1;
+            throw { opaque: `${key} accessor must not run` };
+          },
+        });
+        result = NodeV7Schema.safeParse(
+          key === "jitless" ? primitive : {},
+        );
+      } finally {
+        if (descriptor === undefined) {
+          Reflect.deleteProperty(config, key);
+        } else {
+          Object.defineProperty(config, key, descriptor);
+        }
+      }
+      expect(reads, key).toBe(0);
+      expect(result?.success, key).toBe(false);
+      expect(result).toMatchObject({
+        error: {
+          issues: [
+            {
+              message:
+                "Document-v7 runtime intrinsics changed during the operation",
+            },
+          ],
+        },
+      });
+    }
+
+    const customErrorDescriptor = Object.getOwnPropertyDescriptor(
+      config,
+      "customError",
+    );
+    let callbackCalls = 0;
+    let result: ReturnType<typeof NodeV7Schema.safeParse> | undefined;
+    try {
+      Object.defineProperty(config, "customError", {
+        configurable: true,
+        enumerable: true,
+        value: (): never => {
+          callbackCalls += 1;
+          throw { opaque: "customError callback must not run" };
+        },
+        writable: true,
+      });
+      result = NodeV7Schema.safeParse({});
+    } finally {
+      if (customErrorDescriptor === undefined) {
+        Reflect.deleteProperty(config, "customError");
+      } else {
+        Object.defineProperty(
+          config,
+          "customError",
+          customErrorDescriptor,
+        );
+      }
+    }
+    expect(callbackCalls).toBe(0);
+    expect(result?.success).toBe(false);
+  });
+
   it("preserves every JSON metadata key through parse, clone, and serialization", () => {
     const candidate = structuredClone(
       stagedV7Document(),
@@ -1111,31 +1563,84 @@ describe("staged document-v7 serialization and validation", () => {
     }
   });
 
-  it("contains call-time replacement of preflight identity primitives", () => {
+  it("contains call-time replacement across the v7 dependency closure", () => {
     const defineProperty = Object.defineProperty;
     const ownKeys = Reflect.ownKeys;
     const mutations = [
       {
+        label: "Object.keys",
         holder: Object,
         key: "keys",
         value: (): readonly [] => [],
       },
       {
+        label: "Object.hasOwn",
         holder: Object,
         key: "hasOwn",
         value: (): false => false,
       },
       {
+        label: "Object.getPrototypeOf",
         holder: Object,
         key: "getPrototypeOf",
         value: (): null => null,
       },
       {
+        label: "Object.values",
+        holder: Object,
+        key: "values",
+        value: (): readonly [] => [],
+      },
+      {
+        label: "Array.isArray",
         holder: Array,
         key: "isArray",
         value: (): false => false,
       },
       {
+        label: "Array.prototype.forEach",
+        holder: Array.prototype,
+        key: "forEach",
+        value: (): undefined => undefined,
+      },
+      {
+        label: "Array.prototype.some",
+        holder: Array.prototype,
+        key: "some",
+        value: (): false => false,
+      },
+      {
+        label: "Array.prototype.map",
+        holder: Array.prototype,
+        key: "map",
+        value: (): readonly [] => [],
+      },
+      {
+        label: "Map.prototype.has",
+        holder: Map.prototype,
+        key: "has",
+        value: (): false => false,
+      },
+      {
+        label: "Set.prototype.has",
+        holder: Set.prototype,
+        key: "has",
+        value: (): false => false,
+      },
+      {
+        label: "RegExp.prototype.test",
+        holder: RegExp.prototype,
+        key: "test",
+        value: (): false => false,
+      },
+      {
+        label: "String.prototype.trim",
+        holder: String.prototype,
+        key: "trim",
+        value: (): "" => "",
+      },
+      {
+        label: "global Object",
         holder: globalThis,
         key: "Object",
         value: function PoisonedObject(): void {},
@@ -1147,7 +1652,7 @@ describe("staged document-v7 serialization and validation", () => {
         mutation.holder,
         mutation.key,
       );
-      expect(descriptor, mutation.key).toBeDefined();
+      expect(descriptor, mutation.label).toBeDefined();
       if (descriptor === undefined) continue;
       const trapped = new Proxy(structuredClone(stagedV7Document()), {
         ownKeys(target): (string | symbol)[] {
@@ -1165,7 +1670,230 @@ describe("staged document-v7 serialization and validation", () => {
       } finally {
         defineProperty(mutation.holder, mutation.key, descriptor);
       }
-      expect(result?.ok, mutation.key).toBe(false);
+      expect(result?.ok, mutation.label).toBe(false);
+      expect(result).toMatchObject({
+        diagnostics: [
+          {
+            message:
+              "Document-v7 runtime intrinsics changed during the operation",
+          },
+        ],
+      });
+    }
+  });
+
+  it("rejects enumerable Object.prototype additions made during capture", () => {
+    const key = "__invariantcadV7EnumerableMutation__";
+    const defineProperty = Object.defineProperty;
+    const deleteProperty = Reflect.deleteProperty;
+    const ownKeys = Reflect.ownKeys;
+    expect(Object.getOwnPropertyDescriptor(Object.prototype, key)).toBeUndefined();
+    const trapped = new Proxy(structuredClone(stagedV7Document()), {
+      ownKeys(target): (string | symbol)[] {
+        defineProperty(Object.prototype, key, {
+          configurable: true,
+          enumerable: true,
+          value: true,
+          writable: true,
+        });
+        return ownKeys(target);
+      },
+    });
+    let result: ReturnType<typeof parseDocumentValueV7> | undefined;
+    try {
+      result = parseDocumentValueV7(trapped);
+    } finally {
+      deleteProperty(Object.prototype, key);
+    }
+    expect(result?.ok).toBe(false);
+    expect(result).toMatchObject({
+      diagnostics: [
+        {
+          message:
+            "Document-v7 runtime intrinsics changed during the operation",
+        },
+      ],
+    });
+  });
+
+  it("anchors global bindings to the captured realm object", () => {
+    const realm = globalThis;
+    const globalThisDescriptor = Object.getOwnPropertyDescriptor(
+      realm,
+      "globalThis",
+    );
+    expect(globalThisDescriptor).toBeDefined();
+    if (globalThisDescriptor === undefined) return;
+    const fakeGlobal = Object.create(
+      Object.getPrototypeOf(realm),
+      Object.getOwnPropertyDescriptors(realm),
+    ) as typeof globalThis;
+    let result: ReturnType<typeof parseDocumentValueV7> | undefined;
+    try {
+      Object.defineProperty(realm, "globalThis", {
+        ...globalThisDescriptor,
+        value: fakeGlobal,
+      });
+      result = parseDocumentValueV7(stagedV7Document());
+    } finally {
+      Object.defineProperty(realm, "globalThis", globalThisDescriptor);
+    }
+    expect(result?.ok).toBe(false);
+    expect(result).toMatchObject({
+      diagnostics: [
+        {
+          message:
+            "Document-v7 runtime intrinsics changed during the operation",
+        },
+      ],
+    });
+  });
+
+  it("tracks dependency properties without locking unrelated constructor state", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(
+      Error,
+      "stackTraceLimit",
+    );
+    expect(descriptor).toBeDefined();
+    if (
+      descriptor === undefined ||
+      !Object.hasOwn(descriptor, "value") ||
+      typeof descriptor.value !== "number"
+    ) {
+      return;
+    }
+    let result: ReturnType<typeof parseDocumentValueV7> | undefined;
+    try {
+      Object.defineProperty(Error, "stackTraceLimit", {
+        ...descriptor,
+        value: descriptor.value + 1,
+      });
+      result = parseDocumentValueV7(stagedV7Document());
+    } finally {
+      Object.defineProperty(Error, "stackTraceLimit", descriptor);
+    }
+    expect(result?.ok).toBe(true);
+  });
+
+  it("detects SyntaxError prototype corruption before malformed JSON handling", () => {
+    const prototype = Object.getPrototypeOf(SyntaxError.prototype);
+    let result: ReturnType<typeof parseDocumentV7> | undefined;
+    try {
+      Object.setPrototypeOf(SyntaxError.prototype, null);
+      result = parseDocumentV7("{");
+    } finally {
+      Object.setPrototypeOf(SyntaxError.prototype, prototype);
+    }
+    expect(result?.ok).toBe(false);
+    expect(result).toMatchObject({
+      diagnostics: [
+        {
+          message:
+            "Document-v7 runtime intrinsics changed during the operation",
+        },
+      ],
+    });
+  });
+
+  it("does not inspect hostile thrown values at the v7 boundary", () => {
+    const mapDescriptor = Object.getOwnPropertyDescriptor(
+      Array.prototype,
+      "map",
+    );
+    expect(mapDescriptor).toBeDefined();
+    if (mapDescriptor === undefined) return;
+    const defineProperty = Object.defineProperty;
+    const reflectGet = Reflect.get;
+    let messageReads = 0;
+    const hostileError = new Proxy(new Error("poisoned options"), {
+      get(target, key, receiver): unknown {
+        if (key === "message") {
+          messageReads += 1;
+          defineProperty(Array.prototype, "map", {
+            configurable: true,
+            value: (): readonly [] => [],
+            writable: true,
+          });
+        }
+        return reflectGet(target, key, receiver);
+      },
+    });
+    const options = defineProperty({}, "limits", {
+      configurable: true,
+      enumerable: true,
+      get(): never {
+        throw hostileError;
+      },
+    });
+    let result: ReturnType<typeof parseDocumentValueV7> | undefined;
+    try {
+      result = parseDocumentValueV7(stagedV7Document(), options);
+    } finally {
+      defineProperty(Array.prototype, "map", mapDescriptor);
+    }
+    expect(messageReads).toBe(0);
+    expect(result?.ok).toBe(false);
+    expect(result).toMatchObject({
+      diagnostics: [
+        {
+          message:
+            "Design-document-v7 parse limits could not be read safely",
+        },
+      ],
+    });
+  });
+
+  it("uses the captured TypeError after throwing options corrupt the binding", () => {
+    const source = stagedV7Document();
+    const realm = globalThis;
+    const typeErrorDescriptor = Object.getOwnPropertyDescriptor(
+      realm,
+      "TypeError",
+    );
+    expect(typeErrorDescriptor).toBeDefined();
+    if (typeErrorDescriptor === undefined) return;
+    const IntrinsicTypeError = TypeError;
+    const operations = [
+      (options: object) =>
+        stringifyDocumentV7(
+          source,
+          options as Parameters<typeof stringifyDocumentV7>[1],
+        ),
+      (options: object) =>
+        cloneDocumentV7(
+          source,
+          options as Parameters<typeof cloneDocumentV7>[1],
+        ),
+    ] as const;
+    for (const operation of operations) {
+      let typeErrorReads = 0;
+      let thrown: unknown;
+      const options = Object.defineProperty({}, "limits", {
+        configurable: true,
+        enumerable: true,
+        get(): object {
+          Object.defineProperty(realm, "TypeError", {
+            configurable: true,
+            get(): never {
+              typeErrorReads += 1;
+              throw { opaque: "TypeError accessor must not run" };
+            },
+          });
+          return {};
+        },
+      });
+      try {
+        operation(options);
+      } catch (error) {
+        thrown = error;
+      } finally {
+        Object.defineProperty(realm, "TypeError", typeErrorDescriptor);
+      }
+      expect(typeErrorReads).toBe(0);
+      expect(thrown).toBeInstanceOf(IntrinsicTypeError);
+      expect((thrown as Error).message).toBe(
+        "Document-v7 runtime intrinsics changed during the operation",
+      );
     }
   });
 

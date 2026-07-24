@@ -46,6 +46,11 @@ import {
   preflightDesignDocumentValue,
   type DesignDocumentLimits,
 } from "./document-limits.js";
+import {
+  DOCUMENT_V7_RUNTIME_INTEGRITY_MESSAGE,
+  documentV7RuntimeIntrinsicsAreIntact,
+  throwDocumentV7RuntimeIntegrityError,
+} from "./internal/document-v7-runtime-integrity.js";
 
 const SerializationIntrinsicArray = Array;
 const SerializationIntrinsicArrayPrototype = Array.prototype;
@@ -64,10 +69,6 @@ const serializationIntrinsicJsonStringify =
   SerializationIntrinsicJson.stringify;
 const serializationIntrinsicObjectCreate =
   SerializationIntrinsicObject.create;
-const serializationIntrinsicObjectEntries =
-  SerializationIntrinsicObject.entries;
-const serializationIntrinsicObjectFromEntries =
-  SerializationIntrinsicObject.fromEntries;
 const serializationIntrinsicObjectGetPrototypeOf =
   SerializationIntrinsicObject.getPrototypeOf;
 const serializationIntrinsicObjectHasOwn =
@@ -80,47 +81,11 @@ const serializationIntrinsicTextEncoderEncode =
 const serializationReflectApply = SerializationIntrinsicReflect.apply;
 const serializationTextEncoder = new SerializationIntrinsicTextEncoder();
 
-function serializationIntrinsicsAreIntact(): boolean {
-  return (
-    Array === SerializationIntrinsicArray &&
-    SerializationIntrinsicArray.isArray === serializationIntrinsicArrayIsArray &&
-    SerializationIntrinsicArray.prototype ===
-      SerializationIntrinsicArrayPrototype &&
-    SerializationIntrinsicArrayPrototype.map ===
-      serializationIntrinsicArrayMap &&
-    SerializationIntrinsicArrayPrototype.sort ===
-      serializationIntrinsicArraySort &&
-    Object === SerializationIntrinsicObject &&
-    SerializationIntrinsicObject.create ===
-      serializationIntrinsicObjectCreate &&
-    SerializationIntrinsicObject.entries ===
-      serializationIntrinsicObjectEntries &&
-    SerializationIntrinsicObject.fromEntries ===
-      serializationIntrinsicObjectFromEntries &&
-    SerializationIntrinsicObject.getPrototypeOf ===
-      serializationIntrinsicObjectGetPrototypeOf &&
-    SerializationIntrinsicObject.hasOwn ===
-      serializationIntrinsicObjectHasOwn &&
-    SerializationIntrinsicObject.keys === serializationIntrinsicObjectKeys &&
-    JSON === SerializationIntrinsicJson &&
-    SerializationIntrinsicJson.parse === serializationIntrinsicJsonParse &&
-    SerializationIntrinsicJson.stringify ===
-      serializationIntrinsicJsonStringify &&
-    Reflect === SerializationIntrinsicReflect &&
-    SerializationIntrinsicReflect.apply === serializationReflectApply &&
-    SerializationIntrinsicReflect.ownKeys ===
-      serializationIntrinsicReflectOwnKeys &&
-    TextEncoder === SerializationIntrinsicTextEncoder &&
-    SerializationIntrinsicTextEncoder.prototype.encode ===
-      serializationIntrinsicTextEncoderEncode
-  );
-}
-
 function serializationIntegrityFailure<T>(): CadResult<T> {
   return failure(
     diagnostic(
       "IR_INVALID",
-      "Document-v7 runtime intrinsics changed during the operation",
+      DOCUMENT_V7_RUNTIME_INTEGRITY_MESSAGE,
       { severity: "error" },
     ),
   );
@@ -371,6 +336,9 @@ export function stringifyDocumentV7(
   options: StringifyDocumentV7Options = {},
 ): string {
   const normalizedLimits = parseV7Limits(options);
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    throwDocumentV7RuntimeIntegrityError();
+  }
   if (!normalizedLimits.ok) {
     throw new TypeError(
       normalizedLimits.diagnostics[0]?.message ??
@@ -380,18 +348,24 @@ export function stringifyDocumentV7(
   let pretty: boolean;
   try {
     pretty = options.pretty === true;
-  } catch (error) {
+  } catch {
+    if (!documentV7RuntimeIntrinsicsAreIntact()) {
+      throwDocumentV7RuntimeIntegrityError();
+    }
     throw new TypeError(
-      safeErrorMessage(
-        error,
-        "Cannot read InvariantCAD document-v7 serialization options safely",
-      ),
+      "Cannot read InvariantCAD document-v7 serialization options safely",
     );
+  }
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    throwDocumentV7RuntimeIntegrityError();
   }
   const parsed = parseDocumentValueV7WithLimits(
     document,
     normalizedLimits.value,
   );
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    throwDocumentV7RuntimeIntegrityError();
+  }
   if (!parsed.ok) {
     throw new TypeError(
       parsed.diagnostics[0]?.message ??
@@ -407,6 +381,9 @@ export function stringifyDocumentV7(
     throw new TypeError(
       `Design-document maxDocumentBytes limit ${normalizedLimits.value.maxDocumentBytes} was exceeded by ${documentBytes}`,
     );
+  }
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    throwDocumentV7RuntimeIntegrityError();
   }
   return text;
 }
@@ -442,8 +419,14 @@ function parseLimits(
 function parseV7Limits(
   options: ParseDocumentOptions,
 ): CadResult<DesignDocumentLimits> {
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return serializationIntegrityFailure();
+  }
   try {
     const rawLimits = options.limits;
+    if (!documentV7RuntimeIntrinsicsAreIntact()) {
+      return serializationIntegrityFailure();
+    }
     if (rawLimits === undefined) {
       return success(DEFAULT_DESIGN_DOCUMENT_LIMITS);
     }
@@ -452,8 +435,14 @@ function parseV7Limits(
       DEFAULT_DESIGN_DOCUMENT_LIMITS,
       { strictV7Snapshot: true },
     );
+    if (!documentV7RuntimeIntrinsicsAreIntact()) {
+      return serializationIntegrityFailure();
+    }
     if (!captured.ok) return captured;
     const limits = normalizeDesignDocumentLimits(captured.value);
+    if (!documentV7RuntimeIntrinsicsAreIntact()) {
+      return serializationIntegrityFailure();
+    }
     return limits === undefined
       ? failure(
           diagnostic(
@@ -463,14 +452,14 @@ function parseV7Limits(
           ),
         )
       : success(limits);
-  } catch (error) {
+  } catch {
+    if (!documentV7RuntimeIntrinsicsAreIntact()) {
+      return serializationIntegrityFailure();
+    }
     return failure(
       diagnostic(
         "IR_INVALID",
-        safeErrorMessage(
-          error,
-          "Design-document-v7 parse limits could not be read safely",
-        ),
+        "Design-document-v7 parse limits could not be read safely",
         { severity: "error" },
       ),
     );
@@ -536,30 +525,33 @@ function parseDocumentValueV7WithLimits(
   value: unknown,
   limits: DesignDocumentLimits,
 ): CadResult<DesignDocumentV7> {
-  if (!serializationIntrinsicsAreIntact()) {
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
     return serializationIntegrityFailure();
   }
   const preflight = preflightDesignDocumentValue(value, limits, {
     strictV7Snapshot: true,
   });
-  if (!preflight.ok) return preflight;
-  if (!serializationIntrinsicsAreIntact()) {
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
     return serializationIntegrityFailure();
   }
+  if (!preflight.ok) return preflight;
   let parsed: ReturnType<typeof DesignDocumentV7Schema.safeParse>;
   try {
     parsed = DesignDocumentV7Schema.safeParse(preflight.value);
-  } catch (error) {
+  } catch {
+    if (!documentV7RuntimeIntrinsicsAreIntact()) {
+      return serializationIntegrityFailure();
+    }
     return failure(
       diagnostic(
         "IR_INVALID",
-        safeErrorMessage(
-          error,
-          "The document-v7 value could not be parsed safely",
-        ),
+        "The document-v7 value could not be parsed safely",
         { severity: "error" },
       ),
     );
+  }
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return serializationIntegrityFailure();
   }
   if (!parsed.success) {
     return {
@@ -582,10 +574,13 @@ function parseDocumentValueV7WithLimits(
       ),
     );
   }
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return serializationIntegrityFailure();
+  }
   const validated = validateDocumentV7(
     deepFreeze(parsed.data) as DesignDocumentV7,
   );
-  return serializationIntrinsicsAreIntact()
+  return documentV7RuntimeIntrinsicsAreIntact()
     ? validated
     : serializationIntegrityFailure();
 }
@@ -657,21 +652,27 @@ export function parseDocumentV7(
   }
   const source = text;
   const normalizedLimits = parseV7Limits(options);
-  if (!normalizedLimits.ok) return normalizedLimits;
-  if (!serializationIntrinsicsAreIntact()) {
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
     return serializationIntegrityFailure();
   }
+  if (!normalizedLimits.ok) return normalizedLimits;
   let documentBytes: number;
   try {
     documentBytes = serializationUtf8ByteLength(source);
-  } catch (error) {
+  } catch {
+    if (!documentV7RuntimeIntrinsicsAreIntact()) {
+      return serializationIntegrityFailure();
+    }
     return failure(
       diagnostic(
         "IR_INVALID",
-        safeErrorMessage(error, "The document text could not be read safely"),
+        "The document text could not be read safely",
         { severity: "error" },
       ),
     );
+  }
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return serializationIntegrityFailure();
   }
   if (documentBytes > normalizedLimits.value.maxDocumentBytes) {
     return failure(
@@ -692,17 +693,20 @@ export function parseDocumentV7(
   let value: unknown;
   try {
     value = serializationJsonParse(source);
-  } catch (error) {
+  } catch {
+    if (!documentV7RuntimeIntrinsicsAreIntact()) {
+      return serializationIntegrityFailure();
+    }
     return failure(
       diagnostic("IR_INVALID", "The document is not valid JSON", {
         severity: "error",
         details: {
-          error: safeErrorMessage(error, "JSON parsing failed safely"),
+          error: "JSON parsing failed safely",
         },
       }),
     );
   }
-  if (!serializationIntrinsicsAreIntact()) {
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
     return serializationIntegrityFailure();
   }
   return parseDocumentValueV7WithLimits(value, normalizedLimits.value);
@@ -724,9 +728,14 @@ export function parseDocumentValueV7(
   options: ParseDocumentOptions = {},
 ): CadResult<DesignDocumentV7> {
   const normalizedLimits = parseV7Limits(options);
-  return normalizedLimits.ok
-    ? parseDocumentValueV7WithLimits(value, normalizedLimits.value)
-    : normalizedLimits;
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return serializationIntegrityFailure();
+  }
+  if (!normalizedLimits.ok) return normalizedLimits;
+  const parsed = parseDocumentValueV7WithLimits(value, normalizedLimits.value);
+  return documentV7RuntimeIntrinsicsAreIntact()
+    ? parsed
+    : serializationIntegrityFailure();
 }
 
 export async function hashDocument(
@@ -764,6 +773,9 @@ export function cloneDocumentV7(
   options: ParseDocumentOptions = {},
 ): DesignDocumentV7 {
   const normalizedLimits = parseV7Limits(options);
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    throwDocumentV7RuntimeIntegrityError();
+  }
   if (!normalizedLimits.ok) {
     throw new TypeError(
       normalizedLimits.diagnostics[0]?.message ??
@@ -774,6 +786,9 @@ export function cloneDocumentV7(
     document,
     normalizedLimits.value,
   );
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    throwDocumentV7RuntimeIntegrityError();
+  }
   if (!parsed.ok) {
     throw new TypeError(
       parsed.diagnostics[0]?.message ??
@@ -788,6 +803,9 @@ export function cloneDocumentV7(
     throw new TypeError(
       `Design-document maxDocumentBytes limit ${normalizedLimits.value.maxDocumentBytes} was exceeded by ${documentBytes}`,
     );
+  }
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    throwDocumentV7RuntimeIntegrityError();
   }
   return parsed.value;
 }
