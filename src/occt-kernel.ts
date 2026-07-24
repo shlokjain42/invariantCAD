@@ -7,17 +7,19 @@ import type {
 } from "occt-wasm";
 import type { Vec2, Vec3 } from "./core/math.js";
 import { canonicalStringifyProtocol } from "./core/json.js";
-import type {
-  GeometryKernel,
-  KernelCapabilities,
-  KernelExchangeFormat,
-  KernelFeatureContext,
-  KernelShape,
-  KernelShapeStatus,
-  MeshData,
-  MeshOptions,
-  ResolvedTransformOperation,
-  ShapeMeasurements,
+import {
+  KERNEL_DOCUMENT_BODY_IMPORT_PROTOCOL_VERSION,
+  type GeometryKernel,
+  type KernelCapabilities,
+  type KernelDocumentBodyImportOptions,
+  type KernelExchangeFormat,
+  type KernelFeatureContext,
+  type KernelShape,
+  type KernelShapeStatus,
+  type MeshData,
+  type MeshOptions,
+  type ResolvedTransformOperation,
+  type ShapeMeasurements,
 } from "./kernel.js";
 import type {
   KernelCurveDescriptor,
@@ -508,9 +510,22 @@ function semanticLineage(
   ];
 }
 
+const IntrinsicArrayBuffer = ArrayBuffer;
+const IntrinsicUint8Array = Uint8Array;
+const IntrinsicTextDecoder = TextDecoder;
+
 function arrayBufferCopy(value: Uint8Array): ArrayBuffer {
-  const buffer = new ArrayBuffer(value.byteLength);
-  new Uint8Array(buffer).set(value);
+  if (typedArrayByteLengthGetter === undefined) {
+    throw new TypeError("Uint8Array byte-length intrinsic is unavailable");
+  }
+  const byteLength = Reflect.apply(
+    typedArrayByteLengthGetter,
+    value,
+    [],
+  ) as number;
+  const buffer = new IntrinsicArrayBuffer(byteLength);
+  const target = new IntrinsicUint8Array(buffer);
+  Reflect.apply(typedArraySet, target, [value]);
   return buffer;
 }
 
@@ -518,10 +533,20 @@ const arrayBufferByteLengthGetter = Object.getOwnPropertyDescriptor(
   ArrayBuffer.prototype,
   "byteLength",
 )?.get;
+const arrayBufferIsView = ArrayBuffer.isView;
 const typedArrayNameGetter = Object.getOwnPropertyDescriptor(
   Object.getPrototypeOf(Uint8Array.prototype) as object,
   Symbol.toStringTag,
 )?.get;
+const typedArrayByteLengthGetter = Object.getOwnPropertyDescriptor(
+  Object.getPrototypeOf(Uint8Array.prototype) as object,
+  "byteLength",
+)?.get;
+const typedArrayBufferGetter = Object.getOwnPropertyDescriptor(
+  Object.getPrototypeOf(Uint8Array.prototype) as object,
+  "buffer",
+)?.get;
+const typedArraySet = Uint8Array.prototype.set;
 const urlHrefGetter = Object.getOwnPropertyDescriptor(
   URL.prototype,
   "href",
@@ -545,6 +570,139 @@ function hasUint8ArrayBrand(value: unknown): value is Uint8Array {
     return Reflect.apply(typedArrayNameGetter, value, []) === "Uint8Array";
   } catch {
     return false;
+  }
+}
+
+function snapshotDocumentBodyBytes(value: unknown): Uint8Array<ArrayBuffer> {
+  if (
+    typedArrayNameGetter === undefined ||
+    typedArrayByteLengthGetter === undefined ||
+    typedArrayBufferGetter === undefined ||
+    arrayBufferByteLengthGetter === undefined ||
+    !Reflect.apply(arrayBufferIsView, IntrinsicArrayBuffer, [value])
+  ) {
+    throw new TypeError("Document body data must be a Uint8Array");
+  }
+  try {
+    if (Reflect.apply(typedArrayNameGetter, value, []) !== "Uint8Array") {
+      throw new TypeError("Document body data must be a Uint8Array");
+    }
+    const buffer: unknown = Reflect.apply(typedArrayBufferGetter, value, []);
+    // Applying the ArrayBuffer intrinsic rejects SharedArrayBuffer storage.
+    Reflect.apply(arrayBufferByteLengthGetter, buffer, []);
+    const byteLength: unknown = Reflect.apply(
+      typedArrayByteLengthGetter,
+      value,
+      [],
+    );
+    if (
+      typeof byteLength !== "number" ||
+      !Number.isSafeInteger(byteLength) ||
+      byteLength < 0
+    ) {
+      throw new TypeError("Document body data has an invalid byte length");
+    }
+    const copied = new IntrinsicUint8Array(byteLength);
+    Reflect.apply(typedArraySet, copied, [value]);
+    return copied;
+  } catch (error) {
+    if (
+      error instanceof TypeError &&
+      error.message.startsWith("Document body data")
+    ) {
+      throw error;
+    }
+    throw new TypeError(
+      "Document body data must be a non-detached Uint8Array without shared storage",
+      { cause: error },
+    );
+  }
+}
+
+interface CapturedDocumentBodyImportOptions {
+  readonly format: KernelExchangeFormat;
+  readonly units:
+    | { readonly mode: "from-file" }
+    | {
+        readonly mode: "declared";
+        readonly length: "mm" | "cm" | "m" | "in";
+      };
+}
+
+function captureDocumentBodyImportOptions(
+  value: unknown,
+): CapturedDocumentBodyImportOptions {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new TypeError("Document body import options must be an object");
+  }
+  const format: unknown = Reflect.get(value, "format");
+  const units: unknown = Reflect.get(value, "units");
+  const healing: unknown = Reflect.get(value, "healing");
+  if (
+    typeof healing !== "object" ||
+    healing === null ||
+    Array.isArray(healing) ||
+    Reflect.get(healing, "mode") !== "none"
+  ) {
+    throw new TypeError(
+      "Document body import protocol v1 requires healing mode 'none'",
+    );
+  }
+  if (
+    typeof units !== "object" ||
+    units === null ||
+    Array.isArray(units)
+  ) {
+    throw new TypeError("Document body import units must be an object");
+  }
+  const mode: unknown = Reflect.get(units, "mode");
+  if (format === "step" && mode === "from-file") {
+    return { format, units: { mode } };
+  }
+  if (
+    (format === "brep" || format === "brep-binary") &&
+    mode === "declared"
+  ) {
+    const length: unknown = Reflect.get(units, "length");
+    if (
+      length === "mm" ||
+      length === "cm" ||
+      length === "m" ||
+      length === "in"
+    ) {
+      return { format, units: { mode, length } };
+    }
+    throw new TypeError(
+      "Declared document body units require length 'mm', 'cm', 'm', or 'in'",
+    );
+  }
+  if (
+    format !== "step" &&
+    format !== "brep" &&
+    format !== "brep-binary"
+  ) {
+    throw new TypeError(`Unsupported document body format '${String(format)}'`);
+  }
+  throw new TypeError(
+    format === "step"
+      ? "STEP document bodies require units mode 'from-file'"
+      : `${format} document bodies require units mode 'declared'`,
+  );
+}
+
+function documentBodyLengthScale(
+  options: CapturedDocumentBodyImportOptions,
+): number {
+  if (options.units.mode === "from-file") return 1;
+  switch (options.units.length) {
+    case "mm":
+      return 1;
+    case "cm":
+      return 10;
+    case "m":
+      return 1_000;
+    case "in":
+      return 25.4;
   }
 }
 
@@ -902,6 +1060,14 @@ class OcctKernel implements GeometryKernel {
     ],
     nativeImports: ["step", "brep", "brep-binary"],
     nativeExports: ["step", "brep", "brep-binary"],
+    documentBodyImport: {
+      protocolVersion: KERNEL_DOCUMENT_BODY_IMPORT_PROTOCOL_VERSION,
+      formats: [
+        { format: "step", unitModes: ["from-file"] },
+        { format: "brep", unitModes: ["declared"] },
+        { format: "brep-binary", unitModes: ["declared"] },
+      ],
+    },
     topology: {
       kinds: ["face", "edge", "vertex"],
       provenance: "feature",
@@ -4195,6 +4361,120 @@ class OcctKernel implements GeometryKernel {
     return this.own(this.normalizeImportedSolidOrientation(imported), context, {
       history: "partial",
     });
+  }
+
+  importDocumentBody(
+    data: Uint8Array,
+    options: KernelDocumentBodyImportOptions,
+    context?: KernelFeatureContext,
+  ): KernelShape {
+    this.assertKernelLive();
+    checkContext(context);
+    const bytes = snapshotDocumentBodyBytes(data);
+    const capturedOptions = captureDocumentBodyImportOptions(options);
+    checkContext(context);
+
+    let root: ShapeHandle | undefined;
+    let solid: ShapeHandle | undefined;
+    let candidates: ShapeHandle[] = [];
+    try {
+      switch (capturedOptions.format) {
+        case "step":
+          root = this.raw.importStep(arrayBufferCopy(bytes));
+          break;
+        case "brep":
+          root = this.raw.fromBREP(
+            new IntrinsicTextDecoder("utf-8", { fatal: true }).decode(bytes),
+          );
+          break;
+        case "brep-binary":
+          root = this.raw.fromBREPBinary(
+            new IntrinsicUint8Array(arrayBufferCopy(bytes)),
+          );
+          break;
+      }
+      checkContext(context);
+      if (this.raw.isNull(root) || !this.raw.isValid(root)) {
+        throw new TypeError(
+          "Document body import did not produce valid exact topology",
+        );
+      }
+
+      candidates = this.raw.getSubShapes(root, "solid");
+      if (
+        candidates.length !== 1 ||
+        !this.isPureSingleSolidShape(root, candidates[0]!)
+      ) {
+        throw new TypeError(
+          "Document body import must contain exactly one solid and no loose topology",
+        );
+      }
+      solid = candidates[0]!;
+      candidates = [];
+      const parsedRoot = root;
+      root = undefined;
+      this.raw.release(parsedRoot);
+      checkContext(context);
+
+      const scale = documentBodyLengthScale(capturedOptions);
+      if (scale !== 1) {
+        const unscaled = solid;
+        solid = undefined;
+        try {
+          solid = this.raw.scale(
+            unscaled,
+            { x: 0, y: 0, z: 0 },
+            scale,
+          );
+        } finally {
+          this.raw.release(unscaled);
+        }
+      }
+
+      if (
+        this.raw.isNull(solid) ||
+        this.raw.getShapeType(solid) !== "solid" ||
+        !this.raw.isValid(solid)
+      ) {
+        throw new TypeError(
+          "Document body import must produce one valid positive-volume solid",
+        );
+      }
+      const signedVolume = this.raw.getVolume(solid);
+      if (!Number.isFinite(signedVolume) || signedVolume === 0) {
+        throw new TypeError(
+          "Document body import must produce one valid positive-volume solid",
+        );
+      }
+      if (signedVolume < 0) {
+        const reversedInput = solid;
+        solid = undefined;
+        try {
+          solid = this.raw.reverseShape(reversedInput);
+        } finally {
+          this.raw.release(reversedInput);
+        }
+      }
+      checkContext(context);
+      if (
+        this.raw.isNull(solid) ||
+        this.raw.getShapeType(solid) !== "solid" ||
+        !this.raw.isValid(solid) ||
+        !(this.raw.getVolume(solid) > 0)
+      ) {
+        throw new TypeError(
+          "Document body import must produce one valid positive-volume solid",
+        );
+      }
+
+      const adopted = this.own(solid, context, { history: "partial" });
+      solid = undefined;
+      return adopted;
+    } finally {
+      this.releaseHandles(candidates);
+      if (solid !== undefined) this.raw.release(solid);
+      if (root !== undefined) this.raw.release(root);
+    }
   }
 
   exportShape(
