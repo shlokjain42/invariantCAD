@@ -134,15 +134,17 @@ measurable product program.
   subpaths or packages.
 - Add public API-diff reporting before expanding the already large export
   surface.
-- Establish a reference-model corpus:
-  - configurable enclosure with shell, bosses, holes, and treatments;
-  - revolved shaft/flange with keyway, groove, and patterns;
-  - pipe manifold;
-  - imported STEP repair/edit/export;
-  - mated gearbox assembly with BOM and interference evidence;
-  - later, an associative drawing and a sheet-metal enclosure.
-- Record cold rebuild, warm rebuild, peak memory, native-handle, tessellation,
-  and output-size baselines for every reference model.
+- Establish a small executable reference corpus for workflows the public API
+  supports today: a parameterized electronics enclosure, bolted flange, and
+  hollow stepped shaft.
+- Define the larger acceptance models at the milestones that make them
+  executable: the production enclosure, shaft/flange, and pipe manifold in
+  Milestone 2; imported STEP repair in Milestone 3; a mated gearbox in
+  Milestone 4; and associative drawing and sheet-metal models in Milestone 5.
+- Establish a versioned benchmark format for every executable reference model.
+  It must distinguish first and repeated rebuilds, report memory and native
+  ownership evidence only at boundaries that can measure them, and record
+  tessellation and output sizes without unstable universal timing thresholds.
 - Compile documentation examples as release tests and add one end-to-end
   example for every supported workflow.
 - Raise checked coverage floors toward demonstrated coverage without treating
