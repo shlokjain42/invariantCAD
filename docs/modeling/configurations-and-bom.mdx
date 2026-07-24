@@ -7,45 +7,114 @@ icon: "list-tree"
 Configurations are definition-scoped named overrides stored inside the design
 document. They do not clone the feature graph.
 
-## Define a configuration
+## Complete executable workflow
+
+This canonical module builds a two-instance assembly, selects a named
+configuration that changes its width, suppresses one occurrence, substitutes
+its material, and verifies the resulting BOM.
+
+{/* docs-example:start assembly-configuration-bom */}
 
 ```ts
-const steel = cad.material("steel-a36", {
-  name: "A36 Steel",
-  massDensity: kgPerCubicMeter(7850),
-});
+import {
+  EvaluatedAssembly,
+  createEvaluator,
+  design,
+  kgPerCubicMeter,
+  mm,
+  tf,
+  vec3,
+} from "invariantcad";
 
-const compactSteelSingle = cad.configuration(
-  "compact-steel-single",
+const cad = design("configured-bracket-pair");
+const width = cad.parameter.length("width", mm(40), { min: mm(10) });
+const bracketSolid = cad.box("bracket-solid", {
+  size: vec3(width, mm(20), mm(5)),
+});
+const aluminum = cad.material("aluminum", {
+  name: "Aluminum",
+  massDensity: kgPerCubicMeter(2_700),
+});
+const steel = cad.material("steel", {
+  name: "Steel",
+  massDensity: kgPerCubicMeter(7_850),
+});
+const bracket = cad.part("bracket", bracketSolid, {
+  partNumber: "BRACKET-001",
+  materialRef: aluminum,
+});
+const pair = cad.assembly("pair", (assembly) => {
+  assembly.instance("left", bracket);
+  assembly.instance("right", bracket, {
+    placement: [tf.translate(vec3(mm(60), mm(0), mm(0)))],
+  });
+});
+const wideSteelSingle = cad.configuration(
+  "wide-steel-single",
   (configuration) => {
-    configuration.parameter(width, mm(60));
+    configuration.parameter(width, mm(50));
     configuration.instanceSuppressed(pair, "right");
     configuration.partMaterial(bracket, steel);
   },
-  {
-    description: "One compact bracket manufactured from A36 steel",
-    metadata: { salesCode: "CSS-1" },
-  },
 );
+cad.output("pair", pair);
+
+async function evaluateConfiguredAssembly() {
+  const evaluator = await createEvaluator();
+  try {
+    const result = await evaluator.evaluate(cad.build(), {
+      configuration: wideSteelSingle,
+      outputs: ["pair"],
+    });
+    if (!result.ok) {
+      throw new Error(
+        result.diagnostics.map((item) => item.message).join("\n"),
+      );
+    }
+
+    try {
+      const output = result.value.output("pair");
+      if (!(output instanceof EvaluatedAssembly)) {
+        throw new Error("Expected the 'pair' output to be an assembly");
+      }
+      const bom = output.billOfMaterials();
+      if (!bom.ok) {
+        throw new Error(
+          bom.diagnostics.map((item) => item.message).join("\n"),
+        );
+      }
+      return {
+        configurationId: result.value.configurationId,
+        activeInstances: output.instances.map((instance) => instance.id),
+        totalQuantity: bom.value.totalQuantity,
+        materialId: bom.value.items[0]?.materialId,
+        totalMassKg: bom.value.totalMass,
+      };
+    } finally {
+      result.value.dispose();
+    }
+  } finally {
+    evaluator.dispose();
+  }
+}
+
+export const assemblyConfigurationBomSummary =
+  await evaluateConfiguredAssembly();
+console.log(assemblyConfigurationBomSummary);
 ```
 
-A configuration must contain at least one override. Duplicate overrides inside
-one configuration are rejected during authoring.
+{/* docs-example:end assembly-configuration-bom */}
 
-## Evaluate by configuration
+The release gate compiles and executes the source module from
+`examples/docs/assembly-configuration-bom.ts`. A configuration must contain at
+least one override; duplicate overrides inside one configuration are rejected
+during authoring.
 
-```ts
-const result = await evaluator.evaluate(document, {
-  configuration: compactSteelSingle,
-  outputs: ["pair"],
-});
-```
-
-After serialization, select by configuration ID:
+After serialization, applications select the same variant by its stable ID:
 
 ```ts
 const result = await evaluator.evaluate(parsedDocument, {
-  configuration: "compact-steel-single",
+  configuration: "wide-steel-single",
 });
 ```
 
@@ -65,20 +134,6 @@ instanced twice, suppressing an instance inside that subassembly definition
 affects both placements. Per-occurrence effectivity is roadmap work.
 
 ## Deterministic BOM
-
-```ts
-const output = result.value.output("pair");
-if (output instanceof EvaluatedAssembly) {
-  const bom = output.billOfMaterials();
-  if (!bom.ok) {
-    console.error(bom.diagnostics);
-  } else {
-    for (const item of bom.value.items) {
-      console.log(item.partNumber, item.quantity, item.totalMass);
-    }
-  }
-}
-```
 
 The BOM:
 

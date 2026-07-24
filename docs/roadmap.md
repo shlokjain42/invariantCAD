@@ -146,8 +146,14 @@ measurable product program.
   reports process-wide high-water memory with exact caveats, records native
   handle telemetry as unsupported until a real kernel protocol exists, and
   captures tessellation and output sizes without universal timing thresholds.
-- Compile documentation examples as release tests and add one end-to-end
-  example for every supported workflow.
+- Gate the explicit canonical documentation matrix in
+  `examples/docs/manifest.json`: portable parametric evaluation and STL;
+  sketch/extrude with default and exact evaluation plus STEP; fixed assemblies,
+  named configurations, suppression, material overrides, and BOMs; document
+  migration, canonicalization, parsing, and hashing; exact persistent-topology
+  capture, resolution, and explanation; and structured document-limit
+  diagnostics. Other feature-level snippets remain illustrative rather than
+  being mislabeled as standalone executable programs.
 - Raise checked coverage floors toward demonstrated coverage without treating
   100% line coverage as a substitute for realistic models.
 

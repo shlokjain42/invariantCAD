@@ -4,6 +4,75 @@ description: "Serialize, parse, validate, clone, hash, and migrate versioned Inv
 icon: "file-json"
 ---
 
+## Complete executable lifecycle
+
+This canonical module migrates a frozen v1 document, serializes it
+canonically, reparses the bytes through validation, proves the round trip is
+stable, and computes its semantic SHA-256.
+
+{/* docs-example:start document-canonicalization-and-migration */}
+
+```ts
+import {
+  DOCUMENT_SCHEMA_V1,
+  DOCUMENT_VERSION,
+  hashDocument,
+  migrateDocument,
+  parseDocument,
+  stringifyDocument,
+  type CadResult,
+} from "invariantcad";
+
+function valueOrThrow<T>(result: CadResult<T>): T {
+  if (!result.ok) {
+    throw new Error(
+      result.diagnostics.map((item) => item.message).join("\n"),
+    );
+  }
+  return result.value;
+}
+
+const legacyDocument = {
+  schema: DOCUMENT_SCHEMA_V1,
+  version: 1,
+  name: "legacy-box",
+  units: { length: "mm", angle: "rad" },
+  parameters: {},
+  nodes: {
+    box: {
+      kind: "box",
+      size: [
+        { op: "literal", dimension: "length", value: 10 },
+        { op: "literal", dimension: "length", value: 20 },
+        { op: "literal", dimension: "length", value: 30 },
+      ],
+      center: false,
+    },
+  },
+  outputs: { box: { kind: "solid", node: "box" } },
+} as const;
+
+const migrated = valueOrThrow(migrateDocument(legacyDocument));
+const canonicalJson = stringifyDocument(migrated);
+const reparsed = valueOrThrow(parseDocument(canonicalJson));
+const semanticHash = await hashDocument(reparsed);
+
+export const documentLifecycleSummary = {
+  sourceVersion: legacyDocument.version,
+  targetVersion: migrated.version,
+  currentVersion: DOCUMENT_VERSION,
+  canonicalRoundTrip:
+    stringifyDocument(reparsed) === canonicalJson,
+  semanticHash,
+};
+console.log(documentLifecycleSummary);
+```
+
+{/* docs-example:end document-canonicalization-and-migration */}
+
+The release gate compiles and executes the source module from
+`examples/docs/document-canonicalization-and-migration.ts`.
+
 ## Serialize deterministically
 
 ```ts
@@ -62,13 +131,6 @@ when a detached frozen copy is needed; it is not a mutable editing API.
 
 ## Migrate
 
-```ts
-const migrated = migrateDocument(oldValue);
-if (!migrated.ok) throw new Error(migrated.diagnostics[0]?.message);
-
-console.log(migrated.value.version); // current document version
-```
-
 Migration preserves admitted authored data from versions 1 through 6 and moves
 it to the current schema. It does not:
 
@@ -83,14 +145,10 @@ received before migration.
 
 ## Hash a document
 
-```ts
-const semanticHash = await hashDocument(document);
-const fullHash = await hashDocument(document, { includeMetadata: true });
-```
-
 By default, root metadata is excluded so descriptive root changes do not alter
 the semantic document hash. Node metadata and every modeled field follow the
-protocol's canonical representation.
+protocol's canonical representation. Pass `{ includeMetadata: true }` when the
+root metadata is intentionally part of the hash.
 
 ## Schema identifiers
 

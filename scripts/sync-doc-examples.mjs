@@ -8,24 +8,21 @@ if (mode !== "--check" && mode !== "--write") {
   throw new Error("Usage: node scripts/sync-doc-examples.mjs --check|--write");
 }
 
-const examples = [
-  {
-    id: "parametric-box-default",
-    source: "examples/docs/parametric-box.ts",
-    targets: [
-      { path: "README.md", style: "html" },
-      { path: "docs/get-started/installation.mdx", style: "mdx" },
-    ],
-  },
-  {
-    id: "mounting-plate-default-and-exact",
-    source: "examples/docs/mounting-plate.ts",
-    targets: [
-      { path: "docs/get-started/quickstart.mdx", style: "mdx" },
-      { path: "docs/reference/complete-guide.md", style: "mdx" },
-    ],
-  },
-];
+const manifestPath = resolve(
+  repositoryRoot,
+  "examples/docs/manifest.json",
+);
+const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+if (
+  manifest === null ||
+  typeof manifest !== "object" ||
+  manifest.version !== 1 ||
+  !Array.isArray(manifest.examples) ||
+  manifest.examples.length === 0
+) {
+  throw new Error("examples/docs/manifest.json: unsupported manifest");
+}
+const examples = manifest.examples;
 
 function marker(direction, id, style) {
   return style === "html"
@@ -43,8 +40,18 @@ function uniqueIndex(text, token, path) {
 }
 
 async function sourceRegion(example) {
+  if (
+    typeof example.id !== "string" ||
+    example.id.length === 0 ||
+    typeof example.source !== "string" ||
+    !/^[a-z0-9][a-z0-9-]*\.ts$/u.test(example.source) ||
+    !Array.isArray(example.targets)
+  ) {
+    throw new Error("examples/docs/manifest.json: malformed example entry");
+  }
+  const sourcePath = `examples/docs/${example.source}`;
   const text = await readFile(
-    resolve(repositoryRoot, example.source),
+    resolve(repositoryRoot, sourcePath),
     "utf8",
   );
   const lines = text.split("\n");
@@ -58,11 +65,11 @@ async function sourceRegion(example) {
     lines.lastIndexOf(start) !== startIndex ||
     lines.lastIndexOf(end) !== endIndex
   ) {
-    throw new Error(`${example.source}: expected one ordered '${example.id}' region`);
+    throw new Error(`${sourcePath}: expected one ordered '${example.id}' region`);
   }
   const code = lines.slice(startIndex + 1, endIndex).join("\n");
   if (code.length === 0 || code.includes("```")) {
-    throw new Error(`${example.source}: invalid '${example.id}' region`);
+    throw new Error(`${sourcePath}: invalid '${example.id}' region`);
   }
   return code;
 }
@@ -72,6 +79,16 @@ const updates = [];
 for (const example of examples) {
   const code = await sourceRegion(example);
   for (const target of example.targets) {
+    if (
+      target === null ||
+      typeof target !== "object" ||
+      typeof target.path !== "string" ||
+      (target.style !== "html" && target.style !== "mdx")
+    ) {
+      throw new Error(
+        `examples/docs/manifest.json: malformed target for '${example.id}'`,
+      );
+    }
     if (seenTargets.has(target.path)) {
       throw new Error(`${target.path}: only one generated region is supported`);
     }

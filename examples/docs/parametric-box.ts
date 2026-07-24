@@ -1,3 +1,5 @@
+import type { DocumentationExample } from "./example-contract.js";
+
 // docs-example:start parametric-box-default
 import { createEvaluator, design, mm, vec3 } from "invariantcad";
 
@@ -40,3 +42,11 @@ async function evaluateParametricBox() {
 export const parametricBoxSummary = await evaluateParametricBox();
 console.log(parametricBoxSummary);
 // docs-example:end parametric-box-default
+
+export const documentationExample = {
+  id: "parametric-box-default",
+  checks: {
+    parameterOverrideApplied: parametricBoxSummary.volume === 6_000,
+    binaryStlProduced: parametricBoxSummary.stlBytes > 84,
+  },
+} satisfies DocumentationExample;

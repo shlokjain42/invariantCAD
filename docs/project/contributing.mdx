@@ -68,12 +68,25 @@ The Mintlify source lives in `/docs`. Every navigated page needs `title` and
 planned behavior, and link to one canonical support matrix.
 
 Selected complete fences are synchronized from strict TypeScript regions under
-`examples/docs/`. Edit the canonical source rather than content between
-`docs-example` markers, then run `pnpm docs:generate`. `pnpm docs:check`
-verifies exact synchronization and source-mapped public imports without
-starting native runtimes; run `pnpm test:docs-examples` for the separate
-Manifold and OCCT execution gate. Unmarked illustrative fences remain
-hand-maintained.
+`examples/docs/`. The
+[`manifest.json`](https://github.com/shlokjain42/invariantCAD/blob/main/examples/docs/manifest.json)
+lists every canonical TypeScript module, the public workflows it covers, and
+each synchronized placement. Edit the canonical source rather than content
+between `docs-example` markers, then run `pnpm docs:generate`.
+
+`pnpm docs:check` verifies exact synchronization, manifest-complete TypeScript
+coverage, and source-mapped public imports without starting native runtimes.
+`pnpm test:docs-examples` independently checks that no canonical module is
+missing from the manifest, imports every listed module, runs its Manifold or
+OCCT workflow, and requires all named behavioral checks to pass.
+
+The current executable matrix covers portable parametric modeling and STL,
+sketch/extrude plus exact STEP, fixed assemblies with configurations and BOMs,
+canonical document migration and hashing, persistent topology
+capture/resolution/explanation, and bounded parsing with structured
+diagnostics. Unmarked fences are intentionally illustrative fragments: keep
+them accurate and type-aligned, but do not imply that they are independently
+compiled or executed.
 
 ## Security reports
 

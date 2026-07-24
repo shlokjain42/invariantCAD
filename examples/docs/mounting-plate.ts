@@ -1,3 +1,5 @@
+import type { DocumentationExample } from "./example-contract.js";
+
 // docs-example:start mounting-plate-default-and-exact
 import {
   EvaluatedSolid,
@@ -127,3 +129,19 @@ export const mountingPlateSummary = {
 };
 console.log(mountingPlateSummary);
 // docs-example:end mounting-plate-default-and-exact
+
+const expectedExactVolume = (100 * 50 - Math.PI * 5 ** 2) * 6;
+
+export const documentationExample = {
+  id: "mounting-plate-default-and-exact",
+  checks: {
+    defaultVolume:
+      Math.abs(mountingPlateSummary.defaultVolume - expectedExactVolume) < 2,
+    defaultStlProduced: mountingPlateSummary.defaultStlBytes > 84,
+    exactVolume:
+      Math.abs(mountingPlateSummary.exactVolume - expectedExactVolume) <
+      1e-6,
+    stepProduced: mountingPlateSummary.stepBytes > 1_000,
+    stepHeader: /ISO-10303-21/u.test(mountingPlateSummary.stepHeader),
+  },
+} satisfies DocumentationExample;

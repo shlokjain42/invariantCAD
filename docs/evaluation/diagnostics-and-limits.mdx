@@ -36,6 +36,57 @@ specific authored field is responsible. `related` identifies other document
 locations involved in the same failure, such as the other end of a conflicting
 reference.
 
+## Complete bounded-parse example
+
+This canonical module configures a document-byte ceiling, deliberately exceeds
+it, and branches on the structured resource details instead of parsing the
+human-readable message.
+
+{/* docs-example:start structured-diagnostics-and-resource-limits */}
+
+```ts
+import {
+  design,
+  mm,
+  parseDocument,
+  stringifyDocument,
+  vec3,
+} from "invariantcad";
+
+const cad = design("bounded-input");
+const box = cad.box("box", {
+  size: vec3(mm(10), mm(20), mm(30)),
+});
+cad.output("box", box);
+
+const json = stringifyDocument(cad.build());
+const documentBytes = new TextEncoder().encode(json).byteLength;
+const parsed = parseDocument(json, {
+  limits: { maxDocumentBytes: documentBytes - 1 },
+});
+if (parsed.ok) {
+  throw new Error("Expected the configured byte ceiling to reject the input");
+}
+const issue = parsed.diagnostics[0];
+if (issue === undefined) {
+  throw new Error("Expected a structured resource-limit diagnostic");
+}
+
+export const diagnosticsLimitSummary = {
+  code: issue.code,
+  severity: issue.severity,
+  resource: issue.details?.resource,
+  limit: issue.details?.limit,
+  actual: issue.details?.actual,
+};
+console.log(diagnosticsLimitSummary);
+```
+
+{/* docs-example:end structured-diagnostics-and-resource-limits */}
+
+The release gate compiles and executes the source module from
+`examples/docs/diagnostics-and-resource-limits.ts`.
+
 ## Common code families
 
 | Family | Examples | Typical action |
