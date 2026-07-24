@@ -97,6 +97,13 @@ const RESOURCE_MEDIA_TYPE_PATTERN =
 const IntrinsicArrayBuffer = ArrayBuffer;
 const IntrinsicUint8Array = Uint8Array;
 const IntrinsicMap = Map;
+const IntrinsicPromise = Promise;
+const reflectApply = Reflect.apply;
+const objectCreate = Object.create;
+const objectFreeze = Object.freeze;
+const objectGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
+const objectGetPrototypeOf = Object.getPrototypeOf;
+const objectHasOwn = Object.hasOwn;
 const arrayBufferIsView = ArrayBuffer.isView;
 const typedArrayPrototype = Object.getPrototypeOf(
   Uint8Array.prototype,
@@ -133,6 +140,36 @@ const eventTargetRemoveEventListener =
   typeof EventTarget === "undefined"
     ? undefined
     : EventTarget.prototype.removeEventListener;
+const HEX_DIGITS = "0123456789abcdef";
+
+interface CapturedCryptoDigest {
+  readonly target: object;
+  readonly method: (...arguments_: readonly unknown[]) => unknown;
+}
+
+const capturedCryptoDigest = (() => {
+  try {
+    const target: unknown = globalThis.crypto?.subtle;
+    if (typeof target !== "object" || target === null) return undefined;
+    let prototype: object | null = objectGetPrototypeOf(target);
+    while (prototype !== null) {
+      const descriptor = objectGetOwnPropertyDescriptor(prototype, "digest");
+      if (descriptor !== undefined && typeof descriptor.value === "function") {
+        return objectFreeze({
+          target,
+          method: descriptor.value as (
+            ...arguments_: readonly unknown[]
+          ) => unknown,
+        }) satisfies CapturedCryptoDigest;
+      }
+      prototype = objectGetPrototypeOf(prototype);
+    }
+  } catch {
+    // Resource resolution reports unavailable cryptographic support as a
+    // structured resolution failure when hashing is attempted.
+  }
+  return undefined;
+})();
 
 function lexicalCompare(first: string, second: string): number {
   return first < second ? -1 : first > second ? 1 : 0;
@@ -144,8 +181,8 @@ function isPlainRecord(
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return false;
   }
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === null || Object.getPrototypeOf(prototype) === null;
+  const prototype = objectGetPrototypeOf(value);
+  return prototype === null || objectGetPrototypeOf(prototype) === null;
 }
 
 function invalidInput<T = never>(
@@ -232,7 +269,7 @@ function abortSignalState(value: unknown): boolean | undefined {
     return undefined;
   }
   try {
-    const state = Reflect.apply(abortSignalAbortedGetter, value, []);
+    const state = reflectApply(abortSignalAbortedGetter, value, []);
     return typeof state === "boolean" ? state : undefined;
   } catch {
     return undefined;
@@ -275,7 +312,7 @@ export function normalizeResourceResolutionLimitsV7(
     ...DEFAULT_RESOURCE_RESOLUTION_LIMITS_V7,
   };
   for (const key of LIMIT_KEYS) {
-    if (!Object.hasOwn(snapshot, key)) continue;
+    if (!objectHasOwn(snapshot, key)) continue;
     const candidate = snapshot[key];
     if (
       typeof candidate !== "number" ||
@@ -329,7 +366,11 @@ function captureOptions(value: unknown): CadResult<CapturedResolveOptions> {
   );
 }
 
-function captureRequestedIds(value: unknown): CadResult<readonly ResourceId[]> {
+function captureRequestedIds(
+  value: unknown,
+  limits: ResourceResolutionLimitsV7,
+  signal: AbortSignal | undefined,
+): CadResult<readonly ResourceId[]> {
   try {
     if (!Array.isArray(value)) {
       return invalidInput("Requested resource IDs must be an array");
@@ -340,21 +381,34 @@ function captureRequestedIds(value: unknown): CadResult<readonly ResourceId[]> {
     }
     const ids = new Set<ResourceId>();
     for (let index = 0; index < length; index += 1) {
-      if (!Object.hasOwn(value, index)) {
+      if (isAborted(signal)) return abortFailure();
+      if (!objectHasOwn(value, index)) {
         return invalidInput(
           "Requested resource IDs cannot be sparse",
           `/requestedIds/${index}`,
         );
       }
       const id: unknown = value[index];
+      if (isAborted(signal)) return abortFailure();
       if (typeof id !== "string" || id.length === 0) {
         return invalidInput(
           "Requested resource IDs must be non-empty strings",
           `/requestedIds/${index}`,
         );
       }
-      ids.add(id as ResourceId);
+      if (!ids.has(id as ResourceId)) {
+        const actual = ids.size + 1;
+        if (actual > limits.maxResolvedResources) {
+          return limitFailure(
+            "maxResolvedResources",
+            limits.maxResolvedResources,
+            { actual },
+          );
+        }
+        ids.add(id as ResourceId);
+      }
     }
+    if (isAborted(signal)) return abortFailure();
     return success(Object.freeze([...ids].sort(lexicalCompare)));
   } catch {
     return invalidInput("Requested resource IDs could not be read safely");
@@ -364,6 +418,7 @@ function captureRequestedIds(value: unknown): CadResult<readonly ResourceId[]> {
 function captureLocations(
   value: unknown,
   id: ResourceId,
+  signal: AbortSignal | undefined,
 ): CadResult<readonly string[] | undefined> {
   if (value === undefined) return success(undefined);
   try {
@@ -383,13 +438,15 @@ function captureLocations(
     const output: string[] = [];
     const seen = new Set<string>();
     for (let index = 0; index < length; index += 1) {
-      if (!Object.hasOwn(value, index)) {
+      if (isAborted(signal)) return abortFailure();
+      if (!objectHasOwn(value, index)) {
         return invalidInput(
           `Resource '${id}' locations cannot be sparse`,
           `/resources/${id}/locations/${index}`,
         );
       }
       const location: unknown = value[index];
+      if (isAborted(signal)) return abortFailure();
       if (typeof location !== "string" || location.length === 0) {
         return invalidInput(
           `Resource '${id}' locations must be non-empty strings`,
@@ -405,6 +462,7 @@ function captureLocations(
       seen.add(location);
       output.push(location);
     }
+    if (isAborted(signal)) return abortFailure();
     return success(Object.freeze(output));
   } catch {
     return invalidInput(
@@ -414,9 +472,25 @@ function captureLocations(
   }
 }
 
+type OwnDataProperty =
+  | { readonly kind: "missing" }
+  | { readonly kind: "accessor" }
+  | { readonly kind: "data"; readonly value: unknown };
+
+function ownDataProperty(
+  value: object,
+  key: string,
+): OwnDataProperty {
+  const descriptor = objectGetOwnPropertyDescriptor(value, key);
+  if (descriptor === undefined) return { kind: "missing" };
+  if (!objectHasOwn(descriptor, "value")) return { kind: "accessor" };
+  return { kind: "data", value: descriptor.value };
+}
+
 function captureDefinition(
   id: ResourceId,
   value: unknown,
+  signal: AbortSignal | undefined,
 ): CadResult<CapturedResourceDefinition> {
   let digest: unknown;
   let byteLength: unknown;
@@ -429,10 +503,49 @@ function captureDefinition(
         `/resources/${id}`,
       );
     }
-    digest = value.digest;
-    byteLength = value.byteLength;
-    mediaType = value.mediaType;
-    rawLocations = value.locations;
+    if (isAborted(signal)) return abortFailure();
+    const digestProperty = ownDataProperty(value, "digest");
+    if (isAborted(signal)) return abortFailure();
+    if (digestProperty.kind !== "data") {
+      return invalidInput(
+        `Resource '${id}' digest must be an own data property`,
+        `/resources/${id}/digest`,
+      );
+    }
+    digest = digestProperty.value;
+
+    const byteLengthProperty = ownDataProperty(value, "byteLength");
+    if (isAborted(signal)) return abortFailure();
+    if (byteLengthProperty.kind !== "data") {
+      return invalidInput(
+        `Resource '${id}' byteLength must be an own data property`,
+        `/resources/${id}/byteLength`,
+      );
+    }
+    byteLength = byteLengthProperty.value;
+
+    const mediaTypeProperty = ownDataProperty(value, "mediaType");
+    if (isAborted(signal)) return abortFailure();
+    if (mediaTypeProperty.kind !== "data") {
+      return invalidInput(
+        `Resource '${id}' mediaType must be an own data property`,
+        `/resources/${id}/mediaType`,
+      );
+    }
+    mediaType = mediaTypeProperty.value;
+
+    const locationsProperty = ownDataProperty(value, "locations");
+    if (isAborted(signal)) return abortFailure();
+    if (locationsProperty.kind === "accessor") {
+      return invalidInput(
+        `Resource '${id}' locations must be an own data property`,
+        `/resources/${id}/locations`,
+      );
+    }
+    rawLocations =
+      locationsProperty.kind === "data"
+        ? locationsProperty.value
+        : undefined;
   } catch {
     return invalidInput(
       `Resource '${id}' definition could not be read safely`,
@@ -468,7 +581,7 @@ function captureDefinition(
       `/resources/${id}/mediaType`,
     );
   }
-  const locations = captureLocations(rawLocations, id);
+  const locations = captureLocations(rawLocations, id, signal);
   if (!locations.ok) return locations;
   return success(
     Object.freeze({
@@ -486,14 +599,18 @@ function captureDefinition(
 function captureDefinitions(
   definitions: unknown,
   ids: readonly ResourceId[],
+  limits: ResourceResolutionLimitsV7,
+  signal: AbortSignal | undefined,
 ): CadResult<readonly CapturedResourceDefinition[]> {
   try {
     if (!isPlainRecord(definitions)) {
       return invalidInput("Resource definitions must be a plain record");
     }
     const captured: CapturedResourceDefinition[] = [];
+    let total = 0;
     for (const id of ids) {
-      if (!Object.hasOwn(definitions, id)) {
+      if (isAborted(signal)) return abortFailure();
+      if (!objectHasOwn(definitions, id)) {
         return failure(
           diagnostic(
             "REFERENCE_MISSING",
@@ -506,55 +623,41 @@ function captureDefinitions(
           ),
         );
       }
-      const definition = captureDefinition(id, definitions[id]);
+      const rawDefinition = definitions[id];
+      if (isAborted(signal)) return abortFailure();
+      const definition = captureDefinition(id, rawDefinition, signal);
       if (!definition.ok) return definition;
+      if (definition.value.byteLength > limits.maxResourceBytes) {
+        return limitFailure("maxResourceBytes", limits.maxResourceBytes, {
+          resourceId: definition.value.id,
+          actual: definition.value.byteLength,
+        });
+      }
+      if (definition.value.byteLength > limits.maxTotalResourceBytes - total) {
+        return limitFailure(
+          "maxTotalResourceBytes",
+          limits.maxTotalResourceBytes,
+          {
+            resourceId: definition.value.id,
+            consumed: total,
+            requested: definition.value.byteLength,
+          },
+        );
+      }
+      total += definition.value.byteLength;
       captured.push(definition.value);
     }
+    if (isAborted(signal)) return abortFailure();
     return success(Object.freeze(captured));
   } catch {
     return invalidInput("Resource definitions could not be read safely");
   }
 }
 
-function preflightDeclaredLimits(
-  definitions: readonly CapturedResourceDefinition[],
-  limits: ResourceResolutionLimitsV7,
-): CadResult<void> {
-  if (definitions.length > limits.maxResolvedResources) {
-    return limitFailure(
-      "maxResolvedResources",
-      limits.maxResolvedResources,
-      { actual: definitions.length },
-    );
-  }
-  let total = 0;
-  for (const definition of definitions) {
-    if (definition.byteLength > limits.maxResourceBytes) {
-      return limitFailure("maxResourceBytes", limits.maxResourceBytes, {
-        resourceId: definition.id,
-        actual: definition.byteLength,
-      });
-    }
-    if (definition.byteLength > limits.maxTotalResourceBytes - total) {
-      return limitFailure(
-        "maxTotalResourceBytes",
-        limits.maxTotalResourceBytes,
-        {
-          resourceId: definition.id,
-          consumed: total,
-          requested: definition.byteLength,
-        },
-      );
-    }
-    total += definition.byteLength;
-  }
-  return success(undefined);
-}
-
 function hasArrayBufferBrand(value: unknown): value is ArrayBuffer {
   if (arrayBufferByteLengthGetter === undefined) return false;
   try {
-    Reflect.apply(arrayBufferByteLengthGetter, value, []);
+    reflectApply(arrayBufferByteLengthGetter, value, []);
     return true;
   } catch {
     return false;
@@ -564,7 +667,7 @@ function hasArrayBufferBrand(value: unknown): value is ArrayBuffer {
 function byteSource(value: unknown): ByteSource | undefined {
   try {
     if (hasArrayBufferBrand(value)) {
-      const byteLength = Reflect.apply(
+      const byteLength = reflectApply(
         arrayBufferByteLengthGetter!,
         value,
         [],
@@ -584,19 +687,19 @@ function byteSource(value: unknown): ByteSource | undefined {
       typedArrayByteLengthGetter === undefined ||
       typedArrayBufferGetter === undefined ||
       arrayBufferByteLengthGetter === undefined ||
-      !Reflect.apply(arrayBufferIsView, IntrinsicArrayBuffer, [value]) ||
-      Reflect.apply(typedArrayTagGetter, value, []) !== "Uint8Array"
+      !reflectApply(arrayBufferIsView, IntrinsicArrayBuffer, [value]) ||
+      reflectApply(typedArrayTagGetter, value, []) !== "Uint8Array"
     ) {
       return undefined;
     }
-    const buffer: unknown = Reflect.apply(
+    const buffer: unknown = reflectApply(
       typedArrayBufferGetter,
       value,
       [],
     );
     // The ArrayBuffer intrinsic rejects SharedArrayBuffer-backed views.
-    Reflect.apply(arrayBufferByteLengthGetter, buffer, []);
-    const byteLength: unknown = Reflect.apply(
+    reflectApply(arrayBufferByteLengthGetter, buffer, []);
+    const byteLength: unknown = reflectApply(
       typedArrayByteLengthGetter,
       value,
       [],
@@ -624,7 +727,7 @@ function copyByteSource(
       source.kind === "array-buffer"
         ? new IntrinsicUint8Array(source.value as ArrayBuffer)
         : source.value;
-    Reflect.apply(typedArraySet, copied, [view]);
+    reflectApply(typedArraySet, copied, [view]);
     return copied;
   } catch {
     return undefined;
@@ -655,11 +758,21 @@ class ResourceResolutionAbort {
   readonly name = "ResourceResolutionAbort";
 }
 
+interface ResolverSettlement {
+  value: unknown;
+}
+
+function resolverSettlement(value: unknown): ResolverSettlement {
+  const settlement = objectCreate(null) as ResolverSettlement;
+  settlement.value = value;
+  return settlement;
+}
+
 function awaitResolverResult(
   pending: CapturedPromiseLike,
   signal: AbortSignal | undefined,
-): Promise<unknown> {
-  return new Promise((resolve, reject) => {
+): Promise<ResolverSettlement> {
+  return new IntrinsicPromise((resolve, reject) => {
     let settled = false;
     let listenerAttached = false;
     const removeListener = (): void => {
@@ -672,7 +785,7 @@ function awaitResolverResult(
       }
       listenerAttached = false;
       try {
-        Reflect.apply(eventTargetRemoveEventListener, signal, [
+        reflectApply(eventTargetRemoveEventListener, signal, [
           "abort",
           onAbort,
         ]);
@@ -680,9 +793,9 @@ function awaitResolverResult(
         // Listener cleanup must not replace the selected resolution outcome.
       }
     };
-    const settle = (
-      callback: (value: unknown) => void,
-      value: unknown,
+    const settle = <Value>(
+      callback: (value: Value) => void,
+      value: Value,
     ): void => {
       if (settled) return;
       settled = true;
@@ -701,7 +814,7 @@ function awaitResolverResult(
         return;
       }
       try {
-        Reflect.apply(eventTargetAddEventListener, signal, [
+        reflectApply(eventTargetAddEventListener, signal, [
           "abort",
           onAbort,
           { once: true },
@@ -718,8 +831,8 @@ function awaitResolverResult(
       }
     }
     try {
-      Reflect.apply(pending.then, pending.target, [
-        (value: unknown) => settle(resolve, value),
+      reflectApply(pending.then, pending.target, [
+        (value: unknown) => settle(resolve, resolverSettlement(value)),
         (error: unknown) => settle(reject, error),
       ]);
     } catch (error) {
@@ -731,11 +844,22 @@ function awaitResolverResult(
 async function sha256Digest(
   bytes: OwnedResourceBytes,
 ): Promise<ResourceDigestIR> {
-  const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
-  const hex = [...new IntrinsicUint8Array(digest)]
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
-  return `sha256:${hex}`;
+  if (capturedCryptoDigest === undefined) {
+    throw new TypeError("WebCrypto SHA-256 is unavailable");
+  }
+  const digest = await (reflectApply(
+    capturedCryptoDigest.method,
+    capturedCryptoDigest.target,
+    ["SHA-256", bytes],
+  ) as PromiseLike<ArrayBuffer>);
+  const digestBytes = new IntrinsicUint8Array(digest);
+  let output = "sha256:";
+  for (let index = 0; index < digestBytes.byteLength; index += 1) {
+    const byte = digestBytes[index]!;
+    output += HEX_DIGITS[byte >>> 4]!;
+    output += HEX_DIGITS[byte & 0x0f]!;
+  }
+  return output as ResourceDigestIR;
 }
 
 function createResolvedResources(
@@ -746,30 +870,30 @@ function createResolvedResources(
   return Object.freeze({
     ids: publicIds,
     has: (id: ResourceId): boolean =>
-      Reflect.apply(mapHas, resources, [id]) as boolean,
+      reflectApply(mapHas, resources, [id]) as boolean,
     byteLength: (id: ResourceId): number | undefined => {
-      const bytes = Reflect.apply(mapGet, resources, [
+      const bytes = reflectApply(mapGet, resources, [
         id,
       ]) as OwnedResourceBytes | undefined;
       if (bytes === undefined) return undefined;
-      return Reflect.apply(
+      return reflectApply(
         typedArrayByteLengthGetter!,
         bytes,
         [],
       ) as number;
     },
     read: (id: ResourceId): Uint8Array | undefined => {
-      const bytes = Reflect.apply(mapGet, resources, [
+      const bytes = reflectApply(mapGet, resources, [
         id,
       ]) as OwnedResourceBytes | undefined;
       if (bytes === undefined) return undefined;
-      const byteLength = Reflect.apply(
+      const byteLength = reflectApply(
         typedArrayByteLengthGetter!,
         bytes,
         [],
       ) as number;
       const copied = new IntrinsicUint8Array(byteLength);
-      Reflect.apply(typedArraySet, copied, [bytes]);
+      reflectApply(typedArraySet, copied, [bytes]);
       return copied;
     },
   });
@@ -791,18 +915,19 @@ export async function resolveResourcesV7(
   if (!capturedOptions.ok) return capturedOptions;
   if (isAborted(capturedOptions.value.signal)) return abortFailure();
 
-  const capturedIds = captureRequestedIds(requestedIds);
+  const capturedIds = captureRequestedIds(
+    requestedIds,
+    capturedOptions.value.limits,
+    capturedOptions.value.signal,
+  );
   if (!capturedIds.ok) return capturedIds;
   const capturedDefinitions = captureDefinitions(
     definitions,
     capturedIds.value,
+    capturedOptions.value.limits,
+    capturedOptions.value.signal,
   );
   if (!capturedDefinitions.ok) return capturedDefinitions;
-  const preflight = preflightDeclaredLimits(
-    capturedDefinitions.value,
-    capturedOptions.value.limits,
-  );
-  if (!preflight.ok) return preflight;
 
   if (capturedDefinitions.value.length === 0) {
     return success(
@@ -845,7 +970,7 @@ export async function resolveResourcesV7(
 
     let returned: unknown;
     try {
-      const candidate: unknown = Reflect.apply(resolver, undefined, [request]);
+      const candidate: unknown = reflectApply(resolver, undefined, [request]);
       if (byteSource(candidate) !== undefined) {
         returned = candidate;
       } else {
@@ -856,10 +981,11 @@ export async function resolveResourcesV7(
             `Resolver returned unsupported bytes for resource '${definition.id}'`,
           );
         }
-        returned = await awaitResolverResult(
+        const settlement = await awaitResolverResult(
           pending,
           capturedOptions.value.signal,
         );
+        returned = settlement.value;
       }
     } catch (error) {
       if (
@@ -939,7 +1065,7 @@ export async function resolveResourcesV7(
         { expectedDigest: definition.digest },
       );
     }
-    Reflect.apply(mapSet, resolved, [definition.id, copied]);
+    reflectApply(mapSet, resolved, [definition.id, copied]);
   }
 
   return success(createResolvedResources(capturedIds.value, resolved));

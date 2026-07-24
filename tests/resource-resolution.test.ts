@@ -334,24 +334,24 @@ describe("staged v7 resource resolution", () => {
     );
   });
 
-  it("reads option and definition properties once before the first callback", async () => {
+  it("reads the option getter and each definition data descriptor once before the first callback", async () => {
     const id = resourceId("captured");
     const bytes = new Uint8Array([1, 2]);
     const stored = await definition(bytes);
     const reads = new Map<string, number>();
-    const tracked = Object.fromEntries(
-      Object.entries(stored).map(([key, value]) => [
-        key,
-        {
-          enumerable: true,
-          get: () => {
+    const trackedDefinition = new Proxy(stored, {
+      getOwnPropertyDescriptor: (target, key) => {
+        if (
+          typeof key === "string" &&
+          (key === "digest" ||
+            key === "byteLength" ||
+            key === "mediaType")
+        ) {
             reads.set(key, (reads.get(key) ?? 0) + 1);
-            return value;
-          },
-        },
-      ]),
-    );
-    const trackedDefinition = Object.defineProperties({}, tracked);
+        }
+        return Reflect.getOwnPropertyDescriptor(target, key);
+      },
+    });
     let resolverReads = 0;
     const resolver = () => bytes;
     const options = Object.defineProperty({}, "resolver", {
@@ -373,6 +373,44 @@ describe("staged v7 resource resolution", () => {
       byteLength: 1,
       mediaType: 1,
     });
+  });
+
+  it("rejects inherited and accessor-backed definition fields without invoking accessors", async () => {
+    const id = resourceId("ownData");
+    const bytes = new Uint8Array([4, 2]);
+    const stored = await definition(bytes);
+    const inherited = Object.create(
+      Object.assign(Object.create(null), stored),
+    ) as ResourceDefinitionIR;
+    const inheritedResult = await resolveResourcesV7(
+      { [id]: inherited },
+      [id],
+      { resolver: () => bytes },
+    );
+    expectFailure(inheritedResult, "IR_INVALID");
+
+    let accessorReads = 0;
+    const accessorBacked = Object.defineProperties(
+      {},
+      {
+        digest: {
+          enumerable: true,
+          get: () => {
+            accessorReads += 1;
+            return stored.digest;
+          },
+        },
+        byteLength: { enumerable: true, value: stored.byteLength },
+        mediaType: { enumerable: true, value: stored.mediaType },
+      },
+    ) as ResourceDefinitionIR;
+    const accessorResult = await resolveResourcesV7(
+      { [id]: accessorBacked },
+      [id],
+      { resolver: () => bytes },
+    );
+    expectFailure(accessorResult, "IR_INVALID");
+    expect(accessorReads).toBe(0);
   });
 
   it("does not inspect or expose resource metadata", async () => {
@@ -497,6 +535,42 @@ describe("staged v7 resource resolution", () => {
     expectFailure(digestMismatch, "RESOURCE_INTEGRITY_MISMATCH");
   });
 
+  it("uses captured cryptographic intrinsics after resolver code mutates WebCrypto", async () => {
+    const id = resourceId("cryptoMutation");
+    const committed = new Uint8Array([1, 2, 3]);
+    const substituted = new Uint8Array([9, 9, 9]);
+    const committedDigest = await globalThis.crypto.subtle.digest(
+      "SHA-256",
+      committed,
+    );
+    const subtlePrototype = Object.getPrototypeOf(
+      globalThis.crypto.subtle,
+    ) as object;
+    const original = Object.getOwnPropertyDescriptor(
+      subtlePrototype,
+      "digest",
+    );
+    expect(original?.value).toBeTypeOf("function");
+    try {
+      const result = await resolveResourcesV7(
+        resources([[id, await definition(committed)]]),
+        [id],
+        {
+          resolver: () => {
+            Object.defineProperty(subtlePrototype, "digest", {
+              ...original,
+              value: async () => committedDigest,
+            });
+            return substituted;
+          },
+        },
+      );
+      expectFailure(result, "RESOURCE_INTEGRITY_MISMATCH");
+    } finally {
+      Object.defineProperty(subtlePrototype, "digest", original!);
+    }
+  });
+
   it("preflights distinct count, individual bytes, and aggregate bytes before callbacks", async () => {
     const first = resourceId("first");
     const second = resourceId("second");
@@ -547,6 +621,100 @@ describe("staged v7 resource resolution", () => {
     );
     expectFailure(aggregate, "RESOURCE_LIMIT_EXCEEDED");
     expect(resolver).not.toHaveBeenCalled();
+  });
+
+  it("stops ID and definition capture as soon as declared limits are exceeded", async () => {
+    const first = resourceId("captureA");
+    const second = resourceId("captureB");
+    const third = resourceId("captureC");
+    const requested = [first, second, third];
+    const requestedReads: number[] = [];
+    for (let index = 0; index < requested.length; index += 1) {
+      const value = requested[index]!;
+      Object.defineProperty(requested, index, {
+        configurable: true,
+        enumerable: true,
+        get: () => {
+          requestedReads.push(index);
+          return value;
+        },
+      });
+    }
+    const countResult = await resolveResourcesV7(
+      {},
+      requested,
+      {
+        limits: {
+          maxResolvedResources: 1,
+          maxResourceBytes: 1,
+          maxTotalResourceBytes: 1,
+        },
+      },
+    );
+    expectFailure(countResult, "RESOURCE_LIMIT_EXCEEDED");
+    expect(requestedReads).toEqual([0, 1]);
+
+    const bytes = new Uint8Array([1]);
+    const firstDefinition = await definition(bytes);
+    const secondDefinition = await definition(bytes);
+    let secondDefinitionReads = 0;
+    const trackedSecond = new Proxy(secondDefinition, {
+      getOwnPropertyDescriptor: (target, key) => {
+        secondDefinitionReads += 1;
+        return Reflect.getOwnPropertyDescriptor(target, key);
+      },
+    });
+    const byteResult = await resolveResourcesV7(
+      {
+        [first]: firstDefinition,
+        [second]: trackedSecond,
+      },
+      [first, second],
+      {
+        limits: {
+          maxResolvedResources: 2,
+          maxResourceBytes: 0,
+          maxTotalResourceBytes: 1,
+        },
+      },
+    );
+    expectFailure(byteResult, "RESOURCE_LIMIT_EXCEEDED");
+    expect(secondDefinitionReads).toBe(0);
+  });
+
+  it("stops capture when an input trap makes cancellation visible", async () => {
+    const first = resourceId("captureAbortA");
+    const second = resourceId("captureAbortB");
+    const third = resourceId("captureAbortC");
+    const controller = new AbortController();
+    const requested = [first, second, third];
+    const requestedReads: number[] = [];
+    for (let index = 0; index < requested.length; index += 1) {
+      const value = requested[index]!;
+      Object.defineProperty(requested, index, {
+        configurable: true,
+        enumerable: true,
+        get: () => {
+          requestedReads.push(index);
+          if (index === 1) controller.abort();
+          return value;
+        },
+      });
+    }
+    const result = await resolveResourcesV7(
+      {},
+      requested,
+      {
+        signal: controller.signal,
+        limits: {
+          maxResolvedResources: 3,
+          maxResourceBytes: 1,
+          maxTotalResourceBytes: 3,
+        },
+      },
+    );
+    expectFailure(result, "EVALUATION_ABORTED");
+    expect(requestedReads).toEqual([0, 1]);
   });
 
   it("uses subtraction-based aggregate preflight without unsafe integer addition", async () => {
@@ -670,6 +838,41 @@ describe("staged v7 resource resolution", () => {
     expect(resolver).toHaveBeenCalledOnce();
     settle(bytes);
     await Promise.resolve();
+  });
+
+  it("does not let nested thenable assimilation detach cancellation", async () => {
+    const id = resourceId("nestedThenable");
+    const bytes = new Uint8Array([1]);
+    const controller = new AbortController();
+    const neverSettlingThenable = { then: (): void => {} };
+    const outerThenable = {
+      then: (onfulfilled: (value: unknown) => unknown): void => {
+        queueMicrotask(() => onfulfilled(neverSettlingThenable));
+      },
+    };
+    const resolution = resolveResourcesV7(
+      resources([[id, await definition(bytes)]]),
+      [id],
+      {
+        signal: controller.signal,
+        resolver: () =>
+          outerThenable as unknown as PromiseLike<Uint8Array>,
+      },
+    );
+    queueMicrotask(() => controller.abort());
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const result = await Promise.race([
+      resolution,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error("nested thenable ignored cancellation")),
+          100,
+        );
+      }),
+    ]).finally(() => {
+      if (timeout !== undefined) clearTimeout(timeout);
+    });
+    expectFailure(result, "EVALUATION_ABORTED");
   });
 
   it("does not continue to later resources after cancellation becomes visible", async () => {
