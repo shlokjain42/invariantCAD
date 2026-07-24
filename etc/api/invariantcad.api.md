@@ -1304,6 +1304,12 @@ export interface DesignDocumentLimits {
     // (undocumented)
     readonly maxNestingDepth: number;
     // (undocumented)
+    readonly maxResourceDefinitions: number;
+    // (undocumented)
+    readonly maxResourceLocationBytes: number;
+    // (undocumented)
+    readonly maxResourceLocations: number;
+    // (undocumented)
     readonly maxStoredAdjacencyLinks: number;
     // (undocumented)
     readonly maxStoredEvidenceRecords: number;
@@ -1608,7 +1614,7 @@ export interface Diagnostic {
 export function diagnostic(code: DiagnosticCode, message: string, options?: Omit<Diagnostic, "code" | "message">): Diagnostic;
 
 // @public (undocumented)
-export type DiagnosticCode = "IR_INVALID" | "REFERENCE_MISSING" | "REFERENCE_KIND_MISMATCH" | "DUPLICATE_ID" | "GRAPH_CYCLE" | "EXPRESSION_INVALID" | "EXPRESSION_DIMENSION_MISMATCH" | "PARAMETER_MISSING" | "PARAMETER_OUT_OF_RANGE" | "PARAMETER_CYCLE" | "MASS_DENSITY_INVALID" | "MASS_DENSITY_MISSING" | "MASS_PROPERTIES_INVALID" | "BOM_PART_NUMBER_MISSING" | "BOM_PART_NUMBER_DUPLICATE" | "BOM_MATERIAL_MISSING" | "BOM_OUTPUT_UNSUPPORTED" | "CONFIGURATION_MISSING" | "SKETCH_SOLVE_FAILED" | "SKETCH_UNDER_CONSTRAINED" | "SKETCH_OVER_CONSTRAINED" | "SKETCH_NO_CLOSED_REGION" | "FEATURE_INVALID" | "BOOLEAN_FAILED" | "EMPTY_RESULT" | "KERNEL_ERROR" | "KERNEL_CAPABILITY_MISSING" | "TOPOLOGY_SELECTOR_INVALID" | "TOPOLOGY_SELECTION_MISSING" | "TOPOLOGY_SELECTION_AMBIGUOUS" | "TOPOLOGY_HISTORY_UNAVAILABLE" | "TOPOLOGY_SIGNATURE_INVALID" | "TOPOLOGY_SIGNATURE_LIMIT_EXCEEDED" | "TOPOLOGY_FINGERPRINT_MISMATCH" | "TOPOLOGY_MATCH_MISSING" | "TOPOLOGY_MATCH_AMBIGUOUS" | "OUTPUT_MISSING" | "EVALUATION_ABORTED" | "ARTIFACT_CACHE_OPERATION_FAILED" | "ARTIFACT_CACHE_ENTRY_INVALID" | "ARTIFACT_CACHE_LIMIT_EXCEEDED" | "EXPORT_UNSUPPORTED";
+export type DiagnosticCode = "IR_INVALID" | "REFERENCE_MISSING" | "REFERENCE_KIND_MISMATCH" | "DUPLICATE_ID" | "GRAPH_CYCLE" | "EXPRESSION_INVALID" | "EXPRESSION_DIMENSION_MISMATCH" | "PARAMETER_MISSING" | "PARAMETER_OUT_OF_RANGE" | "PARAMETER_CYCLE" | "MASS_DENSITY_INVALID" | "MASS_DENSITY_MISSING" | "MASS_PROPERTIES_INVALID" | "BOM_PART_NUMBER_MISSING" | "BOM_PART_NUMBER_DUPLICATE" | "BOM_MATERIAL_MISSING" | "BOM_OUTPUT_UNSUPPORTED" | "CONFIGURATION_MISSING" | "SKETCH_SOLVE_FAILED" | "SKETCH_UNDER_CONSTRAINED" | "SKETCH_OVER_CONSTRAINED" | "SKETCH_NO_CLOSED_REGION" | "FEATURE_INVALID" | "BOOLEAN_FAILED" | "EMPTY_RESULT" | "KERNEL_ERROR" | "KERNEL_CAPABILITY_MISSING" | "TOPOLOGY_SELECTOR_INVALID" | "TOPOLOGY_SELECTION_MISSING" | "TOPOLOGY_SELECTION_AMBIGUOUS" | "TOPOLOGY_HISTORY_UNAVAILABLE" | "TOPOLOGY_SIGNATURE_INVALID" | "TOPOLOGY_SIGNATURE_LIMIT_EXCEEDED" | "TOPOLOGY_FINGERPRINT_MISMATCH" | "TOPOLOGY_MATCH_MISSING" | "TOPOLOGY_MATCH_AMBIGUOUS" | "OUTPUT_MISSING" | "EVALUATION_ABORTED" | "RESOURCE_RESOLVER_MISSING" | "RESOURCE_RESOLUTION_FAILED" | "RESOURCE_INTEGRITY_MISMATCH" | "RESOURCE_LIMIT_EXCEEDED" | "ARTIFACT_CACHE_OPERATION_FAILED" | "ARTIFACT_CACHE_ENTRY_INVALID" | "ARTIFACT_CACHE_LIMIT_EXCEEDED" | "EXPORT_UNSUPPORTED";
 
 // @public (undocumented)
 interface DiagnosticLocation {
@@ -2310,6 +2316,7 @@ export interface GeometryKernel {
     }, context?: KernelFeatureContext): KernelShape;
     // (undocumented)
     readonly id: string;
+    importDocumentBody?(data: Uint8Array, options: KernelDocumentBodyImportOptions, context?: KernelFeatureContext): KernelShape;
     // (undocumented)
     importShape?(data: string | ArrayBuffer | Uint8Array, format: KernelExchangeFormat, context?: KernelFeatureContext): KernelShape;
     // (undocumented)
@@ -2393,6 +2400,9 @@ export function inspectEvaluatorProfile(kernel: GeometryKernel, profile: Evaluat
 // @public
 export function inspectKernelCompositeSweepCapabilities(capabilities: KernelCapabilities): KernelCompositeSweepCapabilitiesInspection;
 
+// @public
+export function inspectKernelDocumentBodyImportCapabilities(capabilities: KernelCapabilities): KernelDocumentBodyImportCapabilitiesInspection;
+
 // @public (undocumented)
 export function inspectKernelShapeArtifactSupport(kernel: GeometryKernel): KernelShapeArtifactSupportInspection;
 
@@ -2410,6 +2420,9 @@ type JsonValue = JsonPrimitive | readonly JsonValue[] | {
 };
 
 // @public (undocumented)
+export const KERNEL_DOCUMENT_BODY_IMPORT_PROTOCOL_VERSION: 1;
+
+// @public (undocumented)
 export const KERNEL_SHAPE_ARTIFACT_MAX_COMPATIBILITY_FINGERPRINT_BYTES: 2048;
 
 // @public (undocumented)
@@ -2422,6 +2435,7 @@ const KERNEL_TOPOLOGY_KEY: unique symbol;
 export interface KernelCapabilities {
     // (undocumented)
     readonly compositeSweep?: KernelCompositeSweepCapabilities;
+    readonly documentBodyImport?: KernelDocumentBodyImportCapabilities;
     // (undocumented)
     readonly exact: boolean;
     // (undocumented)
@@ -2499,6 +2513,78 @@ export interface KernelCurveDescriptor {
     // (undocumented)
     readonly radius?: number;
 }
+
+// @public
+export interface KernelDocumentBodyImportCapabilities {
+    // (undocumented)
+    readonly formats: readonly KernelDocumentBodyImportFormatCapabilities[];
+    // (undocumented)
+    readonly protocolVersion: typeof KERNEL_DOCUMENT_BODY_IMPORT_PROTOCOL_VERSION;
+}
+
+// @public (undocumented)
+export interface KernelDocumentBodyImportCapabilitiesAbsent {
+    // (undocumented)
+    readonly status: "absent";
+}
+
+// @public (undocumented)
+export type KernelDocumentBodyImportCapabilitiesInspection = KernelDocumentBodyImportCapabilitiesAbsent | KernelDocumentBodyImportCapabilitiesValid | KernelDocumentBodyImportCapabilitiesMalformed;
+
+// @public (undocumented)
+export interface KernelDocumentBodyImportCapabilitiesMalformed {
+    // (undocumented)
+    readonly details: Readonly<Record<string, unknown>>;
+    // (undocumented)
+    readonly message: string;
+    // (undocumented)
+    readonly reason: KernelDocumentBodyImportCapabilitiesMalformedReason;
+    // (undocumented)
+    readonly status: "malformed";
+}
+
+// @public (undocumented)
+export type KernelDocumentBodyImportCapabilitiesMalformedReason = "not-object" | "unsupported-protocol-version" | "formats-not-array" | "invalid-format-entry" | "unknown-format" | "duplicate-format" | "unit-modes-not-array" | "invalid-unit-mode" | "duplicate-unit-mode" | "empty-unit-modes";
+
+// @public (undocumented)
+export interface KernelDocumentBodyImportCapabilitiesValid {
+    readonly capabilities: KernelDocumentBodyImportCapabilities;
+    // (undocumented)
+    readonly status: "valid";
+}
+
+// @public (undocumented)
+export interface KernelDocumentBodyImportFormatCapabilities {
+    // (undocumented)
+    readonly format: KernelExchangeFormat;
+    // (undocumented)
+    readonly unitModes: readonly KernelDocumentBodyUnitMode[];
+}
+
+// @public (undocumented)
+export interface KernelDocumentBodyImportOptions {
+    // (undocumented)
+    readonly format: KernelExchangeFormat;
+    readonly healing: {
+        readonly mode: "none";
+    };
+    // (undocumented)
+    readonly units: KernelDocumentBodyImportUnits;
+}
+
+// @public (undocumented)
+export type KernelDocumentBodyImportUnits = {
+    readonly mode: "from-file";
+} | {
+    readonly mode: "declared";
+    readonly length: KernelDocumentBodyLengthUnit;
+};
+
+// @public (undocumented)
+export type KernelDocumentBodyLengthUnit = "mm" | "cm" | "m" | "in";
+
+// @public (undocumented)
+export type KernelDocumentBodyUnitMode = "from-file" | "declared";
 
 // Warning: (ae-forgotten-export) The symbol "KernelTopologyDescriptorBase" needs to be exported by the entry point index.d.ts
 //
@@ -2627,6 +2713,9 @@ export function kernelSupports(capabilities: KernelCapabilities, kind: "exactInd
 
 // @public (undocumented)
 export function kernelSupports(capabilities: KernelCapabilities, kind: "nativeImport" | "nativeExport", capability: KernelExchangeFormat): boolean;
+
+// @public (undocumented)
+export function kernelSupportsDocumentBodyImport(capabilities: KernelCapabilities, format: KernelExchangeFormat, unitMode: KernelDocumentBodyUnitMode): boolean;
 
 // @public (undocumented)
 export function kernelSupportsTopology(kernel: GeometryKernel): kernel is TopologyGeometryKernel;

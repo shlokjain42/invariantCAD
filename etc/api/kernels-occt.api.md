@@ -131,6 +131,8 @@ interface GeometryKernel {
     }, context?: KernelFeatureContext): KernelShape;
     // (undocumented)
     readonly id: string;
+    // Warning: (ae-forgotten-export) The symbol "KernelDocumentBodyImportOptions" needs to be exported by the entry point occt-kernel.d.ts
+    importDocumentBody?(data: Uint8Array, options: KernelDocumentBodyImportOptions, context?: KernelFeatureContext): KernelShape;
     // Warning: (ae-forgotten-export) The symbol "KernelExchangeFormat" needs to be exported by the entry point occt-kernel.d.ts
     //
     // (undocumented)
@@ -191,6 +193,9 @@ type InertiaTensor = readonly [Vec3, Vec3, Vec3];
 export const INVARIANTCAD_OCCT_FACADE_0_9_0_RELEASE_MANIFEST_SHA256 = "9973552922d4dd67aa9c79e3a9cdfcbfe0140c52d4cc3d7b567935d7dfa4f708";
 
 // @public (undocumented)
+const KERNEL_DOCUMENT_BODY_IMPORT_PROTOCOL_VERSION: 1;
+
+// @public (undocumented)
 const KERNEL_SHAPE_ARTIFACT_PROTOCOL_VERSION: 1;
 
 // @public (undocumented)
@@ -202,6 +207,8 @@ interface KernelCapabilities {
     //
     // (undocumented)
     readonly compositeSweep?: KernelCompositeSweepCapabilities;
+    // Warning: (ae-forgotten-export) The symbol "KernelDocumentBodyImportCapabilities" needs to be exported by the entry point occt-kernel.d.ts
+    readonly documentBodyImport?: KernelDocumentBodyImportCapabilities;
     // (undocumented)
     readonly exact: boolean;
     // Warning: (ae-forgotten-export) The symbol "KernelExactIndexedTopologyEvolutionCapabilities" needs to be exported by the entry point occt-kernel.d.ts
@@ -264,6 +271,55 @@ interface KernelCurveDescriptor {
     // (undocumented)
     readonly radius?: number;
 }
+
+// @public
+interface KernelDocumentBodyImportCapabilities {
+    // Warning: (ae-forgotten-export) The symbol "KernelDocumentBodyImportFormatCapabilities" needs to be exported by the entry point occt-kernel.d.ts
+    //
+    // (undocumented)
+    readonly formats: readonly KernelDocumentBodyImportFormatCapabilities[];
+    // Warning: (ae-forgotten-export) The symbol "KERNEL_DOCUMENT_BODY_IMPORT_PROTOCOL_VERSION" needs to be exported by the entry point occt-kernel.d.ts
+    //
+    // (undocumented)
+    readonly protocolVersion: typeof KERNEL_DOCUMENT_BODY_IMPORT_PROTOCOL_VERSION;
+}
+
+// @public (undocumented)
+interface KernelDocumentBodyImportFormatCapabilities {
+    // (undocumented)
+    readonly format: KernelExchangeFormat;
+    // Warning: (ae-forgotten-export) The symbol "KernelDocumentBodyUnitMode" needs to be exported by the entry point occt-kernel.d.ts
+    //
+    // (undocumented)
+    readonly unitModes: readonly KernelDocumentBodyUnitMode[];
+}
+
+// @public (undocumented)
+interface KernelDocumentBodyImportOptions {
+    // (undocumented)
+    readonly format: KernelExchangeFormat;
+    readonly healing: {
+        readonly mode: "none";
+    };
+    // Warning: (ae-forgotten-export) The symbol "KernelDocumentBodyImportUnits" needs to be exported by the entry point occt-kernel.d.ts
+    //
+    // (undocumented)
+    readonly units: KernelDocumentBodyImportUnits;
+}
+
+// @public (undocumented)
+type KernelDocumentBodyImportUnits = {
+    readonly mode: "from-file";
+} | {
+    readonly mode: "declared";
+    readonly length: KernelDocumentBodyLengthUnit;
+};
+
+// @public (undocumented)
+type KernelDocumentBodyLengthUnit = "mm" | "cm" | "m" | "in";
+
+// @public (undocumented)
+type KernelDocumentBodyUnitMode = "from-file" | "declared";
 
 // Warning: (ae-forgotten-export) The symbol "KernelTopologyDescriptorBase" needs to be exported by the entry point occt-kernel.d.ts
 //
@@ -1009,6 +1065,10 @@ interface VolumetricMassProperties {
     readonly inertiaTensor: InertiaTensor;
     readonly volume: number;
 }
+
+// Warnings were encountered during analysis:
+//
+// src/kernel.ts:106:7 - (ae-forgotten-export) The symbol "KernelDocumentBodyLengthUnit" needs to be exported by the entry point occt-kernel.d.ts
 
 // (No @packageDocumentation comment for this package)
 
