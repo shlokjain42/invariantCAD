@@ -158,6 +158,7 @@ export type KernelCompositeSweepCapabilitiesInspection =
 
 export type KernelDocumentBodyImportCapabilitiesMalformedReason =
   | "not-object"
+  | "incompatible-kernel-representation"
   | "unsupported-protocol-version"
   | "formats-not-array"
   | "invalid-format-entry"
@@ -339,6 +340,20 @@ export function inspectKernelDocumentBodyImportCapabilities(
       reason: "not-object",
       message: "Document-body import capability metadata must be an object",
       details: { actualType: metadataType(raw) },
+    };
+  }
+  if (capabilities.exact !== true || capabilities.representation !== "brep") {
+    return {
+      status: "malformed",
+      reason: "incompatible-kernel-representation",
+      message:
+        "Document-body import requires an exact B-Rep kernel representation",
+      details: {
+        expectedRepresentation: "brep",
+        actualRepresentation: capabilities.representation,
+        expectedExact: true,
+        actualExact: capabilities.exact,
+      },
     };
   }
 

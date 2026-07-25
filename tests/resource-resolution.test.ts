@@ -161,6 +161,10 @@ describe("staged v7 resource resolution", () => {
     expect([...value.read(alpha)!]).toEqual([1, 2, 3]);
     expect(value.read(alpha)).not.toBe(value.read(alpha));
 
+    const originalSliceDescriptor = Object.getOwnPropertyDescriptor(
+      Uint8Array.prototype,
+      "slice",
+    );
     const originalSlice = Uint8Array.prototype.slice;
     try {
       Object.defineProperty(Uint8Array.prototype, "slice", {
@@ -174,11 +178,15 @@ describe("staged v7 resource resolution", () => {
       hardenedRead[1] = 88;
       expect([...value.read(alpha)!]).toEqual([1, 2, 3]);
     } finally {
-      Object.defineProperty(Uint8Array.prototype, "slice", {
-        configurable: true,
-        writable: true,
-        value: originalSlice,
-      });
+      if (originalSliceDescriptor === undefined) {
+        delete (Uint8Array.prototype as { slice?: unknown }).slice;
+      } else {
+        Object.defineProperty(
+          Uint8Array.prototype,
+          "slice",
+          originalSliceDescriptor,
+        );
+      }
     }
   });
 
@@ -573,6 +581,249 @@ describe("staged v7 resource resolution", () => {
     }
   });
 
+  it("fails closed before invoking ambient methods replaced by resolver code", async () => {
+    const first = resourceId("ambientA");
+    const second = resourceId("ambientB");
+    const bytes = new Uint8Array([4, 5, 6]);
+    const definitions = resources([
+      [first, await definition(bytes)],
+      [second, await definition(bytes)],
+    ]);
+
+    const originalNumberIsSafeInteger = Number.isSafeInteger;
+    const originalArrayIterator = Object.getOwnPropertyDescriptor(
+      Array.prototype,
+      Symbol.iterator,
+    );
+    const originalArrayBufferByteLength = Object.getOwnPropertyDescriptor(
+      ArrayBuffer.prototype,
+      "byteLength",
+    );
+    const typedArrayPrototype = Object.getPrototypeOf(
+      Uint8Array.prototype,
+    ) as object;
+    const originalByteLength = Object.getOwnPropertyDescriptor(
+      typedArrayPrototype,
+      "byteLength",
+    );
+    const originalLocations = Object.getOwnPropertyDescriptor(
+      Object.prototype,
+      "locations",
+    );
+    expect(originalArrayIterator?.value).toBeTypeOf("function");
+    expect(originalArrayBufferByteLength?.get).toBeTypeOf("function");
+    expect(originalByteLength?.get).toBeTypeOf("function");
+    let arrayIteratorCalls = 0;
+    let arrayBufferByteLengthReads = 0;
+    let numberCalls = 0;
+    let byteLengthReads = 0;
+    let inheritedLocationReads = 0;
+    let result: CadResult<ResolvedResourcesV7> | undefined;
+    try {
+      result = await resolveResourcesV7(
+        definitions,
+        [second, first],
+        {
+          resolver: () => {
+            Number.isSafeInteger = ((value: unknown): boolean => {
+              numberCalls += 1;
+              return originalNumberIsSafeInteger(value);
+            }) as typeof Number.isSafeInteger;
+            Object.defineProperty(Array.prototype, Symbol.iterator, {
+              ...originalArrayIterator,
+              value: function (): Iterator<unknown> {
+                arrayIteratorCalls += 1;
+                return Reflect.apply(
+                  originalArrayIterator!.value as CallableFunction,
+                  this,
+                  [],
+                ) as Iterator<unknown>;
+              },
+            });
+            Object.defineProperty(ArrayBuffer.prototype, "byteLength", {
+              ...originalArrayBufferByteLength,
+              get: function (): number {
+                arrayBufferByteLengthReads += 1;
+                return Reflect.apply(
+                  originalArrayBufferByteLength!.get!,
+                  this,
+                  [],
+                ) as number;
+              },
+            });
+            Object.defineProperty(typedArrayPrototype, "byteLength", {
+              ...originalByteLength,
+              get: function (): number {
+                byteLengthReads += 1;
+                return Reflect.apply(originalByteLength!.get!, this, []);
+              },
+            });
+            Object.defineProperty(Object.prototype, "locations", {
+              configurable: true,
+              get: () => {
+                inheritedLocationReads += 1;
+                return undefined;
+              },
+            });
+            return bytes;
+          },
+        },
+      );
+    } finally {
+      Number.isSafeInteger = originalNumberIsSafeInteger;
+      Object.defineProperty(
+        Array.prototype,
+        Symbol.iterator,
+        originalArrayIterator!,
+      );
+      Object.defineProperty(
+        ArrayBuffer.prototype,
+        "byteLength",
+        originalArrayBufferByteLength!,
+      );
+      Object.defineProperty(
+        typedArrayPrototype,
+        "byteLength",
+        originalByteLength!,
+      );
+      if (originalLocations === undefined) {
+        delete (Object.prototype as { locations?: unknown }).locations;
+      } else {
+        Object.defineProperty(
+          Object.prototype,
+          "locations",
+          originalLocations,
+        );
+      }
+    }
+
+    expect(result).toBeDefined();
+    expectFailure(result!, "IR_INVALID");
+    expect(arrayIteratorCalls).toBe(0);
+    expect(arrayBufferByteLengthReads).toBe(0);
+    expect(numberCalls).toBe(0);
+    expect(byteLengthReads).toBe(0);
+    expect(inheritedLocationReads).toBe(0);
+  });
+
+  it("does not invoke array prototype hooks installed by capture-time traps", async () => {
+    const id = resourceId("captureMutation");
+    const bytes = new Uint8Array([1]);
+    const definitions = resources([[id, await definition(bytes)]]);
+
+    const originalIndex = Object.getOwnPropertyDescriptor(
+      Array.prototype,
+      "0",
+    );
+    const originalArrayPrototypeLength = Object.getOwnPropertyDescriptor(
+      Array.prototype,
+      "length",
+    );
+    let indexSetterCalls = 0;
+    const requestedIds: ResourceId[] = [];
+    Object.defineProperty(requestedIds, "0", {
+      configurable: true,
+      enumerable: true,
+      get: () => {
+        Object.defineProperty(Array.prototype, "0", {
+          configurable: true,
+          set: () => {
+            indexSetterCalls += 1;
+          },
+        });
+        return id;
+      },
+    });
+    let requestedResult: CadResult<ResolvedResourcesV7> | undefined;
+    try {
+      requestedResult = await resolveResourcesV7(
+        definitions,
+        requestedIds,
+        { resolver: () => bytes },
+      );
+    } finally {
+      if (originalIndex === undefined) {
+        delete (Array.prototype as { 0?: unknown })[0];
+      } else {
+        Object.defineProperty(Array.prototype, "0", originalIndex);
+      }
+      Object.defineProperty(
+        Array.prototype,
+        "length",
+        originalArrayPrototypeLength!,
+      );
+    }
+    expect(requestedResult).toBeDefined();
+    expectFailure(requestedResult!, "IR_INVALID");
+    expect(indexSetterCalls).toBe(0);
+
+    const originalIterator = Object.getOwnPropertyDescriptor(
+      Array.prototype,
+      Symbol.iterator,
+    );
+    expect(originalIterator?.value).toBeTypeOf("function");
+    let iteratorCalls = 0;
+    const options = {
+      get limits(): { readonly maxResourceBytes: number } {
+        Object.defineProperty(Array.prototype, Symbol.iterator, {
+          ...originalIterator,
+          value: function (): Iterator<unknown> {
+            iteratorCalls += 1;
+            return Reflect.apply(
+              originalIterator!.value as CallableFunction,
+              this,
+              [],
+            ) as Iterator<unknown>;
+          },
+        });
+        return { maxResourceBytes: 1 };
+      },
+      resolver: () => bytes,
+    };
+    let optionsResult: CadResult<ResolvedResourcesV7> | undefined;
+    try {
+      optionsResult = await resolveResourcesV7(
+        definitions,
+        [id],
+        options,
+      );
+    } finally {
+      Object.defineProperty(
+        Array.prototype,
+        Symbol.iterator,
+        originalIterator!,
+      );
+    }
+    expect(optionsResult).toBeDefined();
+    expectFailure(optionsResult!, "IR_INVALID");
+    expect(iteratorCalls).toBe(0);
+  });
+
+  it("admits branded resolver bytes before inspecting thenable properties", async () => {
+    const id = resourceId("brandedThen");
+    const bytes = new Uint8Array([7, 8, 9]);
+    const definitions = resources([[id, await definition(bytes)]]);
+    let thenReads = 0;
+    Object.defineProperty(bytes, "then", {
+      configurable: true,
+      get: () => {
+        thenReads += 1;
+        return undefined;
+      },
+    });
+    let result: CadResult<ResolvedResourcesV7> | undefined;
+    try {
+      result = await resolveResourcesV7(definitions, [id], {
+        resolver: () => bytes,
+      });
+    } finally {
+      delete (bytes as Uint8Array & { then?: unknown }).then;
+    }
+    expect(result).toBeDefined();
+    expect([...resolvedValue(result!).read(id)!]).toEqual([7, 8, 9]);
+    expect(thenReads).toBe(0);
+  });
+
   it("preflights distinct count, individual bytes, and aggregate bytes before callbacks", async () => {
     const first = resourceId("first");
     const second = resourceId("second");
@@ -944,6 +1195,35 @@ describe("staged v7 resource resolution", () => {
     );
     expectFailure(result, "EVALUATION_ABORTED");
     expect(seen).toEqual([first]);
+  });
+
+  it("gives visible cancellation precedence over invalid resolver values and thenables", async () => {
+    const id = resourceId("abortInvalid");
+    const bytes = new Uint8Array([1]);
+    const definitions = resources([[id, await definition(bytes)]]);
+
+    const returnedController = new AbortController();
+    const returned = await resolveResourcesV7(definitions, [id], {
+      signal: returnedController.signal,
+      resolver: () => {
+        returnedController.abort();
+        return 42 as unknown as Uint8Array;
+      },
+    });
+    expectFailure(returned, "EVALUATION_ABORTED");
+
+    const thenController = new AbortController();
+    const thenable = await resolveResourcesV7(definitions, [id], {
+      signal: thenController.signal,
+      resolver: () =>
+        Object.defineProperty({}, "then", {
+          get: () => {
+            thenController.abort();
+            return undefined;
+          },
+        }) as unknown as PromiseLike<Uint8Array>,
+    });
+    expectFailure(thenable, "EVALUATION_ABORTED");
   });
 
   it("supports generic promise-like resolver results", async () => {

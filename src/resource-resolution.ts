@@ -9,6 +9,10 @@ import type {
   ResourceDefinitionIR,
   ResourceDigestIR,
 } from "./ir.js";
+import {
+  DOCUMENT_V7_RUNTIME_INTEGRITY_MESSAGE,
+  documentV7RuntimeIntrinsicsAreIntact,
+} from "./internal/document-v7-runtime-integrity.js";
 
 export interface ResourceResolverRequestV7 {
   readonly id: ResourceId;
@@ -65,13 +69,13 @@ interface CapturedResourceDefinition {
   readonly digest: ResourceDigestIR;
   readonly byteLength: number;
   readonly mediaType: string;
-  readonly locations?: readonly string[];
+  readonly locations: readonly string[] | undefined;
 }
 
 interface CapturedResolveOptions {
-  readonly resolver?: ResourceResolverV7;
+  readonly resolver: ResourceResolverV7 | undefined;
   readonly limits: ResourceResolutionLimitsV7;
-  readonly signal?: AbortSignal;
+  readonly signal: AbortSignal | undefined;
 }
 
 interface ByteSource {
@@ -96,17 +100,32 @@ const RESOURCE_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
 const RESOURCE_MEDIA_TYPE_PATTERN =
   /^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+(?:\s*;.*)?$/;
 
+const IntrinsicArray = Array;
 const IntrinsicArrayBuffer = ArrayBuffer;
+const IntrinsicNumber = Number;
+const IntrinsicObject = Object;
+const IntrinsicReflect = Reflect;
+const IntrinsicSet = Set;
 const IntrinsicUint8Array = Uint8Array;
 const IntrinsicMap = Map;
 const IntrinsicPromise = Promise;
+const IntrinsicWeakSet = WeakSet;
 const reflectApply = Reflect.apply;
 const objectCreate = Object.create;
+const objectDefineProperty = Object.defineProperty;
 const objectFreeze = Object.freeze;
 const objectGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
 const objectGetPrototypeOf = Object.getPrototypeOf;
 const objectHasOwn = Object.hasOwn;
+const objectKeys = Object.keys;
+const arrayFrom = Array.from;
+const arrayIsArray = Array.isArray;
+const arraySort = Array.prototype.sort;
 const arrayBufferIsView = ArrayBuffer.isView;
+const numberIsSafeInteger = Number.isSafeInteger;
+const regexpTest = RegExp.prototype.test;
+const reflectGet = Reflect.get;
+const stringTrim = String.prototype.trim;
 const typedArrayPrototype = Object.getPrototypeOf(
   Uint8Array.prototype,
 ) as object;
@@ -130,6 +149,10 @@ const typedArraySet = Uint8Array.prototype.set;
 const mapGet = Map.prototype.get;
 const mapHas = Map.prototype.has;
 const mapSet = Map.prototype.set;
+const setAdd = Set.prototype.add;
+const setHas = Set.prototype.has;
+const weakSetAdd = WeakSet.prototype.add;
+const weakSetHas = WeakSet.prototype.has;
 const abortSignalAbortedGetter =
   typeof AbortSignal === "undefined"
     ? undefined
@@ -143,6 +166,74 @@ const eventTargetRemoveEventListener =
     ? undefined
     : EventTarget.prototype.removeEventListener;
 const HEX_DIGITS = "0123456789abcdef";
+
+function intrinsicArrayIsArray(value: unknown): value is readonly unknown[] {
+  return reflectApply(arrayIsArray, IntrinsicArray, [value]) as boolean;
+}
+
+function intrinsicArrayFrom<T>(value: ArrayLike<T> | Iterable<T>): T[] {
+  return reflectApply(arrayFrom, IntrinsicArray, [value]) as T[];
+}
+
+function intrinsicArrayAppend<T>(value: T[], entry: T): void {
+  reflectApply(objectDefineProperty, IntrinsicObject, [
+    value,
+    value.length,
+    {
+      configurable: true,
+      enumerable: true,
+      writable: true,
+      value: entry,
+    },
+  ]);
+}
+
+function intrinsicArraySort<T>(
+  value: T[],
+  compare: (first: T, second: T) => number,
+): T[] {
+  return reflectApply(arraySort, value, [compare]) as T[];
+}
+
+function intrinsicObjectCreateNull(): Record<string, unknown> {
+  return reflectApply(objectCreate, IntrinsicObject, [
+    null,
+  ]) as Record<string, unknown>;
+}
+
+function intrinsicObjectFreeze<T>(value: T): Readonly<T> {
+  return reflectApply(objectFreeze, IntrinsicObject, [value]) as Readonly<T>;
+}
+
+function intrinsicObjectKeys(value: object): string[] {
+  return reflectApply(objectKeys, IntrinsicObject, [value]) as string[];
+}
+
+function intrinsicNumberIsSafeInteger(value: unknown): value is number {
+  return reflectApply(numberIsSafeInteger, IntrinsicNumber, [
+    value,
+  ]) as boolean;
+}
+
+function intrinsicRegExpTest(value: RegExp, candidate: string): boolean {
+  return reflectApply(regexpTest, value, [candidate]) as boolean;
+}
+
+function intrinsicReflectGet(value: object, key: PropertyKey): unknown {
+  return reflectApply(reflectGet, IntrinsicReflect, [value, key]);
+}
+
+function intrinsicStringTrim(value: string): string {
+  return reflectApply(stringTrim, value, []) as string;
+}
+
+function intrinsicSetAdd<T>(value: Set<T>, entry: T): void {
+  reflectApply(setAdd, value, [entry]);
+}
+
+function intrinsicSetHas<T>(value: Set<T>, entry: T): boolean {
+  return reflectApply(setHas, value, [entry]) as boolean;
+}
 
 interface CapturedCryptoDigest {
   readonly target: object;
@@ -180,7 +271,11 @@ function lexicalCompare(first: string, second: string): number {
 function isPlainRecord(
   value: unknown,
 ): value is Readonly<Record<string, unknown>> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    intrinsicArrayIsArray(value)
+  ) {
     return false;
   }
   const prototype = objectGetPrototypeOf(value);
@@ -205,6 +300,18 @@ function abortFailure<T = never>(): CadResult<T> {
     diagnostic("EVALUATION_ABORTED", "Resource resolution was aborted", {
       severity: "error",
       details: { phase: "resourceResolution" },
+    }),
+  );
+}
+
+function runtimeIntegrityFailure<T = never>(): CadResult<T> {
+  return failure(
+    diagnostic("IR_INVALID", DOCUMENT_V7_RUNTIME_INTEGRITY_MESSAGE, {
+      severity: "error",
+      details: {
+        phase: "resourceResolution",
+        runtimeIntegrity: false,
+      },
     }),
   );
 }
@@ -287,8 +394,12 @@ function snapshotPlainRecord(
 ): Readonly<Record<string, unknown>> | undefined {
   try {
     if (!isPlainRecord(value)) return undefined;
-    const snapshot = Object.create(null) as Record<string, unknown>;
-    for (const key of Object.keys(value)) snapshot[key] = value[key];
+    const snapshot = intrinsicObjectCreateNull();
+    const keys = intrinsicObjectKeys(value);
+    for (let index = 0; index < keys.length; index += 1) {
+      const key = keys[index]!;
+      snapshot[key] = value[key];
+    }
     return snapshot;
   } catch {
     return undefined;
@@ -301,31 +412,38 @@ export function normalizeResourceResolutionLimitsV7(
   if (value === undefined) return DEFAULT_RESOURCE_RESOLUTION_LIMITS_V7;
   const snapshot = snapshotPlainRecord(value);
   if (snapshot === undefined) return undefined;
-  const keys = Object.keys(snapshot);
-  if (
-    keys.some(
-      (key) =>
-        !LIMIT_KEYS.includes(key as keyof ResourceResolutionLimitsV7),
-    )
-  ) {
-    return undefined;
+  const keys = intrinsicObjectKeys(snapshot);
+  for (let index = 0; index < keys.length; index += 1) {
+    let known = false;
+    for (
+      let limitIndex = 0;
+      limitIndex < LIMIT_KEYS.length;
+      limitIndex += 1
+    ) {
+      if (LIMIT_KEYS[limitIndex] === keys[index]) {
+        known = true;
+        break;
+      }
+    }
+    if (!known) return undefined;
   }
   const normalized: Record<keyof ResourceResolutionLimitsV7, number> = {
     ...DEFAULT_RESOURCE_RESOLUTION_LIMITS_V7,
   };
-  for (const key of LIMIT_KEYS) {
+  for (let index = 0; index < LIMIT_KEYS.length; index += 1) {
+    const key = LIMIT_KEYS[index]!;
     if (!objectHasOwn(snapshot, key)) continue;
     const candidate = snapshot[key];
     if (
       typeof candidate !== "number" ||
-      !Number.isSafeInteger(candidate) ||
+      !intrinsicNumberIsSafeInteger(candidate) ||
       candidate < 0
     ) {
       return undefined;
     }
     normalized[key] = candidate;
   }
-  return Object.freeze(normalized);
+  return intrinsicObjectFreeze(normalized);
 }
 
 function captureOptions(value: unknown): CadResult<CapturedResolveOptions> {
@@ -333,9 +451,26 @@ function captureOptions(value: unknown): CadResult<CapturedResolveOptions> {
   if (snapshot === undefined) {
     return invalidInput("Resource-resolution options must be a plain record");
   }
-  const unknownKey = Object.keys(snapshot).find(
-    (key) => !OPTION_KEYS.includes(key as (typeof OPTION_KEYS)[number]),
-  );
+  const optionKeys = intrinsicObjectKeys(snapshot);
+  let unknownKey: string | undefined;
+  for (let index = 0; index < optionKeys.length; index += 1) {
+    const key = optionKeys[index]!;
+    let known = false;
+    for (
+      let optionIndex = 0;
+      optionIndex < OPTION_KEYS.length;
+      optionIndex += 1
+    ) {
+      if (OPTION_KEYS[optionIndex] === key) {
+        known = true;
+        break;
+      }
+    }
+    if (!known) {
+      unknownKey = key;
+      break;
+    }
+  }
   if (unknownKey !== undefined) {
     return invalidInput(
       `Unknown resource-resolution option '${unknownKey}'`,
@@ -357,14 +492,17 @@ function captureOptions(value: unknown): CadResult<CapturedResolveOptions> {
   if (signal !== undefined && abortSignalState(signal) === undefined) {
     return invalidInput("signal must be an AbortSignal", "/signal");
   }
+  const captured = intrinsicObjectCreateNull() as {
+    resolver: ResourceResolverV7 | undefined;
+    limits: ResourceResolutionLimitsV7;
+    signal: AbortSignal | undefined;
+  };
+  captured.resolver =
+    resolver === undefined ? undefined : resolver as ResourceResolverV7;
+  captured.limits = limits;
+  captured.signal = signal === undefined ? undefined : signal as AbortSignal;
   return success(
-    Object.freeze({
-      ...(resolver === undefined
-        ? {}
-        : { resolver: resolver as ResourceResolverV7 }),
-      limits,
-      ...(signal === undefined ? {} : { signal: signal as AbortSignal }),
-    }),
+    intrinsicObjectFreeze(captured) as CapturedResolveOptions,
   );
 }
 
@@ -374,11 +512,11 @@ function captureRequestedIds(
   signal: AbortSignal | undefined,
 ): CadResult<readonly ResourceId[]> {
   try {
-    if (!Array.isArray(value)) {
+    if (!intrinsicArrayIsArray(value)) {
       return invalidInput("Requested resource IDs must be an array");
     }
     const length = value.length;
-    if (!Number.isSafeInteger(length) || length < 0) {
+    if (!intrinsicNumberIsSafeInteger(length) || length < 0) {
       return invalidInput("Requested resource ID array length is invalid");
     }
     if (length > limits.maxRequestedResourceIds) {
@@ -388,7 +526,8 @@ function captureRequestedIds(
         { actual: length },
       );
     }
-    const ids = new Set<ResourceId>();
+    const ids = new IntrinsicSet<ResourceId>();
+    const ordered: ResourceId[] = [];
     for (let index = 0; index < length; index += 1) {
       if (isAborted(signal)) return abortFailure();
       if (!objectHasOwn(value, index)) {
@@ -405,8 +544,8 @@ function captureRequestedIds(
           `/requestedIds/${index}`,
         );
       }
-      if (!ids.has(id as ResourceId)) {
-        const actual = ids.size + 1;
+      if (!intrinsicSetHas(ids, id as ResourceId)) {
+        const actual = ordered.length + 1;
         if (actual > limits.maxResolvedResources) {
           return limitFailure(
             "maxResolvedResources",
@@ -414,11 +553,13 @@ function captureRequestedIds(
             { actual },
           );
         }
-        ids.add(id as ResourceId);
+        intrinsicSetAdd(ids, id as ResourceId);
+        intrinsicArrayAppend(ordered, id as ResourceId);
       }
     }
     if (isAborted(signal)) return abortFailure();
-    return success(Object.freeze([...ids].sort(lexicalCompare)));
+    intrinsicArraySort(ordered, lexicalCompare);
+    return success(intrinsicObjectFreeze(ordered));
   } catch {
     return invalidInput("Requested resource IDs could not be read safely");
   }
@@ -431,21 +572,21 @@ function captureLocations(
 ): CadResult<readonly string[] | undefined> {
   if (value === undefined) return success(undefined);
   try {
-    if (!Array.isArray(value)) {
+    if (!intrinsicArrayIsArray(value)) {
       return invalidInput(
         `Resource '${id}' locations must be a non-empty array`,
         `/resources/${id}/locations`,
       );
     }
     const length = value.length;
-    if (!Number.isSafeInteger(length) || length <= 0) {
+    if (!intrinsicNumberIsSafeInteger(length) || length <= 0) {
       return invalidInput(
         `Resource '${id}' locations must be a non-empty array`,
         `/resources/${id}/locations`,
       );
     }
     const output: string[] = [];
-    const seen = new Set<string>();
+    const seen = new IntrinsicSet<string>();
     for (let index = 0; index < length; index += 1) {
       if (isAborted(signal)) return abortFailure();
       if (!objectHasOwn(value, index)) {
@@ -462,17 +603,17 @@ function captureLocations(
           `/resources/${id}/locations/${index}`,
         );
       }
-      if (seen.has(location)) {
+      if (intrinsicSetHas(seen, location)) {
         return invalidInput(
           `Resource '${id}' locations cannot contain duplicates`,
           `/resources/${id}/locations/${index}`,
         );
       }
-      seen.add(location);
-      output.push(location);
+      intrinsicSetAdd(seen, location);
+      intrinsicArrayAppend(output, location);
     }
     if (isAborted(signal)) return abortFailure();
-    return success(Object.freeze(output));
+    return success(intrinsicObjectFreeze(output));
   } catch {
     return invalidInput(
       `Resource '${id}' locations could not be read safely`,
@@ -563,7 +704,7 @@ function captureDefinition(
   }
   if (
     typeof digest !== "string" ||
-    !RESOURCE_DIGEST_PATTERN.test(digest)
+    !intrinsicRegExpTest(RESOURCE_DIGEST_PATTERN, digest)
   ) {
     return invalidInput(
       `Resource '${id}' digest must be lowercase SHA-256`,
@@ -572,7 +713,7 @@ function captureDefinition(
   }
   if (
     typeof byteLength !== "number" ||
-    !Number.isSafeInteger(byteLength) ||
+    !intrinsicNumberIsSafeInteger(byteLength) ||
     byteLength < 0
   ) {
     return invalidInput(
@@ -582,8 +723,8 @@ function captureDefinition(
   }
   if (
     typeof mediaType !== "string" ||
-    mediaType.trim() !== mediaType ||
-    !RESOURCE_MEDIA_TYPE_PATTERN.test(mediaType)
+    intrinsicStringTrim(mediaType) !== mediaType ||
+    !intrinsicRegExpTest(RESOURCE_MEDIA_TYPE_PATTERN, mediaType)
   ) {
     return invalidInput(
       `Resource '${id}' mediaType must be a non-empty MIME type`,
@@ -592,16 +733,20 @@ function captureDefinition(
   }
   const locations = captureLocations(rawLocations, id, signal);
   if (!locations.ok) return locations;
+  const captured = intrinsicObjectCreateNull() as {
+    id: ResourceId;
+    digest: ResourceDigestIR;
+    byteLength: number;
+    mediaType: string;
+    locations: readonly string[] | undefined;
+  };
+  captured.id = id;
+  captured.digest = digest as ResourceDigestIR;
+  captured.byteLength = byteLength;
+  captured.mediaType = mediaType;
+  captured.locations = locations.value;
   return success(
-    Object.freeze({
-      id,
-      digest: digest as ResourceDigestIR,
-      byteLength,
-      mediaType,
-      ...(locations.value === undefined
-        ? {}
-        : { locations: locations.value }),
-    }),
+    intrinsicObjectFreeze(captured) as CapturedResourceDefinition,
   );
 }
 
@@ -617,7 +762,8 @@ function captureDefinitions(
     }
     const captured: CapturedResourceDefinition[] = [];
     let total = 0;
-    for (const id of ids) {
+    for (let index = 0; index < ids.length; index += 1) {
+      const id = ids[index]!;
       if (isAborted(signal)) return abortFailure();
       if (!objectHasOwn(definitions, id)) {
         return failure(
@@ -661,10 +807,10 @@ function captureDefinitions(
         );
       }
       total += definition.value.byteLength;
-      captured.push(definition.value);
+      intrinsicArrayAppend(captured, definition.value);
     }
     if (isAborted(signal)) return abortFailure();
-    return success(Object.freeze(captured));
+    return success(intrinsicObjectFreeze(captured));
   } catch {
     return invalidInput("Resource definitions could not be read safely");
   }
@@ -689,7 +835,7 @@ function byteSource(value: unknown): ByteSource | undefined {
         [],
       ) as unknown;
       return typeof byteLength === "number" &&
-        Number.isSafeInteger(byteLength) &&
+        intrinsicNumberIsSafeInteger(byteLength) &&
         byteLength >= 0
         ? {
             value,
@@ -721,7 +867,7 @@ function byteSource(value: unknown): ByteSource | undefined {
       [],
     );
     return typeof byteLength === "number" &&
-      Number.isSafeInteger(byteLength) &&
+      intrinsicNumberIsSafeInteger(byteLength) &&
       byteLength >= 0
       ? {
           value: value as Uint8Array,
@@ -764,14 +910,33 @@ function capturePromiseLike(value: unknown): CapturedPromiseLike | undefined {
   ) {
     return undefined;
   }
-  const then = Reflect.get(value, "then");
+  const then = intrinsicReflectGet(value, "then");
   return typeof then === "function"
-    ? Object.freeze({ target: value, then })
+    ? intrinsicObjectFreeze({
+        target: value,
+        then: then as (...arguments_: readonly unknown[]) => unknown,
+      })
     : undefined;
 }
 
 class ResourceResolutionAbort {
   readonly name = "ResourceResolutionAbort";
+}
+
+const resourceResolutionAborts = new IntrinsicWeakSet<object>();
+
+function resourceResolutionAbort(): ResourceResolutionAbort {
+  const value = new ResourceResolutionAbort();
+  reflectApply(weakSetAdd, resourceResolutionAborts, [value]);
+  return value;
+}
+
+function isResourceResolutionAbort(value: unknown): boolean {
+  return (
+    (typeof value === "object" || typeof value === "function") &&
+    value !== null &&
+    (reflectApply(weakSetHas, resourceResolutionAborts, [value]) as boolean)
+  );
 }
 
 interface ResolverSettlement {
@@ -819,7 +984,7 @@ function awaitResolverResult(
       callback(value);
     };
     const onAbort = (): void => {
-      settle(reject, new ResourceResolutionAbort());
+      settle(reject, resourceResolutionAbort());
     };
     if (signal !== undefined) {
       if (
@@ -863,14 +1028,24 @@ async function sha256Digest(
   if (capturedCryptoDigest === undefined) {
     throw new TypeError("WebCrypto SHA-256 is unavailable");
   }
+  const buffer = reflectApply(
+    typedArrayBufferGetter!,
+    bytes,
+    [],
+  ) as ArrayBuffer;
   const digest = await (reflectApply(
     capturedCryptoDigest.method,
     capturedCryptoDigest.target,
-    ["SHA-256", bytes],
+    ["SHA-256", buffer],
   ) as PromiseLike<ArrayBuffer>);
   const digestBytes = new IntrinsicUint8Array(digest);
+  const digestByteLength = reflectApply(
+    typedArrayByteLengthGetter!,
+    digestBytes,
+    [],
+  ) as number;
   let output = "sha256:";
-  for (let index = 0; index < digestBytes.byteLength; index += 1) {
+  for (let index = 0; index < digestByteLength; index += 1) {
     const byte = digestBytes[index]!;
     output += HEX_DIGITS[byte >>> 4]!;
     output += HEX_DIGITS[byte & 0x0f]!;
@@ -882,8 +1057,8 @@ function createResolvedResources(
   ids: readonly ResourceId[],
   resources: Map<ResourceId, OwnedResourceBytes>,
 ): ResolvedResourcesV7 {
-  const publicIds = Object.freeze(Array.from(ids));
-  return Object.freeze({
+  const publicIds = intrinsicObjectFreeze(intrinsicArrayFrom(ids));
+  return intrinsicObjectFreeze({
     ids: publicIds,
     has: (id: ResourceId): boolean =>
       reflectApply(mapHas, resources, [id]) as boolean,
@@ -927,7 +1102,13 @@ export async function resolveResourcesV7(
   requestedIds: readonly ResourceId[],
   options: ResolveResourcesOptionsV7 = {},
 ): Promise<CadResult<ResolvedResourcesV7>> {
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return runtimeIntegrityFailure();
+  }
   const capturedOptions = captureOptions(options);
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return runtimeIntegrityFailure();
+  }
   if (!capturedOptions.ok) return capturedOptions;
   if (isAborted(capturedOptions.value.signal)) return abortFailure();
 
@@ -936,6 +1117,10 @@ export async function resolveResourcesV7(
     capturedOptions.value.limits,
     capturedOptions.value.signal,
   );
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return runtimeIntegrityFailure();
+  }
+  if (isAborted(capturedOptions.value.signal)) return abortFailure();
   if (!capturedIds.ok) return capturedIds;
   const capturedDefinitions = captureDefinitions(
     definitions,
@@ -943,6 +1128,10 @@ export async function resolveResourcesV7(
     capturedOptions.value.limits,
     capturedOptions.value.signal,
   );
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return runtimeIntegrityFailure();
+  }
+  if (isAborted(capturedOptions.value.signal)) return abortFailure();
   if (!capturedDefinitions.ok) return capturedDefinitions;
 
   if (capturedDefinitions.value.length === 0) {
@@ -969,16 +1158,28 @@ export async function resolveResourcesV7(
 
   const resolved = new IntrinsicMap<ResourceId, OwnedResourceBytes>();
   let consumedBytes = 0;
-  for (const definition of capturedDefinitions.value) {
+  for (
+    let definitionIndex = 0;
+    definitionIndex < capturedDefinitions.value.length;
+    definitionIndex += 1
+  ) {
+    const definition = capturedDefinitions.value[definitionIndex]!;
+    if (!documentV7RuntimeIntrinsicsAreIntact()) {
+      return runtimeIntegrityFailure();
+    }
     if (isAborted(capturedOptions.value.signal)) return abortFailure();
-    const request = Object.freeze({
+    const request = intrinsicObjectFreeze({
       id: definition.id,
       digest: definition.digest,
       byteLength: definition.byteLength,
       mediaType: definition.mediaType,
       ...(definition.locations === undefined
         ? {}
-        : { locations: Object.freeze(Array.from(definition.locations)) }),
+        : {
+            locations: intrinsicObjectFreeze(
+              intrinsicArrayFrom(definition.locations),
+            ),
+          }),
       ...(capturedOptions.value.signal === undefined
         ? {}
         : { signal: capturedOptions.value.signal }),
@@ -987,10 +1188,18 @@ export async function resolveResourcesV7(
     let returned: unknown;
     try {
       const candidate: unknown = reflectApply(resolver, undefined, [request]);
+      if (!documentV7RuntimeIntrinsicsAreIntact()) {
+        return runtimeIntegrityFailure();
+      }
+      if (isAborted(capturedOptions.value.signal)) return abortFailure();
       if (byteSource(candidate) !== undefined) {
         returned = candidate;
       } else {
         const pending = capturePromiseLike(candidate);
+        if (!documentV7RuntimeIntrinsicsAreIntact()) {
+          return runtimeIntegrityFailure();
+        }
+        if (isAborted(capturedOptions.value.signal)) return abortFailure();
         if (pending === undefined) {
           return resolutionFailure(
             definition.id,
@@ -1001,11 +1210,18 @@ export async function resolveResourcesV7(
           pending,
           capturedOptions.value.signal,
         );
+        if (!documentV7RuntimeIntrinsicsAreIntact()) {
+          return runtimeIntegrityFailure();
+        }
+        if (isAborted(capturedOptions.value.signal)) return abortFailure();
         returned = settlement.value;
       }
     } catch (error) {
+      if (!documentV7RuntimeIntrinsicsAreIntact()) {
+        return runtimeIntegrityFailure();
+      }
       if (
-        error instanceof ResourceResolutionAbort ||
+        isResourceResolutionAbort(error) ||
         isAborted(capturedOptions.value.signal)
       ) {
         return abortFailure();
@@ -1062,16 +1278,27 @@ export async function resolveResourcesV7(
         `Resolver returned invalid or detached bytes for resource '${definition.id}'`,
       );
     }
-    consumedBytes += copied.byteLength;
+    consumedBytes += reflectApply(
+      typedArrayByteLengthGetter!,
+      copied,
+      [],
+    ) as number;
 
     let digest: ResourceDigestIR;
     try {
       digest = await sha256Digest(copied);
     } catch {
+      if (!documentV7RuntimeIntrinsicsAreIntact()) {
+        return runtimeIntegrityFailure();
+      }
+      if (isAborted(capturedOptions.value.signal)) return abortFailure();
       return resolutionFailure(
         definition.id,
         `Resource '${definition.id}' could not be hashed`,
       );
+    }
+    if (!documentV7RuntimeIntrinsicsAreIntact()) {
+      return runtimeIntegrityFailure();
     }
     if (isAborted(capturedOptions.value.signal)) return abortFailure();
     if (digest !== definition.digest) {
@@ -1084,5 +1311,9 @@ export async function resolveResourcesV7(
     reflectApply(mapSet, resolved, [definition.id, copied]);
   }
 
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return runtimeIntegrityFailure();
+  }
+  if (isAborted(capturedOptions.value.signal)) return abortFailure();
   return success(createResolvedResources(capturedIds.value, resolved));
 }
