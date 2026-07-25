@@ -27,17 +27,23 @@ import {
   type PartOptions,
 } from "../design.js";
 import {
-  type Expression,
+  Expression,
   type ExpressionIR,
   type LengthExpression,
   type MassDensityExpression,
-  type Parameter,
+  Parameter,
   type Vec3Expression,
+  type ScalarExpression,
+  type ScalarVec3Expression,
 } from "../expressions.js";
 import {
   DOCUMENT_SCHEMA_V7,
   DOCUMENT_VERSION_V7,
   type BodySetMemberIRV7,
+  type CoordinateSystemNodeIRV7,
+  type DatumAxisNodeIRV7,
+  type DatumPlaneNodeIRV7,
+  type DatumPointNodeIRV7,
   type DesignConfigurationIR,
   type DesignDocumentV7,
   type ImportedBodyNodeIRV7,
@@ -64,15 +70,21 @@ const STAGED_BODY_SET_DESIGN_OWNER = Symbol(
 const STAGED_CONFIGURATION_TO_IR = Symbol(
   "InvariantCAD.StagedConfigurationToIRV7",
 );
+const STAGED_DATUM_REFERENCE_CONSTRUCTION = Symbol(
+  "InvariantCAD.StagedDatumReferenceConstructionV7",
+);
 const RESOURCE_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
 const RESOURCE_MEDIA_TYPE_PATTERN =
   /^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+(?:\s*;.*)?$/;
 
 interface StagedParameterIdentityV7 {
   readonly id: ParameterId;
-  readonly dimension: "length" | "massDensity";
+  readonly dimension: "scalar" | "length" | "massDensity";
 }
 const authoringObjectPrototype = Object.prototype;
+const authoringArrayPrototype = Array.prototype;
+const authoringExpressionPrototype = Expression.prototype;
+const authoringParameterPrototype = Parameter.prototype;
 const authoringObjectCreate = Object.create;
 const authoringObjectFreeze = Object.freeze;
 const authoringObjectGetOwnPropertyDescriptor =
@@ -93,6 +105,7 @@ const authoringWeakMapSet = WeakMap.prototype.set;
 const AuthoringWeakSet = WeakSet;
 const authoringWeakSetAdd = WeakSet.prototype.add;
 const authoringWeakSetHas = WeakSet.prototype.has;
+const authoringCaptureFailures = new AuthoringWeakSet<object>();
 const authoringRegExpTest = RegExp.prototype.test;
 const authoringStringTrim = String.prototype.trim;
 const authoringNumberIsSafeInteger = Number.isSafeInteger;
@@ -195,6 +208,20 @@ function authoringIsSafeInteger(value: unknown): boolean {
 
 function authoringIsArray(value: unknown): value is unknown[] {
   return authoringApply<boolean>(authoringArrayIsArray, Array, [value]);
+}
+
+function authoringCaptureFailure(message: string): TypeError {
+  const error = new TypeError(message);
+  authoringWeakSetInsert(authoringCaptureFailures, error);
+  return error;
+}
+
+function isAuthoringCaptureFailure(value: unknown): value is TypeError {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    authoringWeakSetContains(authoringCaptureFailures, value)
+  );
 }
 
 function captureExactOwnDataRecord(
@@ -308,28 +335,38 @@ function detachMetadata(
 }
 
 function captureParameterOptionsV7<
-  D extends "length" | "massDensity",
+  D extends "scalar" | "length" | "massDensity",
 >(
   value: ParameterOptions<D>,
   dimension: D,
 ): ParameterOptions<D> {
   const label =
-    dimension === "length"
-      ? "Length-parameter options"
-      : "Mass-density-parameter options";
+    dimension === "scalar"
+      ? "Scalar-parameter options"
+      : dimension === "length"
+        ? "Length-parameter options"
+        : "Mass-density-parameter options";
   const captured = captureExactOwnDataRecord(
     value,
     ["min", "max", "label", "description"],
     label,
   );
-  const min = captured.min as Expression<D> | undefined;
-  const max = captured.max as Expression<D> | undefined;
-  if (min !== undefined && min.dimension !== dimension) {
-    throw new TypeError(`${label}.min must have dimension ${dimension}`);
-  }
-  if (max !== undefined && max.dimension !== dimension) {
-    throw new TypeError(`${label}.max must have dimension ${dimension}`);
-  }
+  const min =
+    captured.min === undefined
+      ? undefined
+      : captureStagedExpression(
+          captured.min,
+          dimension,
+          `${label}.min`,
+        );
+  const max =
+    captured.max === undefined
+      ? undefined
+      : captureStagedExpression(
+          captured.max,
+          dimension,
+          `${label}.max`,
+        );
   if (
     captured.label !== undefined &&
     typeof captured.label !== "string"
@@ -358,6 +395,192 @@ function captureParameterOptionsV7<
       },
     ],
   );
+}
+
+function captureDatumExpressionIR<
+  D extends "length" | "scalar" | "massDensity",
+>(
+  value: unknown,
+  dimension: D,
+  label: string,
+): ExpressionIR {
+  let expressionIR: unknown;
+  try {
+    if (typeof value !== "object" || value === null) {
+      throw authoringCaptureFailure(
+        `${label} must be a ${dimension} expression`,
+      );
+    }
+    const prototype = authoringApply<object | null>(
+      authoringObjectGetPrototypeOf,
+      Object,
+      [value],
+    );
+    if (
+      prototype !== authoringExpressionPrototype &&
+      prototype !== authoringParameterPrototype
+    ) {
+      throw authoringCaptureFailure(
+        `${label} must be a ${dimension} expression`,
+      );
+    }
+    const dimensionDescriptor = authoringApply<
+      PropertyDescriptor | undefined
+    >(authoringObjectGetOwnPropertyDescriptor, Object, [
+      value,
+      "dimension",
+    ]);
+    const irDescriptor = authoringApply<PropertyDescriptor | undefined>(
+      authoringObjectGetOwnPropertyDescriptor,
+      Object,
+      [value, "ir"],
+    );
+    if (
+      dimensionDescriptor === undefined ||
+      !authoringHasOwn(dimensionDescriptor, "value") ||
+      dimensionDescriptor.value !== dimension ||
+      irDescriptor === undefined ||
+      !authoringHasOwn(irDescriptor, "value")
+    ) {
+      throw authoringCaptureFailure(
+        `${label} must be a ${dimension} expression`,
+      );
+    }
+    expressionIR = irDescriptor.value;
+  } catch (error) {
+    if (isAuthoringCaptureFailure(error)) throw error;
+    throw new TypeError(`${label} could not be read safely`);
+  }
+
+  const captured = preflightDesignDocumentValue(
+    expressionIR,
+    DEFAULT_DESIGN_DOCUMENT_LIMITS,
+    { strictV7Snapshot: true },
+  );
+  if (!captured.ok) {
+    throw new CadError(
+      captured.diagnostics[0]?.message ??
+        `${label} expression IR is invalid`,
+      captured.diagnostics,
+    );
+  }
+  if (
+    typeof captured.value !== "object" ||
+    captured.value === null ||
+    authoringIsArray(captured.value) ||
+    !authoringHasOwn(captured.value, "dimension") ||
+    (captured.value as { readonly dimension?: unknown }).dimension !==
+      dimension
+  ) {
+    throw new TypeError(`${label} must be a ${dimension} expression`);
+  }
+  return captured.value as ExpressionIR;
+}
+
+function captureStagedExpression<
+  D extends "length" | "scalar" | "massDensity",
+>(
+  value: unknown,
+  dimension: D,
+  label: string,
+): Expression<D> {
+  return authoringFreeze({
+    dimension,
+    ir: captureDatumExpressionIR(value, dimension, label),
+  }) as Expression<D>;
+}
+
+function captureDatumVectorIR<D extends "length" | "scalar">(
+  value: unknown,
+  dimension: D,
+  label: string,
+): readonly [ExpressionIR, ExpressionIR, ExpressionIR] {
+  let values: readonly [unknown, unknown, unknown];
+  try {
+    if (!authoringIsArray(value)) {
+      throw authoringCaptureFailure(
+        `${label} must be a dense three-element array`,
+      );
+    }
+    const prototype = authoringApply<object | null>(
+      authoringObjectGetPrototypeOf,
+      Object,
+      [value],
+    );
+    if (prototype !== authoringArrayPrototype) {
+      throw authoringCaptureFailure(`${label} must be a plain array`);
+    }
+    const keys = authoringApply<(string | symbol)[]>(
+      authoringReflectOwnKeys,
+      Reflect,
+      [value],
+    );
+    if (keys.length !== 4) {
+      throw authoringCaptureFailure(
+        `${label} must be a dense three-element array`,
+      );
+    }
+    const allowed = ["0", "1", "2", "length"];
+    for (let index = 0; index < keys.length; index += 1) {
+      const key = keys[index];
+      let supported = false;
+      for (
+        let allowedIndex = 0;
+        allowedIndex < allowed.length;
+        allowedIndex += 1
+      ) {
+        if (key === allowed[allowedIndex]) {
+          supported = true;
+          break;
+        }
+      }
+      if (!supported) {
+        throw authoringCaptureFailure(
+          `${label} contains unsupported properties`,
+        );
+      }
+    }
+    const lengthDescriptor = authoringApply<
+      PropertyDescriptor | undefined
+    >(authoringObjectGetOwnPropertyDescriptor, Object, [value, "length"]);
+    if (
+      lengthDescriptor === undefined ||
+      !authoringHasOwn(lengthDescriptor, "value") ||
+      lengthDescriptor.value !== 3
+    ) {
+      throw authoringCaptureFailure(
+        `${label} must contain exactly three elements`,
+      );
+    }
+    const copied = authoringDenseArray<unknown>(3);
+    for (let index = 0; index < 3; index += 1) {
+      const descriptor = authoringApply<
+        PropertyDescriptor | undefined
+      >(authoringObjectGetOwnPropertyDescriptor, Object, [
+        value,
+        String(index),
+      ]);
+      if (
+        descriptor === undefined ||
+        !authoringHasOwn(descriptor, "value")
+      ) {
+        throw authoringCaptureFailure(
+          `${label}/${index} must be an own data property`,
+        );
+      }
+      copied[index] = descriptor.value;
+    }
+    values = copied as unknown as readonly [unknown, unknown, unknown];
+  } catch (error) {
+    if (isAuthoringCaptureFailure(error)) throw error;
+    throw new TypeError(`${label} could not be read safely`);
+  }
+
+  return authoringFreeze([
+    captureDatumExpressionIR(values[0], dimension, `${label}/0`),
+    captureDatumExpressionIR(values[1], dimension, `${label}/1`),
+    captureDatumExpressionIR(values[2], dimension, `${label}/2`),
+  ]);
 }
 
 function assertOptionalString(
@@ -469,6 +692,99 @@ export class StagedBodySetRefV7 {
   }
 }
 
+type StagedDatumKindV7 =
+  | "datumPoint"
+  | "datumAxis"
+  | "datumPlane"
+  | "coordinateSystem";
+
+/**
+ * Owner-bound reference to one staged datum definition.
+ *
+ * Datums are not document outputs in this slice. The frozen reference shape
+ * is reserved for later feature consumers without exposing v7 publicly.
+ *
+ * @internal
+ */
+export class StagedDatumRefV7<K extends StagedDatumKindV7> {
+  readonly kind: K;
+  readonly node: NodeId;
+  readonly [STAGED_BODY_SET_DESIGN_OWNER]: StagedBodySetDesignBuilderV7;
+
+  constructor(
+    owner: StagedBodySetDesignBuilderV7,
+    node: NodeId,
+    kind: K,
+    construction: unknown,
+  ) {
+    if (construction !== STAGED_DATUM_REFERENCE_CONSTRUCTION) {
+      throw new TypeError(
+        "Staged datum references can only be created by their owning design",
+      );
+    }
+    this[STAGED_BODY_SET_DESIGN_OWNER] = owner;
+    this.node = node;
+    this.kind = kind;
+    authoringFreeze(this);
+  }
+
+  toIR(): RefIRV7<K> {
+    return authoringFreeze({ node: this.node, kind: this.kind });
+  }
+}
+
+/** @internal */
+export class StagedDatumPointRefV7 extends StagedDatumRefV7<"datumPoint"> {
+  declare private readonly stagedDatumPointRefV7Brand: void;
+
+  constructor(
+    owner: StagedBodySetDesignBuilderV7,
+    node: NodeId,
+    construction: unknown,
+  ) {
+    super(owner, node, "datumPoint", construction);
+  }
+}
+
+/** @internal */
+export class StagedDatumAxisRefV7 extends StagedDatumRefV7<"datumAxis"> {
+  declare private readonly stagedDatumAxisRefV7Brand: void;
+
+  constructor(
+    owner: StagedBodySetDesignBuilderV7,
+    node: NodeId,
+    construction: unknown,
+  ) {
+    super(owner, node, "datumAxis", construction);
+  }
+}
+
+/** @internal */
+export class StagedDatumPlaneRefV7 extends StagedDatumRefV7<"datumPlane"> {
+  declare private readonly stagedDatumPlaneRefV7Brand: void;
+
+  constructor(
+    owner: StagedBodySetDesignBuilderV7,
+    node: NodeId,
+    construction: unknown,
+  ) {
+    super(owner, node, "datumPlane", construction);
+  }
+}
+
+/** @internal */
+export class StagedCoordinateSystemRefV7 extends StagedDatumRefV7<"coordinateSystem"> {
+  declare private readonly stagedCoordinateSystemRefV7Brand: void;
+
+  constructor(
+    owner: StagedBodySetDesignBuilderV7,
+    node: NodeId,
+    construction: unknown,
+  ) {
+    super(owner, node, "coordinateSystem", construction);
+  }
+}
+
 /** Configuration surface for the executable staged graph. @internal */
 export class StagedBodySetConfigurationBuilderV7 {
   readonly #parameterHandles: WeakMap<
@@ -503,7 +819,7 @@ export class StagedBodySetConfigurationBuilderV7 {
     authoringFreeze(this);
   }
 
-  parameter<D extends "length" | "massDensity">(
+  parameter<D extends "scalar" | "length" | "massDensity">(
     parameter: Parameter<D>,
     value: Expression<NoInfer<D>>,
   ): this {
@@ -516,17 +832,17 @@ export class StagedBodySetConfigurationBuilderV7 {
         "Parameter references cannot cross staged design boundaries",
       );
     }
-    if (value.dimension !== identity.dimension) {
-      throw new TypeError(
-        `Configuration value for '${identity.id}' must have dimension ${identity.dimension}`,
-      );
-    }
+    const expression = captureDatumExpressionIR(
+      value,
+      identity.dimension,
+      `Configuration value for '${identity.id}'`,
+    );
     if (authoringHasOwn(this.#parameterRecords, identity.id)) {
       throw new TypeError(
         `Duplicate configuration parameter override '${identity.id}'`,
       );
     }
-    this.#parameterRecords[identity.id] = value.ir;
+    this.#parameterRecords[identity.id] = expression;
     return this;
   }
 
@@ -597,6 +913,11 @@ export class StagedBodySetConfigurationBuilderV7 {
  */
 export class StagedBodySetDesignBuilderV7 {
   readonly parameter: Readonly<{
+    readonly scalar: (
+      id: string,
+      defaultValue: ScalarExpression,
+      options?: ParameterOptions<"scalar">,
+    ) => Parameter<"scalar">;
     readonly length: (
       id: string,
       defaultValue: LengthExpression,
@@ -660,6 +981,23 @@ export class StagedBodySetDesignBuilderV7 {
       "InvariantCAD staged-v7 inert reference owner",
     );
     this.parameter = authoringFreeze({
+      scalar: (
+        id: string,
+        defaultValue: ScalarExpression,
+        parameterOptions: ParameterOptions<"scalar"> = {},
+      ): Parameter<"scalar"> => {
+        const key = this.#assertParameterAvailable(id);
+        const parameter = this.#base.parameter.scalar(
+          id,
+          captureStagedExpression(
+            defaultValue,
+            "scalar",
+            `Scalar parameter '${id}' default`,
+          ),
+          captureParameterOptionsV7(parameterOptions, "scalar"),
+        );
+        return this.#registerParameter(key, "scalar", parameter);
+      },
       length: (
         id: string,
         defaultValue: LengthExpression,
@@ -668,7 +1006,11 @@ export class StagedBodySetDesignBuilderV7 {
         const key = this.#assertParameterAvailable(id);
         const parameter = this.#base.parameter.length(
           id,
-          defaultValue,
+          captureStagedExpression(
+            defaultValue,
+            "length",
+            `Length parameter '${id}' default`,
+          ),
           captureParameterOptionsV7(parameterOptions, "length"),
         );
         return this.#registerParameter(key, "length", parameter);
@@ -681,7 +1023,11 @@ export class StagedBodySetDesignBuilderV7 {
         const key = this.#assertParameterAvailable(id);
         const parameter = this.#base.parameter.massDensity(
           id,
-          defaultValue,
+          captureStagedExpression(
+            defaultValue,
+            "massDensity",
+            `Mass-density parameter '${id}' default`,
+          ),
           captureParameterOptionsV7(parameterOptions, "massDensity"),
         );
         return this.#registerParameter(
@@ -701,7 +1047,7 @@ export class StagedBodySetDesignBuilderV7 {
     return key;
   }
 
-  #registerParameter<D extends "length" | "massDensity">(
+  #registerParameter<D extends "scalar" | "length" | "massDensity">(
     id: ParameterId,
     dimension: D,
     parameter: Parameter<D>,
@@ -783,6 +1129,158 @@ export class StagedBodySetDesignBuilderV7 {
     return this.#registerLeaf(
       new StagedBodyLeafRefV7(this, reference.node),
     );
+  }
+
+  datumPoint(
+    id: string,
+    options: { readonly position: Vec3Expression },
+  ): StagedDatumPointRefV7 {
+    const captured = captureExactOwnDataRecord(
+      options,
+      ["position"],
+      "Datum-point options",
+    );
+    const key = this.#assertNodeAvailable(id);
+    const node: DatumPointNodeIRV7 = {
+      kind: "datumPoint",
+      position: captureDatumVectorIR(
+        captured.position,
+        "length",
+        "Datum-point position",
+      ),
+    };
+    const definition = deepFreeze(node);
+    const reference = new StagedDatumPointRefV7(
+      this,
+      key,
+      STAGED_DATUM_REFERENCE_CONSTRUCTION,
+    );
+    authoringSetInsert(this.#nodeIds, key);
+    this.#nodeRecords[key] = definition;
+    return reference;
+  }
+
+  datumAxis(
+    id: string,
+    options: {
+      readonly origin: Vec3Expression;
+      readonly direction: ScalarVec3Expression;
+    },
+  ): StagedDatumAxisRefV7 {
+    const captured = captureExactOwnDataRecord(
+      options,
+      ["origin", "direction"],
+      "Datum-axis options",
+    );
+    const key = this.#assertNodeAvailable(id);
+    const node: DatumAxisNodeIRV7 = {
+      kind: "datumAxis",
+      origin: captureDatumVectorIR(
+        captured.origin,
+        "length",
+        "Datum-axis origin",
+      ),
+      direction: captureDatumVectorIR(
+        captured.direction,
+        "scalar",
+        "Datum-axis direction",
+      ),
+    };
+    const definition = deepFreeze(node);
+    const reference = new StagedDatumAxisRefV7(
+      this,
+      key,
+      STAGED_DATUM_REFERENCE_CONSTRUCTION,
+    );
+    authoringSetInsert(this.#nodeIds, key);
+    this.#nodeRecords[key] = definition;
+    return reference;
+  }
+
+  datumPlane(
+    id: string,
+    options: {
+      readonly origin: Vec3Expression;
+      readonly xDirection: ScalarVec3Expression;
+      readonly normal: ScalarVec3Expression;
+    },
+  ): StagedDatumPlaneRefV7 {
+    const captured = captureExactOwnDataRecord(
+      options,
+      ["origin", "xDirection", "normal"],
+      "Datum-plane options",
+    );
+    const key = this.#assertNodeAvailable(id);
+    const node: DatumPlaneNodeIRV7 = {
+      kind: "datumPlane",
+      origin: captureDatumVectorIR(
+        captured.origin,
+        "length",
+        "Datum-plane origin",
+      ),
+      xDirection: captureDatumVectorIR(
+        captured.xDirection,
+        "scalar",
+        "Datum-plane xDirection",
+      ),
+      normal: captureDatumVectorIR(
+        captured.normal,
+        "scalar",
+        "Datum-plane normal",
+      ),
+    };
+    const definition = deepFreeze(node);
+    const reference = new StagedDatumPlaneRefV7(
+      this,
+      key,
+      STAGED_DATUM_REFERENCE_CONSTRUCTION,
+    );
+    authoringSetInsert(this.#nodeIds, key);
+    this.#nodeRecords[key] = definition;
+    return reference;
+  }
+
+  coordinateSystem(
+    id: string,
+    options: {
+      readonly origin: Vec3Expression;
+      readonly xDirection: ScalarVec3Expression;
+      readonly yDirection: ScalarVec3Expression;
+    },
+  ): StagedCoordinateSystemRefV7 {
+    const captured = captureExactOwnDataRecord(
+      options,
+      ["origin", "xDirection", "yDirection"],
+      "Coordinate-system options",
+    );
+    const key = this.#assertNodeAvailable(id);
+    const node: CoordinateSystemNodeIRV7 = {
+      kind: "coordinateSystem",
+      origin: captureDatumVectorIR(
+        captured.origin,
+        "length",
+        "Coordinate-system origin",
+      ),
+      xDirection: captureDatumVectorIR(
+        captured.xDirection,
+        "scalar",
+        "Coordinate-system xDirection",
+      ),
+      yDirection: captureDatumVectorIR(
+        captured.yDirection,
+        "scalar",
+        "Coordinate-system yDirection",
+      ),
+    };
+    const definition = deepFreeze(node);
+    const reference = new StagedCoordinateSystemRefV7(
+      this,
+      key,
+      STAGED_DATUM_REFERENCE_CONSTRUCTION,
+    );
+    authoringSetInsert(this.#nodeIds, key);
+    this.#nodeRecords[key] = definition;
+    return reference;
   }
 
   configuration(
