@@ -823,6 +823,50 @@ function checkResourceDefinitionResources(
   }
 }
 
+function checkDocumentSnapshotLimits(
+  value: unknown,
+  limits: DesignDocumentLimits,
+): void {
+  checkStructuralOccurrences(value, limits);
+  checkTopologyQueryOccurrences(value, limits);
+  checkTopologyReferenceResources(value, limits);
+  checkResourceDefinitionResources(value, limits);
+}
+
+/**
+ * Checks an already-detached, trusted document snapshot without copying or
+ * recapturing it. Canonical byte limits remain the serialization boundary's
+ * responsibility; this enforces every graph, topology, evidence, and resource
+ * registry limit in the same order as the untrusted-input preflight.
+ *
+ * This is a repository-internal migration primitive and is intentionally not
+ * re-exported from the package root.
+ */
+export function checkTrustedDesignDocumentSnapshotLimits(
+  value: unknown,
+  limits: DesignDocumentLimits,
+): CadResult<void> {
+  try {
+    checkDocumentSnapshotLimits(value, limits);
+    return success(undefined);
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      weakSetHas(documentPreflightFailures, error)
+    ) {
+      return (error as DocumentPreflightFailure).result;
+    }
+    return failure(
+      diagnostic(
+        "IR_INVALID",
+        "Trusted design-document snapshot could not be inspected safely",
+        { severity: "error" },
+      ),
+    );
+  }
+}
+
 /**
  * Detaches and bounds untrusted document structure before recursive schemas or
  * freezing can consume it. The returned plain snapshot is the value that must
@@ -841,10 +885,7 @@ export function preflightDesignDocumentValue(
       limits,
       strictV7Snapshot,
     );
-    checkStructuralOccurrences(snapshot, limits);
-    checkTopologyQueryOccurrences(snapshot, limits);
-    checkTopologyReferenceResources(snapshot, limits);
-    checkResourceDefinitionResources(snapshot, limits);
+    checkDocumentSnapshotLimits(snapshot, limits);
     return success(snapshot);
   } catch (error) {
     if (

@@ -47,6 +47,7 @@ import {
 import { normalizePersistentTopologyReference } from "./topology-signatures.js";
 import { validateDocument, validateDocumentV7 } from "./validation.js";
 import {
+  checkTrustedDesignDocumentSnapshotLimits,
   DEFAULT_DESIGN_DOCUMENT_LIMITS,
   normalizeDesignDocumentLimits,
   preflightDesignDocumentValue,
@@ -57,6 +58,9 @@ import {
   documentV7RuntimeIntrinsicsAreIntact,
   throwDocumentV7RuntimeIntegrityError,
 } from "./internal/document-v7-runtime-integrity.js";
+import {
+  diagnoseDocumentV7IdentityRepresentability,
+} from "./internal/document-v7-identity-representability.js";
 import { auditJsonMemberNames } from "./internal/json-member-audit.js";
 
 const SerializationIntrinsicArray = Array;
@@ -144,6 +148,33 @@ function serializationJsonParse(value: string): unknown {
     SerializationIntrinsicJson,
     [value],
   );
+}
+
+function concatenateDiagnostics(
+  first: readonly Diagnostic[],
+  second: readonly Diagnostic[],
+): Diagnostic[] {
+  const diagnostics = new SerializationIntrinsicArray<Diagnostic>(
+    first.length + second.length,
+  );
+  for (let index = 0; index < first.length; index += 1) {
+    diagnostics[index] = first[index]!;
+  }
+  for (let index = 0; index < second.length; index += 1) {
+    diagnostics[first.length + index] = second[index]!;
+  }
+  return diagnostics;
+}
+
+function prependDiagnostics<T>(
+  diagnostics: readonly Diagnostic[],
+  result: CadResult<T>,
+): CadResult<T> {
+  if (diagnostics.length === 0) return result;
+  const combined = concatenateDiagnostics(diagnostics, result.diagnostics);
+  return result.ok
+    ? success(result.value, combined)
+    : { ok: false, diagnostics: combined };
 }
 
 function v7ParsedShapeMatchesSnapshot(
@@ -468,13 +499,9 @@ function parseV7Limits(
   }
 }
 
-function parseDocumentValueWithLimits(
-  value: unknown,
-  limits: DesignDocumentLimits,
+function validateLegacyDocumentSnapshot(
+  snapshot: unknown,
 ): CadResult<DesignDocument> {
-  const preflight = preflightDesignDocumentValue(value, limits);
-  if (!preflight.ok) return preflight;
-  const snapshot = preflight.value;
   let parsed: ReturnType<typeof DesignDocumentSchema.safeParse>;
   try {
     const version =
@@ -521,6 +548,16 @@ function parseDocumentValueWithLimits(
   }
   const document = deepFreeze(parsed.data) as DesignDocument;
   return validateDocument(document);
+}
+
+function parseDocumentValueWithLimits(
+  value: unknown,
+  limits: DesignDocumentLimits,
+): CadResult<DesignDocument> {
+  const preflight = preflightDesignDocumentValue(value, limits);
+  return preflight.ok
+    ? validateLegacyDocumentSnapshot(preflight.value)
+    : preflight;
 }
 
 function preflightDocumentValueV7WithLimits(
@@ -954,33 +991,150 @@ export function migrateDocument(
       );
 }
 
+function checkDocumentV7CanonicalByteLimit(
+  document: DesignDocumentV7,
+  limits: DesignDocumentLimits,
+): CadResult<void> {
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return serializationIntegrityFailure();
+  }
+  try {
+    const canonicalDocument = canonicalizeDocumentTopology(document);
+    if (!documentV7RuntimeIntrinsicsAreIntact()) {
+      return serializationIntegrityFailure();
+    }
+    const documentBytes = canonicalProtocolByteLengthWithin(
+      canonicalDocument,
+      limits.maxDocumentBytes,
+    );
+    if (!documentV7RuntimeIntrinsicsAreIntact()) {
+      return serializationIntegrityFailure();
+    }
+    return documentBytes === undefined
+      ? failure(
+          diagnostic(
+            "IR_INVALID",
+            `Design-document maxDocumentBytes limit ${limits.maxDocumentBytes} was exceeded before canonical JSON materialization`,
+            {
+              severity: "error",
+              details: {
+                resource: "maxDocumentBytes",
+                limit: limits.maxDocumentBytes,
+                actualAtLeast: limits.maxDocumentBytes + 1,
+              },
+            },
+          ),
+        )
+      : success(undefined);
+  } catch {
+    if (!documentV7RuntimeIntrinsicsAreIntact()) {
+      return serializationIntegrityFailure();
+    }
+    return failure(
+      diagnostic(
+        "IR_INVALID",
+        "Document-v7 canonical byte length could not be checked safely",
+        { severity: "error" },
+      ),
+    );
+  }
+}
+
+function isDocumentByteLimitFailure(result: CadResult<void>): boolean {
+  if (result.ok) return false;
+  for (let index = 0; index < result.diagnostics.length; index += 1) {
+    if (
+      result.diagnostics[index]?.details?.resource === "maxDocumentBytes"
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function migrateNodeToV7(node: NodeIR): NodeIRV7 {
   if (node.kind === "part") {
-    const { solid, ...definition } = node;
-    return {
-      ...definition,
-      geometry: solid,
-    };
+    const source = node as unknown as Readonly<Record<string, unknown>>;
+    const definition = serializationObjectCreateNull<unknown>();
+    const keys = serializationObjectKeys(source);
+    for (let index = 0; index < keys.length; index += 1) {
+      const key = keys[index]!;
+      if (key !== "solid") definition[key] = source[key];
+    }
+    definition.geometry = node.solid;
+    return definition as unknown as NodeIRV7;
   }
   if (node.kind === "assembly") {
-    return {
-      kind: "assembly",
-      instances: node.instances.map((instance) => {
-        const { component, ...definition } = instance;
-        return {
-          ...definition,
-          component: {
-            source: "local",
-            reference: component,
-          },
-          configuration: { mode: "inherit" },
-        };
-      }),
-    };
+    const instances = new SerializationIntrinsicArray<unknown>(
+      node.instances.length,
+    );
+    for (let index = 0; index < node.instances.length; index += 1) {
+      const instance = node.instances[index]!;
+      const source = instance as unknown as Readonly<Record<string, unknown>>;
+      const definition = serializationObjectCreateNull<unknown>();
+      const keys = serializationObjectKeys(source);
+      for (let keyIndex = 0; keyIndex < keys.length; keyIndex += 1) {
+        const key = keys[keyIndex]!;
+        if (key !== "component") definition[key] = source[key];
+      }
+      const component = serializationObjectCreateNull<unknown>();
+      component.source = "local";
+      component.reference = instance.component;
+      definition.component = component;
+      const configuration = serializationObjectCreateNull<unknown>();
+      configuration.mode = "inherit";
+      definition.configuration = configuration;
+      instances[index] = definition;
+    }
+    const assembly = serializationObjectCreateNull<unknown>();
+    assembly.kind = "assembly";
+    assembly.instances = instances;
+    return assembly as unknown as NodeIRV7;
   }
   // Every other v1-v6 node is a structural member of NodeIRV7. In particular,
   // a principal PlaneIR is one arm of PlaneIRV7.
   return node;
+}
+
+function migrateLegacyDocumentSnapshotToV7(
+  source: DesignDocument,
+): DesignDocumentV7 {
+  const nodes = serializationObjectCreateNull<NodeIRV7>();
+  const sourceNodes = source.nodes as Readonly<Record<string, NodeIR>>;
+  const nodeIds = serializationObjectKeys(sourceNodes);
+  for (let index = 0; index < nodeIds.length; index += 1) {
+    const id = nodeIds[index]!;
+    nodes[id] = migrateNodeToV7(sourceNodes[id]!);
+  }
+
+  const candidate = serializationObjectCreateNull<unknown>();
+  candidate.schema = DOCUMENT_SCHEMA_V7;
+  candidate.version = DOCUMENT_VERSION_V7;
+  candidate.name = source.name;
+  candidate.units = source.units;
+  candidate.parameters = source.parameters;
+  if (serializationObjectHasOwn(source, "materials")) {
+    candidate.materials = source.materials;
+  }
+  if (serializationObjectHasOwn(source, "configurations")) {
+    candidate.configurations = source.configurations;
+  }
+  candidate.nodes = nodes;
+  candidate.outputs = source.outputs;
+  if (serializationObjectHasOwn(source, "metadata")) {
+    candidate.metadata = source.metadata;
+  }
+  if (
+    (source.version === DOCUMENT_VERSION_V2 ||
+      source.version === DOCUMENT_VERSION_V3 ||
+      source.version === DOCUMENT_VERSION_V4 ||
+      source.version === DOCUMENT_VERSION_V5 ||
+      source.version === DOCUMENT_VERSION_V6) &&
+    serializationObjectHasOwn(source, "topologyReferences")
+  ) {
+    candidate.topologyReferences = source.topologyReferences;
+  }
+  return candidate as unknown as DesignDocumentV7;
 }
 
 /**
@@ -989,51 +1143,150 @@ function migrateNodeToV7(node: NodeIR): NodeIRV7 {
  *
  * This helper is intentionally not re-exported from the root package while
  * ordinary authoring, parsing, evaluation, hashes, and impact analysis remain
- * on v6. Its input still travels through the bounded public v1-v6 parser, and
- * the transformed result must satisfy the isolated strict v7 schema.
+ * on v6. It performs one strict descriptor capture of either a frozen legacy
+ * document or an already-staged v7 document, then validates and bounds the
+ * trusted snapshot without reading caller-owned objects again. Durable legacy
+ * identities that v7 cannot represent verbatim are diagnosed, never rewritten.
  */
 export function migrateDocumentToV7(
   value: unknown,
   options: ParseDocumentOptions = {},
 ): CadResult<DesignDocumentV7> {
-  const parsed = parseDocumentValue(value, options);
-  if (!parsed.ok) return parsed;
-  const source = parsed.value;
-  const candidate = {
-    schema: DOCUMENT_SCHEMA_V7,
-    version: DOCUMENT_VERSION_V7,
-    name: source.name,
-    units: source.units,
-    parameters: source.parameters,
-    ...(Object.hasOwn(source, "materials")
-      ? { materials: source.materials }
-      : {}),
-    ...(Object.hasOwn(source, "configurations")
-      ? { configurations: source.configurations }
-      : {}),
-    nodes: Object.fromEntries(
-      Object.entries(source.nodes).map(([id, node]) => [
-        id,
-        migrateNodeToV7(node),
-      ]),
-    ),
-    outputs: source.outputs,
-    ...(Object.hasOwn(source, "metadata")
-      ? { metadata: source.metadata }
-      : {}),
-    ...((source.version === DOCUMENT_VERSION_V2 ||
-      source.version === DOCUMENT_VERSION_V3 ||
-      source.version === DOCUMENT_VERSION_V4 ||
-      source.version === DOCUMENT_VERSION_V5 ||
-      source.version === DOCUMENT_VERSION_V6) &&
-    Object.hasOwn(source, "topologyReferences")
-      ? { topologyReferences: source.topologyReferences }
-      : {}),
-  };
-  const migrated = parseDocumentValueV7(candidate, options);
-  if (!migrated.ok) return migrated;
-  return success(migrated.value, [
-    ...parsed.diagnostics,
-    ...migrated.diagnostics,
-  ]);
+  const normalizedLimits = parseV7Limits(options);
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return serializationIntegrityFailure();
+  }
+  if (!normalizedLimits.ok) return normalizedLimits;
+
+  const preflight = preflightDocumentValueV7WithLimits(
+    value,
+    normalizedLimits.value,
+  );
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return serializationIntegrityFailure();
+  }
+  if (!preflight.ok) return preflight;
+
+  const snapshot = preflight.value;
+  const snapshotRecord =
+    typeof snapshot === "object" &&
+    snapshot !== null &&
+    !serializationArrayIsArray(snapshot)
+      ? (snapshot as Readonly<Record<string, unknown>>)
+      : undefined;
+  if (snapshotRecord?.version === DOCUMENT_VERSION_V7) {
+    // A valid v7 snapshot can be topology-canonicalized before Zod clones it.
+    // If a malformed shape prevents that early check, validation supplies the
+    // precise schema diagnostic and the exact byte check is retried afterward.
+    const earlyBytes = checkDocumentV7CanonicalByteLimit(
+      snapshot as DesignDocumentV7,
+      normalizedLimits.value,
+    );
+    if (!documentV7RuntimeIntrinsicsAreIntact()) {
+      return serializationIntegrityFailure();
+    }
+    if (!earlyBytes.ok && isDocumentByteLimitFailure(earlyBytes)) {
+      return earlyBytes;
+    }
+    const parsedV7 = validateDocumentV7Snapshot(snapshot);
+    if (!documentV7RuntimeIntrinsicsAreIntact()) {
+      return serializationIntegrityFailure();
+    }
+    if (!parsedV7.ok) return parsedV7;
+    if (!earlyBytes.ok) {
+      const bytes = checkDocumentV7CanonicalByteLimit(
+        parsedV7.value,
+        normalizedLimits.value,
+      );
+      if (!bytes.ok) {
+        return {
+          ok: false,
+          diagnostics: concatenateDiagnostics(
+            parsedV7.diagnostics,
+            bytes.diagnostics,
+          ),
+        };
+      }
+    }
+    if (!documentV7RuntimeIntrinsicsAreIntact()) {
+      return serializationIntegrityFailure();
+    }
+    return parsedV7;
+  }
+
+  const parsedLegacy = validateLegacyDocumentSnapshot(snapshot);
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return serializationIntegrityFailure();
+  }
+  if (!parsedLegacy.ok) return parsedLegacy;
+
+  const identityDiagnostics =
+    diagnoseDocumentV7IdentityRepresentability(parsedLegacy.value);
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return serializationIntegrityFailure();
+  }
+  if (identityDiagnostics.length > 0) {
+    return {
+      ok: false,
+      diagnostics: concatenateDiagnostics(
+        parsedLegacy.diagnostics,
+        identityDiagnostics,
+      ),
+    };
+  }
+
+  const candidate = migrateLegacyDocumentSnapshotToV7(parsedLegacy.value);
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return serializationIntegrityFailure();
+  }
+  const limitCheck = checkTrustedDesignDocumentSnapshotLimits(
+    candidate,
+    normalizedLimits.value,
+  );
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return serializationIntegrityFailure();
+  }
+  if (!limitCheck.ok) {
+    return {
+      ok: false,
+      diagnostics: concatenateDiagnostics(
+        parsedLegacy.diagnostics,
+        limitCheck.diagnostics,
+      ),
+    };
+  }
+
+  const bytes = checkDocumentV7CanonicalByteLimit(
+    candidate,
+    normalizedLimits.value,
+  );
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return serializationIntegrityFailure();
+  }
+  if (!bytes.ok) {
+    return {
+      ok: false,
+      diagnostics: concatenateDiagnostics(
+        parsedLegacy.diagnostics,
+        bytes.diagnostics,
+      ),
+    };
+  }
+
+  const migrated = validateDocumentV7Snapshot(candidate);
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return serializationIntegrityFailure();
+  }
+  if (!migrated.ok) {
+    return {
+      ok: false,
+      diagnostics: concatenateDiagnostics(
+        parsedLegacy.diagnostics,
+        migrated.diagnostics,
+      ),
+    };
+  }
+  return documentV7RuntimeIntrinsicsAreIntact()
+    ? prependDiagnostics(parsedLegacy.diagnostics, migrated)
+    : serializationIntegrityFailure();
 }
