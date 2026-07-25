@@ -7,6 +7,11 @@
   schema and semantic validation. Detached-value parsing and direct schemas do
   not claim to reconstruct member occurrences already collapsed by another
   parser, and frozen v1-v6 parsing remains unchanged.
+- Added bounded staged Document v7 canonical serialization. Compact and pretty
+  output is counted exactly after topology normalization and rejected before
+  constructing the complete canonical object tree, JSON text, or UTF-8 buffer;
+  cloning enforces the same canonical-byte ceiling without serializing.
+  Successful output and frozen v1-v6 behavior remain byte-for-byte unchanged.
 
 ## [0.1.1] - 2026-07-24
 
