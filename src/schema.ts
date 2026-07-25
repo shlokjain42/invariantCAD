@@ -114,6 +114,7 @@ const v7IntrinsicArrayPrototype = V7IntrinsicArray.prototype;
 const v7IntrinsicNumberIsFinite = Number.isFinite;
 const v7IntrinsicNumberIsSafeInteger = Number.isSafeInteger;
 const v7IntrinsicObjectCreate = Object.create;
+const v7IntrinsicObjectFreeze = Object.freeze;
 const v7IntrinsicObjectGetOwnPropertyDescriptor =
   Object.getOwnPropertyDescriptor;
 const v7IntrinsicObjectGetPrototypeOf = Object.getPrototypeOf;
@@ -209,6 +210,14 @@ function v7WeakSetDelete(value: WeakSet<object>, entry: object): void {
 
 function v7WeakSetHas(value: WeakSet<object>, entry: object): boolean {
   return v7ReflectApply(v7IntrinsicWeakSetHas, value, [entry]) as boolean;
+}
+
+function v7ObjectFreeze<T extends object>(value: T): Readonly<T> {
+  return v7ReflectApply(
+    v7IntrinsicObjectFreeze,
+    V7IntrinsicObject,
+    [value],
+  ) as Readonly<T>;
 }
 
 type V7RawAuditContract = "document" | "node" | "topology-reference-entry";
@@ -580,12 +589,57 @@ function assertV7RuntimeIntegrity(): void {
 
 /**
  * Zod checks live globals such as Promise before and after a schema's internal
- * transform. Guard direct parse-family calls outside that machinery so a
- * corrupted realm cannot run ahead of the descriptor checker.
+ * transform. A terminal facade guards the supported parse-family calls outside
+ * that machinery so a corrupted realm cannot run ahead of the descriptor
+ * checker.
+ *
+ * The facade deliberately exposes neither Zod internals nor combinators.
+ * Arbitrary outer Zod schemas can accept a shortcut branch or touch ambient
+ * state before invoking a nested schema, so a full ZodType cannot honestly be
+ * advertised as an untrusted-runtime boundary.
  */
-function guardV7SchemaParseBoundary<T>(
+const V7_SCHEMA_BOUNDARY_METHODS = [
+  "decode",
+  "decodeAsync",
+  "encode",
+  "encodeAsync",
+  "parse",
+  "parseAsync",
+  "safeDecode",
+  "safeDecodeAsync",
+  "safeEncode",
+  "safeEncodeAsync",
+  "safeParse",
+  "safeParseAsync",
+  "spa",
+] as const;
+
+type V7SchemaBoundaryMethod =
+  (typeof V7_SCHEMA_BOUNDARY_METHODS)[number];
+
+type V7StandardSchemaResult<T> =
+  | {
+      readonly value: T;
+    }
+  | {
+      readonly issues: readonly z.core.$ZodIssue[];
+    };
+
+type V7StandardSchema<T> = Readonly<{
+  readonly validate: (value: unknown) => V7StandardSchemaResult<T>;
+  readonly vendor: "invariantcad";
+  readonly version: 1;
+}>;
+
+type V7SchemaBoundary<T> = Readonly<
+  Pick<z.ZodType<T>, V7SchemaBoundaryMethod> & {
+    readonly "~standard": V7StandardSchema<T>;
+  }
+>;
+
+function createV7SchemaBoundary<T>(
   schema: z.ZodType<T>,
-): z.ZodType<T> {
+): V7SchemaBoundary<T> {
   const integrityError = V7_RUNTIME_INTEGRITY_ZOD_ERROR as z.ZodError<T>;
   const optionsError = V7_SCHEMA_OPTIONS_ZOD_ERROR as z.ZodError<T>;
   const executionError = V7_SCHEMA_EXECUTION_ZOD_ERROR as z.ZodError<T>;
@@ -688,106 +742,46 @@ function guardV7SchemaParseBoundary<T>(
   const guardedDecodeAsync = guardThrowingAsync(schema.decodeAsync);
   const guardedSafeEncodeAsync = guardSafeAsync(schema.safeEncodeAsync);
   const guardedSafeDecodeAsync = guardSafeAsync(schema.safeDecodeAsync);
-  Object.defineProperties(schema, {
-    decode: {
-      configurable: true,
-      enumerable: true,
-      value: guardedDecode,
-      writable: true,
-    },
-    decodeAsync: {
-      configurable: true,
-      enumerable: true,
-      value: guardedDecodeAsync,
-      writable: true,
-    },
-    encode: {
-      configurable: true,
-      enumerable: true,
-      value: guardedEncode,
-      writable: true,
-    },
-    encodeAsync: {
-      configurable: true,
-      enumerable: true,
-      value: guardedEncodeAsync,
-      writable: true,
-    },
-    parse: {
-      configurable: true,
-      enumerable: true,
-      value: guardedParse,
-      writable: true,
-    },
-    parseAsync: {
-      configurable: true,
-      enumerable: true,
-      value: guardedParseAsync,
-      writable: true,
-    },
-    safeDecode: {
-      configurable: true,
-      enumerable: true,
-      value: guardedSafeDecode,
-      writable: true,
-    },
-    safeDecodeAsync: {
-      configurable: true,
-      enumerable: true,
-      value: guardedSafeDecodeAsync,
-      writable: true,
-    },
-    safeEncode: {
-      configurable: true,
-      enumerable: true,
-      value: guardedSafeEncode,
-      writable: true,
-    },
-    safeEncodeAsync: {
-      configurable: true,
-      enumerable: true,
-      value: guardedSafeEncodeAsync,
-      writable: true,
-    },
-    safeParse: {
-      configurable: true,
-      enumerable: true,
-      value: guardedSafeParse,
-      writable: true,
-    },
-    safeParseAsync: {
-      configurable: true,
-      enumerable: true,
-      value: guardedSafeParseAsync,
-      writable: true,
-    },
-    spa: {
-      configurable: true,
-      enumerable: true,
-      value: guardedSafeParseAsync,
-      writable: true,
-    },
-  });
-  const standard = schema["~standard"];
-  Object.defineProperty(standard, "validate", {
-    configurable: true,
-    enumerable: true,
-    value: (value: unknown) => {
-      const parsed = guardedSafeParse(value);
-      return parsed.success
-        ? { value: parsed.data }
-        : { issues: parsed.error.issues };
-    },
-    writable: true,
-  });
-  return schema;
+  const boundary = v7ReflectApply(
+    v7IntrinsicObjectCreate,
+    V7IntrinsicObject,
+    [null],
+  ) as Record<string, unknown>;
+  boundary.decode = guardedDecode;
+  boundary.decodeAsync = guardedDecodeAsync;
+  boundary.encode = guardedEncode;
+  boundary.encodeAsync = guardedEncodeAsync;
+  boundary.parse = guardedParse;
+  boundary.parseAsync = guardedParseAsync;
+  boundary.safeDecode = guardedSafeDecode;
+  boundary.safeDecodeAsync = guardedSafeDecodeAsync;
+  boundary.safeEncode = guardedSafeEncode;
+  boundary.safeEncodeAsync = guardedSafeEncodeAsync;
+  boundary.safeParse = guardedSafeParse;
+  boundary.safeParseAsync = guardedSafeParseAsync;
+  boundary.spa = guardedSafeParseAsync;
+  const standard = v7ReflectApply(
+    v7IntrinsicObjectCreate,
+    V7IntrinsicObject,
+    [null],
+  ) as Record<string, unknown>;
+  standard.validate = (value: unknown): V7StandardSchemaResult<T> => {
+    const parsed = guardedSafeParse(value);
+    return parsed.success
+      ? { value: parsed.data }
+      : { issues: parsed.error.issues };
+  };
+  standard.vendor = "invariantcad";
+  standard.version = 1;
+  boundary["~standard"] = v7ObjectFreeze(standard);
+  return v7ObjectFreeze(boundary) as V7SchemaBoundary<T>;
 }
 
 function withV7RawKeyAudit<T>(
   schema: z.ZodType<T>,
   contract: V7RawAuditContract,
-): z.ZodType<T> {
-  return guardV7SchemaParseBoundary(
+): V7SchemaBoundary<T> {
+  return createV7SchemaBoundary(
     z
       .unknown()
       .transform((value, context) => {
@@ -1830,7 +1824,7 @@ const TopologyReferenceEntryV7BaseSchema: z.ZodType<TopologyReferenceEntryIRV7> 
         });
       });
     }) as z.ZodType<TopologyReferenceEntryIRV7>;
-export const TopologyReferenceEntryV7Schema: z.ZodType<TopologyReferenceEntryIRV7> =
+export const TopologyReferenceEntryV7Schema: V7SchemaBoundary<TopologyReferenceEntryIRV7> =
   withV7RawKeyAudit(
     TopologyReferenceEntryV7BaseSchema,
     "topology-reference-entry",
@@ -2482,7 +2476,7 @@ function createNodeV7Schema(): z.ZodType<NodeIRV7> {
 }
 
 const NodeV7BaseSchema: z.ZodType<NodeIRV7> = createNodeV7Schema();
-export const NodeV7Schema: z.ZodType<NodeIRV7> = withV7RawKeyAudit(
+export const NodeV7Schema: V7SchemaBoundary<NodeIRV7> = withV7RawKeyAudit(
   NodeV7BaseSchema,
   "node",
 );
@@ -2900,7 +2894,7 @@ const DesignDocumentV7BaseSchema: z.ZodType<DesignDocumentV7> = z
     ...DesignDocumentBodyShapeV7,
   })
   .strict() as unknown as z.ZodType<DesignDocumentV7>;
-export const DesignDocumentV7Schema: z.ZodType<DesignDocumentV7> =
+export const DesignDocumentV7Schema: V7SchemaBoundary<DesignDocumentV7> =
   withV7RawKeyAudit(DesignDocumentV7BaseSchema, "document");
 
 export const DesignDocumentSchema: z.ZodType<DesignDocument> = z.union([

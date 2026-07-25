@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+- Replaced the three staged Document v7 direct-schema objects with frozen,
+  null-prototype terminal facades over private Zod schemas. The facades retain
+  guarded parse, codec, async, and Standard Schema entrypoints without exposing
+  Zod combinators, constructors, nested schemas, or raw execution internals
+  that can run outside the v7 runtime-integrity boundary; v1-v6 schemas remain
+  unchanged.
 - Hardened the staged Document v7 text boundary to reject duplicate decoded
   JSON object member names, including escape-equivalent spellings, before
   schema and semantic validation. Detached-value parsing and direct schemas do
