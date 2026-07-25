@@ -12,6 +12,9 @@
   constructing the complete canonical object tree, JSON text, or UTF-8 buffer;
   cloning enforces the same canonical-byte ceiling without serializing.
   Successful output and frozen v1-v6 behavior remain byte-for-byte unchanged.
+- Updated the documentation toolchain to Mint 4.2.742 and selected patched
+  PostCSS 8.5.23 and brace-expansion 5.0.8 transitive resolutions after new
+  upstream advisories, preserving the repository's zero-advisory release gate.
 
 ## [0.1.1] - 2026-07-24
 
