@@ -17,6 +17,7 @@ const intrinsicArrayPrototype = IntrinsicArray.prototype;
 const intrinsicNumberIsFinite = IntrinsicNumber.isFinite;
 const intrinsicNumberIsSafeInteger = IntrinsicNumber.isSafeInteger;
 const intrinsicObjectCreate = IntrinsicObject.create;
+const intrinsicObjectDefineProperty = IntrinsicObject.defineProperty;
 const intrinsicObjectFreeze = IntrinsicObject.freeze;
 const intrinsicObjectGetOwnPropertyDescriptor =
   IntrinsicObject.getOwnPropertyDescriptor;
@@ -59,6 +60,19 @@ function objectFreeze<T>(value: T): Readonly<T> {
   return reflectApply(intrinsicObjectFreeze, IntrinsicObject, [
     value,
   ]) as Readonly<T>;
+}
+
+function arrayDefineIndex<T>(value: T[], index: number, entry: T): void {
+  reflectApply(intrinsicObjectDefineProperty, IntrinsicObject, [
+    value,
+    index,
+    {
+      configurable: true,
+      enumerable: true,
+      writable: true,
+      value: entry,
+    },
+  ]);
 }
 
 function objectGetPrototypeOf(value: object): object | null {
@@ -419,16 +433,16 @@ function captureDocumentValue(
             descriptor === undefined ||
             descriptor.enumerable !== true ||
             !objectHasOwn(descriptor, "value") ||
-            descriptors[index] !== undefined
+            objectHasOwn(descriptors, index)
           ) {
             malformedStrictV7Snapshot(
               "Document-v7 arrays require dense enumerable data indices and no extra properties",
             );
           }
-          descriptors[index] = descriptor;
+          arrayDefineIndex(descriptors, index, descriptor);
         }
         for (let index = 0; index < length; index += 1) {
-          if (descriptors[index] === undefined) {
+          if (!objectHasOwn(descriptors, index)) {
             malformedStrictV7Snapshot(
               "Document-v7 arrays cannot be sparse",
             );
@@ -438,7 +452,11 @@ function captureDocumentValue(
         const state: CapturedObject = { output, state: "active" };
         weakMapSet(captured, current, state);
         for (let index = 0; index < length; index += 1) {
-          output[index] = capture(descriptors[index]!.value, depth + 1);
+          arrayDefineIndex(
+            output,
+            index,
+            capture(descriptors[index]!.value, depth + 1),
+          );
         }
         state.state = "complete";
         return output;
@@ -508,8 +526,8 @@ function captureDocumentValue(
             "Document-v7 objects require enumerable data properties",
           );
         }
-        stringKeys[index] = key;
-        descriptors[index] = descriptor;
+        arrayDefineIndex(stringKeys, index, key);
+        arrayDefineIndex(descriptors, index, descriptor);
       }
       const output = objectCreateNull();
       const state: CapturedObject = { output, state: "active" };
@@ -575,10 +593,10 @@ function checkStructuralOccurrences(
       children.length,
     );
     for (let index = 0; index < children.length; index += 1) {
-      stack[stack.length] = {
+      arrayDefineIndex(stack, stack.length, {
         value: children[index],
         depth: current.depth + 1,
-      };
+      });
     }
   }
 }
@@ -602,7 +620,7 @@ function topologyQueryRoots(value: unknown): readonly unknown[] {
             ? record(candidate.faces)
             : undefined;
     if (selection !== undefined && objectHasOwn(selection, "query")) {
-      roots[roots.length] = selection.query;
+      arrayDefineIndex(roots, roots.length, selection.query);
     }
   }
   return roots;
@@ -616,7 +634,7 @@ function checkTopologyQueryOccurrences(
   const roots = topologyQueryRoots(value);
   const stack = new IntrinsicArray<unknown>(roots.length);
   for (let index = 0; index < roots.length; index += 1) {
-    stack[index] = roots[index];
+    arrayDefineIndex(stack, index, roots[index]);
   }
   let topologyQueryNodes = 0;
   assertSchedulingCapacity(
@@ -662,7 +680,7 @@ function checkTopologyQueryOccurrences(
       children.length,
     );
     for (let index = 0; index < children.length; index += 1) {
-      stack[stack.length] = children[index];
+      arrayDefineIndex(stack, stack.length, children[index]);
     }
   }
 }

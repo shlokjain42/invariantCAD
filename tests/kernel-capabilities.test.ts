@@ -201,6 +201,24 @@ describe("kernel capability negotiation", () => {
         "from-file",
       ),
     ).toBe(false);
+    for (const incompatible of [
+      { ...capable, representation: "mesh" as const },
+      { ...capable, exact: false },
+    ]) {
+      expect(
+        inspectKernelDocumentBodyImportCapabilities(incompatible),
+      ).toEqual(expect.objectContaining({
+        status: "malformed",
+        reason: "incompatible-kernel-representation",
+      }));
+      expect(
+        kernelSupportsDocumentBodyImport(
+          incompatible,
+          "brep",
+          "declared",
+        ),
+      ).toBe(false);
+    }
 
     const sparseFormats = new Array(1);
     const sparseModes = new Array(1);

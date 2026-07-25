@@ -5,6 +5,7 @@
  */
 
 const IntrinsicArray = Array;
+const IntrinsicArrayBuffer = ArrayBuffer;
 const IntrinsicError = Error;
 const IntrinsicFunction = Function;
 const IntrinsicGlobalThis = globalThis;
@@ -277,6 +278,7 @@ const intrinsicTypedArrayPrototype = objectGetPrototypeOf(
 const completeOwners = new IntrinsicArray<object>();
 for (const owner of [
   IntrinsicArray.prototype,
+  IntrinsicArrayBuffer.prototype,
   IntrinsicError.prototype,
   IntrinsicFunction.prototype,
   IntrinsicMap.prototype,
@@ -320,6 +322,10 @@ for (let index = 0; index < completeOwners.length; index += 1) {
 // Constructor/namespace additions outside it are intentionally not lockdown
 // events; inheritance-bearing prototypes above remain complete snapshots.
 const SELECTED_PROPERTIES = [
+  [
+    IntrinsicArrayBuffer,
+    ["prototype", "isView", IntrinsicSymbol.species],
+  ],
   [
     IntrinsicArray,
     ["prototype", "isArray", "from", IntrinsicSymbol.species],
@@ -406,6 +412,7 @@ for (let ownerIndex = 0; ownerIndex < SELECTED_PROPERTIES.length; ownerIndex += 
 
 const GLOBAL_BINDING_NAMES = [
   "Array",
+  "ArrayBuffer",
   "Error",
   "Function",
   "globalThis",

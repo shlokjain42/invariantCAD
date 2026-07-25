@@ -4,6 +4,7 @@ import type {
   MaterialId,
   NodeId,
   ParameterId,
+  ResourceId,
 } from "./core/ids.js";
 import {
   IDENTITY_MATRIX,
@@ -47,6 +48,8 @@ import {
   type AssemblyInstanceIR,
   type DesignConfigurationIR,
   type DesignDocument,
+  type DesignDocumentV7,
+  type ImportedBodyNodeIRV7,
   type MaterialDefinitionIR,
   type NodeIR,
   type PartNodeIR,
@@ -59,12 +62,14 @@ import {
   EXACT_INDEXED_TOPOLOGY_EVOLUTION_PROTOCOL_VERSION,
   GEOMETRY_KERNEL_PROTOCOL_VERSION,
   inspectKernelCompositeSweepCapabilities,
+  inspectKernelDocumentBodyImportCapabilities,
   mergeMeshes,
   transformMesh,
   type BoundingBox,
   type GeometryKernel,
   type KernelCapabilityKind,
   type KernelCompositeSweepRefinement,
+  type KernelDocumentBodyImportOptions,
   type KernelExchangeFormat,
   type KernelFeature,
   type KernelFeatureContext,
@@ -140,7 +145,25 @@ import {
   getEvaluatorArtifactCacheCandidateBinding,
   type EvaluatorArtifactCacheCandidateBinding,
 } from "./internal/evaluator-artifact-cache-candidate.js";
-import { parseDocumentValue } from "./serialization.js";
+import {
+  parseDocumentValue,
+  parseDocumentValueV7,
+} from "./serialization.js";
+import {
+  DEFAULT_RESOURCE_RESOLUTION_LIMITS_V7,
+  resolveResourcesV7,
+  type ResourceResolutionLimitsV7,
+  type ResourceResolverV7,
+} from "./resource-resolution.js";
+import {
+  DEFAULT_DESIGN_DOCUMENT_LIMITS,
+  preflightDesignDocumentValue,
+  type DesignDocumentLimits,
+} from "./document-limits.js";
+import {
+  DOCUMENT_V7_RUNTIME_INTEGRITY_MESSAGE,
+  documentV7RuntimeIntrinsicsAreIntact,
+} from "./internal/document-v7-runtime-integrity.js";
 
 export type ParameterOverride = EvaluationParameterOverride;
 export type ShapeExportFormat = MeshExportFormat | KernelExchangeFormat;
@@ -669,6 +692,12 @@ function meshGeometryMeasurements(mesh: MeshData): Pick<
   };
 }
 
+const evaluationOwnerDisposers =
+  new WeakMap<object, (shape: KernelShape) => void>();
+const evaluationOwnerDisposerGet = WeakMap.prototype.get;
+const evaluationOwnerDisposerSet = WeakMap.prototype.set;
+const evaluationOwnerReflectApply = Reflect.apply;
+
 class EvaluationOwner {
   disposed = false;
   readonly kernel: GeometryKernel;
@@ -691,9 +720,31 @@ class EvaluationOwner {
 
   dispose(): void {
     if (this.disposed) return;
-    for (const shape of this.shapes) this.kernel.disposeShape(shape);
+    const disposeOwnedShape = evaluationOwnerReflectApply(
+      evaluationOwnerDisposerGet,
+      evaluationOwnerDisposers,
+      [this],
+    ) as ((shape: KernelShape) => void) | undefined;
+    for (const shape of this.shapes) {
+      if (disposeOwnedShape === undefined) {
+        this.kernel.disposeShape(shape);
+      } else {
+        disposeOwnedShape(shape);
+      }
+    }
     this.disposed = true;
   }
+}
+
+function captureEvaluationOwnerDisposer(
+  owner: EvaluationOwner,
+  disposer: (shape: KernelShape) => void,
+): void {
+  evaluationOwnerReflectApply(
+    evaluationOwnerDisposerSet,
+    evaluationOwnerDisposers,
+    [owner, disposer],
+  );
 }
 
 export class EvaluatedSolid {
@@ -1330,6 +1381,1513 @@ export class EvaluatedDesign {
   dispose(): void {
     this.owner.dispose();
   }
+}
+
+/**
+ * Source-only options for the staged direct imported-body evaluator.
+ *
+ * This contract is deliberately excluded from the package root until the
+ * complete document-v7 evaluator is ready for public promotion.
+ *
+ * @internal
+ */
+export interface EvaluateImportedBodyOutputsV7Options {
+  readonly outputs?: readonly string[];
+  readonly resolver?: ResourceResolverV7;
+  readonly evaluationLimits?: Partial<ImportedBodyEvaluationLimitsV7>;
+  readonly resourceLimits?: Partial<ResourceResolutionLimitsV7>;
+  readonly documentLimits?: Partial<DesignDocumentLimits>;
+  readonly signal?: AbortSignal;
+}
+
+/** @internal */
+export interface ImportedBodyEvaluationLimitsV7 {
+  readonly maxSelectedOutputs: number;
+}
+
+/** @internal */
+export const DEFAULT_IMPORTED_BODY_EVALUATION_LIMITS_V7:
+  ImportedBodyEvaluationLimitsV7 = Object.freeze({
+    maxSelectedOutputs: 10_000,
+  });
+
+interface CapturedImportedBodyOutputsV7Options {
+  readonly outputs?: readonly string[];
+  readonly resolver?: ResourceResolverV7;
+  readonly evaluationLimits: ImportedBodyEvaluationLimitsV7;
+  readonly resourceLimits: ResourceResolutionLimitsV7;
+  readonly documentLimits?: Partial<DesignDocumentLimits>;
+  readonly signal?: AbortSignal;
+}
+
+interface ImportedBodyKernelAccess {
+  readonly id: string;
+  readonly importDocumentBody: NonNullable<
+    GeometryKernel["importDocumentBody"]
+  >;
+  readonly status: GeometryKernel["status"];
+  readonly measure: GeometryKernel["measure"];
+  readonly disposeShape: GeometryKernel["disposeShape"];
+}
+
+const IMPORTED_BODY_EVALUATION_OPTION_KEYS = Object.freeze([
+  "outputs",
+  "resolver",
+  "evaluationLimits",
+  "resourceLimits",
+  "documentLimits",
+  "signal",
+] as const);
+const IMPORTED_BODY_RESOURCE_LIMIT_KEYS = Object.freeze(
+  Object.keys(
+    DEFAULT_RESOURCE_RESOLUTION_LIMITS_V7,
+  ) as readonly (keyof ResourceResolutionLimitsV7)[],
+);
+const IMPORTED_BODY_EVALUATION_LIMIT_KEYS = Object.freeze([
+  "maxSelectedOutputs",
+] as const satisfies readonly (keyof ImportedBodyEvaluationLimitsV7)[]);
+const IMPORTED_BODY_CAPABILITY_SNAPSHOT_LIMITS = Object.freeze({
+  ...DEFAULT_DESIGN_DOCUMENT_LIMITS,
+  maxDocumentBytes: 1024 * 1024,
+  maxStructuralValues: 10_000,
+  maxNestingDepth: 16,
+});
+const importedBodyObjectPrototype = Object.prototype;
+const importedBodyObjectCreate = Object.create;
+const importedBodyObjectDefineProperty = Object.defineProperty;
+const importedBodyObjectFreeze = Object.freeze;
+const importedBodyObjectGetOwnPropertyDescriptor =
+  Object.getOwnPropertyDescriptor;
+const importedBodyObjectGetPrototypeOf = Object.getPrototypeOf;
+const importedBodyObjectHasOwn = Object.hasOwn;
+const importedBodyObjectKeys = Object.keys;
+const importedBodyReflectApply = Reflect.apply;
+const importedBodyReflectOwnKeys = Reflect.ownKeys;
+const importedBodyArrayIsArray = Array.isArray;
+const importedBodyNumberIsFinite = Number.isFinite;
+const importedBodyNumberIsSafeInteger = Number.isSafeInteger;
+const ImportedBodySet = Set;
+const importedBodySetAdd = Set.prototype.add;
+const importedBodySetHas = Set.prototype.has;
+const importedBodyAbortSignalAbortedGetter =
+  typeof AbortSignal === "undefined"
+    ? undefined
+    : Object.getOwnPropertyDescriptor(AbortSignal.prototype, "aborted")?.get;
+
+function importedBodyApply<T>(
+  method: CallableFunction,
+  receiver: unknown,
+  arguments_: readonly unknown[],
+): T {
+  return importedBodyReflectApply(method, receiver, arguments_) as T;
+}
+
+function importedBodyArray(value: unknown): value is readonly unknown[] {
+  return importedBodyApply<boolean>(importedBodyArrayIsArray, Array, [value]);
+}
+
+function importedBodyArrayAppend<T>(value: T[], entry: T): void {
+  importedBodyApply<void>(importedBodyObjectDefineProperty, Object, [
+    value,
+    value.length,
+    {
+      configurable: true,
+      enumerable: true,
+      writable: true,
+      value: entry,
+    },
+  ]);
+}
+
+function importedBodyObjectKeyList(value: object): string[] {
+  return importedBodyApply<string[]>(importedBodyObjectKeys, Object, [value]);
+}
+
+function importedBodySetAddValue<T>(set: Set<T>, value: T): void {
+  importedBodyApply<Set<T>>(importedBodySetAdd, set, [value]);
+}
+
+function importedBodySetHasValue<T>(set: Set<T>, value: T): boolean {
+  return importedBodyApply<boolean>(importedBodySetHas, set, [value]);
+}
+
+function importedBodyOwnDataRecord(
+  value: unknown,
+  path: string,
+): CadResult<Readonly<Record<string, unknown>>> {
+  try {
+    if (
+      typeof value !== "object" ||
+      value === null ||
+      importedBodyArray(value)
+    ) {
+      return failure(
+        diagnostic("IR_INVALID", `${path} must be a plain record`, {
+          severity: "error",
+          path,
+          details: { phase: "documentV7ImportedBodyEvaluation" },
+        }),
+      );
+    }
+    const prototype = importedBodyApply<object | null>(
+      importedBodyObjectGetPrototypeOf,
+      Object,
+      [value],
+    );
+    if (prototype !== null && prototype !== importedBodyObjectPrototype) {
+      return failure(
+        diagnostic("IR_INVALID", `${path} must be a plain record`, {
+          severity: "error",
+          path,
+          details: { phase: "documentV7ImportedBodyEvaluation" },
+        }),
+      );
+    }
+    const keys = importedBodyApply<(string | symbol)[]>(
+      importedBodyReflectOwnKeys,
+      Reflect,
+      [value],
+    );
+    const snapshot = importedBodyApply<Record<string, unknown>>(
+      importedBodyObjectCreate,
+      Object,
+      [null],
+    );
+    for (let index = 0; index < keys.length; index += 1) {
+      const key = keys[index]!;
+      if (typeof key !== "string") {
+        return failure(
+          diagnostic("IR_INVALID", `${path} cannot contain symbol properties`, {
+            severity: "error",
+            path,
+            details: { phase: "documentV7ImportedBodyEvaluation" },
+          }),
+        );
+      }
+      const descriptor = importedBodyApply<PropertyDescriptor | undefined>(
+        importedBodyObjectGetOwnPropertyDescriptor,
+        Object,
+        [value, key],
+      );
+      const propertyPath = path === "/" ? `/${key}` : `${path}/${key}`;
+      if (
+        descriptor === undefined ||
+        !importedBodyApply<boolean>(
+          importedBodyObjectHasOwn,
+          Object,
+          [descriptor, "value"],
+        )
+      ) {
+        return failure(
+          diagnostic(
+            "IR_INVALID",
+            `${propertyPath} must be an own data property`,
+            {
+              severity: "error",
+              path: propertyPath,
+              details: { phase: "documentV7ImportedBodyEvaluation" },
+            },
+          ),
+        );
+      }
+      snapshot[key] = descriptor.value;
+    }
+    return success(
+      importedBodyApply<Readonly<Record<string, unknown>>>(
+        importedBodyObjectFreeze,
+        Object,
+        [snapshot],
+      ),
+    );
+  } catch {
+    return failure(
+      diagnostic("IR_INVALID", `${path} could not be read safely`, {
+        severity: "error",
+        path,
+        details: { phase: "documentV7ImportedBodyEvaluation" },
+      }),
+    );
+  }
+}
+
+type ImportedBodyOwnDataValue =
+  | { readonly kind: "data"; readonly value: unknown }
+  | { readonly kind: "missing" | "invalid" };
+
+function importedBodyOwnDataValue(
+  value: unknown,
+  key: PropertyKey,
+): ImportedBodyOwnDataValue {
+  try {
+    if (
+      typeof value !== "object" ||
+      value === null ||
+      importedBodyArray(value)
+    ) {
+      return { kind: "invalid" };
+    }
+    const prototype = importedBodyApply<object | null>(
+      importedBodyObjectGetPrototypeOf,
+      Object,
+      [value],
+    );
+    if (prototype !== null && prototype !== importedBodyObjectPrototype) {
+      return { kind: "invalid" };
+    }
+    const descriptor = importedBodyApply<PropertyDescriptor | undefined>(
+      importedBodyObjectGetOwnPropertyDescriptor,
+      Object,
+      [value, key],
+    );
+    if (descriptor === undefined) return { kind: "missing" };
+    if (
+      !importedBodyApply<boolean>(
+        importedBodyObjectHasOwn,
+        Object,
+        [descriptor, "value"],
+      )
+    ) {
+      return { kind: "invalid" };
+    }
+    return { kind: "data", value: descriptor.value };
+  } catch {
+    return { kind: "invalid" };
+  }
+}
+
+function importedBodyOptionKey(value: string): boolean {
+  for (
+    let index = 0;
+    index < IMPORTED_BODY_EVALUATION_OPTION_KEYS.length;
+    index += 1
+  ) {
+    if (IMPORTED_BODY_EVALUATION_OPTION_KEYS[index] === value) return true;
+  }
+  return false;
+}
+
+function importedBodyResourceLimitKey(
+  value: string,
+): value is keyof ResourceResolutionLimitsV7 {
+  for (
+    let index = 0;
+    index < IMPORTED_BODY_RESOURCE_LIMIT_KEYS.length;
+    index += 1
+  ) {
+    if (IMPORTED_BODY_RESOURCE_LIMIT_KEYS[index] === value) return true;
+  }
+  return false;
+}
+
+function captureImportedBodyEvaluationLimits(
+  value: unknown,
+): CadResult<ImportedBodyEvaluationLimitsV7> {
+  if (value === undefined) {
+    return success(DEFAULT_IMPORTED_BODY_EVALUATION_LIMITS_V7);
+  }
+  const captured = importedBodyOwnDataRecord(value, "/evaluationLimits");
+  if (!captured.ok) return captured;
+  const keys = importedBodyObjectKeyList(captured.value);
+  for (let index = 0; index < keys.length; index += 1) {
+    const key = keys[index]!;
+    if (key !== IMPORTED_BODY_EVALUATION_LIMIT_KEYS[0]) {
+      return failure(
+        diagnostic(
+          "IR_INVALID",
+          `Unknown imported-body evaluation limit '${key}'`,
+          {
+            severity: "error",
+            path: `/evaluationLimits/${key}`,
+            details: { phase: "documentV7ImportedBodyEvaluation" },
+          },
+        ),
+      );
+    }
+  }
+  const candidate = importedBodyApply<boolean>(
+    importedBodyObjectHasOwn,
+    Object,
+    [captured.value, "maxSelectedOutputs"],
+  )
+    ? captured.value.maxSelectedOutputs
+    : DEFAULT_IMPORTED_BODY_EVALUATION_LIMITS_V7.maxSelectedOutputs;
+  if (
+    typeof candidate !== "number" ||
+    !importedBodyApply<boolean>(
+      importedBodyNumberIsSafeInteger,
+      Number,
+      [candidate],
+    ) ||
+    candidate < 0
+  ) {
+    return failure(
+      diagnostic(
+        "IR_INVALID",
+        "Imported-body maxSelectedOutputs must be a non-negative safe integer",
+        {
+          severity: "error",
+          path: "/evaluationLimits/maxSelectedOutputs",
+          details: { phase: "documentV7ImportedBodyEvaluation" },
+        },
+      ),
+    );
+  }
+  return success(
+    importedBodyApply<ImportedBodyEvaluationLimitsV7>(
+      importedBodyObjectFreeze,
+      Object,
+      [{ maxSelectedOutputs: candidate }],
+    ),
+  );
+}
+
+function captureImportedBodyResourceLimits(
+  value: unknown,
+): CadResult<ResourceResolutionLimitsV7> {
+  if (value === undefined) {
+    return success(DEFAULT_RESOURCE_RESOLUTION_LIMITS_V7);
+  }
+  const captured = importedBodyOwnDataRecord(value, "/resourceLimits");
+  if (!captured.ok) return captured;
+  const normalized: Record<keyof ResourceResolutionLimitsV7, number> = {
+    ...DEFAULT_RESOURCE_RESOLUTION_LIMITS_V7,
+  };
+  const keys = importedBodyObjectKeyList(captured.value);
+  for (let index = 0; index < keys.length; index += 1) {
+    const key = keys[index]!;
+    if (!importedBodyResourceLimitKey(key)) {
+      return failure(
+        diagnostic(
+          "IR_INVALID",
+          `Unknown resource-resolution limit '${key}'`,
+          {
+            severity: "error",
+            path: `/resourceLimits/${key}`,
+            details: { phase: "documentV7ImportedBodyEvaluation" },
+          },
+        ),
+      );
+    }
+    const candidate = captured.value[key];
+    if (
+      typeof candidate !== "number" ||
+      !importedBodyApply<boolean>(
+        importedBodyNumberIsSafeInteger,
+        Number,
+        [candidate],
+      ) ||
+      candidate < 0
+    ) {
+      return failure(
+        diagnostic(
+          "IR_INVALID",
+          `Resource-resolution limit '${key}' must be a non-negative safe integer`,
+          {
+            severity: "error",
+            path: `/resourceLimits/${key}`,
+            details: { phase: "documentV7ImportedBodyEvaluation" },
+          },
+        ),
+      );
+    }
+    normalized[key] = candidate;
+  }
+  return success(
+    importedBodyApply<ResourceResolutionLimitsV7>(
+      importedBodyObjectFreeze,
+      Object,
+      [normalized],
+    ),
+  );
+}
+
+function importedBodyOutputLimitFailure(
+  limit: number,
+  actual: number,
+): CadResult<never> {
+  return failure(
+    diagnostic(
+      "RESOURCE_LIMIT_EXCEEDED",
+      `Imported-body evaluation selected-output limit ${limit} was exceeded`,
+      {
+        severity: "error",
+        path: "/outputs",
+        details: {
+          phase: "documentV7ImportedBodyEvaluation",
+          resource: "maxSelectedOutputs",
+          limit,
+          actual,
+        },
+      },
+    ),
+  );
+}
+
+function captureImportedBodyOutputNames(
+  value: unknown,
+  maximum: number,
+): CadResult<readonly string[] | undefined> {
+  if (value === undefined) return success(undefined);
+  try {
+    if (!importedBodyArray(value)) {
+      return failure(
+        diagnostic("IR_INVALID", "outputs must be an array", {
+          severity: "error",
+          path: "/outputs",
+          details: { phase: "documentV7ImportedBodyEvaluation" },
+        }),
+      );
+    }
+    const lengthDescriptor = importedBodyApply<
+      PropertyDescriptor | undefined
+    >(importedBodyObjectGetOwnPropertyDescriptor, Object, [value, "length"]);
+    const length = lengthDescriptor?.value;
+    if (
+      typeof length !== "number" ||
+      !importedBodyApply<boolean>(
+        importedBodyNumberIsSafeInteger,
+        Number,
+        [length],
+      ) ||
+      length < 0
+    ) {
+      return failure(
+        diagnostic("IR_INVALID", "outputs has an invalid array length", {
+          severity: "error",
+          path: "/outputs",
+          details: { phase: "documentV7ImportedBodyEvaluation" },
+        }),
+      );
+    }
+    if (length > maximum) {
+      return importedBodyOutputLimitFailure(maximum, length);
+    }
+    const names: string[] = [];
+    const allowedKeys = new ImportedBodySet<string>();
+    const seen = new ImportedBodySet<string>();
+    importedBodySetAddValue(allowedKeys, "length");
+    for (let index = 0; index < length; index += 1) {
+      const key = `${index}`;
+      importedBodySetAddValue(allowedKeys, key);
+      const descriptor = importedBodyApply<PropertyDescriptor | undefined>(
+        importedBodyObjectGetOwnPropertyDescriptor,
+        Object,
+        [value, key],
+      );
+      if (
+        descriptor === undefined ||
+        !importedBodyApply<boolean>(
+          importedBodyObjectHasOwn,
+          Object,
+          [descriptor, "value"],
+        ) ||
+        typeof descriptor.value !== "string"
+      ) {
+        return failure(
+          diagnostic(
+            "IR_INVALID",
+            `outputs[${index}] must be an own string data property`,
+            {
+              severity: "error",
+              path: `/outputs/${index}`,
+              details: { phase: "documentV7ImportedBodyEvaluation" },
+            },
+          ),
+        );
+      }
+      if (!importedBodySetHasValue(seen, descriptor.value)) {
+        importedBodySetAddValue(seen, descriptor.value);
+        importedBodyArrayAppend(names, descriptor.value);
+      }
+    }
+    const ownKeys = importedBodyApply<(string | symbol)[]>(
+      importedBodyReflectOwnKeys,
+      Reflect,
+      [value],
+    );
+    for (let index = 0; index < ownKeys.length; index += 1) {
+      const key = ownKeys[index]!;
+      if (
+        typeof key !== "string" ||
+        !importedBodySetHasValue(allowedKeys, key)
+      ) {
+        return failure(
+          diagnostic(
+            "IR_INVALID",
+            "outputs cannot contain non-index properties",
+            {
+              severity: "error",
+              path: "/outputs",
+              details: { phase: "documentV7ImportedBodyEvaluation" },
+            },
+          ),
+        );
+      }
+    }
+    return success(
+      importedBodyApply<readonly string[]>(
+        importedBodyObjectFreeze,
+        Object,
+        [names],
+      ),
+    );
+  } catch {
+    return failure(
+      diagnostic("IR_INVALID", "outputs could not be read safely", {
+        severity: "error",
+        path: "/outputs",
+        details: { phase: "documentV7ImportedBodyEvaluation" },
+      }),
+    );
+  }
+}
+
+function importedBodyAbortState(value: unknown): boolean | undefined {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    importedBodyAbortSignalAbortedGetter === undefined
+  ) {
+    return undefined;
+  }
+  try {
+    const state = importedBodyApply<unknown>(
+      importedBodyAbortSignalAbortedGetter,
+      value,
+      [],
+    );
+    return typeof state === "boolean" ? state : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function importedBodyEvaluationAborted(
+  signal: AbortSignal | undefined,
+): boolean {
+  return signal !== undefined && importedBodyAbortState(signal) !== false;
+}
+
+function importedBodyEvaluationAbortFailure(
+  node?: NodeId,
+): CadResult<never> {
+  return failure(
+    diagnostic("EVALUATION_ABORTED", "Imported-body evaluation was aborted", {
+      severity: "error",
+      ...(node === undefined ? {} : { node, path: `/nodes/${node}` }),
+      details: { phase: "documentV7ImportedBodyEvaluation" },
+    }),
+  );
+}
+
+function importedBodyRuntimeIntegrityFailure(): CadResult<never> {
+  return failure(
+    diagnostic("IR_INVALID", DOCUMENT_V7_RUNTIME_INTEGRITY_MESSAGE, {
+      severity: "error",
+      details: {
+        phase: "documentV7ImportedBodyEvaluation",
+        runtimeIntegrity: false,
+      },
+    }),
+  );
+}
+
+function captureImportedBodyEvaluationOptions(
+  value: unknown,
+): CadResult<CapturedImportedBodyOutputsV7Options> {
+  const captured = importedBodyOwnDataRecord(
+    value,
+    "/",
+  );
+  if (!captured.ok) return captured;
+  const keys = importedBodyObjectKeyList(captured.value);
+  for (let index = 0; index < keys.length; index += 1) {
+    const key = keys[index]!;
+    if (!importedBodyOptionKey(key)) {
+      return failure(
+        diagnostic(
+          "IR_INVALID",
+          `Unknown imported-body evaluation option '${key}'`,
+          {
+            severity: "error",
+            path: `/${key}`,
+            details: { phase: "documentV7ImportedBodyEvaluation" },
+          },
+        ),
+      );
+    }
+  }
+  const evaluationLimits = captureImportedBodyEvaluationLimits(
+    captured.value.evaluationLimits,
+  );
+  if (!evaluationLimits.ok) return evaluationLimits;
+  const resourceLimits = captureImportedBodyResourceLimits(
+    captured.value.resourceLimits,
+  );
+  if (!resourceLimits.ok) return resourceLimits;
+  const outputs = captureImportedBodyOutputNames(
+    captured.value.outputs,
+    evaluationLimits.value.maxSelectedOutputs,
+  );
+  if (!outputs.ok) return outputs;
+  const resolver = captured.value.resolver;
+  if (resolver !== undefined && typeof resolver !== "function") {
+    return failure(
+      diagnostic("IR_INVALID", "resolver must be a function", {
+        severity: "error",
+        path: "/resolver",
+        details: { phase: "documentV7ImportedBodyEvaluation" },
+      }),
+    );
+  }
+  const signal = captured.value.signal;
+  if (signal !== undefined && importedBodyAbortState(signal) === undefined) {
+    return failure(
+      diagnostic("IR_INVALID", "signal must be an AbortSignal", {
+        severity: "error",
+        path: "/signal",
+        details: { phase: "documentV7ImportedBodyEvaluation" },
+      }),
+    );
+  }
+  const documentLimits = captured.value.documentLimits;
+  if (
+    documentLimits !== undefined &&
+    (typeof documentLimits !== "object" || documentLimits === null)
+  ) {
+    return failure(
+      diagnostic("IR_INVALID", "documentLimits must be a plain record", {
+        severity: "error",
+        path: "/documentLimits",
+        details: { phase: "documentV7ImportedBodyEvaluation" },
+      }),
+    );
+  }
+  return success(
+    importedBodyApply<CapturedImportedBodyOutputsV7Options>(
+      importedBodyObjectFreeze,
+      Object,
+      [
+        {
+          ...(outputs.value === undefined ? {} : { outputs: outputs.value }),
+          ...(resolver === undefined
+            ? {}
+            : { resolver: resolver as ResourceResolverV7 }),
+          evaluationLimits: evaluationLimits.value,
+          resourceLimits: resourceLimits.value,
+          ...(documentLimits === undefined
+            ? {}
+            : {
+                documentLimits:
+                  documentLimits as Partial<DesignDocumentLimits>,
+              }),
+          ...(signal === undefined ? {} : { signal: signal as AbortSignal }),
+        },
+      ],
+    ),
+  );
+}
+
+function importedBodyJsonPointerSegment(value: string): string {
+  return value.replaceAll("~", "~0").replaceAll("/", "~1");
+}
+
+function importedBodyKernelFailure(
+  kernel: string,
+  message: string,
+  options: {
+    readonly node?: NodeId;
+    readonly path?: string;
+    readonly details?: Readonly<Record<string, unknown>>;
+  } = {},
+): CadResult<never> {
+  return failure(
+    diagnostic("KERNEL_ERROR", message, {
+      severity: "error",
+      ...(options.node === undefined ? {} : { node: options.node }),
+      ...(options.path === undefined ? {} : { path: options.path }),
+      details: {
+        phase: "documentV7ImportedBodyEvaluation",
+        kernel,
+        ...options.details,
+      },
+    }),
+  );
+}
+
+function importedBodyCapabilityFailure(
+  kernel: string,
+  node: NodeId,
+  imported: ImportedBodyNodeIRV7,
+  message: string,
+): CadResult<never> {
+  return failure(
+    diagnostic("KERNEL_CAPABILITY_MISSING", message, {
+      severity: "error",
+      node,
+      path: `/nodes/${node}`,
+      details: {
+        phase: "documentV7ImportedBodyEvaluation",
+        kernel,
+        kind: "documentBodyImport",
+        format: imported.format,
+        unitMode: imported.units.mode,
+      },
+    }),
+  );
+}
+
+function captureImportedBodyKernelAccess(
+  kernel: GeometryKernel,
+  nodes: readonly [NodeId, ImportedBodyNodeIRV7][],
+  signal: AbortSignal | undefined,
+): CadResult<ImportedBodyKernelAccess> {
+  let id = "<unknown>";
+  try {
+    const rawId: unknown = kernel.id;
+    if (!documentV7RuntimeIntrinsicsAreIntact()) {
+      return importedBodyRuntimeIntegrityFailure();
+    }
+    if (importedBodyEvaluationAborted(signal)) {
+      return importedBodyEvaluationAbortFailure();
+    }
+    if (typeof rawId === "string") id = rawId;
+    const rawCapabilities: unknown = kernel.capabilities;
+    if (!documentV7RuntimeIntrinsicsAreIntact()) {
+      return importedBodyRuntimeIntegrityFailure();
+    }
+    if (importedBodyEvaluationAborted(signal)) {
+      return importedBodyEvaluationAbortFailure();
+    }
+    const protocolProperty = importedBodyOwnDataValue(
+      rawCapabilities,
+      "protocolVersion",
+    );
+    const representationProperty = importedBodyOwnDataValue(
+      rawCapabilities,
+      "representation",
+    );
+    const exactProperty = importedBodyOwnDataValue(
+      rawCapabilities,
+      "exact",
+    );
+    const importProperty = importedBodyOwnDataValue(
+      rawCapabilities,
+      "documentBodyImport",
+    );
+    if (!documentV7RuntimeIntrinsicsAreIntact()) {
+      return importedBodyRuntimeIntegrityFailure();
+    }
+    if (importedBodyEvaluationAborted(signal)) {
+      return importedBodyEvaluationAbortFailure();
+    }
+    if (
+      protocolProperty.kind !== "data" ||
+      representationProperty.kind !== "data" ||
+      exactProperty.kind !== "data" ||
+      importProperty.kind === "invalid"
+    ) {
+      return importedBodyKernelFailure(
+        id,
+        `Kernel '${id}' capabilities must use own data properties`,
+        { details: { protocolViolation: true } },
+      );
+    }
+    const protocolVersion = protocolProperty.value;
+    if (
+      protocolVersion !==
+      GEOMETRY_KERNEL_PROTOCOL_VERSION
+    ) {
+      return failure(
+        diagnostic(
+          "KERNEL_CAPABILITY_MISSING",
+          `Kernel '${id}' uses an unsupported geometry protocol version`,
+          {
+            severity: "error",
+            details: {
+              phase: "documentV7ImportedBodyEvaluation",
+              kernel: id,
+              expected: GEOMETRY_KERNEL_PROTOCOL_VERSION,
+              actual:
+                typeof protocolVersion === "string" ||
+                typeof protocolVersion === "number" ||
+                typeof protocolVersion === "boolean" ||
+                protocolVersion === null
+                  ? protocolVersion
+                  : typeof protocolVersion,
+            },
+          },
+        ),
+      );
+    }
+    let documentBodyImport: unknown;
+    if (
+      importProperty.kind === "data" &&
+      importProperty.value !== undefined
+    ) {
+      const capturedImport = preflightDesignDocumentValue(
+        importProperty.value,
+        IMPORTED_BODY_CAPABILITY_SNAPSHOT_LIMITS,
+        { strictV7Snapshot: true },
+      );
+      if (!documentV7RuntimeIntrinsicsAreIntact()) {
+        return importedBodyRuntimeIntegrityFailure();
+      }
+      if (importedBodyEvaluationAborted(signal)) {
+        return importedBodyEvaluationAbortFailure();
+      }
+      if (!capturedImport.ok) {
+        return importedBodyKernelFailure(
+          id,
+          `Kernel '${id}' declares unsafe document-body import capabilities`,
+          {
+            details: {
+              protocolViolation: true,
+              reason: "unsafe-capability-metadata",
+            },
+          },
+        );
+      }
+      documentBodyImport = capturedImport.value;
+    }
+    const capabilities = {
+      protocolVersion,
+      representation: representationProperty.value,
+      exact: exactProperty.value,
+      primitives: [],
+      features: [],
+      nativeImports: [],
+      nativeExports: [],
+      ...(documentBodyImport === undefined ? {} : { documentBodyImport }),
+    } as unknown as GeometryKernel["capabilities"];
+    const inspection =
+      inspectKernelDocumentBodyImportCapabilities(capabilities);
+    if (!documentV7RuntimeIntrinsicsAreIntact()) {
+      return importedBodyRuntimeIntegrityFailure();
+    }
+    if (importedBodyEvaluationAborted(signal)) {
+      return importedBodyEvaluationAbortFailure();
+    }
+    if (inspection.status === "malformed") {
+      return importedBodyKernelFailure(
+        id,
+        `Kernel '${id}' declares malformed document-body import capabilities`,
+        {
+          details: {
+            protocolViolation: true,
+            reason: inspection.reason,
+          },
+        },
+      );
+    }
+    if (inspection.status === "absent") {
+      const first = nodes[0]!;
+      return importedBodyCapabilityFailure(
+        id,
+        first[0],
+        first[1],
+        `Kernel '${id}' does not support strong document-body import`,
+      );
+    }
+    for (let nodeIndex = 0; nodeIndex < nodes.length; nodeIndex += 1) {
+      const [nodeId, node] = nodes[nodeIndex]!;
+      let supported = false;
+      for (
+        let formatIndex = 0;
+        formatIndex < inspection.capabilities.formats.length;
+        formatIndex += 1
+      ) {
+        const format = inspection.capabilities.formats[formatIndex]!;
+        if (format.format !== node.format) continue;
+        for (
+          let modeIndex = 0;
+          modeIndex < format.unitModes.length;
+          modeIndex += 1
+        ) {
+          if (format.unitModes[modeIndex] === node.units.mode) {
+            supported = true;
+            break;
+          }
+        }
+        break;
+      }
+      if (!supported) {
+        return importedBodyCapabilityFailure(
+          id,
+          nodeId,
+          node,
+          `Kernel '${id}' does not support ${node.format} document-body import with ${node.units.mode} units`,
+        );
+      }
+    }
+    const importDocumentBody = kernel.importDocumentBody;
+    if (!documentV7RuntimeIntrinsicsAreIntact()) {
+      return importedBodyRuntimeIntegrityFailure();
+    }
+    if (importedBodyEvaluationAborted(signal)) {
+      return importedBodyEvaluationAbortFailure();
+    }
+    const status = kernel.status;
+    if (!documentV7RuntimeIntrinsicsAreIntact()) {
+      return importedBodyRuntimeIntegrityFailure();
+    }
+    if (importedBodyEvaluationAborted(signal)) {
+      return importedBodyEvaluationAbortFailure();
+    }
+    const measure = kernel.measure;
+    if (!documentV7RuntimeIntrinsicsAreIntact()) {
+      return importedBodyRuntimeIntegrityFailure();
+    }
+    if (importedBodyEvaluationAborted(signal)) {
+      return importedBodyEvaluationAbortFailure();
+    }
+    const disposeShape = kernel.disposeShape;
+    if (!documentV7RuntimeIntrinsicsAreIntact()) {
+      return importedBodyRuntimeIntegrityFailure();
+    }
+    if (importedBodyEvaluationAborted(signal)) {
+      return importedBodyEvaluationAbortFailure();
+    }
+    if (
+      typeof importDocumentBody !== "function" ||
+      typeof status !== "function" ||
+      typeof measure !== "function" ||
+      typeof disposeShape !== "function"
+    ) {
+      return importedBodyKernelFailure(
+        id,
+        `Kernel '${id}' advertises document-body import without the required implementation`,
+        { details: { protocolViolation: true } },
+      );
+    }
+    return success(
+      importedBodyApply<ImportedBodyKernelAccess>(
+        importedBodyObjectFreeze,
+        Object,
+        [
+          {
+            id,
+            importDocumentBody,
+            status,
+            measure,
+            disposeShape,
+          },
+        ],
+      ),
+    );
+  } catch {
+    if (!documentV7RuntimeIntrinsicsAreIntact()) {
+      return importedBodyRuntimeIntegrityFailure();
+    }
+    if (importedBodyEvaluationAborted(signal)) {
+      return importedBodyEvaluationAbortFailure();
+    }
+    return importedBodyKernelFailure(
+      id,
+      `Kernel '${id}' document-body import capabilities could not be inspected safely`,
+      { details: { protocolViolation: true } },
+    );
+  }
+}
+
+function disposeImportedBodyShapes(
+  kernel: GeometryKernel,
+  disposeShape: GeometryKernel["disposeShape"],
+  shapes: Readonly<Record<number, KernelShape>>,
+  shapeCount: number,
+): void {
+  for (let index = 0; index < shapeCount; index += 1) {
+    try {
+      importedBodyApply<void>(disposeShape, kernel, [shapes[index]!]);
+    } catch {
+      // Preserve the original structured failure while making best-effort
+      // cleanup of every other shape in this operation.
+    }
+  }
+}
+
+function importedBodyImportOptions(
+  node: ImportedBodyNodeIRV7,
+): KernelDocumentBodyImportOptions {
+  return importedBodyApply<KernelDocumentBodyImportOptions>(
+    importedBodyObjectFreeze,
+    Object,
+    [
+      {
+        format: node.format,
+        units: node.units,
+        healing: node.healing,
+      },
+    ],
+  );
+}
+
+/**
+ * Evaluates only direct document-v7 `importedBody` outputs.
+ *
+ * The function is source-exported for staged conformance work but deliberately
+ * omitted from `src/index.ts`. It performs no I/O from resource locations,
+ * never falls back to weak native import or a mesh approximation, and borrows
+ * the supplied kernel. A successful `EvaluatedDesign` owns every imported
+ * shape until `dispose()`; every failure disposes all shapes already acquired.
+ *
+ * @internal
+ */
+export async function evaluateImportedBodyOutputsV7(
+  kernel: GeometryKernel,
+  inputDocument: DesignDocumentV7,
+  inputOptions: EvaluateImportedBodyOutputsV7Options = {},
+): Promise<CadResult<EvaluatedDesign>> {
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return importedBodyRuntimeIntegrityFailure();
+  }
+  const capturedOptions = captureImportedBodyEvaluationOptions(inputOptions);
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return importedBodyRuntimeIntegrityFailure();
+  }
+  if (!capturedOptions.ok) return capturedOptions;
+  const options = capturedOptions.value;
+  if (importedBodyEvaluationAborted(options.signal)) {
+    return importedBodyEvaluationAbortFailure();
+  }
+
+  const parsed = parseDocumentValueV7(
+    inputDocument,
+    options.documentLimits === undefined
+      ? {}
+      : { limits: options.documentLimits },
+  );
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return importedBodyRuntimeIntegrityFailure();
+  }
+  if (importedBodyEvaluationAborted(options.signal)) {
+    return importedBodyEvaluationAbortFailure();
+  }
+  if (!parsed.ok) return parsed;
+  const document = parsed.value;
+
+  const requested =
+    options.outputs === undefined
+      ? importedBodyObjectKeyList(document.outputs)
+      : [...options.outputs];
+  if (requested.length > options.evaluationLimits.maxSelectedOutputs) {
+    return importedBodyOutputLimitFailure(
+      options.evaluationLimits.maxSelectedOutputs,
+      requested.length,
+    );
+  }
+  if (requested.length === 0) {
+    return failure(
+      diagnostic("OUTPUT_MISSING", "The document has no selected outputs", {
+        severity: "error",
+        path: "/outputs",
+        details: { phase: "documentV7ImportedBodyEvaluation" },
+      }),
+    );
+  }
+
+  const selectedNodes = new Map<NodeId, ImportedBodyNodeIRV7>();
+  const outputNodes = new Map<string, NodeId>();
+  for (let index = 0; index < requested.length; index += 1) {
+    const name = requested[index]!;
+    const outputPath = `/outputs/${importedBodyJsonPointerSegment(name)}`;
+    const reference = importedBodyApply<boolean>(
+      importedBodyObjectHasOwn,
+      Object,
+      [document.outputs, name],
+    )
+      ? document.outputs[name]
+      : undefined;
+    if (reference === undefined) {
+      return failure(
+        diagnostic("OUTPUT_MISSING", `Unknown output '${name}'`, {
+          severity: "error",
+          path: outputPath,
+          details: { phase: "documentV7ImportedBodyEvaluation" },
+        }),
+      );
+    }
+    const node = importedBodyApply<boolean>(
+      importedBodyObjectHasOwn,
+      Object,
+      [document.nodes, reference.node],
+    )
+      ? document.nodes[reference.node]
+      : undefined;
+    if (
+      reference.kind !== "solid" ||
+      node === undefined ||
+      node.kind !== "importedBody"
+    ) {
+      return failure(
+        diagnostic(
+          "EVALUATION_UNSUPPORTED",
+          `Staged imported-body evaluation requires output '${name}' to directly reference an importedBody node`,
+          {
+            severity: "error",
+            node: reference.node,
+            path: outputPath,
+            details: {
+              phase: "documentV7ImportedBodyEvaluation",
+              supported: "direct-imported-body-output",
+              outputKind: reference.kind,
+              nodeKind: node?.kind,
+            },
+          },
+        ),
+      );
+    }
+    selectedNodes.set(reference.node, node);
+    outputNodes.set(name, reference.node);
+  }
+
+  const orderedNodes = [...selectedNodes.entries()].sort(([first], [second]) =>
+    lexicalCompare(first, second),
+  );
+  const kernelAccess = captureImportedBodyKernelAccess(
+    kernel,
+    orderedNodes,
+    options.signal,
+  );
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return importedBodyRuntimeIntegrityFailure();
+  }
+  if (importedBodyEvaluationAborted(options.signal)) {
+    return importedBodyEvaluationAbortFailure();
+  }
+  if (!kernelAccess.ok) return kernelAccess;
+
+  const resourceIds: ResourceId[] = [];
+  const seenResourceIds = new ImportedBodySet<ResourceId>();
+  for (let index = 0; index < orderedNodes.length; index += 1) {
+    const resource = orderedNodes[index]![1].resource;
+    if (importedBodySetHasValue(seenResourceIds, resource)) continue;
+    importedBodySetAddValue(seenResourceIds, resource);
+    resourceIds[resourceIds.length] = resource;
+  }
+  const resolved = await resolveResourcesV7(
+    document.resources ?? {},
+    resourceIds,
+    {
+      ...(options.resolver === undefined
+        ? {}
+        : { resolver: options.resolver }),
+      limits: options.resourceLimits,
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    },
+  );
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return importedBodyRuntimeIntegrityFailure();
+  }
+  if (importedBodyEvaluationAborted(options.signal)) {
+    return importedBodyEvaluationAbortFailure();
+  }
+  if (!resolved.ok) return resolved;
+
+  const createdShapes = new Set<KernelShape>();
+  const createdShapeList = importedBodyApply<Record<number, KernelShape>>(
+    importedBodyObjectCreate,
+    Object,
+    [null],
+  );
+  let createdShapeCount = 0;
+  const shapesByNode = new Map<NodeId, KernelShape>();
+  const failAfterCleanup = (
+    result: CadResult<never>,
+  ): CadResult<EvaluatedDesign> => {
+    disposeImportedBodyShapes(
+      kernel,
+      kernelAccess.value.disposeShape,
+      createdShapeList,
+      createdShapeCount,
+    );
+    return result;
+  };
+
+  for (let index = 0; index < orderedNodes.length; index += 1) {
+    const [nodeId, node] = orderedNodes[index]!;
+    if (importedBodyEvaluationAborted(options.signal)) {
+      return failAfterCleanup(importedBodyEvaluationAbortFailure(nodeId));
+    }
+    const bytes = resolved.value.read(node.resource);
+    if (bytes === undefined) {
+      return failAfterCleanup(
+        importedBodyKernelFailure(
+          kernelAccess.value.id,
+          `Verified resource '${node.resource}' is unavailable for imported body '${nodeId}'`,
+          {
+            node: nodeId,
+            path: `/nodes/${nodeId}/resource`,
+            details: {
+              protocolViolation: true,
+              resourceId: node.resource,
+              format: node.format,
+            },
+          },
+        ),
+      );
+    }
+
+    let shape: KernelShape;
+    try {
+      shape = importedBodyApply<KernelShape>(
+        kernelAccess.value.importDocumentBody,
+        kernel,
+        [
+          bytes,
+          importedBodyImportOptions(node),
+          {
+            feature: nodeId,
+            ...(options.signal === undefined
+              ? {}
+              : { signal: options.signal }),
+          },
+        ],
+      );
+    } catch (error) {
+      if (!documentV7RuntimeIntrinsicsAreIntact()) {
+        return failAfterCleanup(importedBodyRuntimeIntegrityFailure());
+      }
+      if (importedBodyEvaluationAborted(options.signal)) {
+        return failAfterCleanup(importedBodyEvaluationAbortFailure(nodeId));
+      }
+      return failAfterCleanup(
+        importedBodyKernelFailure(
+          kernelAccess.value.id,
+          `Kernel '${kernelAccess.value.id}' failed to import document body '${nodeId}'`,
+          {
+            node: nodeId,
+            path: `/nodes/${nodeId}`,
+            details: {
+              resourceId: node.resource,
+              format: node.format,
+              unitMode: node.units.mode,
+              cause: safeErrorMessage(
+                error,
+                "Document-body import failed with an opaque value",
+              ),
+            },
+          },
+        ),
+      );
+    }
+    const duplicate = importedBodyApply<boolean>(
+      importedBodySetHas,
+      createdShapes,
+      [shape],
+    );
+    if (duplicate) {
+      if (!documentV7RuntimeIntrinsicsAreIntact()) {
+        return failAfterCleanup(importedBodyRuntimeIntegrityFailure());
+      }
+      if (importedBodyEvaluationAborted(options.signal)) {
+        return failAfterCleanup(importedBodyEvaluationAbortFailure(nodeId));
+      }
+      return failAfterCleanup(
+        importedBodyKernelFailure(
+          kernelAccess.value.id,
+          `Kernel '${kernelAccess.value.id}' reused an owned shape across imported-body nodes`,
+          {
+            node: nodeId,
+            path: `/nodes/${nodeId}`,
+            details: {
+              protocolViolation: true,
+              resourceId: node.resource,
+              format: node.format,
+            },
+          },
+        ),
+      );
+    }
+    importedBodyApply<Set<KernelShape>>(
+      importedBodySetAdd,
+      createdShapes,
+      [shape],
+    );
+    createdShapeList[createdShapeCount] = shape;
+    createdShapeCount += 1;
+    if (!documentV7RuntimeIntrinsicsAreIntact()) {
+      return failAfterCleanup(importedBodyRuntimeIntegrityFailure());
+    }
+    if (importedBodyEvaluationAborted(options.signal)) {
+      return failAfterCleanup(importedBodyEvaluationAbortFailure(nodeId));
+    }
+
+    try {
+      const rawStatus = importedBodyApply<unknown>(
+        kernelAccess.value.status,
+        kernel,
+        [shape],
+      );
+      if (!documentV7RuntimeIntrinsicsAreIntact()) {
+        return failAfterCleanup(importedBodyRuntimeIntegrityFailure());
+      }
+      if (importedBodyEvaluationAborted(options.signal)) {
+        return failAfterCleanup(importedBodyEvaluationAbortFailure(nodeId));
+      }
+      const statusOk = importedBodyOwnDataValue(rawStatus, "ok");
+      const statusCode = importedBodyOwnDataValue(rawStatus, "code");
+      if (!documentV7RuntimeIntrinsicsAreIntact()) {
+        return failAfterCleanup(importedBodyRuntimeIntegrityFailure());
+      }
+      if (importedBodyEvaluationAborted(options.signal)) {
+        return failAfterCleanup(importedBodyEvaluationAbortFailure(nodeId));
+      }
+      if (
+        statusOk.kind !== "data" ||
+        typeof statusOk.value !== "boolean" ||
+        statusCode.kind !== "data" ||
+        typeof statusCode.value !== "string"
+      ) {
+        return failAfterCleanup(
+          importedBodyKernelFailure(
+            kernelAccess.value.id,
+            `Kernel '${kernelAccess.value.id}' returned malformed imported-body status`,
+            {
+              node: nodeId,
+              path: `/nodes/${nodeId}`,
+              details: {
+                protocolViolation: true,
+                resourceId: node.resource,
+                format: node.format,
+              },
+            },
+          ),
+        );
+      }
+      if (statusOk.value !== true) {
+        return failAfterCleanup(
+          importedBodyKernelFailure(
+            kernelAccess.value.id,
+            `Kernel '${kernelAccess.value.id}' returned an invalid imported body '${nodeId}'`,
+            {
+              node: nodeId,
+              path: `/nodes/${nodeId}`,
+              details: {
+                protocolViolation: true,
+                resourceId: node.resource,
+                format: node.format,
+                status: statusCode.value,
+              },
+            },
+          ),
+        );
+      }
+      const rawMeasurements = importedBodyApply<unknown>(
+        kernelAccess.value.measure,
+        kernel,
+        [shape],
+      );
+      if (!documentV7RuntimeIntrinsicsAreIntact()) {
+        return failAfterCleanup(importedBodyRuntimeIntegrityFailure());
+      }
+      if (importedBodyEvaluationAborted(options.signal)) {
+        return failAfterCleanup(importedBodyEvaluationAbortFailure(nodeId));
+      }
+      const volume = importedBodyOwnDataValue(rawMeasurements, "volume");
+      if (!documentV7RuntimeIntrinsicsAreIntact()) {
+        return failAfterCleanup(importedBodyRuntimeIntegrityFailure());
+      }
+      if (importedBodyEvaluationAborted(options.signal)) {
+        return failAfterCleanup(importedBodyEvaluationAbortFailure(nodeId));
+      }
+      if (
+        volume.kind !== "data" ||
+        !importedBodyApply<boolean>(
+          importedBodyNumberIsFinite,
+          Number,
+          [volume.value],
+        ) ||
+        !(typeof volume.value === "number" && volume.value > 0)
+      ) {
+        return failAfterCleanup(
+          importedBodyKernelFailure(
+            kernelAccess.value.id,
+            `Kernel '${kernelAccess.value.id}' returned a non-positive imported body '${nodeId}'`,
+            {
+              node: nodeId,
+              path: `/nodes/${nodeId}`,
+              details: {
+                protocolViolation: true,
+                resourceId: node.resource,
+                format: node.format,
+                volume:
+                  volume.kind === "data" &&
+                  (typeof volume.value === "number" ||
+                    typeof volume.value === "string" ||
+                    typeof volume.value === "boolean" ||
+                    volume.value === null)
+                    ? volume.value
+                    : volume.kind,
+              },
+            },
+          ),
+        );
+      }
+    } catch (error) {
+      if (!documentV7RuntimeIntrinsicsAreIntact()) {
+        return failAfterCleanup(importedBodyRuntimeIntegrityFailure());
+      }
+      if (importedBodyEvaluationAborted(options.signal)) {
+        return failAfterCleanup(importedBodyEvaluationAbortFailure(nodeId));
+      }
+      return failAfterCleanup(
+        importedBodyKernelFailure(
+          kernelAccess.value.id,
+          `Kernel '${kernelAccess.value.id}' could not validate imported body '${nodeId}'`,
+          {
+            node: nodeId,
+            path: `/nodes/${nodeId}`,
+            details: {
+              protocolViolation: true,
+              resourceId: node.resource,
+              format: node.format,
+              cause: safeErrorMessage(
+                error,
+                "Imported-body validation failed with an opaque value",
+              ),
+            },
+          },
+        ),
+      );
+    }
+    shapesByNode.set(nodeId, shape);
+  }
+
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return failAfterCleanup(importedBodyRuntimeIntegrityFailure());
+  }
+  if (importedBodyEvaluationAborted(options.signal)) {
+    return failAfterCleanup(importedBodyEvaluationAbortFailure());
+  }
+  const owner = new EvaluationOwner(
+    kernel,
+    createdShapes,
+    null,
+  );
+  captureEvaluationOwnerDisposer(
+    owner,
+    (shape) =>
+      importedBodyApply<void>(
+        kernelAccess.value.disposeShape,
+        kernel,
+        [shape],
+      ),
+  );
+  const outputs = new Map<string, EvaluatedOutput>();
+  for (let index = 0; index < requested.length; index += 1) {
+    const name = requested[index]!;
+    const nodeId = outputNodes.get(name)!;
+    outputs.set(name, new EvaluatedSolid(name, owner, shapesByNode.get(nodeId)!));
+  }
+  const evaluated = new EvaluatedDesign(
+    owner,
+    outputs,
+    null,
+    Object.freeze({}),
+    [],
+  );
+  return success(evaluated);
 }
 
 export class Evaluator {

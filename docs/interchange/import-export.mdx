@@ -106,6 +106,26 @@ The current public authoring grammar does not yet expose an imported-body
 feature node. Import is therefore a kernel and staged Document v7 foundation,
 not an end-user 0.1 modeling workflow.
 
+The repository now has one source-only staged evaluator slice for a Document v7
+output that directly references an `importedBody` node. It admits bytes only
+through the caller-supplied resolver, verifies the declared byte length and
+SHA-256 digest, and then invokes the kernel's strong exact single-solid import
+contract. The result follows normal evaluated-solid ownership and can be
+measured and tessellated while its evaluated design is live. Topology
+inspection and native export remain gated by the selected exact kernel's
+separate topology and export capabilities; the stock OCCT executable coverage
+exercises both.
+
+This narrow slice is not exported by the package root and is not available
+through the public builder or CLI. It does not evaluate body sets, parts,
+assemblies, external occurrences, or an imported body composed through a
+downstream transform, Boolean, or other feature. It performs no location I/O,
+does not fall back to `importShape(...)`, and admits no healing mode beyond
+`none`. A resource's `mediaType` is currently committed provenance passed to
+the resolver; it is not used to choose the reader or accepted as a substitute
+for the imported-body node's explicit `format`. A versioned
+format-to-media-type policy is still required before public promotion.
+
 There are deliberately two kernel boundaries:
 
 - `nativeImports` plus `importShape(...)` is weak exchange support. It may
@@ -157,10 +177,14 @@ try {
 ```
 
 This low-level call snapshots the supplied bytes but does not verify a document
-resource digest. The staged resolver performs byte-length and SHA-256 admission
-before calling the kernel. The strong importer then requires exactly one valid,
-positive-volume solid with no loose topology and reports only partial imported
-history. It does not invent stable feature lineage or authored topology roles.
+resource digest. The staged direct-output evaluator composes the existing
+resolver and strong importer: byte-length and SHA-256 admission completes
+before the imported parser is called. Missing resolvers, failed resolution,
+integrity mismatches, limits, cancellation, unsupported capability
+combinations, and kernel failures remain structured diagnostics. The strong
+importer requires exactly one valid, positive-volume solid with no loose
+topology and reports only partial imported history. It does not invent stable
+feature lineage or authored topology roles.
 
 Native STEP/BREP parsers can allocate or execute beyond JavaScript byte limits.
 Applications handling hostile files still need a disposable worker or process
