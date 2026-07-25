@@ -56,6 +56,7 @@ import {
   type NodeIR,
   type NodeIRV7,
   type PartNodeIR,
+  type PartNodeIRV7,
   type RefIR,
   type TopologySelectionIR,
   type TransformOperationIR,
@@ -1703,6 +1704,645 @@ export class EvaluatedBodySetDesignV7 {
 }
 
 /**
+ * Geometry owned by one staged document-v7 part result.
+ *
+ * A single solid retains ordinary native export and topology behavior through
+ * `solid`. A body set retains authored body identity and per-body behavior
+ * through `bodySet`; no aggregate B-Rep is synthesized.
+ *
+ * @internal
+ */
+export type EvaluatedPartGeometryV7 =
+  | {
+      readonly kind: "solid";
+      readonly node: NodeId;
+      readonly solid: EvaluatedSolid;
+    }
+  | {
+      readonly kind: "bodySet";
+      readonly node: NodeId;
+      readonly bodySet: EvaluatedBodySetV7;
+    };
+
+interface EvaluatedPartValueV7 {
+  readonly node: NodeId;
+  readonly kernelId: string;
+  readonly definition: PartNodeIRV7;
+  readonly geometry: EvaluatedPartGeometryV7;
+  readonly representation: KernelRepresentation;
+  readonly exact: boolean;
+  readonly materialId?: MaterialId;
+  readonly materialDefinition?: EvaluatedMaterial;
+  readonly massDensity?: number;
+  readonly massDensitySource?: MassDensitySource;
+}
+
+function partV7MassDensityPath(part: EvaluatedPartValueV7): string {
+  if (part.definition.massDensity !== undefined) {
+    return `/nodes/${part.node}/massDensity`;
+  }
+  if (part.materialId !== undefined) {
+    return `/materials/${part.materialId}/massDensity`;
+  }
+  return `/nodes/${part.node}/massDensity`;
+}
+
+function partV7NonBlank(value: string | undefined): string | null {
+  if (value === undefined) return null;
+  return importedBodyApply<string>(
+    importedBodyStringTrim,
+    value,
+    [],
+  ).length === 0
+    ? null
+    : value;
+}
+
+const PART_MEASUREMENT_SNAPSHOT_LIMITS = Object.freeze({
+  ...DEFAULT_DESIGN_DOCUMENT_LIMITS,
+  maxDocumentBytes: 16 * 1024,
+  maxStructuralValues: 128,
+  maxNestingDepth: 8,
+});
+const PART_MEASUREMENT_KEYS = Object.freeze([
+  "volume",
+  "surfaceArea",
+  "boundingBox",
+  "centerOfMass",
+  "inertiaTensor",
+  "genus",
+  "tolerance",
+] as const);
+const PART_BOUNDING_BOX_KEYS = Object.freeze(["min", "max"] as const);
+
+function partMeasurementExactRecord(
+  value: unknown,
+  expectedKeys: readonly string[],
+): Readonly<Record<string, unknown>> | undefined {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    importedBodyArray(value)
+  ) {
+    return undefined;
+  }
+  const keys = importedBodyObjectKeyList(value);
+  if (keys.length !== expectedKeys.length) return undefined;
+  for (let index = 0; index < keys.length; index += 1) {
+    let expected = false;
+    for (
+      let expectedIndex = 0;
+      expectedIndex < expectedKeys.length;
+      expectedIndex += 1
+    ) {
+      if (keys[index] === expectedKeys[expectedIndex]) {
+        expected = true;
+        break;
+      }
+    }
+    if (!expected) return undefined;
+  }
+  return value as Readonly<Record<string, unknown>>;
+}
+
+function partMeasurementVector(value: unknown): Vec3 | undefined {
+  if (!importedBodyArray(value) || value.length !== 3) return undefined;
+  const first = value[0];
+  const second = value[1];
+  const third = value[2];
+  if (
+    typeof first !== "number" ||
+    typeof second !== "number" ||
+    typeof third !== "number" ||
+    !importedBodyApply<boolean>(
+      importedBodyNumberIsFinite,
+      Number,
+      [first],
+    ) ||
+    !importedBodyApply<boolean>(
+      importedBodyNumberIsFinite,
+      Number,
+      [second],
+    ) ||
+    !importedBodyApply<boolean>(
+      importedBodyNumberIsFinite,
+      Number,
+      [third],
+    )
+  ) {
+    return undefined;
+  }
+  return importedBodyApply<Vec3>(
+    importedBodyObjectFreeze,
+    Object,
+    [[first, second, third]],
+  );
+}
+
+function partMeasurementTensor(
+  value: unknown,
+): ShapeMeasurements["inertiaTensor"] | undefined {
+  if (!importedBodyArray(value) || value.length !== 3) return undefined;
+  const first = partMeasurementVector(value[0]);
+  const second = partMeasurementVector(value[1]);
+  const third = partMeasurementVector(value[2]);
+  if (first === undefined || second === undefined || third === undefined) {
+    return undefined;
+  }
+  return importedBodyApply<ShapeMeasurements["inertiaTensor"]>(
+    importedBodyObjectFreeze,
+    Object,
+    [[first, second, third]],
+  );
+}
+
+function partMeasurementFailure(
+  part: EvaluatedPartValueV7,
+  leaf: NodeId,
+  reason: string,
+): CadResult<never> {
+  return partKernelFailure(
+    part.kernelId,
+    `Kernel '${part.kernelId}' returned malformed measurements for part leaf '${leaf}'`,
+    {
+      node: leaf,
+      path: `/nodes/${leaf}`,
+      details: {
+        protocolViolation: true,
+        reason,
+        part: part.node,
+      },
+    },
+  );
+}
+
+function capturePartMeasurement(
+  value: unknown,
+  part: EvaluatedPartValueV7,
+  leaf: NodeId,
+): CadResult<ShapeMeasurements> {
+  const captured = preflightDesignDocumentValue(
+    value,
+    PART_MEASUREMENT_SNAPSHOT_LIMITS,
+    { strictV7Snapshot: true },
+  );
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return partRuntimeIntegrityFailure();
+  }
+  if (!captured.ok) {
+    return partMeasurementFailure(
+      part,
+      leaf,
+      "unsafe-measurement-snapshot",
+    );
+  }
+  const measurement = partMeasurementExactRecord(
+    captured.value,
+    PART_MEASUREMENT_KEYS,
+  );
+  if (measurement === undefined) {
+    return partMeasurementFailure(
+      part,
+      leaf,
+      "invalid-measurement-record",
+    );
+  }
+  const bounds = partMeasurementExactRecord(
+    measurement.boundingBox,
+    PART_BOUNDING_BOX_KEYS,
+  );
+  const minimum =
+    bounds === undefined
+      ? undefined
+      : partMeasurementVector(bounds.min);
+  const maximum =
+    bounds === undefined
+      ? undefined
+      : partMeasurementVector(bounds.max);
+  const center = partMeasurementVector(measurement.centerOfMass);
+  const inertia = partMeasurementTensor(measurement.inertiaTensor);
+  const volume = measurement.volume;
+  const surfaceArea = measurement.surfaceArea;
+  const genus = measurement.genus;
+  const tolerance = measurement.tolerance;
+  if (
+    typeof volume !== "number" ||
+    !importedBodyApply<boolean>(
+      importedBodyNumberIsFinite,
+      Number,
+      [volume],
+    ) ||
+    !(volume > 0) ||
+    typeof surfaceArea !== "number" ||
+    !importedBodyApply<boolean>(
+      importedBodyNumberIsFinite,
+      Number,
+      [surfaceArea],
+    ) ||
+    surfaceArea < 0 ||
+    typeof genus !== "number" ||
+    !importedBodyApply<boolean>(
+      importedBodyNumberIsSafeInteger,
+      Number,
+      [genus],
+    ) ||
+    genus < 0 ||
+    typeof tolerance !== "number" ||
+    !importedBodyApply<boolean>(
+      importedBodyNumberIsFinite,
+      Number,
+      [tolerance],
+    ) ||
+    tolerance < 0 ||
+    minimum === undefined ||
+    maximum === undefined ||
+    center === undefined ||
+    inertia === undefined
+  ) {
+    return partMeasurementFailure(
+      part,
+      leaf,
+      "invalid-measurement-fields",
+    );
+  }
+  for (let axis = 0; axis < 3; axis += 1) {
+    if (minimum[axis]! > maximum[axis]!) {
+      return partMeasurementFailure(
+        part,
+        leaf,
+        "invalid-measurement-bounds",
+      );
+    }
+  }
+  const boundingBox = importedBodyApply<ShapeMeasurements["boundingBox"]>(
+    importedBodyObjectFreeze,
+    Object,
+    [{ min: minimum, max: maximum }],
+  );
+  return success(
+    importedBodyApply<ShapeMeasurements>(
+      importedBodyObjectFreeze,
+      Object,
+      [
+        {
+          volume,
+          surfaceArea,
+          boundingBox,
+          centerOfMass: center,
+          inertiaTensor: inertia,
+          genus,
+          tolerance,
+        },
+      ],
+    ),
+  );
+}
+
+/**
+ * Owned staged document-v7 part output.
+ *
+ * Mesh access is common to single- and multibody parts. Native single-shape
+ * export remains available only through the discriminated `geometry.solid`;
+ * this class deliberately exposes mesh formats only.
+ *
+ * Physical mass for a body set is the additive mass of every authored body
+ * membership at one uniform effective part density. Overlapping bodies are not
+ * Boolean-unioned or deduplicated.
+ *
+ * @internal
+ */
+export class EvaluatedPartV7 {
+  readonly name: string;
+  readonly node: NodeId;
+  readonly geometry: EvaluatedPartGeometryV7;
+  readonly representation: KernelRepresentation;
+  readonly exact: boolean;
+  readonly partNumber: string | undefined;
+  readonly description: string | undefined;
+  readonly metadata: PartNodeIRV7["metadata"] | undefined;
+  /** Legacy descriptive label; never resolved as a material identifier. */
+  readonly material: string | undefined;
+  readonly materialId: string | undefined;
+  readonly materialName: string | undefined;
+  readonly materialDefinition: EvaluatedMaterial | undefined;
+  readonly massDensity: number | undefined;
+  readonly massDensitySource: MassDensitySource | undefined;
+  readonly #name: string;
+  readonly #owner: EvaluationOwner;
+  readonly #value: EvaluatedPartValueV7;
+
+  constructor(
+    name: string,
+    owner: EvaluationOwner,
+    part: EvaluatedPartValueV7,
+  ) {
+    this.name = name;
+    this.#name = name;
+    this.#owner = owner;
+    this.#value = part;
+    this.node = part.node;
+    this.geometry = part.geometry;
+    this.representation = part.representation;
+    this.exact = part.exact;
+    this.partNumber = part.definition.partNumber;
+    this.description = part.definition.description;
+    this.metadata = part.definition.metadata;
+    this.material = part.definition.material;
+    this.materialId = part.materialId;
+    this.materialName = part.materialDefinition?.name;
+    this.materialDefinition = part.materialDefinition;
+    this.massDensity = part.massDensity;
+    this.massDensitySource = part.massDensitySource;
+    importedBodyApply<void>(importedBodyObjectFreeze, Object, [this]);
+  }
+
+  mesh(options?: MeshOptions): MeshData {
+    this.#owner.assertLive();
+    const geometry = this.#value.geometry;
+    return geometry.kind === "solid"
+      ? geometry.solid.mesh(options)
+      : geometry.bodySet.mesh(options);
+  }
+
+  export(format: "stl"): Uint8Array;
+  export(format: TextShapeExportFormat): string;
+  export(format: MeshExportFormat): Uint8Array | string;
+  export(format: MeshExportFormat): Uint8Array | string {
+    this.#owner.assertLive();
+    if (
+      format !== "stl" &&
+      format !== "stl-ascii" &&
+      format !== "obj"
+    ) {
+      const value = diagnostic(
+        "EXPORT_UNSUPPORTED",
+        `Aggregate part export for '${this.#name}' is unsupported for ${String(format)}`,
+        {
+          severity: "error",
+          node: this.#value.node,
+          details: { output: this.#name, format },
+        },
+      );
+      throw new CadError(value.message, [value]);
+    }
+    return exportMesh(this.mesh(), format, this.#name);
+  }
+
+  physicalMassProperties(): CadResult<PhysicalMassProperties> {
+    if (!documentV7RuntimeIntrinsicsAreIntact()) {
+      return partRuntimeIntegrityFailure();
+    }
+    this.#owner.assertLive();
+    const part = this.#value;
+    if (part.massDensity === undefined) {
+      return failure(
+        diagnostic(
+          "MASS_DENSITY_MISSING",
+          `Part '${part.node}' has no authored mass density`,
+          {
+            severity: "error",
+            node: part.node,
+            path: partV7MassDensityPath(part),
+            hints: [
+              "Author massDensity on the part or reference a material definition",
+            ],
+          },
+        ),
+      );
+    }
+    try {
+      if (part.geometry.kind === "solid") {
+        const rawMeasurement = part.geometry.solid.measure();
+        if (!documentV7RuntimeIntrinsicsAreIntact()) {
+          return partRuntimeIntegrityFailure();
+        }
+        const captured = capturePartMeasurement(
+          rawMeasurement,
+          part,
+          part.geometry.node,
+        );
+        if (!captured.ok) return captured;
+        const physical = scalePhysicalMassProperties(
+          captured.value,
+          part.massDensity,
+        );
+        if (!documentV7RuntimeIntrinsicsAreIntact()) {
+          return partRuntimeIntegrityFailure();
+        }
+        return success(physical);
+      }
+      const values: PhysicalMassProperties[] = [];
+      const measurements = new ImportedBodyMap<NodeId, ShapeMeasurements>();
+      for (
+        let index = 0;
+        index < part.geometry.bodySet.bodies.length;
+        index += 1
+      ) {
+        const body = part.geometry.bodySet.bodies[index]!;
+        let measured = importedBodyMapGetValue(measurements, body.node);
+        if (measured === undefined) {
+          const rawMeasurement = body.solid.measure();
+          if (!documentV7RuntimeIntrinsicsAreIntact()) {
+            return partRuntimeIntegrityFailure();
+          }
+          const captured = capturePartMeasurement(
+            rawMeasurement,
+            part,
+            body.node,
+          );
+          if (!captured.ok) return captured;
+          measured = captured.value;
+          importedBodyMapSetValue(measurements, body.node, measured);
+        }
+        const physical = scalePhysicalMassProperties(
+          measured,
+          part.massDensity,
+        );
+        if (!documentV7RuntimeIntrinsicsAreIntact()) {
+          return partRuntimeIntegrityFailure();
+        }
+        importedBodyArrayAppend(
+          values,
+          physical,
+        );
+      }
+      const combined = combinePhysicalMassProperties(values);
+      if (!documentV7RuntimeIntrinsicsAreIntact()) {
+        return partRuntimeIntegrityFailure();
+      }
+      return success(combined);
+    } catch (error) {
+      if (!documentV7RuntimeIntrinsicsAreIntact()) {
+        return partRuntimeIntegrityFailure();
+      }
+      return failure(
+        diagnostic(
+          "MASS_PROPERTIES_INVALID",
+          `Physical mass properties for part '${part.node}' could not be represented`,
+          {
+            severity: "error",
+            node: part.node,
+            path: partV7MassDensityPath(part),
+            details: {
+              massDensity: part.massDensity,
+              cause: safeErrorMessage(
+                error,
+                "Part mass properties failed with an opaque value",
+              ),
+            },
+          },
+        ),
+      );
+    }
+  }
+
+  billOfMaterials(): CadResult<BillOfMaterials> {
+    if (!documentV7RuntimeIntrinsicsAreIntact()) {
+      return partRuntimeIntegrityFailure();
+    }
+    this.#owner.assertLive();
+    const part = this.#value;
+    const diagnostics: Diagnostic[] = [];
+    const partNumber = partV7NonBlank(part.definition.partNumber);
+    const material = partV7NonBlank(
+      part.materialDefinition?.name ?? part.definition.material,
+    );
+    if (partNumber === null) {
+      importedBodyArrayAppend(
+        diagnostics,
+        diagnostic(
+          "BOM_PART_NUMBER_MISSING",
+          `Part '${part.node}' has no part number`,
+          {
+            severity: "warning",
+            node: part.node,
+            path: `/nodes/${part.node}/partNumber`,
+          },
+        ),
+      );
+    }
+    if (material === null) {
+      importedBodyArrayAppend(
+        diagnostics,
+        diagnostic(
+          "BOM_MATERIAL_MISSING",
+          `Part '${part.node}' has no material`,
+          {
+            severity: "warning",
+            node: part.node,
+            path:
+              part.materialId === undefined
+                ? `/nodes/${part.node}/material`
+                : `/nodes/${part.node}/materialId`,
+            hints: [
+              "Reference a document material or author a legacy material label",
+            ],
+          },
+        ),
+      );
+    }
+
+    let definitionMass: number | null = null;
+    if (part.massDensity === undefined) {
+      importedBodyArrayAppend(
+        diagnostics,
+        diagnostic(
+          "MASS_DENSITY_MISSING",
+          `Part '${part.node}' has no authored mass density`,
+          {
+            severity: "warning",
+            node: part.node,
+            path: partV7MassDensityPath(part),
+            hints: [
+              "Author massDensity on the part or reference a material definition",
+            ],
+            details: { occurrenceIds: [] },
+          },
+        ),
+      );
+    } else {
+      const physical = this.physicalMassProperties();
+      if (!physical.ok) return physical;
+      definitionMass = physical.value.mass;
+    }
+
+    const item: BillOfMaterialsItem = {
+      partNode: part.node,
+      partNumber,
+      description: part.definition.description ?? null,
+      materialId: part.materialId ?? null,
+      material,
+      quantity: 1,
+      occurrenceIds: importedBodyApply<readonly string[]>(
+        importedBodyObjectFreeze,
+        Object,
+        [[]],
+      ),
+      massDensity: part.massDensity ?? null,
+      massDensitySource: part.massDensitySource ?? null,
+      definitionMass,
+      totalMass: definitionMass,
+    };
+    const massComplete = definitionMass !== null;
+    const knownMass = definitionMass ?? 0;
+    return success(
+      {
+        configurationId: this.#owner.configurationId,
+        units: { mass: "kg" },
+        items: [item],
+        totalQuantity: 1,
+        massComplete,
+        knownMass,
+        totalMass: massComplete ? knownMass : null,
+      },
+      diagnostics,
+    );
+  }
+}
+
+/**
+ * Source-only result container for direct staged document-v7 part outputs.
+ *
+ * @internal
+ */
+export class EvaluatedPartDesignV7 {
+  readonly configurationId: string | null;
+  readonly parameters: Readonly<Record<string, number>>;
+  readonly diagnostics: readonly Diagnostic[];
+  readonly outputNames: readonly string[];
+  readonly #outputs: ReadonlyMap<string, EvaluatedPartV7>;
+  readonly #owner: EvaluationOwner;
+
+  constructor(
+    owner: EvaluationOwner,
+    outputs: ReadonlyMap<string, EvaluatedPartV7>,
+    configurationId: string | null,
+    parameters: Readonly<Record<string, number>>,
+    diagnostics: readonly Diagnostic[],
+  ) {
+    this.#owner = owner;
+    this.#outputs = outputs;
+    this.outputNames = Object.freeze([...outputs.keys()]);
+    this.configurationId = configurationId;
+    this.parameters = parameters;
+    this.diagnostics = diagnostics;
+  }
+
+  output(name: string): EvaluatedPartV7 {
+    this.#owner.assertLive();
+    const output = this.#outputs.get(name);
+    if (output === undefined) {
+      throw new RangeError(`Unknown evaluated part output '${name}'`);
+    }
+    return output;
+  }
+
+  dispose(): void {
+    this.#owner.dispose();
+  }
+}
+
+/**
  * Source-only options for the staged direct imported-body evaluator.
  *
  * This contract is deliberately excluded from the package root until the
@@ -1770,6 +2410,48 @@ export const DEFAULT_BODY_SET_EVALUATION_LIMITS_V7:
     maxDistinctSolids: 100_000,
   });
 
+/**
+ * Source-only options for direct staged document-v7 part evaluation.
+ *
+ * @internal
+ */
+export interface EvaluatePartOutputsV7Options {
+  readonly configuration?: string;
+  /**
+   * Bounded caller overrides are finite scalar values. Named configuration
+   * overrides retain the full parsed document expression grammar.
+   */
+  readonly parameters?: Readonly<Record<string, number>>;
+  readonly outputs?: readonly string[];
+  readonly resolver?: ResourceResolverV7;
+  readonly evaluationLimits?: Partial<PartEvaluationLimitsV7>;
+  readonly resourceLimits?: Partial<ResourceResolutionLimitsV7>;
+  readonly documentLimits?: Partial<DesignDocumentLimits>;
+  readonly signal?: AbortSignal;
+}
+
+/** @internal */
+export interface PartEvaluationLimitsV7 {
+  readonly maxSelectedOutputs: number;
+  readonly maxParameterOverrides: number;
+  /** Solid parts count once; every authored body-set membership counts once. */
+  readonly maxPartBodies: number;
+  /** Distinct directly referenced leaf nodes acquired from the kernel. */
+  readonly maxDistinctSolids: number;
+  /** Every document material is resolved to preserve the v6 material contract. */
+  readonly maxResolvedMaterials: number;
+}
+
+/** @internal */
+export const DEFAULT_PART_EVALUATION_LIMITS_V7:
+  PartEvaluationLimitsV7 = Object.freeze({
+    maxSelectedOutputs: 10_000,
+    maxParameterOverrides: 10_000,
+    maxPartBodies: 100_000,
+    maxDistinctSolids: 100_000,
+    maxResolvedMaterials: 10_000,
+  });
+
 interface CapturedImportedBodyOutputsV7Options {
   readonly outputs?: readonly string[];
   readonly resolver?: ResourceResolverV7;
@@ -1823,8 +2505,13 @@ const importedBodyObjectKeys = Object.keys;
 const importedBodyReflectApply = Reflect.apply;
 const importedBodyReflectOwnKeys = Reflect.ownKeys;
 const importedBodyArrayIsArray = Array.isArray;
+const importedBodyArraySort = Array.prototype.sort;
 const importedBodyNumberIsFinite = Number.isFinite;
 const importedBodyNumberIsSafeInteger = Number.isSafeInteger;
+const importedBodyStringTrim = String.prototype.trim;
+const ImportedBodyMap = Map;
+const importedBodyMapGet = Map.prototype.get;
+const importedBodyMapSet = Map.prototype.set;
 const ImportedBodySet = Set;
 const importedBodySetAdd = Set.prototype.add;
 const importedBodySetHas = Set.prototype.has;
@@ -1858,6 +2545,12 @@ function importedBodyArrayAppend<T>(value: T[], entry: T): void {
   ]);
 }
 
+function importedBodyArraySortLexically(value: string[]): string[] {
+  return importedBodyApply<string[]>(importedBodyArraySort, value, [
+    lexicalCompare,
+  ]);
+}
+
 function importedBodyObjectKeyList(value: object): string[] {
   return importedBodyApply<string[]>(importedBodyObjectKeys, Object, [value]);
 }
@@ -1868,6 +2561,21 @@ function importedBodySetAddValue<T>(set: Set<T>, value: T): void {
 
 function importedBodySetHasValue<T>(set: Set<T>, value: T): boolean {
   return importedBodyApply<boolean>(importedBodySetHas, set, [value]);
+}
+
+function importedBodyMapGetValue<K, V>(
+  map: Map<K, V>,
+  key: K,
+): V | undefined {
+  return importedBodyApply<V | undefined>(importedBodyMapGet, map, [key]);
+}
+
+function importedBodyMapSetValue<K, V>(
+  map: Map<K, V>,
+  key: K,
+  value: V,
+): void {
+  importedBodyApply<Map<K, V>>(importedBodyMapSet, map, [key, value]);
 }
 
 function importedBodyOwnDataRecord(
@@ -3265,16 +3973,19 @@ type BodySetPrimitiveNodeV7 = Exclude<
   ImportedBodyNodeIRV7
 >;
 
-interface CapturedBodySetOutputsV7Options {
+interface CapturedStagedV7EvaluationOptions<EvaluationLimits> {
   readonly configuration?: string;
   readonly parameters: Readonly<Record<string, number>>;
   readonly outputs?: readonly string[];
   readonly resolver?: ResourceResolverV7;
-  readonly evaluationLimits: BodySetEvaluationLimitsV7;
+  readonly evaluationLimits: EvaluationLimits;
   readonly resourceLimits: ResourceResolutionLimitsV7;
   readonly documentLimits?: Partial<DesignDocumentLimits>;
   readonly signal?: AbortSignal;
 }
+
+type CapturedBodySetOutputsV7Options =
+  CapturedStagedV7EvaluationOptions<BodySetEvaluationLimitsV7>;
 
 interface BodySetKernelAccess extends StagedV7SolidKernelAccess {
   readonly representation: KernelRepresentation;
@@ -3335,16 +4046,30 @@ const BODY_SET_EVALUATION_LIMIT_KEYS = Object.freeze([
 const BODY_SET_DOCUMENT_LIMIT_KEY_COUNT =
   importedBodyObjectKeyList(DEFAULT_DESIGN_DOCUMENT_LIMITS).length;
 
-interface BodySetOwnDataRecordOptions {
+interface StagedV7OwnDataRecordOptions<LimitKey extends string> {
   readonly signal?: AbortSignal;
   readonly maximumOwnKeys?: number;
-  readonly limitResource?: keyof BodySetEvaluationLimitsV7;
+  readonly limitResource?: LimitKey;
 }
 
-function bodySetOwnDataRecord(
+type StagedV7PostBoundaryFailure = (
+  signal: AbortSignal | undefined,
+) => CadResult<never> | undefined;
+
+type StagedV7LimitFailure<LimitKey extends string> = (
+  resource: LimitKey,
+  limit: number,
+  actual: number,
+  path: string,
+) => CadResult<never>;
+
+function stagedV7OwnDataRecord<LimitKey extends string>(
   value: unknown,
   path: string,
-  options: BodySetOwnDataRecordOptions = {},
+  options: StagedV7OwnDataRecordOptions<LimitKey>,
+  phase: string,
+  postBoundaryFailure: StagedV7PostBoundaryFailure,
+  limitFailure: StagedV7LimitFailure<LimitKey>,
 ): CadResult<Readonly<Record<string, unknown>>> {
   try {
     if (
@@ -3356,7 +4081,7 @@ function bodySetOwnDataRecord(
         diagnostic("IR_INVALID", `${path} must be a plain record`, {
           severity: "error",
           path,
-          details: { phase: BODY_SET_EVALUATION_PHASE },
+          details: { phase },
         }),
       );
     }
@@ -3365,14 +4090,14 @@ function bodySetOwnDataRecord(
       Object,
       [value],
     );
-    const afterPrototype = bodySetPostBoundaryFailure(options.signal);
+    const afterPrototype = postBoundaryFailure(options.signal);
     if (afterPrototype !== undefined) return afterPrototype;
     if (prototype !== null && prototype !== importedBodyObjectPrototype) {
       return failure(
         diagnostic("IR_INVALID", `${path} must be a plain record`, {
           severity: "error",
           path,
-          details: { phase: BODY_SET_EVALUATION_PHASE },
+          details: { phase },
         }),
       );
     }
@@ -3381,14 +4106,14 @@ function bodySetOwnDataRecord(
       Reflect,
       [value],
     );
-    const afterOwnKeys = bodySetPostBoundaryFailure(options.signal);
+    const afterOwnKeys = postBoundaryFailure(options.signal);
     if (afterOwnKeys !== undefined) return afterOwnKeys;
     if (
       options.maximumOwnKeys !== undefined &&
       keys.length > options.maximumOwnKeys
     ) {
       if (options.limitResource !== undefined) {
-        return bodySetLimitFailure(
+        return limitFailure(
           options.limitResource,
           options.maximumOwnKeys,
           keys.length,
@@ -3400,7 +4125,7 @@ function bodySetOwnDataRecord(
           severity: "error",
           path,
           details: {
-            phase: BODY_SET_EVALUATION_PHASE,
+            phase,
             limit: options.maximumOwnKeys,
             actual: keys.length,
           },
@@ -3419,7 +4144,7 @@ function bodySetOwnDataRecord(
           diagnostic("IR_INVALID", `${path} cannot contain symbol properties`, {
             severity: "error",
             path,
-            details: { phase: BODY_SET_EVALUATION_PHASE },
+            details: { phase },
           }),
         );
       }
@@ -3428,7 +4153,7 @@ function bodySetOwnDataRecord(
         Object,
         [value, key],
       );
-      const afterDescriptor = bodySetPostBoundaryFailure(options.signal);
+      const afterDescriptor = postBoundaryFailure(options.signal);
       if (afterDescriptor !== undefined) return afterDescriptor;
       const propertyPath =
         path === "/"
@@ -3449,7 +4174,7 @@ function bodySetOwnDataRecord(
             {
               severity: "error",
               path: propertyPath,
-              details: { phase: BODY_SET_EVALUATION_PHASE },
+              details: { phase },
             },
           ),
         );
@@ -3473,27 +4198,35 @@ function bodySetOwnDataRecord(
       ),
     );
   } catch {
-    const afterFailure = bodySetPostBoundaryFailure(options.signal);
+    const afterFailure = postBoundaryFailure(options.signal);
     if (afterFailure !== undefined) return afterFailure;
     return failure(
       diagnostic("IR_INVALID", `${path} could not be read safely`, {
         severity: "error",
         path,
-        details: { phase: BODY_SET_EVALUATION_PHASE },
+        details: { phase },
       }),
     );
   }
 }
 
-function bodySetOptionKey(value: string): boolean {
-  for (
-    let index = 0;
-    index < BODY_SET_EVALUATION_OPTION_KEYS.length;
-    index += 1
-  ) {
-    if (BODY_SET_EVALUATION_OPTION_KEYS[index] === value) return true;
-  }
-  return false;
+type BodySetOwnDataRecordOptions = StagedV7OwnDataRecordOptions<
+  keyof BodySetEvaluationLimitsV7
+>;
+
+function bodySetOwnDataRecord(
+  value: unknown,
+  path: string,
+  options: BodySetOwnDataRecordOptions = {},
+): CadResult<Readonly<Record<string, unknown>>> {
+  return stagedV7OwnDataRecord(
+    value,
+    path,
+    options,
+    BODY_SET_EVALUATION_PHASE,
+    bodySetPostBoundaryFailure,
+    bodySetLimitFailure,
+  );
 }
 
 function bodySetEvaluationLimitKey(
@@ -3507,12 +4240,6 @@ function bodySetEvaluationLimitKey(
     if (BODY_SET_EVALUATION_LIMIT_KEYS[index] === value) return true;
   }
   return false;
-}
-
-function bodySetResourceLimitKey(
-  value: string,
-): value is keyof ResourceResolutionLimitsV7 {
-  return importedBodyResourceLimitKey(value);
 }
 
 function bodySetLimitFailure(
@@ -3626,17 +4353,27 @@ function captureBodySetEvaluationLimits(
   );
 }
 
-function captureBodySetResourceLimits(
+function captureStagedV7ResourceLimits<LimitKey extends string>(
   value: unknown,
   signal: AbortSignal | undefined,
+  phase: string,
+  postBoundaryFailure: StagedV7PostBoundaryFailure,
+  limitFailure: StagedV7LimitFailure<LimitKey>,
 ): CadResult<ResourceResolutionLimitsV7> {
   if (value === undefined) {
     return success(DEFAULT_RESOURCE_RESOLUTION_LIMITS_V7);
   }
-  const captured = bodySetOwnDataRecord(value, "/resourceLimits", {
-    ...(signal === undefined ? {} : { signal }),
-    maximumOwnKeys: IMPORTED_BODY_RESOURCE_LIMIT_KEYS.length,
-  });
+  const captured = stagedV7OwnDataRecord(
+    value,
+    "/resourceLimits",
+    {
+      ...(signal === undefined ? {} : { signal }),
+      maximumOwnKeys: IMPORTED_BODY_RESOURCE_LIMIT_KEYS.length,
+    },
+    phase,
+    postBoundaryFailure,
+    limitFailure,
+  );
   if (!captured.ok) return captured;
   const normalized: Record<keyof ResourceResolutionLimitsV7, number> = {
     maxRequestedResourceIds:
@@ -3650,7 +4387,7 @@ function captureBodySetResourceLimits(
   const keys = importedBodyObjectKeyList(captured.value);
   for (let index = 0; index < keys.length; index += 1) {
     const key = keys[index]!;
-    if (!bodySetResourceLimitKey(key)) {
+    if (!importedBodyResourceLimitKey(key)) {
       return failure(
         diagnostic(
           "IR_INVALID",
@@ -3658,7 +4395,7 @@ function captureBodySetResourceLimits(
           {
             severity: "error",
             path: `/resourceLimits/${importedBodyJsonPointerSegment(key)}`,
-            details: { phase: BODY_SET_EVALUATION_PHASE },
+            details: { phase },
           },
         ),
       );
@@ -3680,7 +4417,7 @@ function captureBodySetResourceLimits(
           {
             severity: "error",
             path: `/resourceLimits/${key}`,
-            details: { phase: BODY_SET_EVALUATION_PHASE },
+            details: { phase },
           },
         ),
       );
@@ -3696,10 +4433,27 @@ function captureBodySetResourceLimits(
   );
 }
 
-function captureBodySetOutputNames(
+function captureBodySetResourceLimits(
+  value: unknown,
+  signal: AbortSignal | undefined,
+): CadResult<ResourceResolutionLimitsV7> {
+  return captureStagedV7ResourceLimits(
+    value,
+    signal,
+    BODY_SET_EVALUATION_PHASE,
+    bodySetPostBoundaryFailure,
+    bodySetLimitFailure,
+  );
+}
+
+function captureStagedV7OutputNames<LimitKey extends string>(
   value: unknown,
   maximum: number,
   signal: AbortSignal | undefined,
+  phase: string,
+  postBoundaryFailure: StagedV7PostBoundaryFailure,
+  limitFailure: StagedV7LimitFailure<LimitKey>,
+  selectedOutputLimit: LimitKey,
 ): CadResult<readonly string[] | undefined> {
   if (value === undefined) return success(undefined);
   try {
@@ -3708,14 +4462,14 @@ function captureBodySetOutputNames(
         diagnostic("IR_INVALID", "outputs must be an array", {
           severity: "error",
           path: "/outputs",
-          details: { phase: BODY_SET_EVALUATION_PHASE },
+          details: { phase },
         }),
       );
     }
     const lengthDescriptor = importedBodyApply<
       PropertyDescriptor | undefined
     >(importedBodyObjectGetOwnPropertyDescriptor, Object, [value, "length"]);
-    const afterLength = bodySetPostBoundaryFailure(signal);
+    const afterLength = postBoundaryFailure(signal);
     if (afterLength !== undefined) return afterLength;
     const length = lengthDescriptor?.value;
     if (
@@ -3731,17 +4485,12 @@ function captureBodySetOutputNames(
         diagnostic("IR_INVALID", "outputs has an invalid array length", {
           severity: "error",
           path: "/outputs",
-          details: { phase: BODY_SET_EVALUATION_PHASE },
+          details: { phase },
         }),
       );
     }
     if (length > maximum) {
-      return bodySetLimitFailure(
-        "maxSelectedOutputs",
-        maximum,
-        length,
-        "/outputs",
-      );
+      return limitFailure(selectedOutputLimit, maximum, length, "/outputs");
     }
     const names: string[] = [];
     const allowedKeys = new ImportedBodySet<string>();
@@ -3755,7 +4504,7 @@ function captureBodySetOutputNames(
         Object,
         [value, key],
       );
-      const afterDescriptor = bodySetPostBoundaryFailure(signal);
+      const afterDescriptor = postBoundaryFailure(signal);
       if (afterDescriptor !== undefined) return afterDescriptor;
       if (
         descriptor === undefined ||
@@ -3773,7 +4522,7 @@ function captureBodySetOutputNames(
             {
               severity: "error",
               path: `/outputs/${index}`,
-              details: { phase: BODY_SET_EVALUATION_PHASE },
+              details: { phase },
             },
           ),
         );
@@ -3788,7 +4537,7 @@ function captureBodySetOutputNames(
       Reflect,
       [value],
     );
-    const afterOwnKeys = bodySetPostBoundaryFailure(signal);
+    const afterOwnKeys = postBoundaryFailure(signal);
     if (afterOwnKeys !== undefined) return afterOwnKeys;
     if (ownKeys.length !== length + 1) {
       return failure(
@@ -3798,7 +4547,7 @@ function captureBodySetOutputNames(
           {
             severity: "error",
             path: "/outputs",
-            details: { phase: BODY_SET_EVALUATION_PHASE },
+            details: { phase },
           },
         ),
       );
@@ -3816,7 +4565,7 @@ function captureBodySetOutputNames(
             {
               severity: "error",
               path: "/outputs",
-              details: { phase: BODY_SET_EVALUATION_PHASE },
+              details: { phase },
             },
           ),
         );
@@ -3830,22 +4579,42 @@ function captureBodySetOutputNames(
       ),
     );
   } catch {
-    const afterFailure = bodySetPostBoundaryFailure(signal);
+    const afterFailure = postBoundaryFailure(signal);
     if (afterFailure !== undefined) return afterFailure;
     return failure(
       diagnostic("IR_INVALID", "outputs could not be read safely", {
         severity: "error",
         path: "/outputs",
-        details: { phase: BODY_SET_EVALUATION_PHASE },
+        details: { phase },
       }),
     );
   }
 }
 
-function captureBodySetParameters(
+function captureBodySetOutputNames(
   value: unknown,
   maximum: number,
   signal: AbortSignal | undefined,
+): CadResult<readonly string[] | undefined> {
+  return captureStagedV7OutputNames(
+    value,
+    maximum,
+    signal,
+    BODY_SET_EVALUATION_PHASE,
+    bodySetPostBoundaryFailure,
+    bodySetLimitFailure,
+    "maxSelectedOutputs",
+  );
+}
+
+function captureStagedV7Parameters<LimitKey extends string>(
+  value: unknown,
+  maximum: number,
+  signal: AbortSignal | undefined,
+  phase: string,
+  postBoundaryFailure: StagedV7PostBoundaryFailure,
+  limitFailure: StagedV7LimitFailure<LimitKey>,
+  parameterLimit: LimitKey,
 ): CadResult<Readonly<Record<string, number>>> {
   if (value === undefined) {
     return success(
@@ -3862,11 +4631,18 @@ function captureBodySetParameters(
       ),
     );
   }
-  const captured = bodySetOwnDataRecord(value, "/parameters", {
-    ...(signal === undefined ? {} : { signal }),
-    maximumOwnKeys: maximum,
-    limitResource: "maxParameterOverrides",
-  });
+  const captured = stagedV7OwnDataRecord(
+    value,
+    "/parameters",
+    {
+      ...(signal === undefined ? {} : { signal }),
+      maximumOwnKeys: maximum,
+      limitResource: parameterLimit,
+    },
+    phase,
+    postBoundaryFailure,
+    limitFailure,
+  );
   if (!captured.ok) return captured;
   const keys = importedBodyObjectKeyList(captured.value);
   for (let index = 0; index < keys.length; index += 1) {
@@ -3887,7 +4663,7 @@ function captureBodySetParameters(
           {
             severity: "error",
             path: `/parameters/${importedBodyJsonPointerSegment(key)}`,
-            details: { phase: BODY_SET_EVALUATION_PHASE },
+            details: { phase },
           },
         ),
       );
@@ -3898,22 +4674,81 @@ function captureBodySetParameters(
   );
 }
 
-function captureBodySetEvaluationOptions(
+function captureBodySetParameters(
   value: unknown,
-): CadResult<CapturedBodySetOutputsV7Options> {
-  const captured = bodySetOwnDataRecord(value, "/", {
-    maximumOwnKeys: BODY_SET_EVALUATION_OPTION_KEYS.length,
-  });
+  maximum: number,
+  signal: AbortSignal | undefined,
+): CadResult<Readonly<Record<string, number>>> {
+  return captureStagedV7Parameters(
+    value,
+    maximum,
+    signal,
+    BODY_SET_EVALUATION_PHASE,
+    bodySetPostBoundaryFailure,
+    bodySetLimitFailure,
+    "maxParameterOverrides",
+  );
+}
+
+interface StagedV7CommonEvaluationLimits {
+  readonly maxSelectedOutputs: number;
+  readonly maxParameterOverrides: number;
+}
+
+function captureStagedV7EvaluationOptions<
+  EvaluationLimits extends StagedV7CommonEvaluationLimits,
+  LimitKey extends keyof EvaluationLimits & string,
+>(
+  value: unknown,
+  subject: string,
+  phase: string,
+  optionKeys: readonly string[],
+  postBoundaryFailure: StagedV7PostBoundaryFailure,
+  limitFailure: StagedV7LimitFailure<LimitKey>,
+  captureEvaluationLimits: (
+    candidate: unknown,
+    signal: AbortSignal | undefined,
+  ) => CadResult<EvaluationLimits>,
+  captureResourceLimits: (
+    candidate: unknown,
+    signal: AbortSignal | undefined,
+  ) => CadResult<ResourceResolutionLimitsV7>,
+  captureOutputNames: (
+    candidate: unknown,
+    maximum: number,
+    signal: AbortSignal | undefined,
+  ) => CadResult<readonly string[] | undefined>,
+  captureParameters: (
+    candidate: unknown,
+    maximum: number,
+    signal: AbortSignal | undefined,
+  ) => CadResult<Readonly<Record<string, number>>>,
+): CadResult<CapturedStagedV7EvaluationOptions<EvaluationLimits>> {
+  const captured = stagedV7OwnDataRecord(
+    value,
+    "/",
+    { maximumOwnKeys: optionKeys.length },
+    phase,
+    postBoundaryFailure,
+    limitFailure,
+  );
   if (!captured.ok) return captured;
   const keys = importedBodyObjectKeyList(captured.value);
   for (let index = 0; index < keys.length; index += 1) {
     const key = keys[index]!;
-    if (!bodySetOptionKey(key)) {
+    let known = false;
+    for (let optionIndex = 0; optionIndex < optionKeys.length; optionIndex += 1) {
+      if (optionKeys[optionIndex] === key) {
+        known = true;
+        break;
+      }
+    }
+    if (!known) {
       return failure(
-        diagnostic("IR_INVALID", `Unknown body-set evaluation option '${key}'`, {
+        diagnostic("IR_INVALID", `Unknown ${subject} evaluation option '${key}'`, {
           severity: "error",
           path: `/${importedBodyJsonPointerSegment(key)}`,
-          details: { phase: BODY_SET_EVALUATION_PHASE },
+          details: { phase },
         }),
       );
     }
@@ -3927,13 +4762,13 @@ function captureBodySetEvaluationOptions(
       diagnostic("IR_INVALID", "signal must be an AbortSignal", {
         severity: "error",
         path: "/signal",
-        details: { phase: BODY_SET_EVALUATION_PHASE },
+        details: { phase },
       }),
     );
   }
   const signal =
     rawSignal === undefined ? undefined : rawSignal as AbortSignal;
-  const afterSignal = bodySetPostBoundaryFailure(signal);
+  const afterSignal = postBoundaryFailure(signal);
   if (afterSignal !== undefined) return afterSignal;
 
   const configuration = captured.value.configuration;
@@ -3942,38 +4777,38 @@ function captureBodySetEvaluationOptions(
       diagnostic("IR_INVALID", "configuration must be a string", {
         severity: "error",
         path: "/configuration",
-        details: { phase: BODY_SET_EVALUATION_PHASE },
+        details: { phase },
       }),
     );
   }
-  const evaluationLimits = captureBodySetEvaluationLimits(
+  const evaluationLimits = captureEvaluationLimits(
     captured.value.evaluationLimits,
     signal,
   );
-  const afterEvaluationLimits = bodySetPostBoundaryFailure(signal);
+  const afterEvaluationLimits = postBoundaryFailure(signal);
   if (afterEvaluationLimits !== undefined) return afterEvaluationLimits;
   if (!evaluationLimits.ok) return evaluationLimits;
-  const resourceLimits = captureBodySetResourceLimits(
+  const resourceLimits = captureResourceLimits(
     captured.value.resourceLimits,
     signal,
   );
-  const afterResourceLimits = bodySetPostBoundaryFailure(signal);
+  const afterResourceLimits = postBoundaryFailure(signal);
   if (afterResourceLimits !== undefined) return afterResourceLimits;
   if (!resourceLimits.ok) return resourceLimits;
-  const outputs = captureBodySetOutputNames(
+  const outputs = captureOutputNames(
     captured.value.outputs,
     evaluationLimits.value.maxSelectedOutputs,
     signal,
   );
-  const afterOutputs = bodySetPostBoundaryFailure(signal);
+  const afterOutputs = postBoundaryFailure(signal);
   if (afterOutputs !== undefined) return afterOutputs;
   if (!outputs.ok) return outputs;
-  const parameters = captureBodySetParameters(
+  const parameters = captureParameters(
     captured.value.parameters,
     evaluationLimits.value.maxParameterOverrides,
     signal,
   );
-  const afterParameters = bodySetPostBoundaryFailure(signal);
+  const afterParameters = postBoundaryFailure(signal);
   if (afterParameters !== undefined) return afterParameters;
   if (!parameters.ok) return parameters;
   const resolver = captured.value.resolver;
@@ -3982,28 +4817,31 @@ function captureBodySetEvaluationOptions(
       diagnostic("IR_INVALID", "resolver must be a function", {
         severity: "error",
         path: "/resolver",
-        details: { phase: BODY_SET_EVALUATION_PHASE },
+        details: { phase },
       }),
     );
   }
   let documentLimits: Partial<DesignDocumentLimits> | undefined;
   if (captured.value.documentLimits !== undefined) {
-    const snapshot = bodySetOwnDataRecord(
+    const snapshot = stagedV7OwnDataRecord(
       captured.value.documentLimits,
       "/documentLimits",
       {
         ...(signal === undefined ? {} : { signal }),
         maximumOwnKeys: BODY_SET_DOCUMENT_LIMIT_KEY_COUNT,
       },
+      phase,
+      postBoundaryFailure,
+      limitFailure,
     );
-    const afterDocumentLimits = bodySetPostBoundaryFailure(signal);
+    const afterDocumentLimits = postBoundaryFailure(signal);
     if (afterDocumentLimits !== undefined) return afterDocumentLimits;
     if (!snapshot.ok) return snapshot;
     documentLimits =
       snapshot.value as unknown as Partial<DesignDocumentLimits>;
   }
   return success(
-    importedBodyApply<CapturedBodySetOutputsV7Options>(
+    importedBodyApply<CapturedStagedV7EvaluationOptions<EvaluationLimits>>(
       importedBodyObjectFreeze,
       Object,
       [
@@ -4021,6 +4859,23 @@ function captureBodySetEvaluationOptions(
         },
       ],
     ),
+  );
+}
+
+function captureBodySetEvaluationOptions(
+  value: unknown,
+): CadResult<CapturedBodySetOutputsV7Options> {
+  return captureStagedV7EvaluationOptions(
+    value,
+    "body-set",
+    BODY_SET_EVALUATION_PHASE,
+    BODY_SET_EVALUATION_OPTION_KEYS,
+    bodySetPostBoundaryFailure,
+    bodySetLimitFailure,
+    captureBodySetEvaluationLimits,
+    captureBodySetResourceLimits,
+    captureBodySetOutputNames,
+    captureBodySetParameters,
   );
 }
 
@@ -4116,11 +4971,38 @@ function bodySetPostBoundaryFailure(
   return undefined;
 }
 
+interface StagedV7LeafDiagnosticContext {
+  readonly phase: string;
+  readonly capabilityScope: string;
+  readonly leafLabel: string;
+  readonly leafFailureLabel: string;
+  readonly postBoundaryFailure: typeof bodySetPostBoundaryFailure;
+  readonly kernelFailure: typeof bodySetKernelFailure;
+  readonly capabilityFailure: typeof bodySetCapabilityFailure;
+}
+
+const BODY_SET_LEAF_DIAGNOSTICS =
+  Object.freeze<StagedV7LeafDiagnosticContext>({
+    phase: BODY_SET_EVALUATION_PHASE,
+    capabilityScope: "body-set",
+    leafLabel: "body-set leaf",
+    leafFailureLabel: "Body-set leaf",
+    postBoundaryFailure: bodySetPostBoundaryFailure,
+    kernelFailure: bodySetKernelFailure,
+    capabilityFailure: bodySetCapabilityFailure,
+  });
+
 function captureBodySetKernelAccess(
   kernel: GeometryKernel,
   orderedLeaves: readonly [NodeId, BodySetLeafNodeV7][],
   signal: AbortSignal | undefined,
+  diagnostics: StagedV7LeafDiagnosticContext = BODY_SET_LEAF_DIAGNOSTICS,
 ): CadResult<BodySetKernelAccess> {
+  const {
+    postBoundaryFailure,
+    kernelFailure,
+    capabilityFailure,
+  } = diagnostics;
   let importsRequired = false;
   for (let index = 0; index < orderedLeaves.length; index += 1) {
     if (orderedLeaves[index]![1].kind === "importedBody") {
@@ -4131,51 +5013,51 @@ function captureBodySetKernelAccess(
   let id = "<unknown>";
   try {
     const rawId: unknown = kernel.id;
-    const afterId = bodySetPostBoundaryFailure(signal);
+    const afterId = postBoundaryFailure(signal);
     if (afterId !== undefined) return afterId;
     if (typeof rawId === "string") id = rawId;
 
     const rawCapabilities: unknown = kernel.capabilities;
-    const afterCapabilities = bodySetPostBoundaryFailure(signal);
+    const afterCapabilities = postBoundaryFailure(signal);
     if (afterCapabilities !== undefined) return afterCapabilities;
     const protocolProperty = importedBodyOwnDataValue(
       rawCapabilities,
       "protocolVersion",
     );
-    const afterProtocol = bodySetPostBoundaryFailure(signal);
+    const afterProtocol = postBoundaryFailure(signal);
     if (afterProtocol !== undefined) return afterProtocol;
     const representationProperty = importedBodyOwnDataValue(
       rawCapabilities,
       "representation",
     );
-    const afterRepresentation = bodySetPostBoundaryFailure(signal);
+    const afterRepresentation = postBoundaryFailure(signal);
     if (afterRepresentation !== undefined) return afterRepresentation;
     const exactProperty = importedBodyOwnDataValue(rawCapabilities, "exact");
-    const afterExact = bodySetPostBoundaryFailure(signal);
+    const afterExact = postBoundaryFailure(signal);
     if (afterExact !== undefined) return afterExact;
     const primitivesProperty = importedBodyOwnDataValue(
       rawCapabilities,
       "primitives",
     );
-    const afterPrimitives = bodySetPostBoundaryFailure(signal);
+    const afterPrimitives = postBoundaryFailure(signal);
     if (afterPrimitives !== undefined) return afterPrimitives;
     const importProperty = importedBodyOwnDataValue(
       rawCapabilities,
       "documentBodyImport",
     );
-    const afterImport = bodySetPostBoundaryFailure(signal);
+    const afterImport = postBoundaryFailure(signal);
     if (afterImport !== undefined) return afterImport;
     const nativeExportsProperty = importedBodyOwnDataValue(
       rawCapabilities,
       "nativeExports",
     );
-    const afterNativeExports = bodySetPostBoundaryFailure(signal);
+    const afterNativeExports = postBoundaryFailure(signal);
     if (afterNativeExports !== undefined) return afterNativeExports;
     const topologyProperty = importedBodyOwnDataValue(
       rawCapabilities,
       "topology",
     );
-    const afterTopology = bodySetPostBoundaryFailure(signal);
+    const afterTopology = postBoundaryFailure(signal);
     if (afterTopology !== undefined) return afterTopology;
     if (
       protocolProperty.kind !== "data" ||
@@ -4186,7 +5068,7 @@ function captureBodySetKernelAccess(
       topologyProperty.kind === "invalid" ||
       (importsRequired && importProperty.kind === "invalid")
     ) {
-      return bodySetKernelFailure(
+      return kernelFailure(
         id,
         `Kernel '${id}' capabilities must use own data properties`,
         { details: { protocolViolation: true } },
@@ -4202,7 +5084,7 @@ function captureBodySetKernelAccess(
           {
             severity: "error",
             details: {
-              phase: BODY_SET_EVALUATION_PHASE,
+              phase: diagnostics.phase,
               kernel: id,
               expected: GEOMETRY_KERNEL_PROTOCOL_VERSION,
               actual:
@@ -4223,14 +5105,14 @@ function captureBodySetKernelAccess(
       representation !== "brep" &&
       representation !== "sdf"
     ) {
-      return bodySetKernelFailure(
+      return kernelFailure(
         id,
         `Kernel '${id}' declares an invalid representation`,
         { details: { protocolViolation: true } },
       );
     }
     if (typeof exactProperty.value !== "boolean") {
-      return bodySetKernelFailure(
+      return kernelFailure(
         id,
         `Kernel '${id}' declares an invalid exactness flag`,
         { details: { protocolViolation: true } },
@@ -4243,12 +5125,12 @@ function captureBodySetKernelAccess(
       IMPORTED_BODY_CAPABILITY_SNAPSHOT_LIMITS,
       { strictV7Snapshot: true },
     );
-    const afterPrimitiveSnapshot = bodySetPostBoundaryFailure(signal);
+    const afterPrimitiveSnapshot = postBoundaryFailure(signal);
     if (afterPrimitiveSnapshot !== undefined) {
       return afterPrimitiveSnapshot;
     }
     if (!primitiveSnapshot.ok || !importedBodyArray(primitiveSnapshot.value)) {
-      return bodySetKernelFailure(
+      return kernelFailure(
         id,
         `Kernel '${id}' declares unsafe primitive capabilities`,
         {
@@ -4271,7 +5153,7 @@ function captureBodySetKernelAccess(
         primitive !== "cylinder" &&
         primitive !== "sphere"
       ) {
-        return bodySetKernelFailure(
+        return kernelFailure(
           id,
           `Kernel '${id}' declares an invalid primitive capability`,
           {
@@ -4290,7 +5172,7 @@ function captureBodySetKernelAccess(
       IMPORTED_BODY_CAPABILITY_SNAPSHOT_LIMITS,
       { strictV7Snapshot: true },
     );
-    const afterNativeExportsSnapshot = bodySetPostBoundaryFailure(signal);
+    const afterNativeExportsSnapshot = postBoundaryFailure(signal);
     if (afterNativeExportsSnapshot !== undefined) {
       return afterNativeExportsSnapshot;
     }
@@ -4298,7 +5180,7 @@ function captureBodySetKernelAccess(
       !nativeExportsSnapshot.ok ||
       !importedBodyArray(nativeExportsSnapshot.value)
     ) {
-      return bodySetKernelFailure(
+      return kernelFailure(
         id,
         `Kernel '${id}' declares unsafe native-export capabilities`,
         {
@@ -4321,7 +5203,7 @@ function captureBodySetKernelAccess(
         format !== "brep" &&
         format !== "brep-binary"
       ) {
-        return bodySetKernelFailure(
+        return kernelFailure(
           id,
           `Kernel '${id}' declares an invalid native-export capability`,
           {
@@ -4348,7 +5230,7 @@ function captureBodySetKernelAccess(
         IMPORTED_BODY_CAPABILITY_SNAPSHOT_LIMITS,
         { strictV7Snapshot: true },
       );
-      const afterTopologySnapshot = bodySetPostBoundaryFailure(signal);
+      const afterTopologySnapshot = postBoundaryFailure(signal);
       if (afterTopologySnapshot !== undefined) {
         return afterTopologySnapshot;
       }
@@ -4358,7 +5240,7 @@ function captureBodySetKernelAccess(
         topologySnapshot.value === null ||
         importedBodyArray(topologySnapshot.value)
       ) {
-        return bodySetKernelFailure(
+        return kernelFailure(
           id,
           `Kernel '${id}' declares unsafe topology capabilities`,
           {
@@ -4401,7 +5283,7 @@ function captureBodySetKernelAccess(
       }
       if (!advertised) {
         const nodeId = firstPrimitiveNodes.get(primitive)!;
-        return bodySetCapabilityFailure(
+        return capabilityFailure(
           id,
           nodeId,
           "primitive",
@@ -4422,10 +5304,10 @@ function captureBodySetKernelAccess(
         IMPORTED_BODY_CAPABILITY_SNAPSHOT_LIMITS,
         { strictV7Snapshot: true },
       );
-      const afterImportSnapshot = bodySetPostBoundaryFailure(signal);
+      const afterImportSnapshot = postBoundaryFailure(signal);
       if (afterImportSnapshot !== undefined) return afterImportSnapshot;
       if (!capturedImport.ok) {
-        return bodySetKernelFailure(
+        return kernelFailure(
           id,
           `Kernel '${id}' declares unsafe document-body import capabilities`,
           {
@@ -4451,10 +5333,10 @@ function captureBodySetKernelAccess(
       } as unknown as GeometryKernel["capabilities"];
       const inspection =
         inspectKernelDocumentBodyImportCapabilities(capabilities);
-      const afterInspection = bodySetPostBoundaryFailure(signal);
+      const afterInspection = postBoundaryFailure(signal);
       if (afterInspection !== undefined) return afterInspection;
       if (inspection.status === "malformed") {
-        return bodySetKernelFailure(
+        return kernelFailure(
           id,
           `Kernel '${id}' declares malformed document-body import capabilities`,
           {
@@ -4467,7 +5349,7 @@ function captureBodySetKernelAccess(
       }
       if (inspection.status === "absent") {
         const [nodeId, node] = importedNodes[0]!;
-        return bodySetCapabilityFailure(
+        return capabilityFailure(
           id,
           nodeId,
           "documentBodyImport",
@@ -4498,7 +5380,7 @@ function captureBodySetKernelAccess(
           break;
         }
         if (!supported) {
-          return bodySetCapabilityFailure(
+          return capabilityFailure(
             id,
             nodeId,
             "documentBodyImport",
@@ -4512,14 +5394,14 @@ function captureBodySetKernelAccess(
     let box: BodySetKernelAccess["box"];
     if (importedBodySetHasValue(requiredPrimitives, "box")) {
       const method = kernel.box;
-      const afterMethod = bodySetPostBoundaryFailure(
+      const afterMethod = postBoundaryFailure(
         signal,
         firstPrimitiveNodes.get("box"),
       );
       if (afterMethod !== undefined) return afterMethod;
       if (typeof method !== "function") {
         const nodeId = firstPrimitiveNodes.get("box")!;
-        return bodySetCapabilityFailure(
+        return capabilityFailure(
           id,
           nodeId,
           "primitive",
@@ -4532,14 +5414,14 @@ function captureBodySetKernelAccess(
     let cylinder: BodySetKernelAccess["cylinder"];
     if (importedBodySetHasValue(requiredPrimitives, "cylinder")) {
       const method = kernel.cylinder;
-      const afterMethod = bodySetPostBoundaryFailure(
+      const afterMethod = postBoundaryFailure(
         signal,
         firstPrimitiveNodes.get("cylinder"),
       );
       if (afterMethod !== undefined) return afterMethod;
       if (typeof method !== "function") {
         const nodeId = firstPrimitiveNodes.get("cylinder")!;
-        return bodySetCapabilityFailure(
+        return capabilityFailure(
           id,
           nodeId,
           "primitive",
@@ -4552,14 +5434,14 @@ function captureBodySetKernelAccess(
     let sphere: BodySetKernelAccess["sphere"];
     if (importedBodySetHasValue(requiredPrimitives, "sphere")) {
       const method = kernel.sphere;
-      const afterMethod = bodySetPostBoundaryFailure(
+      const afterMethod = postBoundaryFailure(
         signal,
         firstPrimitiveNodes.get("sphere"),
       );
       if (afterMethod !== undefined) return afterMethod;
       if (typeof method !== "function") {
         const nodeId = firstPrimitiveNodes.get("sphere")!;
-        return bodySetCapabilityFailure(
+        return capabilityFailure(
           id,
           nodeId,
           "primitive",
@@ -4572,14 +5454,14 @@ function captureBodySetKernelAccess(
     let importDocumentBody: BodySetKernelAccess["importDocumentBody"];
     if (importedNodes.length > 0) {
       const method = kernel.importDocumentBody;
-      const afterMethod = bodySetPostBoundaryFailure(
+      const afterMethod = postBoundaryFailure(
         signal,
         importedNodes[0]![0],
       );
       if (afterMethod !== undefined) return afterMethod;
       if (typeof method !== "function") {
         const nodeId = importedNodes[0]![0];
-        return bodySetKernelFailure(
+        return kernelFailure(
           id,
           `Kernel '${id}' advertises document-body import without implementing it`,
           {
@@ -4595,30 +5477,30 @@ function captureBodySetKernelAccess(
       importDocumentBody = method;
     }
     const status = kernel.status;
-    const afterStatus = bodySetPostBoundaryFailure(signal);
+    const afterStatus = postBoundaryFailure(signal);
     if (afterStatus !== undefined) return afterStatus;
     const measure = kernel.measure;
-    const afterMeasure = bodySetPostBoundaryFailure(signal);
+    const afterMeasure = postBoundaryFailure(signal);
     if (afterMeasure !== undefined) return afterMeasure;
     const mesh = kernel.mesh;
-    const afterMesh = bodySetPostBoundaryFailure(signal);
+    const afterMesh = postBoundaryFailure(signal);
     if (afterMesh !== undefined) return afterMesh;
     let topology: BodySetKernelAccess["topology"];
     if (topologyAdvertised) {
       const method = kernel.topology;
-      const afterTopologyMethod = bodySetPostBoundaryFailure(signal);
+      const afterTopologyMethod = postBoundaryFailure(signal);
       if (afterTopologyMethod !== undefined) return afterTopologyMethod;
       if (typeof method === "function") topology = method;
     }
     let exportShape: BodySetKernelAccess["exportShape"];
     if (nativeExports.length > 0) {
       const method = kernel.exportShape;
-      const afterExportMethod = bodySetPostBoundaryFailure(signal);
+      const afterExportMethod = postBoundaryFailure(signal);
       if (afterExportMethod !== undefined) return afterExportMethod;
       if (typeof method === "function") exportShape = method;
     }
     const disposeShape = kernel.disposeShape;
-    const afterDispose = bodySetPostBoundaryFailure(signal);
+    const afterDispose = postBoundaryFailure(signal);
     if (afterDispose !== undefined) return afterDispose;
     if (
       typeof status !== "function" ||
@@ -4626,7 +5508,7 @@ function captureBodySetKernelAccess(
       typeof mesh !== "function" ||
       typeof disposeShape !== "function"
     ) {
-      return bodySetKernelFailure(
+      return kernelFailure(
         id,
         `Kernel '${id}' does not implement the required owned-shape contract`,
         { details: { protocolViolation: true } },
@@ -4659,11 +5541,11 @@ function captureBodySetKernelAccess(
       ),
     );
   } catch {
-    const afterFailure = bodySetPostBoundaryFailure(signal);
+    const afterFailure = postBoundaryFailure(signal);
     if (afterFailure !== undefined) return afterFailure;
-    return bodySetKernelFailure(
+    return kernelFailure(
       id,
-      `Kernel '${id}' body-set capabilities could not be inspected safely`,
+      `Kernel '${id}' ${diagnostics.capabilityScope} capabilities could not be inspected safely`,
       { details: { protocolViolation: true } },
     );
   }
@@ -4676,20 +5558,22 @@ function validateBodySetAcquiredShape(
   nodeId: NodeId,
   nodeKind: BodySetLeafNodeV7["kind"],
   signal: AbortSignal | undefined,
+  diagnostics: StagedV7LeafDiagnosticContext = BODY_SET_LEAF_DIAGNOSTICS,
 ): CadResult<undefined> {
+  const { postBoundaryFailure, kernelFailure } = diagnostics;
   try {
     const rawStatus = importedBodyApply<unknown>(
       access.status,
       kernel,
       [shape],
     );
-    const afterStatus = bodySetPostBoundaryFailure(signal, nodeId);
+    const afterStatus = postBoundaryFailure(signal, nodeId);
     if (afterStatus !== undefined) return afterStatus;
     const statusOk = importedBodyOwnDataValue(rawStatus, "ok");
-    const afterStatusOk = bodySetPostBoundaryFailure(signal, nodeId);
+    const afterStatusOk = postBoundaryFailure(signal, nodeId);
     if (afterStatusOk !== undefined) return afterStatusOk;
     const statusCode = importedBodyOwnDataValue(rawStatus, "code");
-    const afterStatusCode = bodySetPostBoundaryFailure(signal, nodeId);
+    const afterStatusCode = postBoundaryFailure(signal, nodeId);
     if (afterStatusCode !== undefined) return afterStatusCode;
     if (
       statusOk.kind !== "data" ||
@@ -4697,9 +5581,9 @@ function validateBodySetAcquiredShape(
       statusCode.kind !== "data" ||
       typeof statusCode.value !== "string"
     ) {
-      return bodySetKernelFailure(
+      return kernelFailure(
         access.id,
-        `Kernel '${access.id}' returned malformed status for body-set leaf '${nodeId}'`,
+        `Kernel '${access.id}' returned malformed status for ${diagnostics.leafLabel} '${nodeId}'`,
         {
           node: nodeId,
           path: `/nodes/${nodeId}`,
@@ -4708,9 +5592,9 @@ function validateBodySetAcquiredShape(
       );
     }
     if (!statusOk.value) {
-      return bodySetKernelFailure(
+      return kernelFailure(
         access.id,
-        `Kernel '${access.id}' returned an invalid body-set leaf '${nodeId}'`,
+        `Kernel '${access.id}' returned an invalid ${diagnostics.leafLabel} '${nodeId}'`,
         {
           node: nodeId,
           path: `/nodes/${nodeId}`,
@@ -4728,10 +5612,10 @@ function validateBodySetAcquiredShape(
       kernel,
       [shape],
     );
-    const afterMeasure = bodySetPostBoundaryFailure(signal, nodeId);
+    const afterMeasure = postBoundaryFailure(signal, nodeId);
     if (afterMeasure !== undefined) return afterMeasure;
     const volume = importedBodyOwnDataValue(rawMeasurements, "volume");
-    const afterMeasurementCapture = bodySetPostBoundaryFailure(signal, nodeId);
+    const afterMeasurementCapture = postBoundaryFailure(signal, nodeId);
     if (afterMeasurementCapture !== undefined) {
       return afterMeasurementCapture;
     }
@@ -4745,9 +5629,9 @@ function validateBodySetAcquiredShape(
       ) ||
       !(volume.value > 0)
     ) {
-      return bodySetKernelFailure(
+      return kernelFailure(
         access.id,
-        `Kernel '${access.id}' returned a non-positive body-set leaf '${nodeId}'`,
+        `Kernel '${access.id}' returned a non-positive ${diagnostics.leafLabel} '${nodeId}'`,
         {
           node: nodeId,
           path: `/nodes/${nodeId}`,
@@ -4768,11 +5652,11 @@ function validateBodySetAcquiredShape(
     }
     return success(undefined);
   } catch (error) {
-    const afterFailure = bodySetPostBoundaryFailure(signal, nodeId);
+    const afterFailure = postBoundaryFailure(signal, nodeId);
     if (afterFailure !== undefined) return afterFailure;
-    return bodySetKernelFailure(
+    return kernelFailure(
       access.id,
-      `Kernel '${access.id}' could not validate body-set leaf '${nodeId}'`,
+      `Kernel '${access.id}' could not validate ${diagnostics.leafLabel} '${nodeId}'`,
       {
         node: nodeId,
         path: `/nodes/${nodeId}`,
@@ -4781,7 +5665,7 @@ function validateBodySetAcquiredShape(
           nodeKind,
           cause: bodySetThrownCause(
             error,
-            "Body-set leaf validation failed with an opaque value",
+            `${diagnostics.leafFailureLabel} validation failed with an opaque value`,
           ),
         },
       },
@@ -5562,6 +6446,1482 @@ export async function evaluateBodySetOutputsV7(
     Object.freeze(diagnostics),
   );
   const finalBoundary = bodySetPostBoundaryFailure(options.signal);
+  if (finalBoundary !== undefined) {
+    return failAfterCleanup(finalBoundary);
+  }
+  return success(evaluated, diagnostics);
+}
+
+type CapturedPartOutputsV7Options =
+  CapturedStagedV7EvaluationOptions<PartEvaluationLimitsV7>;
+
+type SelectedPartGeometryNodeV7 =
+  | {
+      readonly kind: "solid";
+      readonly nodeId: NodeId;
+      readonly node: BodySetLeafNodeV7;
+    }
+  | {
+      readonly kind: "bodySet";
+      readonly nodeId: NodeId;
+      readonly node: BodySetNodeIRV7;
+    };
+
+interface SelectedPartOutputV7 {
+  readonly name: string;
+  readonly nodeId: NodeId;
+  readonly node: PartNodeIRV7;
+  readonly geometry: SelectedPartGeometryNodeV7;
+}
+
+interface ResolvedPartDefinitionV7 {
+  readonly materialId?: MaterialId;
+  readonly materialDefinition?: EvaluatedMaterial;
+  readonly massDensity?: number;
+  readonly massDensitySource?: MassDensitySource;
+}
+
+const PART_EVALUATION_PHASE = "documentV7PartEvaluation";
+const PART_EVALUATION_OPTION_KEYS = Object.freeze([
+  "configuration",
+  "parameters",
+  "outputs",
+  "resolver",
+  "evaluationLimits",
+  "resourceLimits",
+  "documentLimits",
+  "signal",
+] as const);
+const PART_EVALUATION_LIMIT_KEYS = Object.freeze([
+  "maxSelectedOutputs",
+  "maxParameterOverrides",
+  "maxPartBodies",
+  "maxDistinctSolids",
+  "maxResolvedMaterials",
+] as const satisfies readonly (keyof PartEvaluationLimitsV7)[]);
+
+function partEvaluationAborted(signal: AbortSignal | undefined): boolean {
+  return importedBodyEvaluationAborted(signal);
+}
+
+function partEvaluationAbortFailure(node?: NodeId): CadResult<never> {
+  return failure(
+    diagnostic("EVALUATION_ABORTED", "Part evaluation was aborted", {
+      severity: "error",
+      ...(node === undefined ? {} : { node, path: `/nodes/${node}` }),
+      details: { phase: PART_EVALUATION_PHASE },
+    }),
+  );
+}
+
+function partRuntimeIntegrityFailure(): CadResult<never> {
+  return failure(
+    diagnostic("IR_INVALID", DOCUMENT_V7_RUNTIME_INTEGRITY_MESSAGE, {
+      severity: "error",
+      details: {
+        phase: PART_EVALUATION_PHASE,
+        runtimeIntegrity: false,
+      },
+    }),
+  );
+}
+
+function partPostBoundaryFailure(
+  signal: AbortSignal | undefined,
+  node?: NodeId,
+): CadResult<never> | undefined {
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return partRuntimeIntegrityFailure();
+  }
+  if (partEvaluationAborted(signal)) {
+    return partEvaluationAbortFailure(node);
+  }
+  return undefined;
+}
+
+function partLimitFailure(
+  resource: keyof PartEvaluationLimitsV7,
+  limit: number,
+  actual: number,
+  path: string,
+): CadResult<never> {
+  return failure(
+    diagnostic(
+      "RESOURCE_LIMIT_EXCEEDED",
+      `Part evaluation limit '${resource}' (${limit}) was exceeded`,
+      {
+        severity: "error",
+        path,
+        details: {
+          phase: PART_EVALUATION_PHASE,
+          resource,
+          limit,
+          actual,
+        },
+      },
+    ),
+  );
+}
+
+type PartOwnDataRecordOptions = StagedV7OwnDataRecordOptions<
+  keyof PartEvaluationLimitsV7
+>;
+
+function partOwnDataRecord(
+  value: unknown,
+  path: string,
+  options: PartOwnDataRecordOptions = {},
+): CadResult<Readonly<Record<string, unknown>>> {
+  return stagedV7OwnDataRecord(
+    value,
+    path,
+    options,
+    PART_EVALUATION_PHASE,
+    partPostBoundaryFailure,
+    partLimitFailure,
+  );
+}
+
+function partEvaluationLimitKey(
+  value: string,
+): value is keyof PartEvaluationLimitsV7 {
+  for (let index = 0; index < PART_EVALUATION_LIMIT_KEYS.length; index += 1) {
+    if (PART_EVALUATION_LIMIT_KEYS[index] === value) return true;
+  }
+  return false;
+}
+
+function capturePartEvaluationLimits(
+  value: unknown,
+  signal: AbortSignal | undefined,
+): CadResult<PartEvaluationLimitsV7> {
+  if (value === undefined) return success(DEFAULT_PART_EVALUATION_LIMITS_V7);
+  const captured = partOwnDataRecord(value, "/evaluationLimits", {
+    ...(signal === undefined ? {} : { signal }),
+    maximumOwnKeys: PART_EVALUATION_LIMIT_KEYS.length,
+  });
+  if (!captured.ok) return captured;
+  const keys = importedBodyObjectKeyList(captured.value);
+  for (let index = 0; index < keys.length; index += 1) {
+    const key = keys[index]!;
+    if (!partEvaluationLimitKey(key)) {
+      return failure(
+        diagnostic("IR_INVALID", `Unknown part evaluation limit '${key}'`, {
+          severity: "error",
+          path: `/evaluationLimits/${importedBodyJsonPointerSegment(key)}`,
+          details: { phase: PART_EVALUATION_PHASE },
+        }),
+      );
+    }
+  }
+  const normalized: Record<keyof PartEvaluationLimitsV7, number> = {
+    maxSelectedOutputs:
+      DEFAULT_PART_EVALUATION_LIMITS_V7.maxSelectedOutputs,
+    maxParameterOverrides:
+      DEFAULT_PART_EVALUATION_LIMITS_V7.maxParameterOverrides,
+    maxPartBodies: DEFAULT_PART_EVALUATION_LIMITS_V7.maxPartBodies,
+    maxDistinctSolids:
+      DEFAULT_PART_EVALUATION_LIMITS_V7.maxDistinctSolids,
+    maxResolvedMaterials:
+      DEFAULT_PART_EVALUATION_LIMITS_V7.maxResolvedMaterials,
+  };
+  for (let index = 0; index < PART_EVALUATION_LIMIT_KEYS.length; index += 1) {
+    const key = PART_EVALUATION_LIMIT_KEYS[index]!;
+    if (
+      !importedBodyApply<boolean>(
+        importedBodyObjectHasOwn,
+        Object,
+        [captured.value, key],
+      )
+    ) {
+      continue;
+    }
+    const candidate = captured.value[key];
+    if (
+      typeof candidate !== "number" ||
+      !importedBodyApply<boolean>(
+        importedBodyNumberIsSafeInteger,
+        Number,
+        [candidate],
+      ) ||
+      candidate < 0
+    ) {
+      return failure(
+        diagnostic(
+          "IR_INVALID",
+          `Part evaluation limit '${key}' must be a non-negative safe integer`,
+          {
+            severity: "error",
+            path: `/evaluationLimits/${key}`,
+            details: { phase: PART_EVALUATION_PHASE },
+          },
+        ),
+      );
+    }
+    normalized[key] = candidate;
+  }
+  return success(
+    importedBodyApply<PartEvaluationLimitsV7>(
+      importedBodyObjectFreeze,
+      Object,
+      [normalized],
+    ),
+  );
+}
+
+function capturePartResourceLimits(
+  value: unknown,
+  signal: AbortSignal | undefined,
+): CadResult<ResourceResolutionLimitsV7> {
+  return captureStagedV7ResourceLimits(
+    value,
+    signal,
+    PART_EVALUATION_PHASE,
+    partPostBoundaryFailure,
+    partLimitFailure,
+  );
+}
+
+function capturePartOutputNames(
+  value: unknown,
+  maximum: number,
+  signal: AbortSignal | undefined,
+): CadResult<readonly string[] | undefined> {
+  return captureStagedV7OutputNames(
+    value,
+    maximum,
+    signal,
+    PART_EVALUATION_PHASE,
+    partPostBoundaryFailure,
+    partLimitFailure,
+    "maxSelectedOutputs",
+  );
+}
+
+function capturePartParameters(
+  value: unknown,
+  maximum: number,
+  signal: AbortSignal | undefined,
+): CadResult<Readonly<Record<string, number>>> {
+  return captureStagedV7Parameters(
+    value,
+    maximum,
+    signal,
+    PART_EVALUATION_PHASE,
+    partPostBoundaryFailure,
+    partLimitFailure,
+    "maxParameterOverrides",
+  );
+}
+
+function capturePartEvaluationOptions(
+  value: unknown,
+): CadResult<CapturedPartOutputsV7Options> {
+  return captureStagedV7EvaluationOptions(
+    value,
+    "part",
+    PART_EVALUATION_PHASE,
+    PART_EVALUATION_OPTION_KEYS,
+    partPostBoundaryFailure,
+    partLimitFailure,
+    capturePartEvaluationLimits,
+    capturePartResourceLimits,
+    capturePartOutputNames,
+    capturePartParameters,
+  );
+}
+
+function partFeatureInvalid(
+  node: NodeId,
+  field: string,
+  message: string,
+  value?: unknown,
+): CadResult<never> {
+  return failure(
+    diagnostic("FEATURE_INVALID", message, {
+      severity: "error",
+      node,
+      path: `/nodes/${node}/${field}`,
+      details: {
+        phase: PART_EVALUATION_PHASE,
+        ...(value === undefined ? {} : { value }),
+      },
+    }),
+  );
+}
+
+function partKernelFailure(
+  kernel: string,
+  message: string,
+  options: {
+    readonly node?: NodeId;
+    readonly path?: string;
+    readonly details?: Readonly<Record<string, unknown>>;
+  } = {},
+): CadResult<never> {
+  return failure(
+    diagnostic("KERNEL_ERROR", message, {
+      severity: "error",
+      ...(options.node === undefined ? {} : { node: options.node }),
+      ...(options.path === undefined ? {} : { path: options.path }),
+      details: {
+        phase: PART_EVALUATION_PHASE,
+        kernel,
+        ...options.details,
+      },
+    }),
+  );
+}
+
+function partCapabilityFailure(
+  kernel: string,
+  node: NodeId,
+  kind: "primitive" | "documentBodyImport",
+  capability: string,
+  message: string,
+): CadResult<never> {
+  return failure(
+    diagnostic("KERNEL_CAPABILITY_MISSING", message, {
+      severity: "error",
+      node,
+      path: `/nodes/${node}`,
+      details: {
+        phase: PART_EVALUATION_PHASE,
+        kernel,
+        kind,
+        capability,
+      },
+    }),
+  );
+}
+
+const PART_LEAF_DIAGNOSTICS =
+  Object.freeze<StagedV7LeafDiagnosticContext>({
+    phase: PART_EVALUATION_PHASE,
+    capabilityScope: "part",
+    leafLabel: "part leaf",
+    leafFailureLabel: "Part leaf",
+    postBoundaryFailure: partPostBoundaryFailure,
+    kernelFailure: partKernelFailure,
+    capabilityFailure: partCapabilityFailure,
+  });
+
+/**
+ * Evaluates only direct document-v7 `part` outputs whose geometry directly
+ * references a supported solid leaf or a directly supported body set.
+ *
+ * This source export deliberately remains absent from `src/index.ts`. The
+ * supplied kernel is borrowed. Every failure disposes each distinct acquired
+ * shape exactly once; a successful result owns those shapes until `dispose()`.
+ *
+ * @internal
+ */
+export async function evaluatePartOutputsV7(
+  kernel: GeometryKernel,
+  inputDocument: DesignDocumentV7,
+  inputOptions: EvaluatePartOutputsV7Options = {},
+): Promise<CadResult<EvaluatedPartDesignV7>> {
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return partRuntimeIntegrityFailure();
+  }
+  const capturedOptions = capturePartEvaluationOptions(inputOptions);
+  const afterOptions = partPostBoundaryFailure(undefined);
+  if (afterOptions !== undefined) return afterOptions;
+  if (!capturedOptions.ok) return capturedOptions;
+  const options = capturedOptions.value;
+  if (partEvaluationAborted(options.signal)) {
+    return partEvaluationAbortFailure();
+  }
+
+  const parsed = parseDocumentValueV7(
+    inputDocument,
+    options.documentLimits === undefined
+      ? {}
+      : { limits: options.documentLimits },
+  );
+  const afterDocument = partPostBoundaryFailure(options.signal);
+  if (afterDocument !== undefined) return afterDocument;
+  if (!parsed.ok) return parsed;
+  const document = parsed.value;
+
+  const requested: string[] = [];
+  if (options.outputs === undefined) {
+    const outputNames = importedBodyObjectKeyList(document.outputs);
+    if (
+      outputNames.length >
+      options.evaluationLimits.maxSelectedOutputs
+    ) {
+      return partLimitFailure(
+        "maxSelectedOutputs",
+        options.evaluationLimits.maxSelectedOutputs,
+        outputNames.length,
+        "/outputs",
+      );
+    }
+    for (let index = 0; index < outputNames.length; index += 1) {
+      importedBodyArrayAppend(requested, outputNames[index]!);
+    }
+  } else {
+    for (let index = 0; index < options.outputs.length; index += 1) {
+      importedBodyArrayAppend(requested, options.outputs[index]!);
+    }
+  }
+  if (requested.length > options.evaluationLimits.maxSelectedOutputs) {
+    return partLimitFailure(
+      "maxSelectedOutputs",
+      options.evaluationLimits.maxSelectedOutputs,
+      requested.length,
+      "/outputs",
+    );
+  }
+  if (requested.length === 0) {
+    return failure(
+      diagnostic("OUTPUT_MISSING", "The document has no selected outputs", {
+        severity: "error",
+        path: "/outputs",
+        details: { phase: PART_EVALUATION_PHASE },
+      }),
+    );
+  }
+
+  const selectedOutputs: SelectedPartOutputV7[] = [];
+  const selectedLeaves = new Map<NodeId, BodySetLeafNodeV7>();
+  let selectedBodyCount = 0;
+  const registerLeaf = (
+    leafId: NodeId,
+    leaf: NodeIRV7 | undefined,
+    path: string,
+    memberId?: EntityId,
+  ): CadResult<never> | undefined => {
+    if (
+      leaf === undefined ||
+      (leaf.kind !== "box" &&
+        leaf.kind !== "cylinder" &&
+        leaf.kind !== "sphere" &&
+        leaf.kind !== "importedBody")
+    ) {
+      return failure(
+        diagnostic(
+          "EVALUATION_UNSUPPORTED",
+          memberId === undefined
+            ? `Part geometry '${leafId}' must directly reference a supported solid leaf`
+            : `Part body '${memberId}' must directly reference a supported solid leaf`,
+          {
+            severity: "error",
+            node: leafId,
+            path,
+            details: {
+              phase: PART_EVALUATION_PHASE,
+              supported: ["box", "cylinder", "sphere", "importedBody"],
+              referencedNode: leafId,
+              nodeKind: leaf?.kind,
+            },
+          },
+        ),
+      );
+    }
+    if (!selectedLeaves.has(leafId)) {
+      selectedLeaves.set(leafId, leaf);
+      if (
+        selectedLeaves.size >
+        options.evaluationLimits.maxDistinctSolids
+      ) {
+        return partLimitFailure(
+          "maxDistinctSolids",
+          options.evaluationLimits.maxDistinctSolids,
+          selectedLeaves.size,
+          path,
+        );
+      }
+    }
+    return undefined;
+  };
+
+  for (let outputIndex = 0; outputIndex < requested.length; outputIndex += 1) {
+    const name = requested[outputIndex]!;
+    const outputPath = `/outputs/${importedBodyJsonPointerSegment(name)}`;
+    const reference = importedBodyApply<boolean>(
+      importedBodyObjectHasOwn,
+      Object,
+      [document.outputs, name],
+    )
+      ? document.outputs[name]
+      : undefined;
+    if (reference === undefined) {
+      return failure(
+        diagnostic("OUTPUT_MISSING", `Unknown output '${name}'`, {
+          severity: "error",
+          path: outputPath,
+          details: { phase: PART_EVALUATION_PHASE },
+        }),
+      );
+    }
+    const outputNode = importedBodyApply<boolean>(
+      importedBodyObjectHasOwn,
+      Object,
+      [document.nodes, reference.node],
+    )
+      ? document.nodes[reference.node]
+      : undefined;
+    if (
+      reference.kind !== "part" ||
+      outputNode === undefined ||
+      outputNode.kind !== "part" ||
+      !("geometry" in outputNode)
+    ) {
+      return failure(
+        diagnostic(
+          "EVALUATION_UNSUPPORTED",
+          `Staged part evaluation requires output '${name}' to directly reference a part node`,
+          {
+            severity: "error",
+            node: reference.node,
+            path: outputPath,
+            details: {
+              phase: PART_EVALUATION_PHASE,
+              supported: "direct-part-output",
+              outputKind: reference.kind,
+              nodeKind: outputNode?.kind,
+            },
+          },
+        ),
+      );
+    }
+    const geometryNode = importedBodyApply<boolean>(
+      importedBodyObjectHasOwn,
+      Object,
+      [document.nodes, outputNode.geometry.node],
+    )
+      ? document.nodes[outputNode.geometry.node]
+      : undefined;
+    let geometry: SelectedPartGeometryNodeV7;
+    if (
+      outputNode.geometry.kind === "solid" &&
+      geometryNode !== undefined &&
+      (geometryNode.kind === "box" ||
+        geometryNode.kind === "cylinder" ||
+        geometryNode.kind === "sphere" ||
+        geometryNode.kind === "importedBody")
+    ) {
+      geometry = {
+        kind: "solid",
+        nodeId: outputNode.geometry.node,
+        node: geometryNode,
+      };
+      selectedBodyCount += 1;
+      if (
+        selectedBodyCount >
+        options.evaluationLimits.maxPartBodies
+      ) {
+        return partLimitFailure(
+          "maxPartBodies",
+          options.evaluationLimits.maxPartBodies,
+          selectedBodyCount,
+          `/nodes/${reference.node}/geometry`,
+        );
+      }
+      const registered = registerLeaf(
+        outputNode.geometry.node,
+        geometryNode,
+        `/nodes/${reference.node}/geometry`,
+      );
+      if (registered !== undefined) return registered;
+    } else if (
+      outputNode.geometry.kind === "bodySet" &&
+      geometryNode !== undefined &&
+      geometryNode.kind === "bodySet"
+    ) {
+      geometry = {
+        kind: "bodySet",
+        nodeId: outputNode.geometry.node,
+        node: geometryNode,
+      };
+      selectedBodyCount += geometryNode.bodies.length;
+      if (
+        selectedBodyCount >
+        options.evaluationLimits.maxPartBodies
+      ) {
+        return partLimitFailure(
+          "maxPartBodies",
+          options.evaluationLimits.maxPartBodies,
+          selectedBodyCount,
+          `/nodes/${outputNode.geometry.node}/bodies`,
+        );
+      }
+      for (
+        let bodyIndex = 0;
+        bodyIndex < geometryNode.bodies.length;
+        bodyIndex += 1
+      ) {
+        const member = geometryNode.bodies[bodyIndex]!;
+        const leaf = importedBodyApply<boolean>(
+          importedBodyObjectHasOwn,
+          Object,
+          [document.nodes, member.solid.node],
+        )
+          ? document.nodes[member.solid.node]
+          : undefined;
+        const registered = registerLeaf(
+          member.solid.node,
+          leaf,
+          `/nodes/${outputNode.geometry.node}/bodies/${bodyIndex}/solid`,
+          member.id,
+        );
+        if (registered !== undefined) return registered;
+      }
+    } else {
+      return failure(
+        diagnostic(
+          "EVALUATION_UNSUPPORTED",
+          `Part '${reference.node}' geometry must directly reference a supported solid leaf or bodySet`,
+          {
+            severity: "error",
+            node: reference.node,
+            path: `/nodes/${reference.node}/geometry`,
+            details: {
+              phase: PART_EVALUATION_PHASE,
+              supported: [
+                "box",
+                "cylinder",
+                "sphere",
+                "importedBody",
+                "bodySet",
+              ],
+              geometryKind: outputNode.geometry.kind,
+              referencedNode: outputNode.geometry.node,
+              nodeKind: geometryNode?.kind,
+            },
+          },
+        ),
+      );
+    }
+    importedBodyArrayAppend(selectedOutputs, {
+      name,
+      nodeId: reference.node,
+      node: outputNode,
+      geometry,
+    });
+  }
+
+  let selectedConfigurationId: ConfigurationId | null = null;
+  let selectedConfiguration: DesignConfigurationIR | undefined;
+  if (options.configuration !== undefined) {
+    if (
+      !importedBodyApply<boolean>(
+        importedBodyObjectHasOwn,
+        Object,
+        [document.configurations ?? {}, options.configuration],
+      )
+    ) {
+      return failure(
+        diagnostic(
+          "CONFIGURATION_MISSING",
+          `Unknown configuration '${options.configuration}'`,
+          {
+            severity: "error",
+            path: `/configurations/${importedBodyJsonPointerSegment(
+              options.configuration,
+            )}`,
+            details: {
+              phase: PART_EVALUATION_PHASE,
+              available: importedBodyObjectKeyList(
+                document.configurations ?? {},
+              ).sort(lexicalCompare),
+            },
+          },
+        ),
+      );
+    }
+    selectedConfigurationId = options.configuration as ConfigurationId;
+    selectedConfiguration =
+      document.configurations![selectedConfigurationId];
+  }
+
+  let parameterResult: ReturnType<typeof resolveEvaluationParameters>;
+  try {
+    parameterResult = resolveEvaluationParameters(
+      document,
+      options.parameters,
+      selectedConfigurationId,
+      selectedConfiguration,
+    );
+  } catch (error) {
+    const afterParameters = partPostBoundaryFailure(options.signal);
+    if (afterParameters !== undefined) return afterParameters;
+    return failure(
+      diagnostic(
+        "EXPRESSION_INVALID",
+        bodySetThrownCause(
+          error,
+          "Part parameters could not be resolved safely",
+        ),
+        {
+          severity: "error",
+          path: "/parameters",
+          details: { phase: PART_EVALUATION_PHASE },
+        },
+      ),
+    );
+  }
+  const afterParameters = partPostBoundaryFailure(options.signal);
+  if (afterParameters !== undefined) return afterParameters;
+  if (!parameterResult.ok) return parameterResult;
+  const parameterValues = parameterResult.value.values;
+  const diagnostics: Diagnostic[] = [];
+  for (let index = 0; index < parsed.diagnostics.length; index += 1) {
+    importedBodyArrayAppend(diagnostics, parsed.diagnostics[index]!);
+  }
+  for (
+    let index = 0;
+    index < parameterResult.diagnostics.length;
+    index += 1
+  ) {
+    importedBodyArrayAppend(
+      diagnostics,
+      parameterResult.diagnostics[index]!,
+    );
+  }
+
+  const expression = (value: ExpressionIR): number =>
+    evaluateExpression(value, {
+      resolveParameter: (id) => {
+        const resolved = parameterValues.get(id);
+        if (resolved === undefined) {
+          throw new Error(`Unresolved parameter '${id}'`);
+        }
+        return resolved;
+      },
+    });
+
+  const materialIds = importedBodyArraySortLexically(
+    importedBodyObjectKeyList(document.materials ?? {}),
+  );
+  if (
+    materialIds.length >
+    options.evaluationLimits.maxResolvedMaterials
+  ) {
+    return partLimitFailure(
+      "maxResolvedMaterials",
+      options.evaluationLimits.maxResolvedMaterials,
+      materialIds.length,
+      "/materials",
+    );
+  }
+  const resolvedMaterials = new Map<MaterialId, EvaluatedMaterial>();
+  for (let index = 0; index < materialIds.length; index += 1) {
+    const id = materialIds[index] as MaterialId;
+    if (partEvaluationAborted(options.signal)) {
+      return partEvaluationAbortFailure();
+    }
+    const definition = document.materials![id]!;
+    let massDensity: number;
+    try {
+      massDensity = expression(definition.massDensity);
+    } catch (error) {
+      const afterMaterial = partPostBoundaryFailure(options.signal);
+      if (afterMaterial !== undefined) return afterMaterial;
+      importedBodyArrayAppend(
+        diagnostics,
+        diagnostic(
+          "MASS_DENSITY_INVALID",
+          `Material '${id}' massDensity must evaluate to a finite, strictly positive number`,
+          {
+            severity: "error",
+            path: `/materials/${id}/massDensity`,
+            details: {
+              phase: PART_EVALUATION_PHASE,
+              cause: bodySetThrownCause(
+                error,
+                "Material density evaluation failed with an opaque value",
+              ),
+            },
+          },
+        ),
+      );
+      continue;
+    }
+    if (
+      !importedBodyApply<boolean>(
+        importedBodyNumberIsFinite,
+        Number,
+        [massDensity],
+      ) ||
+      !(massDensity > 0)
+    ) {
+      importedBodyArrayAppend(
+        diagnostics,
+        diagnostic(
+          "MASS_DENSITY_INVALID",
+          `Material '${id}' massDensity must be finite and strictly positive`,
+          {
+            severity: "error",
+            path: `/materials/${id}/massDensity`,
+            details: {
+              phase: PART_EVALUATION_PHASE,
+              value: massDensity,
+            },
+          },
+        ),
+      );
+      continue;
+    }
+    resolvedMaterials.set(
+      id,
+      importedBodyApply<EvaluatedMaterial>(
+        importedBodyObjectFreeze,
+        Object,
+        [
+          {
+            id,
+            name: definition.name,
+            ...(definition.description === undefined
+              ? {}
+              : { description: definition.description }),
+            massDensity,
+            ...(definition.metadata === undefined
+              ? {}
+              : { metadata: definition.metadata }),
+          },
+        ],
+      ),
+    );
+  }
+  if (hasErrors(diagnostics)) {
+    return { ok: false, diagnostics };
+  }
+
+  const resolvedParts = new Map<NodeId, ResolvedPartDefinitionV7>();
+  for (let index = 0; index < selectedOutputs.length; index += 1) {
+    const selected = selectedOutputs[index]!;
+    if (resolvedParts.has(selected.nodeId)) continue;
+    if (partEvaluationAborted(options.signal)) {
+      return partEvaluationAbortFailure(selected.nodeId);
+    }
+    const materialOverrides =
+      selectedConfiguration?.partMaterialOverrides;
+    const materialId =
+      materialOverrides !== undefined &&
+      importedBodyApply<boolean>(
+        importedBodyObjectHasOwn,
+        Object,
+        [materialOverrides, selected.nodeId],
+      )
+        ? materialOverrides[selected.nodeId]
+        : selected.node.materialId;
+    const materialDefinition =
+      materialId === undefined
+        ? undefined
+        : resolvedMaterials.get(materialId);
+    let massDensity: number | undefined;
+    let massDensitySource: MassDensitySource | undefined;
+    if (selected.node.massDensity !== undefined) {
+      try {
+        massDensity = expression(selected.node.massDensity);
+      } catch (error) {
+        const afterDensity = partPostBoundaryFailure(
+          options.signal,
+          selected.nodeId,
+        );
+        if (afterDensity !== undefined) return afterDensity;
+        return failure(
+          diagnostic(
+            "MASS_DENSITY_INVALID",
+            `Part '${selected.nodeId}' massDensity must evaluate to a finite, strictly positive number`,
+            {
+              severity: "error",
+              node: selected.nodeId,
+              path: `/nodes/${selected.nodeId}/massDensity`,
+              details: {
+                phase: PART_EVALUATION_PHASE,
+                cause: bodySetThrownCause(
+                  error,
+                  "Part density evaluation failed with an opaque value",
+                ),
+              },
+            },
+          ),
+        );
+      }
+      if (
+        !importedBodyApply<boolean>(
+          importedBodyNumberIsFinite,
+          Number,
+          [massDensity],
+        ) ||
+        !(massDensity > 0)
+      ) {
+        return failure(
+          diagnostic(
+            "MASS_DENSITY_INVALID",
+            `Part '${selected.nodeId}' massDensity must be finite and strictly positive`,
+            {
+              severity: "error",
+              node: selected.nodeId,
+              path: `/nodes/${selected.nodeId}/massDensity`,
+              details: {
+                phase: PART_EVALUATION_PHASE,
+                value: massDensity,
+              },
+            },
+          ),
+        );
+      }
+      massDensitySource = "part";
+    } else if (materialDefinition !== undefined) {
+      massDensity = materialDefinition.massDensity;
+      massDensitySource = "material";
+    }
+    resolvedParts.set(
+      selected.nodeId,
+      importedBodyApply<ResolvedPartDefinitionV7>(
+        importedBodyObjectFreeze,
+        Object,
+        [
+          {
+            ...(materialId === undefined ? {} : { materialId }),
+            ...(materialDefinition === undefined
+              ? {}
+              : { materialDefinition }),
+            ...(massDensity === undefined ? {} : { massDensity }),
+            ...(massDensitySource === undefined
+              ? {}
+              : { massDensitySource }),
+          },
+        ],
+      ),
+    );
+  }
+
+  const orderedLeaves = [...selectedLeaves.entries()].sort(
+    ([first], [second]) => lexicalCompare(first, second),
+  );
+  const resolvedPrimitives = new Map<NodeId, ResolvedBodySetPrimitiveV7>();
+  for (let index = 0; index < orderedLeaves.length; index += 1) {
+    const [nodeId, node] = orderedLeaves[index]!;
+    if (node.kind === "importedBody") continue;
+    try {
+      if (node.kind === "box") {
+        const size = node.size.map(expression) as unknown as Vec3;
+        for (let axis = 0; axis < size.length; axis += 1) {
+          if (
+            !importedBodyApply<boolean>(
+              importedBodyNumberIsFinite,
+              Number,
+              [size[axis]],
+            ) ||
+            !(size[axis]! > 0)
+          ) {
+            return partFeatureInvalid(
+              nodeId,
+              `size/${axis}`,
+              `size/${axis} must be finite and positive`,
+              size[axis],
+            );
+          }
+        }
+        resolvedPrimitives.set(nodeId, {
+          kind: "box",
+          size,
+          center: node.center,
+        });
+      } else if (node.kind === "cylinder") {
+        const height = expression(node.height);
+        const radiusBottom = expression(node.radiusBottom);
+        const radiusTop = expression(node.radiusTop);
+        if (
+          !importedBodyApply<boolean>(
+            importedBodyNumberIsFinite,
+            Number,
+            [height],
+          ) ||
+          !(height > 0)
+        ) {
+          return partFeatureInvalid(
+            nodeId,
+            "height",
+            "height must be finite and positive",
+            height,
+          );
+        }
+        if (
+          !importedBodyApply<boolean>(
+            importedBodyNumberIsFinite,
+            Number,
+            [radiusBottom],
+          ) ||
+          !(radiusBottom > 0)
+        ) {
+          return partFeatureInvalid(
+            nodeId,
+            "radiusBottom",
+            "radiusBottom must be finite and positive",
+            radiusBottom,
+          );
+        }
+        if (
+          !importedBodyApply<boolean>(
+            importedBodyNumberIsFinite,
+            Number,
+            [radiusTop],
+          ) ||
+          radiusTop < 0
+        ) {
+          return partFeatureInvalid(
+            nodeId,
+            "radiusTop",
+            "radiusTop must be finite and non-negative",
+            radiusTop,
+          );
+        }
+        resolvedPrimitives.set(nodeId, {
+          kind: "cylinder",
+          height,
+          radiusBottom,
+          radiusTop,
+          center: node.center,
+          ...(node.segments === undefined
+            ? {}
+            : { segments: node.segments }),
+        });
+      } else {
+        const radius = expression(node.radius);
+        if (
+          !importedBodyApply<boolean>(
+            importedBodyNumberIsFinite,
+            Number,
+            [radius],
+          ) ||
+          !(radius > 0)
+        ) {
+          return partFeatureInvalid(
+            nodeId,
+            "radius",
+            "radius must be finite and positive",
+            radius,
+          );
+        }
+        resolvedPrimitives.set(nodeId, {
+          kind: "sphere",
+          radius,
+          ...(node.segments === undefined
+            ? {}
+            : { segments: node.segments }),
+        });
+      }
+    } catch (error) {
+      const afterExpression = partPostBoundaryFailure(
+        options.signal,
+        nodeId,
+      );
+      if (afterExpression !== undefined) return afterExpression;
+      return failure(
+        diagnostic(
+          "EXPRESSION_INVALID",
+          bodySetThrownCause(
+            error,
+            `Primitive leaf '${nodeId}' expressions could not be evaluated`,
+          ),
+          {
+            severity: "error",
+            node: nodeId,
+            path: `/nodes/${nodeId}`,
+            details: { phase: PART_EVALUATION_PHASE },
+          },
+        ),
+      );
+    }
+  }
+
+  const kernelAccess = captureBodySetKernelAccess(
+    kernel,
+    orderedLeaves,
+    options.signal,
+    PART_LEAF_DIAGNOSTICS,
+  );
+  const afterKernelCapture = partPostBoundaryFailure(options.signal);
+  if (afterKernelCapture !== undefined) return afterKernelCapture;
+  if (!kernelAccess.ok) return kernelAccess;
+
+  const resourceIds: ResourceId[] = [];
+  const seenResourceIds = new ImportedBodySet<ResourceId>();
+  for (let index = 0; index < orderedLeaves.length; index += 1) {
+    const node = orderedLeaves[index]![1];
+    if (
+      node.kind !== "importedBody" ||
+      importedBodySetHasValue(seenResourceIds, node.resource)
+    ) {
+      continue;
+    }
+    importedBodySetAddValue(seenResourceIds, node.resource);
+    importedBodyArrayAppend(resourceIds, node.resource);
+  }
+  let resolvedResources: ResolvedResourcesV7 | undefined;
+  if (resourceIds.length > 0) {
+    const resolved = await resolveResourcesV7(
+      document.resources ?? {},
+      resourceIds,
+      {
+        ...(options.resolver === undefined
+          ? {}
+          : { resolver: options.resolver }),
+        limits: options.resourceLimits,
+        ...(options.signal === undefined
+          ? {}
+          : { signal: options.signal }),
+      },
+    );
+    const afterResources = partPostBoundaryFailure(options.signal);
+    if (afterResources !== undefined) return afterResources;
+    if (!resolved.ok) return resolved;
+    resolvedResources = resolved.value;
+  }
+
+  const createdShapes = new ImportedBodySet<KernelShape>();
+  const createdShapeList = importedBodyApply<Record<number, KernelShape>>(
+    importedBodyObjectCreate,
+    Object,
+    [null],
+  );
+  let createdShapeCount = 0;
+  const shapesByNode = new Map<NodeId, KernelShape>();
+  const failAfterCleanup = (
+    result: CadResult<never>,
+  ): CadResult<EvaluatedPartDesignV7> => {
+    disposeImportedBodyShapes(
+      kernel,
+      kernelAccess.value.disposeShape,
+      createdShapeList,
+      createdShapeCount,
+    );
+    const afterCleanup = partPostBoundaryFailure(options.signal);
+    if (afterCleanup !== undefined) return afterCleanup;
+    return result;
+  };
+
+  for (let index = 0; index < orderedLeaves.length; index += 1) {
+    const [nodeId, node] = orderedLeaves[index]!;
+    if (partEvaluationAborted(options.signal)) {
+      return failAfterCleanup(partEvaluationAbortFailure(nodeId));
+    }
+    let shape: KernelShape;
+    try {
+      const context = importedBodyApply<KernelFeatureContext>(
+        importedBodyObjectFreeze,
+        Object,
+        [
+          {
+            feature: nodeId,
+            ...(options.signal === undefined
+              ? {}
+              : { signal: options.signal }),
+          },
+        ],
+      );
+      if (node.kind === "importedBody") {
+        const bytes = resolvedResources?.read(node.resource);
+        const afterRead = partPostBoundaryFailure(
+          options.signal,
+          nodeId,
+        );
+        if (afterRead !== undefined) {
+          return failAfterCleanup(afterRead);
+        }
+        if (bytes === undefined) {
+          return failAfterCleanup(
+            partKernelFailure(
+              kernelAccess.value.id,
+              `Verified resource '${node.resource}' is unavailable for part leaf '${nodeId}'`,
+              {
+                node: nodeId,
+                path: `/nodes/${nodeId}/resource`,
+                details: {
+                  protocolViolation: true,
+                  resourceId: node.resource,
+                  format: node.format,
+                },
+              },
+            ),
+          );
+        }
+        shape = importedBodyApply<KernelShape>(
+          kernelAccess.value.importDocumentBody!,
+          kernel,
+          [bytes, importedBodyImportOptions(node), context],
+        );
+      } else {
+        const resolved = resolvedPrimitives.get(nodeId)!;
+        if (resolved.kind === "box") {
+          shape = importedBodyApply<KernelShape>(
+            kernelAccess.value.box!,
+            kernel,
+            [resolved.size, resolved.center, context],
+          );
+        } else if (resolved.kind === "cylinder") {
+          shape = importedBodyApply<KernelShape>(
+            kernelAccess.value.cylinder!,
+            kernel,
+            [
+              resolved.height,
+              resolved.radiusBottom,
+              resolved.radiusTop,
+              resolved.center,
+              resolved.segments,
+              context,
+            ],
+          );
+        } else {
+          shape = importedBodyApply<KernelShape>(
+            kernelAccess.value.sphere!,
+            kernel,
+            [resolved.radius, resolved.segments, context],
+          );
+        }
+      }
+    } catch (error) {
+      const afterFailure = partPostBoundaryFailure(
+        options.signal,
+        nodeId,
+      );
+      if (afterFailure !== undefined) {
+        return failAfterCleanup(afterFailure);
+      }
+      return failAfterCleanup(
+        partKernelFailure(
+          kernelAccess.value.id,
+          `Kernel '${kernelAccess.value.id}' failed to construct part leaf '${nodeId}'`,
+          {
+            node: nodeId,
+            path: `/nodes/${nodeId}`,
+            details: {
+              nodeKind: node.kind,
+              ...(node.kind === "importedBody"
+                ? {
+                    resourceId: node.resource,
+                    format: node.format,
+                    unitMode: node.units.mode,
+                  }
+                : {}),
+              cause: bodySetThrownCause(
+                error,
+                "Part leaf construction failed with an opaque value",
+              ),
+            },
+          },
+        ),
+      );
+    }
+
+    if (importedBodySetHasValue(createdShapes, shape)) {
+      const afterDuplicate = partPostBoundaryFailure(
+        options.signal,
+        nodeId,
+      );
+      if (afterDuplicate !== undefined) {
+        return failAfterCleanup(afterDuplicate);
+      }
+      return failAfterCleanup(
+        partKernelFailure(
+          kernelAccess.value.id,
+          `Kernel '${kernelAccess.value.id}' reused an owned shape across distinct part leaves`,
+          {
+            node: nodeId,
+            path: `/nodes/${nodeId}`,
+            details: {
+              protocolViolation: true,
+              nodeKind: node.kind,
+            },
+          },
+        ),
+      );
+    }
+    importedBodySetAddValue(createdShapes, shape);
+    importedBodyApply<void>(importedBodyObjectDefineProperty, Object, [
+      createdShapeList,
+      createdShapeCount,
+      {
+        configurable: true,
+        enumerable: true,
+        writable: true,
+        value: shape,
+      },
+    ]);
+    createdShapeCount += 1;
+    const afterAcquisition = partPostBoundaryFailure(
+      options.signal,
+      nodeId,
+    );
+    if (afterAcquisition !== undefined) {
+      return failAfterCleanup(afterAcquisition);
+    }
+    const validated = validateBodySetAcquiredShape(
+      kernel,
+      kernelAccess.value,
+      shape,
+      nodeId,
+      node.kind,
+      options.signal,
+      PART_LEAF_DIAGNOSTICS,
+    );
+    if (!validated.ok) return failAfterCleanup(validated);
+    shapesByNode.set(nodeId, shape);
+  }
+
+  const beforeSuccess = partPostBoundaryFailure(options.signal);
+  if (beforeSuccess !== undefined) {
+    return failAfterCleanup(beforeSuccess);
+  }
+  const owner = new EvaluationOwner(
+    kernel,
+    createdShapes,
+    selectedConfigurationId,
+  );
+  captureEvaluationOwnerDisposer(
+    owner,
+    (shape) =>
+      importedBodyApply<void>(
+        kernelAccess.value.disposeShape,
+        kernel,
+        [shape],
+      ),
+  );
+  const outputs = new Map<string, EvaluatedPartV7>();
+  for (let outputIndex = 0; outputIndex < selectedOutputs.length; outputIndex += 1) {
+    const selected = selectedOutputs[outputIndex]!;
+    let geometry: EvaluatedPartGeometryV7;
+    if (selected.geometry.kind === "solid") {
+      geometry = importedBodyApply<EvaluatedPartGeometryV7>(
+        importedBodyObjectFreeze,
+        Object,
+        [
+          {
+            kind: "solid",
+            node: selected.geometry.nodeId,
+            solid: new StagedBodySetEvaluatedSolidV7(
+              selected.name,
+              owner,
+              shapesByNode.get(selected.geometry.nodeId)!,
+              kernelAccess.value,
+            ),
+          },
+        ],
+      );
+    } else {
+      const bodies: EvaluatedBodyV7[] = [];
+      for (
+        let bodyIndex = 0;
+        bodyIndex < selected.geometry.node.bodies.length;
+        bodyIndex += 1
+      ) {
+        const member = selected.geometry.node.bodies[bodyIndex]!;
+        const solid = new StagedBodySetEvaluatedSolidV7(
+          member.name ?? member.id,
+          owner,
+          shapesByNode.get(member.solid.node)!,
+          kernelAccess.value,
+        );
+        importedBodyArrayAppend(
+          bodies,
+          importedBodyApply<EvaluatedBodyV7>(
+            importedBodyObjectFreeze,
+            Object,
+            [
+              {
+                id: member.id,
+                node: member.solid.node,
+                ...(member.name === undefined
+                  ? {}
+                  : { name: member.name }),
+                ...(member.metadata === undefined
+                  ? {}
+                  : { metadata: member.metadata }),
+                solid,
+              },
+            ],
+          ),
+        );
+      }
+      geometry = importedBodyApply<EvaluatedPartGeometryV7>(
+        importedBodyObjectFreeze,
+        Object,
+        [
+          {
+            kind: "bodySet",
+            node: selected.geometry.nodeId,
+            bodySet: new EvaluatedBodySetV7(
+              selected.name,
+              owner,
+              bodies,
+              kernelAccess.value.representation,
+              kernelAccess.value.exact,
+            ),
+          },
+        ],
+      );
+    }
+    const resolved = resolvedParts.get(selected.nodeId)!;
+    const value = importedBodyApply<EvaluatedPartValueV7>(
+      importedBodyObjectFreeze,
+      Object,
+      [
+        {
+          node: selected.nodeId,
+          kernelId: kernelAccess.value.id,
+          definition: selected.node,
+          geometry,
+          representation: kernelAccess.value.representation,
+          exact: kernelAccess.value.exact,
+          ...(resolved.materialId === undefined
+            ? {}
+            : { materialId: resolved.materialId }),
+          ...(resolved.materialDefinition === undefined
+            ? {}
+            : { materialDefinition: resolved.materialDefinition }),
+          ...(resolved.massDensity === undefined
+            ? {}
+            : { massDensity: resolved.massDensity }),
+          ...(resolved.massDensitySource === undefined
+            ? {}
+            : { massDensitySource: resolved.massDensitySource }),
+        },
+      ],
+    );
+    outputs.set(
+      selected.name,
+      new EvaluatedPartV7(selected.name, owner, value),
+    );
+  }
+  const publicParameters = importedBodyApply<Record<string, number>>(
+    importedBodyObjectCreate,
+    Object,
+    [null],
+  );
+  for (const [id, value] of parameterValues) {
+    importedBodyApply<void>(importedBodyObjectDefineProperty, Object, [
+      publicParameters,
+      id,
+      {
+        configurable: true,
+        enumerable: true,
+        writable: false,
+        value,
+      },
+    ]);
+  }
+  importedBodyApply<void>(importedBodyObjectFreeze, Object, [
+    publicParameters,
+  ]);
+  const evaluated = new EvaluatedPartDesignV7(
+    owner,
+    outputs,
+    selectedConfigurationId,
+    publicParameters,
+    importedBodyApply<readonly Diagnostic[]>(
+      importedBodyObjectFreeze,
+      Object,
+      [diagnostics],
+    ),
+  );
+  const finalBoundary = partPostBoundaryFailure(options.signal);
   if (finalBoundary !== undefined) {
     return failAfterCleanup(finalBoundary);
   }
