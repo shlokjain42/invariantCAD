@@ -127,7 +127,7 @@
     "@playwright/test": "^1.61.1",
     "@types/node": "^26.1.1",
     "@vitest/coverage-v8": "^4.1.10",
-    "mint": "4.2.740",
+    "mint": "4.2.742",
     "oxlint": "1.75.0",
     "publint": "^0.3.22",
     "tsup": "^8.5.1",
