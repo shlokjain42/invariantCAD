@@ -130,11 +130,11 @@ format chooses the reader; committed `mediaType` is provenance and resolver
 context, not reader inference. The caller supplies the digest and byte-length
 commitments; the facade does not read or hash the resource bytes. Ordered
 resource locations are resolver hints only. Neither the facade nor the staged
-evaluators perform file, URL, or package I/O. Building validates namespaces,
-commitments, owner identity, material and configuration references, dense
-collections, unique member IDs, and caller-selected `DesignDocumentLimits`
-before returning detached, deeply frozen v7 data. Immediate authoring ceilings
-default to
+evaluators perform file, URL, or package I/O. Authoring methods validate
+namespaces, commitments, owner identity, material and configuration references,
+dense collections, and unique member IDs. Build applies caller-selected
+`DesignDocumentLimits` and strict v7 validation before returning detached,
+deeply frozen v7 data. Immediate authoring ceilings default to
 `10,000` resources, `100,000` aggregate location hints, and `16 MiB` of
 aggregate UTF-8 location text. An individual body set is also rejected before
 copying above the default `1,000,000` structural-value ceiling. Caller-selected

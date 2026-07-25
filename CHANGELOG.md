@@ -49,15 +49,16 @@
   text/binary BREP imports require declared units, and every import fixes
   healing to `none` and expects one solid. Body sets preserve unique member
   IDs, authored order, optional names, detached metadata, and shared-leaf
-  memberships. Build enforces ownership, namespaces, dense non-empty
-  collections, commitments, material/configuration references, exact plain
-  own-data option records, and caller-selectable document limits before
-  returning a detached, deeply frozen, strictly valid v7 document. Unknown or
-  accessor-backed parameter, configuration, material, part, resource, import,
-  and membership fields are rejected rather than silently discarded. The
-  facade remains source-only: it does not add a root or package-subpath API,
-  general feature graphs, assemblies, external occurrences, datums, location
-  I/O, reader inference, healing, or exact aggregate export.
+  memberships. The authoring methods enforce ownership, namespaces, dense
+  non-empty collections, commitments, material/configuration references, and
+  exact plain own-data option records. Build applies caller-selected document
+  limits and strict v7 parsing before returning a detached, deeply frozen
+  document. Unknown or accessor-backed parameter, configuration, material,
+  part, resource, import, and membership fields are rejected rather than
+  silently discarded. The facade remains source-only: it does not add a root
+  or package-subpath API, general feature graphs, assemblies, external
+  occurrences, datums, location I/O, reader inference, healing, or exact
+  aggregate export.
 - Added a source-only staged Document v7 evaluator for outputs that directly
   reference a `bodySet` node. Every authored member is active, there is no
   inferred primary body, and member IDs, order, optional names, and detached
