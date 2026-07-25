@@ -324,6 +324,84 @@ describe("staged document-v7 serialization and validation", () => {
     }
   });
 
+  it("measures raw UTF-8 exactly without normalizing lone surrogates", () => {
+    const canonical = stringifyDocumentV7(stagedV7Document());
+    const originalName = '"name":"document-v7-runtime"';
+    const encoder = new TextEncoder();
+    const names = [
+      "ASCII",
+      "é",
+      "中",
+      "😀",
+      "\ud800x",
+      "x\udc00",
+      "ASCII-é-中-😀-\ud800x\udc00",
+    ];
+
+    for (const name of names) {
+      const source = canonical.replace(
+        originalName,
+        `"name":"${name}"`,
+      );
+      const bytes = encoder.encode(source).byteLength;
+      const exact = parseDocumentV7(source, {
+        limits: { maxDocumentBytes: bytes },
+      });
+      expect(exact.ok, name).toBe(true);
+      if (exact.ok) {
+        expect(exact.value.name, name).toBe(name);
+      }
+
+      const limit = bytes - 1;
+      expect(
+        parseDocumentV7(source, {
+          limits: { maxDocumentBytes: limit },
+        }),
+        name,
+      ).toMatchObject({
+        ok: false,
+        diagnostics: [
+          {
+            code: "IR_INVALID",
+            message: `Design-document maxDocumentBytes limit ${limit} was exceeded before UTF-8 buffer materialization`,
+            details: {
+              resource: "maxDocumentBytes",
+              limit,
+              actualAtLeast: limit + 1,
+            },
+          },
+        ],
+      });
+    }
+
+    const literalLoneSurrogate = canonical.replace(
+      originalName,
+      '"name":"\ud800"',
+    );
+    const escapedLoneSurrogate = canonical.replace(
+      originalName,
+      '"name":"\\ud800"',
+    );
+    const literalBytes = encoder.encode(literalLoneSurrogate).byteLength;
+    const escapedBytes = encoder.encode(escapedLoneSurrogate).byteLength;
+    expect(encoder.encode("\ud800").byteLength).toBe(3);
+    expect(encoder.encode("\\ud800").byteLength).toBe(6);
+    expect(escapedBytes - literalBytes).toBe(3);
+
+    const literal = parseDocumentV7(literalLoneSurrogate, {
+      limits: { maxDocumentBytes: literalBytes },
+    });
+    const escaped = parseDocumentV7(escapedLoneSurrogate, {
+      limits: { maxDocumentBytes: escapedBytes },
+    });
+    expect(literal.ok).toBe(true);
+    expect(escaped.ok).toBe(true);
+    if (literal.ok && escaped.ok) {
+      expect(literal.value.name).toBe("\ud800");
+      expect(escaped.value.name).toBe(literal.value.name);
+    }
+  });
+
   it("keeps malformed JSON and byte-limit failures ahead of member auditing", () => {
     expect(parseDocumentV7('{"name":1,"name":2')).toMatchObject({
       ok: false,
@@ -352,10 +430,11 @@ describe("staged document-v7 serialization and validation", () => {
       diagnostics: [
         {
           code: "IR_INVALID",
+          message: `Design-document maxDocumentBytes limit ${bytes - 1} was exceeded before UTF-8 buffer materialization`,
           details: {
             resource: "maxDocumentBytes",
             limit: bytes - 1,
-            actual: bytes,
+            actualAtLeast: bytes,
           },
         },
       ],
@@ -374,6 +453,44 @@ describe("staged document-v7 serialization and validation", () => {
           details: {
             reason: "duplicate-json-member",
           },
+        },
+      ],
+    });
+
+    const malformedDuplicate = duplicate.slice(0, -1);
+    const malformedBytes = new TextEncoder().encode(
+      malformedDuplicate,
+    ).byteLength;
+    expect(
+      parseDocumentV7(malformedDuplicate, {
+        limits: {
+          maxDocumentBytes: malformedBytes - 1,
+        },
+      }),
+    ).toMatchObject({
+      ok: false,
+      diagnostics: [
+        {
+          details: {
+            resource: "maxDocumentBytes",
+            limit: malformedBytes - 1,
+            actualAtLeast: malformedBytes,
+          },
+        },
+      ],
+    });
+    expect(
+      parseDocumentV7(malformedDuplicate, {
+        limits: {
+          maxDocumentBytes: malformedBytes,
+        },
+      }),
+    ).toMatchObject({
+      ok: false,
+      diagnostics: [
+        {
+          code: "IR_INVALID",
+          message: "The document is not valid JSON",
         },
       ],
     });

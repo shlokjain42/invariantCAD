@@ -5,6 +5,7 @@ import {
   canonicalStringifyProtocolWithin,
   deepFreeze,
 } from "./core/json.js";
+import { utf8ByteLengthWithin } from "./core/utf8.js";
 import {
   diagnostic,
   failure,
@@ -60,7 +61,6 @@ const SerializationIntrinsicArrayPrototype = Array.prototype;
 const SerializationIntrinsicJson = JSON;
 const SerializationIntrinsicObject = Object;
 const SerializationIntrinsicReflect = Reflect;
-const SerializationIntrinsicTextEncoder = TextEncoder;
 const serializationIntrinsicArrayIsArray =
   SerializationIntrinsicArray.isArray;
 const serializationIntrinsicArrayMap =
@@ -79,10 +79,7 @@ const serializationIntrinsicObjectHasOwn =
 const serializationIntrinsicObjectKeys = SerializationIntrinsicObject.keys;
 const serializationIntrinsicReflectOwnKeys =
   SerializationIntrinsicReflect.ownKeys;
-const serializationIntrinsicTextEncoderEncode =
-  SerializationIntrinsicTextEncoder.prototype.encode;
 const serializationReflectApply = SerializationIntrinsicReflect.apply;
-const serializationTextEncoder = new SerializationIntrinsicTextEncoder();
 
 function serializationIntegrityFailure<T>(): CadResult<T> {
   return failure(
@@ -136,15 +133,6 @@ function serializationSort<T>(
   compare: (first: T, second: T) => number,
 ): void {
   serializationReflectApply(serializationIntrinsicArraySort, value, [compare]);
-}
-
-function serializationUtf8ByteLength(value: string): number {
-  const bytes = serializationReflectApply(
-    serializationIntrinsicTextEncoderEncode,
-    serializationTextEncoder,
-    [value],
-  ) as Uint8Array;
-  return bytes.byteLength;
 }
 
 function serializationJsonParse(value: string): unknown {
@@ -682,9 +670,12 @@ export function parseDocumentV7(
     return serializationIntegrityFailure();
   }
   if (!normalizedLimits.ok) return normalizedLimits;
-  let documentBytes: number;
+  let documentBytes: number | undefined;
   try {
-    documentBytes = serializationUtf8ByteLength(source);
+    documentBytes = utf8ByteLengthWithin(
+      source,
+      normalizedLimits.value.maxDocumentBytes,
+    );
   } catch {
     if (!documentV7RuntimeIntrinsicsAreIntact()) {
       return serializationIntegrityFailure();
@@ -700,17 +691,21 @@ export function parseDocumentV7(
   if (!documentV7RuntimeIntrinsicsAreIntact()) {
     return serializationIntegrityFailure();
   }
-  if (documentBytes > normalizedLimits.value.maxDocumentBytes) {
+  if (documentBytes === undefined) {
     return failure(
       diagnostic(
         "IR_INVALID",
-        `Design-document maxDocumentBytes limit ${normalizedLimits.value.maxDocumentBytes} was exceeded by ${documentBytes}`,
+        `Design-document maxDocumentBytes limit ${normalizedLimits.value.maxDocumentBytes} was exceeded before UTF-8 buffer materialization`,
         {
           severity: "error",
           details: {
             resource: "maxDocumentBytes",
             limit: normalizedLimits.value.maxDocumentBytes,
-            actual: documentBytes,
+            actualAtLeast:
+              source.length >
+              normalizedLimits.value.maxDocumentBytes
+                ? source.length
+                : normalizedLimits.value.maxDocumentBytes + 1,
           },
         },
       ),
