@@ -15,6 +15,7 @@ const IntrinsicMath = Math;
 const IntrinsicNumber = Number;
 const IntrinsicObject = Object;
 const IntrinsicPromise = Promise;
+const IntrinsicRangeError = RangeError;
 const IntrinsicReflect = Reflect;
 const IntrinsicRegExp = RegExp;
 const IntrinsicSet = Set;
@@ -284,6 +285,7 @@ for (const owner of [
   IntrinsicMap.prototype,
   IntrinsicObject.prototype,
   IntrinsicPromise.prototype,
+  IntrinsicRangeError.prototype,
   IntrinsicRegExp.prototype,
   IntrinsicSet.prototype,
   IntrinsicString.prototype,
@@ -367,7 +369,10 @@ const SELECTED_PROPERTIES = [
       "POSITIVE_INFINITY",
     ],
   ],
-  [IntrinsicMath, ["PI", "abs", "ceil", "hypot", "max", "min", "round"]],
+  [
+    IntrinsicMath,
+    ["PI", "abs", "ceil", "hypot", "max", "min", "round", "sign"],
+  ],
   [IntrinsicReflect, ["apply", "ownKeys"]],
   [IntrinsicJSON, ["parse", "stringify"]],
   [
@@ -375,6 +380,7 @@ const SELECTED_PROPERTIES = [
     ["iterator", "hasInstance", "species"],
   ],
   [IntrinsicPromise, ["prototype", "resolve", "all"]],
+  [IntrinsicRangeError, ["prototype"]],
   [IntrinsicError, ["prototype"]],
   [IntrinsicTypeError, ["prototype"]],
   [IntrinsicSyntaxError, ["prototype"]],
@@ -422,6 +428,7 @@ const GLOBAL_BINDING_NAMES = [
   "Number",
   "Object",
   "Promise",
+  "RangeError",
   "Reflect",
   "RegExp",
   "Set",
