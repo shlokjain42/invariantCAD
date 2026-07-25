@@ -67,20 +67,60 @@ Provides:
 Exact native STEP/BREP assembly structure is not a separate 0.1 product-data
 model; an aggregate export follows the current evaluated geometry behavior.
 
-## Repository-only staged Document v7 imports, body sets, and parts
+## Repository-only staged Document v7 imports, body sets, parts, and datums
 
 The repository-only `stagedBodySetDesignV7(...)` facade can now author the
-direct graph admitted by the staged import, body-set, and part evaluators
-without hand-writing v7 IR. It admits typed length and mass-density parameters,
-named parameter and part-material configurations, document-owned materials,
-boxes, cylinders, spheres, content commitments, imported bodies, body sets,
-and parts over one direct leaf or body set. Outputs may directly reference an
-imported body, body set, or part. The built `DesignDocumentV7` is detached,
-deeply frozen, and accepted by strict v7 parsing and semantic validation;
-`build({ limits })` can apply partial `DesignDocumentLimits` overrides and
-raises a `CadError` rather than returning an invalid document. The facade is
-not a root or package-subpath export and does not change the public v6 builder
-or evaluator types.
+direct graph admitted by the staged import, body-set, and part evaluators, plus
+the nodes admitted by the datum resolver, without hand-writing v7 IR. It admits
+typed length, mass-density, and scalar parameters; named parameter and
+part-material configurations; document-owned materials; boxes, cylinders,
+spheres; content commitments; imported bodies; body sets; parts over one
+direct leaf or body set; and datum points, axes, planes, and coordinate
+systems. Outputs may directly reference an imported body, body set, or part;
+datums are selected separately by node ID and are never design outputs. The
+built `DesignDocumentV7` is detached, deeply frozen, and accepted by strict v7
+parsing and semantic validation; `build({ limits })` can apply partial
+`DesignDocumentLimits` overrides and raises a `CadError` rather than returning
+an invalid document. The facade is not a root or package-subpath export and
+does not change the public v6 builder or evaluator types.
+
+### Datum-node resolution
+
+The source-only `evaluateDatumNodesV7(...)` operation resolves selected
+Document v7 datum node IDs without creating or borrowing a geometry kernel.
+Its source-only contract types are `EvaluateDatumNodesV7Options`,
+`DatumEvaluationLimitsV7`, and `EvaluatedDatumNodesV7`. Node-ID selection
+is intentionally separate from `document.outputs`: attempting to make a datum
+an output remains invalid, and the public evaluated-output union is unchanged.
+The `nodes` option preserves the first occurrence of each requested ID; when it
+is omitted, every datum node is selected in lexical ID order. The result
+contains the selected `configurationId`, resolved `parameters`, ordered
+`nodeIds`, a keyed `datums` record, and structured `diagnostics`.
+
+Resolution applies parameter defaults, the selected named configuration, and
+then bounded caller parameter overrides. A resolved point contains its
+length-valued position. A resolved axis contains its origin and normalized
+direction. Resolved planes and coordinate systems contain deterministic,
+orthonormal, right-handed frames. Direction components must resolve to finite
+numbers and each direction must have nonzero length. After normalization, a
+plane's positive-X direction and normal, or a coordinate system's positive-X
+and positive-Y directions, must have an absolute dot product no greater than
+the fixed `1e-12` threshold. Accepted pairs are deterministically
+re-orthonormalized rather than returning floating-point drift as authored
+frame semantics.
+
+Selected-node work and caller parameter overrides are bounded independently by
+`maxSelectedNodes` and `maxParameterOverrides`. The operation also applies
+caller-selected document limits, checks cancellation, guards runtime integrity,
+and contains hostile descriptors and opaque thrown values behind structured
+diagnostics. Successful resolved values are detached and deeply frozen.
+Because the operation performs only expression and frame evaluation, it has no
+kernel capability, approximation, native-handle, or kernel-cleanup boundary.
+
+This slice does not connect a datum plane to a sketch, admit datums into shape
+algebra, evaluate assemblies or external occurrences, add datum design
+outputs, or promote Document v7. Those remain unsupported rather than being
+inferred from the existence of resolved frames.
 
 An output authored from a `StagedImportedBodyRefV7` can be selected by the
 source-only `evaluateImportedBodyOutputsV7(...)` operation. That operation
@@ -222,11 +262,11 @@ mesh, export, measurement, BOM, and metadata values already returned to the
 caller remain detached. The caller-supplied kernel is borrowed and is never
 disposed by the staged design.
 
-The staged part slice still excludes assemblies, external occurrences, datums,
-healing, location I/O, body-consuming operations, and general dependency
-graphs. It does not widen the package-root `EvaluatedOutput` union, public
-document alias, builder, evaluator, CLI, or migration target; those remain on
-the frozen v6 surface.
+The staged geometry slices still exclude assemblies, external occurrences,
+datum-backed sketches, healing, location I/O, body-consuming operations, and
+general dependency graphs. The separate datum resolver does not widen the
+package-root `EvaluatedOutput` union, public document alias, builder, evaluator,
+CLI, or migration target; those remain on the frozen v6 surface.
 
 ## Lifetime
 

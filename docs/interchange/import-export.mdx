@@ -208,18 +208,21 @@ measurement, exact aggregate STEP/BREP, a cross-body topology namespace,
 interference subtraction, or primary-body inference. Bare body sets still have
 no aggregate mass contract; the part supplies the uniform-density semantics.
 
-The authoring facade and all three staged evaluator slices remain
-repository-only: none is exported by the package root, available from a
-package subpath, or integrated with the public builder or CLI. The facade does
-not author assemblies, external occurrences, datums, transforms, Booleans,
+The authoring facade, all three staged geometry-evaluator slices, and the
+kernel-independent datum resolver remain repository-only: none is exported by
+the package root, available from a package subpath, or integrated with the
+public builder or CLI. The facade can author datum points, axes, planes, and
+coordinate systems, but they are resolved by selected node ID rather than
+published as design outputs or consumed by sketches or shape algebra. It still
+does not author assemblies, external occurrences, transforms, Booleans,
 body-consuming operations, per-body materials, or general dependency graphs,
-and the staged evaluators do not evaluate those structures. The facade cannot
-publish a direct primitive or generic-solid output either. The operations
-perform no location I/O and admit no healing beyond `none`. A resource's
-`mediaType` is committed provenance passed to the resolver; it is not used to
-choose the reader or accepted as a substitute for the imported-body node's
-explicit `format`. A versioned format-to-media-type policy is still required
-before public promotion.
+and the staged geometry evaluators do not evaluate those structures. The
+facade cannot publish a direct primitive or generic-solid output either. The
+operations perform no location I/O and admit no healing beyond `none`. A
+resource's `mediaType` is committed provenance passed to the resolver; it is
+not used to choose the reader or accepted as a substitute for the
+imported-body node's explicit `format`. A versioned format-to-media-type policy
+is still required before public promotion.
 
 There are deliberately two kernel boundaries:
 
