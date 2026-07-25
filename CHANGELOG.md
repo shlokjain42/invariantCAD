@@ -2,13 +2,26 @@
 
 ## [Unreleased]
 
+- Added a source-only staged Document v7 evaluator for outputs that directly
+  reference a `bodySet` node. Every authored member is active, there is no
+  inferred primary body, and member IDs, order, optional names, and detached
+  metadata survive evaluation. The admitted leaves are limited to direct
+  boxes, cylinders, spheres, and imported bodies. Native-only sets may use an
+  exact or approximate kernel and identify that representation; imported
+  members still require caller-resolved, digest-verified bytes and the strong
+  exact B-Rep import contract. Each body can be meshed, measured, inspected for
+  topology when supported, and exported through its kernel capabilities.
+  Aggregate mesh, STL, and OBJ are explicitly approximate/lossy. Exact
+  aggregate STEP/BREP, aggregate mass or topology namespaces, downstream
+  feature graphs, product structure, healing, location I/O, and public v7
+  promotion remain unsupported.
 - Added the first source-only staged Document v7 evaluation slice for outputs
   that directly reference an `importedBody` node. It verifies caller-resolved
   bytes against the document's byte-length and SHA-256 commitments before
   invoking the kernel's strong exact single-solid import contract, and it
-  fails closed instead of falling back to weak native import. This does not
-  promote v7 or add a package entry point, location I/O, healing, body-set
-  evaluation, or downstream feature composition; `mediaType` remains bound
+  fails closed instead of falling back to weak native import. That direct-output
+  operation does not promote v7 or add a package entry point, location I/O,
+  healing, or downstream feature composition; `mediaType` remains bound
   provenance pending a versioned format-to-media-type policy.
 - Made staged Document v7 commutative topology-query serialization use
   locale-independent UTF-16 code-unit ordering, including nested negation and

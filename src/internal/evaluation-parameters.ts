@@ -14,7 +14,11 @@ import {
   type Dimension,
   type ExpressionIR,
 } from "../expressions.js";
-import type { DesignConfigurationIR, DesignDocument } from "../ir.js";
+import type {
+  DesignConfigurationIR,
+  DesignDocument,
+  DesignDocumentV7,
+} from "../ir.js";
 
 export type EvaluationParameterOverride = number | Expression<Dimension>;
 
@@ -118,7 +122,7 @@ function parameterCycleMembers(
  * a sketch solver or geometry kernel.
  */
 export function resolveEvaluationParameters(
-  document: DesignDocument,
+  document: DesignDocument | DesignDocumentV7,
   overrides: Readonly<Record<string, EvaluationParameterOverride>>,
   configurationId: ConfigurationId | null,
   configuration: DesignConfigurationIR | undefined,

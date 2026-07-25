@@ -107,11 +107,21 @@ not in the product roadmap.
 
 Document v7 resource resolution, datums, richer shape algebra, body-set and
 multibody results, imported-body nodes, external occurrences, and feature-hash
-protocol v2 are also staged internally. A source-only executable slice now
+protocol v2 are also staged internally. One source-only executable slice
 evaluates outputs that directly reference an imported-body node by verifying
 caller-resolved bytes and invoking the kernel's strong exact single-solid
-import contract. It performs no location I/O or weak-import fallback and does
-not yet cover healing, body sets, or downstream feature composition.
+import contract. A second evaluates outputs that directly reference a body set
+whose members are direct box, cylinder, sphere, or imported-body leaves. It
+preserves authored member identity, order, names, and metadata, treats every
+listed member as active with no inferred primary, and reports whether a
+native-only result is exact or approximate. Imported members retain the
+verified-resource and strong exact B-Rep requirement.
+
+The staged body-set result supports per-body mesh and measurement, plus
+capability-gated topology and native single-body export. Aggregate mesh, STL,
+and OBJ are explicitly approximate/lossy. Exact aggregate STEP/BREP, aggregate
+mass or topology semantics, downstream feature composition, parts, assemblies,
+external occurrences, healing, and location I/O remain unsupported.
 `mediaType` remains committed provenance pending a versioned
 format-to-media-type policy. These are correctness-tested design inputs for
 Milestone 1, not public authoring or evaluation capabilities. The public
@@ -202,7 +212,7 @@ artifacts.
 
 ## Milestone 1 — Document v7 modeling foundation
 
-**Status: Next**
+**Status: In progress**
 
 This milestone introduces the algebra and resource graph needed by nearly every
 later CAD domain.
