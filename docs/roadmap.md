@@ -110,19 +110,21 @@ multibody results, imported-body nodes, external occurrences, and feature-hash
 protocol v2 are also staged internally. A source-only
 `stagedBodySetDesignV7(...)` facade now authors the complete direct graph
 admitted by the staged evaluators and datum resolver: typed length,
-mass-density, and scalar parameters; named parameter and part-material
-configurations; document-owned materials; boxes, cylinders, spheres;
-content-addressed resource commitments; imported-body leaves; body sets; parts
-over one direct leaf or body set; datum points, axes, planes, and coordinate
-systems; and direct imported-body/body-set/part outputs. Datums remain
-addressable nodes rather than design outputs. The facade produces detached,
-deeply frozen, strictly valid v7 documents while enforcing namespaces, typed
-builder ownership, exact plain own-data options, dense collections, unique
-memberships, commitments, material/configuration references, and authoring
-limits. Resource locations remain inert resolver hints, and the imported
-node's explicit format—not `mediaType`—selects STEP or BREP interpretation. The
-caller computes each digest and byte-length commitment; the facade performs no
-resource-byte I/O or hashing.
+mass-density, and scalar parameters; named parameter, part-material, and root
+instance-suppression configurations; document-owned materials; boxes,
+cylinders, spheres; content-addressed resource commitments; imported-body
+leaves; body sets; parts over one direct leaf or body set; flat fixed-placement
+assemblies of local parts with per-occurrence configuration selectors; datum
+points, axes, planes, and coordinate systems; and direct
+imported-body/body-set/part/local-assembly outputs. Datums remain addressable
+nodes rather than design outputs. The facade produces detached, deeply frozen,
+strictly valid v7 documents while enforcing namespaces, typed builder
+ownership, exact plain own-data options, dense collections, unique
+memberships and occurrence IDs, commitments, material/configuration
+references, and authoring limits. Resource locations remain inert resolver
+hints, and the imported node's explicit format—not `mediaType`—selects STEP or
+BREP interpretation. The caller computes each digest and byte-length
+commitment; the facade performs no resource-byte I/O or hashing.
 
 One source-only executable slice evaluates outputs that directly reference an
 imported-body node by verifying caller-resolved bytes and invoking the kernel's
@@ -139,10 +141,23 @@ single-solid/body-set result union. The staged facade now constructs that exact
 part boundary, including typed material definitions, part metadata, explicit
 density, and named material substitution.
 
-A fourth source-only operation, `evaluateDatumNodesV7(...)`, resolves selected
-datum node IDs without a geometry kernel. Parameter values follow base,
-selected-configuration, then caller-override precedence. Points retain their
-resolved position; axes normalize their direction; planes and coordinate
+A fourth geometry operation, `evaluateLocalAssemblyOutputsV7(...)`, evaluates
+selected outputs whose active instances directly reference local parts.
+Stable one-segment occurrence paths, root configuration suppression, explicit
+false unsuppression, and inherited, base, or named child configuration
+selection are executable. One part result is reused per effective
+`(part, configuration)` state, and leaf acquisition is deduplicated by node
+within each configuration batch, without collapsing occurrences, multibody
+memberships, or contextual BOM rows. Aggregate mesh/STL/OBJ remains
+approximate/lossy, while physical mass composes each occurrence's effective
+density and affine placement. Effectively suppressed unsupported components
+are inert; active nested local assemblies and external components fail before
+resource resolution or kernel work.
+
+A separate source-only operation, `evaluateDatumNodesV7(...)`, resolves
+selected datum node IDs without a geometry kernel. Parameter values follow
+base, selected-configuration, then caller-override precedence. Points retain
+their resolved position; axes normalize their direction; planes and coordinate
 systems return deterministic orthonormal right-handed frames. Direction inputs
 must be finite and nonzero, and normalized authored direction pairs must be
 orthogonal within a fixed absolute dot-product threshold of `1e-12` before
@@ -158,15 +173,18 @@ uniform density and additive independent-body physical-mass semantics, with
 aliases and overlaps counted per authored membership, plus a one-row BOM.
 Those numeric properties inherit backend measurement quality. Bare body sets
 still have no aggregate mass; exact aggregate STEP/BREP, aggregate geometric
-measurement or topology, downstream feature composition, assemblies, external
-occurrences, healing, and location I/O remain unsupported. `mediaType` remains
-committed provenance pending a versioned format-to-media-type policy. The
-facade still excludes assemblies, external occurrences, datum-backed sketches,
-transforms, Booleans, body-consuming operations, per-body materials, and
-general feature graphs, including generic solid and direct primitive outputs.
-These are correctness-tested design inputs for Milestone 1, not public
-authoring or evaluation capabilities. No root export, package subpath, or CLI
-surface was added; the public document alias and migration target remain v6.
+measurement or topology, downstream feature composition, nested local
+assemblies, external occurrence evaluation, healing, and location I/O remain
+unsupported. Local-assembly exact aggregate export, aggregate geometric
+measurement or topology, mates, motion, and interference/collision are also
+unsupported. `mediaType` remains committed provenance pending a versioned
+format-to-media-type policy. The facade still excludes nested local assemblies,
+external occurrences, datum-backed sketches, transforms, Booleans,
+body-consuming operations, per-body materials, and general feature graphs,
+including generic solid and direct primitive outputs. These are
+correctness-tested design inputs for Milestone 1, not public authoring or
+evaluation capabilities. No root export, package subpath, or CLI surface was
+added; the public document alias and migration target remain v6.
 
 The staged v7 text parser rejects duplicate decoded JSON object members,
 including escape-equivalent names, and applies structural and nesting ceilings

@@ -2,6 +2,32 @@
 
 ## [Unreleased]
 
+- Extended the repository-only `stagedBodySetDesignV7(...)` facade with
+  source-only flat local assembly authoring and evaluation. The staged
+  `assembly(...)` callback receives a `StagedLocalAssemblyBuilderV7` whose
+  instances reference owned local parts, retain stable one-segment occurrence
+  IDs and ordered placements, and select `inherit`, `base`, or named
+  configuration context. Named
+  `configuration.instanceSuppressed(...)` overrides apply to the selected root
+  assembly and can either suppress an instance or explicitly unsuppress one
+  authored as suppressed. `evaluateLocalAssemblyOutputsV7(...)` returns owned
+  `EvaluatedLocalAssemblyDesignV7`, `EvaluatedLocalAssemblyV7`, and
+  `EvaluatedLocalOccurrenceV7` results for active direct local-part instances.
+  Repeated occurrences reuse one evaluated part result per effective
+  `(part, configuration)` context within one call, while leaf acquisition is
+  also deduplicated by leaf node inside each configuration batch. Neither
+  optimization collapses occurrences, multibody memberships, or BOM
+  quantities. Aggregate mesh,
+  STL, and OBJ remain approximate/lossy; contextual BOM and placed physical
+  mass preserve each occurrence's effective material, density, configuration,
+  and affine placement. Document, resource, and assembly-evaluation limits,
+  cancellation, runtime-integrity checks, hostile-boundary containment,
+  transactional shape cleanup, and borrowed-kernel ownership apply throughout.
+  Effectively suppressed unsupported components are inert, while active nested
+  local assemblies and external components are rejected before resolver or
+  kernel work. This adds no external-document evaluation, nesting, mates,
+  interference, exact aggregate STEP/BREP, cross-run cache, CLI surface, or
+  public Document v7 promotion; the public v6 API is unchanged.
 - Extended the repository-only `stagedBodySetDesignV7(...)` facade with typed
   scalar parameters and owned Document v7 datum-point, datum-axis, datum-plane,
   and coordinate-system authoring. A separate source-only

@@ -88,6 +88,51 @@ degrees-of-freedom analysis, motion study, contact, or interference engine yet.
 Those are planned as separate protocols rather than hidden behavior inside
 fixed transforms.
 
+## Repository-only Document v7 local-assembly slice
+
+The staged Document v7 facade now provides a separate source-only
+`assembly(...)` authoring method. Its callback receives a
+`StagedLocalAssemblyBuilderV7` and can add fixed-placement instances of owned
+local parts. These staged assemblies can be published as direct outputs and
+selected by `evaluateLocalAssemblyOutputsV7(...)`. They are not available from
+the package root, a package subpath, the public evaluator, or the CLI.
+
+This first v7 slice is flat. Each active instance must reference a local part
+whose geometry is already admitted by the direct staged part evaluator:
+one supported solid leaf or one supported body set, including
+commitment-verified imported leaves. An instance keeps a stable ID that is its
+complete one-segment path in the selected assembly and an ordered affine
+placement. The ID is identity evidence authored by the document, not inferred
+from array position or geometry.
+
+The configuration selected for the root assembly controls its instance
+suppression. A named
+`configuration.instanceSuppressed(assembly, instanceId, false)` can explicitly
+activate an instance authored as suppressed. Each active instance separately
+selects `inherit`, `base`, or a named configuration for its part. Repeated
+instances of one part retain distinct IDs and quantities while reusing one
+evaluated part result when both the part and effective configuration match.
+Direct part evaluation may additionally acquire a shared leaf node once within
+each configuration batch. Neither optimization creates a cross-run cache or
+geometric-equivalence guarantee.
+
+The result types are `EvaluatedLocalAssemblyDesignV7`,
+`EvaluatedLocalAssemblyV7`, and `EvaluatedLocalOccurrenceV7`. They retain
+ordered active occurrences and their effective configuration, material,
+density, and placement evidence. Whole-assembly mesh, binary/ASCII STL, and OBJ
+are merged placed tessellations and therefore approximate/lossy. Contextual
+BOM and physical-mass operations count every occurrence and every multibody
+membership, transform mass properties by placement, and never fuse overlaps or
+subtract interference.
+
+Suppression is resolved before component admission, so an effectively
+suppressed unsupported component in hand-authored v7 data is inert. An active
+nested local assembly or external component fails with a structured diagnostic
+before resource resolution or geometry-kernel work. Recursive product
+structure, external-document evaluation, mates, joints, DOF, motion, contact,
+interference, collision, assembly topology, aggregate geometric
+`measure()`, and exact aggregate STEP/BREP remain unsupported.
+
 ## Ownership rules
 
 Parts, materials, assemblies, and components must belong to the same
