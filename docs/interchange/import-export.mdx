@@ -103,9 +103,41 @@ try {
 ## Staged Document v7 import and body-set status
 
 The current public authoring grammar does not yet expose an imported-body
-or body-set feature node. These are therefore kernel and staged Document v7
-foundations, not end-user 0.1 modeling workflows. The package-root document
-alias, builder, and evaluator remain on the frozen v6 model.
+or body-set feature node. The repository now contains
+`stagedBodySetDesignV7(...)`, a source-only authoring facade for the exact graph
+admitted by the staged evaluators. This is executable Document v7 evidence, not
+an end-user package workflow: the package-root document alias, builder,
+evaluator, and migration target remain on the frozen v6 model, and no package
+subpath exposes the facade.
+
+The staged facade authors:
+
+- length parameters and named parameter configurations, plus direct boxes,
+  cylinders, and spheres, by privately composing the existing v6 builder;
+- document-owned commitments with an explicit SHA-256 digest, byte length,
+  media type, ordered location hints, and detached metadata;
+- owner-bound imported-body leaves for STEP with file units or text/binary BREP
+  with an explicit `mm`, `cm`, `m`, or `in` length unit;
+- owner-bound body sets whose dense, non-empty ordered memberships directly
+  reference facade-created primitives or imported bodies; and
+- outputs that directly target an imported body or body set.
+
+Every imported node fixes healing to `none` and expects one solid. Its explicit
+format chooses the reader; committed `mediaType` is provenance and resolver
+context, not reader inference. The caller supplies the digest and byte-length
+commitments; the facade does not read or hash the resource bytes. Ordered
+resource locations are resolver hints only. Neither the facade nor either
+evaluator performs file, URL, or package I/O. Building validates namespaces,
+commitments, owner identity, configuration references, dense collections,
+unique member IDs, and caller-selected `DesignDocumentLimits` before returning
+detached, deeply frozen v7 data. Immediate authoring ceilings default to
+`10,000` resources, `100,000` aggregate location hints, and `16 MiB` of
+aggregate UTF-8 location text. An individual body set is also rejected before
+copying above the default `1,000,000` structural-value ceiling. Caller-selected
+build limits can be stricter but cannot raise these immediate safeguards.
+Resource, import, unit-policy, and body-member records must be plain own-data
+records. Accessor-backed and unknown fields are rejected rather than invoked
+or silently interpreted.
 
 The repository has two source-only staged evaluator slices:
 
@@ -146,15 +178,17 @@ resources. Those admission limits do not bound mesh buffers created by later
 facade calls; applications handling hostile or very large tessellations still
 need a disposable worker or process and an application-owned output ceiling.
 
-Neither staged slice is exported by the package root or available through the
-public builder or CLI. They do not evaluate parts, assemblies, external
-occurrences, body-consuming operations, or general dependency graphs. They
-also do not define aggregate mass semantics or a cross-body topology namespace,
-perform location I/O, or admit healing beyond `none`. A resource's `mediaType`
-is currently committed provenance passed to the resolver; it is not used to
-choose the reader or accepted as a substitute for the imported-body node's
-explicit `format`. A versioned format-to-media-type policy is still required
-before public promotion.
+The authoring facade and both staged evaluator slices remain repository-only:
+none is exported by the package root, available from a package subpath, or
+integrated with the public builder or CLI. They do not author or evaluate
+parts, assemblies, external occurrences, datums, body-consuming operations, or
+general dependency graphs; the facade cannot publish a direct primitive or
+generic-solid output either. They also do not define aggregate mass semantics
+or a cross-body topology namespace, perform location I/O, or admit healing
+beyond `none`. A resource's `mediaType` is committed provenance passed to the
+resolver; it is not used to choose the reader or accepted as a substitute for
+the imported-body node's explicit `format`. A versioned format-to-media-type
+policy is still required before public promotion.
 
 There are deliberately two kernel boundaries:
 

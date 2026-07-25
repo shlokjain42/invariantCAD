@@ -107,15 +107,27 @@ not in the product roadmap.
 
 Document v7 resource resolution, datums, richer shape algebra, body-set and
 multibody results, imported-body nodes, external occurrences, and feature-hash
-protocol v2 are also staged internally. One source-only executable slice
-evaluates outputs that directly reference an imported-body node by verifying
-caller-resolved bytes and invoking the kernel's strong exact single-solid
-import contract. A second evaluates outputs that directly reference a body set
-whose members are direct box, cylinder, sphere, or imported-body leaves. It
-preserves authored member identity, order, names, and metadata, treats every
-listed member as active with no inferred primary, and reports whether a
-native-only result is exact or approximate. Imported members retain the
-verified-resource and strong exact B-Rep requirement.
+protocol v2 are also staged internally. A source-only
+`stagedBodySetDesignV7(...)` facade now authors the complete direct graph
+admitted by the staged evaluators: length parameters, named parameter
+configurations, boxes, cylinders, spheres, content-addressed resource
+commitments, imported-body leaves, body sets, and direct imported-body/body-set
+outputs. It produces detached, deeply frozen, strictly valid v7 documents
+while enforcing namespaces, builder ownership, dense collections, unique
+memberships, commitments, configuration references, and authoring limits.
+Resource locations remain inert resolver hints, and the imported node's
+explicit format—not `mediaType`—selects STEP or BREP interpretation. The caller
+computes each digest and byte-length commitment; the facade performs no
+resource-byte I/O or hashing.
+
+One source-only executable slice evaluates outputs that directly reference an
+imported-body node by verifying caller-resolved bytes and invoking the kernel's
+strong exact single-solid import contract. A second evaluates outputs that
+directly reference a body set whose members are direct box, cylinder, sphere,
+or imported-body leaves. It preserves authored member identity, order, names,
+and metadata, treats every listed member as active with no inferred primary,
+and reports whether a native-only result is exact or approximate. Imported
+members retain the verified-resource and strong exact B-Rep requirement.
 
 The staged body-set result supports per-body mesh and measurement, plus
 capability-gated topology and native single-body export. Aggregate mesh, STL,
@@ -123,9 +135,12 @@ and OBJ are explicitly approximate/lossy. Exact aggregate STEP/BREP, aggregate
 mass or topology semantics, downstream feature composition, parts, assemblies,
 external occurrences, healing, and location I/O remain unsupported.
 `mediaType` remains committed provenance pending a versioned
-format-to-media-type policy. These are correctness-tested design inputs for
-Milestone 1, not public authoring or evaluation capabilities. The public
-document alias and migration target remain v6.
+format-to-media-type policy. The facade also excludes parts, assemblies,
+datums, sketches, transforms, Booleans, body-consuming operations, and general
+feature graphs, including generic solid and direct primitive outputs. These are
+correctness-tested design inputs for Milestone 1, not public authoring or
+evaluation capabilities. No root export, package subpath, or CLI surface was
+added; the public document alias and migration target remain v6.
 
 The staged v7 text parser rejects duplicate decoded JSON object members,
 including escape-equivalent names, and applies structural and nesting ceilings
@@ -248,6 +263,12 @@ later CAD domain.
 An imported exact body and a native multibody design can be authored,
 serialized, migrated, evaluated, inspected, and exported without escaping the
 document model. Their identities and resource inputs are reproducible.
+
+The repository-only facade and staged evaluators now exercise that workflow for
+direct imported bodies and direct primitive/imported body sets, including real
+Manifold and stock-OCCT acceptance paths. The milestone remains in progress
+because this evidence is source-only and does not yet cover public v7
+promotion, parts/product structure, datums, or general feature graphs.
 
 ## Milestone 2 — everyday part modeling
 

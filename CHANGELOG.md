@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+- Added `stagedBodySetDesignV7(...)`, a repository-only Document v7 authoring
+  facade for the graph already admitted by the staged import and body-set
+  evaluators. It privately composes the frozen v6 builder for length
+  parameters, named parameter configurations, boxes, cylinders, and spheres,
+  then adds document-owned resource commitments, owner-bound imported bodies,
+  body sets, and direct imported-body/body-set outputs. Resources bind an
+  explicit SHA-256 digest, byte length, media type, ordered location hints, and
+  detached metadata; callers compute the commitments, and locations never
+  cause core I/O. STEP imports always use file units, text/binary BREP imports
+  require declared units, and every import fixes healing to `none` and expects
+  one solid. Body sets preserve unique member IDs, authored order, optional
+  names, detached metadata, and shared-leaf memberships. Build enforces
+  ownership, namespaces, dense non-empty collections, commitments,
+  configuration references, exact plain own-data option records, and
+  caller-selectable document limits before returning a detached, deeply
+  frozen, strictly valid v7 document. Unknown or accessor-backed resource,
+  import, and membership fields are rejected rather than silently discarded.
+  The facade remains source-only: it does not add a root or package-subpath
+  API, general feature graphs, parts, assemblies, external occurrences,
+  datums, location I/O, reader inference, healing, or exact aggregate export.
 - Added a source-only staged Document v7 evaluator for outputs that directly
   reference a `bodySet` node. Every authored member is active, there is no
   inferred primary body, and member IDs, order, optional names, and detached

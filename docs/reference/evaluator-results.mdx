@@ -67,7 +67,27 @@ Provides:
 Exact native STEP/BREP assembly structure is not a separate 0.1 product-data
 model; an aggregate export follows the current evaluated geometry behavior.
 
-## Repository-only staged Document v7 body sets
+## Repository-only staged Document v7 imports and body sets
+
+The repository-only `stagedBodySetDesignV7(...)` facade can now author the
+complete graph admitted by the staged import and body-set evaluators without
+hand-writing v7 IR. It privately composes the existing v6 builder for length
+parameters, named parameter configurations, boxes, cylinders, and spheres,
+then adds content commitments, imported bodies, body sets, and outputs. Its
+outputs are limited to a direct imported-body or direct body-set reference.
+The built `DesignDocumentV7` is detached, deeply frozen, and accepted by strict
+v7 parsing and semantic validation; `build({ limits })` can apply partial
+`DesignDocumentLimits` overrides and raises a `CadError` rather than returning
+an invalid document. The facade is not a root or package-subpath export and
+does not change the public v6 builder or evaluator types.
+
+An output authored from a `StagedImportedBodyRefV7` can be selected by the
+source-only `evaluateImportedBodyOutputsV7(...)` operation. That operation
+returns the ordinary `EvaluatedDesign`/`EvaluatedSolid` result shape, but only
+for outputs that directly reference an imported-body node. It requires
+caller-resolved, commitment-verified bytes and the strong exact B-Rep
+single-solid import contract; it never calls the weak native importer or
+converts the result to a mesh backend.
 
 The source tree contains a staged
 `evaluateBodySetOutputsV7(kernel, document, options)` operation for selected
@@ -120,7 +140,8 @@ descriptor containing `id`, source `node`, optional `name`, optional detached
 Whole-set STEP/BREP export, aggregate mass properties, and a cross-body topology
 namespace are unsupported. The staged operation does not fuse bodies or create
 a kernel compound. It also does not evaluate downstream feature graphs, parts,
-assemblies, external occurrences, healing, or location I/O.
+assemblies, external occurrences, datums, healing, or location I/O. The
+authoring facade deliberately cannot construct those unsupported inputs.
 
 The evaluation limits bound document admission and shape acquisition, not mesh
 buffers produced by later facade calls. Tessellation and mesh export remain
