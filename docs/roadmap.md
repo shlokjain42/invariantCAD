@@ -121,8 +121,11 @@ while preserving `TextEncoder` byte semantics for admitted text. Staged v7
 serialization separately counts the topology-normalized compact or pretty
 canonical representation before constructing its complete canonical object
 tree, JSON text, or UTF-8 buffer; staged cloning enforces the same compact byte
-ceiling without serializing. These boundaries remain internal and do not
-promote v7 or change the public v6 alias and migration target.
+ceiling without serializing. The three repository-staged direct schemas expose
+only frozen parse, codec, async, and Standard Schema facades over private Zod
+schemas; arbitrary Zod composition is not presented as an untrusted-runtime
+boundary. These boundaries remain internal and do not promote v7 or change the
+public v6 alias and migration target.
 
 ## Development rules
 

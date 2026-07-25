@@ -1374,6 +1374,58 @@ describe("staged document-v7 serialization and validation", () => {
     }
   });
 
+  it("exposes terminal frozen v7 schema boundaries", () => {
+    const boundaries = [
+      DesignDocumentV7Schema,
+      NodeV7Schema,
+      TopologyReferenceEntryV7Schema,
+    ] as const;
+    const expectedKeys = [
+      "decode",
+      "decodeAsync",
+      "encode",
+      "encodeAsync",
+      "parse",
+      "parseAsync",
+      "safeDecode",
+      "safeDecodeAsync",
+      "safeEncode",
+      "safeEncodeAsync",
+      "safeParse",
+      "safeParseAsync",
+      "spa",
+      "~standard",
+    ];
+
+    for (const boundary of boundaries) {
+      expect(Object.getPrototypeOf(boundary)).toBeNull();
+      expect(Object.isFrozen(boundary)).toBe(true);
+      expect(Object.keys(boundary)).toEqual(expectedKeys);
+      expect("_zod" in boundary).toBe(false);
+      expect("optional" in boundary).toBe(false);
+      expect("in" in boundary).toBe(false);
+      expect(Reflect.set(boundary, "safeParse", () => true)).toBe(false);
+
+      const standard = boundary["~standard"];
+      expect(Object.getPrototypeOf(standard)).toBeNull();
+      expect(Object.isFrozen(standard)).toBe(true);
+      expect(standard.vendor).toBe("invariantcad");
+      expect(standard.version).toBe(1);
+      expect(Reflect.set(standard, "validate", () => true)).toBe(false);
+    }
+
+    if (false) {
+      // @ts-expect-error V7 boundaries intentionally expose no Zod derivation.
+      NodeV7Schema.optional();
+      // @ts-expect-error V7 boundaries intentionally expose no Zod internals.
+      void NodeV7Schema._zod;
+      // @ts-expect-error Free Zod factories are outside the terminal boundary.
+      z.optional(NodeV7Schema);
+      // @ts-expect-error Module-level Zod parsing cannot bypass the facade.
+      z.safeParse(NodeV7Schema, {});
+    }
+  });
+
   it("guards codec and Standard Schema entrypoints before live Promise access", () => {
     const source = stagedV7Document();
     const primitive = source.nodes[nodeId("primitive")];
