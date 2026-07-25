@@ -18,6 +18,7 @@ import type {
   TopologyOriginRelation,
   TopologyQueryIR,
   TopologySelectionIR,
+  TopologySelectionIRV7,
   TopologySourceIR,
 } from "./ir.js";
 import type {
@@ -69,9 +70,23 @@ function assertCompatible<K extends TopologyKind>(
   }
 }
 
-function canonicalLogicalQuery(
+type CanonicalQueryComparator = (
+  first: string,
+  second: string,
+) => number;
+
+function legacyLocaleCompare(first: string, second: string): number {
+  return first.localeCompare(second);
+}
+
+function lexicalCodeUnitCompare(first: string, second: string): number {
+  return first < second ? -1 : first > second ? 1 : 0;
+}
+
+function canonicalLogicalQueryWithComparator(
   op: "and" | "or",
   queries: readonly TopologyQueryIR[],
+  compare: CanonicalQueryComparator,
 ): TopologyQueryIR {
   const flattened = queries.flatMap((query) =>
     query.op === op ? query.queries : [query],
@@ -81,41 +96,101 @@ function canonicalLogicalQuery(
   return {
     op,
     queries: [...unique.entries()]
-      .sort(([first], [second]) => first.localeCompare(second))
+      .sort(([first], [second]) => compare(first, second))
       .map(([, query]) => query),
   };
 }
 
-export function canonicalizeTopologyQueryIR(
+function canonicalLogicalQuery(
+  op: "and" | "or",
+  queries: readonly TopologyQueryIR[],
+): TopologyQueryIR {
+  return canonicalLogicalQueryWithComparator(
+    op,
+    queries,
+    legacyLocaleCompare,
+  );
+}
+
+function canonicalizeTopologyQueryIRWithComparator(
   query: TopologyQueryIR,
+  compare: CanonicalQueryComparator,
 ): TopologyQueryIR {
   switch (query.op) {
     case "and":
     case "or":
-      return canonicalLogicalQuery(
+      return canonicalLogicalQueryWithComparator(
         query.op,
-        query.queries.map(canonicalizeTopologyQueryIR),
+        query.queries.map((child) =>
+          canonicalizeTopologyQueryIRWithComparator(child, compare),
+        ),
+        compare,
       );
     case "not":
-      return { op: "not", query: canonicalizeTopologyQueryIR(query.query) };
+      return {
+        op: "not",
+        query: canonicalizeTopologyQueryIRWithComparator(
+          query.query,
+          compare,
+        ),
+      };
     case "adjacentTo":
       return {
         op: "adjacentTo",
-        selection: canonicalizeTopologySelectionIR(query.selection),
+        selection: canonicalizeTopologySelectionIRWithComparator(
+          query.selection,
+          compare,
+        ),
       };
     default:
       return query;
   }
 }
 
-export function canonicalizeTopologySelectionIR<K extends TopologyKind>(
+function canonicalizeTopologySelectionIRWithComparator<
+  K extends TopologyKind,
+>(
   selection: TopologySelectionIR<K>,
+  compare: CanonicalQueryComparator,
 ): TopologySelectionIR<K> {
   return {
     topology: selection.topology,
-    query: canonicalizeTopologyQueryIR(selection.query),
+    query: canonicalizeTopologyQueryIRWithComparator(
+      selection.query,
+      compare,
+    ),
     cardinality: selection.cardinality,
   };
+}
+
+export function canonicalizeTopologyQueryIR(
+  query: TopologyQueryIR,
+): TopologyQueryIR {
+  return canonicalizeTopologyQueryIRWithComparator(
+    query,
+    legacyLocaleCompare,
+  );
+}
+
+export function canonicalizeTopologySelectionIR<K extends TopologyKind>(
+  selection: TopologySelectionIR<K>,
+): TopologySelectionIR<K> {
+  return canonicalizeTopologySelectionIRWithComparator(
+    selection,
+    legacyLocaleCompare,
+  );
+}
+
+/** Locale-independent staged Document v7 topology-selection normalization. */
+export function canonicalizeTopologySelectionIRV7<
+  K extends TopologyKind,
+>(
+  selection: TopologySelectionIRV7<K>,
+): TopologySelectionIRV7<K> {
+  return canonicalizeTopologySelectionIRWithComparator(
+    selection,
+    lexicalCodeUnitCompare,
+  );
 }
 
 export class TopologySelection<K extends TopologyKind = TopologyKind> {

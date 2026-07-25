@@ -40,7 +40,10 @@ import {
   DesignDocumentV6Schema,
   DesignDocumentV7Schema,
 } from "./schema.js";
-import { canonicalizeTopologySelectionIR } from "./topology.js";
+import {
+  canonicalizeTopologySelectionIR,
+  canonicalizeTopologySelectionIRV7,
+} from "./topology.js";
 import { normalizePersistentTopologyReference } from "./topology-signatures.js";
 import { validateDocument, validateDocumentV7 } from "./validation.js";
 import {
@@ -247,6 +250,10 @@ type SerializableDocument = DesignDocument | DesignDocumentV7;
 function canonicalizeDocumentTopology<T extends SerializableDocument>(
   document: T,
 ): T {
+  const canonicalizeSelection: typeof canonicalizeTopologySelectionIR =
+    document.version === DOCUMENT_VERSION_V7
+      ? canonicalizeTopologySelectionIRV7
+      : canonicalizeTopologySelectionIR;
   const sourceNodes = document.nodes as unknown as Readonly<
     Record<string, NodeIR | NodeIRV7>
   >;
@@ -259,17 +266,17 @@ function canonicalizeDocumentTopology<T extends SerializableDocument>(
       node.kind === "fillet" || node.kind === "chamfer"
         ? {
             ...node,
-            edges: canonicalizeTopologySelectionIR(node.edges),
+            edges: canonicalizeSelection(node.edges),
           }
         : node.kind === "shell"
           ? {
               ...node,
-              openings: canonicalizeTopologySelectionIR(node.openings),
+              openings: canonicalizeSelection(node.openings),
             }
           : node.kind === "draft"
             ? {
                 ...node,
-                faces: canonicalizeTopologySelectionIR(node.faces),
+                faces: canonicalizeSelection(node.faces),
               }
             : node;
   }

@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- Made staged Document v7 commutative topology-query serialization use
+  locale-independent UTF-16 code-unit ordering, including nested negation and
+  adjacency selections. Distinct strings that a locale collator equates now
+  canonicalize identically across input permutations; frozen v1-v6
+  canonicalization retains its existing comparator and bytes.
 - Replaced the three staged Document v7 direct-schema objects with frozen,
   null-prototype terminal facades over private Zod schemas. The facades retain
   guarded parse, codec, async, and Standard Schema entrypoints without exposing

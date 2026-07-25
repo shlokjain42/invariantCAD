@@ -124,8 +124,10 @@ tree, JSON text, or UTF-8 buffer; staged cloning enforces the same compact byte
 ceiling without serializing. The three repository-staged direct schemas expose
 only frozen parse, codec, async, and Standard Schema facades over private Zod
 schemas; arbitrary Zod composition is not presented as an untrusted-runtime
-boundary. These boundaries remain internal and do not promote v7 or change the
-public v6 alias and migration target.
+boundary. Commutative v7 topology queries use locale-independent UTF-16
+code-unit ordering without changing the frozen v1-v6 comparator path. These
+boundaries remain internal and do not promote v7 or change the public v6 alias
+and migration target.
 
 ## Development rules
 
