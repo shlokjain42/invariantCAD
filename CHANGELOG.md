@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+- Extended the repository-only `stagedBodySetDesignV7(...)` facade with typed
+  scalar parameters and owned Document v7 datum-point, datum-axis, datum-plane,
+  and coordinate-system authoring. A separate source-only
+  `evaluateDatumNodesV7(...)` boundary resolves caller-selected datum node IDs
+  without treating datums as design outputs or requiring a geometry kernel.
+  Base defaults, a selected named configuration, and bounded caller overrides
+  apply in that order. Resolved points, normalized axes, and deterministic
+  right-handed plane and coordinate-system frames are detached and deeply
+  frozen. Direction inputs must be finite and nonzero; paired directions must
+  be orthogonal after normalization within the fixed absolute dot-product
+  threshold of `1e-12`, and admitted pairs are deterministically
+  re-orthonormalized. Document and evaluation limits, cancellation,
+  runtime-integrity checks, hostile-boundary containment, and structured
+  diagnostics apply without introducing kernel ownership. Datum-backed
+  sketches, general shape algebra, assemblies, external occurrences, datum
+  design outputs, and public Document v7 promotion remain unsupported; the
+  public v6 API is unchanged.
 - Extended the repository-only `stagedBodySetDesignV7(...)` facade with direct
   Document v7 part and material authoring. The source-only API now admits typed
   mass-density parameters, document-owned `material(...)` definitions,
@@ -57,8 +74,8 @@
   part, resource, import, and membership fields are rejected rather than
   silently discarded. The facade remains source-only: it does not add a root
   or package-subpath API, general feature graphs, assemblies, external
-  occurrences, datums, location I/O, reader inference, healing, or exact
-  aggregate export.
+  occurrences, datum-backed sketches, location I/O, reader inference, healing,
+  or exact aggregate export.
 - Added a source-only staged Document v7 evaluator for outputs that directly
   reference a `bodySet` node. Every authored member is active, there is no
   inferred primary body, and member IDs, order, optional names, and detached

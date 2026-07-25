@@ -109,13 +109,15 @@ Document v7 resource resolution, datums, richer shape algebra, body-set and
 multibody results, imported-body nodes, external occurrences, and feature-hash
 protocol v2 are also staged internally. A source-only
 `stagedBodySetDesignV7(...)` facade now authors the complete direct graph
-admitted by the staged evaluators: typed length and mass-density parameters,
-named parameter and part-material configurations, document-owned materials,
-boxes, cylinders, spheres, content-addressed resource commitments,
-imported-body leaves, body sets, parts over one direct leaf or body set, and
-direct imported-body/body-set/part outputs. It produces detached, deeply
-frozen, strictly valid v7 documents while enforcing namespaces, typed builder
-ownership, exact plain own-data options, dense collections, unique
+admitted by the staged evaluators and datum resolver: typed length,
+mass-density, and scalar parameters; named parameter and part-material
+configurations; document-owned materials; boxes, cylinders, spheres;
+content-addressed resource commitments; imported-body leaves; body sets; parts
+over one direct leaf or body set; datum points, axes, planes, and coordinate
+systems; and direct imported-body/body-set/part outputs. Datums remain
+addressable nodes rather than design outputs. The facade produces detached,
+deeply frozen, strictly valid v7 documents while enforcing namespaces, typed
+builder ownership, exact plain own-data options, dense collections, unique
 memberships, commitments, material/configuration references, and authoring
 limits. Resource locations remain inert resolver hints, and the imported
 node's explicit format—not `mediaType`—selects STEP or BREP interpretation. The
@@ -137,6 +139,18 @@ single-solid/body-set result union. The staged facade now constructs that exact
 part boundary, including typed material definitions, part metadata, explicit
 density, and named material substitution.
 
+A fourth source-only operation, `evaluateDatumNodesV7(...)`, resolves selected
+datum node IDs without a geometry kernel. Parameter values follow base,
+selected-configuration, then caller-override precedence. Points retain their
+resolved position; axes normalize their direction; planes and coordinate
+systems return deterministic orthonormal right-handed frames. Direction inputs
+must be finite and nonzero, and normalized authored direction pairs must be
+orthogonal within a fixed absolute dot-product threshold of `1e-12` before
+deterministic re-orthonormalization. Selected-node and parameter-override work
+is bounded, document limits and cancellation are honored, and failures remain
+structured diagnostics. This resolver does not make datums design outputs or
+connect them to sketches or kernel geometry.
+
 The staged body-set result supports per-body mesh and measurement, plus
 capability-gated topology and native single-body export. Aggregate mesh, STL,
 and OBJ are explicitly approximate/lossy. A containing part can now supply one
@@ -147,7 +161,7 @@ still have no aggregate mass; exact aggregate STEP/BREP, aggregate geometric
 measurement or topology, downstream feature composition, assemblies, external
 occurrences, healing, and location I/O remain unsupported. `mediaType` remains
 committed provenance pending a versioned format-to-media-type policy. The
-facade still excludes assemblies, external occurrences, datums, sketches,
+facade still excludes assemblies, external occurrences, datum-backed sketches,
 transforms, Booleans, body-consuming operations, per-body materials, and
 general feature graphs, including generic solid and direct primitive outputs.
 These are correctness-tested design inputs for Milestone 1, not public
@@ -281,7 +295,8 @@ direct imported bodies, direct primitive/imported body sets, and directly
 authored typed parts and material intent over those geometries, including real
 Manifold and stock-OCCT acceptance paths. The milestone remains in progress
 because this evidence is source-only and does not yet cover public v7
-promotion, assemblies/product structure, datums, or general feature graphs.
+promotion, assemblies/product structure, datum-backed modeling, or general
+feature graphs.
 
 ## Milestone 2 — everyday part modeling
 
