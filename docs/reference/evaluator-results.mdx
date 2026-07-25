@@ -67,6 +67,75 @@ Provides:
 Exact native STEP/BREP assembly structure is not a separate 0.1 product-data
 model; an aggregate export follows the current evaluated geometry behavior.
 
+## Repository-only staged Document v7 body sets
+
+The source tree contains a staged
+`evaluateBodySetOutputsV7(kernel, document, options)` operation for selected
+Document v7 outputs that directly reference `bodySet` nodes. It is not exported
+from the package root or a package subpath, does not widen the public
+`EvaluatedOutput` union, and does not change the public v6 document or evaluator
+aliases. Its source-only options and result types are
+`EvaluateBodySetOutputsV7Options`, `BodySetEvaluationLimitsV7`,
+`EvaluatedBodySetDesignV7`, `EvaluatedBodySetV7`, and `EvaluatedBodyV7`.
+Options can select a `configuration`, supply bounded `parameters` and
+`outputs`, provide a resource `resolver`, set `evaluationLimits`,
+`resourceLimits`, and `documentLimits`, and carry a cancellation `signal`.
+The evaluation limits independently bound selected outputs, aggregate selected
+memberships, distinct evaluated solids, and caller parameter overrides through
+`maxSelectedOutputs`, `maxBodySetMembers`, `maxDistinctSolids`, and
+`maxParameterOverrides`.
+
+Each evaluated body-set output retains the authored member sequence and each
+member's stable ID, optional name, and detached metadata. Every listed member
+is active; this slice does not select or infer a primary body. A member must
+directly reference a box, cylinder, sphere, or imported-body leaf. Shared leaf
+evaluation can be deduplicated without deduplicating the memberships that
+refer to it. Native primitive expressions resolve against the base or selected
+named configuration and the admitted caller parameter values.
+
+The result records the kernel `representation` as `"mesh"`, `"brep"`, or
+`"sdf"`, while `exact` mirrors the captured kernel capability. Native-only
+primitive sets may use an exact or approximate kernel. Any imported member
+requires verified caller-resolved bytes and the strong exact B-Rep
+document-body import capability; weak native import and mesh fallback are not
+used.
+
+`EvaluatedBodySetDesignV7` exposes the selected `configurationId`, resolved
+`parameters`, structured `diagnostics`, deterministic `outputNames`,
+`output(name)`, and `dispose()`. `EvaluatedBodySetV7` exposes its output `name`,
+ordered `bodies` and `bodyIds`, `body(id)`, `representation`, `exact`, aggregate
+`mesh()`, and mesh-format `export(...)`. An `EvaluatedBodyV7` is a frozen
+descriptor containing `id`, source `node`, optional `name`, optional detached
+`metadata`, and an owned `EvaluatedSolid` in `solid`.
+
+| Scope | Available operation | Boundary |
+| --- | --- | --- |
+| Per body through `body(id).solid` | `mesh()` | Returns fresh detached mesh data |
+| Per body through `body(id).solid` | `measure()` | Returns that body's geometric measurements |
+| Per body through `body(id).solid` | `topology()` | Requires backend topology support |
+| Per body through `body(id).solid` | `export(...)` | STL/OBJ is mesh-derived; STEP/text BREP/binary BREP requires the corresponding native kernel capability |
+| Whole body set | `mesh()` | Combines member tessellations in authored order and is approximate |
+| Whole body set | `export("stl" \| "stl-ascii" \| "obj")` | Mesh-derived and explicitly approximate/lossy |
+
+Whole-set STEP/BREP export, aggregate mass properties, and a cross-body topology
+namespace are unsupported. The staged operation does not fuse bodies or create
+a kernel compound. It also does not evaluate downstream feature graphs, parts,
+assemblies, external occurrences, healing, or location I/O.
+
+The evaluation limits bound document admission and shape acquisition, not mesh
+buffers produced by later facade calls. Tessellation and mesh export remain
+backend work controlled by `MeshOptions`; hostile or very large geometry still
+belongs in a disposable worker or process with an application-owned output
+ceiling.
+
+Evaluation is transactional: failure releases every distinct acquired shape
+exactly once. A successful `EvaluatedBodySetDesignV7` owns each distinct shape
+until `dispose()`. After disposal, design output lookup, body lookup,
+whole-set mesh/export, and per-body solid operations fail deterministically.
+Detached mesh, export, measurement, and metadata values already returned to
+the caller remain detached. The caller-supplied kernel is borrowed and is never
+disposed by the staged design.
+
 ## Lifetime
 
 Every method that touches an output asserts its owning evaluation is live.

@@ -100,31 +100,61 @@ try {
 }
 ```
 
-## Native import status
+## Staged Document v7 import and body-set status
 
 The current public authoring grammar does not yet expose an imported-body
-feature node. Import is therefore a kernel and staged Document v7 foundation,
-not an end-user 0.1 modeling workflow.
+or body-set feature node. These are therefore kernel and staged Document v7
+foundations, not end-user 0.1 modeling workflows. The package-root document
+alias, builder, and evaluator remain on the frozen v6 model.
 
-The repository now has one source-only staged evaluator slice for a Document v7
-output that directly references an `importedBody` node. It admits bytes only
-through the caller-supplied resolver, verifies the declared byte length and
-SHA-256 digest, and then invokes the kernel's strong exact single-solid import
-contract. The result follows normal evaluated-solid ownership and can be
-measured and tessellated while its evaluated design is live. Topology
-inspection and native export remain gated by the selected exact kernel's
-separate topology and export capabilities; the stock OCCT executable coverage
-exercises both.
+The repository has two source-only staged evaluator slices:
 
-This narrow slice is not exported by the package root and is not available
-through the public builder or CLI. It does not evaluate body sets, parts,
-assemblies, external occurrences, or an imported body composed through a
-downstream transform, Boolean, or other feature. It performs no location I/O,
-does not fall back to `importShape(...)`, and admits no healing mode beyond
-`none`. A resource's `mediaType` is currently committed provenance passed to
-the resolver; it is not used to choose the reader or accepted as a substitute
-for the imported-body node's explicit `format`. A versioned
-format-to-media-type policy is still required before public promotion.
+- A direct imported-body output admits bytes only through the caller-supplied
+  resolver, verifies the declared byte length and SHA-256 digest, and invokes
+  the kernel's strong exact single-solid import contract.
+- A direct body-set output preserves authored member order, stable member IDs,
+  optional names, and detached metadata. Every listed member is active and no
+  member is treated as a primary body. Its solid reference must point directly
+  to a box, cylinder, sphere, or imported-body leaf; transforms, Booleans, and
+  all other downstream composition remain outside this slice.
+
+Native-only body sets can run on either exact or approximate kernels, and the
+result records the kernel representation as `mesh`, `brep`, or `sdf` together
+with its exactness claim. An imported member is different: the complete body
+set must use an exact `brep` kernel with strong document-body import support.
+Imported bytes cross the same verified-resource boundary as a direct
+imported-body output. There is no weak `importShape(...)` fallback and no
+automatic conversion to a mesh representation.
+
+The staged body-set result owns its distinct kernel shapes until disposal.
+Each member can produce a detached mesh and measurements. Topology and native
+single-body STEP/BREP export remain gated by the kernel's separate
+capabilities. A shared leaf can be evaluated once without collapsing its
+distinct authored memberships. Aggregate tessellation preserves the authored
+member sequence, while aggregate STL and OBJ export are mesh-derived and
+therefore explicitly approximate/lossy even when the source bodies are exact.
+No exact aggregate STEP or BREP export is available: the evaluator does not
+fuse the bodies, invent a compound, or otherwise reinterpret the authored set.
+Failure releases every distinct acquired shape exactly once. Success keeps
+those shapes live until the staged design is disposed; subsequent facade and
+per-body solid operations then fail deterministically. The supplied kernel is
+borrowed and is never disposed by this operation.
+
+The staged operation bounds selected outputs, caller parameter overrides,
+authored memberships, distinct acquired solids, documents, and resolved
+resources. Those admission limits do not bound mesh buffers created by later
+facade calls; applications handling hostile or very large tessellations still
+need a disposable worker or process and an application-owned output ceiling.
+
+Neither staged slice is exported by the package root or available through the
+public builder or CLI. They do not evaluate parts, assemblies, external
+occurrences, body-consuming operations, or general dependency graphs. They
+also do not define aggregate mass semantics or a cross-body topology namespace,
+perform location I/O, or admit healing beyond `none`. A resource's `mediaType`
+is currently committed provenance passed to the resolver; it is not used to
+choose the reader or accepted as a substitute for the imported-body node's
+explicit `format`. A versioned format-to-media-type policy is still required
+before public promotion.
 
 There are deliberately two kernel boundaries:
 
@@ -177,14 +207,14 @@ try {
 ```
 
 This low-level call snapshots the supplied bytes but does not verify a document
-resource digest. The staged direct-output evaluator composes the existing
-resolver and strong importer: byte-length and SHA-256 admission completes
-before the imported parser is called. Missing resolvers, failed resolution,
-integrity mismatches, limits, cancellation, unsupported capability
-combinations, and kernel failures remain structured diagnostics. The strong
-importer requires exactly one valid, positive-volume solid with no loose
-topology and reports only partial imported history. It does not invent stable
-feature lineage or authored topology roles.
+resource digest. Both staged evaluator slices compose the existing resolver
+and strong importer when an imported leaf is present: byte-length and SHA-256
+admission completes before the imported parser is called. Missing resolvers,
+failed resolution, integrity mismatches, limits, cancellation, unsupported
+capability combinations, and kernel failures remain structured diagnostics.
+The strong importer requires exactly one valid, positive-volume solid with no
+loose topology and reports only partial imported history. It does not invent
+stable feature lineage or authored topology roles.
 
 Native STEP/BREP parsers can allocate or execute beyond JavaScript byte limits.
 Applications handling hostile files still need a disposable worker or process
