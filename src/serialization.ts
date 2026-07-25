@@ -1,6 +1,8 @@
 import {
+  canonicalProtocolByteLengthWithin,
   canonicalStringify,
   canonicalStringifyProtocol,
+  canonicalStringifyProtocolWithin,
   deepFreeze,
 } from "./core/json.js";
 import {
@@ -373,14 +375,18 @@ export function stringifyDocumentV7(
         "Cannot serialize an invalid InvariantCAD document-v7 value",
     );
   }
-  const text = canonicalStringifyProtocol(
-    canonicalizeDocumentTopology(parsed.value),
-    pretty ? 2 : undefined,
+  const canonicalDocument = canonicalizeDocumentTopology(parsed.value);
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    throwDocumentV7RuntimeIntegrityError();
+  }
+  const text = canonicalStringifyProtocolWithin(
+    canonicalDocument,
+    normalizedLimits.value.maxDocumentBytes,
+    pretty,
   );
-  const documentBytes = serializationUtf8ByteLength(text);
-  if (documentBytes > normalizedLimits.value.maxDocumentBytes) {
+  if (text === undefined) {
     throw new TypeError(
-      `Design-document maxDocumentBytes limit ${normalizedLimits.value.maxDocumentBytes} was exceeded by ${documentBytes}`,
+      `Design-document maxDocumentBytes limit ${normalizedLimits.value.maxDocumentBytes} was exceeded before canonical JSON materialization`,
     );
   }
   if (!documentV7RuntimeIntrinsicsAreIntact()) {
@@ -878,13 +884,17 @@ export function cloneDocumentV7(
         "Cannot clone an invalid InvariantCAD document-v7 value",
     );
   }
-  const text = canonicalStringifyProtocol(
-    canonicalizeDocumentTopology(parsed.value),
+  const canonicalDocument = canonicalizeDocumentTopology(parsed.value);
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    throwDocumentV7RuntimeIntegrityError();
+  }
+  const documentBytes = canonicalProtocolByteLengthWithin(
+    canonicalDocument,
+    normalizedLimits.value.maxDocumentBytes,
   );
-  const documentBytes = serializationUtf8ByteLength(text);
-  if (documentBytes > normalizedLimits.value.maxDocumentBytes) {
+  if (documentBytes === undefined) {
     throw new TypeError(
-      `Design-document maxDocumentBytes limit ${normalizedLimits.value.maxDocumentBytes} was exceeded by ${documentBytes}`,
+      `Design-document maxDocumentBytes limit ${normalizedLimits.value.maxDocumentBytes} was exceeded before canonical JSON materialization`,
     );
   }
   if (!documentV7RuntimeIntrinsicsAreIntact()) {

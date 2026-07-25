@@ -1,12 +1,170 @@
 import { describe, expect, it } from "vitest";
 import {
+  canonicalProtocolByteLengthWithin,
   canonicalStringify,
   canonicalStringifyProtocol,
+  canonicalStringifyProtocolWithin,
   canonicalizeProtocol,
   deepFreeze,
 } from "../src/core/json.js";
 
 describe("canonical JSON", () => {
+  it("counts and writes bounded protocol JSON byte-for-byte", () => {
+    const ownProto = JSON.parse(
+      '{"z":1,"__proto__":{"polluted":true},"a":2}',
+    ) as Record<string, unknown>;
+    const integerLikeKeys = {
+      "4294967295": "not-an-array-index",
+      "01": "leading-zero",
+      "10": "ten",
+      "2": "two",
+      "4294967294": "largest-array-index",
+      __proto__: null,
+    };
+    const cases: unknown[] = [
+      null,
+      true,
+      false,
+      0,
+      -0,
+      Number.MIN_VALUE,
+      Number.MAX_VALUE,
+      1e-7,
+      1e21,
+      1.2345678901234567,
+      "",
+      '"\\/\b\t\n\f\r\u0000\u001fé中😀',
+      "\ud800x",
+      "x\udc00",
+      [],
+      {},
+      [null, true, false, -0, "é", ["😀"], {}],
+      {
+        emptyArray: [],
+        emptyObject: {},
+        nested: { z: 1, a: [2, { y: false, x: null }] },
+        omitted: undefined,
+      },
+      ownProto,
+      integerLikeKeys,
+    ];
+    const encoder = new TextEncoder();
+
+    for (const pretty of [false, true]) {
+      for (const value of cases) {
+        const expected = canonicalStringifyProtocol(
+          value,
+          pretty ? 2 : undefined,
+        );
+        const expectedBytes = encoder.encode(expected).byteLength;
+
+        expect(
+          canonicalProtocolByteLengthWithin(
+            value,
+            Number.MAX_SAFE_INTEGER,
+            pretty,
+          ),
+        ).toBe(expectedBytes);
+        expect(
+          canonicalStringifyProtocolWithin(
+            value,
+            Number.MAX_SAFE_INTEGER,
+            pretty,
+          ),
+        ).toBe(expected);
+      }
+    }
+  });
+
+  it("accepts the exact byte ceiling and stops one byte below it", () => {
+    const value = {
+      z: ["é", "😀", "\ud800", "\udc00"],
+      a: { nested: true },
+    };
+    const encoder = new TextEncoder();
+
+    for (const pretty of [false, true]) {
+      const expected = canonicalStringifyProtocol(
+        value,
+        pretty ? 2 : undefined,
+      );
+      const bytes = encoder.encode(expected).byteLength;
+
+      expect(canonicalProtocolByteLengthWithin(value, bytes, pretty)).toBe(
+        bytes,
+      );
+      expect(canonicalStringifyProtocolWithin(value, bytes, pretty)).toBe(
+        expected,
+      );
+      expect(
+        canonicalProtocolByteLengthWithin(value, bytes - 1, pretty),
+      ).toBeUndefined();
+      expect(
+        canonicalStringifyProtocolWithin(value, bytes - 1, pretty),
+      ).toBeUndefined();
+    }
+  });
+
+  it("rejects invalid byte ceilings and invalid JSON values", () => {
+    const boundedOperations = [
+      canonicalProtocolByteLengthWithin,
+      canonicalStringifyProtocolWithin,
+    ];
+
+    for (const operation of boundedOperations) {
+      for (const maximumBytes of [
+        -1,
+        0.5,
+        Number.NaN,
+        Number.POSITIVE_INFINITY,
+        Number.MAX_SAFE_INTEGER + 1,
+      ]) {
+        expect(() => operation(null, maximumBytes)).toThrow(TypeError);
+      }
+
+      for (const value of [
+        Number.NaN,
+        Number.POSITIVE_INFINITY,
+        Number.NEGATIVE_INFINITY,
+      ]) {
+        expect(() => operation(value, 1_000)).toThrow(
+          "CAD documents cannot contain NaN or infinite numbers",
+        );
+      }
+
+      for (const value of [
+        undefined,
+        Symbol("unsupported"),
+        1n,
+        () => undefined,
+        [undefined],
+      ]) {
+        expect(() => operation(value, 1_000)).toThrow(
+          /Unsupported JSON value/,
+        );
+      }
+    }
+  });
+
+  it("stops before reading later properties once the byte ceiling is exceeded", () => {
+    let getterReads = 0;
+    const source = Object.defineProperty(
+      { a: "a value that already exceeds the ceiling" },
+      "z",
+      {
+        enumerable: true,
+        get(): never {
+          getterReads += 1;
+          throw new Error("later getter must not run");
+        },
+      },
+    );
+
+    expect(canonicalProtocolByteLengthWithin(source, 5)).toBeUndefined();
+    expect(canonicalStringifyProtocolWithin(source, 5)).toBeUndefined();
+    expect(getterReads).toBe(0);
+  });
+
   it("preserves own __proto__ keys without mutating object prototypes", () => {
     const source = JSON.parse(
       '{"z":1,"__proto__":{"polluted":true},"a":2}',

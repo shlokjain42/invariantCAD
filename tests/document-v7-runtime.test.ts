@@ -1507,33 +1507,72 @@ describe("staged document-v7 serialization and validation", () => {
   });
 
   it("enforces maxDocumentBytes for staged stringify and clone", () => {
-    const source = stagedV7Document();
-    const text = stringifyDocumentV7(source);
-    const bytes = new TextEncoder().encode(text).byteLength;
+    const source = {
+      ...stagedV7Document(),
+      metadata: {
+        ascii: 'quote:" backslash:\\ slash:/',
+        bmp: "café 漢字",
+        astral: "😀🚀",
+        loneHighSurrogate: "\ud800",
+        loneLowSurrogate: "\udc00",
+        controls: "\u0000\b\t\n\f\r\u001f",
+      },
+    } as unknown as DesignDocumentV7;
+    const compact = stringifyDocumentV7(source);
+    const pretty = stringifyDocumentV7(source, { pretty: true });
+    const compactBytes = new TextEncoder().encode(compact).byteLength;
+    const prettyBytes = new TextEncoder().encode(pretty).byteLength;
     const baseline = parseDocumentValueV7(source);
     expect(baseline.ok).toBe(true);
     if (!baseline.ok) return;
 
-    expect(
-      stringifyDocumentV7(source, {
-        limits: { maxDocumentBytes: bytes },
-      }),
-    ).toBe(text);
-    expect(() =>
-      stringifyDocumentV7(source, {
-        limits: { maxDocumentBytes: bytes - 1 },
-      }),
-    ).toThrow(/maxDocumentBytes/);
+    expect(compact).toContain(
+      '"ascii":"quote:\\" backslash:\\\\ slash:/"',
+    );
+    expect(compact).toContain('"bmp":"café 漢字"');
+    expect(compact).toContain('"astral":"😀🚀"');
+    expect(compact).toContain('"loneHighSurrogate":"\\ud800"');
+    expect(compact).toContain('"loneLowSurrogate":"\\udc00"');
+    expect(compact).toContain(
+      '"controls":"\\u0000\\b\\t\\n\\f\\r\\u001f"',
+    );
+
+    for (const boundary of [
+      { pretty: false, text: compact, bytes: compactBytes },
+      { pretty: true, text: pretty, bytes: prettyBytes },
+    ]) {
+      expect(
+        stringifyDocumentV7(source, {
+          pretty: boundary.pretty,
+          limits: { maxDocumentBytes: boundary.bytes },
+        }),
+      ).toBe(boundary.text);
+      expect(() =>
+        stringifyDocumentV7(source, {
+          pretty: boundary.pretty,
+          limits: { maxDocumentBytes: boundary.bytes - 1 },
+        }),
+      ).toThrow(
+        `Design-document maxDocumentBytes limit ${
+          boundary.bytes - 1
+        } was exceeded before canonical JSON materialization`,
+      );
+    }
+
     expect(
       cloneDocumentV7(source, {
-        limits: { maxDocumentBytes: bytes },
+        limits: { maxDocumentBytes: compactBytes },
       }),
     ).toEqual(baseline.value);
     expect(() =>
       cloneDocumentV7(source, {
-        limits: { maxDocumentBytes: bytes - 1 },
+        limits: { maxDocumentBytes: compactBytes - 1 },
       }),
-    ).toThrow(/maxDocumentBytes/);
+    ).toThrow(
+      `Design-document maxDocumentBytes limit ${
+        compactBytes - 1
+      } was exceeded before canonical JSON materialization`,
+    );
   });
 
   it("reads staged serialization options once before detaching the document", () => {
