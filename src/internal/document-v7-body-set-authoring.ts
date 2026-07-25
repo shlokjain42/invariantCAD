@@ -17,6 +17,7 @@ import { deepFreeze, type JsonValue } from "../core/json.js";
 import { CadError } from "../core/result.js";
 import { utf8ByteLengthWithin } from "../core/utf8.js";
 import {
+  AssemblyRef,
   DesignBuilder,
   type ConfigurationOptions,
   type DesignOptions,
@@ -39,6 +40,8 @@ import {
 import {
   DOCUMENT_SCHEMA_V7,
   DOCUMENT_VERSION_V7,
+  type AssemblyInstanceIRV7,
+  type AssemblyNodeIRV7,
   type BodySetMemberIRV7,
   type CoordinateSystemNodeIRV7,
   type DatumAxisNodeIRV7,
@@ -50,10 +53,12 @@ import {
   type ImportedBodyLengthUnitV7,
   type MaterialDefinitionIR,
   type NodeIRV7,
+  type OccurrenceConfigurationIRV7,
   type PartNodeIRV7,
   type RefIRV7,
   type ResourceDefinitionIR,
   type ResourceDigestIR,
+  type TransformOperationIR,
 } from "../ir.js";
 import {
   DEFAULT_DESIGN_DOCUMENT_LIMITS,
@@ -69,6 +74,9 @@ const STAGED_BODY_SET_DESIGN_OWNER = Symbol(
 );
 const STAGED_CONFIGURATION_TO_IR = Symbol(
   "InvariantCAD.StagedConfigurationToIRV7",
+);
+const STAGED_LOCAL_ASSEMBLY_TO_IR = Symbol(
+  "InvariantCAD.StagedLocalAssemblyToIRV7",
 );
 const STAGED_DATUM_REFERENCE_CONSTRUCTION = Symbol(
   "InvariantCAD.StagedDatumReferenceConstructionV7",
@@ -583,6 +591,263 @@ function captureDatumVectorIR<D extends "length" | "scalar">(
   ]);
 }
 
+function captureDenseOwnDataArray(
+  value: unknown,
+  label: string,
+  options: {
+    readonly exactLength?: number;
+    readonly maximumLength?: number;
+  } = {},
+): readonly unknown[] {
+  let copied: unknown[] | undefined;
+  let problem: string | undefined;
+  let rangeProblem: string | undefined;
+  try {
+    if (!authoringIsArray(value)) {
+      problem = `${label} must be a dense array`;
+    } else {
+      const prototype = authoringApply<object | null>(
+        authoringObjectGetPrototypeOf,
+        Object,
+        [value],
+      );
+      if (prototype !== authoringArrayPrototype) {
+        problem = `${label} must be a plain array`;
+      } else {
+        const lengthDescriptor = authoringApply<
+          PropertyDescriptor | undefined
+        >(authoringObjectGetOwnPropertyDescriptor, Object, [
+          value,
+          "length",
+        ]);
+        const length =
+          lengthDescriptor !== undefined &&
+          authoringHasOwn(lengthDescriptor, "value")
+            ? lengthDescriptor.value
+            : undefined;
+        if (
+          !authoringIsSafeInteger(length) ||
+          (length as number) < 0
+        ) {
+          problem = `${label} has an invalid length`;
+        } else if (
+          options.exactLength !== undefined &&
+          length !== options.exactLength
+        ) {
+          problem = `${label} must contain exactly ${options.exactLength} elements`;
+        } else if (
+          options.maximumLength !== undefined &&
+          (length as number) > options.maximumLength
+        ) {
+          rangeProblem = `${label} exceeds the authoring limit of ${options.maximumLength}`;
+        } else {
+          const ownKeys = authoringApply<(string | symbol)[]>(
+            authoringReflectOwnKeys,
+            Reflect,
+            [value],
+          );
+          if (ownKeys.length !== (length as number) + 1) {
+            problem = `${label} must be dense and cannot contain non-index properties`;
+          } else {
+            const allowed = new AuthoringSet<PropertyKey>();
+            authoringSetInsert(allowed, "length");
+            for (let index = 0; index < (length as number); index += 1) {
+              authoringSetInsert(allowed, String(index));
+            }
+            for (let index = 0; index < ownKeys.length; index += 1) {
+              if (!authoringSetContains(allowed, ownKeys[index]!)) {
+                problem = `${label} must be dense and cannot contain non-index properties`;
+                break;
+              }
+            }
+            if (problem === undefined) {
+              copied = authoringDenseArray<unknown>(length as number);
+              for (
+                let index = 0;
+                index < (length as number);
+                index += 1
+              ) {
+                const descriptor = authoringApply<
+                  PropertyDescriptor | undefined
+                >(authoringObjectGetOwnPropertyDescriptor, Object, [
+                  value,
+                  String(index),
+                ]);
+                if (
+                  descriptor === undefined ||
+                  !authoringHasOwn(descriptor, "value")
+                ) {
+                  problem = `${label}/${index} must be an own data property`;
+                  break;
+                }
+                copied[index] = descriptor.value;
+              }
+            }
+          }
+        }
+      }
+    }
+  } catch {
+    throw new TypeError(`${label} could not be read safely`);
+  }
+  if (rangeProblem !== undefined) throw new RangeError(rangeProblem);
+  if (problem !== undefined) throw new TypeError(problem);
+  return authoringFreeze(copied!);
+}
+
+function captureTransformExpressionIR(
+  value: unknown,
+  dimension: "length" | "angle" | "scalar",
+  label: string,
+): ExpressionIR {
+  const captured = preflightDesignDocumentValue(
+    value,
+    DEFAULT_DESIGN_DOCUMENT_LIMITS,
+    { strictV7Snapshot: true },
+  );
+  if (!captured.ok) {
+    throw new CadError(
+      captured.diagnostics[0]?.message ??
+        `${label} expression IR is invalid`,
+      captured.diagnostics,
+    );
+  }
+  if (
+    typeof captured.value !== "object" ||
+    captured.value === null ||
+    authoringIsArray(captured.value) ||
+    !authoringHasOwn(captured.value, "dimension") ||
+    (captured.value as { readonly dimension?: unknown }).dimension !==
+      dimension
+  ) {
+    throw new TypeError(`${label} must be a ${dimension} expression IR`);
+  }
+  return deepFreeze(captured.value as ExpressionIR);
+}
+
+function captureTransformVectorIR(
+  value: unknown,
+  dimension: "length" | "angle" | "scalar",
+  label: string,
+): readonly [ExpressionIR, ExpressionIR, ExpressionIR] {
+  const values = captureDenseOwnDataArray(value, label, {
+    exactLength: 3,
+  });
+  return authoringFreeze([
+    captureTransformExpressionIR(values[0], dimension, `${label}/0`),
+    captureTransformExpressionIR(values[1], dimension, `${label}/1`),
+    captureTransformExpressionIR(values[2], dimension, `${label}/2`),
+  ]);
+}
+
+function captureTransformOperationIR(
+  value: unknown,
+  label: string,
+): TransformOperationIR {
+  const captured = captureExactOwnDataRecord(
+    value,
+    ["kind", "value", "normal"],
+    label,
+  );
+  const kind = captured.kind;
+  if (
+    kind === "translate" ||
+    kind === "rotate" ||
+    kind === "scale"
+  ) {
+    if (
+      !authoringHasOwn(captured, "value") ||
+      authoringHasOwn(captured, "normal")
+    ) {
+      throw new TypeError(
+        `${label} '${kind}' requires only a value vector`,
+      );
+    }
+    return deepFreeze({
+      kind,
+      value: captureTransformVectorIR(
+        captured.value,
+        kind === "translate"
+          ? "length"
+          : kind === "rotate"
+            ? "angle"
+            : "scalar",
+        `${label}.value`,
+      ),
+    });
+  }
+  if (kind === "mirror") {
+    if (
+      !authoringHasOwn(captured, "normal") ||
+      authoringHasOwn(captured, "value")
+    ) {
+      throw new TypeError(
+        `${label} 'mirror' requires only a normal vector`,
+      );
+    }
+    return deepFreeze({
+      kind: "mirror",
+      normal: captureTransformVectorIR(
+        captured.normal,
+        "scalar",
+        `${label}.normal`,
+      ),
+    });
+  }
+  throw new TypeError(`${label}.kind is not a supported transform`);
+}
+
+function capturePlacementIR(
+  value: unknown,
+  label: string,
+): readonly TransformOperationIR[] {
+  const operations = captureDenseOwnDataArray(value, label, {
+    maximumLength: DEFAULT_DESIGN_DOCUMENT_LIMITS.maxStructuralValues,
+  });
+  const copied = authoringDenseArray<TransformOperationIR>(
+    operations.length,
+  );
+  for (let index = 0; index < operations.length; index += 1) {
+    copied[index] = captureTransformOperationIR(
+      operations[index],
+      `${label}/${index}`,
+    );
+  }
+  return authoringFreeze(copied);
+}
+
+function captureOccurrenceConfigurationIR(
+  value: unknown,
+  label: string,
+): OccurrenceConfigurationIRV7 {
+  const captured = captureExactOwnDataRecord(
+    value,
+    ["mode", "id"],
+    label,
+  );
+  if (captured.mode === "inherit" || captured.mode === "base") {
+    if (authoringHasOwn(captured, "id")) {
+      throw new TypeError(
+        `${label} mode '${captured.mode}' cannot contain an id`,
+      );
+    }
+    return authoringFreeze({ mode: captured.mode });
+  }
+  if (captured.mode === "named") {
+    if (
+      !authoringHasOwn(captured, "id") ||
+      typeof captured.id !== "string"
+    ) {
+      throw new TypeError(`${label} mode 'named' requires an id`);
+    }
+    return authoringFreeze({
+      mode: "named",
+      id: configurationId(captured.id),
+    });
+  }
+  throw new TypeError(`${label}.mode is invalid`);
+}
+
 function assertOptionalString(
   value: unknown,
   label: string,
@@ -628,6 +893,13 @@ export interface StagedBodySetMemberAuthoringV7 {
   readonly solid: StagedBodyLeafRefV7;
   readonly name?: string;
   readonly metadata?: Readonly<Record<string, JsonValue>>;
+}
+
+/** Options for one flat local part occurrence. @internal */
+export interface StagedLocalAssemblyInstanceOptionsV7 {
+  readonly placement?: readonly TransformOperationIR[];
+  readonly suppressed?: boolean;
+  readonly configuration?: OccurrenceConfigurationIRV7;
 }
 
 /**
@@ -785,6 +1057,111 @@ export class StagedCoordinateSystemRefV7 extends StagedDatumRefV7<"coordinateSys
   }
 }
 
+/**
+ * Flat, local, part-only assembly authoring for the executable staged graph.
+ *
+ * Nested local assemblies and external document occurrences remain outside
+ * this slice even though the frozen v7 grammar already reserves them.
+ *
+ * @internal
+ */
+export class StagedLocalAssemblyBuilderV7 {
+  readonly #partHandles: WeakSet<object>;
+  readonly #partHandleIds: WeakMap<object, NodeId>;
+  readonly #instances: AssemblyInstanceIRV7[] = [];
+  readonly #instanceIds = new AuthoringSet<EntityId>();
+
+  constructor(
+    partHandles: WeakSet<object>,
+    partHandleIds: WeakMap<object, NodeId>,
+  ) {
+    this.#partHandles = partHandles;
+    this.#partHandleIds = partHandleIds;
+    authoringFreeze(this);
+  }
+
+  instance(
+    id: string,
+    component: PartRef,
+    options: StagedLocalAssemblyInstanceOptionsV7 = {},
+  ): this {
+    const partNode = authoringWeakMapRead(
+      this.#partHandleIds,
+      component,
+    );
+    if (
+      !authoringWeakSetContains(this.#partHandles, component) ||
+      partNode === undefined
+    ) {
+      throw new TypeError(
+        "Assembly parts cannot cross staged design boundaries",
+      );
+    }
+    if (
+      this.#instances.length >=
+      DEFAULT_DESIGN_DOCUMENT_LIMITS.maxStructuralValues
+    ) {
+      throw new RangeError(
+        `Assembly instances exceed the authoring structural-value limit of ${DEFAULT_DESIGN_DOCUMENT_LIMITS.maxStructuralValues}`,
+      );
+    }
+    const captured = captureExactOwnDataRecord(
+      options,
+      ["placement", "suppressed", "configuration"],
+      `Assembly instance '${id}' options`,
+    );
+    if (
+      captured.suppressed !== undefined &&
+      typeof captured.suppressed !== "boolean"
+    ) {
+      throw new TypeError(
+        `Assembly instance '${id}' suppressed must be a boolean`,
+      );
+    }
+    const stableId = entityId(id);
+    if (authoringSetContains(this.#instanceIds, stableId)) {
+      throw new TypeError(`Duplicate assembly instance '${id}'`);
+    }
+    const placement =
+      captured.placement === undefined
+        ? authoringFreeze([] as TransformOperationIR[])
+        : capturePlacementIR(
+            captured.placement,
+            `Assembly instance '${id}' placement`,
+          );
+    const configuration =
+      captured.configuration === undefined
+        ? authoringFreeze({ mode: "inherit" as const })
+        : captureOccurrenceConfigurationIR(
+            captured.configuration,
+            `Assembly instance '${id}' configuration`,
+          );
+    const instance: AssemblyInstanceIRV7 = deepFreeze({
+      id: stableId,
+      component: {
+        source: "local",
+        reference: { node: partNode, kind: "part" },
+      },
+      configuration,
+      placement,
+      suppressed: captured.suppressed ?? false,
+    });
+    authoringSetInsert(this.#instanceIds, stableId);
+    this.#instances[this.#instances.length] = instance;
+    return this;
+  }
+
+  [STAGED_LOCAL_ASSEMBLY_TO_IR](): readonly AssemblyInstanceIRV7[] {
+    const copied = authoringDenseArray<AssemblyInstanceIRV7>(
+      this.#instances.length,
+    );
+    for (let index = 0; index < this.#instances.length; index += 1) {
+      copied[index] = this.#instances[index]!;
+    }
+    return authoringFreeze(copied);
+  }
+}
+
 /** Configuration surface for the executable staged graph. @internal */
 export class StagedBodySetConfigurationBuilderV7 {
   readonly #parameterHandles: WeakMap<
@@ -793,8 +1170,14 @@ export class StagedBodySetConfigurationBuilderV7 {
   >;
   readonly #partHandles: WeakSet<object>;
   readonly #materialHandles: WeakSet<object>;
+  readonly #assemblyHandles: WeakSet<object>;
   readonly #partHandleIds: WeakMap<object, NodeId>;
   readonly #materialHandleIds: WeakMap<object, MaterialId>;
+  readonly #assemblyHandleIds: WeakMap<object, NodeId>;
+  readonly #assemblyHandleInstanceIds: WeakMap<
+    object,
+    ReadonlySet<EntityId>
+  >;
   readonly #parameterRecords = authoringNullRecord<Record<
     ParameterId,
     ExpressionIR
@@ -803,19 +1186,32 @@ export class StagedBodySetConfigurationBuilderV7 {
     NodeId,
     MaterialId
   >>();
+  readonly #instanceSuppressionRecords = authoringNullRecord<Record<
+    NodeId,
+    Record<EntityId, boolean>
+  >>();
 
   constructor(
     parameterHandles: WeakMap<object, StagedParameterIdentityV7>,
     partHandles: WeakSet<object>,
     materialHandles: WeakSet<object>,
+    assemblyHandles: WeakSet<object>,
     partHandleIds: WeakMap<object, NodeId>,
     materialHandleIds: WeakMap<object, MaterialId>,
+    assemblyHandleIds: WeakMap<object, NodeId>,
+    assemblyHandleInstanceIds: WeakMap<
+      object,
+      ReadonlySet<EntityId>
+    >,
   ) {
     this.#parameterHandles = parameterHandles;
     this.#partHandles = partHandles;
     this.#materialHandles = materialHandles;
+    this.#assemblyHandles = assemblyHandles;
     this.#partHandleIds = partHandleIds;
     this.#materialHandleIds = materialHandleIds;
+    this.#assemblyHandleIds = assemblyHandleIds;
+    this.#assemblyHandleInstanceIds = assemblyHandleInstanceIds;
     authoringFreeze(this);
   }
 
@@ -877,12 +1273,66 @@ export class StagedBodySetConfigurationBuilderV7 {
     return this;
   }
 
+  instanceSuppressed(
+    assembly: AssemblyRef,
+    instanceId: string,
+    suppressed = true,
+  ): this {
+    const assemblyId = authoringWeakMapRead(
+      this.#assemblyHandleIds,
+      assembly,
+    );
+    const instanceIds = authoringWeakMapRead(
+      this.#assemblyHandleInstanceIds,
+      assembly,
+    );
+    if (
+      !authoringWeakSetContains(this.#assemblyHandles, assembly) ||
+      assemblyId === undefined ||
+      instanceIds === undefined
+    ) {
+      throw new TypeError(
+        "Assemblies cannot cross staged design boundaries",
+      );
+    }
+    if (typeof suppressed !== "boolean") {
+      throw new TypeError(
+        "Configuration instance suppression must be a boolean",
+      );
+    }
+    const stableId = entityId(instanceId);
+    if (!authoringSetContains(instanceIds, stableId)) {
+      throw new RangeError(
+        `Assembly '${assemblyId}' has no instance '${instanceId}'`,
+      );
+    }
+    let records = this.#instanceSuppressionRecords[assemblyId];
+    if (records === undefined) {
+      records = authoringNullRecord<Record<EntityId, boolean>>();
+      this.#instanceSuppressionRecords[assemblyId] = records;
+    }
+    if (authoringHasOwn(records, stableId)) {
+      throw new TypeError(
+        `Duplicate configuration instance override '${assemblyId}/${stableId}'`,
+      );
+    }
+    records[stableId] = suppressed;
+    return this;
+  }
+
   [STAGED_CONFIGURATION_TO_IR](
     options: ConfigurationOptions,
   ): DesignConfigurationIR {
     const parameterIds = authoringKeys(this.#parameterRecords);
     const partIds = authoringKeys(this.#partMaterialRecords);
-    if (parameterIds.length === 0 && partIds.length === 0) {
+    const assemblyIds = authoringKeys(
+      this.#instanceSuppressionRecords,
+    );
+    if (
+      parameterIds.length === 0 &&
+      partIds.length === 0 &&
+      assemblyIds.length === 0
+    ) {
       throw new TypeError("A configuration requires at least one override");
     }
     return deepFreeze({
@@ -895,6 +1345,13 @@ export class StagedBodySetConfigurationBuilderV7 {
       ...(partIds.length === 0
         ? {}
         : { partMaterialOverrides: { ...this.#partMaterialRecords } }),
+      ...(assemblyIds.length === 0
+        ? {}
+        : {
+            instanceSuppressions: deepFreeze({
+              ...this.#instanceSuppressionRecords,
+            }),
+          }),
       ...(options.metadata === undefined
         ? {}
         : { metadata: options.metadata }),
@@ -948,7 +1405,7 @@ export class StagedBodySetDesignBuilderV7 {
   readonly #nodeRecords = authoringNullRecord<Record<NodeId, NodeIRV7>>();
   readonly #outputRecords = authoringNullRecord<Record<
     string,
-    RefIRV7<"solid" | "bodySet" | "part">
+    RefIRV7<"solid" | "bodySet" | "part" | "assembly">
   >>();
   readonly #materialHandles = new AuthoringWeakSet<object>();
   readonly #materialHandleIds = new AuthoringWeakMap<
@@ -961,6 +1418,12 @@ export class StagedBodySetDesignBuilderV7 {
   readonly #bodySetHandles = new AuthoringWeakSet<object>();
   readonly #partHandles = new AuthoringWeakSet<object>();
   readonly #partHandleIds = new AuthoringWeakMap<object, NodeId>();
+  readonly #assemblyHandles = new AuthoringWeakSet<object>();
+  readonly #assemblyHandleIds = new AuthoringWeakMap<object, NodeId>();
+  readonly #assemblyHandleInstanceIds = new AuthoringWeakMap<
+    object,
+    ReadonlySet<EntityId>
+  >();
   readonly #parameterHandles = new AuthoringWeakMap<
     object,
     StagedParameterIdentityV7
@@ -1318,8 +1781,11 @@ export class StagedBodySetDesignBuilderV7 {
       this.#parameterHandles,
       this.#partHandles,
       this.#materialHandles,
+      this.#assemblyHandles,
       this.#partHandleIds,
       this.#materialHandleIds,
+      this.#assemblyHandleIds,
+      this.#assemblyHandleInstanceIds,
     );
     build(configuration);
     this.#configurationRecords[key] =
@@ -1498,6 +1964,44 @@ export class StagedBodySetDesignBuilderV7 {
     authoringSetInsert(this.#nodeIds, key);
     this.#nodeRecords[key] = definition;
     if (massDensity !== undefined) this.#usesMassDensity = true;
+    return reference;
+  }
+
+  assembly(
+    id: string,
+    build: (assembly: StagedLocalAssemblyBuilderV7) => void,
+  ): AssemblyRef {
+    if (typeof build !== "function") {
+      throw new TypeError("Assembly build callback must be a function");
+    }
+    const key = this.#assertNodeAvailable(id);
+    const builder = new StagedLocalAssemblyBuilderV7(
+      this.#partHandles,
+      this.#partHandleIds,
+    );
+    build(builder);
+    const instances = builder[STAGED_LOCAL_ASSEMBLY_TO_IR]();
+    const node: AssemblyNodeIRV7 = {
+      kind: "assembly",
+      instances,
+    };
+    const definition = deepFreeze(node);
+    const reference = authoringFreeze(
+      new AssemblyRef(this.#handleOwner, key),
+    );
+    const instanceIds = new AuthoringSet<EntityId>();
+    for (let index = 0; index < instances.length; index += 1) {
+      authoringSetInsert(instanceIds, instances[index]!.id);
+    }
+    authoringWeakSetInsert(this.#assemblyHandles, reference);
+    authoringWeakMapWrite(this.#assemblyHandleIds, reference, key);
+    authoringWeakMapWrite(
+      this.#assemblyHandleInstanceIds,
+      reference,
+      instanceIds,
+    );
+    authoringSetInsert(this.#nodeIds, key);
+    this.#nodeRecords[key] = definition;
     return reference;
   }
 
@@ -1766,7 +2270,8 @@ export class StagedBodySetDesignBuilderV7 {
     reference:
       | StagedImportedBodyRefV7
       | StagedBodySetRefV7
-      | PartRef,
+      | PartRef
+      | AssemblyRef,
   ): this {
     assertValidId(name, "Output name");
     const imported = authoringWeakSetContains(
@@ -1784,17 +2289,30 @@ export class StagedBodySetDesignBuilderV7 {
     const part =
       authoringWeakSetContains(this.#partHandles, reference) &&
       partNode !== undefined;
-    if (!imported && !bodySet && !part) {
+    const assemblyNode = authoringWeakMapRead(
+      this.#assemblyHandleIds,
+      reference,
+    );
+    const assembly =
+      authoringWeakSetContains(this.#assemblyHandles, reference) &&
+      assemblyNode !== undefined;
+    if (!imported && !bodySet && !part && !assembly) {
       throw new TypeError(
-        "Only owned direct imported bodies, body sets, and parts can be staged outputs",
+        "Only owned direct imported bodies, body sets, parts, and assemblies can be staged outputs",
       );
     }
     if (authoringHasOwn(this.#outputRecords, name)) {
       throw new TypeError(`Duplicate output '${name}'`);
     }
     this.#outputRecords[name] = deepFreeze({
-      node: part ? partNode : reference.node,
-      kind: part ? "part" : bodySet ? "bodySet" : "solid",
+      node: part ? partNode : assembly ? assemblyNode : reference.node,
+      kind: part
+        ? "part"
+        : assembly
+          ? "assembly"
+          : bodySet
+            ? "bodySet"
+            : "solid",
     });
     return this;
   }
