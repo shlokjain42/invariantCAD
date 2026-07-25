@@ -115,12 +115,14 @@ The staged v7 text parser rejects duplicate decoded JSON object members,
 including escape-equivalent names, and applies structural and nesting ceilings
 to raw values even when native last-key-wins parsing would discard them.
 Detached-value and direct-schema boundaries cannot reconstruct member
-occurrences already collapsed by another parser. Staged v7 serialization now
-counts the topology-normalized compact or pretty canonical representation
-before constructing its complete canonical object tree, JSON text, or UTF-8
-buffer; staged cloning enforces the same compact byte ceiling without
-serializing. These boundaries remain internal and do not promote v7 or change
-the public v6 alias and migration target.
+occurrences already collapsed by another parser. Its raw UTF-8 ceiling now
+stops without constructing a complete encoded buffer or reaching JSON parsing,
+while preserving `TextEncoder` byte semantics for admitted text. Staged v7
+serialization separately counts the topology-normalized compact or pretty
+canonical representation before constructing its complete canonical object
+tree, JSON text, or UTF-8 buffer; staged cloning enforces the same compact byte
+ceiling without serializing. These boundaries remain internal and do not
+promote v7 or change the public v6 alias and migration target.
 
 ## Development rules
 

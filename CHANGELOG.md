@@ -7,6 +7,11 @@
   schema and semantic validation. Detached-value parsing and direct schemas do
   not claim to reconstruct member occurrences already collapsed by another
   parser, and frozen v1-v6 parsing remains unchanged.
+- Replaced staged Document v7 raw-text byte measurement with a bounded,
+  buffer-free UTF-8 counter. Oversized text can stop before complete scanning
+  and always fails before UTF-8 buffer construction, JSON parsing, or
+  duplicate-member auditing, while admitted text retains exact `TextEncoder`
+  semantics, including replacement encoding for lone surrogates.
 - Added bounded staged Document v7 canonical serialization. Compact and pretty
   output is counted exactly after topology normalization and rejected before
   constructing the complete canonical object tree, JSON text, or UTF-8 buffer;
