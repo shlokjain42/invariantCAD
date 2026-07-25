@@ -2298,7 +2298,7 @@ export class StagedBodySetDesignBuilderV7 {
       assemblyNode !== undefined;
     if (!imported && !bodySet && !part && !assembly) {
       throw new TypeError(
-        "Only owned direct imported bodies, body sets, parts, and assemblies can be staged outputs",
+        "Only owned direct imported bodies, body sets, and parts or owned assemblies can be staged outputs",
       );
     }
     if (authoringHasOwn(this.#outputRecords, name)) {
