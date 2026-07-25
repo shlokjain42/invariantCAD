@@ -70,17 +70,17 @@ model; an aggregate export follows the current evaluated geometry behavior.
 ## Repository-only staged Document v7 imports, body sets, and parts
 
 The repository-only `stagedBodySetDesignV7(...)` facade can now author the
-direct graph admitted by the staged import and body-set evaluators without
-hand-writing v7 IR. It privately composes the existing v6 builder for length
-parameters, named parameter configurations, boxes, cylinders, and spheres,
-then adds content commitments, imported bodies, body sets, and outputs. Its
-outputs are limited to a direct imported-body or direct body-set reference; it
-does not author parts. The built `DesignDocumentV7` is detached, deeply frozen,
-and accepted by strict v7 parsing and semantic validation; `build({ limits })`
-can apply partial `DesignDocumentLimits` overrides and raises a `CadError`
-rather than returning an invalid document. The facade is not a root or
-package-subpath export and does not change the public v6 builder or evaluator
-types.
+direct graph admitted by the staged import, body-set, and part evaluators
+without hand-writing v7 IR. It admits typed length and mass-density parameters,
+named parameter and part-material configurations, document-owned materials,
+boxes, cylinders, spheres, content commitments, imported bodies, body sets,
+and parts over one direct leaf or body set. Outputs may directly reference an
+imported body, body set, or part. The built `DesignDocumentV7` is detached,
+deeply frozen, and accepted by strict v7 parsing and semantic validation;
+`build({ limits })` can apply partial `DesignDocumentLimits` overrides and
+raises a `CadError` rather than returning an invalid document. The facade is
+not a root or package-subpath export and does not change the public v6 builder
+or evaluator types.
 
 An output authored from a `StagedImportedBodyRefV7` can be selected by the
 source-only `evaluateImportedBodyOutputsV7(...)` operation. That operation
@@ -148,10 +148,12 @@ The source-only
 `evaluatePartOutputsV7(kernel, document, options)` operation selects only
 outputs that directly reference a Document v7 `part` node. The part's geometry
 must directly reference either a supported box, cylinder, sphere, or imported
-body, or a body set admitted by the staged body-set evaluator. This does not
-add part authoring: callers currently reach the slice through strictly parsed
-v7 documents, and `stagedBodySetDesignV7(...)` still cannot construct a part.
-Its source-only contract types are `EvaluatePartOutputsV7Options`,
+body, or a body set admitted by the staged body-set evaluator. The source-only
+`stagedBodySetDesignV7(...)` facade constructs exactly those direct part
+documents through `material(...)`, `part(...)`, typed configuration
+`.partMaterial(...)`, and direct part `output(...)`; it does not admit another
+part or a downstream solid graph as part geometry. Its source-only evaluation
+contract types are `EvaluatePartOutputsV7Options`,
 `PartEvaluationLimitsV7`, `EvaluatedPartDesignV7`,
 `EvaluatedPartGeometryV7`, and `EvaluatedPartV7`.
 
@@ -182,6 +184,12 @@ while the legacy `material` string remains only an authored descriptive label.
 Missing density is never inferred from a name: `physicalMassProperties()`
 returns a structured missing-density failure, and `billOfMaterials()` returns
 its deterministic one-row report with incomplete mass and a warning.
+
+The authoring facade enforces typed, same-builder material and part references.
+Material, part, configuration, parameter, resource, import, and membership
+options are captured as exact plain own-data records; unknown fields and
+accessors are rejected without invoking getters. Caller metadata and
+collections are detached before the resulting v7 document is deeply frozen.
 
 For a multibody part, physical mass applies the one effective part density to
 each authored membership and combines the independent-body mass, center of

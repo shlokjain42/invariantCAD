@@ -76,33 +76,79 @@ stagedBodySetDesignV7(
 ): StagedBodySetDesignBuilderV7
 ```
 
-This is a deliberately narrow facade for authoring the graph already
-executable by the two staged v7 evaluators. Its implementation lives in
+This is a deliberately narrow facade for authoring the direct graph already
+executable by the three staged v7 evaluators. Its implementation lives in
 `src/internal/document-v7-body-set-authoring.ts`; it is not exported from the
 package root or any package subpath. The public `design(...)` builder,
 `DesignDocument` alias, evaluator, and migration target remain on frozen v6.
 
-The facade privately composes the v6 builder for the following shared
-authoring behavior:
+The facade privately composes the v6 builder for admitted parameters and
+native primitives, then adds staged configuration, material, resource,
+imported-body, body-set, and part records. Its complete admitted surface is:
 
 | Method | Staged result | Boundary |
 | --- | --- | --- |
-| `parameter.length(...)` | Owned length parameter | Length defaults, bounds, labels, and descriptions only |
-| `configuration(...)` | Configuration ID | Its `StagedBodySetConfigurationBuilderV7` callback admits only `.parameter(parameter, value)` overrides |
+| `parameter.length(...)` | `Parameter<"length">` | Length defaults, bounds, labels, and descriptions |
+| `parameter.massDensity(...)` | `Parameter<"massDensity">` | Density in the canonical kg/mm³ base unit |
+| `material(id, options)` | `MaterialRef` | Document-owned name, density expression, optional description, and detached metadata |
+| `configuration(...)` | Configuration ID | Its callback admits typed length/density `.parameter(...)` overrides and `.partMaterial(part, material)` substitution |
 | `box(...)`, `cylinder(...)`, `sphere(...)` | `StagedBodyLeafRefV7` | Direct primitive leaves with the v6-shaped typed length-expression API |
 | `resource(id, commitment)` | `StagedResourceRefV7` | Explicit SHA-256 digest, byte length, media type, ordered location hints, and detached metadata |
 | `importedBody(id, resource, options)` | `StagedImportedBodyRefV7` | Direct STEP or text/binary BREP leaf with a strong single-solid policy |
 | `bodySet(id, members)` | `StagedBodySetRefV7` | Dense non-empty ordered memberships of direct primitive or imported leaves |
-| `output(name, reference)` | Builder | Direct imported-body or direct body-set targets only |
+| `part(id, geometry, options?)` | `PartRef` | Direct owned solid leaf or body-set geometry with part and material intent |
+| `output(name, reference)` | Builder | Direct imported-body, body-set, or part targets |
 | `build(options?)` | `DesignDocumentV7` | Detached, deeply frozen data accepted by strict v7 parsing and semantic validation |
 
+The newly admitted source signatures are:
+
+```ts
+parameter.massDensity(
+  id: string,
+  defaultValue: MassDensityExpression,
+  options?: ParameterOptions<"massDensity">,
+): Parameter<"massDensity">
+
+material(id: string, options: MaterialOptions): MaterialRef
+
+part(
+  id: string,
+  geometry: StagedBodyLeafRefV7 | StagedBodySetRefV7,
+  options?: PartOptions,
+): PartRef
+
+configuration.partMaterial(part: PartRef, material: MaterialRef): this
+
+output(
+  name: string,
+  reference: StagedImportedBodyRefV7 | StagedBodySetRefV7 | PartRef,
+): StagedBodySetDesignBuilderV7
+```
+
 Every staged reference is owned by the builder that created it. Resource IDs,
-parameter IDs, configuration IDs, node IDs, output names, and body-member IDs
-must be valid and unique in their applicable namespace. A body-set member keeps
-its stable ID, authored position, optional name, and detached JSON metadata;
-multiple memberships may deliberately reference the same owned leaf. Every
-listed member is active, and the facade neither selects nor infers a primary
-body.
+parameter IDs, material IDs, configuration IDs, node IDs, output names, and
+body-member IDs must be valid and unique in their applicable namespace. The
+facade rejects foreign or forged geometry, material, part, resource, and output
+handles. It constructs canonical references from captured identity rather than
+dispatching through mutable handle methods.
+
+A body-set member keeps its stable ID, authored position, optional name, and
+detached JSON metadata; multiple memberships may deliberately reference the
+same owned leaf. Every listed member is active, and the facade neither selects
+nor infers a primary body. A staged part wraps either one owned box, cylinder,
+sphere, or imported-body leaf, or one owned body set. It cannot wrap another
+part or a downstream solid graph.
+
+`material(...)` authors a document-owned definition with an explicit
+mass-density expression. `part(...)` accepts the existing `PartOptions`
+contract: part number, description, detached metadata, optional explicit
+density, and either a legacy descriptive `material` string or an owned
+`materialRef`, never both. A configuration can substitute another owned
+material for an owned part. The selected material determines effective
+material identity and supplies density when needed; an explicit part density
+still wins. A legacy label and a material name never perform catalogue lookup.
+Length and density parameters may be specialized by a named configuration and
+then by bounded caller overrides during evaluation.
 
 A resource commitment describes bytes that an application resolver may later
 supply. Its ordered `locations` are hints only: authoring and evaluation never
@@ -126,18 +172,22 @@ do not raise these immediate safeguards.
 Build fails before returning a document when a handle comes from another
 builder, a namespace is duplicated, a required collection is sparse or empty,
 member IDs repeat, a commitment is malformed, a configuration references
-foreign definitions, an authoring limit is exceeded, or a resource, import,
-unit-policy, or body-member record contains an accessor or unknown field.
-Those inputs must be plain own-data records; unsupported semantics are rejected
-rather than silently discarded. Successful build detaches caller metadata and
-collections before recursively freezing the document.
+foreign definitions, an authoring limit is exceeded, or a parameter,
+configuration, material, part, resource, import, unit-policy, or body-member
+option record contains an accessor or unknown field. Those inputs must be plain
+own-data records; accessors are not invoked and unsupported semantics are
+rejected rather than silently discarded. Successful build detaches caller
+metadata and collections before recursively freezing the document.
 
-This facade does not author generic solid or direct primitive outputs, parts,
+This facade does not author generic solid or direct primitive outputs,
 assemblies, external occurrences, datums, sketches, transforms, Booleans,
-body-consuming features, or other general dependency graphs. It also does not
-add CLI support, location I/O, reader inference, healing, aggregate
-mass/topology semantics, or exact aggregate STEP/BREP export. Those omissions
-are product boundaries, not implicit fallbacks.
+body-consuming features, per-body materials, or other general dependency
+graphs. It also does not add CLI support, location I/O, reader inference,
+healing, a primary-body rule, cross-body topology, aggregate geometric
+measurement, or exact aggregate STEP/BREP export. Part-level STL/OBJ export is
+an aggregate tessellation view and is explicitly approximate/lossy; exact
+native export and topology remain per-solid or per-body capabilities. Those
+omissions are product boundaries, not implicit fallbacks.
 
 ## ID rules
 
