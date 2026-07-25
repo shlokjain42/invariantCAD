@@ -127,20 +127,28 @@ directly reference a body set whose members are direct box, cylinder, sphere,
 or imported-body leaves. It preserves authored member identity, order, names,
 and metadata, treats every listed member as active with no inferred primary,
 and reports whether a native-only result is exact or approximate. Imported
-members retain the verified-resource and strong exact B-Rep requirement.
+members retain the verified-resource and strong exact B-Rep requirement. A
+third evaluates outputs that directly reference a part whose geometry is one
+supported solid leaf or one admitted body set. It preserves detached part
+metadata and effective material/density provenance through an explicit
+single-solid/body-set result union without adding part authoring.
 
 The staged body-set result supports per-body mesh and measurement, plus
 capability-gated topology and native single-body export. Aggregate mesh, STL,
-and OBJ are explicitly approximate/lossy. Exact aggregate STEP/BREP, aggregate
-mass or topology semantics, downstream feature composition, parts, assemblies,
-external occurrences, healing, and location I/O remain unsupported.
-`mediaType` remains committed provenance pending a versioned
-format-to-media-type policy. The facade also excludes parts, assemblies,
-datums, sketches, transforms, Booleans, body-consuming operations, and general
-feature graphs, including generic solid and direct primitive outputs. These are
-correctness-tested design inputs for Milestone 1, not public authoring or
-evaluation capabilities. No root export, package subpath, or CLI surface was
-added; the public document alias and migration target remain v6.
+and OBJ are explicitly approximate/lossy. A containing part can now supply one
+uniform density and additive independent-body physical-mass semantics, with
+aliases and overlaps counted per authored membership, plus a one-row BOM.
+Those numeric properties inherit backend measurement quality. Bare body sets
+still have no aggregate mass; exact aggregate STEP/BREP, aggregate geometric
+measurement or topology, downstream feature composition, assemblies, external
+occurrences, healing, and location I/O remain unsupported. `mediaType` remains
+committed provenance pending a versioned format-to-media-type policy. The
+facade also excludes part authoring, assemblies, datums, sketches, transforms,
+Booleans, body-consuming operations, and general feature graphs, including
+generic solid and direct primitive outputs. These are correctness-tested design
+inputs for Milestone 1, not public authoring or evaluation capabilities. No
+root export, package subpath, or CLI surface was added; the public document
+alias and migration target remain v6.
 
 The staged v7 text parser rejects duplicate decoded JSON object members,
 including escape-equivalent names, and applies structural and nesting ceilings
@@ -265,10 +273,11 @@ serialized, migrated, evaluated, inspected, and exported without escaping the
 document model. Their identities and resource inputs are reproducible.
 
 The repository-only facade and staged evaluators now exercise that workflow for
-direct imported bodies and direct primitive/imported body sets, including real
-Manifold and stock-OCCT acceptance paths. The milestone remains in progress
-because this evidence is source-only and does not yet cover public v7
-promotion, parts/product structure, datums, or general feature graphs.
+direct imported bodies, direct primitive/imported body sets, and directly
+authored part IR over those geometries, including real Manifold and stock-OCCT
+acceptance paths. The milestone remains in progress because this evidence is
+source-only and does not yet cover public v7 promotion, part authoring,
+assemblies/product structure, datums, or general feature graphs.
 
 ## Milestone 2 — everyday part modeling
 

@@ -67,19 +67,20 @@ Provides:
 Exact native STEP/BREP assembly structure is not a separate 0.1 product-data
 model; an aggregate export follows the current evaluated geometry behavior.
 
-## Repository-only staged Document v7 imports and body sets
+## Repository-only staged Document v7 imports, body sets, and parts
 
 The repository-only `stagedBodySetDesignV7(...)` facade can now author the
-complete graph admitted by the staged import and body-set evaluators without
+direct graph admitted by the staged import and body-set evaluators without
 hand-writing v7 IR. It privately composes the existing v6 builder for length
 parameters, named parameter configurations, boxes, cylinders, and spheres,
 then adds content commitments, imported bodies, body sets, and outputs. Its
-outputs are limited to a direct imported-body or direct body-set reference.
-The built `DesignDocumentV7` is detached, deeply frozen, and accepted by strict
-v7 parsing and semantic validation; `build({ limits })` can apply partial
-`DesignDocumentLimits` overrides and raises a `CadError` rather than returning
-an invalid document. The facade is not a root or package-subpath export and
-does not change the public v6 builder or evaluator types.
+outputs are limited to a direct imported-body or direct body-set reference; it
+does not author parts. The built `DesignDocumentV7` is detached, deeply frozen,
+and accepted by strict v7 parsing and semantic validation; `build({ limits })`
+can apply partial `DesignDocumentLimits` overrides and raises a `CadError`
+rather than returning an invalid document. The facade is not a root or
+package-subpath export and does not change the public v6 builder or evaluator
+types.
 
 An output authored from a `StagedImportedBodyRefV7` can be selected by the
 source-only `evaluateImportedBodyOutputsV7(...)` operation. That operation
@@ -137,25 +138,87 @@ descriptor containing `id`, source `node`, optional `name`, optional detached
 | Whole body set | `mesh()` | Combines member tessellations in authored order and is approximate |
 | Whole body set | `export("stl" \| "stl-ascii" \| "obj")` | Mesh-derived and explicitly approximate/lossy |
 
-Whole-set STEP/BREP export, aggregate mass properties, and a cross-body topology
-namespace are unsupported. The staged operation does not fuse bodies or create
-a kernel compound. It also does not evaluate downstream feature graphs, parts,
-assemblies, external occurrences, datums, healing, or location I/O. The
-authoring facade deliberately cannot construct those unsupported inputs.
+Whole-set STEP/BREP export, bare-body-set mass properties, and a cross-body
+topology namespace are unsupported. The staged operation does not fuse bodies
+or create a kernel compound.
 
-The evaluation limits bound document admission and shape acquisition, not mesh
-buffers produced by later facade calls. Tessellation and mesh export remain
-backend work controlled by `MeshOptions`; hostile or very large geometry still
-belongs in a disposable worker or process with an application-owned output
-ceiling.
+### Direct part outputs
+
+The source-only
+`evaluatePartOutputsV7(kernel, document, options)` operation selects only
+outputs that directly reference a Document v7 `part` node. The part's geometry
+must directly reference either a supported box, cylinder, sphere, or imported
+body, or a body set admitted by the staged body-set evaluator. This does not
+add part authoring: callers currently reach the slice through strictly parsed
+v7 documents, and `stagedBodySetDesignV7(...)` still cannot construct a part.
+Its source-only contract types are `EvaluatePartOutputsV7Options`,
+`PartEvaluationLimitsV7`, `EvaluatedPartDesignV7`,
+`EvaluatedPartGeometryV7`, and `EvaluatedPartV7`.
+
+`EvaluatedPartDesignV7` has the same evaluation-scoped container shape as the
+body-set result: selected `configurationId`, resolved `parameters`, structured
+`diagnostics`, deterministic `outputNames`, `output(name)`, and `dispose()`.
+Each `EvaluatedPartV7` retains the source part node, part number, description,
+detached metadata, legacy material label, effective material identity and
+definition, density, and density source. Its `geometry` is an explicit
+discriminated union:
+
+- `"solid"` retains the direct source node and one owned `EvaluatedSolid`.
+- `"bodySet"` retains the source body-set node and one
+  `EvaluatedBodySetV7`, including its ordered authored memberships.
+
+The evaluator never promotes one member to a primary body and never constructs
+a compound or Boolean union. Part-level `mesh()` and
+`export("stl" | "stl-ascii" | "obj")` merge tessellations in authored order;
+they are approximate/lossy even when the retained bodies come from an exact
+kernel. Native single-body or per-body export and topology remain available
+only through the retained geometry's `solid` facades and their kernel
+capabilities. A multibody part has no aggregate `measure()` or cross-body
+topology namespace.
+
+Named configuration selection first determines the effective material ID. An
+explicit part `massDensity` then takes precedence over that material's density,
+while the legacy `material` string remains only an authored descriptive label.
+Missing density is never inferred from a name: `physicalMassProperties()`
+returns a structured missing-density failure, and `billOfMaterials()` returns
+its deterministic one-row report with incomplete mass and a warning.
+
+For a multibody part, physical mass applies the one effective part density to
+each authored membership and combines the independent-body mass, center of
+mass, and inertia contributions. Shared aliases are counted once per authored
+membership, and spatial overlaps are also counted independently; the operation
+does not detect interference or subtract a union volume. The calculation uses
+the selected backend's measurements. The result's backend `representation` and
+`exact` capability describe that boundary, but do not make the returned
+floating-point mass an independent mathematical-exactness guarantee. A bare
+`EvaluatedBodySetV7` still has no aggregate mass contract.
+
+Part evaluation accepts the same configuration, parameter, output, resolver,
+resource-limit, document-limit, and cancellation boundaries as body-set
+evaluation. Its evaluation limits bound selected outputs, parameter overrides,
+authored part-body memberships, distinct acquired solid leaves, and resolved
+material definitions through `maxSelectedOutputs`,
+`maxParameterOverrides`, `maxPartBodies`, `maxDistinctSolids`, and
+`maxResolvedMaterials`. These limits bound document admission and shape
+acquisition, not mesh buffers produced by later facade calls. Tessellation and
+mesh export remain backend work controlled by `MeshOptions`; hostile or very
+large geometry still belongs in a disposable worker or process with an
+application-owned output ceiling.
 
 Evaluation is transactional: failure releases every distinct acquired shape
-exactly once. A successful `EvaluatedBodySetDesignV7` owns each distinct shape
-until `dispose()`. After disposal, design output lookup, body lookup,
-whole-set mesh/export, and per-body solid operations fail deterministically.
-Detached mesh, export, measurement, and metadata values already returned to
-the caller remain detached. The caller-supplied kernel is borrowed and is never
+exactly once. A successful `EvaluatedBodySetDesignV7` or
+`EvaluatedPartDesignV7` owns each distinct shape until `dispose()`. After
+disposal, design output lookup, part operations, body lookup, whole-set
+mesh/export, and per-body solid operations fail deterministically. Detached
+mesh, export, measurement, BOM, and metadata values already returned to the
+caller remain detached. The caller-supplied kernel is borrowed and is never
 disposed by the staged design.
+
+The staged part slice still excludes assemblies, external occurrences, datums,
+healing, location I/O, body-consuming operations, and general dependency
+graphs. It does not widen the package-root `EvaluatedOutput` union, public
+document alias, builder, evaluator, CLI, or migration target; those remain on
+the frozen v6 surface.
 
 ## Lifetime
 

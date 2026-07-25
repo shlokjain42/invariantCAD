@@ -100,7 +100,7 @@ try {
 }
 ```
 
-## Staged Document v7 import and body-set status
+## Staged Document v7 import, body-set, and part status
 
 The current public authoring grammar does not yet expose an imported-body
 or body-set feature node. The repository now contains
@@ -139,7 +139,7 @@ Resource, import, unit-policy, and body-member records must be plain own-data
 records. Accessor-backed and unknown fields are rejected rather than invoked
 or silently interpreted.
 
-The repository has two source-only staged evaluator slices:
+The repository has three source-only staged evaluator slices:
 
 - A direct imported-body output admits bytes only through the caller-supplied
   resolver, verifies the declared byte length and SHA-256 digest, and invokes
@@ -149,6 +149,11 @@ The repository has two source-only staged evaluator slices:
   member is treated as a primary body. Its solid reference must point directly
   to a box, cylinder, sphere, or imported-body leaf; transforms, Booleans, and
   all other downstream composition remain outside this slice.
+- A direct part output preserves part metadata and effective material/density
+  provenance while retaining an explicit single-solid or body-set geometry
+  branch. Its geometry must be one supported direct solid leaf or one body set
+  admitted by the preceding slice. This evaluator does not imply that the
+  staged facade can author parts.
 
 Native-only body sets can run on either exact or approximate kernels, and the
 result records the kernel representation as `mesh`, `brep`, or `sdf` together
@@ -178,17 +183,34 @@ resources. Those admission limits do not bound mesh buffers created by later
 facade calls; applications handling hostile or very large tessellations still
 need a disposable worker or process and an application-owned output ceiling.
 
-The authoring facade and both staged evaluator slices remain repository-only:
-none is exported by the package root, available from a package subpath, or
-integrated with the public builder or CLI. They do not author or evaluate
-parts, assemblies, external occurrences, datums, body-consuming operations, or
-general dependency graphs; the facade cannot publish a direct primitive or
-generic-solid output either. They also do not define aggregate mass semantics
-or a cross-body topology namespace, perform location I/O, or admit healing
-beyond `none`. A resource's `mediaType` is committed provenance passed to the
-resolver; it is not used to choose the reader or accepted as a substitute for
-the imported-body node's explicit `format`. A versioned format-to-media-type
-policy is still required before public promotion.
+For a direct part, a named configuration can replace the authored `materialId`.
+An explicit part density still overrides the effective material density, and a
+legacy material label is never used as a catalogue lookup. The one-row part
+BOM and `physicalMassProperties()` use one uniform effective density across
+all memberships. Mass is additive over independent bodies: repeated aliases
+and spatial overlaps each contribute once per authored membership rather than
+being fused or unioned. The numeric result inherits the selected backend's
+measurement quality; a kernel capability marked exact is not a separate proof
+of mathematically exact floating-point mass.
+
+Part-level `mesh()` and STL/OBJ export are aggregate tessellation views and are
+therefore approximate/lossy. Exact native export remains a per-solid or
+per-body capability. Multibody parts do not expose aggregate geometric
+measurement, exact aggregate STEP/BREP, a cross-body topology namespace,
+interference subtraction, or primary-body inference. Bare body sets still have
+no aggregate mass contract; the part supplies the uniform-density semantics.
+
+The authoring facade and all three staged evaluator slices remain
+repository-only: none is exported by the package root, available from a
+package subpath, or integrated with the public builder or CLI. The facade does
+not author parts, and the evaluators do not evaluate assemblies, external
+occurrences, datums, body-consuming operations, or general dependency graphs.
+The facade cannot publish a direct primitive or generic-solid output either.
+The operations perform no location I/O and admit no healing beyond `none`. A
+resource's `mediaType` is committed provenance passed to the resolver; it is
+not used to choose the reader or accepted as a substitute for the
+imported-body node's explicit `format`. A versioned format-to-media-type policy
+is still required before public promotion.
 
 There are deliberately two kernel boundaries:
 

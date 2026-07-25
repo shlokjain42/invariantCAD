@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+- Added a source-only staged Document v7 evaluator for outputs that directly
+  reference a `part` node whose geometry is either one supported solid leaf or
+  one directly supported body set. `EvaluatedPartV7` preserves detached part
+  metadata and exposes its geometry as an explicit single-solid/body-set
+  discriminated union rather than inventing a primary body or kernel compound.
+  Named-configuration material overrides determine the effective material
+  identity, while an explicit part density continues to take precedence over
+  the effective material density. Physical mass uses one uniform part density
+  and additive independent-body semantics; repeated aliases and overlapping
+  memberships are each counted rather than fused or deduplicated. A
+  deterministic one-row BOM reports the same effective material and mass
+  provenance. Part-level mesh and STL/OBJ export are aggregate tessellation
+  views and therefore approximate/lossy; exactness and physical measurements
+  retain the selected backend's quality rather than gaining an independent
+  exactness guarantee. Resolver verification, evaluation/resource/document
+  limits, cancellation, transactional cleanup, and borrowed-kernel ownership
+  match the staged body-set boundary. This slice adds no part authoring,
+  assembly evaluation, cross-body topology, aggregate geometric measurement,
+  or exact aggregate STEP/BREP export, and it does not change the public v6
+  API.
 - Added `stagedBodySetDesignV7(...)`, a repository-only Document v7 authoring
   facade for the graph already admitted by the staged import and body-set
   evaluators. It privately composes the frozen v6 builder for length
