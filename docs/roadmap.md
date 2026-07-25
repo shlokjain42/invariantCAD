@@ -109,15 +109,17 @@ Document v7 resource resolution, datums, richer shape algebra, body-set and
 multibody results, imported-body nodes, external occurrences, and feature-hash
 protocol v2 are also staged internally. A source-only
 `stagedBodySetDesignV7(...)` facade now authors the complete direct graph
-admitted by the staged evaluators: length parameters, named parameter
-configurations, boxes, cylinders, spheres, content-addressed resource
-commitments, imported-body leaves, body sets, and direct imported-body/body-set
-outputs. It produces detached, deeply frozen, strictly valid v7 documents
-while enforcing namespaces, builder ownership, dense collections, unique
-memberships, commitments, configuration references, and authoring limits.
-Resource locations remain inert resolver hints, and the imported node's
-explicit format—not `mediaType`—selects STEP or BREP interpretation. The caller
-computes each digest and byte-length commitment; the facade performs no
+admitted by the staged evaluators: typed length and mass-density parameters,
+named parameter and part-material configurations, document-owned materials,
+boxes, cylinders, spheres, content-addressed resource commitments,
+imported-body leaves, body sets, parts over one direct leaf or body set, and
+direct imported-body/body-set/part outputs. It produces detached, deeply
+frozen, strictly valid v7 documents while enforcing namespaces, typed builder
+ownership, exact plain own-data options, dense collections, unique
+memberships, commitments, material/configuration references, and authoring
+limits. Resource locations remain inert resolver hints, and the imported
+node's explicit format—not `mediaType`—selects STEP or BREP interpretation. The
+caller computes each digest and byte-length commitment; the facade performs no
 resource-byte I/O or hashing.
 
 One source-only executable slice evaluates outputs that directly reference an
@@ -131,7 +133,9 @@ members retain the verified-resource and strong exact B-Rep requirement. A
 third evaluates outputs that directly reference a part whose geometry is one
 supported solid leaf or one admitted body set. It preserves detached part
 metadata and effective material/density provenance through an explicit
-single-solid/body-set result union without adding part authoring.
+single-solid/body-set result union. The staged facade now constructs that exact
+part boundary, including typed material definitions, part metadata, explicit
+density, and named material substitution.
 
 The staged body-set result supports per-body mesh and measurement, plus
 capability-gated topology and native single-body export. Aggregate mesh, STL,
@@ -143,12 +147,12 @@ still have no aggregate mass; exact aggregate STEP/BREP, aggregate geometric
 measurement or topology, downstream feature composition, assemblies, external
 occurrences, healing, and location I/O remain unsupported. `mediaType` remains
 committed provenance pending a versioned format-to-media-type policy. The
-facade also excludes part authoring, assemblies, datums, sketches, transforms,
-Booleans, body-consuming operations, and general feature graphs, including
-generic solid and direct primitive outputs. These are correctness-tested design
-inputs for Milestone 1, not public authoring or evaluation capabilities. No
-root export, package subpath, or CLI surface was added; the public document
-alias and migration target remain v6.
+facade still excludes assemblies, external occurrences, datums, sketches,
+transforms, Booleans, body-consuming operations, per-body materials, and
+general feature graphs, including generic solid and direct primitive outputs.
+These are correctness-tested design inputs for Milestone 1, not public
+authoring or evaluation capabilities. No root export, package subpath, or CLI
+surface was added; the public document alias and migration target remain v6.
 
 The staged v7 text parser rejects duplicate decoded JSON object members,
 including escape-equivalent names, and applies structural and nesting ceilings
@@ -274,10 +278,10 @@ document model. Their identities and resource inputs are reproducible.
 
 The repository-only facade and staged evaluators now exercise that workflow for
 direct imported bodies, direct primitive/imported body sets, and directly
-authored part IR over those geometries, including real Manifold and stock-OCCT
-acceptance paths. The milestone remains in progress because this evidence is
-source-only and does not yet cover public v7 promotion, part authoring,
-assemblies/product structure, datums, or general feature graphs.
+authored typed parts and material intent over those geometries, including real
+Manifold and stock-OCCT acceptance paths. The milestone remains in progress
+because this evidence is source-only and does not yet cover public v7
+promotion, assemblies/product structure, datums, or general feature graphs.
 
 ## Milestone 2 — everyday part modeling
 

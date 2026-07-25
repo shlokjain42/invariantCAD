@@ -112,32 +112,37 @@ subpath exposes the facade.
 
 The staged facade authors:
 
-- length parameters and named parameter configurations, plus direct boxes,
-  cylinders, and spheres, by privately composing the existing v6 builder;
+- typed length and mass-density parameters, named parameter configurations,
+  document-owned materials, and typed part-material substitutions;
+- direct boxes, cylinders, and spheres by privately composing the existing v6
+  builder;
 - document-owned commitments with an explicit SHA-256 digest, byte length,
   media type, ordered location hints, and detached metadata;
 - owner-bound imported-body leaves for STEP with file units or text/binary BREP
   with an explicit `mm`, `cm`, `m`, or `in` length unit;
 - owner-bound body sets whose dense, non-empty ordered memberships directly
   reference facade-created primitives or imported bodies; and
-- outputs that directly target an imported body or body set.
+- owner-bound parts whose geometry is one direct leaf or one admitted body set,
+  plus outputs that directly target an imported body, body set, or part.
 
 Every imported node fixes healing to `none` and expects one solid. Its explicit
 format chooses the reader; committed `mediaType` is provenance and resolver
 context, not reader inference. The caller supplies the digest and byte-length
 commitments; the facade does not read or hash the resource bytes. Ordered
-resource locations are resolver hints only. Neither the facade nor either
-evaluator performs file, URL, or package I/O. Building validates namespaces,
-commitments, owner identity, configuration references, dense collections,
-unique member IDs, and caller-selected `DesignDocumentLimits` before returning
-detached, deeply frozen v7 data. Immediate authoring ceilings default to
+resource locations are resolver hints only. Neither the facade nor the staged
+evaluators perform file, URL, or package I/O. Authoring methods validate
+namespaces, commitments, owner identity, material and configuration references,
+dense collections, and unique member IDs. Build applies caller-selected
+`DesignDocumentLimits` and strict v7 validation before returning detached,
+deeply frozen v7 data. Immediate authoring ceilings default to
 `10,000` resources, `100,000` aggregate location hints, and `16 MiB` of
 aggregate UTF-8 location text. An individual body set is also rejected before
 copying above the default `1,000,000` structural-value ceiling. Caller-selected
 build limits can be stricter but cannot raise these immediate safeguards.
-Resource, import, unit-policy, and body-member records must be plain own-data
-records. Accessor-backed and unknown fields are rejected rather than invoked
-or silently interpreted.
+Parameter, configuration, material, part, resource, import, unit-policy, and
+body-member options must be plain own-data records. Accessor-backed and unknown
+fields are rejected without invocation or silent interpretation, and caller
+metadata is detached.
 
 The repository has three source-only staged evaluator slices:
 
@@ -152,8 +157,9 @@ The repository has three source-only staged evaluator slices:
 - A direct part output preserves part metadata and effective material/density
   provenance while retaining an explicit single-solid or body-set geometry
   branch. Its geometry must be one supported direct solid leaf or one body set
-  admitted by the preceding slice. This evaluator does not imply that the
-  staged facade can author parts.
+  admitted by the preceding slice. The staged facade authors exactly this
+  direct part boundary through `material(...)`, `part(...)`, configuration
+  `.partMaterial(...)`, and direct part `output(...)`.
 
 Native-only body sets can run on either exact or approximate kernels, and the
 result records the kernel representation as `mesh`, `brep`, or `sdf` together
@@ -185,10 +191,12 @@ need a disposable worker or process and an application-owned output ceiling.
 
 For a direct part, a named configuration can replace the authored `materialId`.
 An explicit part density still overrides the effective material density, and a
-legacy material label is never used as a catalogue lookup. The one-row part
-BOM and `physicalMassProperties()` use one uniform effective density across
-all memberships. Mass is additive over independent bodies: repeated aliases
-and spatial overlaps each contribute once per authored membership rather than
+legacy material label or material name is never used as a catalogue lookup.
+Length and density parameters first resolve in the selected configuration and
+may then be specialized by bounded caller overrides. The one-row part BOM and
+`physicalMassProperties()` use one uniform effective density across all
+memberships. Mass is additive over independent bodies: repeated aliases and
+spatial overlaps each contribute once per authored membership rather than
 being fused or unioned. The numeric result inherits the selected backend's
 measurement quality; a kernel capability marked exact is not a separate proof
 of mathematically exact floating-point mass.
@@ -203,14 +211,15 @@ no aggregate mass contract; the part supplies the uniform-density semantics.
 The authoring facade and all three staged evaluator slices remain
 repository-only: none is exported by the package root, available from a
 package subpath, or integrated with the public builder or CLI. The facade does
-not author parts, and the evaluators do not evaluate assemblies, external
-occurrences, datums, body-consuming operations, or general dependency graphs.
-The facade cannot publish a direct primitive or generic-solid output either.
-The operations perform no location I/O and admit no healing beyond `none`. A
-resource's `mediaType` is committed provenance passed to the resolver; it is
-not used to choose the reader or accepted as a substitute for the
-imported-body node's explicit `format`. A versioned format-to-media-type policy
-is still required before public promotion.
+not author assemblies, external occurrences, datums, transforms, Booleans,
+body-consuming operations, per-body materials, or general dependency graphs,
+and the staged evaluators do not evaluate those structures. The facade cannot
+publish a direct primitive or generic-solid output either. The operations
+perform no location I/O and admit no healing beyond `none`. A resource's
+`mediaType` is committed provenance passed to the resolver; it is not used to
+choose the reader or accepted as a substitute for the imported-body node's
+explicit `format`. A versioned format-to-media-type policy is still required
+before public promotion.
 
 There are deliberately two kernel boundaries:
 

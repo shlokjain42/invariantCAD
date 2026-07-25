@@ -10,7 +10,11 @@ import {
   type EvaluatedPartDesignV7,
   evaluatePartOutputsV7,
 } from "../src/evaluator.js";
-import type { ExpressionIR } from "../src/expressions.js";
+import {
+  kgPerCubicMillimeter,
+  mm,
+  type ExpressionIR,
+} from "../src/expressions.js";
 import {
   DOCUMENT_SCHEMA_V7,
   DOCUMENT_VERSION_V7,
@@ -38,6 +42,9 @@ import {
   type MeshOptions,
   type ShapeMeasurements,
 } from "../src/kernel.js";
+import {
+  stagedBodySetDesignV7,
+} from "../src/internal/document-v7-body-set-authoring.js";
 import { createManifoldKernel } from "../src/manifold-kernel.js";
 import { createOcctKernel } from "../src/occt-kernel.js";
 import type { KernelTopologySnapshot } from "../src/protocol/topology.js";
@@ -910,6 +917,180 @@ describe("staged document-v7 part output evaluation", () => {
     }
   });
 
+  it("evaluates an authored configured multibody part through the staged facade", async () => {
+    const cad = stagedBodySetDesignV7("authored-part-evaluation");
+    const width = cad.parameter.length("width", mm(2), {
+      min: mm(1),
+      max: mm(20),
+    });
+    const densityParameter = cad.parameter.massDensity(
+      "density",
+      kgPerCubicMillimeter(2e-6),
+      {
+        min: kgPerCubicMillimeter(1e-9),
+        max: kgPerCubicMillimeter(1e-3),
+      },
+    );
+    const light = cad.material("light", {
+      name: "Light fixture",
+      massDensity: kgPerCubicMillimeter(1e-6),
+    });
+    const configured = cad.material("configured", {
+      name: "Configured fixture",
+      massDensity: densityParameter,
+      metadata: { family: "acceptance" },
+    });
+    const shared = cad.box("shared", {
+      size: [width, mm(3), mm(4)],
+    });
+    const bodies = cad.bodySet("bodies", [
+      {
+        id: "primary",
+        solid: shared,
+        name: "Primary body",
+        metadata: { role: "datum" },
+      },
+      {
+        id: "alias",
+        solid: shared,
+        name: "Authored alias",
+      },
+    ]);
+    const inherited = cad.part("inheritedPart", bodies, {
+      partNumber: "AUTHORED-MULTI",
+      description: "Configured multibody fixture",
+      materialRef: light,
+    });
+    const explicit = cad.part("explicitPart", shared, {
+      partNumber: "AUTHORED-EXPLICIT",
+      materialRef: light,
+      massDensity: kgPerCubicMillimeter(5e-6),
+    });
+    cad.configuration("performance", (configuration) =>
+      configuration
+        .parameter(width, mm(4))
+        .parameter(
+          densityParameter,
+          kgPerCubicMillimeter(3e-6),
+        )
+        .partMaterial(inherited, configured)
+        .partMaterial(explicit, configured),
+    );
+    cad.output("inherited", inherited);
+    cad.output("explicit", explicit);
+
+    const harness = createKernelHarness();
+    const evaluated = expectPartResult(
+      await evaluatePartOutputsV7(harness.kernel, cad.build(), {
+        configuration: "performance",
+        parameters: {
+          width: 6,
+          density: 4e-6,
+        },
+      }),
+    );
+    const inheritedOutput = evaluated.output("inherited");
+    const explicitOutput = evaluated.output("explicit");
+    let retained: EvaluatedSolid | undefined;
+    try {
+      expect(evaluated.configurationId).toBe("performance");
+      expect(evaluated.parameters).toMatchObject({
+        width: 6,
+        density: 4e-6,
+      });
+      expect(harness.primitiveCalls).toHaveLength(1);
+      expect(harness.primitiveCalls[0]).toMatchObject({
+        kind: "box",
+        arguments: [[6, 3, 4], false],
+        context: { feature: "shared" },
+      });
+
+      expect(inheritedOutput).toMatchObject({
+        node: "inheritedPart",
+        partNumber: "AUTHORED-MULTI",
+        materialId: "configured",
+        materialName: "Configured fixture",
+        massDensity: 4e-6,
+        massDensitySource: "material",
+      });
+      expect(explicitOutput).toMatchObject({
+        node: "explicitPart",
+        partNumber: "AUTHORED-EXPLICIT",
+        materialId: "configured",
+        materialName: "Configured fixture",
+        massDensity: 5e-6,
+        massDensitySource: "part",
+      });
+
+      expect(inheritedOutput.geometry.kind).toBe("bodySet");
+      if (inheritedOutput.geometry.kind !== "bodySet") {
+        throw new Error("Expected an authored body-set part");
+      }
+      const evaluatedBodies = inheritedOutput.geometry.bodySet;
+      retained = evaluatedBodies.body("primary").solid;
+      expect(evaluatedBodies.bodyIds).toEqual(["primary", "alias"]);
+      expect(evaluatedBodies.body("primary")).toMatchObject({
+        id: "primary",
+        node: "shared",
+        name: "Primary body",
+        metadata: { role: "datum" },
+      });
+      expect(evaluatedBodies.body("alias")).toMatchObject({
+        id: "alias",
+        node: "shared",
+        name: "Authored alias",
+      });
+      expect(
+        evaluatedBodies.body("primary").solid.measure().volume,
+      ).toBe(72);
+      expect(
+        evaluatedBodies.body("alias").solid.measure().volume,
+      ).toBe(72);
+
+      const bom = inheritedOutput.billOfMaterials();
+      expect(bom.ok).toBe(true);
+      if (bom.ok) {
+        expect(bom.value).toMatchObject({
+          configurationId: "performance",
+          totalQuantity: 1,
+          massComplete: true,
+          knownMass: expect.closeTo(576e-6, 15),
+          totalMass: expect.closeTo(576e-6, 15),
+          items: [
+            expect.objectContaining({
+              partNode: "inheritedPart",
+              partNumber: "AUTHORED-MULTI",
+              materialId: "configured",
+              quantity: 1,
+              massDensity: 4e-6,
+              massDensitySource: "material",
+              definitionMass: expect.closeTo(576e-6, 15),
+              totalMass: expect.closeTo(576e-6, 15),
+            }),
+          ],
+        });
+      }
+      const inheritedPhysical =
+        inheritedOutput.physicalMassProperties();
+      expect(inheritedPhysical.ok).toBe(true);
+      if (inheritedPhysical.ok) {
+        expect(inheritedPhysical.value.mass).toBeCloseTo(576e-6, 15);
+      }
+      const explicitPhysical = explicitOutput.physicalMassProperties();
+      expect(explicitPhysical.ok).toBe(true);
+      if (explicitPhysical.ok) {
+        expect(explicitPhysical.value.mass).toBeCloseTo(360e-6, 15);
+      }
+    } finally {
+      evaluated.dispose();
+      evaluated.dispose();
+    }
+    expect(() => retained?.measure()).toThrow(/disposed/i);
+    expect(harness.disposed).toHaveLength(1);
+    expect(harness.live.size).toBe(0);
+    expect(harness.disposeKernel).not.toHaveBeenCalled();
+  });
+
   it("orders material diagnostics deterministically by material id", async () => {
     const document = await partDocument({
       materials: {
@@ -1613,32 +1794,34 @@ describe("staged document-v7 part output evaluation", () => {
 
 describe("native staged document-v7 part evaluation", () => {
   it("evaluates single-solid and multibody parts with Manifold", async () => {
-    const document = await partDocument({
-      materials: {
-        fixture: { name: "Fixture", massDensity: density(1e-6) },
-      },
-      nodes: {
-        box: box(),
-        sphere: sphere(length(1)),
-        bodies: bodySet([
-          member("box", "box"),
-          member("sphere", "sphere"),
-          member("box-alias", "box"),
-        ]),
-        single: part("box", "solid", {
-          partNumber: "MANIFOLD-SINGLE",
-          materialId: "fixture" as never,
-        }),
-        multi: part("bodies", "bodySet", {
-          partNumber: "MANIFOLD-MULTI",
-          materialId: "fixture" as never,
-        }),
-      },
-      outputs: {
-        single: { node: "single", kind: "part" },
-        multi: { node: "multi", kind: "part" },
-      },
+    const cad = stagedBodySetDesignV7("manifold-part-evaluation");
+    const fixture = cad.material("fixture", {
+      name: "Fixture",
+      massDensity: kgPerCubicMillimeter(1e-6),
     });
+    const authoredBox = cad.box("box", {
+      size: [mm(2), mm(3), mm(4)],
+    });
+    const authoredSphere = cad.sphere("sphere", {
+      radius: mm(1),
+      segments: 24,
+    });
+    const bodies = cad.bodySet("bodies", [
+      { id: "box", solid: authoredBox },
+      { id: "sphere", solid: authoredSphere },
+      { id: "box-alias", solid: authoredBox },
+    ]);
+    const single = cad.part("single", authoredBox, {
+      partNumber: "MANIFOLD-SINGLE",
+      materialRef: fixture,
+    });
+    const multi = cad.part("multi", bodies, {
+      partNumber: "MANIFOLD-MULTI",
+      materialRef: fixture,
+    });
+    cad.output("single", single);
+    cad.output("multi", multi);
+    const document = cad.build();
     const kernel = await createManifoldKernel();
     try {
       const evaluated = expectPartResult(
@@ -1730,26 +1913,39 @@ describe("native staged document-v7 part evaluation", () => {
 
   it("evaluates a verified mixed exact part with stock OCCT and releases every shape", async () => {
     const resources = { imported: step };
-    const document = await partDocument({
-      resources,
-      materials: {
-        fixture: { name: "Fixture", massDensity: density(1e-6) },
-      },
-      nodes: {
-        imported: importedBody("imported"),
-        native: box(),
-        bodies: bodySet([
-          member("imported", "imported", { name: "Imported STEP" }),
-          member("native", "native", { name: "Native box" }),
-          member("native-alias", "native"),
-        ]),
-        exactPart: part("bodies", "bodySet", {
-          partNumber: "OCCT-MIXED",
-          materialId: "fixture" as never,
-        }),
-      },
-      outputs: { exact: { node: "exactPart", kind: "part" } },
+    const cad = stagedBodySetDesignV7("occt-part-evaluation");
+    const fixture = cad.material("fixture", {
+      name: "Fixture",
+      massDensity: kgPerCubicMillimeter(1e-6),
     });
+    const resource = cad.resource("imported", {
+      digest: await digest(step),
+      byteLength: step.byteLength,
+      mediaType: "model/step",
+      locations: ["project://part-evaluation/imported"],
+    });
+    const imported = cad.importedBody("imported", resource, {
+      format: "step",
+      units: { mode: "from-file" },
+    });
+    const native = cad.box("native", {
+      size: [mm(2), mm(3), mm(4)],
+    });
+    const bodies = cad.bodySet("bodies", [
+      {
+        id: "imported",
+        solid: imported,
+        name: "Imported STEP",
+      },
+      { id: "native", solid: native, name: "Native box" },
+      { id: "native-alias", solid: native },
+    ]);
+    const exactPart = cad.part("exactPart", bodies, {
+      partNumber: "OCCT-MIXED",
+      materialRef: fixture,
+    });
+    cad.output("exact", exactPart);
+    const document = cad.build();
     const kernel = await createOcctKernel();
     const liveShapes = (
       kernel as GeometryKernel & {

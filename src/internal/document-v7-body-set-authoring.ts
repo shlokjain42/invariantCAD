@@ -1,25 +1,36 @@
 import {
   assertValidId,
+  configurationId,
   entityId,
+  materialId,
   nodeId,
+  parameterId,
   resourceId,
+  type ConfigurationId,
   type EntityId,
+  type MaterialId,
   type NodeId,
+  type ParameterId,
   type ResourceId,
 } from "../core/ids.js";
 import { deepFreeze, type JsonValue } from "../core/json.js";
 import { CadError } from "../core/result.js";
 import { utf8ByteLengthWithin } from "../core/utf8.js";
 import {
-  ConfigurationBuilder,
   DesignBuilder,
   type ConfigurationOptions,
   type DesignOptions,
+  MaterialRef,
+  type MaterialOptions,
   type ParameterOptions,
+  PartRef,
+  type PartOptions,
 } from "../design.js";
 import {
   type Expression,
+  type ExpressionIR,
   type LengthExpression,
+  type MassDensityExpression,
   type Parameter,
   type Vec3Expression,
 } from "../expressions.js";
@@ -27,10 +38,13 @@ import {
   DOCUMENT_SCHEMA_V7,
   DOCUMENT_VERSION_V7,
   type BodySetMemberIRV7,
+  type DesignConfigurationIR,
   type DesignDocumentV7,
   type ImportedBodyNodeIRV7,
   type ImportedBodyLengthUnitV7,
+  type MaterialDefinitionIR,
   type NodeIRV7,
+  type PartNodeIRV7,
   type RefIRV7,
   type ResourceDefinitionIR,
   type ResourceDigestIR,
@@ -47,9 +61,17 @@ import {
 const STAGED_BODY_SET_DESIGN_OWNER = Symbol(
   "InvariantCAD.StagedBodySetDesignOwnerV7",
 );
+const STAGED_CONFIGURATION_TO_IR = Symbol(
+  "InvariantCAD.StagedConfigurationToIRV7",
+);
 const RESOURCE_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
 const RESOURCE_MEDIA_TYPE_PATTERN =
   /^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+(?:\s*;.*)?$/;
+
+interface StagedParameterIdentityV7 {
+  readonly id: ParameterId;
+  readonly dimension: "length" | "massDensity";
+}
 const authoringObjectPrototype = Object.prototype;
 const authoringObjectCreate = Object.create;
 const authoringObjectFreeze = Object.freeze;
@@ -57,9 +79,23 @@ const authoringObjectGetOwnPropertyDescriptor =
   Object.getOwnPropertyDescriptor;
 const authoringObjectGetPrototypeOf = Object.getPrototypeOf;
 const authoringObjectHasOwn = Object.hasOwn;
+const authoringObjectKeys = Object.keys;
 const authoringReflectApply = Reflect.apply;
 const authoringReflectOwnKeys = Reflect.ownKeys;
+const AuthoringArray = Array;
 const authoringArrayIsArray = Array.isArray;
+const AuthoringSet = Set;
+const authoringSetAdd = Set.prototype.add;
+const authoringSetHas = Set.prototype.has;
+const AuthoringWeakMap = WeakMap;
+const authoringWeakMapGet = WeakMap.prototype.get;
+const authoringWeakMapSet = WeakMap.prototype.set;
+const AuthoringWeakSet = WeakSet;
+const authoringWeakSetAdd = WeakSet.prototype.add;
+const authoringWeakSetHas = WeakSet.prototype.has;
+const authoringRegExpTest = RegExp.prototype.test;
+const authoringStringTrim = String.prototype.trim;
+const authoringNumberIsSafeInteger = Number.isSafeInteger;
 
 function authoringApply<T>(
   method: CallableFunction,
@@ -67,6 +103,98 @@ function authoringApply<T>(
   arguments_: readonly unknown[],
 ): T {
   return authoringReflectApply(method, receiver, arguments_) as T;
+}
+
+function authoringFreeze<T>(value: T): T {
+  return authoringApply<T>(authoringObjectFreeze, Object, [value]);
+}
+
+function authoringNullRecord<T extends object>(): T {
+  return authoringApply<T>(authoringObjectCreate, Object, [null]);
+}
+
+function authoringHasOwn(
+  value: object,
+  key: PropertyKey,
+): boolean {
+  return authoringApply<boolean>(authoringObjectHasOwn, Object, [
+    value,
+    key,
+  ]);
+}
+
+function authoringKeys(value: object): string[] {
+  return authoringApply<string[]>(authoringObjectKeys, Object, [value]);
+}
+
+function authoringDenseArray<T>(length: number): T[] {
+  return authoringApply<T[]>(AuthoringArray, undefined, [length]);
+}
+
+function authoringSetContains<T>(
+  set: ReadonlySet<T>,
+  value: T,
+): boolean {
+  return authoringApply<boolean>(authoringSetHas, set, [value]);
+}
+
+function authoringSetInsert<T>(set: Set<T>, value: T): void {
+  authoringApply<Set<T>>(authoringSetAdd, set, [value]);
+}
+
+function authoringWeakSetContains(
+  set: WeakSet<object>,
+  value: object,
+): boolean {
+  return authoringApply<boolean>(authoringWeakSetHas, set, [value]);
+}
+
+function authoringWeakSetInsert(
+  set: WeakSet<object>,
+  value: object,
+): void {
+  authoringApply<WeakSet<object>>(authoringWeakSetAdd, set, [value]);
+}
+
+function authoringWeakMapRead<V>(
+  map: WeakMap<object, V>,
+  key: object,
+): V | undefined {
+  return authoringApply<V | undefined>(authoringWeakMapGet, map, [key]);
+}
+
+function authoringWeakMapWrite<V>(
+  map: WeakMap<object, V>,
+  key: object,
+  value: V,
+): void {
+  authoringApply<WeakMap<object, V>>(authoringWeakMapSet, map, [
+    key,
+    value,
+  ]);
+}
+
+function authoringPatternMatches(
+  pattern: RegExp,
+  value: string,
+): boolean {
+  return authoringApply<boolean>(authoringRegExpTest, pattern, [value]);
+}
+
+function authoringTrim(value: string): string {
+  return authoringApply<string>(authoringStringTrim, value, []);
+}
+
+function authoringIsSafeInteger(value: unknown): boolean {
+  return authoringApply<boolean>(
+    authoringNumberIsSafeInteger,
+    Number,
+    [value],
+  );
+}
+
+function authoringIsArray(value: unknown): value is unknown[] {
+  return authoringApply<boolean>(authoringArrayIsArray, Array, [value]);
 }
 
 function captureExactOwnDataRecord(
@@ -170,13 +298,75 @@ function detachMetadata(
   if (
     typeof captured.value !== "object" ||
     captured.value === null ||
-    Array.isArray(captured.value)
+    authoringIsArray(captured.value)
   ) {
     throw new TypeError(`${label} must be a JSON record`);
   }
   return deepFreeze(
     captured.value as Readonly<Record<string, JsonValue>>,
   );
+}
+
+function captureParameterOptionsV7<
+  D extends "length" | "massDensity",
+>(
+  value: ParameterOptions<D>,
+  dimension: D,
+): ParameterOptions<D> {
+  const label =
+    dimension === "length"
+      ? "Length-parameter options"
+      : "Mass-density-parameter options";
+  const captured = captureExactOwnDataRecord(
+    value,
+    ["min", "max", "label", "description"],
+    label,
+  );
+  const min = captured.min as Expression<D> | undefined;
+  const max = captured.max as Expression<D> | undefined;
+  if (min !== undefined && min.dimension !== dimension) {
+    throw new TypeError(`${label}.min must have dimension ${dimension}`);
+  }
+  if (max !== undefined && max.dimension !== dimension) {
+    throw new TypeError(`${label}.max must have dimension ${dimension}`);
+  }
+  if (
+    captured.label !== undefined &&
+    typeof captured.label !== "string"
+  ) {
+    throw new TypeError(`${label}.label must be a string`);
+  }
+  if (
+    captured.description !== undefined &&
+    typeof captured.description !== "string"
+  ) {
+    throw new TypeError(`${label}.description must be a string`);
+  }
+  return authoringApply<ParameterOptions<D>>(
+    authoringObjectFreeze,
+    Object,
+    [
+      {
+        ...(min === undefined ? {} : { min }),
+        ...(max === undefined ? {} : { max }),
+        ...(captured.label === undefined
+          ? {}
+          : { label: captured.label as string }),
+        ...(captured.description === undefined
+          ? {}
+          : { description: captured.description as string }),
+      },
+    ],
+  );
+}
+
+function assertOptionalString(
+  value: unknown,
+  label: string,
+): asserts value is string | undefined {
+  if (value !== undefined && typeof value !== "string") {
+    throw new TypeError(`${label} must be a string`);
+  }
 }
 
 /**
@@ -229,7 +419,7 @@ export class StagedResourceRefV7 {
   constructor(owner: StagedBodySetDesignBuilderV7, id: ResourceId) {
     this[STAGED_BODY_SET_DESIGN_OWNER] = owner;
     this.id = id;
-    Object.freeze(this);
+    authoringFreeze(this);
   }
 }
 
@@ -249,7 +439,7 @@ export class StagedBodyLeafRefV7 {
   constructor(owner: StagedBodySetDesignBuilderV7, node: NodeId) {
     this[STAGED_BODY_SET_DESIGN_OWNER] = owner;
     this.node = node;
-    Object.freeze(this);
+    authoringFreeze(this);
   }
 
   toIR(): RefIRV7<"solid"> {
@@ -271,7 +461,7 @@ export class StagedBodySetRefV7 {
   constructor(owner: StagedBodySetDesignBuilderV7, node: NodeId) {
     this[STAGED_BODY_SET_DESIGN_OWNER] = owner;
     this.node = node;
-    Object.freeze(this);
+    authoringFreeze(this);
   }
 
   toIR(): RefIRV7<"bodySet"> {
@@ -279,34 +469,129 @@ export class StagedBodySetRefV7 {
   }
 }
 
-/**
- * Parameter-only configuration surface for the executable staged graph.
- *
- * @internal
- */
+/** Configuration surface for the executable staged graph. @internal */
 export class StagedBodySetConfigurationBuilderV7 {
-  readonly #builder: ConfigurationBuilder;
+  readonly #parameterHandles: WeakMap<
+    object,
+    StagedParameterIdentityV7
+  >;
+  readonly #partHandles: WeakSet<object>;
+  readonly #materialHandles: WeakSet<object>;
+  readonly #partHandleIds: WeakMap<object, NodeId>;
+  readonly #materialHandleIds: WeakMap<object, MaterialId>;
+  readonly #parameterRecords = authoringNullRecord<Record<
+    ParameterId,
+    ExpressionIR
+  >>();
+  readonly #partMaterialRecords = authoringNullRecord<Record<
+    NodeId,
+    MaterialId
+  >>();
 
-  constructor(builder: ConfigurationBuilder) {
-    this.#builder = builder;
-    Object.freeze(this);
+  constructor(
+    parameterHandles: WeakMap<object, StagedParameterIdentityV7>,
+    partHandles: WeakSet<object>,
+    materialHandles: WeakSet<object>,
+    partHandleIds: WeakMap<object, NodeId>,
+    materialHandleIds: WeakMap<object, MaterialId>,
+  ) {
+    this.#parameterHandles = parameterHandles;
+    this.#partHandles = partHandles;
+    this.#materialHandles = materialHandles;
+    this.#partHandleIds = partHandleIds;
+    this.#materialHandleIds = materialHandleIds;
+    authoringFreeze(this);
   }
 
-  parameter(
-    parameter: Parameter<"length">,
-    value: Expression<"length">,
+  parameter<D extends "length" | "massDensity">(
+    parameter: Parameter<D>,
+    value: Expression<NoInfer<D>>,
   ): this {
-    this.#builder.parameter(parameter, value);
+    const identity = authoringWeakMapRead(
+      this.#parameterHandles,
+      parameter,
+    );
+    if (identity === undefined) {
+      throw new TypeError(
+        "Parameter references cannot cross staged design boundaries",
+      );
+    }
+    if (value.dimension !== identity.dimension) {
+      throw new TypeError(
+        `Configuration value for '${identity.id}' must have dimension ${identity.dimension}`,
+      );
+    }
+    if (authoringHasOwn(this.#parameterRecords, identity.id)) {
+      throw new TypeError(
+        `Duplicate configuration parameter override '${identity.id}'`,
+      );
+    }
+    this.#parameterRecords[identity.id] = value.ir;
     return this;
+  }
+
+  partMaterial(part: PartRef, material: MaterialRef): this {
+    const partId = authoringWeakMapRead(this.#partHandleIds, part);
+    if (
+      !authoringWeakSetContains(this.#partHandles, part) ||
+      partId === undefined
+    ) {
+      throw new TypeError(
+        "Parts cannot cross staged design boundaries",
+      );
+    }
+    const materialId = authoringWeakMapRead(
+      this.#materialHandleIds,
+      material,
+    );
+    if (
+      !authoringWeakSetContains(this.#materialHandles, material) ||
+      materialId === undefined
+    ) {
+      throw new TypeError(
+        "Materials cannot cross staged design boundaries",
+      );
+    }
+    if (authoringHasOwn(this.#partMaterialRecords, partId)) {
+      throw new TypeError(
+        `Duplicate configuration material override '${partId}'`,
+      );
+    }
+    this.#partMaterialRecords[partId] = materialId;
+    return this;
+  }
+
+  [STAGED_CONFIGURATION_TO_IR](
+    options: ConfigurationOptions,
+  ): DesignConfigurationIR {
+    const parameterIds = authoringKeys(this.#parameterRecords);
+    const partIds = authoringKeys(this.#partMaterialRecords);
+    if (parameterIds.length === 0 && partIds.length === 0) {
+      throw new TypeError("A configuration requires at least one override");
+    }
+    return deepFreeze({
+      ...(options.description === undefined
+        ? {}
+        : { description: options.description }),
+      ...(parameterIds.length === 0
+        ? {}
+        : { parameterOverrides: { ...this.#parameterRecords } }),
+      ...(partIds.length === 0
+        ? {}
+        : { partMaterialOverrides: { ...this.#partMaterialRecords } }),
+      ...(options.metadata === undefined
+        ? {}
+        : { metadata: options.metadata }),
+    });
   }
 }
 
 /**
  * Repository-only authoring facade for the currently executable v7 graph.
  *
- * It composes the frozen v6 builder for length parameters and native
- * primitives, then emits a strictly parsed v7 document containing only direct
- * imported-body and body-set outputs.
+ * It composes the frozen v6 builder for admitted parameters and native
+ * primitives, then adds staged configurations, direct resources, imported
+ * bodies, body sets, parts, and material intent before strict v7 parsing.
  *
  * @internal
  */
@@ -317,26 +602,53 @@ export class StagedBodySetDesignBuilderV7 {
       defaultValue: LengthExpression,
       options?: ParameterOptions<"length">,
     ) => Parameter<"length">;
+    readonly massDensity: (
+      id: string,
+      defaultValue: MassDensityExpression,
+      options?: ParameterOptions<"massDensity">,
+    ) => Parameter<"massDensity">;
   }>;
 
   readonly #base: DesignBuilder;
-  readonly #nodeIds = new Set<NodeId>();
-  readonly #resourceRecords = Object.create(null) as Record<
+  readonly #handleOwner: DesignBuilder;
+  readonly #nodeIds = new AuthoringSet<NodeId>();
+  readonly #configurationRecords = authoringNullRecord<Record<
+    ConfigurationId,
+    DesignConfigurationIR
+  >>();
+  readonly #materialRecords = authoringNullRecord<Record<
+    MaterialId,
+    MaterialDefinitionIR
+  >>();
+  readonly #resourceRecords = authoringNullRecord<Record<
     ResourceId,
     ResourceDefinitionIR
-  >;
-  readonly #nodeRecords = Object.create(null) as Record<NodeId, NodeIRV7>;
-  readonly #outputRecords = Object.create(null) as Record<
+  >>();
+  readonly #nodeRecords = authoringNullRecord<Record<NodeId, NodeIRV7>>();
+  readonly #outputRecords = authoringNullRecord<Record<
     string,
-    RefIRV7<"solid" | "bodySet">
-  >;
-  readonly #resourceHandles = new WeakSet<object>();
-  readonly #leafHandles = new WeakSet<object>();
-  readonly #importedBodyHandles = new WeakSet<object>();
-  readonly #bodySetHandles = new WeakSet<object>();
+    RefIRV7<"solid" | "bodySet" | "part">
+  >>();
+  readonly #materialHandles = new AuthoringWeakSet<object>();
+  readonly #materialHandleIds = new AuthoringWeakMap<
+    object,
+    MaterialId
+  >();
+  readonly #resourceHandles = new AuthoringWeakSet<object>();
+  readonly #leafHandles = new AuthoringWeakSet<object>();
+  readonly #importedBodyHandles = new AuthoringWeakSet<object>();
+  readonly #bodySetHandles = new AuthoringWeakSet<object>();
+  readonly #partHandles = new AuthoringWeakSet<object>();
+  readonly #partHandleIds = new AuthoringWeakMap<object, NodeId>();
+  readonly #parameterHandles = new AuthoringWeakMap<
+    object,
+    StagedParameterIdentityV7
+  >();
+  readonly #parameterIds = new AuthoringSet<ParameterId>();
   #resourceCount = 0;
   #resourceLocationCount = 0;
   #resourceLocationBytes = 0;
+  #usesMassDensity = false;
 
   constructor(name: string, options: DesignOptions = {}) {
     this.#base = new DesignBuilder(name, {
@@ -344,32 +656,82 @@ export class StagedBodySetDesignBuilderV7 {
         ? {}
         : { metadata: detachMetadata(options.metadata, "Design metadata") }),
     });
-    this.parameter = Object.freeze({
+    this.#handleOwner = new DesignBuilder(
+      "InvariantCAD staged-v7 inert reference owner",
+    );
+    this.parameter = authoringFreeze({
       length: (
         id: string,
         defaultValue: LengthExpression,
         parameterOptions: ParameterOptions<"length"> = {},
-      ): Parameter<"length"> =>
-        this.#base.parameter.length(id, defaultValue, parameterOptions),
+      ): Parameter<"length"> => {
+        const key = this.#assertParameterAvailable(id);
+        const parameter = this.#base.parameter.length(
+          id,
+          defaultValue,
+          captureParameterOptionsV7(parameterOptions, "length"),
+        );
+        return this.#registerParameter(key, "length", parameter);
+      },
+      massDensity: (
+        id: string,
+        defaultValue: MassDensityExpression,
+        parameterOptions: ParameterOptions<"massDensity"> = {},
+      ): Parameter<"massDensity"> => {
+        const key = this.#assertParameterAvailable(id);
+        const parameter = this.#base.parameter.massDensity(
+          id,
+          defaultValue,
+          captureParameterOptionsV7(parameterOptions, "massDensity"),
+        );
+        return this.#registerParameter(
+          key,
+          "massDensity",
+          parameter,
+        );
+      },
     });
+  }
+
+  #assertParameterAvailable(id: string): ParameterId {
+    const key = parameterId(id);
+    if (authoringSetContains(this.#parameterIds, key)) {
+      throw new TypeError(`Duplicate parameter '${id}'`);
+    }
+    return key;
+  }
+
+  #registerParameter<D extends "length" | "massDensity">(
+    id: ParameterId,
+    dimension: D,
+    parameter: Parameter<D>,
+  ): Parameter<D> {
+    authoringFreeze(parameter);
+    authoringWeakMapWrite(
+      this.#parameterHandles,
+      parameter,
+      authoringFreeze({ id, dimension }),
+    );
+    authoringSetInsert(this.#parameterIds, id);
+    return parameter;
   }
 
   #assertNodeAvailable(id: string): NodeId {
     const key = nodeId(id);
-    if (this.#nodeIds.has(key)) {
+    if (authoringSetContains(this.#nodeIds, key)) {
       throw new TypeError(`Duplicate feature '${id}'`);
     }
     return key;
   }
 
   #registerLeaf(reference: StagedBodyLeafRefV7): StagedBodyLeafRefV7 {
-    this.#leafHandles.add(reference);
+    authoringWeakSetInsert(this.#leafHandles, reference);
     return reference;
   }
 
   #assertLeafOwned(reference: StagedBodyLeafRefV7): void {
     if (
-      !this.#leafHandles.has(reference) ||
+      !authoringWeakSetContains(this.#leafHandles, reference) ||
       reference[STAGED_BODY_SET_DESIGN_OWNER] !== this
     ) {
       throw new TypeError(
@@ -384,7 +746,7 @@ export class StagedBodySetDesignBuilderV7 {
   ): StagedBodyLeafRefV7 {
     const key = this.#assertNodeAvailable(id);
     const reference = this.#base.box(id, options);
-    this.#nodeIds.add(key);
+    authoringSetInsert(this.#nodeIds, key);
     return this.#registerLeaf(
       new StagedBodyLeafRefV7(this, reference.node),
     );
@@ -402,7 +764,7 @@ export class StagedBodySetDesignBuilderV7 {
   ): StagedBodyLeafRefV7 {
     const key = this.#assertNodeAvailable(id);
     const reference = this.#base.cylinder(id, options);
-    this.#nodeIds.add(key);
+    authoringSetInsert(this.#nodeIds, key);
     return this.#registerLeaf(
       new StagedBodyLeafRefV7(this, reference.node),
     );
@@ -417,7 +779,7 @@ export class StagedBodySetDesignBuilderV7 {
   ): StagedBodyLeafRefV7 {
     const key = this.#assertNodeAvailable(id);
     const reference = this.#base.sphere(id, options);
-    this.#nodeIds.add(key);
+    authoringSetInsert(this.#nodeIds, key);
     return this.#registerLeaf(
       new StagedBodyLeafRefV7(this, reference.node),
     );
@@ -427,26 +789,218 @@ export class StagedBodySetDesignBuilderV7 {
     id: string,
     build: (configuration: StagedBodySetConfigurationBuilderV7) => void,
     options: ConfigurationOptions = {},
-  ): ReturnType<DesignBuilder["configuration"]> {
+  ): ConfigurationId {
+    const key = configurationId(id);
+    if (authoringHasOwn(this.#configurationRecords, key)) {
+      throw new TypeError(`Duplicate configuration '${id}'`);
+    }
+    const captured = captureExactOwnDataRecord(
+      options,
+      ["description", "metadata"],
+      "Configuration options",
+    );
+    assertOptionalString(
+      captured.description,
+      "Configuration options.description",
+    );
     const capturedOptions: ConfigurationOptions = {
-      ...(options.description === undefined
+      ...(captured.description === undefined
         ? {}
-        : { description: options.description }),
-      ...(options.metadata === undefined
+        : { description: captured.description }),
+      ...(captured.metadata === undefined
         ? {}
         : {
             metadata: detachMetadata(
-              options.metadata,
+              captured.metadata as Readonly<Record<string, JsonValue>>,
               "Configuration metadata",
             ),
           }),
     };
-    return this.#base.configuration(
-      id,
-      (configuration) =>
-        build(new StagedBodySetConfigurationBuilderV7(configuration)),
-      capturedOptions,
+    const configuration = new StagedBodySetConfigurationBuilderV7(
+      this.#parameterHandles,
+      this.#partHandles,
+      this.#materialHandles,
+      this.#partHandleIds,
+      this.#materialHandleIds,
     );
+    build(configuration);
+    this.#configurationRecords[key] =
+      configuration[STAGED_CONFIGURATION_TO_IR](capturedOptions);
+    return key;
+  }
+
+  material(id: string, options: MaterialOptions): MaterialRef {
+    const captured = captureExactOwnDataRecord(
+      options,
+      ["name", "massDensity", "description", "metadata"],
+      "Material options",
+    );
+    const key = materialId(id);
+    if (authoringHasOwn(this.#materialRecords, key)) {
+      throw new TypeError(`Duplicate material '${id}'`);
+    }
+    if (
+      typeof captured.name !== "string" ||
+      authoringTrim(captured.name).length === 0
+    ) {
+      throw new TypeError(`Material '${id}' requires a non-empty name`);
+    }
+    const massDensity = captured.massDensity as
+      | MassDensityExpression
+      | undefined;
+    if (
+      massDensity === undefined ||
+      massDensity.dimension !== "massDensity"
+    ) {
+      throw new TypeError(
+        "Material massDensity must be a mass-density expression",
+      );
+    }
+    assertOptionalString(
+      captured.description,
+      "Material options.description",
+    );
+    const definition = deepFreeze({
+      name: captured.name,
+      massDensity: massDensity.ir,
+      ...(captured.description === undefined
+        ? {}
+        : { description: captured.description }),
+      ...(captured.metadata === undefined
+        ? {}
+        : {
+            metadata: detachMetadata(
+              captured.metadata as Readonly<Record<string, JsonValue>>,
+              "Material metadata",
+            ),
+          }),
+    });
+    const reference = authoringFreeze(
+      new MaterialRef(this.#handleOwner, key),
+    );
+    authoringWeakSetInsert(this.#materialHandles, reference);
+    authoringWeakMapWrite(this.#materialHandleIds, reference, key);
+    this.#materialRecords[key] = definition;
+    this.#usesMassDensity = true;
+    return reference;
+  }
+
+  part(
+    id: string,
+    geometry: StagedBodyLeafRefV7 | StagedBodySetRefV7,
+    options: PartOptions = {},
+  ): PartRef {
+    const leaf =
+      authoringWeakSetContains(this.#leafHandles, geometry) &&
+      geometry[STAGED_BODY_SET_DESIGN_OWNER] === this;
+    const bodySet =
+      authoringWeakSetContains(this.#bodySetHandles, geometry) &&
+      geometry[STAGED_BODY_SET_DESIGN_OWNER] === this;
+    if (!leaf && !bodySet) {
+      throw new TypeError(
+        "Part geometry cannot cross staged design boundaries",
+      );
+    }
+    const captured = captureExactOwnDataRecord(
+      options,
+      [
+        "partNumber",
+        "description",
+        "material",
+        "materialRef",
+        "massDensity",
+        "metadata",
+      ],
+      "Part options",
+    );
+    assertOptionalString(
+      captured.partNumber,
+      "Part options.partNumber",
+    );
+    assertOptionalString(
+      captured.description,
+      "Part options.description",
+    );
+    assertOptionalString(captured.material, "Part options.material");
+    const material = captured.material;
+    const materialReference = captured.materialRef as
+      | MaterialRef
+      | undefined;
+    if (material !== undefined && materialReference !== undefined) {
+      throw new TypeError(
+        "A part cannot use both material and materialRef",
+      );
+    }
+    const materialReferenceId =
+      materialReference === undefined
+        ? undefined
+        : authoringWeakMapRead(
+            this.#materialHandleIds,
+            materialReference,
+          );
+    if (materialReference !== undefined) {
+      if (
+        !authoringWeakSetContains(
+          this.#materialHandles,
+          materialReference,
+        ) ||
+        materialReferenceId === undefined
+      ) {
+        throw new TypeError(
+          "Materials cannot cross staged design boundaries",
+        );
+      }
+    }
+    const massDensity = captured.massDensity as
+      | MassDensityExpression
+      | undefined;
+    if (
+      massDensity !== undefined &&
+      massDensity.dimension !== "massDensity"
+    ) {
+      throw new TypeError(
+        "Part massDensity must be a mass-density expression",
+      );
+    }
+    const metadata =
+      captured.metadata === undefined
+        ? undefined
+        : detachMetadata(
+            captured.metadata as Readonly<Record<string, JsonValue>>,
+            "Part metadata",
+          );
+    const key = this.#assertNodeAvailable(id);
+    const node: PartNodeIRV7 = {
+      kind: "part",
+      geometry: {
+        node: geometry.node,
+        kind: bodySet ? "bodySet" : "solid",
+      },
+      ...(captured.partNumber === undefined
+        ? {}
+        : { partNumber: captured.partNumber }),
+      ...(captured.description === undefined
+        ? {}
+        : { description: captured.description }),
+      ...(material === undefined ? {} : { material }),
+      ...(materialReferenceId === undefined
+        ? {}
+        : { materialId: materialReferenceId }),
+      ...(massDensity === undefined
+        ? {}
+        : { massDensity: massDensity.ir }),
+      ...(metadata === undefined ? {} : { metadata }),
+    };
+    const definition = deepFreeze(node);
+    const reference = authoringFreeze(
+      new PartRef(this.#handleOwner, key),
+    );
+    authoringWeakSetInsert(this.#partHandles, reference);
+    authoringWeakMapWrite(this.#partHandleIds, reference, key);
+    authoringSetInsert(this.#nodeIds, key);
+    this.#nodeRecords[key] = definition;
+    if (massDensity !== undefined) this.#usesMassDensity = true;
+    return reference;
   }
 
   resource(
@@ -464,7 +1018,7 @@ export class StagedBodySetDesignBuilderV7 {
     const rawLocations = capturedOptions.locations;
     const metadata = capturedOptions.metadata;
     const key = resourceId(id);
-    if (Object.hasOwn(this.#resourceRecords, key)) {
+    if (authoringHasOwn(this.#resourceRecords, key)) {
       throw new TypeError(`Duplicate resource '${id}'`);
     }
     if (
@@ -477,14 +1031,14 @@ export class StagedBodySetDesignBuilderV7 {
     }
     if (
       typeof digest !== "string" ||
-      !RESOURCE_DIGEST_PATTERN.test(digest)
+      !authoringPatternMatches(RESOURCE_DIGEST_PATTERN, digest)
     ) {
       throw new TypeError(
         "Resource digest must be a lowercase sha256 commitment",
       );
     }
     if (
-      !Number.isSafeInteger(byteLength) ||
+      !authoringIsSafeInteger(byteLength) ||
       (byteLength as number) < 0
     ) {
       throw new TypeError(
@@ -493,8 +1047,8 @@ export class StagedBodySetDesignBuilderV7 {
     }
     if (
       typeof mediaType !== "string" ||
-      mediaType.trim() !== mediaType ||
-      !RESOURCE_MEDIA_TYPE_PATTERN.test(mediaType)
+      authoringTrim(mediaType) !== mediaType ||
+      !authoringPatternMatches(RESOURCE_MEDIA_TYPE_PATTERN, mediaType)
     ) {
       throw new TypeError("Resource mediaType must be a non-empty MIME type");
     }
@@ -502,7 +1056,7 @@ export class StagedBodySetDesignBuilderV7 {
     let locations: readonly string[] | undefined;
     let addedLocationBytes = 0;
     if (rawLocations !== undefined) {
-      if (!Array.isArray(rawLocations) || rawLocations.length === 0) {
+      if (!authoringIsArray(rawLocations) || rawLocations.length === 0) {
         throw new TypeError(
           "Resource locations must be a non-empty dense array",
         );
@@ -515,22 +1069,22 @@ export class StagedBodySetDesignBuilderV7 {
           `Resource locations exceed the authoring limit of ${DEFAULT_DESIGN_DOCUMENT_LIMITS.maxResourceLocations}`,
         );
       }
-      const copied = new Array<string>(rawLocations.length);
-      const seen = new Set<string>();
+      const copied = authoringDenseArray<string>(rawLocations.length);
+      const seen = new AuthoringSet<string>();
       for (let index = 0; index < rawLocations.length; index += 1) {
-        if (!Object.hasOwn(rawLocations, index)) {
+        if (!authoringHasOwn(rawLocations, index)) {
           throw new TypeError("Resource locations must be a dense array");
         }
         const location = rawLocations[index];
         if (typeof location !== "string" || location.length === 0) {
           throw new TypeError("Resource locations must be non-empty strings");
         }
-        if (seen.has(location)) {
+        if (authoringSetContains(seen, location)) {
           throw new TypeError(
             `Resource location '${location}' is duplicated`,
           );
         }
-        seen.add(location);
+        authoringSetInsert(seen, location);
         const remaining =
           DEFAULT_DESIGN_DOCUMENT_LIMITS.maxResourceLocationBytes -
           this.#resourceLocationBytes -
@@ -544,10 +1098,10 @@ export class StagedBodySetDesignBuilderV7 {
         addedLocationBytes += byteLength;
         copied[index] = location;
       }
-      locations = Object.freeze(copied);
+      locations = authoringFreeze(copied);
     }
 
-    this.#resourceRecords[key] = deepFreeze({
+    const definition = deepFreeze({
       digest: digest as ResourceDigestIR,
       byteLength: byteLength as number,
       mediaType,
@@ -561,11 +1115,12 @@ export class StagedBodySetDesignBuilderV7 {
             ),
           }),
     });
+    const reference = new StagedResourceRefV7(this, key);
+    authoringWeakSetInsert(this.#resourceHandles, reference);
+    this.#resourceRecords[key] = definition;
     this.#resourceCount += 1;
     this.#resourceLocationCount += locations?.length ?? 0;
     this.#resourceLocationBytes += addedLocationBytes;
-    const reference = new StagedResourceRefV7(this, key);
-    this.#resourceHandles.add(reference);
     return reference;
   }
 
@@ -575,7 +1130,7 @@ export class StagedBodySetDesignBuilderV7 {
     options: StagedImportedBodyAuthoringOptionsV7,
   ): StagedImportedBodyRefV7 {
     if (
-      !this.#resourceHandles.has(resource) ||
+      !authoringWeakSetContains(this.#resourceHandles, resource) ||
       resource[STAGED_BODY_SET_DESIGN_OWNER] !== this
     ) {
       throw new TypeError(
@@ -630,11 +1185,12 @@ export class StagedBodySetDesignBuilderV7 {
             healing: { mode: "none" },
             expected: "single-solid",
           };
-    this.#nodeRecords[key] = deepFreeze(node);
-    this.#nodeIds.add(key);
+    const definition = deepFreeze(node);
     const reference = new StagedImportedBodyRefV7(this, key);
-    this.#registerLeaf(reference);
-    this.#importedBodyHandles.add(reference);
+    authoringWeakSetInsert(this.#leafHandles, reference);
+    authoringWeakSetInsert(this.#importedBodyHandles, reference);
+    authoringSetInsert(this.#nodeIds, key);
+    this.#nodeRecords[key] = definition;
     return reference;
   }
 
@@ -643,7 +1199,7 @@ export class StagedBodySetDesignBuilderV7 {
     members: readonly StagedBodySetMemberAuthoringV7[],
   ): StagedBodySetRefV7 {
     const key = this.#assertNodeAvailable(id);
-    if (!Array.isArray(members) || members.length === 0) {
+    if (!authoringIsArray(members) || members.length === 0) {
       throw new TypeError("A body set requires a non-empty dense array");
     }
     if (
@@ -654,10 +1210,12 @@ export class StagedBodySetDesignBuilderV7 {
         `Body-set members exceed the authoring structural-value limit of ${DEFAULT_DESIGN_DOCUMENT_LIMITS.maxStructuralValues}`,
       );
     }
-    const copied = new Array<BodySetMemberIRV7>(members.length);
-    const seen = new Set<EntityId>();
+    const copied = authoringDenseArray<BodySetMemberIRV7>(
+      members.length,
+    );
+    const seen = new AuthoringSet<EntityId>();
     for (let index = 0; index < members.length; index += 1) {
-      if (!Object.hasOwn(members, index)) {
+      if (!authoringHasOwn(members, index)) {
         throw new TypeError("Body-set members must be a dense array");
       }
       const member = captureExactOwnDataRecord(
@@ -666,12 +1224,12 @@ export class StagedBodySetDesignBuilderV7 {
         `Body-set member ${index}`,
       );
       const memberId = entityId(member.id as string);
-      if (seen.has(memberId)) {
+      if (authoringSetContains(seen, memberId)) {
         throw new TypeError(
           `Body-set member ID '${member.id}' is duplicated`,
         );
       }
-      seen.add(memberId);
+      authoringSetInsert(seen, memberId);
       const solid = member.solid as StagedBodyLeafRefV7;
       this.#assertLeafOwned(solid);
       if (
@@ -694,46 +1252,59 @@ export class StagedBodySetDesignBuilderV7 {
             }),
       });
     }
-    this.#nodeRecords[key] = deepFreeze({
+    const definition: NodeIRV7 = deepFreeze({
       kind: "bodySet",
-      bodies: Object.freeze(copied),
+      bodies: authoringFreeze(copied),
     });
-    this.#nodeIds.add(key);
     const reference = new StagedBodySetRefV7(this, key);
-    this.#bodySetHandles.add(reference);
+    authoringWeakSetInsert(this.#bodySetHandles, reference);
+    authoringSetInsert(this.#nodeIds, key);
+    this.#nodeRecords[key] = definition;
     return reference;
   }
 
   output(
     name: string,
-    reference: StagedImportedBodyRefV7 | StagedBodySetRefV7,
+    reference:
+      | StagedImportedBodyRefV7
+      | StagedBodySetRefV7
+      | PartRef,
   ): this {
     assertValidId(name, "Output name");
-    const imported =
-      this.#importedBodyHandles.has(reference) &&
-      reference[STAGED_BODY_SET_DESIGN_OWNER] === this;
-    const bodySet =
-      this.#bodySetHandles.has(reference) &&
-      reference[STAGED_BODY_SET_DESIGN_OWNER] === this;
-    if (!imported && !bodySet) {
+    const imported = authoringWeakSetContains(
+      this.#importedBodyHandles,
+      reference,
+    );
+    const bodySet = authoringWeakSetContains(
+      this.#bodySetHandles,
+      reference,
+    );
+    const partNode = authoringWeakMapRead(
+      this.#partHandleIds,
+      reference,
+    );
+    const part =
+      authoringWeakSetContains(this.#partHandles, reference) &&
+      partNode !== undefined;
+    if (!imported && !bodySet && !part) {
       throw new TypeError(
-        "Only owned direct imported bodies and body sets can be staged outputs",
+        "Only owned direct imported bodies, body sets, and parts can be staged outputs",
       );
     }
-    if (Object.hasOwn(this.#outputRecords, name)) {
+    if (authoringHasOwn(this.#outputRecords, name)) {
       throw new TypeError(`Duplicate output '${name}'`);
     }
     this.#outputRecords[name] = deepFreeze({
-      node: reference.node,
-      kind: bodySet ? "bodySet" : "solid",
+      node: part ? partNode : reference.node,
+      kind: part ? "part" : bodySet ? "bodySet" : "solid",
     });
     return this;
   }
 
   build(options: ParseDocumentOptions = {}): DesignDocumentV7 {
     const base = this.#base.build();
-    const nativeNodes = Object.create(null) as Record<NodeId, NodeIRV7>;
-    const nativeNodeIds = Object.keys(base.nodes) as NodeId[];
+    const nativeNodes = authoringNullRecord<Record<NodeId, NodeIRV7>>();
+    const nativeNodeIds = authoringKeys(base.nodes) as NodeId[];
     for (let index = 0; index < nativeNodeIds.length; index += 1) {
       const id = nativeNodeIds[index]!;
       const node = base.nodes[id]!;
@@ -752,11 +1323,17 @@ export class StagedBodySetDesignBuilderV7 {
       schema: DOCUMENT_SCHEMA_V7,
       version: DOCUMENT_VERSION_V7,
       name: base.name,
-      units: base.units,
+      units: {
+        ...base.units,
+        ...(this.#usesMassDensity ? { mass: "kg" as const } : {}),
+      },
       parameters: base.parameters,
-      ...(base.configurations === undefined
+      ...(authoringKeys(this.#materialRecords).length === 0
         ? {}
-        : { configurations: base.configurations }),
+        : { materials: { ...this.#materialRecords } }),
+      ...(authoringKeys(this.#configurationRecords).length === 0
+        ? {}
+        : { configurations: { ...this.#configurationRecords } }),
       ...(this.#resourceCount === 0
         ? {}
         : { resources: { ...this.#resourceRecords } }),
@@ -781,7 +1358,7 @@ export class StagedBodySetDesignBuilderV7 {
 
 /**
  * Creates the repository-only authoring facade for executable direct v7 body
- * imports and body sets.
+ * imports, body sets, parts, and material intent.
  *
  * @internal
  */

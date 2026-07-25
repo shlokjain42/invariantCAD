@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+- Extended the repository-only `stagedBodySetDesignV7(...)` facade with direct
+  Document v7 part and material authoring. The source-only API now admits typed
+  mass-density parameters, document-owned `material(...)` definitions,
+  `part(...)` over one owned direct solid leaf or body set, named
+  `.partMaterial(...)` substitutions, and direct part outputs. Existing
+  `PartOptions` preserve part number, description, detached metadata, the
+  exclusive legacy-label/typed-material-reference choice, and explicit density
+  precedence over the effective configured material. Issued geometry,
+  material, and part handles are identity-checked; exact plain own-data option
+  capture rejects accessors and unknown fields without invocation. Authored
+  parts run through the staged evaluator with deterministic BOM/mass behavior,
+  including additive body-set memberships and approximate/lossy aggregate
+  STL/OBJ export. This remains a source-only direct-geometry slice: it adds no
+  assemblies, external occurrences, transforms, Booleans, general feature
+  graphs, per-body materials, exact aggregate STEP/BREP, or public v7 API.
 - Added a source-only staged Document v7 evaluator for outputs that directly
   reference a `part` node whose geometry is either one supported solid leaf or
   one directly supported body set. `EvaluatedPartV7` preserves detached part
@@ -18,30 +33,32 @@
   retain the selected backend's quality rather than gaining an independent
   exactness guarantee. Resolver verification, evaluation/resource/document
   limits, cancellation, transactional cleanup, and borrowed-kernel ownership
-  match the staged body-set boundary. This slice adds no part authoring,
-  assembly evaluation, cross-body topology, aggregate geometric measurement,
-  or exact aggregate STEP/BREP export, and it does not change the public v6
-  API.
+  match the staged body-set boundary. This evaluator adds no assembly
+  evaluation, cross-body topology, aggregate geometric measurement, or exact
+  aggregate STEP/BREP export, and it does not change the public v6 API.
 - Added `stagedBodySetDesignV7(...)`, a repository-only Document v7 authoring
-  facade for the graph already admitted by the staged import and body-set
-  evaluators. It privately composes the frozen v6 builder for length
-  parameters, named parameter configurations, boxes, cylinders, and spheres,
-  then adds document-owned resource commitments, owner-bound imported bodies,
-  body sets, and direct imported-body/body-set outputs. Resources bind an
-  explicit SHA-256 digest, byte length, media type, ordered location hints, and
-  detached metadata; callers compute the commitments, and locations never
-  cause core I/O. STEP imports always use file units, text/binary BREP imports
-  require declared units, and every import fixes healing to `none` and expects
-  one solid. Body sets preserve unique member IDs, authored order, optional
-  names, detached metadata, and shared-leaf memberships. Build enforces
-  ownership, namespaces, dense non-empty collections, commitments,
-  configuration references, exact plain own-data option records, and
-  caller-selectable document limits before returning a detached, deeply
-  frozen, strictly valid v7 document. Unknown or accessor-backed resource,
-  import, and membership fields are rejected rather than silently discarded.
-  The facade remains source-only: it does not add a root or package-subpath
-  API, general feature graphs, parts, assemblies, external occurrences,
-  datums, location I/O, reader inference, healing, or exact aggregate export.
+  facade for the direct graph admitted by the staged import, body-set, and part
+  evaluators. It privately composes the frozen v6 builder for admitted typed
+  parameters, boxes, cylinders, and spheres, then adds staged named
+  configurations, document-owned materials and resource commitments,
+  owner-bound imported bodies, body sets, parts, and direct
+  imported-body/body-set/part outputs.
+  Resources bind an explicit SHA-256 digest, byte length, media type, ordered
+  location hints, and detached metadata; callers compute the commitments, and
+  locations never cause core I/O. STEP imports always use file units,
+  text/binary BREP imports require declared units, and every import fixes
+  healing to `none` and expects one solid. Body sets preserve unique member
+  IDs, authored order, optional names, detached metadata, and shared-leaf
+  memberships. The authoring methods enforce ownership, namespaces, dense
+  non-empty collections, commitments, material/configuration references, and
+  exact plain own-data option records. Build applies caller-selected document
+  limits and strict v7 parsing before returning a detached, deeply frozen
+  document. Unknown or accessor-backed parameter, configuration, material,
+  part, resource, import, and membership fields are rejected rather than
+  silently discarded. The facade remains source-only: it does not add a root
+  or package-subpath API, general feature graphs, assemblies, external
+  occurrences, datums, location I/O, reader inference, healing, or exact
+  aggregate export.
 - Added a source-only staged Document v7 evaluator for outputs that directly
   reference a `bodySet` node. Every authored member is active, there is no
   inferred primary body, and member IDs, order, optional names, and detached

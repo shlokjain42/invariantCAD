@@ -148,22 +148,35 @@ Missing density does not invent a zero mass. Physical-property methods return a
 diagnostic result explaining which part or material prevented a complete
 rollup.
 
-## Repository-only Document v7 part evaluation
+## Repository-only Document v7 part authoring and evaluation
 
-The source tree also contains a staged evaluator for Document v7 outputs that
-directly reference a part. This is executable protocol evidence, not a public
-authoring workflow: the package-root builder and
-`stagedBodySetDesignV7(...)` cannot author a v7 part, and the public document
-and evaluator aliases remain v6.
+The source tree contains a staged authoring and evaluation path for Document v7
+outputs that directly reference a part. `stagedBodySetDesignV7(...)` now exposes
+source-only `parameter.massDensity(...)`, `material(...)`, `part(...)`,
+configuration `.partMaterial(...)`, and direct part `output(...)` methods in
+addition to its existing direct geometry methods. This is executable protocol
+evidence, not a public package workflow: the package-root builder, document
+alias, evaluator aliases, CLI, and migration target remain v6.
+
+A staged part's geometry must be one owned direct box, cylinder, sphere, or
+imported-body leaf, or one owned body set composed from those leaves. Parts
+cannot wrap another part, transforms, Booleans, or other downstream feature
+graphs. Materials and parts are builder-owned typed handles; foreign or forged
+handles are rejected. New option records must be exact plain own-data records,
+and accessor-backed or unknown fields are rejected without invoking them.
+Part, material, configuration, and membership metadata is detached before the
+document is deeply frozen.
 
 The staged result preserves part number, description, detached metadata,
 legacy material label, effective material definition, density, and density
 source. Its geometry is explicitly either one retained solid or one retained
 body set; the evaluator never chooses a primary body. Named configuration
-material overrides select the effective material identity. An explicit part
-density takes precedence over that material's density, just as on the public
-v6 evaluator, while a legacy material label remains descriptive and never
-supplies inferred density.
+material overrides select the effective material identity. Authored or
+configured density parameters resolve in the selected configuration and may be
+further specialized by bounded caller overrides. An explicit part density
+takes precedence over the effective material's density, while a legacy
+material label and material name remain descriptive and never supply inferred
+density.
 
 `billOfMaterials()` returns one deterministic part row with quantity one.
 Missing density leaves its mass incomplete and produces a warning rather than
@@ -179,7 +192,7 @@ The part facade can merge tessellations and export STL or OBJ, all explicitly
 approximate/lossy. Exact export and topology remain per-solid or per-body
 capabilities. Aggregate geometric measurement, cross-body topology, exact
 aggregate STEP/BREP, assemblies, occurrence rollups, interference handling,
-and per-body materials are outside this staged slice.
+per-body materials, and general part graphs are outside this staged slice.
 
 ## Runtime parameter overrides
 
