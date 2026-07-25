@@ -94,6 +94,7 @@ const authoringArrayPrototype = Array.prototype;
 const authoringExpressionPrototype = Expression.prototype;
 const authoringParameterPrototype = Parameter.prototype;
 const authoringObjectCreate = Object.create;
+const authoringObjectDefineProperty = Object.defineProperty;
 const authoringObjectFreeze = Object.freeze;
 const authoringObjectGetOwnPropertyDescriptor =
   Object.getOwnPropertyDescriptor;
@@ -106,6 +107,7 @@ const AuthoringArray = Array;
 const authoringArrayIsArray = Array.isArray;
 const AuthoringSet = Set;
 const authoringSetAdd = Set.prototype.add;
+const authoringSetDelete = Set.prototype.delete;
 const authoringSetHas = Set.prototype.has;
 const AuthoringWeakMap = WeakMap;
 const authoringWeakMapGet = WeakMap.prototype.get;
@@ -152,6 +154,23 @@ function authoringDenseArray<T>(length: number): T[] {
   return authoringApply<T[]>(AuthoringArray, undefined, [length]);
 }
 
+function authoringDefineArraySlot<T>(
+  value: T[],
+  index: number,
+  item: T,
+): void {
+  authoringApply<T[]>(authoringObjectDefineProperty, Object, [
+    value,
+    index,
+    {
+      configurable: true,
+      enumerable: true,
+      value: item,
+      writable: true,
+    },
+  ]);
+}
+
 function authoringSetContains<T>(
   set: ReadonlySet<T>,
   value: T,
@@ -161,6 +180,10 @@ function authoringSetContains<T>(
 
 function authoringSetInsert<T>(set: Set<T>, value: T): void {
   authoringApply<Set<T>>(authoringSetAdd, set, [value]);
+}
+
+function authoringSetRemove<T>(set: Set<T>, value: T): void {
+  authoringApply<boolean>(authoringSetDelete, set, [value]);
 }
 
 function authoringWeakSetContains(
@@ -680,7 +703,7 @@ function captureDenseOwnDataArray(
                   problem = `${label}/${index} must be an own data property`;
                   break;
                 }
-                copied[index] = descriptor.value;
+                authoringDefineArraySlot(copied, index, descriptor.value);
               }
             }
           }
@@ -808,9 +831,13 @@ function capturePlacementIR(
     operations.length,
   );
   for (let index = 0; index < operations.length; index += 1) {
-    copied[index] = captureTransformOperationIR(
-      operations[index],
-      `${label}/${index}`,
+    authoringDefineArraySlot(
+      copied,
+      index,
+      captureTransformOperationIR(
+        operations[index],
+        `${label}/${index}`,
+      ),
     );
   }
   return authoringFreeze(copied);
@@ -1147,7 +1174,11 @@ export class StagedLocalAssemblyBuilderV7 {
       suppressed: captured.suppressed ?? false,
     });
     authoringSetInsert(this.#instanceIds, stableId);
-    this.#instances[this.#instances.length] = instance;
+    authoringDefineArraySlot(
+      this.#instances,
+      this.#instances.length,
+      instance,
+    );
     return this;
   }
 
@@ -1156,11 +1187,14 @@ export class StagedLocalAssemblyBuilderV7 {
       this.#instances.length,
     );
     for (let index = 0; index < this.#instances.length; index += 1) {
-      copied[index] = this.#instances[index]!;
+      authoringDefineArraySlot(copied, index, this.#instances[index]!);
     }
     return authoringFreeze(copied);
   }
 }
+
+const stagedLocalAssemblyToIRV7 =
+  StagedLocalAssemblyBuilderV7.prototype[STAGED_LOCAL_ASSEMBLY_TO_IR];
 
 /** Configuration surface for the executable staged graph. @internal */
 export class StagedBodySetConfigurationBuilderV7 {
@@ -1975,34 +2009,41 @@ export class StagedBodySetDesignBuilderV7 {
       throw new TypeError("Assembly build callback must be a function");
     }
     const key = this.#assertNodeAvailable(id);
-    const builder = new StagedLocalAssemblyBuilderV7(
-      this.#partHandles,
-      this.#partHandleIds,
-    );
-    build(builder);
-    const instances = builder[STAGED_LOCAL_ASSEMBLY_TO_IR]();
-    const node: AssemblyNodeIRV7 = {
-      kind: "assembly",
-      instances,
-    };
-    const definition = deepFreeze(node);
-    const reference = authoringFreeze(
-      new AssemblyRef(this.#handleOwner, key),
-    );
-    const instanceIds = new AuthoringSet<EntityId>();
-    for (let index = 0; index < instances.length; index += 1) {
-      authoringSetInsert(instanceIds, instances[index]!.id);
-    }
-    authoringWeakSetInsert(this.#assemblyHandles, reference);
-    authoringWeakMapWrite(this.#assemblyHandleIds, reference, key);
-    authoringWeakMapWrite(
-      this.#assemblyHandleInstanceIds,
-      reference,
-      instanceIds,
-    );
     authoringSetInsert(this.#nodeIds, key);
-    this.#nodeRecords[key] = definition;
-    return reference;
+    try {
+      const builder = new StagedLocalAssemblyBuilderV7(
+        this.#partHandles,
+        this.#partHandleIds,
+      );
+      build(builder);
+      const instances = authoringApply<
+        readonly AssemblyInstanceIRV7[]
+      >(stagedLocalAssemblyToIRV7, builder, []);
+      const node: AssemblyNodeIRV7 = {
+        kind: "assembly",
+        instances,
+      };
+      const definition = deepFreeze(node);
+      const reference = authoringFreeze(
+        new AssemblyRef(this.#handleOwner, key),
+      );
+      const instanceIds = new AuthoringSet<EntityId>();
+      for (let index = 0; index < instances.length; index += 1) {
+        authoringSetInsert(instanceIds, instances[index]!.id);
+      }
+      authoringWeakSetInsert(this.#assemblyHandles, reference);
+      authoringWeakMapWrite(this.#assemblyHandleIds, reference, key);
+      authoringWeakMapWrite(
+        this.#assemblyHandleInstanceIds,
+        reference,
+        instanceIds,
+      );
+      this.#nodeRecords[key] = definition;
+      return reference;
+    } catch (error) {
+      authoringSetRemove(this.#nodeIds, key);
+      throw error;
+    }
   }
 
   resource(

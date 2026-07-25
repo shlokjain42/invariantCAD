@@ -48,7 +48,7 @@ function designWithPart(name: string) {
   const part = cad.part("part", solid, {
     partNumber: `${name}-part`,
   });
-  return { cad, width, part };
+  return { cad, width, solid, part };
 }
 
 function literal(
@@ -211,6 +211,158 @@ describe("staged Document v7 local assembly authoring", () => {
     expect(node?.kind).toBe("assembly");
     if (node?.kind !== "assembly") return;
     expect(node.instances.map((instance) => instance.id)).toEqual(["first"]);
+  });
+
+  it("reserves assembly IDs across callbacks and rolls them back after failure", () => {
+    const { cad, solid, part } = designWithPart("reentrant-id");
+    let collidedPart: PartRef | undefined;
+    expect(() =>
+      cad.assembly("product", (instances) => {
+        collidedPart = cad.part("product", solid);
+        instances.instance("part", part);
+      }),
+    ).toThrow(/Duplicate feature 'product'/);
+    expect(collidedPart).toBeUndefined();
+
+    const product = cad.assembly("product", (instances) => {
+      instances.instance("part", part);
+    });
+    expect(() =>
+      cad.assembly("retry", () => {
+        throw new Error("callback failed");
+      }),
+    ).toThrow("callback failed");
+    const retry = cad.assembly("retry", (instances) => {
+      instances.instance("part", part);
+    });
+    cad.output("product", product);
+    cad.output("retry", retry);
+
+    const document = cad.build();
+    expect(document.nodes[nodeId("product")]).toMatchObject({
+      kind: "assembly",
+      instances: [{ id: "part" }],
+    });
+    expect(document.nodes[nodeId("retry")]).toMatchObject({
+      kind: "assembly",
+      instances: [{ id: "part" }],
+    });
+  });
+
+  it("does not dispatch instance extraction through the mutable builder prototype", () => {
+    const { cad, part } = designWithPart("builder-prototype");
+    const inner = cad.assembly("inner", (instances) => {
+      instances.instance("part", part);
+    });
+    const prototype = StagedLocalAssemblyBuilderV7.prototype;
+    const conversionKey = Reflect.ownKeys(prototype).find(
+      (key): key is symbol => typeof key === "symbol",
+    );
+    expect(conversionKey).toBeTypeOf("symbol");
+    if (conversionKey === undefined) return;
+    const descriptor = Object.getOwnPropertyDescriptor(
+      prototype,
+      conversionKey,
+    );
+    expect(descriptor).toBeDefined();
+    if (descriptor === undefined) return;
+
+    let replacementCalls = 0;
+    let outer: AssemblyRef | undefined;
+    try {
+      outer = cad.assembly("outer", (instances) => {
+        instances.instance("part", part);
+        Object.defineProperty(prototype, conversionKey, {
+          ...descriptor,
+          value: () => {
+            replacementCalls += 1;
+            return [
+              {
+                id: "nested",
+                component: {
+                  source: "local",
+                  reference: { node: "inner", kind: "assembly" },
+                },
+                configuration: { mode: "inherit" },
+                placement: [],
+                suppressed: false,
+              },
+            ];
+          },
+        });
+      });
+    } finally {
+      Object.defineProperty(prototype, conversionKey, descriptor);
+    }
+
+    expect(replacementCalls).toBe(0);
+    expect(outer).toBeDefined();
+    if (outer === undefined) return;
+    cad.output("outer", outer);
+    cad.output("inner", inner);
+    const node = cad.build().nodes[nodeId("outer")];
+    expect(node).toMatchObject({
+      kind: "assembly",
+      instances: [
+        {
+          id: "part",
+          component: {
+            source: "local",
+            reference: { node: "part", kind: "part" },
+          },
+        },
+      ],
+    });
+  });
+
+  it("defines assembly array slots without invoking inherited numeric setters", () => {
+    const { cad, part } = designWithPart("array-slot");
+    const indexDescriptor = Object.getOwnPropertyDescriptor(
+      Array.prototype,
+      "0",
+    );
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(
+      Array.prototype,
+      "length",
+    );
+    expect(lengthDescriptor).toBeDefined();
+    if (lengthDescriptor === undefined) return;
+
+    let setterCalls = 0;
+    let assembly: AssemblyRef | undefined;
+    try {
+      Object.defineProperty(Array.prototype, "0", {
+        configurable: true,
+        enumerable: false,
+        set: () => {
+          setterCalls += 1;
+        },
+      });
+      assembly = cad.assembly("product", (instances) => {
+        instances.instance("part", part);
+      });
+    } finally {
+      if (indexDescriptor === undefined) {
+        Reflect.deleteProperty(Array.prototype, "0");
+      } else {
+        Object.defineProperty(Array.prototype, "0", indexDescriptor);
+      }
+      Object.defineProperty(
+        Array.prototype,
+        "length",
+        lengthDescriptor,
+      );
+    }
+
+    expect(setterCalls).toBe(0);
+    expect(assembly).toBeDefined();
+    if (assembly === undefined) return;
+    cad.output("product", assembly);
+    const node = cad.build().nodes[nodeId("product")];
+    expect(node).toMatchObject({
+      kind: "assembly",
+      instances: [{ id: "part" }],
+    });
   });
 
   it("rejects duplicate, missing, cross-owner, forged, and nested handles", () => {
