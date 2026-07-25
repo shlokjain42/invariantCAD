@@ -107,9 +107,15 @@ not in the product roadmap.
 
 Document v7 resource resolution, datums, richer shape algebra, body-set and
 multibody results, imported-body nodes, external occurrences, and feature-hash
-protocol v2 are also staged internally. They are correctness-tested design
-inputs for Milestone 1, but they are not public authoring or evaluation
-capabilities. The public document alias and migration target remain v6.
+protocol v2 are also staged internally. A source-only executable slice now
+evaluates outputs that directly reference an imported-body node by verifying
+caller-resolved bytes and invoking the kernel's strong exact single-solid
+import contract. It performs no location I/O or weak-import fallback and does
+not yet cover healing, body sets, or downstream feature composition.
+`mediaType` remains committed provenance pending a versioned
+format-to-media-type policy. These are correctness-tested design inputs for
+Milestone 1, not public authoring or evaluation capabilities. The public
+document alias and migration target remain v6.
 
 The staged v7 text parser rejects duplicate decoded JSON object members,
 including escape-equivalent names, and applies structural and nesting ceilings

@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+- Added the first source-only staged Document v7 evaluation slice for outputs
+  that directly reference an `importedBody` node. It verifies caller-resolved
+  bytes against the document's byte-length and SHA-256 commitments before
+  invoking the kernel's strong exact single-solid import contract, and it
+  fails closed instead of falling back to weak native import. This does not
+  promote v7 or add a package entry point, location I/O, healing, body-set
+  evaluation, or downstream feature composition; `mediaType` remains bound
+  provenance pending a versioned format-to-media-type policy.
 - Made staged Document v7 commutative topology-query serialization use
   locale-independent UTF-16 code-unit ordering, including nested negation and
   adjacency selections. Distinct strings that a locale collator equates now
