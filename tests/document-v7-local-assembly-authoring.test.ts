@@ -156,6 +156,69 @@ describe("staged Document v7 local assembly authoring", () => {
     expect(stringifyDocumentV7(parsed.value)).toBe(text);
   });
 
+  it("authors owned nested local assemblies without changing flat occurrence behavior", () => {
+    const { cad, part } = designWithPart("nested-authoring");
+    const subassembly = cad.assembly("subassembly", (instances) => {
+      instances.instance("part", part);
+    });
+    const product = cad.assembly("product", (instances) => {
+      instances.instance("subassembly", subassembly, {
+        placement: [tf.translate([mm(4), mm(0), mm(0)])],
+        configuration: { mode: "base" },
+      });
+      instances.instance("direct-part", part);
+    });
+    cad.output("product", product);
+
+    const document = cad.build();
+    expect(document.nodes[nodeId("subassembly")]).toMatchObject({
+      kind: "assembly",
+      instances: [
+        {
+          id: "part",
+          component: {
+            source: "local",
+            reference: { node: "part", kind: "part" },
+          },
+        },
+      ],
+    });
+    expect(document.nodes[nodeId("product")]).toMatchObject({
+      kind: "assembly",
+      instances: [
+        {
+          id: "subassembly",
+          component: {
+            source: "local",
+            reference: {
+              node: "subassembly",
+              kind: "assembly",
+            },
+          },
+          configuration: { mode: "base" },
+          placement: [
+            {
+              kind: "translate",
+              value: [
+                { op: "literal", dimension: "length", value: 4 },
+                { op: "literal", dimension: "length", value: 0 },
+                { op: "literal", dimension: "length", value: 0 },
+              ],
+            },
+          ],
+        },
+        {
+          id: "direct-part",
+          component: {
+            source: "local",
+            reference: { node: "part", kind: "part" },
+          },
+        },
+      ],
+    });
+    expectDeepFrozen(document);
+  });
+
   it("detaches mutable placement and configuration IR at the call boundary", () => {
     const { cad, part } = designWithPart("detached");
     const expression = literal("length", 4);
@@ -365,7 +428,7 @@ describe("staged Document v7 local assembly authoring", () => {
     });
   });
 
-  it("rejects duplicate, missing, cross-owner, forged, and nested handles", () => {
+  it("rejects duplicate, missing, cross-owner, and forged handles", () => {
     const first = designWithPart("first");
     const second = designWithPart("second");
     expect(() =>
@@ -390,11 +453,20 @@ describe("staged Document v7 local assembly authoring", () => {
         /Duplicate assembly instance/,
       );
     });
-    const nested = first.cad.assembly("nested-attempt", (instances) => {
-      expect(() =>
-        instances.instance("nested", assembly as never),
-      ).toThrow(/cannot cross staged design boundaries/);
+    const nested = first.cad.assembly("nested", (instances) => {
+      instances.instance("nested", assembly);
     });
+    const foreignAssembly = second.cad.assembly(
+      "foreign-assembly",
+      (instances) => {
+        instances.instance("part", second.part);
+      },
+    );
+    expect(() =>
+      first.cad.assembly("cross-owner-assembly", (instances) => {
+        instances.instance("foreign", foreignAssembly);
+      }),
+    ).toThrow(/cannot cross staged design boundaries/);
     first.cad.configuration("valid", (configuration) => {
       expect(() =>
         configuration.instanceSuppressed(assembly, "missing"),
@@ -416,13 +488,29 @@ describe("staged Document v7 local assembly authoring", () => {
       nodeId("product"),
     );
     expect(() =>
+      first.cad.assembly("forged-assembly", (instances) => {
+        instances.instance("forged", forgedAssembly);
+      }),
+    ).toThrow(/cannot cross staged design boundaries/);
+    expect(() =>
       first.cad.output("forged", forgedAssembly),
     ).toThrow(/owned direct/);
-    first.cad.output("nested-empty", nested);
-    expect(
-      first.cad.build().configurations?.[configurationId("valid")],
-    ).toMatchObject({
+    first.cad.output("nested", nested);
+    const document = first.cad.build();
+    expect(document.configurations?.[configurationId("valid")]).toMatchObject({
       instanceSuppressions: { product: { part: false } },
+    });
+    expect(document.nodes[nodeId("nested")]).toMatchObject({
+      kind: "assembly",
+      instances: [
+        {
+          id: "nested",
+          component: {
+            source: "local",
+            reference: { node: "product", kind: "assembly" },
+          },
+        },
+      ],
     });
   });
 
@@ -652,6 +740,10 @@ describe("staged Document v7 local assembly authoring", () => {
       modelRefPrototype,
       "toIR",
     )!;
+    const { cad, part } = designWithPart("prototype");
+    const subassembly = cad.assembly("subassembly", (instances) => {
+      instances.instance("part", part);
+    });
     try {
       Object.defineProperty(modelRefPrototype, "toIR", {
         ...descriptor,
@@ -659,9 +751,9 @@ describe("staged Document v7 local assembly authoring", () => {
           throw new Error("AssemblyRef.toIR must not be invoked");
         },
       });
-      const { cad, part } = designWithPart("prototype");
       const assembly = cad.assembly("product", (instances) => {
         instances.instance("part", part);
+        instances.instance("subassembly", subassembly);
       });
       cad.configuration("configured", (configuration) => {
         configuration.instanceSuppressed(assembly, "part");
