@@ -6,6 +6,7 @@ import {
 import type { ResourceId } from "../src/core/ids.js";
 import type { ExpressionIR } from "../src/expressions.js";
 import {
+  EvaluatedBodySetDesignV7,
   EvaluatedSolid,
   evaluateBodySetOutputsV7,
 } from "../src/evaluator.js";
@@ -2879,6 +2880,200 @@ describe("staged document-v7 body-set output evaluation", () => {
     }
     expect(harness.disposed).toHaveLength(2);
     expect(harness.disposeKernel).not.toHaveBeenCalled();
+  });
+
+  it("retains authentic result and owner methods across prototype mutation", async () => {
+    const document = await bodySetDocument({
+      nodes: {
+        primitive: box(),
+        bodies: bodySet([member("primitive", "primitive")]),
+      },
+      outputs: { bodies: { node: "bodies", kind: "bodySet" } },
+    });
+    const outputDescriptor = Object.getOwnPropertyDescriptor(
+      EvaluatedBodySetDesignV7.prototype,
+      "output",
+    );
+    const disposeDescriptor = Object.getOwnPropertyDescriptor(
+      EvaluatedBodySetDesignV7.prototype,
+      "dispose",
+    );
+    if (
+      outputDescriptor === undefined ||
+      disposeDescriptor === undefined ||
+      typeof outputDescriptor.value !== "function" ||
+      typeof disposeDescriptor.value !== "function"
+    ) {
+      throw new Error(
+        "Body-set result prototype regression requires data methods",
+      );
+    }
+    const restorePrototype = (): void => {
+      Object.defineProperty(
+        EvaluatedBodySetDesignV7.prototype,
+        "output",
+        outputDescriptor,
+      );
+      Object.defineProperty(
+        EvaluatedBodySetDesignV7.prototype,
+        "dispose",
+        disposeDescriptor,
+      );
+    };
+    let hostileDispatches = 0;
+    const harness = createKernelHarness({
+      primitiveHook: (_kind, shape) => {
+        Object.defineProperty(
+          EvaluatedBodySetDesignV7.prototype,
+          "output",
+          {
+            ...outputDescriptor,
+            value: (): never => {
+              hostileDispatches += 1;
+              throw Symbol("hostile body-set output dispatch");
+            },
+          },
+        );
+        Object.defineProperty(
+          EvaluatedBodySetDesignV7.prototype,
+          "dispose",
+          {
+            ...disposeDescriptor,
+            value: (): void => {
+              hostileDispatches += 1;
+            },
+          },
+        );
+        return shape;
+      },
+    });
+    let result:
+      | Awaited<ReturnType<typeof evaluateBodySetOutputsV7>>
+      | undefined;
+    let secondResult:
+      | Awaited<ReturnType<typeof evaluateBodySetOutputsV7>>
+      | undefined;
+    let restoreOwnerPrototype: (() => void) | undefined;
+    try {
+      result = await evaluateBodySetOutputsV7(
+        harness.kernel,
+        document,
+      );
+      expect(
+        result?.ok,
+        JSON.stringify(result?.diagnostics),
+      ).toBe(true);
+      if (result?.ok !== true) return;
+      const evaluatedBodySet = result.value.output("bodies");
+      expect(evaluatedBodySet.bodyIds).toEqual(["primitive"]);
+      const retainedSolid =
+        evaluatedBodySet.body("primitive").solid;
+      const owner = (
+        retainedSolid as unknown as {
+          readonly owner: {
+            readonly disposed: boolean;
+            readonly shapes: ReadonlySet<KernelShape>;
+          };
+        }
+      ).owner;
+      const ownerPrototype = Object.getPrototypeOf(owner) as object;
+      const ownerAssertLiveDescriptor =
+        Object.getOwnPropertyDescriptor(
+          ownerPrototype,
+          "assertLive",
+        );
+      const ownerDisposeDescriptor =
+        Object.getOwnPropertyDescriptor(
+          ownerPrototype,
+          "dispose",
+        );
+      if (
+        ownerAssertLiveDescriptor === undefined ||
+        ownerDisposeDescriptor === undefined
+      ) {
+        throw new Error(
+          "Evaluation-owner regression requires prototype methods",
+        );
+      }
+      restoreOwnerPrototype = (): void => {
+        Object.defineProperty(
+          ownerPrototype,
+          "assertLive",
+          ownerAssertLiveDescriptor,
+        );
+        Object.defineProperty(
+          ownerPrototype,
+          "dispose",
+          ownerDisposeDescriptor,
+        );
+      };
+      Object.defineProperty(ownerPrototype, "assertLive", {
+        ...ownerAssertLiveDescriptor,
+        value: (): never => {
+          hostileDispatches += 1;
+          throw Symbol("hostile owner liveness dispatch");
+        },
+      });
+      Object.defineProperty(ownerPrototype, "dispose", {
+        ...ownerDisposeDescriptor,
+        value: (): void => {
+          hostileDispatches += 1;
+        },
+      });
+      expect(Object.isFrozen(result.value)).toBe(true);
+      expect(Object.isFrozen(evaluatedBodySet)).toBe(true);
+      expect(Object.isFrozen(retainedSolid)).toBe(true);
+      expect(Object.isFrozen(owner)).toBe(true);
+      expect(
+        Object.getOwnPropertyDescriptor(owner, "disposed"),
+      ).toMatchObject({
+        configurable: false,
+        enumerable: true,
+        set: undefined,
+      });
+      expect(Reflect.set(owner, "disposed", false)).toBe(false);
+      (owner.shapes as Set<KernelShape>).clear();
+      expect(Object.hasOwn(result.value, "owner")).toBe(false);
+      expect(Object.hasOwn(result.value, "outputs")).toBe(false);
+      expect(Object.hasOwn(evaluatedBodySet, "owner")).toBe(false);
+      expect(Object.hasOwn(evaluatedBodySet, "bodiesById")).toBe(
+        false,
+      );
+      secondResult = await evaluateBodySetOutputsV7(
+        harness.kernel,
+        document,
+      );
+      expect(
+        secondResult.ok,
+        JSON.stringify(secondResult.diagnostics),
+      ).toBe(true);
+      if (!secondResult.ok) return;
+      const secondSolid = secondResult.value
+        .output("bodies")
+        .body("primitive").solid;
+      expect(secondSolid.measure().volume).toBeGreaterThan(0);
+      result.value.dispose();
+      result.value.dispose();
+      secondResult.value.dispose();
+      secondResult.value.dispose();
+      expect(hostileDispatches).toBe(0);
+      expect(harness.disposed).toHaveLength(2);
+      expect(harness.live.size).toBe(0);
+      expect(owner.disposed).toBe(true);
+      expect(Reflect.set(owner, "disposed", false)).toBe(false);
+      expect(owner.disposed).toBe(true);
+      expect(() => retainedSolid.measure()).toThrow(/disposed/i);
+      expect(() => secondSolid.measure()).toThrow(/disposed/i);
+      expect(harness.disposeKernel).not.toHaveBeenCalled();
+    } finally {
+      restoreOwnerPrototype?.();
+      restorePrototype();
+      if (result?.ok === true) result.value.dispose();
+      if (secondResult?.ok === true) secondResult.value.dispose();
+      for (const shape of [...harness.live]) {
+        harness.kernel.disposeShape(shape);
+      }
+    }
   });
 
   it("enforces maxParameterOverrides at the exact caller-override boundary", async () => {

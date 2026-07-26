@@ -143,11 +143,15 @@ matching, exact native evolution reports, conformance witnesses, and artifact
 sizes. Raising a limit changes the accepted workload and should be reviewed
 like a resource-policy change.
 
-## Source-only staged 0.2 external products
+## Source-only staged external products
 
-The repository-only Document v7 product evaluator adds a document-scoped
-resource boundary for external part occurrences. This is source-only work
-staged for 0.2, not a public 0.1.1 evaluator or resolver API.
+The repository-only product evaluator adds a document-scoped resource boundary
+for direct external-part occurrences and fixed external subassemblies.
+`externalAssembly(resource, output)` selects one assembly output from a
+committed InvariantCAD document and expands its child-local part and assembly
+tree. Each active occurrence path may cross at most one external-document
+boundary. This is source-only work staged for 0.2, not a public 0.1.1
+evaluator, resolver, builder, or CLI API.
 
 Resolver requests made by this operation include a frozen `documentScope`.
 `{ source: "root" }` identifies commitments in the product document. A child
@@ -169,12 +173,14 @@ document JSON and later child geometry:
 | `maxTotalResourceBytes` | Bounds all committed bytes retained across every phase |
 | `maxExternalDocuments` | Bounds distinct active external document resources before resolver or kernel work |
 
-Each resolution phase is fully preflighted, including its effect on cumulative
-counts and committed bytes, before a resolver callback for that phase. A later
-phase that would exceed the shared budget therefore fails before any child
-geometry callback, even when earlier external document JSON has already been
-resolved. Suppressed branches are pruned before external-document admission and
-do not consume these product-work ceilings.
+All selected external-document commitments are preflighted and resolved before
+child assembly expansion or part preparation. Each later resolution phase is
+also fully preflighted, including its effect on cumulative counts and committed
+bytes, before a resolver callback for that phase. A later phase that would
+exceed the shared budget therefore fails before any child geometry callback,
+even when external document JSON has already been resolved. Suppressed branches
+are pruned before descendant document admission and do not consume those
+descendant product-work ceilings.
 
 An occurrence-specific external child failure is reported at the parent
 occurrence's component pointer. Structured details always add
@@ -185,22 +191,33 @@ diagnostic already names its own `resource`, that value is preserved instead
 of being overwritten. A child-owned output is preserved separately as
 `childOutput`, while `output` continues to name the external component output
 selected by the parent. The original child location is preserved as
-`childNode` and `childPath` when supplied. Deferred external BOM warnings keep
-the same component provenance, so applications can identify both the product
-occurrence and the child-document cause without parsing message text.
+`childNode` and `childPath` when supplied. A fixed-subassembly leaf also retains
+its child part node and the child assembly/component location when the failure
+belongs to that leaf. Internal selectors used to evaluate those leaves are never
+reported as authored output names. Deferred external BOM warnings keep the same
+component provenance, so applications can identify both the product occurrence
+and the child-document cause without parsing message text.
 
-An aggregate first-phase limit or preflight failure that cannot be attributed
-to one external component remains aggregate. The evaluator does not attach it
-to an arbitrary first occurrence merely to supply a component pointer.
+An aggregate limit, preflight, or shared child-resource failure that cannot be
+attributed to one leaf remains at the selected external component boundary. A
+failure shared by several leaves of one fixed subassembly is not attached to an
+arbitrary first leaf merely to supply a child node or part name.
 
-Unsupported external assembly outputs fail before child resolver or kernel
-work. A missing child configuration and an unsupported migrated-v6 extrusion
-part both preserve parent/child provenance and fail before child geometry work.
+An `externalAssembly(...)` declaration whose selected child output is not
+actually an assembly fails after committed child-document admission and before
+geometry work. A missing child configuration and an unsupported migrated-v6
+extrusion-backed part likewise preserve parent/child provenance and fail before
+child geometry work. Child-local parts and nested local assemblies are admitted,
+but an active external descendant would cross a second document boundary and is
+rejected before nested resolution or child geometry/kernel work. A suppressed
+nested external descendant remains inert.
+
 If later child evaluation fails, every earlier acquired or intermediate shape
-is released exactly once. Successful product results retain their child shapes
-until product disposal. The supplied kernel is borrowed in both cases and is
-never disposed by the staged operation; verified resource bytes are cleared
-when its operation-scoped session ends.
+is released exactly once, including work from an earlier child context.
+Successful product results retain their child shapes until product disposal.
+The supplied kernel is borrowed in both cases and is never disposed by the
+staged operation; verified resource bytes are cleared when its operation-scoped
+session ends.
 
 ## Debugging workflow
 

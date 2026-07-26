@@ -718,10 +718,35 @@ const evaluationOwnerDisposerGet = WeakMap.prototype.get;
 const evaluationOwnerDisposerSet = WeakMap.prototype.set;
 const evaluationOwnerReflectApply = Reflect.apply;
 const evaluationOwnerArrayFrom = Array.from;
+const evaluationOwnerObjectDefineProperty =
+  Object.defineProperty;
 const evaluationOwnerObjectFreeze = Object.freeze;
 
+function installEvaluationInstanceMethod(
+  instance: object,
+  key: PropertyKey,
+  method: CallableFunction,
+): void {
+  evaluationOwnerReflectApply(
+    evaluationOwnerObjectDefineProperty,
+    Object,
+    [
+      instance,
+      key,
+      {
+        configurable: false,
+        enumerable: false,
+        writable: false,
+        value: method,
+      },
+    ],
+  );
+}
+
 class EvaluationOwner {
-  disposed = false;
+  #disposed = false;
+  readonly #shapes: readonly KernelShape[];
+  declare disposed: boolean;
   readonly kernel: GeometryKernel;
   readonly shapes: ReadonlySet<KernelShape>;
   readonly configurationId: string | null;
@@ -734,28 +759,60 @@ class EvaluationOwner {
     this.kernel = kernel;
     this.shapes = shapes;
     this.configurationId = configurationId;
+    this.#shapes = evaluationOwnerReflectApply(
+      evaluationOwnerObjectFreeze,
+      Object,
+      [
+        evaluationOwnerReflectApply(
+          evaluationOwnerArrayFrom,
+          Array,
+          [shapes],
+        ),
+      ],
+    ) as readonly KernelShape[];
+    evaluationOwnerReflectApply(
+      evaluationOwnerObjectDefineProperty,
+      Object,
+      [
+        this,
+        "disposed",
+        {
+          configurable: false,
+          enumerable: true,
+          get: () => this.#disposed,
+        },
+      ],
+    );
+    installEvaluationOwnerMethods(this);
+    evaluationOwnerReflectApply(
+      evaluationOwnerObjectFreeze,
+      Object,
+      [this],
+    );
   }
 
   assertLive(): void {
-    if (this.disposed) throw new Error("This evaluation result has been disposed");
+    if (this.#disposed) {
+      throw new Error("This evaluation result has been disposed");
+    }
   }
 
   dispose(): void {
-    if (this.disposed) return;
+    if (this.#disposed) return;
     const capturedDisposal = evaluationOwnerReflectApply(
       evaluationOwnerDisposerGet,
       evaluationOwnerDisposers,
       [this],
     ) as CapturedEvaluationOwnerDisposal | undefined;
     if (capturedDisposal === undefined) {
-      for (const shape of this.shapes) {
-        this.kernel.disposeShape(shape);
+      for (let index = 0; index < this.#shapes.length; index += 1) {
+        this.kernel.disposeShape(this.#shapes[index]!);
       }
-      this.disposed = true;
+      this.#disposed = true;
       return;
     }
 
-    this.disposed = true;
+    this.#disposed = true;
     let firstError: unknown;
     let disposalFailed = false;
     for (let index = 0; index < capturedDisposal.shapes.length; index += 1) {
@@ -772,18 +829,38 @@ class EvaluationOwner {
   }
 }
 
+const evaluationOwnerAssertLive =
+  EvaluationOwner.prototype.assertLive;
+const evaluationOwnerDispose = EvaluationOwner.prototype.dispose;
+
+function installEvaluationOwnerMethods(
+  owner: EvaluationOwner,
+): void {
+  installEvaluationInstanceMethod(
+    owner,
+    "assertLive",
+    evaluationOwnerAssertLive,
+  );
+  installEvaluationInstanceMethod(
+    owner,
+    "dispose",
+    evaluationOwnerDispose,
+  );
+}
+
 function captureEvaluationOwnerDisposer(
   owner: EvaluationOwner,
+  shapes: ReadonlySet<KernelShape>,
   disposer: (shape: KernelShape) => void,
 ): void {
-  const shapes = evaluationOwnerReflectApply(
+  const capturedShapes = evaluationOwnerReflectApply(
     evaluationOwnerObjectFreeze,
     Object,
     [
       evaluationOwnerReflectApply(
         evaluationOwnerArrayFrom,
         Array,
-        [owner.shapes],
+        [shapes],
       ),
     ],
   ) as readonly KernelShape[];
@@ -795,7 +872,7 @@ function captureEvaluationOwnerDisposer(
       evaluationOwnerReflectApply(
         evaluationOwnerObjectFreeze,
         Object,
-        [{ disposeShape: disposer, shapes }],
+        [{ disposeShape: disposer, shapes: capturedShapes }],
       ),
     ],
   );
@@ -918,6 +995,12 @@ class StagedBodySetEvaluatedSolidV7 extends EvaluatedSolid {
   ) {
     super(name, owner, shape);
     this.#access = access;
+    installStagedBodySetEvaluatedSolidV7Methods(this);
+    evaluationOwnerReflectApply(
+      evaluationOwnerObjectFreeze,
+      Object,
+      [this],
+    );
   }
 
   override mesh(options?: MeshOptions): MeshData {
@@ -1570,6 +1653,74 @@ export class EvaluatedDesign {
   }
 }
 
+const stagedImportedBodyEvaluatedSolidMeshV7 =
+  EvaluatedSolid.prototype.mesh;
+const stagedImportedBodyEvaluatedSolidMeasureV7 =
+  EvaluatedSolid.prototype.measure;
+const stagedImportedBodyEvaluatedSolidTopologyV7 =
+  EvaluatedSolid.prototype.topology;
+const stagedImportedBodyEvaluatedSolidExportV7 =
+  EvaluatedSolid.prototype.export;
+const stagedImportedBodyEvaluatedDesignOutputV7 =
+  EvaluatedDesign.prototype.output;
+const stagedImportedBodyEvaluatedDesignDisposeV7 =
+  EvaluatedDesign.prototype.dispose;
+
+function retainStagedImportedBodySolidV7(
+  solid: EvaluatedSolid,
+): EvaluatedSolid {
+  installEvaluationInstanceMethod(
+    solid,
+    "mesh",
+    stagedImportedBodyEvaluatedSolidMeshV7,
+  );
+  installEvaluationInstanceMethod(
+    solid,
+    "measure",
+    stagedImportedBodyEvaluatedSolidMeasureV7,
+  );
+  installEvaluationInstanceMethod(
+    solid,
+    "topology",
+    stagedImportedBodyEvaluatedSolidTopologyV7,
+  );
+  installEvaluationInstanceMethod(
+    solid,
+    "export",
+    stagedImportedBodyEvaluatedSolidExportV7,
+  );
+  return evaluationOwnerReflectApply(
+    evaluationOwnerObjectFreeze,
+    Object,
+    [solid],
+  ) as EvaluatedSolid;
+}
+
+function retainStagedImportedBodyDesignV7(
+  design: EvaluatedDesign,
+): EvaluatedDesign {
+  installEvaluationInstanceMethod(
+    design,
+    "output",
+    stagedImportedBodyEvaluatedDesignOutputV7,
+  );
+  installEvaluationInstanceMethod(
+    design,
+    "dispose",
+    stagedImportedBodyEvaluatedDesignDisposeV7,
+  );
+  evaluationOwnerReflectApply(
+    evaluationOwnerObjectFreeze,
+    Object,
+    [design.outputNames],
+  );
+  return evaluationOwnerReflectApply(
+    evaluationOwnerObjectFreeze,
+    Object,
+    [design],
+  ) as EvaluatedDesign;
+}
+
 /**
  * One authored body-set member from the staged document-v7 evaluator.
  *
@@ -1588,6 +1739,50 @@ export interface EvaluatedBodyV7 {
   readonly solid: EvaluatedSolid;
 }
 
+type EvaluatedPartDiagnosticIdentityV7 =
+  | {
+      readonly kind: "output";
+      readonly output: string;
+    }
+  | {
+      readonly kind: "externalAssemblyPart";
+      readonly output: string;
+      readonly outputKind: "assembly";
+      readonly childPartNode: NodeId;
+    };
+
+interface EvaluatedBodySetV7Backing {
+  readonly owner: EvaluationOwner;
+  readonly bodies: readonly EvaluatedBodyV7[];
+  readonly bodyIds: readonly EntityId[];
+  readonly bodiesById: ReadonlyMap<EntityId, EvaluatedBodyV7>;
+  readonly representation: KernelRepresentation;
+  readonly exact: boolean;
+}
+
+const evaluatedBodySetV7Backings =
+  new WeakMap<object, EvaluatedBodySetV7Backing>();
+
+function evaluatedBodySetV7Backing(
+  bodies: readonly EvaluatedBodyV7[],
+): EvaluatedBodySetV7Backing | undefined {
+  return evaluationOwnerReflectApply(
+    evaluationOwnerDisposerGet,
+    evaluatedBodySetV7Backings,
+    [bodies],
+  ) as EvaluatedBodySetV7Backing | undefined;
+}
+
+function retainEvaluatedBodySetV7Backing(
+  backing: EvaluatedBodySetV7Backing,
+): void {
+  evaluationOwnerReflectApply(
+    evaluationOwnerDisposerSet,
+    evaluatedBodySetV7Backings,
+    [backing.bodies, backing],
+  );
+}
+
 /**
  * Owned staged multibody output. Protocol v1 has no hidden primary or inactive
  * body: every descriptor in `bodies` is an active authored member.
@@ -1603,8 +1798,9 @@ export class EvaluatedBodySetV7 {
   readonly bodyIds: readonly EntityId[];
   readonly representation: KernelRepresentation;
   readonly exact: boolean;
-  private readonly owner: EvaluationOwner;
-  private readonly bodiesById: ReadonlyMap<EntityId, EvaluatedBodyV7>;
+  readonly #owner: EvaluationOwner;
+  readonly #bodiesById: ReadonlyMap<EntityId, EvaluatedBodyV7>;
+  readonly #diagnosticIdentity: EvaluatedPartDiagnosticIdentityV7;
 
   constructor(
     name: string,
@@ -1612,23 +1808,63 @@ export class EvaluatedBodySetV7 {
     bodies: readonly EvaluatedBodyV7[],
     representation: KernelRepresentation,
     exact: boolean,
+    diagnosticIdentity?: EvaluatedPartDiagnosticIdentityV7,
   ) {
     this.name = name;
-    this.owner = owner;
-    this.bodies = Object.freeze([...bodies]);
-    this.bodyIds = Object.freeze(
-      this.bodies.map((body) => body.id),
-    );
-    this.bodiesById = new Map(
-      this.bodies.map((body) => [body.id, body]),
-    );
-    this.representation = representation;
-    this.exact = exact;
+    const retained = evaluatedBodySetV7Backing(bodies);
+    const backing =
+      retained !== undefined &&
+      retained.owner === owner &&
+      retained.representation === representation &&
+      retained.exact === exact
+        ? retained
+        : (() => {
+            const copiedBodies = Object.freeze([...bodies]);
+            const value =
+              evaluationOwnerReflectApply(
+                evaluationOwnerObjectFreeze,
+                Object,
+                [
+                  {
+                    owner,
+                    bodies: copiedBodies,
+                    bodyIds: Object.freeze(
+                      copiedBodies.map((body) => body.id),
+                    ),
+                    bodiesById: new Map(
+                      copiedBodies.map((body) => [
+                        body.id,
+                        body,
+                      ]),
+                    ),
+                    representation,
+                    exact,
+                  },
+                ],
+              ) as EvaluatedBodySetV7Backing;
+            retainEvaluatedBodySetV7Backing(value);
+            return value;
+          })();
+    this.#owner = backing.owner;
+    this.bodies = backing.bodies;
+    this.bodyIds = backing.bodyIds;
+    this.#bodiesById = backing.bodiesById;
+    this.representation = backing.representation;
+    this.exact = backing.exact;
+    this.#diagnosticIdentity =
+      diagnosticIdentity ??
+      importedBodyApply<EvaluatedPartDiagnosticIdentityV7>(
+        importedBodyObjectFreeze,
+        Object,
+        [{ kind: "output", output: name }],
+      );
+    installEvaluatedBodySetV7Methods(this);
+    importedBodyApply<void>(importedBodyObjectFreeze, Object, [this]);
   }
 
   body(id: string): EvaluatedBodyV7 {
-    this.owner.assertLive();
-    const body = this.bodiesById.get(id as EntityId);
+    this.#owner.assertLive();
+    const body = this.#bodiesById.get(id as EntityId);
     if (body === undefined) {
       throw new RangeError(
         `Unknown body '${id}' in evaluated body set '${this.name}'`,
@@ -1638,7 +1874,7 @@ export class EvaluatedBodySetV7 {
   }
 
   mesh(options?: MeshOptions): MeshData {
-    this.owner.assertLive();
+    this.#owner.assertLive();
     const meshes: MeshData[] = [];
     for (let index = 0; index < this.bodies.length; index += 1) {
       meshes.push(this.bodies[index]!.solid.mesh(options));
@@ -1650,7 +1886,7 @@ export class EvaluatedBodySetV7 {
   export(format: TextShapeExportFormat): string;
   export(format: MeshExportFormat): Uint8Array | string;
   export(format: MeshExportFormat): Uint8Array | string {
-    this.owner.assertLive();
+    this.#owner.assertLive();
     if (
       format !== "stl" &&
       format !== "stl-ascii" &&
@@ -1661,7 +1897,17 @@ export class EvaluatedBodySetV7 {
         `Aggregate exact export for body set '${this.name}' is unsupported for ${String(format)}`,
         {
           severity: "error",
-          details: { output: this.name, format },
+          details:
+            this.#diagnosticIdentity.kind === "output"
+              ? { output: this.name, format }
+              : {
+                  output: this.#diagnosticIdentity.output,
+                  outputKind:
+                    this.#diagnosticIdentity.outputKind,
+                  childPartNode:
+                    this.#diagnosticIdentity.childPartNode,
+                  format,
+                },
         },
       );
       throw new CadError(value.message, [value]);
@@ -1680,8 +1926,8 @@ export class EvaluatedBodySetDesignV7 {
   readonly parameters: Readonly<Record<string, number>>;
   readonly diagnostics: readonly Diagnostic[];
   readonly outputNames: readonly string[];
-  private readonly outputs: ReadonlyMap<string, EvaluatedBodySetV7>;
-  private readonly owner: EvaluationOwner;
+  readonly #outputs: ReadonlyMap<string, EvaluatedBodySetV7>;
+  readonly #owner: EvaluationOwner;
 
   constructor(
     owner: EvaluationOwner,
@@ -1690,17 +1936,19 @@ export class EvaluatedBodySetDesignV7 {
     parameters: Readonly<Record<string, number>>,
     diagnostics: readonly Diagnostic[],
   ) {
-    this.owner = owner;
-    this.outputs = outputs;
+    this.#owner = owner;
+    this.#outputs = outputs;
     this.outputNames = Object.freeze([...outputs.keys()]);
     this.configurationId = configurationId;
     this.parameters = parameters;
     this.diagnostics = diagnostics;
+    installEvaluatedBodySetDesignV7Methods(this);
+    importedBodyApply<void>(importedBodyObjectFreeze, Object, [this]);
   }
 
   output(name: string): EvaluatedBodySetV7 {
-    this.owner.assertLive();
-    const output = this.outputs.get(name);
+    this.#owner.assertLive();
+    const output = this.#outputs.get(name);
     if (output === undefined) {
       throw new RangeError(`Unknown evaluated body-set output '${name}'`);
     }
@@ -1708,7 +1956,7 @@ export class EvaluatedBodySetDesignV7 {
   }
 
   dispose(): void {
-    this.owner.dispose();
+    this.#owner.dispose();
   }
 }
 
@@ -1744,6 +1992,35 @@ interface EvaluatedPartValueV7 {
   readonly materialDefinition?: EvaluatedMaterial;
   readonly massDensity?: number;
   readonly massDensitySource?: MassDensitySource;
+}
+
+interface EvaluatedPartV7ViewState {
+  readonly owner: EvaluationOwner;
+  readonly value: EvaluatedPartValueV7;
+}
+
+const evaluatedPartV7ViewStates =
+  new WeakMap<object, EvaluatedPartV7ViewState>();
+
+function evaluatedPartV7ViewState(
+  part: EvaluatedPartV7,
+): EvaluatedPartV7ViewState | undefined {
+  return evaluationOwnerReflectApply(
+    evaluationOwnerDisposerGet,
+    evaluatedPartV7ViewStates,
+    [part],
+  ) as EvaluatedPartV7ViewState | undefined;
+}
+
+function retainEvaluatedPartV7ViewState(
+  part: EvaluatedPartV7,
+  state: EvaluatedPartV7ViewState,
+): void {
+  evaluationOwnerReflectApply(
+    evaluationOwnerDisposerSet,
+    evaluatedPartV7ViewStates,
+    [part, state],
+  );
 }
 
 function partV7MassDensityPath(part: EvaluatedPartValueV7): string {
@@ -2039,16 +2316,25 @@ export class EvaluatedPartV7 {
   readonly #name: string;
   readonly #owner: EvaluationOwner;
   readonly #value: EvaluatedPartValueV7;
+  readonly #diagnosticIdentity: EvaluatedPartDiagnosticIdentityV7;
 
   constructor(
     name: string,
     owner: EvaluationOwner,
     part: EvaluatedPartValueV7,
+    diagnosticIdentity?: EvaluatedPartDiagnosticIdentityV7,
   ) {
     this.name = name;
     this.#name = name;
     this.#owner = owner;
     this.#value = part;
+    this.#diagnosticIdentity =
+      diagnosticIdentity ??
+      importedBodyApply<EvaluatedPartDiagnosticIdentityV7>(
+        importedBodyObjectFreeze,
+        Object,
+        [{ kind: "output", output: name }],
+      );
     this.node = part.node;
     this.geometry = part.geometry;
     this.representation = part.representation;
@@ -2062,6 +2348,15 @@ export class EvaluatedPartV7 {
     this.materialDefinition = part.materialDefinition;
     this.massDensity = part.massDensity;
     this.massDensitySource = part.massDensitySource;
+    retainEvaluatedPartV7ViewState(
+      this,
+      evaluationOwnerReflectApply(
+        evaluationOwnerObjectFreeze,
+        Object,
+        [{ owner, value: part }],
+      ) as EvaluatedPartV7ViewState,
+    );
+    installEvaluatedPartV7Methods(this);
     importedBodyApply<void>(importedBodyObjectFreeze, Object, [this]);
   }
 
@@ -2085,11 +2380,23 @@ export class EvaluatedPartV7 {
     ) {
       const value = diagnostic(
         "EXPORT_UNSUPPORTED",
-        `Aggregate part export for '${this.#name}' is unsupported for ${String(format)}`,
+        this.#diagnosticIdentity.kind === "output"
+          ? `Aggregate part export for '${this.#name}' is unsupported for ${String(format)}`
+          : `Aggregate part export for child part '${this.#diagnosticIdentity.childPartNode}' is unsupported for ${String(format)}`,
         {
           severity: "error",
           node: this.#value.node,
-          details: { output: this.#name, format },
+          details:
+            this.#diagnosticIdentity.kind === "output"
+              ? { output: this.#name, format }
+              : {
+                  output: this.#diagnosticIdentity.output,
+                  outputKind:
+                    this.#diagnosticIdentity.outputKind,
+                  childPartNode:
+                    this.#diagnosticIdentity.childPartNode,
+                  format,
+                },
         },
       );
       throw new CadError(value.message, [value]);
@@ -2310,6 +2617,135 @@ export class EvaluatedPartV7 {
 }
 
 /**
+ * Creates an immutable diagnostic facade for one part leaf selected through
+ * an authored external assembly output. The facade shares the exact owner,
+ * geometry, and multibody backing state; it does not construct or copy shape
+ * data. `name` remains the admitted child part-node identity because the leaf
+ * is not itself a document output.
+ *
+ * @internal
+ */
+export function createExternalAssemblyPartViewV7(
+  part: EvaluatedPartV7,
+  output: string,
+  childPartNode: NodeId,
+): CadResult<EvaluatedPartV7> {
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return partRuntimeIntegrityFailure();
+  }
+  const state = evaluatedPartV7ViewState(part);
+  if (
+    state === undefined ||
+    typeof output !== "string" ||
+    typeof childPartNode !== "string"
+  ) {
+    return failure(
+      diagnostic(
+        "IR_INVALID",
+        "External assembly part view is not owned by this evaluator",
+        {
+          severity: "error",
+          details: {
+            phase: PART_EVALUATION_PHASE,
+            partOwner: state !== undefined,
+            outputIsString: typeof output === "string",
+            childPartNodeIsString:
+              typeof childPartNode === "string",
+          },
+        },
+      ),
+    );
+  }
+  if (state.value.node !== childPartNode) {
+    return failure(
+      diagnostic(
+        "IR_INVALID",
+        "External assembly part view does not belong to the selected child part",
+        {
+          severity: "error",
+          node: childPartNode,
+          details: {
+            phase: PART_EVALUATION_PHASE,
+            partOwner: true,
+            selectedPartNode: childPartNode,
+            evaluatedPartNode: state.value.node,
+          },
+        },
+      ),
+    );
+  }
+  try {
+    state.owner.assertLive();
+  } catch {
+    return failure(
+      diagnostic(
+        "IR_INVALID",
+        "External assembly part view cannot retain a disposed evaluation",
+        {
+          severity: "error",
+          node: childPartNode,
+          details: {
+            phase: PART_EVALUATION_PHASE,
+            evaluationDisposed: true,
+          },
+        },
+      ),
+    );
+  }
+  const diagnosticIdentity =
+    importedBodyApply<EvaluatedPartDiagnosticIdentityV7>(
+      importedBodyObjectFreeze,
+      Object,
+      [
+        {
+          kind: "externalAssemblyPart",
+          output,
+          outputKind: "assembly",
+          childPartNode,
+        },
+      ],
+    );
+  let contextualValue = state.value;
+  if (state.value.geometry.kind === "bodySet") {
+    const source = state.value.geometry.bodySet;
+    const bodySet = new EvaluatedBodySetV7(
+      childPartNode,
+      state.owner,
+      source.bodies,
+      source.representation,
+      source.exact,
+      diagnosticIdentity,
+    );
+    const geometry =
+      importedBodyApply<EvaluatedPartGeometryV7>(
+        importedBodyObjectFreeze,
+        Object,
+        [
+          {
+            kind: "bodySet",
+            node: state.value.geometry.node,
+            bodySet,
+          },
+        ],
+      );
+    contextualValue =
+      importedBodyApply<EvaluatedPartValueV7>(
+        importedBodyObjectFreeze,
+        Object,
+        [{ ...state.value, geometry }],
+      );
+  }
+  const view = new EvaluatedPartV7(
+    childPartNode,
+    state.owner,
+    contextualValue,
+    diagnosticIdentity,
+  );
+  const boundary = partPostBoundaryFailure(undefined, childPartNode);
+  return boundary ?? success(view);
+}
+
+/**
  * Source-only result container for direct staged document-v7 part outputs.
  *
  * @internal
@@ -2335,6 +2771,7 @@ export class EvaluatedPartDesignV7 {
     this.configurationId = configurationId;
     this.parameters = parameters;
     this.diagnostics = diagnostics;
+    installEvaluatedPartDesignV7Methods(this);
   }
 
   output(name: string): EvaluatedPartV7 {
@@ -2349,6 +2786,135 @@ export class EvaluatedPartDesignV7 {
   dispose(): void {
     this.#owner.dispose();
   }
+}
+
+const stagedBodySetEvaluatedSolidV7Mesh =
+  StagedBodySetEvaluatedSolidV7.prototype.mesh;
+const stagedBodySetEvaluatedSolidV7Measure =
+  StagedBodySetEvaluatedSolidV7.prototype.measure;
+const stagedBodySetEvaluatedSolidV7Topology =
+  StagedBodySetEvaluatedSolidV7.prototype.topology;
+const stagedBodySetEvaluatedSolidV7Export =
+  StagedBodySetEvaluatedSolidV7.prototype.export;
+const evaluatedBodySetV7Body =
+  EvaluatedBodySetV7.prototype.body;
+const evaluatedBodySetV7Mesh =
+  EvaluatedBodySetV7.prototype.mesh;
+const evaluatedBodySetV7Export =
+  EvaluatedBodySetV7.prototype.export;
+const evaluatedBodySetDesignV7Output =
+  EvaluatedBodySetDesignV7.prototype.output;
+const evaluatedBodySetDesignV7Dispose =
+  EvaluatedBodySetDesignV7.prototype.dispose;
+const evaluatedPartV7Mesh = EvaluatedPartV7.prototype.mesh;
+const evaluatedPartV7Export = EvaluatedPartV7.prototype.export;
+const evaluatedPartV7PhysicalMassProperties =
+  EvaluatedPartV7.prototype.physicalMassProperties;
+const evaluatedPartV7BillOfMaterials =
+  EvaluatedPartV7.prototype.billOfMaterials;
+const evaluatedPartDesignV7Output =
+  EvaluatedPartDesignV7.prototype.output;
+const evaluatedPartDesignV7Dispose =
+  EvaluatedPartDesignV7.prototype.dispose;
+
+function installStagedBodySetEvaluatedSolidV7Methods(
+  value: StagedBodySetEvaluatedSolidV7,
+): void {
+  installEvaluationInstanceMethod(
+    value,
+    "mesh",
+    stagedBodySetEvaluatedSolidV7Mesh,
+  );
+  installEvaluationInstanceMethod(
+    value,
+    "measure",
+    stagedBodySetEvaluatedSolidV7Measure,
+  );
+  installEvaluationInstanceMethod(
+    value,
+    "topology",
+    stagedBodySetEvaluatedSolidV7Topology,
+  );
+  installEvaluationInstanceMethod(
+    value,
+    "export",
+    stagedBodySetEvaluatedSolidV7Export,
+  );
+}
+
+function installEvaluatedBodySetV7Methods(
+  value: EvaluatedBodySetV7,
+): void {
+  installEvaluationInstanceMethod(
+    value,
+    "body",
+    evaluatedBodySetV7Body,
+  );
+  installEvaluationInstanceMethod(
+    value,
+    "mesh",
+    evaluatedBodySetV7Mesh,
+  );
+  installEvaluationInstanceMethod(
+    value,
+    "export",
+    evaluatedBodySetV7Export,
+  );
+}
+
+function installEvaluatedBodySetDesignV7Methods(
+  value: EvaluatedBodySetDesignV7,
+): void {
+  installEvaluationInstanceMethod(
+    value,
+    "output",
+    evaluatedBodySetDesignV7Output,
+  );
+  installEvaluationInstanceMethod(
+    value,
+    "dispose",
+    evaluatedBodySetDesignV7Dispose,
+  );
+}
+
+function installEvaluatedPartV7Methods(
+  value: EvaluatedPartV7,
+): void {
+  installEvaluationInstanceMethod(
+    value,
+    "mesh",
+    evaluatedPartV7Mesh,
+  );
+  installEvaluationInstanceMethod(
+    value,
+    "export",
+    evaluatedPartV7Export,
+  );
+  installEvaluationInstanceMethod(
+    value,
+    "physicalMassProperties",
+    evaluatedPartV7PhysicalMassProperties,
+  );
+  installEvaluationInstanceMethod(
+    value,
+    "billOfMaterials",
+    evaluatedPartV7BillOfMaterials,
+  );
+}
+
+function installEvaluatedPartDesignV7Methods(
+  value: EvaluatedPartDesignV7,
+): void {
+  installEvaluationInstanceMethod(
+    value,
+    "output",
+    evaluatedPartDesignV7Output,
+  );
+  installEvaluationInstanceMethod(
+    value,
+    "dispose",
+    evaluatedPartDesignV7Dispose,
+  );
 }
 
 /**
@@ -2435,6 +3001,7 @@ export const DEFAULT_BODY_SET_EVALUATION_LIMITS_V7:
  */
 declare const preparedPartOutputsV7Brand: unique symbol;
 declare const preparedPartKernelAccessV7Brand: unique symbol;
+declare const preparedPartShapeOwnershipTransactionV7Brand: unique symbol;
 
 /** Aggregate work admitted by one prepared staged part evaluation. @internal */
 export interface PreparedPartEvaluationMetricsV7 {
@@ -2470,6 +3037,16 @@ export interface PreparedPartOutputsV7 {
 export interface PreparedPartKernelAccessV7 {
   readonly kernelId: string;
   readonly [preparedPartKernelAccessV7Brand]: true;
+}
+
+/**
+ * Owner-checked transaction for detecting aliased kernel shapes across
+ * multiple prepared part batches executed against one borrowed kernel.
+ *
+ * @internal
+ */
+export interface PreparedPartShapeOwnershipTransactionV7 {
+  readonly [preparedPartShapeOwnershipTransactionV7Brand]: true;
 }
 
 export interface EvaluatePartOutputsV7Options {
@@ -2625,7 +3202,10 @@ function importedBodySetAddValue<T>(set: Set<T>, value: T): void {
   importedBodyApply<Set<T>>(importedBodySetAdd, set, [value]);
 }
 
-function importedBodySetHasValue<T>(set: Set<T>, value: T): boolean {
+function importedBodySetHasValue<T>(
+  set: ReadonlySet<T>,
+  value: T,
+): boolean {
   return importedBodyApply<boolean>(importedBodySetHas, set, [value]);
 }
 
@@ -4000,6 +4580,7 @@ export async function evaluateImportedBodyOutputsV7(
   );
   captureEvaluationOwnerDisposer(
     owner,
+    createdShapes,
     (shape) =>
       importedBodyApply<void>(
         kernelAccess.value.disposeShape,
@@ -4011,14 +4592,25 @@ export async function evaluateImportedBodyOutputsV7(
   for (let index = 0; index < requested.length; index += 1) {
     const name = requested[index]!;
     const nodeId = outputNodes.get(name)!;
-    outputs.set(name, new EvaluatedSolid(name, owner, shapesByNode.get(nodeId)!));
+    outputs.set(
+      name,
+      retainStagedImportedBodySolidV7(
+        new EvaluatedSolid(
+          name,
+          owner,
+          shapesByNode.get(nodeId)!,
+        ),
+      ),
+    );
   }
-  const evaluated = new EvaluatedDesign(
-    owner,
-    outputs,
-    null,
-    Object.freeze({}),
-    [],
+  const evaluated = retainStagedImportedBodyDesignV7(
+    new EvaluatedDesign(
+      owner,
+      outputs,
+      null,
+      Object.freeze({}),
+      Object.freeze([]),
+    ),
   );
   return success(evaluated);
 }
@@ -6088,6 +6680,8 @@ function validateStagedSolidGraphShape(
 interface EvaluatedStagedSolidGraphV7 {
   readonly access: BodySetKernelAccess;
   readonly createdShapes: Set<KernelShape>;
+  readonly createdShapeList: Readonly<Record<number, KernelShape>>;
+  readonly createdShapeCount: number;
   readonly shapesByNode: ReadonlyMap<NodeId, KernelShape>;
   readonly dispose: () => void;
 }
@@ -6122,6 +6716,11 @@ interface EvaluateStagedSolidGraphV7Options {
   readonly access?: BodySetKernelAccess;
   readonly resolvedResources?: ResolvedResourcesV7;
   readonly resourcesArePreResolved?: boolean;
+  /**
+   * Shapes retained by earlier successful batches in one owner-checked
+   * prepared-part transaction.
+   */
+  readonly previouslyOwnedShapes?: ReadonlySet<KernelShape>;
 }
 
 function resolvedTransformOperationV7(
@@ -6735,6 +7334,26 @@ async function evaluateStagedSolidGraphV7(
       );
     }
 
+    if (
+      options.previouslyOwnedShapes !== undefined &&
+      importedBodySetHasValue(options.previouslyOwnedShapes, shape)
+    ) {
+      return failAfterCleanup(
+        kernelFailure(
+          kernelAccess.value.id,
+          `Kernel '${kernelAccess.value.id}' returned a shape already owned by an earlier prepared part batch for solid graph node '${nodeId}'`,
+          {
+            node: nodeId,
+            path: `/nodes/${nodeId}`,
+            details: {
+              protocolViolation: true,
+              crossBatchShapeOwnership: true,
+              nodeKind: node.kind,
+            },
+          },
+        ),
+      );
+    }
     if (importedBodySetHasValue(createdShapes, shape)) {
       return failAfterCleanup(
         kernelFailure(
@@ -6787,6 +7406,8 @@ async function evaluateStagedSolidGraphV7(
   return success({
     access: kernelAccess.value,
     createdShapes,
+    createdShapeList,
+    createdShapeCount,
     shapesByNode,
     dispose: () =>
       disposeImportedBodyShapes(
@@ -7103,6 +7724,7 @@ export async function evaluateBodySetOutputsV7(
   );
   captureEvaluationOwnerDisposer(
     owner,
+    createdShapes,
     (shape) =>
       importedBodyApply<void>(
         kernelAccess.value.disposeShape,
@@ -7235,10 +7857,21 @@ interface PreparedPartKernelAccessV7State {
   readonly access: BodySetKernelAccess;
 }
 
+interface PreparedPartShapeOwnershipTransactionV7State {
+  readonly kernel: GeometryKernel;
+  readonly ownedShapes: Set<KernelShape>;
+  active: boolean;
+}
+
 const preparedPartOutputsV7States =
   new WeakMap<object, PreparedPartOutputsV7State>();
 const preparedPartKernelAccessV7States =
   new WeakMap<object, PreparedPartKernelAccessV7State>();
+const preparedPartShapeOwnershipTransactionV7States =
+  new WeakMap<
+    object,
+    PreparedPartShapeOwnershipTransactionV7State
+  >();
 const preparedPartWeakMapGet = WeakMap.prototype.get;
 const preparedPartWeakMapSet = WeakMap.prototype.set;
 
@@ -7260,6 +7893,58 @@ function preparedPartKernelState(
     preparedPartKernelAccessV7States,
     [access],
   );
+}
+
+function preparedPartShapeOwnershipTransactionState(
+  transaction: PreparedPartShapeOwnershipTransactionV7,
+): PreparedPartShapeOwnershipTransactionV7State | undefined {
+  return importedBodyApply<
+    PreparedPartShapeOwnershipTransactionV7State | undefined
+  >(
+    preparedPartWeakMapGet,
+    preparedPartShapeOwnershipTransactionV7States,
+    [transaction],
+  );
+}
+
+/**
+ * Creates one opaque, kernel-bound transaction for a sequential collection of
+ * prepared part batches.
+ *
+ * @internal
+ */
+export function createPreparedPartShapeOwnershipTransactionV7(
+  kernel: GeometryKernel,
+): CadResult<PreparedPartShapeOwnershipTransactionV7> {
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return partRuntimeIntegrityFailure();
+  }
+  const transaction = importedBodyApply<Record<string, never>>(
+    importedBodyObjectCreate,
+    Object,
+    [null],
+  );
+  importedBodyApply<void>(
+    importedBodyObjectFreeze,
+    Object,
+    [transaction],
+  );
+  const result =
+    transaction as unknown as PreparedPartShapeOwnershipTransactionV7;
+  importedBodyApply<void>(
+    preparedPartWeakMapSet,
+    preparedPartShapeOwnershipTransactionV7States,
+    [
+      result,
+      {
+        kernel,
+        ownedShapes: new ImportedBodySet<KernelShape>(),
+        active: false,
+      },
+    ],
+  );
+  const boundary = partPostBoundaryFailure(undefined);
+  return boundary ?? success(result);
 }
 
 function createPreparedPartOutputsV7(
@@ -8319,22 +9004,36 @@ export async function executePreparedPartOutputsV7(
   prepared: PreparedPartOutputsV7,
   retainedAccess: PreparedPartKernelAccessV7,
   resolvedResources?: ResolvedResourcesV7,
+  shapeOwnershipTransaction?: PreparedPartShapeOwnershipTransactionV7,
 ): Promise<CadResult<EvaluatedPartDesignV7>> {
   if (!documentV7RuntimeIntrinsicsAreIntact()) {
     return partRuntimeIntegrityFailure();
   }
   const state = preparedPartState(prepared);
   const retained = preparedPartKernelState(retainedAccess);
+  const transactionState =
+    shapeOwnershipTransaction === undefined
+      ? undefined
+      : preparedPartShapeOwnershipTransactionState(
+          shapeOwnershipTransaction,
+        );
   if (
     state === undefined ||
     retained === undefined ||
     retained.prepared !== prepared ||
-    retained.kernel !== kernel
+    retained.kernel !== kernel ||
+    (shapeOwnershipTransaction !== undefined &&
+      (transactionState === undefined ||
+        transactionState.kernel !== kernel))
   ) {
     return failure(
       diagnostic(
         "IR_INVALID",
-        "Prepared part kernel access does not belong to this evaluation",
+        shapeOwnershipTransaction !== undefined &&
+          (transactionState === undefined ||
+            transactionState.kernel !== kernel)
+          ? "Prepared part shape-ownership transaction does not belong to this kernel"
+          : "Prepared part kernel access does not belong to this evaluation",
         {
           severity: "error",
           details: {
@@ -8343,11 +9042,61 @@ export async function executePreparedPartOutputsV7(
             accessOwner: retained !== undefined,
             preparedMatches: retained?.prepared === prepared,
             kernelMatches: retained?.kernel === kernel,
+            shapeOwnershipTransactionOwner:
+              shapeOwnershipTransaction === undefined ||
+              transactionState !== undefined,
+            shapeOwnershipTransactionKernelMatches:
+              shapeOwnershipTransaction === undefined ||
+              transactionState?.kernel === kernel,
           },
         },
       ),
     );
   }
+  if (transactionState?.active === true) {
+    return failure(
+      diagnostic(
+        "IR_INVALID",
+        "Concurrent prepared part shape-ownership transaction calls are unsupported",
+        {
+          severity: "error",
+          details: {
+            phase: PART_EVALUATION_PHASE,
+            shapeOwnershipTransactionActive: true,
+          },
+        },
+      ),
+    );
+  }
+  if (transactionState !== undefined) {
+    transactionState.active = true;
+  }
+  try {
+    return await executePreparedPartOutputsV7InTransaction(
+      kernel,
+      state,
+      retained,
+      resolvedResources,
+      transactionState,
+    );
+  } finally {
+    if (transactionState !== undefined) {
+      transactionState.active = false;
+    }
+  }
+}
+
+async function executePreparedPartOutputsV7InTransaction(
+  kernel: GeometryKernel,
+  state: PreparedPartOutputsV7State,
+  retained: PreparedPartKernelAccessV7State,
+  resolvedResources:
+    | ResolvedResourcesV7
+    | undefined,
+  transaction:
+    | PreparedPartShapeOwnershipTransactionV7State
+    | undefined,
+): Promise<CadResult<EvaluatedPartDesignV7>> {
   const {
     options,
     document,
@@ -8373,6 +9122,9 @@ export async function executePreparedPartOutputsV7(
     access: retained.access,
     ...(resolvedResources === undefined ? {} : { resolvedResources }),
     resourcesArePreResolved: true,
+    ...(transaction === undefined
+      ? {}
+      : { previouslyOwnedShapes: transaction.ownedShapes }),
   });
   const afterSolidGraph = partPostBoundaryFailure(options.signal);
   if (afterSolidGraph !== undefined) {
@@ -8403,6 +9155,7 @@ export async function executePreparedPartOutputsV7(
   );
   captureEvaluationOwnerDisposer(
     owner,
+    createdShapes,
     (shape) =>
       importedBodyApply<void>(
         kernelAccess.value.disposeShape,
@@ -8526,6 +9279,18 @@ export async function executePreparedPartOutputsV7(
   const finalBoundary = partPostBoundaryFailure(options.signal);
   if (finalBoundary !== undefined) {
     return failAfterCleanup(finalBoundary);
+  }
+  if (transaction !== undefined) {
+    for (
+      let index = 0;
+      index < solidGraph.value.createdShapeCount;
+      index += 1
+    ) {
+      importedBodySetAddValue(
+        transaction.ownedShapes,
+        solidGraph.value.createdShapeList[index]!,
+      );
+    }
   }
   return success(evaluated, diagnostics);
 }

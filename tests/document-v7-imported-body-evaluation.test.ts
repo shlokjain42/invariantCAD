@@ -13,6 +13,7 @@ import {
   type ResourceDigestIR,
 } from "../src/ir.js";
 import {
+  EvaluatedDesign,
   EvaluatedSolid,
   evaluateImportedBodyOutputsV7,
 } from "../src/evaluator.js";
@@ -1163,6 +1164,117 @@ describe("staged document-v7 imported-body output evaluation", () => {
     expect(poisonedNumberCalls).toBe(0);
     expect(guardedHarness.disposed).toHaveLength(1);
     expect(guardedHarness.live.size).toBe(0);
+  });
+
+  it("retains authentic result behavior when import mutates result prototypes", async () => {
+    const bytes = encoder.encode("hostile-result-prototypes");
+    const document = await importedDocument(
+      { resource: bytes },
+      { body: importedBody("resource" as ResourceId) },
+      { body: { node: "body", kind: "solid" } },
+    );
+    const methods = [
+      { target: EvaluatedSolid.prototype, key: "mesh" },
+      { target: EvaluatedSolid.prototype, key: "measure" },
+      { target: EvaluatedSolid.prototype, key: "topology" },
+      { target: EvaluatedSolid.prototype, key: "export" },
+      { target: EvaluatedDesign.prototype, key: "output" },
+      { target: EvaluatedDesign.prototype, key: "dispose" },
+    ] as const;
+    const descriptors = methods.map((method) => ({
+      ...method,
+      descriptor: Object.getOwnPropertyDescriptor(
+        method.target,
+        method.key,
+      ),
+    }));
+    if (
+      descriptors.some(
+        ({ descriptor }) =>
+          descriptor === undefined ||
+          typeof descriptor.value !== "function",
+      )
+    ) {
+      throw new Error(
+        "Imported-body result regression requires data methods",
+      );
+    }
+    const restore = (): void => {
+      for (const method of descriptors) {
+        Object.defineProperty(
+          method.target,
+          method.key,
+          method.descriptor!,
+        );
+      }
+    };
+    let hostileDispatches = 0;
+    const harness = createKernelHarness({
+      importHook: (_bytes, _options, _context, shape) => {
+        for (const method of descriptors) {
+          Object.defineProperty(method.target, method.key, {
+            ...method.descriptor!,
+            value: (): never => {
+              hostileDispatches += 1;
+              throw Symbol(
+                `hostile imported-body dispatch: ${method.key}`,
+              );
+            },
+          });
+        }
+        return shape;
+      },
+    });
+    let result:
+      | Awaited<ReturnType<typeof evaluateImportedBodyOutputsV7>>
+      | undefined;
+    try {
+      result = await evaluateImportedBodyOutputsV7(
+        harness.kernel,
+        document,
+        { resolver: () => bytes },
+      );
+      expect(
+        result.ok,
+        JSON.stringify(result.diagnostics),
+      ).toBe(true);
+      if (!result.ok) return;
+      const output = result.value.output("body");
+      expect(output).toBeInstanceOf(EvaluatedSolid);
+      if (!(output instanceof EvaluatedSolid)) return;
+      expect(Object.isFrozen(result.value)).toBe(true);
+      expect(Object.isFrozen(result.value.outputNames)).toBe(true);
+      expect(Object.isFrozen(output)).toBe(true);
+      expect(Reflect.set(output, "owner", Object.freeze({}))).toBe(
+        false,
+      );
+      expect(Reflect.set(output, "shape", Object.freeze({}))).toBe(
+        false,
+      );
+      expect(output.measure().volume).toBeGreaterThan(0);
+      expect(output.mesh().indices.length).toBeGreaterThan(0);
+      expect(output.export("stl")).toBeInstanceOf(Uint8Array);
+      expect(output.topology()).toMatchObject({
+        ok: false,
+        diagnostics: [
+          expect.objectContaining({
+            code: "KERNEL_CAPABILITY_MISSING",
+          }),
+        ],
+      });
+      result.value.dispose();
+      result.value.dispose();
+      expect(hostileDispatches).toBe(0);
+      expect(harness.disposed).toHaveLength(1);
+      expect(harness.live.size).toBe(0);
+      expect(() => output.measure()).toThrow(/disposed/i);
+    } finally {
+      restore();
+      if (result?.ok === true) result.value.dispose();
+      for (const shape of [...harness.live]) {
+        harness.kernel.disposeShape(shape);
+      }
+    }
   });
 
   it("rolls back earlier imported nodes when a later node fails", async () => {

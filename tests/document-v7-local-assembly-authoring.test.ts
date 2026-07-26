@@ -21,6 +21,7 @@ import {
   DOCUMENT_VERSION_V7,
 } from "../src/ir.js";
 import {
+  StagedExternalAssemblyRefV7,
   StagedLocalAssemblyBuilderV7,
   StagedExternalPartRefV7,
   stagedBodySetDesignV7,
@@ -79,6 +80,82 @@ function externalDocumentResource(
 }
 
 describe("staged Document v7 local assembly authoring", () => {
+  it("authors frozen external assembly occurrences without publishing a feature node", () => {
+    const { cad, part } = designWithPart("external-assembly-authoring");
+    const resource = externalDocumentResource(cad);
+    const externalAssembly = cad.externalAssembly(
+      resource,
+      "mainAssembly",
+    );
+    const product = cad.assembly("product", (instances) => {
+      instances.instance("local", part);
+      instances.instance("external-base", externalAssembly, {
+        configuration: { mode: "base" },
+        placement: [tf.translate([mm(12), mm(0), mm(0)])],
+      });
+      instances.instance("external-named", externalAssembly, {
+        configuration: {
+          mode: "named",
+          id: configurationId("service"),
+        },
+      });
+    });
+    cad.output("product", product);
+
+    expect(externalAssembly).toMatchObject({
+      source: "external",
+      resource: "externalDocument",
+      output: "mainAssembly",
+      outputKind: "assembly",
+    });
+    expect(Object.isFrozen(externalAssembly)).toBe(true);
+    const document = cad.build();
+    expect(document.nodes[nodeId("mainAssembly")]).toBeUndefined();
+    expect(document.nodes[nodeId("product")]).toMatchObject({
+      kind: "assembly",
+      instances: [
+        {
+          id: "local",
+          component: {
+            source: "local",
+            reference: { node: "part", kind: "part" },
+          },
+        },
+        {
+          id: "external-base",
+          component: {
+            source: "external",
+            resource: "externalDocument",
+            output: "mainAssembly",
+            outputKind: "assembly",
+          },
+          configuration: { mode: "base" },
+          placement: [
+            {
+              kind: "translate",
+              value: [
+                { op: "literal", dimension: "length", value: 12 },
+                { op: "literal", dimension: "length", value: 0 },
+                { op: "literal", dimension: "length", value: 0 },
+              ],
+            },
+          ],
+        },
+        {
+          id: "external-named",
+          component: {
+            source: "external",
+            resource: "externalDocument",
+            output: "mainAssembly",
+            outputKind: "assembly",
+          },
+          configuration: { mode: "named", id: "service" },
+        },
+      ],
+    });
+    expectDeepFrozen(document);
+  });
+
   it("authors frozen external part occurrences without publishing a feature node", () => {
     const { cad, part } = designWithPart("external-part-authoring");
     const resource = externalDocumentResource(cad);
@@ -712,6 +789,120 @@ describe("staged Document v7 local assembly authoring", () => {
     });
   });
 
+  it("rejects foreign, forged, malformed, and non-document external assembly handles transactionally", () => {
+    const first = designWithPart("external-assembly-first");
+    const second = designWithPart("external-assembly-second");
+    const firstResource = externalDocumentResource(first.cad);
+    const secondResource = externalDocumentResource(second.cad);
+    const firstExternal = first.cad.externalAssembly(
+      firstResource,
+      "mainAssembly",
+    );
+    const secondExternal = second.cad.externalAssembly(
+      secondResource,
+      "mainAssembly",
+    );
+
+    expect(() =>
+      second.cad.externalAssembly(firstResource, "mainAssembly"),
+    ).toThrow(/Resources cannot cross staged design boundaries/);
+    expect(() =>
+      new StagedExternalAssemblyRefV7(
+        first.cad,
+        resourceId("externalDocument"),
+        "mainAssembly",
+        undefined,
+      ),
+    ).toThrow(/only be created by their owning design/);
+    expect(() =>
+      first.cad.assembly("foreign", (instances) => {
+        instances.instance("foreign", secondExternal);
+      }),
+    ).toThrow(/cannot cross staged design boundaries/);
+
+    let accessorCalls = 0;
+    const forgedAccessor = Object.create(
+      StagedExternalAssemblyRefV7.prototype,
+    ) as object;
+    Object.defineProperties(forgedAccessor, {
+      resource: {
+        enumerable: true,
+        get: () => {
+          accessorCalls += 1;
+          throw new Error("forged resource accessor invoked");
+        },
+      },
+      output: {
+        enumerable: true,
+        get: () => {
+          accessorCalls += 1;
+          throw new Error("forged output accessor invoked");
+        },
+      },
+    });
+    expect(() =>
+      first.cad.assembly("forged-accessor", (instances) => {
+        instances.instance("forged", forgedAccessor as never);
+      }),
+    ).toThrow(/cannot cross staged design boundaries/);
+    expect(accessorCalls).toBe(0);
+
+    const forgedUnknown = {
+      source: "external",
+      resource: "externalDocument",
+      output: "mainAssembly",
+      outputKind: "assembly",
+      unsupported: true,
+    };
+    expect(() =>
+      first.cad.assembly("forged-unknown", (instances) => {
+        instances.instance("forged", forgedUnknown as never);
+      }),
+    ).toThrow(/cannot cross staged design boundaries/);
+
+    const wrongMedia = first.cad.resource("stepFile", {
+      digest: `sha256:${"1".repeat(64)}`,
+      byteLength: 1,
+      mediaType: "model/step",
+    });
+    expect(() =>
+      first.cad.externalAssembly(wrongMedia, "mainAssembly"),
+    ).toThrow(/require resource mediaType/);
+    expect(() =>
+      first.cad.externalAssembly(firstResource, "invalid output"),
+    ).toThrow(/External assembly output/);
+
+    expect(() =>
+      first.cad.assembly("recoverable-assembly", (instances) => {
+        instances.instance("valid", firstExternal);
+        instances.instance("forged", forgedUnknown as never);
+      }),
+    ).toThrow(/cannot cross staged design boundaries/);
+    const recovered = first.cad.assembly(
+      "recoverable-assembly",
+      (instances) => {
+        instances.instance("valid", firstExternal);
+      },
+    );
+    first.cad.output("recoverable-assembly", recovered);
+    expect(
+      first.cad.build().nodes[nodeId("recoverable-assembly")],
+    ).toMatchObject({
+      kind: "assembly",
+      instances: [
+        {
+          id: "valid",
+          component: {
+            source: "external",
+            resource: "externalDocument",
+            output: "mainAssembly",
+            outputKind: "assembly",
+          },
+        },
+      ],
+    });
+  });
+
   it("rejects external occurrence accessors and unknown option fields without partial publication", () => {
     const { cad } = designWithPart("external-options");
     const externalPart = cad.externalPart(
@@ -1012,6 +1203,7 @@ describe("staged Document v7 local assembly authoring", () => {
   it("keeps the staged assembly surface outside the public v1-v6 API", () => {
     expect("stagedBodySetDesignV7" in publicApi).toBe(false);
     expect("StagedLocalAssemblyBuilderV7" in publicApi).toBe(false);
+    expect("StagedExternalAssemblyRefV7" in publicApi).toBe(false);
     expect("StagedExternalPartRefV7" in publicApi).toBe(false);
     expect("StagedLocalAssemblyInstanceOptionsV7" in publicApi).toBe(false);
     const publicDocument = new DesignBuilder("public-v6").build();

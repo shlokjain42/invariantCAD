@@ -65,7 +65,7 @@ valid while a selected kernel lacks one of its features.
 | `output` | builder | Publish a solid, part, or assembly by output name |
 | `build` | current `DesignDocument` | Validate authoring closure and emit frozen JSON data |
 
-## Repository-only staged Document v7 authoring
+## Repository-only staged product authoring
 
 The source tree contains:
 
@@ -77,17 +77,18 @@ stagedBodySetDesignV7(
 ```
 
 This is a deliberately narrow facade for authoring bounded
-primitive/import/Boolean/transform solid DAGs, acyclic nested local assemblies,
-and datum nodes admitted by the four staged v7 geometry evaluators and the
-datum resolver. Its implementation lives in
+primitive/import/Boolean/transform solid DAGs, acyclic fixed-placement products
+with one external-document boundary per active path, and datum nodes admitted
+by the four staged geometry evaluators and the datum resolver. Its implementation lives in
 `src/internal/document-v7-body-set-authoring.ts`; it is not exported from the
 package root or any package subpath. The public `design(...)` builder,
 `DesignDocument` alias, evaluator, and migration target remain on frozen v6.
+This is repository-only work staged for 0.2, not public 0.1.1 authoring.
 
 The facade privately composes the v6 builder for admitted parameters and
 native primitives, then adds staged configuration, material, resource,
-imported-body, body-set, part, nested local assembly, and datum records. Its
-complete admitted surface is:
+imported-body, body-set, part, local assembly, external component, and datum
+records. Its complete admitted surface is:
 
 | Method | Staged result | Boundary |
 | --- | --- | --- |
@@ -107,12 +108,14 @@ complete admitted surface is:
 | `translate(...)`, `rotate(...)`, `scale(...)`, `mirror(...)` | `StagedSolidRefV7` | Typed one-operation conveniences that can be chained into a solid DAG |
 | `bodySet(id, members)` | `StagedBodySetRefV7` | Dense non-empty ordered memberships whose roots are owned primitive/import/Boolean/transform solid DAGs |
 | `part(id, geometry, options?)` | `PartRef` | One owned staged solid DAG root or one owned body set, with part and material intent |
-| `assembly(id, build)` | `AssemblyRef` | Fixed-placement instances of owned local parts or previously completed local assemblies through `StagedLocalAssemblyBuilderV7` |
+| `externalPart(resource, output)` | `StagedExternalPartRefV7` | One named part output in a committed InvariantCAD document, without a local feature node |
+| `externalAssembly(resource, output)` | `StagedExternalAssemblyRefV7` | One named assembly output in a committed InvariantCAD document, without a local feature node |
+| `assembly(id, build)` | `AssemblyRef` | Fixed-placement instances of owned local parts, previously completed local assemblies, or owned external component handles through `StagedLocalAssemblyBuilderV7` |
 | `datumPoint(...)` | Owned datum handle | Parametric position from three length expressions |
 | `datumAxis(...)` | Owned datum handle | Parametric origin and one scalar direction |
 | `datumPlane(...)` | Owned datum handle | Parametric origin, scalar positive-X direction, and scalar normal |
 | `coordinateSystem(...)` | Owned datum handle | Parametric origin plus scalar positive-X and positive-Y directions |
-| `output(name, reference)` | Builder | Direct imported-body, body-set, part, or staged local-assembly targets |
+| `output(name, reference)` | Builder | Direct imported-body, body-set, part, or staged product-assembly targets |
 | `build(options?)` | `DesignDocumentV7` | Detached, deeply frozen data accepted by strict v7 parsing and semantic validation |
 
 The relevant staged source signatures are:
@@ -191,9 +194,23 @@ assembly(
   build: (assembly: StagedLocalAssemblyBuilderV7) => void,
 ): AssemblyRef
 
+externalPart(
+  resource: StagedResourceRefV7,
+  output: string,
+): StagedExternalPartRefV7
+
+externalAssembly(
+  resource: StagedResourceRefV7,
+  output: string,
+): StagedExternalAssemblyRefV7
+
 assembly.instance(
   id: string,
-  component: PartRef | AssemblyRef,
+  component:
+    | PartRef
+    | AssemblyRef
+    | StagedExternalPartRefV7
+    | StagedExternalAssemblyRefV7,
   options?: StagedLocalAssemblyInstanceOptionsV7,
 ): this
 
@@ -224,11 +241,14 @@ output(
 Every staged reference is owned by the builder that created it. Resource IDs,
 parameter IDs, material IDs, configuration IDs, node IDs, output names, and
 body-member IDs must be valid and unique in their applicable namespace. The
-facade rejects foreign or forged geometry, material, part, assembly, resource,
-and output handles. It constructs canonical references from captured identity
-rather than dispatching through mutable handle methods. Datum authoring returns
-owner-bound, frozen handles reserved for later feature consumers; no method in
-this slice consumes one.
+facade rejects foreign or forged geometry, material, part, assembly,
+external-component, resource, and output handles. External handles require an
+owned resource whose media type is
+`application/vnd.invariantcad.document+json`; they retain a valid requested
+output ID and publish no local feature node. The facade constructs canonical
+references from captured identity rather than dispatching through mutable
+handle methods. Datum authoring returns owner-bound, frozen handles reserved for
+later feature consumers; no method in this slice consumes one.
 
 A body-set member keeps its stable ID, authored position, optional name, and
 detached JSON metadata; multiple memberships may deliberately reference the
@@ -276,7 +296,7 @@ transform. `maxDistinctSolids` counts primitive and imported leaves.
 target and tool edge, including repeated tool references, and
 `maxTransformOperations` counts the ordered operations stored on distinct
 transform nodes. Each defaults to `100,000` in the staged body-set, part, and
-local-assembly evaluators.
+product-assembly evaluators.
 
 Transform expressions must resolve to finite values. Scale components must be
 nonzero, and a mirror normal must be finite and nonzero. The selected kernel
@@ -320,25 +340,37 @@ Boolean or transformed solid also cannot be published directly by
 generic-solid output is the narrower direct `StagedImportedBodyRefV7` output
 already admitted by the import evaluator.
 
-### Nested local assemblies
+### Fixed-placement products
 
 The staged `assembly(id, build)` method passes one
 `StagedLocalAssemblyBuilderV7` to its callback. Each `instance(...)` in this
-slice references an owned local part or an already-completed owned local
-assembly. An assembly handle is published only after its callback succeeds, so
-the facade can reference earlier definitions but cannot author a cycle. Foreign
-or forged handles are rejected.
+slice references an owned local part, an already-completed owned local assembly,
+or an owned external-part or external-assembly handle. A local assembly handle
+is published only after its callback succeeds, so the facade can reference
+earlier local definitions but cannot author a local cycle. Foreign or forged
+handles are rejected.
+
+`externalPart(resource, output)` and
+`externalAssembly(resource, output)` require a committed InvariantCAD-document
+resource owned by the same staged builder. They select a valid named part or
+assembly output without publishing a local feature node. Product evaluation
+admits the committed child document before child geometry work. A selected
+external assembly may contain child-local parts and bounded nested local
+assemblies; each active occurrence path may cross only one external-document
+boundary.
 
 An instance ID is stable within its containing assembly. Evaluation joins
 those IDs into a full root-to-leaf path for each emitted part occurrence. Its
 placement is an ordered list of translate, rotate, scale, or mirror operations,
 and its configuration selector is exactly one of:
 
-- `inherit`, which evaluates the referenced part or child assembly in the
-  configuration active for the containing assembly;
-- `base`, which evaluates it in the base document context; or
-- `named`, which evaluates it in the referenced document-owned named
-  configuration.
+- `inherit`, which evaluates a local component in the containing assembly's
+  context and maps root base to child base or a root named ID to the same ID in
+  an external document;
+- `base`, which evaluates a local component in the root base context or an
+  external component in the child base context; or
+- `named`, which selects the referenced configuration in the applicable root or
+  child document.
 
 Omitted instance options mean an empty placement, `suppressed: false`, and
 `{ mode: "inherit" }`.
@@ -350,29 +382,38 @@ definition. Passing `false` explicitly unsuppresses an instance authored with
 `suppressed: true`; omission retains the authored value. Suppression is
 resolved before component support is checked, so suppressing an assembly edge
 prunes its entire subtree, including external or otherwise unsupported
-descendants. An active external component remains unsupported and is rejected
-before resource resolution or kernel work.
+descendants. A suppressed nested external component therefore performs no
+descendant resolution or kernel work. An active direct external part or fixed
+subassembly is supported, but an active external descendant inside the admitted
+child would cross a second document boundary and is rejected before nested
+resolution or child geometry/kernel work.
 
 Occurrence IDs are unique only within their containing assembly. Repeating one
 part or subassembly in several instances is expected and does not copy its
 document definition. Iterative evaluation expands active assemblies in authored
-depth-first leaf order, composes edge placements parent first, and applies
-bounded caller parameter overrides in every selected configuration context.
-Per-occurrence `inherit`, `base`, and named selection can therefore produce
-different geometry, material, or density from a shared part definition.
-Evaluation reuses one part result for equal `(part, effective configuration)`
-states within one call, and direct part evaluation may separately deduplicate
-solid-DAG acquisition within each configuration batch. Authoring does not
-create a persistent or cross-run cache commitment.
+depth-first leaf order and composes edge placements parent first. Bounded caller
+parameter overrides apply to root-document contexts only and never cross an
+external boundary. Per-occurrence `inherit`, `base`, and named selection can
+therefore produce different geometry, material, or density from a shared part
+definition.
 
-Local-assembly evaluation separately bounds nesting with `maxAssemblyDepth` and
-the aggregate stored leaf-path length with `maxOccurrencePathSegments`, in
-addition to its instance, occurrence, placement, part, solid, material, and
-resource ceilings. Solid-graph nodes, all solid dependency edges, and transform
-operations are counted globally by `(node, effective configuration)` across
-the active product tree. Repeated occurrences in the same context reuse that
-count, different contexts are charged independently, and suppressed subtrees
-are pruned before these counters advance. Hand-authored cyclic dependencies
+Evaluation reuses local parts for equal `(part, effective configuration)`
+states and direct external parts for equal
+`(resource, output, child configuration)` states. Fixed-subassembly leaves
+share geometry by resource, child part node, and child configuration; distinct
+assembly output aliases retain separate component, diagnostic, and BOM identity.
+Direct part evaluation may additionally deduplicate solid-DAG acquisition
+within a configuration batch. Authoring does not create a persistent or
+cross-run cache commitment.
+
+Product evaluation separately bounds nesting with `maxAssemblyDepth` and the
+aggregate stored leaf-path length with `maxOccurrencePathSegments`, in addition
+to its external-document, instance, occurrence, placement, contextual-part,
+solid, material, document, and resource ceilings. Solid-graph nodes, all solid
+dependency edges, and transform operations are counted globally across the
+active product. Repeated occurrences in the same effective context reuse that
+work, different contexts are charged independently, and suppressed subtrees are
+pruned before these counters advance. Hand-authored cyclic local dependencies
 fail strict document admission, and evaluation also rejects a recursive path
 rather than looping.
 
@@ -423,19 +464,20 @@ caller-selected document limits and strict v7 validation before returning the
 detached, recursively frozen document.
 
 This facade does not author generic solid or direct primitive outputs,
-external occurrences, cyclic assembly graphs, datum-backed sketches, Booleans
-over body sets/parts/assemblies, transforms over body sets/parts/assemblies,
-other body-consuming features, per-body materials, or general solid graphs
-beyond primitive/import/Boolean/transform DAGs. It also does not add datum
-design outputs, CLI support, location I/O, reader inference, healing, a
-primary-body rule,
-cross-body or assembly topology, aggregate geometric measurement, mates,
-motion, interference/collision, or exact aggregate STEP/BREP export. Part- and
-assembly-level STL/OBJ export is an aggregate tessellation view and is
+recursive external-document graphs, cyclic local assembly graphs, datum-backed
+sketches, Booleans over body sets/parts/assemblies, transforms over body
+sets/parts/assemblies, other body-consuming features, per-body materials, or
+general solid graphs beyond primitive/import/Boolean/transform DAGs. It also
+does not add datum design outputs, CLI support, location I/O, reader inference,
+healing, a primary-body rule, cross-body or assembly topology, aggregate
+geometric measurement, mates, motion, interference/collision, or exact
+aggregate STEP/BREP export.
+
+Part- and product-level STL/OBJ export is an aggregate tessellation view and is
 explicitly approximate/lossy; exact native export and topology remain per-solid
 or per-body capabilities. These omissions are product boundaries, not implicit
-fallbacks, and Document v7 remains staged rather than the public document
-alias.
+fallbacks. The staged facade remains repository-only work for 0.2, and the
+public 0.1.1 document alias remains v6.
 
 ## ID rules
 
