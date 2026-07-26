@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+- Fixed resolved sketch-profile admission after final parameter and
+  configuration evaluation. Before a dependent geometry-kernel feature call,
+  the evaluator now certifies the finite, nondegenerate,
+  supported-simple loops of profiles that declare holes and requires boundary
+  clearance strictly greater than the sketch tolerance between every hole and
+  its outer loop and between distinct holes. Disjoint
+  outside or enclosing holes, boundary contact or tangency, intersections,
+  partial overlap, coincidence, and nested holes fail closed with
+  `SKETCH_NO_CLOSED_REGION` and bounded sketch/loop/entity provenance where
+  available instead of being reinterpreted by a backend. Explicit outer/hole
+  roles remain independent of traversal winding. Every solved profile now
+  passes through the same bounded,
+  cancellable closure gate; after that gate, hole-free profiles retain their
+  existing feature-specific geometric admission.
+  The kernel-neutral hole-region check uses analytic line/arc/circle
+  predicates plus bounded adaptive chord-sagitta separation proofs; rendering
+  `segments` hints do not decide validity, numeric uncertainty fails closed,
+  exhausted work returns `RESOURCE_LIMIT_EXCEEDED`, and cancellation returns
+  `EVALUATION_ABORTED`. This is an `Evaluator` modeling boundary shared by
+  Manifold, OCCT, and custom kernels. Direct low-level `GeometryKernel` calls
+  remain responsible for satisfying their resolved-profile contract, and this
+  fix does not add islands, general multi-region algebra, or automatic
+  parameter coupling.
 - Added the repository-staged `evaluateProductDocument(...)` boundary for one
   ordered selection containing any supported mix of direct solid, body-set,
   part, and fixed-assembly Document v7 outputs. The owned
