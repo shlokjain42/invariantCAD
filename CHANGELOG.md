@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+- Made CLI argument handling fail closed. `validate`, `inspect`, `bom`, and
+  `export` now reject unknown or command-inapplicable options, extra positional
+  arguments, missing or empty values, duplicate single-value options, and
+  malformed inline parameter assignments with usage exit code 2 before
+  document I/O or kernel initialization. `inspect`, `bom`, and `export` accept
+  repeatable `--parameter name=value` and `--parameter=name=value` overrides
+  using finite JSON-number syntax and the authored parameter-ID grammar.
+  Inline overrides take precedence over named configurations and document
+  defaults. They are intentionally mutually exclusive with the existing
+  `--parameters values.json` input so automation cannot depend on an implicit
+  file-versus-command-line precedence rule. Syntactically valid unknown
+  parameter IDs still flow to the evaluator's structured
+  `PARAMETER_MISSING` diagnostic, while the installed-package smoke gate proves
+  strict preflight and repeatable overrides through the packed binary.
 - Added source-only staged 0.2 product evaluation for external part and fixed
   subassembly occurrences. The repository-only
   `stagedBodySetDesignV7(...)` facade can bind a committed InvariantCAD
