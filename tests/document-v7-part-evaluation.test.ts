@@ -5,6 +5,8 @@ import {
 } from "occt-wasm";
 import type { ResourceId } from "../src/core/ids.js";
 import {
+  createExternalAssemblyPartViewV7,
+  createPreparedPartShapeOwnershipTransactionV7,
   EvaluatedSolid,
   EvaluatedPartV7,
   executePreparedPartOutputsV7,
@@ -842,6 +844,200 @@ describe("staged document-v7 part output evaluation", () => {
       retained.value,
     );
     expectFailureCode(mismatchedKernel, "IR_INVALID");
+    expect(otherHarness.primitiveCalls).toHaveLength(0);
+  });
+
+  it("rejects opaque external-assembly part handles without observing them", () => {
+    let nodeReads = 0;
+    const forged = Object.create(null, {
+      node: {
+        enumerable: true,
+        get(): never {
+          nodeReads += 1;
+          throw Symbol("hostile evaluated part node");
+        },
+      },
+    });
+    const rejected = createExternalAssemblyPartViewV7(
+      forged as EvaluatedPartV7,
+      "module",
+      "part" as never,
+    );
+    expectFailureCode(rejected, "IR_INVALID");
+    expect(rejected.diagnostics[0]?.details).toMatchObject({
+      partOwner: false,
+      outputIsString: true,
+      childPartNodeIsString: true,
+    });
+    expect(nodeReads).toBe(0);
+
+    const revoked = Proxy.revocable({}, {});
+    revoked.revoke();
+    const opaque = createExternalAssemblyPartViewV7(
+      revoked.proxy as EvaluatedPartV7,
+      "module",
+      "part" as never,
+    );
+    expectFailureCode(opaque, "IR_INVALID");
+    expect(opaque.diagnostics[0]?.details).toMatchObject({
+      partOwner: false,
+    });
+  });
+
+  it("rejects cross-batch shape aliases without disposing earlier ownership", async () => {
+    let firstOwnedShape: KernelShape | undefined;
+    const harness = createKernelHarness({
+      primitiveHook: (_kind, shape, callIndex) => {
+        if (callIndex === 0) {
+          firstOwnedShape = shape;
+          return shape;
+        }
+        return callIndex === 2 ? firstOwnedShape! : shape;
+      },
+    });
+    const firstDocument = await partDocument({
+      nodes: {
+        leaf: box(),
+        part: part("leaf", "solid"),
+      },
+      outputs: { part: { node: "part", kind: "part" } },
+    });
+    const secondDocument = await partDocument({
+      nodes: {
+        aLeaf: box(),
+        zLeaf: box(),
+        bodies: bodySet([
+          member("a", "aLeaf"),
+          member("z", "zLeaf"),
+        ]),
+        part: part("bodies", "bodySet"),
+      },
+      outputs: { part: { node: "part", kind: "part" } },
+    });
+    const firstPrepared = preparePartOutputsV7(firstDocument);
+    const secondPrepared = preparePartOutputsV7(secondDocument);
+    expect(firstPrepared.ok).toBe(true);
+    expect(secondPrepared.ok).toBe(true);
+    if (!firstPrepared.ok || !secondPrepared.ok) return;
+    const firstAccess = preflightPreparedPartOutputsV7(
+      harness.kernel,
+      firstPrepared.value,
+    );
+    const secondAccess = preflightPreparedPartOutputsV7(
+      harness.kernel,
+      secondPrepared.value,
+    );
+    expect(firstAccess.ok).toBe(true);
+    expect(secondAccess.ok).toBe(true);
+    if (!firstAccess.ok || !secondAccess.ok) return;
+    const transaction =
+      createPreparedPartShapeOwnershipTransactionV7(harness.kernel);
+    expect(transaction.ok).toBe(true);
+    if (!transaction.ok) return;
+
+    const first = await executePreparedPartOutputsV7(
+      harness.kernel,
+      firstPrepared.value,
+      firstAccess.value,
+      undefined,
+      transaction.value,
+    );
+    expect(first.ok, JSON.stringify(first.diagnostics)).toBe(true);
+    if (!first.ok) return;
+    expect(harness.live.size).toBe(1);
+
+    const second = await executePreparedPartOutputsV7(
+      harness.kernel,
+      secondPrepared.value,
+      secondAccess.value,
+      undefined,
+      transaction.value,
+    );
+    expectFailureCode(second, "KERNEL_ERROR");
+    expect(second.diagnostics[0]).toMatchObject({
+      details: {
+        protocolViolation: true,
+        crossBatchShapeOwnership: true,
+      },
+    });
+    expect(harness.disposed).toHaveLength(1);
+    expect(harness.disposed[0]?.feature).toBe("aLeaf");
+    expect(harness.live).toEqual(new Set([firstOwnedShape]));
+    const retainedPart = first.value.output("part");
+    if (retainedPart.geometry.kind === "solid") {
+      expect(retainedPart.geometry.solid.measure().volume).toBe(24);
+    }
+
+    first.value.dispose();
+    expect(harness.disposed).toHaveLength(2);
+    expect(harness.live.size).toBe(0);
+    expect(harness.disposeKernel).not.toHaveBeenCalled();
+  });
+
+  it("rejects forged and wrong-kernel shape-ownership transactions before construction", async () => {
+    const document = await partDocument({
+      nodes: {
+        leaf: box(),
+        part: part("leaf", "solid"),
+      },
+      outputs: { part: { node: "part", kind: "part" } },
+    });
+    const harness = createKernelHarness();
+    const prepared = preparePartOutputsV7(document);
+    expect(prepared.ok).toBe(true);
+    if (!prepared.ok) return;
+    const retained = preflightPreparedPartOutputsV7(
+      harness.kernel,
+      prepared.value,
+    );
+    expect(retained.ok).toBe(true);
+    if (!retained.ok) return;
+
+    const forged = await executePreparedPartOutputsV7(
+      harness.kernel,
+      prepared.value,
+      retained.value,
+      undefined,
+      Object.freeze({}) as never,
+    );
+    expectFailureCode(forged, "IR_INVALID");
+    expect(forged.diagnostics[0]?.details).toMatchObject({
+      shapeOwnershipTransactionOwner: false,
+    });
+    const revoked = Proxy.revocable({}, {});
+    revoked.revoke();
+    const opaque = await executePreparedPartOutputsV7(
+      harness.kernel,
+      prepared.value,
+      retained.value,
+      undefined,
+      revoked.proxy as never,
+    );
+    expectFailureCode(opaque, "IR_INVALID");
+    expect(opaque.diagnostics[0]?.details).toMatchObject({
+      shapeOwnershipTransactionOwner: false,
+    });
+
+    const otherHarness = createKernelHarness();
+    const otherTransaction =
+      createPreparedPartShapeOwnershipTransactionV7(
+        otherHarness.kernel,
+      );
+    expect(otherTransaction.ok).toBe(true);
+    if (!otherTransaction.ok) return;
+    const wrongKernel = await executePreparedPartOutputsV7(
+      harness.kernel,
+      prepared.value,
+      retained.value,
+      undefined,
+      otherTransaction.value,
+    );
+    expectFailureCode(wrongKernel, "IR_INVALID");
+    expect(wrongKernel.diagnostics[0]?.details).toMatchObject({
+      shapeOwnershipTransactionOwner: true,
+      shapeOwnershipTransactionKernelMatches: false,
+    });
+    expect(harness.primitiveCalls).toHaveLength(0);
     expect(otherHarness.primitiveCalls).toHaveLength(0);
   });
 
