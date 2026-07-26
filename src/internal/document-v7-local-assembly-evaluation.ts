@@ -36,6 +36,7 @@ import {
 import { exportMesh, type MeshExportFormat } from "../exporters.js";
 import { evaluateExpression, type ExpressionIR } from "../expressions.js";
 import type {
+  AssemblyNodeIRV7,
   DesignConfigurationIR,
   DesignDocumentV7,
   PartNodeIRV7,
@@ -306,8 +307,10 @@ function contextKey(
 export interface LocalAssemblyEvaluationLimitsV7 {
   readonly maxSelectedOutputs: number;
   readonly maxParameterOverrides: number;
+  readonly maxAssemblyDepth: number;
   readonly maxScannedInstances: number;
   readonly maxActiveOccurrences: number;
+  readonly maxOccurrencePathSegments: number;
   readonly maxPlacementOperations: number;
   readonly maxContextualParts: number;
   readonly maxPartBodies: number;
@@ -320,8 +323,10 @@ export const DEFAULT_LOCAL_ASSEMBLY_EVALUATION_LIMITS_V7:
   LocalAssemblyEvaluationLimitsV7 = localAssemblyFreeze({
     maxSelectedOutputs: 10_000,
     maxParameterOverrides: 10_000,
+    maxAssemblyDepth: 64,
     maxScannedInstances: 100_000,
     maxActiveOccurrences: 100_000,
+    maxOccurrencePathSegments: 1_000_000,
     maxPlacementOperations: 100_000,
     maxContextualParts: 100_000,
     maxPartBodies: 100_000,
@@ -341,10 +346,10 @@ export interface EvaluateLocalAssemblyOutputsV7Options {
   readonly signal?: AbortSignal;
 }
 
-/** One active, flat, local part occurrence. @internal */
+/** One active local-part leaf in a bounded local occurrence tree. @internal */
 export interface EvaluatedLocalOccurrenceV7 {
   readonly id: EntityId;
-  readonly path: readonly [EntityId];
+  readonly path: readonly EntityId[];
   readonly partNode: NodeId;
   readonly configurationId: ConfigurationId | null;
   readonly part: EvaluatedPartV7;
@@ -360,14 +365,14 @@ export interface ContextualBillOfMaterialsItemV7 {
   readonly materialId: string | null;
   readonly material: string | null;
   readonly quantity: number;
-  readonly occurrencePaths: readonly (readonly [EntityId])[];
+  readonly occurrencePaths: readonly (readonly EntityId[])[];
   readonly massDensity: number | null;
   readonly massDensitySource: MassDensitySource | null;
   readonly definitionMass: number | null;
   readonly totalMass: number | null;
 }
 
-/** Context-preserving BOM for one flat local assembly. @internal */
+/** Context-preserving BOM for one bounded local assembly tree. @internal */
 export interface ContextualBillOfMaterialsV7 {
   readonly rootConfigurationId: string | null;
   readonly units: { readonly mass: "kg" };
@@ -391,6 +396,7 @@ interface CapturedLocalAssemblyOptions {
 
 interface SelectedOccurrence {
   readonly id: EntityId;
+  readonly path: readonly EntityId[];
   readonly partNode: NodeId;
   readonly configurationId: ConfigurationId | null;
   readonly transform: Mat4;
@@ -400,6 +406,22 @@ interface SelectedAssembly {
   readonly name: string;
   readonly node: NodeId;
   readonly occurrences: readonly SelectedOccurrence[];
+}
+
+interface ResolvedAssemblyContext {
+  readonly configuration: DesignConfigurationIR | undefined;
+  readonly expression: (value: ExpressionIR) => number;
+}
+
+interface AssemblyTraversalFrame {
+  readonly nodeId: NodeId;
+  readonly node: AssemblyNodeIRV7;
+  readonly configurationId: ConfigurationId | null;
+  readonly context: ResolvedAssemblyContext;
+  readonly transform: Mat4;
+  readonly path: readonly EntityId[];
+  readonly ancestry: readonly NodeId[];
+  nextInstance: number;
 }
 
 const LOCAL_ASSEMBLY_OPTION_KEYS = localAssemblyFreeze([
@@ -1361,6 +1383,103 @@ function resolvedPlacement(
   return success(localAssemblyFreeze(result) as Mat4);
 }
 
+function appendOccurrencePath(
+  path: readonly EntityId[],
+  id: EntityId,
+): readonly EntityId[] {
+  const next = new LocalAssemblyArray<EntityId>(path.length + 1);
+  for (let index = 0; index < path.length; index += 1) {
+    next[index] = path[index]!;
+  }
+  next[path.length] = id;
+  return localAssemblyFreeze(next);
+}
+
+function nodePathContains(
+  path: readonly NodeId[],
+  node: NodeId,
+): boolean {
+  for (let index = 0; index < path.length; index += 1) {
+    if (path[index] === node) return true;
+  }
+  return false;
+}
+
+function appendNodePath(
+  path: readonly NodeId[],
+  node: NodeId,
+): readonly NodeId[] {
+  const next = new LocalAssemblyArray<NodeId>(path.length + 1);
+  for (let index = 0; index < path.length; index += 1) {
+    next[index] = path[index]!;
+  }
+  next[path.length] = node;
+  return localAssemblyFreeze(next);
+}
+
+function composeOccurrencePlacement(
+  parent: Mat4,
+  local: Mat4,
+  assembly: NodeId,
+  instanceIndex: number,
+  path: readonly EntityId[],
+  signal: AbortSignal | undefined,
+): CadResult<Mat4> {
+  const boundary = postBoundaryFailure(signal, assembly);
+  if (boundary !== undefined) return boundary;
+  let composed: Mat4;
+  try {
+    composed = multiplyMatrices(parent, local);
+  } catch (error) {
+    return failure(
+      diagnostic(
+        "FEATURE_INVALID",
+        safeErrorMessage(
+          error,
+          "Nested assembly placement could not be composed",
+        ),
+        {
+          severity: "error",
+          node: assembly,
+          path:
+            `/nodes/${jsonPointerSegment(assembly)}/instances/` +
+            `${instanceIndex}/placement`,
+          details: {
+            phase: LOCAL_ASSEMBLY_EVALUATION_PHASE,
+            occurrencePath: path,
+          },
+        },
+      ),
+    );
+  }
+  const afterComposition = postBoundaryFailure(signal, assembly);
+  if (afterComposition !== undefined) return afterComposition;
+  for (let index = 0; index < composed.length; index += 1) {
+    if (!localAssemblyFinite(composed[index])) {
+      return failure(
+        diagnostic(
+          "FEATURE_INVALID",
+          "Nested assembly placement matrix overflowed numeric range",
+          {
+            severity: "error",
+            node: assembly,
+            path:
+              `/nodes/${jsonPointerSegment(assembly)}/instances/` +
+              `${instanceIndex}/placement`,
+            details: {
+              phase: LOCAL_ASSEMBLY_EVALUATION_PHASE,
+              occurrencePath: path,
+              matrixIndex: index,
+              value: "non-finite",
+            },
+          },
+        ),
+      );
+    }
+  }
+  return success(localAssemblyFreeze(composed) as Mat4);
+}
+
 function unsupported(
   message: string,
   node: NodeId,
@@ -2275,12 +2394,13 @@ function cleanupChildren(
 }
 
 /**
- * Evaluates selected direct Document v7 assembly outputs containing only flat,
- * active, local part occurrences.
+ * Evaluates selected direct Document v7 assembly outputs by flattening bounded,
+ * acyclic local assembly trees into active local-part leaves.
  *
  * Part evaluation is batched once per effective configuration. Suppressed
- * unsupported occurrences are inert; active nested or external components are
- * rejected before resource resolution or kernel work.
+ * unsupported occurrences are inert; active external components and recursive
+ * hand-authored local graphs are rejected before resource resolution or kernel
+ * work.
  *
  * @internal
  */
@@ -2366,9 +2486,109 @@ export async function evaluateLocalAssemblyOutputsV7(
   const afterParameters = postBoundaryFailure(options.signal);
   if (afterParameters !== undefined) return afterParameters;
   if (!rootParameters.ok) return rootParameters;
-  const evaluatePlacementExpression = expressionEvaluator(
-    rootParameters.value.values,
+  const diagnostics: Diagnostic[] = [
+    ...parsed.diagnostics,
+    ...rootParameters.diagnostics,
+  ];
+  const assemblyContexts = new LocalAssemblyMap<
+    ConfigurationId | null,
+    ResolvedAssemblyContext
+  >();
+  localAssemblyMapInsert(
+    assemblyContexts,
+    rootConfigurationId,
+    localAssemblyFreeze({
+      configuration: rootConfiguration,
+      expression: expressionEvaluator(rootParameters.value.values),
+    }),
   );
+  const resolveAssemblyContext = (
+    configurationId: ConfigurationId | null,
+  ): CadResult<ResolvedAssemblyContext> => {
+    const existing = localAssemblyMapValue(
+      assemblyContexts,
+      configurationId,
+    );
+    if (existing !== undefined) return success(existing);
+    const configuration =
+      configurationId === null
+        ? undefined
+        : localAssemblyHasOwn(
+              document.configurations ?? {},
+              configurationId,
+            )
+          ? document.configurations![configurationId]
+          : undefined;
+    if (configurationId !== null && configuration === undefined) {
+      return failure(
+        diagnostic(
+          "CONFIGURATION_MISSING",
+          `Unknown configuration '${configurationId}'`,
+          {
+            severity: "error",
+            path: `/configurations/${jsonPointerSegment(
+              configurationId,
+            )}`,
+            details: { phase: LOCAL_ASSEMBLY_EVALUATION_PHASE },
+          },
+        ),
+      );
+    }
+    let resolved: ReturnType<typeof resolveEvaluationParameters>;
+    try {
+      resolved = resolveEvaluationParameters(
+        document,
+        options.parameters,
+        configurationId,
+        configuration,
+      );
+    } catch (error) {
+      const boundary = postBoundaryFailure(options.signal);
+      return (
+        boundary ??
+        failure(
+          diagnostic(
+            "EXPRESSION_INVALID",
+            safeErrorMessage(
+              error,
+              configurationId === null
+                ? "Base-context assembly parameters could not be resolved safely"
+                : `Assembly parameters for configuration '${configurationId}' could not be resolved safely`,
+            ),
+            {
+              severity: "error",
+              path:
+                configurationId === null
+                  ? "/parameters"
+                  : `/configurations/${jsonPointerSegment(
+                      configurationId,
+                    )}`,
+              details: {
+                phase: LOCAL_ASSEMBLY_EVALUATION_PHASE,
+                effectiveConfigurationId: configurationId,
+              },
+            },
+          ),
+        )
+      );
+    }
+    const boundary = postBoundaryFailure(options.signal);
+    if (boundary !== undefined) return boundary;
+    if (!resolved.ok) return resolved;
+    for (let index = 0; index < resolved.diagnostics.length; index += 1) {
+      diagnostics[diagnostics.length] = resolved.diagnostics[index]!;
+    }
+    const context = localAssemblyFreeze({
+      configuration,
+      expression: expressionEvaluator(resolved.value.values),
+    });
+    localAssemblyMapInsert(
+      assemblyContexts,
+      configurationId,
+      context,
+    );
+    return success(context);
+  };
 
   const requested =
     options.outputs === undefined
@@ -2406,6 +2626,7 @@ export async function evaluateLocalAssemblyOutputsV7(
   const contextualLeaves = new LocalAssemblySet<string>();
   let scannedInstances = 0;
   let activeOccurrences = 0;
+  let occurrencePathSegments = 0;
   let placementOperations = 0;
   let partBodies = 0;
 
@@ -2446,31 +2667,58 @@ export async function evaluateLocalAssemblyOutputsV7(
         },
       );
     }
-    const scanned = addBoundedCount(
+    if (options.evaluationLimits.maxAssemblyDepth < 1) {
+      return limitFailure(
+        "maxAssemblyDepth",
+        options.evaluationLimits.maxAssemblyDepth,
+        1,
+        `/nodes/${jsonPointerSegment(reference.node)}`,
+      );
+    }
+    const rootContext = resolveAssemblyContext(rootConfigurationId);
+    if (!rootContext.ok) return rootContext;
+    const occurrences: SelectedOccurrence[] = [];
+    const rootScanned = addBoundedCount(
       scannedInstances,
       node.instances.length,
       options.evaluationLimits.maxScannedInstances,
     );
-    if (!scanned.ok) {
+    if (!rootScanned.ok) {
       return limitFailure(
         "maxScannedInstances",
         options.evaluationLimits.maxScannedInstances,
-        scanned.actual,
+        rootScanned.actual,
         `/nodes/${jsonPointerSegment(reference.node)}/instances`,
       );
     }
-    scannedInstances = scanned.value;
-    const occurrences: SelectedOccurrence[] = [];
-    for (
-      let instanceIndex = 0;
-      instanceIndex < node.instances.length;
-      instanceIndex += 1
-    ) {
-      const instance = node.instances[instanceIndex]!;
+    scannedInstances = rootScanned.value;
+    const rootAncestry = localAssemblyFreeze([reference.node]);
+    const traversal = new LocalAssemblyArray<AssemblyTraversalFrame>();
+    traversal[0] = {
+      nodeId: reference.node,
+      node,
+      configurationId: rootConfigurationId,
+      context: rootContext.value,
+      transform: IDENTITY_MATRIX,
+      path: localAssemblyFreeze([] as EntityId[]),
+      ancestry: rootAncestry,
+      nextInstance: 0,
+    };
+    while (traversal.length > 0) {
+      const boundary = postBoundaryFailure(options.signal);
+      if (boundary !== undefined) return boundary;
+      const frame = traversal[traversal.length - 1]!;
+      if (frame.nextInstance >= frame.node.instances.length) {
+        traversal.length -= 1;
+        continue;
+      }
+      const instanceIndex = frame.nextInstance;
+      frame.nextInstance += 1;
+      const instance = frame.node.instances[instanceIndex]!;
       const suppressed =
         configuredSuppression(
-          rootConfiguration,
-          reference.node,
+          frame.context.configuration,
+          frame.nodeId,
           instance.id,
         ) ?? instance.suppressed;
       if (suppressed) continue;
@@ -2484,7 +2732,7 @@ export async function evaluateLocalAssemblyOutputsV7(
           "maxActiveOccurrences",
           options.evaluationLimits.maxActiveOccurrences,
           active.actual,
-          `/nodes/${jsonPointerSegment(reference.node)}/instances`,
+          `/nodes/${jsonPointerSegment(frame.nodeId)}/instances`,
         );
       }
       activeOccurrences = active.value;
@@ -2498,20 +2746,20 @@ export async function evaluateLocalAssemblyOutputsV7(
           "maxPlacementOperations",
           options.evaluationLimits.maxPlacementOperations,
           placements.actual,
-          `/nodes/${jsonPointerSegment(reference.node)}/instances/${instanceIndex}/placement`,
+          `/nodes/${jsonPointerSegment(frame.nodeId)}/instances/${instanceIndex}/placement`,
         );
       }
       placementOperations = placements.value;
       const componentPath =
-        `/nodes/${jsonPointerSegment(reference.node)}/instances/` +
+        `/nodes/${jsonPointerSegment(frame.nodeId)}/instances/` +
         `${instanceIndex}/component`;
       if (instance.component.source === "external") {
         return unsupported(
           `Active occurrence '${instance.id}' references an external component`,
-          reference.node,
+          frame.nodeId,
           componentPath,
           {
-            supported: "active-local-part-occurrence",
+            supported: "active-local-part-or-assembly-occurrence",
             componentSource: "external",
             resource: instance.component.resource,
             output: instance.component.output,
@@ -2525,17 +2773,119 @@ export async function evaluateLocalAssemblyOutputsV7(
       )
         ? document.nodes[component.node]
         : undefined;
+      const localPart =
+        component.kind === "part" &&
+        componentNode?.kind === "part" &&
+        "geometry" in componentNode;
+      const localAssembly =
+        component.kind === "assembly" &&
+        componentNode?.kind === "assembly";
+      if (!localPart && !localAssembly) {
+        return unsupported(
+          `Active occurrence '${instance.id}' must reference a local part or assembly`,
+          frame.nodeId,
+          `${componentPath}/reference`,
+          {
+            supported: "active-local-part-or-assembly-occurrence",
+            componentKind: component.kind,
+            nodeKind: componentNode?.kind,
+          },
+        );
+      }
+      const childConfigurationId = occurrenceConfigurationId(
+        instance.configuration,
+        frame.configurationId,
+      );
+      const nextPath = appendOccurrencePath(
+        frame.path,
+        instance.id,
+      );
+      const placement = resolvedPlacement(
+        instance.placement,
+        frame.context.expression,
+        frame.nodeId,
+        instanceIndex,
+        options.signal,
+      );
+      if (!placement.ok) return placement;
+      const composedPlacement = composeOccurrencePlacement(
+        frame.transform,
+        placement.value,
+        frame.nodeId,
+        instanceIndex,
+        nextPath,
+        options.signal,
+      );
+      if (!composedPlacement.ok) return composedPlacement;
+
+      if (localAssembly) {
+        if (
+          nodePathContains(frame.ancestry, component.node)
+        ) {
+          return unsupported(
+            `Active occurrence '${instance.id}' closes a recursive local assembly path`,
+            frame.nodeId,
+            `${componentPath}/reference`,
+            {
+              supported: "acyclic-local-assembly-graph",
+              occurrencePath: nextPath,
+              referencedNode: component.node,
+            },
+          );
+        }
+        const nextDepth = frame.ancestry.length + 1;
+        if (
+          nextDepth >
+          options.evaluationLimits.maxAssemblyDepth
+        ) {
+          return limitFailure(
+            "maxAssemblyDepth",
+            options.evaluationLimits.maxAssemblyDepth,
+            nextDepth,
+            `${componentPath}/reference`,
+          );
+        }
+        const childContext = resolveAssemblyContext(
+          childConfigurationId,
+        );
+        if (!childContext.ok) return childContext;
+        const scanned = addBoundedCount(
+          scannedInstances,
+          componentNode.instances.length,
+          options.evaluationLimits.maxScannedInstances,
+        );
+        if (!scanned.ok) {
+          return limitFailure(
+            "maxScannedInstances",
+            options.evaluationLimits.maxScannedInstances,
+            scanned.actual,
+            `/nodes/${jsonPointerSegment(component.node)}/instances`,
+          );
+        }
+        scannedInstances = scanned.value;
+        traversal[traversal.length] = {
+          nodeId: component.node,
+          node: componentNode,
+          configurationId: childConfigurationId,
+          context: childContext.value,
+          transform: composedPlacement.value,
+          path: nextPath,
+          ancestry: appendNodePath(
+            frame.ancestry,
+            component.node,
+          ),
+          nextInstance: 0,
+        };
+        continue;
+      }
       if (
-        component.kind !== "part" ||
         componentNode === undefined ||
         componentNode.kind !== "part" ||
         !("geometry" in componentNode)
       ) {
         return unsupported(
-          componentNode?.kind === "assembly"
-            ? `Active occurrence '${instance.id}' references a nested local assembly`
-            : `Active occurrence '${instance.id}' must reference a local part`,
-          reference.node,
+          `Active occurrence '${instance.id}' must reference a local part`,
+          frame.nodeId,
           `${componentPath}/reference`,
           {
             supported: "active-local-part-occurrence",
@@ -2544,10 +2894,21 @@ export async function evaluateLocalAssemblyOutputsV7(
           },
         );
       }
-      const childConfigurationId = occurrenceConfigurationId(
-        instance.configuration,
-        rootConfigurationId,
+
+      const pathSegments = addBoundedCount(
+        occurrencePathSegments,
+        nextPath.length,
+        options.evaluationLimits.maxOccurrencePathSegments,
       );
+      if (!pathSegments.ok) {
+        return limitFailure(
+          "maxOccurrencePathSegments",
+          options.evaluationLimits.maxOccurrencePathSegments,
+          pathSegments.actual,
+          `${componentPath}/reference`,
+        );
+      }
+      occurrencePathSegments = pathSegments.value;
       const partState = contextKey(
         component.node,
         childConfigurationId,
@@ -2619,19 +2980,12 @@ export async function evaluateLocalAssemblyOutputsV7(
         }
         localAssemblySetInsert(contextParts, component.node);
       }
-      const placement = resolvedPlacement(
-        instance.placement,
-        evaluatePlacementExpression,
-        reference.node,
-        instanceIndex,
-        options.signal,
-      );
-      if (!placement.ok) return placement;
       occurrences[occurrences.length] = {
         id: instance.id,
+        path: nextPath,
         partNode: component.node,
         configurationId: childConfigurationId,
-        transform: placement.value,
+        transform: composedPlacement.value,
       };
     }
     selected[outputIndex] = {
@@ -2675,10 +3029,6 @@ export async function evaluateLocalAssemblyOutputsV7(
 
   const children: EvaluatedPartDesignV7[] = [];
   const partResults = new LocalAssemblyMap<string, EvaluatedPartV7>();
-  const diagnostics: Diagnostic[] = [
-    ...parsed.diagnostics,
-    ...rootParameters.diagnostics,
-  ];
   for (let contextIndex = 0; contextIndex < contextIds.length; contextIndex += 1) {
     const configurationId = contextIds[contextIndex]!;
     const partIds = [
@@ -2813,7 +3163,7 @@ export async function evaluateLocalAssemblyOutputsV7(
       const occurrence = item.occurrences[occurrenceIndex]!;
       occurrences[occurrenceIndex] = deepFreeze({
         id: occurrence.id,
-        path: [occurrence.id] as const,
+        path: occurrence.path,
         partNode: occurrence.partNode,
         configurationId: occurrence.configurationId,
         part: localAssemblyMapValue(

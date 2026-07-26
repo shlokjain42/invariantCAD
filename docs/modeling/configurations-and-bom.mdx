@@ -194,51 +194,63 @@ capabilities. Aggregate geometric measurement, cross-body topology, exact
 aggregate STEP/BREP, assemblies, occurrence rollups, interference handling,
 per-body materials, and general part graphs are outside this staged slice.
 
-## Repository-only Document v7 flat local assemblies
+## Repository-only Document v7 nested local assemblies
 
-The staged facade can now wrap those admitted parts in a flat local assembly
-through `assembly(...)` and its `StagedLocalAssemblyBuilderV7` callback, publish
-that assembly as an output, and evaluate it with the source-only
+The staged facade can wrap those admitted parts and already-completed local
+assemblies in an acyclic fixed-placement assembly graph through `assembly(...)`
+and its `StagedLocalAssemblyBuilderV7` callback, publish a containing assembly
+as an output, and evaluate it with the source-only
 `evaluateLocalAssemblyOutputsV7(...)` operation. A staged configuration can
-call `instanceSuppressed(assembly, instanceId, suppressed?)`. The selected root
-configuration overrides the instance's authored suppression; passing `false`
-therefore reactivates an instance authored as suppressed.
+call `instanceSuppressed(assembly, instanceId, suppressed?)`. The configuration
+active for each containing assembly overrides that definition's authored
+suppression; passing `false` therefore reactivates an instance authored as
+suppressed.
 
 This is deliberately different from widening the public v6 semantics described
 above. Each staged v7 instance also carries one child configuration selector:
 
-| Selector | Effective part context |
+| Selector | Effective child context |
 | --- | --- |
-| `inherit` | The configuration selected for the root assembly |
-| `base` | The base document, regardless of the root selection |
+| `inherit` | The configuration active for the containing assembly |
+| `base` | The base document, regardless of the containing assembly's context |
 | `named` | The referenced document-owned named configuration |
 
-Caller parameter overrides then specialize every active part context for that
-one evaluation. The evaluator reuses one evaluated part result for equal
-`(part, effective configuration)` states within the call, but keeps every
-stable one-segment occurrence ID and quantity. Direct part evaluation may also
-acquire a leaf node once per configuration batch when multiple admitted parts
-reference it. It does not infer geometric equivalence between contexts and
-establishes no cross-run cache.
+That selected context controls a referenced child assembly's own suppression
+and placement expressions, or a referenced part's geometry and product intent.
+Caller parameter overrides then specialize every selected context for that one
+evaluation. Active part leaves are emitted in authored depth-first order with
+full root-to-leaf occurrence paths. Placement operations execute in authored
+order on each edge and compose parent first into a root-relative transform.
+
+The evaluator reuses one evaluated part result for equal
+`(part, effective configuration)` states within the call, but keeps every full
+occurrence path and quantity. Direct part evaluation may also acquire a leaf
+node once per configuration batch when multiple admitted parts reference it.
+It does not infer geometric equivalence between contexts and establishes no
+cross-run cache.
 
 The contextual BOM keeps unlike `(part, effective configuration)` states in
-separate deterministic rows. Each row records its stable occurrence IDs,
-effective material and density provenance, definition mass, placed total mass,
-and quantity. Occurrences sharing one context aggregate quantity normally.
-Missing density leaves the affected row and overall total incomplete, with
-diagnostics instead of an invented zero. Physical mass applies each context's
-density to every single- or multibody part membership, then composes the
-occurrence's affine placement before combining mass, center of mass, and
+separate deterministic rows. Each row records its stable full occurrence
+paths, effective material and density provenance, definition mass, placed total
+mass, and quantity. Occurrences sharing one context aggregate quantity
+normally. Missing density leaves the affected row and overall total incomplete,
+with diagnostics instead of an invented zero. Physical mass applies each
+context's density to every single- or multibody part membership, then uses the
+root-relative affine placement before combining mass, center of mass, and
 inertia. Aliases and overlaps still count per authored membership and
 occurrence; this is not interference subtraction or a Boolean union.
 
-Effectively suppressed hand-authored nested or external components are inert.
-An active nested local assembly or external component is rejected before
-resolver or kernel work. The staged slice does not provide recursive product
-structure, external-document evaluation, per-body materials, mates, motion,
-interference, assembly topology, aggregate geometric measurement, or exact
-assembly STEP/BREP export. Its aggregate mesh, STL, and OBJ are
-approximate/lossy tessellation views.
+Suppression is decided before a component is admitted, so a suppressed nested
+edge prunes its entire subtree, including external or otherwise unsupported
+descendants. Traversal is bounded by `maxAssemblyDepth`,
+`maxOccurrencePathSegments`, scanned-instance, active-occurrence, placement,
+and downstream part/resource ceilings. Active external components and cyclic
+local-assembly graphs are rejected before resolver or kernel work. The staged
+slice does not provide external-document evaluation, per-body materials, mates,
+joints, DOF, motion, contact, interference/collision, assembly topology,
+aggregate geometric measurement, or exact assembly STEP/BREP export. Its
+aggregate mesh, STL, and OBJ are approximate/lossy tessellation views, and
+Document v7 remains repository-only.
 
 ## Runtime parameter overrides
 

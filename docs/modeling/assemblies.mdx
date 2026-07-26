@@ -93,28 +93,36 @@ fixed transforms.
 The staged Document v7 facade now provides a separate source-only
 `assembly(...)` authoring method. Its callback receives a
 `StagedLocalAssemblyBuilderV7` and can add fixed-placement instances of owned
-local parts. These staged assemblies can be published as direct outputs and
-selected by `evaluateLocalAssemblyOutputsV7(...)`. They are not available from
-the package root, a package subpath, the public evaluator, or the CLI.
+local parts or already-completed local assemblies from the same builder.
+Requiring the referenced assembly to be complete makes facade-authored nesting
+acyclic by construction. These staged assemblies can be published as direct
+outputs and selected by `evaluateLocalAssemblyOutputsV7(...)`. They are not
+available from the package root, a package subpath, the public evaluator, or
+the CLI.
 
-This first v7 slice is flat. Each active instance must reference a local part
-whose geometry is already admitted by the direct staged part evaluator:
-one supported solid leaf or one supported body set, including
-commitment-verified imported leaves. An instance keeps a stable ID that is its
-complete one-segment path in the selected assembly and an ordered affine
-placement. The ID is identity evidence authored by the document, not inferred
-from array position or geometry.
+Evaluation expands active local assemblies iteratively and emits active part
+leaves in authored depth-first order. Each leaf part must use geometry already
+admitted by the direct staged part evaluator: one supported solid leaf or one
+supported body set, including commitment-verified imported leaves. Every leaf
+occurrence retains its full root-to-leaf instance path. Its `id` is the final
+path segment, while the complete path supplies stable identity independent of
+array position or geometry.
 
-The configuration selected for the root assembly controls its instance
-suppression. A named
+The configuration active at each containing assembly controls that definition's
+instance suppression and placement expressions. A named
 `configuration.instanceSuppressed(assembly, instanceId, false)` can explicitly
-activate an instance authored as suppressed. Each active instance separately
-selects `inherit`, `base`, or a named configuration for its part. Repeated
-instances of one part retain distinct IDs and quantities while reusing one
-evaluated part result when both the part and effective configuration match.
-Direct part evaluation may additionally acquire a shared leaf node once within
-each configuration batch. Neither optimization creates a cross-run cache or
-geometric-equivalence guarantee.
+activate an instance authored as suppressed in that assembly definition. Each
+active edge then selects `inherit`, `base`, or a named configuration for its
+referenced part or child assembly. Caller parameter overrides specialize every
+selected context. Placement operations execute in authored order on each edge,
+then nested placements compose parent first so every returned matrix is
+root-relative.
+
+Repeated instances of one part retain distinct full paths and quantities while
+reusing one evaluated part result when both the part and effective
+configuration match. Direct part evaluation may additionally acquire a shared
+leaf node once within each configuration batch. Neither optimization creates a
+cross-run cache or geometric-equivalence guarantee.
 
 The result types are `EvaluatedLocalAssemblyDesignV7`,
 `EvaluatedLocalAssemblyV7`, and `EvaluatedLocalOccurrenceV7`. They retain
@@ -125,13 +133,21 @@ BOM and physical-mass operations count every occurrence and every multibody
 membership, transform mass properties by placement, and never fuse overlaps or
 subtract interference.
 
-Suppression is resolved before component admission, so an effectively
-suppressed unsupported component in hand-authored v7 data is inert. An active
-nested local assembly or external component fails with a structured diagnostic
-before resource resolution or geometry-kernel work. Recursive product
-structure, external-document evaluation, mates, joints, DOF, motion, contact,
-interference, collision, assembly topology, aggregate geometric
-`measure()`, and exact aggregate STEP/BREP remain unsupported.
+Traversal is bounded independently by `maxAssemblyDepth` and the aggregate
+`maxOccurrencePathSegments` stored across emitted leaves, in addition to the
+existing selected-output, scanned-instance, active-occurrence, placement, part,
+solid, material, and resource ceilings. Suppression is resolved before
+component admission and prunes an entire nested subtree, so an effectively
+suppressed external or otherwise unsupported descendant is inert and charges
+no descendant traversal work.
+
+An active external component fails with a structured diagnostic before
+resource resolution or geometry-kernel work. Cyclic local-assembly graphs are
+not supported: the staged facade cannot construct one, strict document
+admission rejects hand-authored dependency cycles, and evaluation also fails
+closed if one reaches traversal. External-document evaluation, mates, joints,
+DOF, motion, contact, interference, collision, assembly topology, aggregate
+geometric `measure()`, and exact aggregate STEP/BREP remain unsupported.
 
 ## Ownership rules
 

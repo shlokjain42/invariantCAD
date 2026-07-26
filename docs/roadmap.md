@@ -110,12 +110,13 @@ multibody results, imported-body nodes, external occurrences, and feature-hash
 protocol v2 are also staged internally. A source-only
 `stagedBodySetDesignV7(...)` facade now authors the complete direct graph
 admitted by the staged evaluators and datum resolver: typed length,
-mass-density, and scalar parameters; named parameter, part-material, and root
-instance-suppression configurations; document-owned materials; boxes,
+mass-density, and scalar parameters; named parameter, part-material, and
+assembly-instance-suppression configurations; document-owned materials; boxes,
 cylinders, spheres; content-addressed resource commitments; imported-body
-leaves; body sets; parts over one direct leaf or body set; flat fixed-placement
-assemblies of local parts with per-occurrence configuration selectors; datum
-points, axes, planes, and coordinate systems; and direct
+leaves; body sets; parts over one direct leaf or body set; acyclic nested
+fixed-placement assemblies of local parts and already-completed local
+assemblies with per-occurrence configuration selectors; datum points, axes,
+planes, and coordinate systems; and direct
 imported-body/body-set/part/local-assembly outputs. Datums remain addressable
 nodes rather than design outputs. The facade produces detached, deeply frozen,
 strictly valid v7 documents while enforcing namespaces, typed builder
@@ -142,17 +143,22 @@ part boundary, including typed material definitions, part metadata, explicit
 density, and named material substitution.
 
 A fourth geometry operation, `evaluateLocalAssemblyOutputsV7(...)`, evaluates
-selected outputs whose active instances directly reference local parts.
-Stable one-segment occurrence paths, root configuration suppression, explicit
-false unsuppression, and inherited, base, or named child configuration
-selection are executable. One part result is reused per effective
-`(part, configuration)` state, and leaf acquisition is deduplicated by node
-within each configuration batch, without collapsing occurrences, multibody
-memberships, or contextual BOM rows. Aggregate mesh/STL/OBJ remains
-approximate/lossy, while physical mass composes each occurrence's effective
-density and affine placement. Effectively suppressed unsupported components
-are inert; active nested local assemblies and external components fail before
-resource resolution or kernel work.
+selected outputs whose acyclic nested instances reference local parts or local
+assemblies. Iterative expansion emits active part leaves in authored
+depth-first order with full root-to-leaf occurrence paths. Every containing
+assembly's effective configuration controls its definition-scoped suppression
+and placement expressions; each edge then selects an inherited, base, or named
+child context, and caller parameter overrides apply in every context.
+Placements compose parent first into root-relative transforms. One part result
+is reused per effective `(part, configuration)` state, and leaf acquisition is
+deduplicated by node within each configuration batch, without collapsing
+occurrences, multibody memberships, or contextual BOM rows. Aggregate
+mesh/STL/OBJ remains approximate/lossy, while physical mass composes each
+occurrence's effective density and placement. Suppressed assembly edges prune
+their full subtree; active external components fail before resource resolution
+or kernel work. Nesting and retained identity are bounded by
+`maxAssemblyDepth` and `maxOccurrencePathSegments` alongside the existing work
+ceilings.
 
 A separate source-only operation, `evaluateDatumNodesV7(...)`, resolves
 selected datum node IDs without a geometry kernel. Parameter values follow
@@ -173,18 +179,18 @@ uniform density and additive independent-body physical-mass semantics, with
 aliases and overlaps counted per authored membership, plus a one-row BOM.
 Those numeric properties inherit backend measurement quality. Bare body sets
 still have no aggregate mass; exact aggregate STEP/BREP, aggregate geometric
-measurement or topology, downstream feature composition, nested local
-assemblies, external occurrence evaluation, healing, and location I/O remain
-unsupported. Local-assembly exact aggregate export, aggregate geometric
-measurement or topology, mates, motion, and interference/collision are also
-unsupported. `mediaType` remains committed provenance pending a versioned
-format-to-media-type policy. The facade still excludes nested local assemblies,
-external occurrences, datum-backed sketches, transforms, Booleans,
-body-consuming operations, per-body materials, and general feature graphs,
-including generic solid and direct primitive outputs. These are
-correctness-tested design inputs for Milestone 1, not public authoring or
-evaluation capabilities. No root export, package subpath, or CLI surface was
-added; the public document alias and migration target remain v6.
+measurement or topology, downstream feature composition, external occurrence
+evaluation, healing, and location I/O remain unsupported. Local-assembly exact
+aggregate export, aggregate geometric measurement or topology, cyclic graphs,
+mates, motion, and interference/collision are also unsupported. `mediaType`
+remains committed provenance pending a versioned format-to-media-type policy.
+The facade still excludes external occurrences, datum-backed sketches,
+solid transform nodes, Booleans, body-consuming operations, per-body materials,
+and general feature graphs, including generic solid and direct primitive
+outputs. These are correctness-tested design inputs for Milestone 1, not
+public authoring or evaluation capabilities. No root export, package subpath,
+or CLI surface was added; the public document alias and migration target remain
+v6.
 
 The staged v7 text parser rejects duplicate decoded JSON object members,
 including escape-equivalent names, and applies structural and nesting ceilings
@@ -310,11 +316,12 @@ document model. Their identities and resource inputs are reproducible.
 
 The repository-only facade and staged evaluators now exercise that workflow for
 direct imported bodies, direct primitive/imported body sets, and directly
-authored typed parts and material intent over those geometries, including real
-Manifold and stock-OCCT acceptance paths. The milestone remains in progress
-because this evidence is source-only and does not yet cover public v7
-promotion, assemblies/product structure, datum-backed modeling, or general
-feature graphs.
+authored typed parts and material intent over those geometries, including
+acyclic nested local fixed-placement assemblies and real Manifold and
+stock-OCCT acceptance paths. The milestone remains in progress because this
+evidence is source-only and does not yet cover public v7 promotion, external
+product documents/components, datum-backed modeling, or general feature
+graphs.
 
 ## Milestone 2 — everyday part modeling
 

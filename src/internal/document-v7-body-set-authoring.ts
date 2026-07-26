@@ -922,7 +922,7 @@ export interface StagedBodySetMemberAuthoringV7 {
   readonly metadata?: Readonly<Record<string, JsonValue>>;
 }
 
-/** Options for one flat local part occurrence. @internal */
+/** Options for one local part or assembly occurrence. @internal */
 export interface StagedLocalAssemblyInstanceOptionsV7 {
   readonly placement?: readonly TransformOperationIR[];
   readonly suppressed?: boolean;
@@ -1085,43 +1085,66 @@ export class StagedCoordinateSystemRefV7 extends StagedDatumRefV7<"coordinateSys
 }
 
 /**
- * Flat, local, part-only assembly authoring for the executable staged graph.
+ * Local part and nested-assembly authoring for the executable staged graph.
  *
- * Nested local assemblies and external document occurrences remain outside
- * this slice even though the frozen v7 grammar already reserves them.
+ * External document occurrences remain outside this slice even though the
+ * frozen v7 grammar already reserves them.
  *
  * @internal
  */
 export class StagedLocalAssemblyBuilderV7 {
   readonly #partHandles: WeakSet<object>;
+  readonly #assemblyHandles: WeakSet<object>;
   readonly #partHandleIds: WeakMap<object, NodeId>;
+  readonly #assemblyHandleIds: WeakMap<object, NodeId>;
   readonly #instances: AssemblyInstanceIRV7[] = [];
   readonly #instanceIds = new AuthoringSet<EntityId>();
 
   constructor(
     partHandles: WeakSet<object>,
+    assemblyHandles: WeakSet<object>,
     partHandleIds: WeakMap<object, NodeId>,
+    assemblyHandleIds: WeakMap<object, NodeId>,
   ) {
     this.#partHandles = partHandles;
+    this.#assemblyHandles = assemblyHandles;
     this.#partHandleIds = partHandleIds;
+    this.#assemblyHandleIds = assemblyHandleIds;
     authoringFreeze(this);
   }
 
   instance(
     id: string,
-    component: PartRef,
+    component: PartRef | AssemblyRef,
     options: StagedLocalAssemblyInstanceOptionsV7 = {},
   ): this {
     const partNode = authoringWeakMapRead(
       this.#partHandleIds,
       component,
     );
+    const assemblyNode = authoringWeakMapRead(
+      this.#assemblyHandleIds,
+      component,
+    );
+    let componentReference: RefIRV7<"part" | "assembly">;
     if (
-      !authoringWeakSetContains(this.#partHandles, component) ||
-      partNode === undefined
+      partNode !== undefined &&
+      authoringWeakSetContains(this.#partHandles, component)
     ) {
+      componentReference = { node: partNode, kind: "part" };
+    } else if (
+      assemblyNode !== undefined &&
+      authoringWeakSetContains(this.#assemblyHandles, component)
+    ) {
+      // Only already-completed assemblies have an owned handle, so authored
+      // nested graphs are acyclic by construction.
+      componentReference = {
+        node: assemblyNode,
+        kind: "assembly",
+      };
+    } else {
       throw new TypeError(
-        "Assembly parts cannot cross staged design boundaries",
+        "Assembly components cannot cross staged design boundaries",
       );
     }
     if (
@@ -1167,7 +1190,7 @@ export class StagedLocalAssemblyBuilderV7 {
       id: stableId,
       component: {
         source: "local",
-        reference: { node: partNode, kind: "part" },
+        reference: componentReference,
       },
       configuration,
       placement,
@@ -2013,7 +2036,9 @@ export class StagedBodySetDesignBuilderV7 {
     try {
       const builder = new StagedLocalAssemblyBuilderV7(
         this.#partHandles,
+        this.#assemblyHandles,
         this.#partHandleIds,
+        this.#assemblyHandleIds,
       );
       build(builder);
       const instances = authoringApply<
