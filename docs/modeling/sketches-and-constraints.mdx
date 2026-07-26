@@ -45,7 +45,9 @@ const profile = cad.sketch("flange-profile", plane.xy(), (sketch) => {
 
 Profiles have one explicit outer loop and zero or more explicit hole loops. The
 evaluator does not infer which disconnected loop is outer from enumeration
-order.
+order. These roles are explicit modeling intent: traversal winding does not
+turn a declared hole into an outer loop or an outer loop into a hole. Profiles
+do not currently express islands or general multi-region region algebra.
 
 ## Entities
 
@@ -115,9 +117,46 @@ cad.sketch("precision-profile", plane.xy(), buildProfile, {
 
 Tolerance is a positive finite number in millimetres. It affects sketch
 solution and profile validity checks; it is not permission to accept arbitrary
-gaps. Invalid loop order, zero-length edges, unresolved constraints,
-self-intersections, and holes outside the outer loop fail with structured
-diagnostics.
+gaps.
+
+After the final call-time parameter and named-configuration values are
+resolved, the evaluator validates the solved profile before handing it to a
+dependent geometry-kernel feature. When a profile declares holes, its resolved
+loops must be finite, nondegenerate, closed, and simple enough for the current
+single-outer-region contract. Every hole boundary must have clearance strictly
+greater than the sketch tolerance from the outer boundary and every other hole
+boundary. A hole that is disjoint but outside the outer loop, encloses it,
+touches it, crosses or partially overlaps it, or coincides with it is rejected.
+Distinct holes likewise cannot touch, intersect, coincide, or nest. After the
+same bounded and cancellable closure gate used for every solved profile,
+hole-free profiles retain their existing feature-specific geometric admission
+and diagnostics.
+
+This evaluator-side hole-region decision is kernel-neutral, so Manifold, OCCT,
+and a custom kernel used through `Evaluator` receive the same decision. Invalid
+regions fail before the profile reaches a dependent kernel call with
+`SKETCH_NO_CLOSED_REGION`. Relationship and self-contact diagnostics identify
+the sketch and resolved loop index where available, and retain an implicated
+entity only when solver provenance exactly matches the authored loop and
+curve. Closure failures retain the established profile-scoped diagnostic.
+Explicit outer/hole roles remain independent of clockwise or counterclockwise
+traversal.
+
+The validator uses analytic line, arc, and circle predicates plus adaptive
+chord-sagitta bounds for separation proofs. Curve `segments` values are
+rendering/backend tessellation hints and do not relax or discretize this
+decision. The closure and hole-region checks share a cumulative work ceiling
+per sketch, sourced from
+`DEFAULT_DESIGN_DOCUMENT_LIMITS.maxStructuralValues`, and the evaluation abort
+signal. Exhausting the ceiling returns `RESOURCE_LIMIT_EXCEEDED`, cancellation
+returns `EVALUATION_ABORTED`, and a numerically uncertain clearance fails
+closed.
+
+This guarantee belongs to document evaluation. A direct low-level
+`GeometryKernel` profile call bypasses the evaluator boundary and must satisfy
+the kernel's resolved-profile contract itself. InvariantCAD does not clamp,
+move, or reinterpret an invalid hole, and it does not derive relational
+parameter bounds automatically.
 
 ## Stable entity IDs
 
