@@ -3,16 +3,21 @@
 ## [Unreleased]
 
 - Extended the repository-only `stagedBodySetDesignV7(...)` facade with
-  source-only flat local assembly authoring and evaluation. The staged
+  source-only nested local assembly authoring and evaluation. The staged
   `assembly(...)` callback receives a `StagedLocalAssemblyBuilderV7` whose
-  instances reference owned local parts, retain stable one-segment occurrence
-  IDs and ordered placements, and select `inherit`, `base`, or named
-  configuration context. Named
-  `configuration.instanceSuppressed(...)` overrides apply to the selected root
-  assembly and can either suppress an instance or explicitly unsuppress one
-  authored as suppressed. `evaluateLocalAssemblyOutputsV7(...)` returns owned
+  instances reference owned local parts or already-completed local assemblies,
+  retain stable local occurrence IDs and ordered placements, and select
+  `inherit`, `base`, or named child configuration context. Named
+  `configuration.instanceSuppressed(...)` overrides apply at every active
+  assembly definition and can either suppress an instance or explicitly
+  unsuppress one authored as suppressed.
+  `evaluateLocalAssemblyOutputsV7(...)` iteratively flattens the active local
+  tree in deterministic authored depth-first order and returns owned
   `EvaluatedLocalAssemblyDesignV7`, `EvaluatedLocalAssemblyV7`, and
-  `EvaluatedLocalOccurrenceV7` results for active direct local-part instances.
+  `EvaluatedLocalOccurrenceV7` leaf results. A containing assembly's effective
+  configuration controls its suppression and placement expressions; the
+  occurrence selector then chooses the referenced child part or assembly
+  context. Placements compose parent first along the complete path.
   Repeated occurrences reuse one evaluated part result per effective
   `(part, configuration)` context within one call, while leaf acquisition is
   also deduplicated by leaf node inside each configuration batch. Neither
@@ -23,11 +28,13 @@
   and affine placement. Document, resource, and assembly-evaluation limits,
   cancellation, runtime-integrity checks, hostile-boundary containment,
   transactional shape cleanup, and borrowed-kernel ownership apply throughout.
-  Effectively suppressed unsupported components are inert, while active nested
-  local assemblies and external components are rejected before resolver or
-  kernel work. This adds no external-document evaluation, nesting, mates,
-  interference, exact aggregate STEP/BREP, cross-run cache, CLI surface, or
-  public Document v7 promotion; the public v6 API is unchanged.
+  Assembly-specific work ceilings now include active nesting depth and
+  aggregate stored occurrence-path segments. Effectively suppressed external
+  components are inert, while active external components and hand-authored
+  cyclic graphs are rejected before resolver or kernel work. This adds no
+  external-document evaluation, mates, interference, exact aggregate
+  STEP/BREP, cross-run cache, CLI surface, or public Document v7 promotion; the
+  public v6 API is unchanged.
 - Extended the repository-only `stagedBodySetDesignV7(...)` facade with typed
   scalar parameters and owned Document v7 datum-point, datum-axis, datum-plane,
   and coordinate-system authoring. A separate source-only

@@ -113,8 +113,8 @@ subpath exposes the facade.
 The staged facade authors:
 
 - typed length and mass-density parameters, named parameter configurations,
-  document-owned materials, typed part-material substitutions, and root
-  assembly instance-suppression overrides;
+  document-owned materials, typed part-material substitutions, and
+  assembly-definition instance-suppression overrides;
 - direct boxes, cylinders, and spheres by privately composing the existing v6
   builder;
 - document-owned commitments with an explicit SHA-256 digest, byte length,
@@ -125,10 +125,10 @@ The staged facade authors:
   reference facade-created primitives or imported bodies;
 - owner-bound parts whose geometry is one direct leaf or one admitted body set;
   and
-- flat fixed-placement assemblies whose instances directly reference owned
-  local parts and select inherited, base, or named child configuration
-  contexts, plus outputs that directly target an imported body, body set, part,
-  or staged local assembly.
+- acyclic nested fixed-placement assemblies whose instances reference owned
+  local parts or already-completed local assemblies and select inherited, base,
+  or named child configuration contexts, plus outputs that directly target an
+  imported body, body set, part, or staged local assembly.
 
 Every imported node fixes healing to `none` and expects one solid. Its explicit
 format chooses the reader; committed `mediaType` is provenance and resolver
@@ -166,10 +166,12 @@ The repository has four source-only staged geometry-evaluator slices:
   admitted by the preceding slice. The staged facade authors exactly this
   direct part boundary through `material(...)`, `part(...)`, configuration
   `.partMaterial(...)`, and direct part `output(...)`.
-- A direct flat local-assembly output preserves active occurrence order, stable
-  one-segment IDs, resolved placements, and each part occurrence's effective
-  `inherit`, `base`, or named configuration context. Root configuration
-  suppression, including explicit `false` unsuppression, is resolved before
+- A direct local-assembly output iteratively expands active local assemblies in
+  authored depth-first leaf order. It preserves full root-to-leaf occurrence
+  paths, root-relative placements composed parent first, and each part
+  occurrence's effective `inherit`, `base`, or named configuration context.
+  Every containing assembly's context controls that definition's suppression
+  and placement expressions, including explicit `false` unsuppression, before
   component admission. Active local parts may use the same single-solid or
   multibody geometry as the direct part slice, including verified imported
   leaves.
@@ -221,18 +223,25 @@ measurement, exact aggregate STEP/BREP, a cross-body topology namespace,
 interference subtraction, or primary-body inference. Bare body sets still have
 no aggregate mass contract; the part supplies the uniform-density semantics.
 
-For a flat local assembly, repeated part instances retain distinct occurrence
-IDs and BOM quantities. One evaluated part result is reused for equal
-`(part, effective configuration)` contexts within one evaluation call. Within
-each effective-configuration batch, direct part evaluation may also acquire a
-shared leaf node once even when multiple admitted parts reference it. Neither
-optimization is a cross-run cache or geometry-equivalence claim. Aggregate
-assembly mesh, binary/ASCII STL, and OBJ apply each occurrence placement and
-remain approximate/lossy. The contextual BOM keeps unlike part/configuration
-states separate, while physical mass applies each effective density and affine
-placement before combining mass, center of mass, and inertia. An effectively
-suppressed unsupported component is inert. An active nested local assembly or
-external component is rejected before resolver or kernel work.
+For a nested local assembly, repeated part instances retain distinct full
+occurrence paths and BOM quantities. One evaluated part result is reused for
+equal `(part, effective configuration)` contexts within one evaluation call.
+Within each effective-configuration batch, direct part evaluation may also
+acquire a shared leaf node once even when multiple admitted parts reference it.
+Neither optimization is a cross-run cache or geometry-equivalence claim.
+Aggregate assembly mesh, binary/ASCII STL, and OBJ apply each root-relative
+occurrence placement and remain approximate/lossy. The contextual BOM keeps
+unlike part/configuration states separate, while physical mass applies each
+effective density and placement before combining mass, center of mass, and
+inertia.
+
+A suppressed assembly edge prunes its entire subtree before descendant
+admission or work accounting. Traversal is bounded by `maxAssemblyDepth`,
+`maxOccurrencePathSegments`, scanned-instance, active-occurrence, placement,
+and downstream part/resource ceilings. An active external component is
+rejected before resolver or kernel work. The facade cannot construct a cycle
+because it accepts only already-completed same-builder assembly handles; strict
+document admission and evaluation reject hand-authored recursive graphs.
 
 The authoring facade, all four staged geometry-evaluator slices, and the
 kernel-independent datum resolver remain repository-only: none is exported by
@@ -240,17 +249,17 @@ the package root, available from a package subpath, or integrated with the
 public builder or CLI. The facade can author datum points, axes, planes, and
 coordinate systems, but they are resolved by selected node ID rather than
 published as design outputs or consumed by sketches or shape algebra. It still
-does not author nested local assemblies, external occurrences, transforms,
-Booleans, body-consuming operations, per-body materials, or general dependency
-graphs, and the staged geometry evaluators do not evaluate those structures.
-The facade cannot publish a direct primitive or generic-solid output either.
-The operations perform no location I/O and admit no healing beyond `none`. A
-resource's `mediaType` is committed provenance passed to the resolver; it is
-not used to choose the reader or accepted as a substitute for the imported-body
-node's explicit `format`. Assembly mates, interference/collision, assembly-wide
-topology or geometric measurement, and exact aggregate STEP/BREP remain
-unsupported. A versioned format-to-media-type policy is still required before
-public promotion.
+does not author external occurrences, cyclic local-assembly graphs, solid
+transform nodes, Booleans, body-consuming operations, per-body materials, or
+general dependency graphs, and the staged geometry evaluators do not evaluate
+those structures. The facade cannot publish a direct primitive or generic-solid
+output either. The operations perform no location I/O and admit no healing
+beyond `none`. A resource's `mediaType` is committed provenance passed to the
+resolver; it is not used to choose the reader or accepted as a substitute for
+the imported-body node's explicit `format`. Assembly mates, motion,
+interference/collision, assembly-wide topology or geometric measurement, and
+exact aggregate STEP/BREP remain unsupported. A versioned
+format-to-media-type policy is still required before public v7 promotion.
 
 There are deliberately two kernel boundaries:
 

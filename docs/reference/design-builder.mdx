@@ -76,16 +76,16 @@ stagedBodySetDesignV7(
 ): StagedBodySetDesignBuilderV7
 ```
 
-This is a deliberately narrow facade for authoring the direct graph, flat local
-assemblies, and datum nodes admitted by the four staged v7 geometry evaluators
-and the datum resolver. Its implementation lives in
+This is a deliberately narrow facade for authoring the direct graph, acyclic
+nested local assemblies, and datum nodes admitted by the four staged v7
+geometry evaluators and the datum resolver. Its implementation lives in
 `src/internal/document-v7-body-set-authoring.ts`; it is not exported from the
 package root or any package subpath. The public `design(...)` builder,
 `DesignDocument` alias, evaluator, and migration target remain on frozen v6.
 
 The facade privately composes the v6 builder for admitted parameters and
 native primitives, then adds staged configuration, material, resource,
-imported-body, body-set, part, flat local assembly, and datum records. Its
+imported-body, body-set, part, nested local assembly, and datum records. Its
 complete admitted surface is:
 
 | Method | Staged result | Boundary |
@@ -100,7 +100,7 @@ complete admitted surface is:
 | `importedBody(id, resource, options)` | `StagedImportedBodyRefV7` | Direct STEP or text/binary BREP leaf with a strong single-solid policy |
 | `bodySet(id, members)` | `StagedBodySetRefV7` | Dense non-empty ordered memberships of direct primitive or imported leaves |
 | `part(id, geometry, options?)` | `PartRef` | Direct owned solid leaf or body-set geometry with part and material intent |
-| `assembly(id, build)` | `AssemblyRef` | Flat fixed-placement instances of owned local parts through `StagedLocalAssemblyBuilderV7` |
+| `assembly(id, build)` | `AssemblyRef` | Fixed-placement instances of owned local parts or previously completed local assemblies through `StagedLocalAssemblyBuilderV7` |
 | `datumPoint(...)` | Owned datum handle | Parametric position from three length expressions |
 | `datumAxis(...)` | Owned datum handle | Parametric origin and one scalar direction |
 | `datumPlane(...)` | Owned datum handle | Parametric origin, scalar positive-X direction, and scalar normal |
@@ -132,7 +132,7 @@ assembly(
 
 assembly.instance(
   id: string,
-  component: PartRef,
+  component: PartRef | AssemblyRef,
   options?: StagedLocalAssemblyInstanceOptionsV7,
 ): this
 
@@ -187,40 +187,56 @@ still wins. A legacy label and a material name never perform catalogue lookup.
 Length, density, and scalar parameters may be specialized by a named
 configuration and then by bounded caller overrides during evaluation.
 
-### Flat local assemblies
+### Nested local assemblies
 
 The staged `assembly(id, build)` method passes one
 `StagedLocalAssemblyBuilderV7` to its callback. Each `instance(...)` in this
-slice references an owned local part directly. Its stable ID is the complete
-one-segment occurrence path for that flat assembly, its placement is an ordered
-list of translate, rotate, scale, or mirror operations, and its configuration
-selector is exactly one of:
+slice references an owned local part or an already-completed owned local
+assembly. An assembly handle is published only after its callback succeeds, so
+the facade can reference earlier definitions but cannot author a cycle. Foreign
+or forged handles are rejected.
 
-- `inherit`, which evaluates the part in the configuration selected for the
-  root assembly;
-- `base`, which evaluates the part in the base document context; or
-- `named`, which evaluates the part in the referenced document-owned named
+An instance ID is stable within its containing assembly. Evaluation joins
+those IDs into a full root-to-leaf path for each emitted part occurrence. Its
+placement is an ordered list of translate, rotate, scale, or mirror operations,
+and its configuration selector is exactly one of:
+
+- `inherit`, which evaluates the referenced part or child assembly in the
+  configuration active for the containing assembly;
+- `base`, which evaluates it in the base document context; or
+- `named`, which evaluates it in the referenced document-owned named
   configuration.
 
 Omitted instance options mean an empty placement, `suppressed: false`, and
 `{ mode: "inherit" }`.
 
-The root configuration also controls definition-scoped instance suppression
-through `configuration.instanceSuppressed(...)`. Passing `false` explicitly
-unsuppresses an instance authored with `suppressed: true`; omission retains the
-authored value. Suppression is resolved before component support is checked, so
-an effectively suppressed nested or external component present in hand-authored
-v7 data is inert. An active nested local assembly or external component remains
-unsupported and is rejected before resource resolution or kernel work.
+The configuration active for every containing assembly controls its
+definition-scoped instance suppression and placement expressions.
+`configuration.instanceSuppressed(...)` can target any owned assembly
+definition. Passing `false` explicitly unsuppresses an instance authored with
+`suppressed: true`; omission retains the authored value. Suppression is
+resolved before component support is checked, so suppressing an assembly edge
+prunes its entire subtree, including external or otherwise unsupported
+descendants. An active external component remains unsupported and is rejected
+before resource resolution or kernel work.
 
 Occurrence IDs are unique only within their containing assembly. Repeating one
-part in several instances is expected and does not copy its document
-definition. Per-occurrence `inherit`, `base`, and named selection can still
-produce different effective geometry, material, or density from that shared
-definition. Evaluation reuses one part result for equal `(part, effective
-configuration)` states within one call, and direct part evaluation may
-separately deduplicate leaf acquisition within each configuration batch.
-Authoring does not create a persistent or cross-run cache commitment.
+part or subassembly in several instances is expected and does not copy its
+document definition. Iterative evaluation expands active assemblies in authored
+depth-first leaf order, composes edge placements parent first, and applies
+bounded caller parameter overrides in every selected configuration context.
+Per-occurrence `inherit`, `base`, and named selection can therefore produce
+different geometry, material, or density from a shared part definition.
+Evaluation reuses one part result for equal `(part, effective configuration)`
+states within one call, and direct part evaluation may separately deduplicate
+leaf acquisition within each configuration batch. Authoring does not create a
+persistent or cross-run cache commitment.
+
+Local-assembly evaluation separately bounds nesting with `maxAssemblyDepth` and
+the aggregate stored leaf-path length with `maxOccurrencePathSegments`, in
+addition to its instance, occurrence, placement, part, solid, material, and
+resource ceilings. Hand-authored cyclic dependencies fail strict document
+admission, and evaluation also rejects a recursive path rather than looping.
 
 The four datum methods author ordinary Document v7 nodes with stable node IDs.
 A point carries a length-valued position. An axis adds one scalar direction. A
@@ -269,16 +285,17 @@ caller-selected document limits and strict v7 validation before returning the
 detached, recursively frozen document.
 
 This facade does not author generic solid or direct primitive outputs,
-nested local assemblies, external occurrences, datum-backed sketches,
-transforms, Booleans, body-consuming features, per-body materials, or other
-general dependency graphs. It also does not add datum design outputs, CLI
-support, location I/O, reader inference, healing, a primary-body rule,
+external occurrences, cyclic assembly graphs, datum-backed sketches,
+solid transform nodes, Booleans, body-consuming features, per-body materials,
+or other general dependency graphs. It also does not add datum design outputs,
+CLI support, location I/O, reader inference, healing, a primary-body rule,
 cross-body or assembly topology, aggregate geometric measurement, mates,
-interference, or exact aggregate STEP/BREP export. Part- and assembly-level
-STL/OBJ export is an aggregate tessellation view and is explicitly
-approximate/lossy; exact native export and topology remain per-solid or
-per-body capabilities. Those omissions are product boundaries, not implicit
-fallbacks.
+motion, interference/collision, or exact aggregate STEP/BREP export. Part- and
+assembly-level STL/OBJ export is an aggregate tessellation view and is
+explicitly approximate/lossy; exact native export and topology remain per-solid
+or per-body capabilities. These omissions are product boundaries, not implicit
+fallbacks, and Document v7 remains staged rather than the public document
+alias.
 
 ## ID rules
 
