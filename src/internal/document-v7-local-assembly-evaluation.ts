@@ -65,6 +65,10 @@ import {
   documentV7RuntimeIntrinsicsAreIntact,
 } from "./document-v7-runtime-integrity.js";
 import { resolveEvaluationParameters } from "./evaluation-parameters.js";
+import {
+  planStagedSolidGraphV7,
+  type StagedSolidGraphRootV7,
+} from "./document-v7-solid-graph-evaluation.js";
 
 const LOCAL_ASSEMBLY_EVALUATION_PHASE =
   "documentV7LocalAssemblyEvaluation";
@@ -315,6 +319,9 @@ export interface LocalAssemblyEvaluationLimitsV7 {
   readonly maxContextualParts: number;
   readonly maxPartBodies: number;
   readonly maxDistinctSolids: number;
+  readonly maxSolidGraphNodes: number;
+  readonly maxSolidDependencyLinks: number;
+  readonly maxTransformOperations: number;
   readonly maxResolvedMaterials: number;
 }
 
@@ -331,6 +338,9 @@ export const DEFAULT_LOCAL_ASSEMBLY_EVALUATION_LIMITS_V7:
     maxContextualParts: 100_000,
     maxPartBodies: 100_000,
     maxDistinctSolids: 100_000,
+    maxSolidGraphNodes: 100_000,
+    maxSolidDependencyLinks: 100_000,
+    maxTransformOperations: 100_000,
     maxResolvedMaterials: 100_000,
   });
 
@@ -1499,67 +1509,29 @@ function unsupported(
   );
 }
 
-function partGeometryLeaves(
+function partGeometryBodyCount(
   document: DesignDocumentV7,
   partId: NodeId,
   part: PartNodeIRV7,
-): CadResult<readonly NodeId[]> {
+): CadResult<number> {
   const geometry = localAssemblyHasOwn(
     document.nodes,
     part.geometry.node,
   )
     ? document.nodes[part.geometry.node]
     : undefined;
-  if (
-    part.geometry.kind === "solid" &&
-    geometry !== undefined &&
-    (geometry.kind === "box" ||
-      geometry.kind === "cylinder" ||
-      geometry.kind === "sphere" ||
-      geometry.kind === "importedBody")
-  ) {
-    return success(localAssemblyFreeze([part.geometry.node]));
+  if (part.geometry.kind === "solid" && geometry !== undefined) {
+    return success(1);
   }
   if (
     part.geometry.kind === "bodySet" &&
     geometry !== undefined &&
     geometry.kind === "bodySet"
   ) {
-    const leaves = new LocalAssemblyArray<NodeId>(
-      geometry.bodies.length,
-    );
-    for (let index = 0; index < geometry.bodies.length; index += 1) {
-      const body = geometry.bodies[index]!;
-      const leaf = localAssemblyHasOwn(
-        document.nodes,
-        body.solid.node,
-      )
-        ? document.nodes[body.solid.node]
-        : undefined;
-      if (
-        leaf === undefined ||
-        (leaf.kind !== "box" &&
-          leaf.kind !== "cylinder" &&
-          leaf.kind !== "sphere" &&
-          leaf.kind !== "importedBody")
-      ) {
-        return unsupported(
-          `Part '${partId}' body '${body.id}' must directly reference a supported solid leaf`,
-          partId,
-          `/nodes/${jsonPointerSegment(part.geometry.node)}/bodies/${index}/solid`,
-          {
-            supported: ["box", "cylinder", "sphere", "importedBody"],
-            referencedNode: body.solid.node,
-            nodeKind: leaf?.kind,
-          },
-        );
-      }
-      leaves[index] = body.solid.node;
-    }
-    return success(localAssemblyFreeze(leaves));
+    return success(geometry.bodies.length);
   }
   return unsupported(
-    `Part '${partId}' geometry must directly reference a supported solid leaf or bodySet`,
+    `Part '${partId}' geometry must reference an admitted solid graph or bodySet`,
     partId,
     `/nodes/${jsonPointerSegment(partId)}/geometry`,
     {
@@ -1568,6 +1540,7 @@ function partGeometryLeaves(
         "cylinder",
         "sphere",
         "importedBody",
+        "transform",
         "bodySet",
       ],
       geometryKind: part.geometry.kind,
@@ -1575,6 +1548,44 @@ function partGeometryLeaves(
       nodeKind: geometry?.kind,
     },
   );
+}
+
+function appendPartGeometryRoots(
+  document: DesignDocumentV7,
+  partId: NodeId,
+  part: PartNodeIRV7,
+  roots: StagedSolidGraphRootV7[],
+): CadResult<undefined> {
+  const geometry = localAssemblyHasOwn(
+    document.nodes,
+    part.geometry.node,
+  )
+    ? document.nodes[part.geometry.node]
+    : undefined;
+  if (part.geometry.kind === "solid" && geometry !== undefined) {
+    roots[roots.length] = {
+      node: part.geometry.node,
+      path: `/nodes/${jsonPointerSegment(partId)}/geometry`,
+    };
+    return success(undefined);
+  }
+  if (
+    part.geometry.kind === "bodySet" &&
+    geometry !== undefined &&
+    geometry.kind === "bodySet"
+  ) {
+    for (let index = 0; index < geometry.bodies.length; index += 1) {
+      roots[roots.length] = {
+        node: geometry.bodies[index]!.solid.node,
+        path:
+          `/nodes/${jsonPointerSegment(part.geometry.node)}/bodies/` +
+          `${index}/solid`,
+      };
+    }
+    return success(undefined);
+  }
+  const bodyCount = partGeometryBodyCount(document, partId, part);
+  return bodyCount.ok ? success(undefined) : bodyCount;
 }
 
 class LocalAssemblyOwner {
@@ -2623,7 +2634,6 @@ export async function evaluateLocalAssemblyOutputsV7(
     Set<NodeId>
   >();
   const contextualParts = new LocalAssemblySet<string>();
-  const contextualLeaves = new LocalAssemblySet<string>();
   let scannedInstances = 0;
   let activeOccurrences = 0;
   let occurrencePathSegments = 0;
@@ -2926,15 +2936,15 @@ export async function evaluateLocalAssemblyOutputsV7(
             `${componentPath}/reference`,
           );
         }
-        const leaves = partGeometryLeaves(
+        const bodyCount = partGeometryBodyCount(
           document,
           component.node,
           componentNode,
         );
-        if (!leaves.ok) return leaves;
+        if (!bodyCount.ok) return bodyCount;
         const bodies = addBoundedCount(
           partBodies,
-          leaves.value.length,
+          bodyCount.value,
           options.evaluationLimits.maxPartBodies,
         );
         if (!bodies.ok) {
@@ -2946,26 +2956,6 @@ export async function evaluateLocalAssemblyOutputsV7(
           );
         }
         partBodies = bodies.value;
-        for (let leafIndex = 0; leafIndex < leaves.value.length; leafIndex += 1) {
-          const leafState = contextKey(
-            leaves.value[leafIndex]!,
-            childConfigurationId,
-          );
-          if (!localAssemblySetContains(contextualLeaves, leafState)) {
-            localAssemblySetInsert(contextualLeaves, leafState);
-            if (
-              contextualLeaves.size >
-              options.evaluationLimits.maxDistinctSolids
-            ) {
-              return limitFailure(
-                "maxDistinctSolids",
-                options.evaluationLimits.maxDistinctSolids,
-                contextualLeaves.size,
-                `/nodes/${jsonPointerSegment(component.node)}/geometry`,
-              );
-            }
-          }
-        }
         let contextParts = localAssemblyMapValue(
           partsByContext,
           childConfigurationId,
@@ -3027,6 +3017,120 @@ export async function evaluateLocalAssemblyOutputsV7(
           : lexicalCompare(first, second),
   ]);
 
+  let distinctSolids = 0;
+  let solidGraphNodes = 0;
+  let solidDependencyLinks = 0;
+  let transformOperations = 0;
+  for (
+    let contextIndex = 0;
+    contextIndex < contextIds.length;
+    contextIndex += 1
+  ) {
+    const configurationId = contextIds[contextIndex]!;
+    const partIds = [
+      ...localAssemblyMapValue(partsByContext, configurationId)!,
+    ];
+    localAssemblyApply<void>(localAssemblyArraySort, partIds, [
+      lexicalCompare,
+    ]);
+    const roots = new LocalAssemblyArray<StagedSolidGraphRootV7>();
+    for (let partIndex = 0; partIndex < partIds.length; partIndex += 1) {
+      const partId = partIds[partIndex]!;
+      const part = document.nodes[partId];
+      if (
+        part === undefined ||
+        part.kind !== "part" ||
+        !("geometry" in part)
+      ) {
+        return unsupported(
+          `Contextual part '${partId}' is not a local part definition`,
+          partId,
+          `/nodes/${jsonPointerSegment(partId)}`,
+          {
+            supported: "local-part-definition",
+            nodeKind: part?.kind,
+          },
+        );
+      }
+      const appended = appendPartGeometryRoots(
+        document,
+        partId,
+        part,
+        roots,
+      );
+      if (!appended.ok) return appended;
+    }
+    const plan = planStagedSolidGraphV7(
+      document,
+      roots,
+      options.evaluationLimits,
+      LOCAL_ASSEMBLY_EVALUATION_PHASE,
+    );
+    const afterPlan = postBoundaryFailure(options.signal);
+    if (afterPlan !== undefined) return afterPlan;
+    if (!plan.ok) return plan;
+    const path =
+      partIds.length === 0
+        ? "/nodes"
+        : `/nodes/${jsonPointerSegment(partIds[0]!)}/geometry`;
+    const nextDistinctSolids = addBoundedCount(
+      distinctSolids,
+      plan.value.leafNodes.length,
+      options.evaluationLimits.maxDistinctSolids,
+    );
+    if (!nextDistinctSolids.ok) {
+      return limitFailure(
+        "maxDistinctSolids",
+        options.evaluationLimits.maxDistinctSolids,
+        nextDistinctSolids.actual,
+        path,
+      );
+    }
+    distinctSolids = nextDistinctSolids.value;
+    const nextSolidGraphNodes = addBoundedCount(
+      solidGraphNodes,
+      plan.value.graphNodeCount,
+      options.evaluationLimits.maxSolidGraphNodes,
+    );
+    if (!nextSolidGraphNodes.ok) {
+      return limitFailure(
+        "maxSolidGraphNodes",
+        options.evaluationLimits.maxSolidGraphNodes,
+        nextSolidGraphNodes.actual,
+        path,
+      );
+    }
+    solidGraphNodes = nextSolidGraphNodes.value;
+    const nextDependencyLinks = addBoundedCount(
+      solidDependencyLinks,
+      plan.value.dependencyLinkCount,
+      options.evaluationLimits.maxSolidDependencyLinks,
+    );
+    if (!nextDependencyLinks.ok) {
+      return limitFailure(
+        "maxSolidDependencyLinks",
+        options.evaluationLimits.maxSolidDependencyLinks,
+        nextDependencyLinks.actual,
+        path,
+      );
+    }
+    solidDependencyLinks = nextDependencyLinks.value;
+    const nextTransformOperations = addBoundedCount(
+      transformOperations,
+      plan.value.transformOperationCount,
+      options.evaluationLimits.maxTransformOperations,
+    );
+    if (!nextTransformOperations.ok) {
+      return limitFailure(
+        "maxTransformOperations",
+        options.evaluationLimits.maxTransformOperations,
+        nextTransformOperations.actual,
+        path,
+      );
+    }
+    transformOperations = nextTransformOperations.value;
+  }
+
   const children: EvaluatedPartDesignV7[] = [];
   const partResults = new LocalAssemblyMap<string, EvaluatedPartV7>();
   for (let contextIndex = 0; contextIndex < contextIds.length; contextIndex += 1) {
@@ -3071,6 +3175,12 @@ export async function evaluateLocalAssemblyOutputsV7(
             maxPartBodies: options.evaluationLimits.maxPartBodies,
             maxDistinctSolids:
               options.evaluationLimits.maxDistinctSolids,
+            maxSolidGraphNodes:
+              options.evaluationLimits.maxSolidGraphNodes,
+            maxSolidDependencyLinks:
+              options.evaluationLimits.maxSolidDependencyLinks,
+            maxTransformOperations:
+              options.evaluationLimits.maxTransformOperations,
             maxResolvedMaterials: materialCount,
           },
           ...(options.resourceLimits === undefined

@@ -316,6 +316,46 @@ describe("staged document-v7 part authoring", () => {
     expectDeepFrozen(parsed.value);
   });
 
+  it("accepts transformed solid geometry without exposing it as a direct output", () => {
+    const cad = stagedBodySetDesignV7("transformed-part-authoring");
+    const source = cad.box("source", {
+      size: [mm(2), mm(3), mm(4)],
+    });
+    const transformed = cad.translate("transformed", source, [
+      mm(10),
+      mm(0),
+      mm(0),
+    ]);
+    const part = cad.part("part", transformed, {
+      partNumber: "TRANSFORMED-001",
+    });
+    cad.output("part", part);
+
+    expect(() => cad.output("solid", transformed as never)).toThrow(
+      /only owned|output|reference/i,
+    );
+    expect(cad.build().nodes).toMatchObject({
+      transformed: {
+        kind: "transform",
+        input: { node: "source", kind: "solid" },
+        operations: [
+          {
+            kind: "translate",
+            value: [mm(10).ir, mm(0).ir, mm(0).ir],
+          },
+        ],
+      },
+      part: {
+        kind: "part",
+        geometry: { node: "transformed", kind: "solid" },
+        partNumber: "TRANSFORMED-001",
+      },
+    });
+    expect(cad.build().outputs).toEqual({
+      part: { node: "part", kind: "part" },
+    });
+  });
+
   it("rejects foreign and forged geometry, material, part, and configuration handles", () => {
     const first = stagedBodySetDesignV7("first");
     const second = stagedBodySetDesignV7("second");

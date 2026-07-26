@@ -3,13 +3,17 @@ import {
   OcctKernel as RawOcctKernel,
   type ShapeHandle,
 } from "occt-wasm";
+import {
+  configurationId,
+  parameterId,
+} from "../src/core/ids.js";
 import { DEFAULT_DESIGN_DOCUMENT_LIMITS } from "../src/document-limits.js";
 import {
   EvaluatedSolid,
   evaluateBodySetOutputsV7,
   evaluateImportedBodyOutputsV7,
 } from "../src/evaluator.js";
-import { mm } from "../src/expressions.js";
+import { deg, mm, scalar } from "../src/expressions.js";
 import { hashDesignFeaturesV2 } from "../src/feature-hashes-v2.js";
 import {
   DOCUMENT_SCHEMA_V7,
@@ -21,6 +25,7 @@ import {
   stagedBodySetDesignV7,
   StagedBodyLeafRefV7,
   StagedBodySetRefV7,
+  StagedSolidRefV7,
 } from "../src/internal/document-v7-body-set-authoring.js";
 import { createManifoldKernel } from "../src/manifold-kernel.js";
 import { createOcctKernel } from "../src/occt-kernel.js";
@@ -368,6 +373,331 @@ describe("staged document-v7 body-set authoring", () => {
     expect(wideNative?.parameterValues).toEqual({ width: 5 });
     expect(wideNative?.hash).not.toBe(baseNative?.hash);
     expect(wideImported?.hash).toBe(baseImported?.hash);
+  });
+
+  it("authors owner-bound transform chains with parameterized convenience operations", () => {
+    const cad = stagedBodySetDesignV7("authored-transform-chain");
+    const distance = cad.parameter.length("distance", mm(5));
+    const angle = cad.parameter.angle("angle", deg(30), {
+      min: deg(0),
+      max: deg(180),
+    });
+    const factor = cad.parameter.scalar("factor", scalar(2));
+    cad.configuration("turned", (configuration) => {
+      configuration.parameter(distance, mm(8));
+      configuration.parameter(angle, deg(90));
+      configuration.parameter(factor, scalar(3));
+    });
+
+    const source = cad.box("source", {
+      size: [mm(2), mm(3), mm(4)],
+    });
+    const translated = cad.translate("translated", source, [
+      distance,
+      mm(0),
+      mm(0),
+    ]);
+    const rotated = cad.rotate("rotated", translated, [
+      deg(0),
+      deg(0),
+      angle,
+    ]);
+    const scaled = cad.scale("scaled", rotated, [
+      factor,
+      scalar(1),
+      scalar(1),
+    ]);
+    const mirrored = cad.mirror("mirrored", scaled, [
+      scalar(1),
+      scalar(0),
+      scalar(0),
+    ]);
+    const transformed = cad.transform("transformed", mirrored, [
+      {
+        kind: "translate",
+        value: [mm(0).ir, mm(1).ir, mm(0).ir],
+      },
+      {
+        kind: "rotate",
+        value: [deg(10).ir, deg(0).ir, deg(0).ir],
+      },
+    ]);
+    const resource = cad.resource("fixture", resourceCommitment());
+    const imported = cad.importedBody("imported", resource, {
+      format: "step",
+      units: { mode: "from-file" },
+    });
+    const transformedImport = cad.translate(
+      "transformed-import",
+      imported,
+      [mm(0), distance, mm(0)],
+    );
+    const bodies = cad.bodySet("bodies", [
+      { id: "transformed", solid: transformed },
+      { id: "transformed-import", solid: transformedImport },
+      { id: "source", solid: source },
+    ]);
+    const part = cad.part("part", transformed);
+    cad.output("bodies", bodies);
+    cad.output("part", part);
+
+    expect(source).toBeInstanceOf(StagedBodyLeafRefV7);
+    expect(transformed).toBeInstanceOf(StagedSolidRefV7);
+    expect(transformed).not.toBeInstanceOf(StagedBodyLeafRefV7);
+    expect(Object.isFrozen(transformed)).toBe(true);
+    expect(() => cad.output("direct", transformed as never)).toThrow(
+      /only owned|output|reference/i,
+    );
+
+    const document = cad.build();
+    expect(document.parameters[parameterId("angle")]).toEqual({
+      dimension: "angle",
+      default: deg(30).ir,
+      min: deg(0).ir,
+      max: deg(180).ir,
+    });
+    expect(
+      document.configurations?.[configurationId("turned")]
+        ?.parameterOverrides,
+    ).toEqual({
+      angle: deg(90).ir,
+      distance: mm(8).ir,
+      factor: scalar(3).ir,
+    });
+    expect(document.nodes).toMatchObject({
+      translated: {
+        kind: "transform",
+        input: { node: "source", kind: "solid" },
+        operations: [
+          {
+            kind: "translate",
+            value: [
+              {
+                op: "parameter",
+                dimension: "length",
+                id: "distance",
+              },
+              mm(0).ir,
+              mm(0).ir,
+            ],
+          },
+        ],
+      },
+      rotated: {
+        kind: "transform",
+        input: { node: "translated", kind: "solid" },
+        operations: [
+          {
+            kind: "rotate",
+            value: [
+              deg(0).ir,
+              deg(0).ir,
+              {
+                op: "parameter",
+                dimension: "angle",
+                id: "angle",
+              },
+            ],
+          },
+        ],
+      },
+      scaled: {
+        kind: "transform",
+        input: { node: "rotated", kind: "solid" },
+        operations: [
+          {
+            kind: "scale",
+            value: [
+              {
+                op: "parameter",
+                dimension: "scalar",
+                id: "factor",
+              },
+              scalar(1).ir,
+              scalar(1).ir,
+            ],
+          },
+        ],
+      },
+      mirrored: {
+        kind: "transform",
+        input: { node: "scaled", kind: "solid" },
+        operations: [
+          {
+            kind: "mirror",
+            normal: [scalar(1).ir, scalar(0).ir, scalar(0).ir],
+          },
+        ],
+      },
+      transformed: {
+        kind: "transform",
+        input: { node: "mirrored", kind: "solid" },
+        operations: [
+          {
+            kind: "translate",
+            value: [mm(0).ir, mm(1).ir, mm(0).ir],
+          },
+          {
+            kind: "rotate",
+            value: [deg(10).ir, deg(0).ir, deg(0).ir],
+          },
+        ],
+      },
+      "transformed-import": {
+        kind: "transform",
+        input: { node: "imported", kind: "solid" },
+        operations: [
+          {
+            kind: "translate",
+            value: [
+              mm(0).ir,
+              {
+                op: "parameter",
+                dimension: "length",
+                id: "distance",
+              },
+              mm(0).ir,
+            ],
+          },
+        ],
+      },
+      bodies: {
+        kind: "bodySet",
+        bodies: [
+          {
+            id: "transformed",
+            solid: { node: "transformed", kind: "solid" },
+          },
+          {
+            id: "transformed-import",
+            solid: { node: "transformed-import", kind: "solid" },
+          },
+          {
+            id: "source",
+            solid: { node: "source", kind: "solid" },
+          },
+        ],
+      },
+      part: {
+        kind: "part",
+        geometry: { node: "transformed", kind: "solid" },
+      },
+    });
+    expect(document.outputs).toEqual({
+      bodies: { node: "bodies", kind: "bodySet" },
+      part: { node: "part", kind: "part" },
+    });
+    expectDeepFrozen(document);
+  });
+
+  it("hardens transform capture and rejects foreign or forged solid handles", () => {
+    const first = stagedBodySetDesignV7("first-transform-owner");
+    const second = stagedBodySetDesignV7("second-transform-owner");
+    const firstBox = first.box("box", {
+      size: [mm(1), mm(1), mm(1)],
+    });
+    const secondBox = second.box("box", {
+      size: [mm(1), mm(1), mm(1)],
+    });
+
+    let foreignVectorInvoked = false;
+    const foreignVector = [mm(1), mm(0), mm(0)];
+    Object.defineProperty(foreignVector, "0", {
+      configurable: true,
+      enumerable: true,
+      get() {
+        foreignVectorInvoked = true;
+        return mm(1);
+      },
+    });
+    expect(() =>
+      first.translate("foreign", secondBox, foreignVector as never),
+    ).toThrow(/solid|design|owner|boundar/i);
+    expect(foreignVectorInvoked).toBe(false);
+    expect(() =>
+      first.transform(
+        "forged",
+        new StagedSolidRefV7(first, firstBox.node),
+        [
+          {
+            kind: "translate",
+            value: [mm(1).ir, mm(0).ir, mm(0).ir],
+          },
+        ],
+      ),
+    ).toThrow(/solid|design|owner|boundar/i);
+    expect(() => first.transform("empty", firstBox, [])).toThrow(
+      /at least one|operation|empty/i,
+    );
+
+    const sparse = new Array(1) as {
+      readonly kind: "translate";
+      readonly value: readonly [
+        ReturnType<typeof mm>["ir"],
+        ReturnType<typeof mm>["ir"],
+        ReturnType<typeof mm>["ir"],
+      ];
+    }[];
+    expect(() => first.transform("sparse", firstBox, sparse)).toThrow(
+      /dense|sparse|operation/i,
+    );
+
+    let operationAccessorInvoked = false;
+    const accessorOperation = { kind: "translate" } as Record<
+      string,
+      unknown
+    >;
+    Object.defineProperty(accessorOperation, "value", {
+      enumerable: true,
+      get() {
+        operationAccessorInvoked = true;
+        return [mm(1).ir, mm(0).ir, mm(0).ir];
+      },
+    });
+    expect(() =>
+      first.transform("accessor-operation", firstBox, [
+        accessorOperation as never,
+      ]),
+    ).toThrow(/value.*own data|operation|accessor/i);
+    expect(operationAccessorInvoked).toBe(false);
+
+    let vectorAccessorInvoked = false;
+    const accessorVector = [mm(1), mm(0), mm(0)];
+    Object.defineProperty(accessorVector, "0", {
+      configurable: true,
+      enumerable: true,
+      get() {
+        vectorAccessorInvoked = true;
+        return mm(1);
+      },
+    });
+    expect(() =>
+      first.translate(
+        "accessor-vector",
+        firstBox,
+        accessorVector as never,
+      ),
+    ).toThrow(/own data|translation|vector/i);
+    expect(vectorAccessorInvoked).toBe(false);
+
+    const transformed = first.translate("owned", firstBox, [
+      mm(1),
+      mm(0),
+      mm(0),
+    ]);
+    expect(() =>
+      second.bodySet("foreign-transformed", [
+        { id: "foreign", solid: transformed },
+      ]),
+    ).toThrow(/solid|design|owner|boundar/i);
+    expect(first.build().nodes).not.toHaveProperty("foreign");
+    expect(first.build().nodes).not.toHaveProperty("forged");
+    expect(first.build().nodes).not.toHaveProperty("empty");
+    expect(first.build().nodes).not.toHaveProperty("sparse");
+    expect(first.build().nodes).not.toHaveProperty(
+      "accessor-operation",
+    );
+    expect(first.build().nodes).not.toHaveProperty("accessor-vector");
   });
 
   it("rejects cross-builder handles in every owner-bound authoring position", () => {
@@ -833,6 +1163,26 @@ describe("authored staged document-v7 native evaluation", () => {
     const box = cad.box("box", {
       size: [width, mm(3), mm(4)],
     });
+    const translated = cad.translate("translated", box, [
+      width,
+      mm(0),
+      mm(0),
+    ]);
+    const rotated = cad.rotate("rotated", translated, [
+      deg(0),
+      deg(0),
+      deg(90),
+    ]);
+    const scaled = cad.scale("scaled", rotated, [
+      scalar(2),
+      scalar(1),
+      scalar(1),
+    ]);
+    const transformed = cad.mirror("transformed", scaled, [
+      scalar(1),
+      scalar(0),
+      scalar(0),
+    ]);
     const cylinder = cad.cylinder("cylinder", {
       height: mm(5),
       radius: mm(2),
@@ -841,6 +1191,7 @@ describe("authored staged document-v7 native evaluation", () => {
     const bodies = cad.bodySet("bodies", [
       { id: "box", solid: box, name: "Configured box" },
       { id: "box-alias", solid: box },
+      { id: "transformed", solid: transformed },
       { id: "cylinder", solid: cylinder },
     ]);
     cad.output("bodies", bodies);
@@ -856,12 +1207,20 @@ describe("authored staged document-v7 native evaluation", () => {
         const output = base.value.output("bodies");
         expect(base.value.configurationId).toBeNull();
         expect(base.value.parameters).toEqual({ width: 2 });
-        expect(output.bodyIds).toEqual(["box", "box-alias", "cylinder"]);
+        expect(output.bodyIds).toEqual([
+          "box",
+          "box-alias",
+          "transformed",
+          "cylinder",
+        ]);
         expect(output.body("box").solid.measure().volume).toBeCloseTo(24, 8);
         expect(output.body("box-alias").solid.measure().volume).toBeCloseTo(
           24,
           8,
         );
+        expect(
+          output.body("transformed").solid.measure().volume,
+        ).toBeCloseTo(48, 8);
         expect(output.body("cylinder").solid.measure().volume).toBeCloseTo(
           Math.PI * 20,
           0,
@@ -887,6 +1246,12 @@ describe("authored staged document-v7 native evaluation", () => {
         expect(
           configured.value.output("bodies").body("box").solid.measure().volume,
         ).toBeCloseTo(60, 8);
+        expect(
+          configured.value
+            .output("bodies")
+            .body("transformed")
+            .solid.measure().volume,
+        ).toBeCloseTo(120, 8);
       } finally {
         configured.value.dispose();
       }
@@ -932,10 +1297,22 @@ describe("authored staged document-v7 exact import evaluation", () => {
     const native = cad.box("native", {
       size: [mm(2), mm(3), mm(4)],
     });
+    const transformedImported = cad.translate(
+      "transformed-imported",
+      imported,
+      [mm(10), mm(0), mm(0)],
+    );
+    const transformedNative = cad.scale("transformed-native", native, [
+      scalar(2),
+      scalar(1),
+      scalar(1),
+    ]);
     const bodies = cad.bodySet("bodies", [
       { id: "imported", solid: imported, name: "Imported STEP" },
+      { id: "transformed-imported", solid: transformedImported },
       { id: "native", solid: native, name: "Native box" },
       { id: "native-alias", solid: native },
+      { id: "transformed-native", solid: transformedNative },
     ]);
     cad.output("imported-output", imported);
     cad.output("body-set-output", bodies);
@@ -1003,8 +1380,10 @@ describe("authored staged document-v7 exact import evaluation", () => {
         expect(requests).toHaveLength(2);
         expect(output.bodyIds).toEqual([
           "imported",
+          "transformed-imported",
           "native",
           "native-alias",
+          "transformed-native",
         ]);
         expect(output.representation).toBe("brep");
         expect(output.exact).toBe(true);
@@ -1012,6 +1391,9 @@ describe("authored staged document-v7 exact import evaluation", () => {
           24,
           8,
         );
+        expect(
+          output.body("transformed-imported").solid.measure().volume,
+        ).toBeCloseTo(24, 8);
         expect(output.body("native").solid.measure().volume).toBeCloseTo(
           24,
           8,
@@ -1020,6 +1402,34 @@ describe("authored staged document-v7 exact import evaluation", () => {
           24,
           8,
         );
+        expect(
+          output.body("transformed-native").solid.measure().volume,
+        ).toBeCloseTo(48, 8);
+        expect(
+          output.body("transformed-imported").solid.topology(),
+        ).toMatchObject({
+          ok: true,
+          value: { history: "partial" },
+        });
+        const transformedTopology = output
+          .body("transformed-native")
+          .solid.topology();
+        expect(transformedTopology).toMatchObject({
+          ok: true,
+          value: { history: "complete" },
+        });
+        if (transformedTopology.ok) {
+          expect(transformedTopology.value.faces).toHaveLength(6);
+          expect(
+            transformedTopology.value.faces.every((face) =>
+              face.lineage.some(
+                (entry) =>
+                  entry.feature === "transformed-native" &&
+                  entry.relation === "modified",
+              ),
+            ),
+          ).toBe(true);
+        }
         expect(
           output.body("native").solid.export("step").byteLength,
         ).toBeGreaterThan(100);

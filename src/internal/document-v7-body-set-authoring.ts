@@ -29,6 +29,8 @@ import {
 } from "../design.js";
 import {
   Expression,
+  type AngleExpression,
+  type AngleVec3Expression,
   type ExpressionIR,
   type LengthExpression,
   type MassDensityExpression,
@@ -87,7 +89,7 @@ const RESOURCE_MEDIA_TYPE_PATTERN =
 
 interface StagedParameterIdentityV7 {
   readonly id: ParameterId;
-  readonly dimension: "scalar" | "length" | "massDensity";
+  readonly dimension: "scalar" | "length" | "angle" | "massDensity";
 }
 const authoringObjectPrototype = Object.prototype;
 const authoringArrayPrototype = Array.prototype;
@@ -366,7 +368,7 @@ function detachMetadata(
 }
 
 function captureParameterOptionsV7<
-  D extends "scalar" | "length" | "massDensity",
+  D extends "scalar" | "length" | "angle" | "massDensity",
 >(
   value: ParameterOptions<D>,
   dimension: D,
@@ -376,7 +378,9 @@ function captureParameterOptionsV7<
       ? "Scalar-parameter options"
       : dimension === "length"
         ? "Length-parameter options"
-        : "Mass-density-parameter options";
+        : dimension === "angle"
+          ? "Angle-parameter options"
+          : "Mass-density-parameter options";
   const captured = captureExactOwnDataRecord(
     value,
     ["min", "max", "label", "description"],
@@ -429,7 +433,7 @@ function captureParameterOptionsV7<
 }
 
 function captureDatumExpressionIR<
-  D extends "length" | "scalar" | "massDensity",
+  D extends "length" | "angle" | "scalar" | "massDensity",
 >(
   value: unknown,
   dimension: D,
@@ -509,7 +513,7 @@ function captureDatumExpressionIR<
 }
 
 function captureStagedExpression<
-  D extends "length" | "scalar" | "massDensity",
+  D extends "length" | "angle" | "scalar" | "massDensity",
 >(
   value: unknown,
   dimension: D,
@@ -521,7 +525,7 @@ function captureStagedExpression<
   }) as Expression<D>;
 }
 
-function captureDatumVectorIR<D extends "length" | "scalar">(
+function captureDatumVectorIR<D extends "length" | "angle" | "scalar">(
   value: unknown,
   dimension: D,
   label: string,
@@ -917,7 +921,7 @@ export type StagedImportedBodyAuthoringOptionsV7 =
 /** One active authored body-set membership. @internal */
 export interface StagedBodySetMemberAuthoringV7 {
   readonly id: string;
-  readonly solid: StagedBodyLeafRefV7;
+  readonly solid: StagedSolidRefV7;
   readonly name?: string;
   readonly metadata?: Readonly<Record<string, JsonValue>>;
 }
@@ -946,14 +950,14 @@ export class StagedResourceRefV7 {
 }
 
 /**
- * Direct primitive or imported-body leaf owned by one staged builder.
+ * General executable solid reference owned by one staged builder.
  *
- * This is deliberately not a general solid reference: transforms, Booleans,
- * sketches, and other downstream nodes are outside this executable slice.
+ * This handle currently covers native/imported leaves and transform nodes.
+ * Additional solid-producing graph nodes remain outside this executable slice.
  *
  * @internal
  */
-export class StagedBodyLeafRefV7 {
+export class StagedSolidRefV7 {
   readonly kind = "solid" as const;
   readonly node: NodeId;
   readonly [STAGED_BODY_SET_DESIGN_OWNER]: StagedBodySetDesignBuilderV7;
@@ -965,6 +969,15 @@ export class StagedBodyLeafRefV7 {
   }
 
   toIR(): RefIRV7<"solid"> {
+    return { node: this.node, kind: "solid" };
+  }
+}
+
+/** Direct primitive or imported-body leaf owned by one staged builder. @internal */
+export class StagedBodyLeafRefV7 extends StagedSolidRefV7 {
+  declare private readonly stagedBodyLeafRefV7Brand: void;
+
+  override toIR(): RefIRV7<"solid"> {
     return { node: this.node, kind: "solid" };
   }
 }
@@ -1272,7 +1285,9 @@ export class StagedBodySetConfigurationBuilderV7 {
     authoringFreeze(this);
   }
 
-  parameter<D extends "scalar" | "length" | "massDensity">(
+  parameter<
+    D extends "scalar" | "length" | "angle" | "massDensity",
+  >(
     parameter: Parameter<D>,
     value: Expression<NoInfer<D>>,
   ): this {
@@ -1437,6 +1452,11 @@ export class StagedBodySetDesignBuilderV7 {
       defaultValue: LengthExpression,
       options?: ParameterOptions<"length">,
     ) => Parameter<"length">;
+    readonly angle: (
+      id: string,
+      defaultValue: AngleExpression,
+      options?: ParameterOptions<"angle">,
+    ) => Parameter<"angle">;
     readonly massDensity: (
       id: string,
       defaultValue: MassDensityExpression,
@@ -1470,7 +1490,7 @@ export class StagedBodySetDesignBuilderV7 {
     MaterialId
   >();
   readonly #resourceHandles = new AuthoringWeakSet<object>();
-  readonly #leafHandles = new AuthoringWeakSet<object>();
+  readonly #solidHandles = new AuthoringWeakSet<object>();
   readonly #importedBodyHandles = new AuthoringWeakSet<object>();
   readonly #bodySetHandles = new AuthoringWeakSet<object>();
   readonly #partHandles = new AuthoringWeakSet<object>();
@@ -1535,6 +1555,23 @@ export class StagedBodySetDesignBuilderV7 {
         );
         return this.#registerParameter(key, "length", parameter);
       },
+      angle: (
+        id: string,
+        defaultValue: AngleExpression,
+        parameterOptions: ParameterOptions<"angle"> = {},
+      ): Parameter<"angle"> => {
+        const key = this.#assertParameterAvailable(id);
+        const parameter = this.#base.parameter.angle(
+          id,
+          captureStagedExpression(
+            defaultValue,
+            "angle",
+            `Angle parameter '${id}' default`,
+          ),
+          captureParameterOptionsV7(parameterOptions, "angle"),
+        );
+        return this.#registerParameter(key, "angle", parameter);
+      },
       massDensity: (
         id: string,
         defaultValue: MassDensityExpression,
@@ -1567,7 +1604,9 @@ export class StagedBodySetDesignBuilderV7 {
     return key;
   }
 
-  #registerParameter<D extends "scalar" | "length" | "massDensity">(
+  #registerParameter<
+    D extends "scalar" | "length" | "angle" | "massDensity",
+  >(
     id: ParameterId,
     dimension: D,
     parameter: Parameter<D>,
@@ -1590,18 +1629,18 @@ export class StagedBodySetDesignBuilderV7 {
     return key;
   }
 
-  #registerLeaf(reference: StagedBodyLeafRefV7): StagedBodyLeafRefV7 {
-    authoringWeakSetInsert(this.#leafHandles, reference);
+  #registerLeaf<T extends StagedBodyLeafRefV7>(reference: T): T {
+    authoringWeakSetInsert(this.#solidHandles, reference);
     return reference;
   }
 
-  #assertLeafOwned(reference: StagedBodyLeafRefV7): void {
+  #assertSolidOwned(reference: StagedSolidRefV7): void {
     if (
-      !authoringWeakSetContains(this.#leafHandles, reference) ||
+      !authoringWeakSetContains(this.#solidHandles, reference) ||
       reference[STAGED_BODY_SET_DESIGN_OWNER] !== this
     ) {
       throw new TypeError(
-        "Body leaves cannot cross staged design boundaries",
+        "Solid references cannot cross staged design boundaries",
       );
     }
   }
@@ -1649,6 +1688,105 @@ export class StagedBodySetDesignBuilderV7 {
     return this.#registerLeaf(
       new StagedBodyLeafRefV7(this, reference.node),
     );
+  }
+
+  transform(
+    id: string,
+    input: StagedSolidRefV7,
+    operations: readonly TransformOperationIR[],
+  ): StagedSolidRefV7 {
+    this.#assertSolidOwned(input);
+    const capturedOperations = capturePlacementIR(
+      operations,
+      `Transform '${id}' operations`,
+    );
+    if (capturedOperations.length === 0) {
+      throw new TypeError("A transform requires at least one operation");
+    }
+    const key = this.#assertNodeAvailable(id);
+    const node: NodeIRV7 = {
+      kind: "transform",
+      input: { node: input.node, kind: "solid" },
+      operations: capturedOperations,
+    };
+    const definition = deepFreeze(node);
+    const reference = new StagedSolidRefV7(this, key);
+    authoringWeakSetInsert(this.#solidHandles, reference);
+    authoringSetInsert(this.#nodeIds, key);
+    this.#nodeRecords[key] = definition;
+    return reference;
+  }
+
+  translate(
+    id: string,
+    input: StagedSolidRefV7,
+    value: Vec3Expression,
+  ): StagedSolidRefV7 {
+    this.#assertSolidOwned(input);
+    return this.transform(id, input, [
+      {
+        kind: "translate",
+        value: captureDatumVectorIR(
+          value,
+          "length",
+          `Transform '${id}' translation`,
+        ),
+      },
+    ]);
+  }
+
+  rotate(
+    id: string,
+    input: StagedSolidRefV7,
+    value: AngleVec3Expression,
+  ): StagedSolidRefV7 {
+    this.#assertSolidOwned(input);
+    return this.transform(id, input, [
+      {
+        kind: "rotate",
+        value: captureDatumVectorIR(
+          value,
+          "angle",
+          `Transform '${id}' rotation`,
+        ),
+      },
+    ]);
+  }
+
+  scale(
+    id: string,
+    input: StagedSolidRefV7,
+    value: ScalarVec3Expression,
+  ): StagedSolidRefV7 {
+    this.#assertSolidOwned(input);
+    return this.transform(id, input, [
+      {
+        kind: "scale",
+        value: captureDatumVectorIR(
+          value,
+          "scalar",
+          `Transform '${id}' scale`,
+        ),
+      },
+    ]);
+  }
+
+  mirror(
+    id: string,
+    input: StagedSolidRefV7,
+    normal: ScalarVec3Expression,
+  ): StagedSolidRefV7 {
+    this.#assertSolidOwned(input);
+    return this.transform(id, input, [
+      {
+        kind: "mirror",
+        normal: captureDatumVectorIR(
+          normal,
+          "scalar",
+          `Transform '${id}' mirror normal`,
+        ),
+      },
+    ]);
   }
 
   datumPoint(
@@ -1908,11 +2046,11 @@ export class StagedBodySetDesignBuilderV7 {
 
   part(
     id: string,
-    geometry: StagedBodyLeafRefV7 | StagedBodySetRefV7,
+    geometry: StagedSolidRefV7 | StagedBodySetRefV7,
     options: PartOptions = {},
   ): PartRef {
     const leaf =
-      authoringWeakSetContains(this.#leafHandles, geometry) &&
+      authoringWeakSetContains(this.#solidHandles, geometry) &&
       geometry[STAGED_BODY_SET_DESIGN_OWNER] === this;
     const bodySet =
       authoringWeakSetContains(this.#bodySetHandles, geometry) &&
@@ -2255,7 +2393,7 @@ export class StagedBodySetDesignBuilderV7 {
           };
     const definition = deepFreeze(node);
     const reference = new StagedImportedBodyRefV7(this, key);
-    authoringWeakSetInsert(this.#leafHandles, reference);
+    this.#registerLeaf(reference);
     authoringWeakSetInsert(this.#importedBodyHandles, reference);
     authoringSetInsert(this.#nodeIds, key);
     this.#nodeRecords[key] = definition;
@@ -2298,8 +2436,8 @@ export class StagedBodySetDesignBuilderV7 {
         );
       }
       authoringSetInsert(seen, memberId);
-      const solid = member.solid as StagedBodyLeafRefV7;
-      this.#assertLeafOwned(solid);
+      const solid = member.solid as StagedSolidRefV7;
+      this.#assertSolidOwned(solid);
       if (
         member.name !== undefined &&
         (typeof member.name !== "string" || member.name.length === 0)

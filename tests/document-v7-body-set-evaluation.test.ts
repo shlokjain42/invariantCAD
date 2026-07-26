@@ -31,6 +31,7 @@ import {
   type KernelShape,
   type MeshData,
   type MeshOptions,
+  type ResolvedTransformOperation,
   type ShapeMeasurements,
 } from "../src/kernel.js";
 import { createManifoldKernel } from "../src/manifold-kernel.js";
@@ -53,6 +54,29 @@ const lengthParameter = (id: string): ExpressionIR => ({
   dimension: "length",
   id: id as never,
 });
+
+const angle = (value: number): ExpressionIR => ({
+  op: "literal",
+  dimension: "angle",
+  value,
+});
+
+const scalar = (value: number): ExpressionIR => ({
+  op: "literal",
+  dimension: "scalar",
+  value,
+});
+
+function transform(
+  input: string,
+  operations: Extract<NodeIRV7, { readonly kind: "transform" }>["operations"],
+): NodeIRV7 {
+  return {
+    kind: "transform",
+    input: { node: input as never, kind: "solid" },
+    operations,
+  };
+}
 
 function box(
   size: readonly [ExpressionIR, ExpressionIR, ExpressionIR] = [
@@ -199,7 +223,7 @@ const strongImportCapabilities = {
 
 interface FakeShape extends KernelShape {
   readonly serial: number;
-  readonly source: KernelPrimitive | "imported";
+  readonly source: KernelPrimitive | "imported" | "transformed";
 }
 
 interface PrimitiveCall {
@@ -216,10 +240,18 @@ interface ImportCall {
   readonly shape: FakeShape;
 }
 
+interface TransformCall {
+  readonly input: FakeShape;
+  readonly operations: readonly ResolvedTransformOperation[];
+  readonly context: KernelFeatureContext | undefined;
+  readonly shape: FakeShape;
+}
+
 interface KernelHarness {
   readonly kernel: GeometryKernel;
   readonly primitiveCalls: PrimitiveCall[];
   readonly importCalls: ImportCall[];
+  readonly transformCalls: TransformCall[];
   readonly meshCalls: readonly {
     readonly shape: FakeShape;
     readonly options: MeshOptions | undefined;
@@ -242,6 +274,7 @@ interface KernelHarnessOptions {
     | "status"
     | "measure"
     | "mesh"
+    | "transform"
     | "disposeShape"
   )[];
   readonly primitiveHook?: (
@@ -256,6 +289,13 @@ interface KernelHarnessOptions {
     shape: FakeShape,
     callIndex: number,
   ) => KernelShape;
+  readonly transformHook?: (
+    input: FakeShape,
+    operations: readonly ResolvedTransformOperation[],
+    context: KernelFeatureContext | undefined,
+    shape: FakeShape,
+    callIndex: number,
+  ) => KernelShape;
   readonly statusHook?: (
     shape: FakeShape,
   ) => ReturnType<GeometryKernel["status"]>;
@@ -264,6 +304,7 @@ interface KernelHarnessOptions {
     shape: FakeShape,
     options: MeshOptions | undefined,
   ) => MeshData;
+  readonly disposeHook?: (shape: FakeShape, callIndex: number) => void;
 }
 
 function createKernelHarness(
@@ -271,6 +312,7 @@ function createKernelHarness(
 ): KernelHarness {
   const primitiveCalls: PrimitiveCall[] = [];
   const importCalls: ImportCall[] = [];
+  const transformCalls: TransformCall[] = [];
   const meshCalls: {
     shape: FakeShape;
     options: MeshOptions | undefined;
@@ -290,7 +332,7 @@ function createKernelHarness(
     representation: "brep",
     exact: true,
     primitives: ["box", "cylinder", "sphere"],
-    features: [],
+    features: ["transform"],
     nativeImports: [],
     nativeExports: ["step", "brep", "brep-binary"],
     topology: {
@@ -375,6 +417,30 @@ function createKernelHarness(
               ) ?? shape;
             }),
         }),
+    ...(omitted.has("transform")
+      ? {}
+      : {
+          transform: (
+            input: KernelShape,
+            operations: readonly ResolvedTransformOperation[],
+            context?: KernelFeatureContext,
+          ): KernelShape =>
+            acquire("transformed", (shape) => {
+              transformCalls.push({
+                input: input as FakeShape,
+                operations,
+                context,
+                shape,
+              });
+              return options.transformHook?.(
+                input as FakeShape,
+                operations,
+                context,
+                shape,
+                transformCalls.length - 1,
+              ) ?? shape;
+            }),
+        }),
     ...(omitted.has("mesh")
       ? {}
       : {
@@ -436,6 +502,7 @@ function createKernelHarness(
               );
             }
             disposed.push(candidate);
+            options.disposeHook?.(candidate, disposed.length - 1);
           },
         }),
     dispose: disposeKernel,
@@ -445,6 +512,7 @@ function createKernelHarness(
     kernel,
     primitiveCalls,
     importCalls,
+    transformCalls,
     meshCalls,
     exportCalls,
     disposed,
@@ -962,7 +1030,7 @@ describe("staged document-v7 body-set output evaluation", () => {
     expect(harness.disposeKernel).not.toHaveBeenCalled();
   });
 
-  it("rejects direct solid outputs and downstream member graphs before kernel work", async () => {
+  it("rejects direct solid outputs before kernel work", async () => {
     const direct = await bodySetDocument({
       nodes: { primitive: box() },
       outputs: { primitive: { node: "primitive", kind: "solid" } },
@@ -974,39 +1042,334 @@ describe("staged document-v7 body-set output evaluation", () => {
     );
     expectFailureCode(directResult, "EVALUATION_UNSUPPORTED");
     expect(directHarness.primitiveCalls).toHaveLength(0);
+  });
 
-    const downstream = await bodySetDocument({
+  it("evaluates ordered transform payloads once across shared body-set graphs", async () => {
+    const document = await bodySetDocument({
+      parameters: {
+        offset: {
+          dimension: "length",
+          default: length(2),
+        },
+      },
+      configurations: {
+        shifted: {
+          parameterOverrides: {
+            offset: length(6),
+          } as never,
+        },
+      },
       nodes: {
         primitive: box(),
-        transformed: {
-          kind: "transform",
-          input: { node: "primitive" as never, kind: "solid" },
+        transformed: transform("primitive", [
+          {
+            kind: "translate",
+            value: [lengthParameter("offset"), length(2), length(3)],
+          },
+          {
+            kind: "rotate",
+            value: [angle(0.1), angle(0.2), angle(0.3)],
+          },
+          {
+            kind: "scale",
+            value: [scalar(2), scalar(3), scalar(4)],
+          },
+          {
+            kind: "mirror",
+            normal: [scalar(1), scalar(0), scalar(0)],
+          },
+        ]),
+        chained: transform("transformed", [
+          {
+            kind: "translate",
+            value: [length(5), length(0), length(0)],
+          },
+        ]),
+        first: bodySet([
+          member("transformed", "transformed"),
+          member("chained-a", "chained"),
+          member("chained-b", "chained"),
+        ]),
+        second: bodySet([
+          member("shared-transform", "transformed"),
+          member("shared-chain", "chained"),
+        ]),
+      },
+      outputs: {
+        first: { node: "first", kind: "bodySet" },
+        second: { node: "second", kind: "bodySet" },
+        alias: { node: "first", kind: "bodySet" },
+      },
+    });
+
+    for (const testCase of [
+      { options: {}, offset: 2, configuration: null },
+      {
+        options: { configuration: "shifted" },
+        offset: 6,
+        configuration: "shifted",
+      },
+      {
+        options: {
+          configuration: "shifted",
+          parameters: { offset: 9 },
+        },
+        offset: 9,
+        configuration: "shifted",
+      },
+    ] as const) {
+      const harness = createKernelHarness();
+      const result = await evaluateBodySetOutputsV7(
+        harness.kernel,
+        document,
+        {
+          ...testCase.options,
+          outputs: ["second", "alias", "first"],
+        },
+      );
+      expect(result.ok, JSON.stringify(result.diagnostics)).toBe(true);
+      if (!result.ok) continue;
+      try {
+        expect(result.value.configurationId).toBe(testCase.configuration);
+        expect(result.value.parameters).toEqual({ offset: testCase.offset });
+        expect(result.value.outputNames).toEqual(["second", "alias", "first"]);
+        expect(result.value.output("first").bodyIds).toEqual([
+          "transformed",
+          "chained-a",
+          "chained-b",
+        ]);
+        expect(result.value.output("second").bodyIds).toEqual([
+          "shared-transform",
+          "shared-chain",
+        ]);
+        expect(harness.primitiveCalls).toHaveLength(1);
+        expect(harness.transformCalls).toHaveLength(2);
+        expect(harness.transformCalls[0]).toMatchObject({
+          input: { serial: 0, source: "box" },
+          context: { feature: "transformed" },
+          shape: { serial: 1, source: "transformed" },
+        });
+        expect(harness.transformCalls[0]!.operations).toEqual([
+          {
+            kind: "translate",
+            value: [testCase.offset, 2, 3],
+          },
+          {
+            kind: "rotate",
+            value: [0.1, 0.2, 0.3],
+          },
+          {
+            kind: "scale",
+            value: [2, 3, 4],
+          },
+          {
+            kind: "mirror",
+            normal: [1, 0, 0],
+          },
+        ]);
+        expect(Object.isFrozen(harness.transformCalls[0]!.operations)).toBe(
+          true,
+        );
+        expect(harness.transformCalls[1]).toMatchObject({
+          input: { serial: 1, source: "transformed" },
           operations: [
             {
               kind: "translate",
-              value: [length(1), length(0), length(0)],
+              value: [5, 0, 0],
             },
           ],
-        },
-        bodies: bodySet([member("downstream", "transformed")]),
+          context: { feature: "chained" },
+          shape: { serial: 2, source: "transformed" },
+        });
+        expect(
+          result.value.output("first").body("chained-a").solid.measure(),
+        ).toEqual(
+          result.value.output("first").body("chained-b").solid.measure(),
+        );
+      } finally {
+        result.value.dispose();
+      }
+      expect(harness.disposed.map(({ serial }) => serial).sort()).toEqual([
+        0, 1, 2,
+      ]);
+      expect(harness.live.size).toBe(0);
+    }
+  });
+
+  it("preflights transform capability and method honesty before kernel work", async () => {
+    const document = await bodySetDocument({
+      nodes: {
+        primitive: box(),
+        transformed: transform("primitive", [
+          {
+            kind: "translate",
+            value: [length(1), length(0), length(0)],
+          },
+        ]),
+        bodies: bodySet([member("transformed", "transformed")]),
       },
       outputs: { bodies: { node: "bodies", kind: "bodySet" } },
     });
-    const downstreamHarness = createKernelHarness();
-    const downstreamResult = await evaluateBodySetOutputsV7(
-      downstreamHarness.kernel,
-      downstream,
+
+    const capabilityHarness = createKernelHarness();
+    const missingCapability = await evaluateBodySetOutputsV7(
+      {
+        ...capabilityHarness.kernel,
+        capabilities: {
+          ...capabilityHarness.kernel.capabilities,
+          features: [],
+        },
+      },
+      document,
     );
-    expectFailureCode(downstreamResult, "EVALUATION_UNSUPPORTED");
-    expect(downstreamHarness.primitiveCalls).toHaveLength(0);
-    if (!downstreamResult.ok) {
-      expect(downstreamResult.diagnostics).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            path: "/nodes/bodies/bodies/0/solid",
-          }),
+    expectFailureCode(missingCapability, "KERNEL_CAPABILITY_MISSING");
+    expect(capabilityHarness.primitiveCalls).toHaveLength(0);
+    expect(capabilityHarness.transformCalls).toHaveLength(0);
+
+    for (const mode of ["missing", "non-callable"] as const) {
+      const harness = createKernelHarness({
+        ...(mode === "missing" ? { omitMethods: ["transform"] } : {}),
+      });
+      const kernel =
+        mode === "missing"
+          ? harness.kernel
+          : ({
+              ...harness.kernel,
+              transform: 17,
+            } as unknown as GeometryKernel);
+      const result = await evaluateBodySetOutputsV7(kernel, document);
+      expectFailureCode(result, "KERNEL_ERROR");
+      expect(harness.primitiveCalls, mode).toHaveLength(0);
+      expect(harness.transformCalls, mode).toHaveLength(0);
+      expect(harness.live.size, mode).toBe(0);
+    }
+  });
+
+  it("rejects transform input and prior-shape aliases transactionally", async () => {
+    const inputAliasDocument = await bodySetDocument({
+      nodes: {
+        primitive: box(),
+        transformed: transform("primitive", [
+          {
+            kind: "translate",
+            value: [length(1), length(0), length(0)],
+          },
         ]),
-      );
+        bodies: bodySet([member("transformed", "transformed")]),
+      },
+      outputs: { bodies: { node: "bodies", kind: "bodySet" } },
+    });
+    const inputAliasHarness = createKernelHarness({
+      transformHook: (input) => input,
+    });
+    const inputAlias = await evaluateBodySetOutputsV7(
+      inputAliasHarness.kernel,
+      inputAliasDocument,
+    );
+    expectFailureCode(inputAlias, "KERNEL_ERROR");
+    expect(inputAliasHarness.primitiveCalls).toHaveLength(1);
+    expect(inputAliasHarness.transformCalls).toHaveLength(1);
+    expect(inputAliasHarness.disposed.map(({ serial }) => serial)).toEqual([0]);
+    expect(inputAliasHarness.live.size).toBe(0);
+
+    const priorAliasDocument = await bodySetDocument({
+      nodes: {
+        primitive: box(),
+        first: transform("primitive", [
+          {
+            kind: "translate",
+            value: [length(1), length(0), length(0)],
+          },
+        ]),
+        second: transform("first", [
+          {
+            kind: "translate",
+            value: [length(2), length(0), length(0)],
+          },
+        ]),
+        bodies: bodySet([member("second", "second")]),
+      },
+      outputs: { bodies: { node: "bodies", kind: "bodySet" } },
+    });
+    let firstTransformShape: FakeShape | undefined;
+    const priorAliasHarness = createKernelHarness({
+      transformHook: (_input, _operations, _context, shape, callIndex) => {
+        if (callIndex === 0) {
+          firstTransformShape = shape;
+          return shape;
+        }
+        return firstTransformShape!;
+      },
+    });
+    const priorAlias = await evaluateBodySetOutputsV7(
+      priorAliasHarness.kernel,
+      priorAliasDocument,
+    );
+    expectFailureCode(priorAlias, "KERNEL_ERROR");
+    expect(priorAliasHarness.primitiveCalls).toHaveLength(1);
+    expect(priorAliasHarness.transformCalls).toHaveLength(2);
+    expect(
+      priorAliasHarness.disposed.map(({ serial }) => serial).sort(),
+    ).toEqual([0, 1]);
+    expect(priorAliasHarness.live.size).toBe(0);
+  });
+
+  it("rejects non-finite and degenerate transform payloads before kernel work", async () => {
+    const overflow: ExpressionIR = {
+      op: "mul",
+      dimension: "length",
+      left: length(Number.MAX_VALUE),
+      right: scalar(2),
+    };
+    const cases = [
+      {
+        operation: {
+          kind: "translate",
+          value: [overflow, length(0), length(0)],
+        },
+        code: "EXPRESSION_INVALID",
+        path: "/nodes/transformed/operations/0/value",
+      },
+      {
+        operation: {
+          kind: "scale",
+          value: [scalar(1), scalar(0), scalar(1)],
+        },
+        code: "FEATURE_INVALID",
+        path: "/nodes/transformed/operations/0/value/1",
+      },
+      {
+        operation: {
+          kind: "mirror",
+          normal: [scalar(0), scalar(0), scalar(0)],
+        },
+        code: "FEATURE_INVALID",
+        path: "/nodes/transformed/operations/0/normal",
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const document = await bodySetDocument({
+        nodes: {
+          primitive: box(),
+          transformed: transform("primitive", [testCase.operation]),
+          bodies: bodySet([member("transformed", "transformed")]),
+        },
+        outputs: { bodies: { node: "bodies", kind: "bodySet" } },
+      });
+      const harness = createKernelHarness();
+      const result = await evaluateBodySetOutputsV7(harness.kernel, document);
+      expectFailureCode(result, testCase.code);
+      if (!result.ok) {
+        expect(result.diagnostics).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ path: testCase.path }),
+          ]),
+        );
+      }
+      expect(harness.primitiveCalls).toHaveLength(0);
+      expect(harness.transformCalls).toHaveLength(0);
+      expect(harness.live.size).toBe(0);
     }
   });
 
@@ -1078,6 +1441,99 @@ describe("staged document-v7 body-set output evaluation", () => {
     expect(resourceResolver).not.toHaveBeenCalled();
     expect(resourceHarness.primitiveCalls).toHaveLength(0);
     expect(resourceHarness.importCalls).toHaveLength(0);
+  });
+
+  it("enforces exact solid-graph node, dependency-link, and operation ceilings", async () => {
+    const document = await bodySetDocument({
+      nodes: {
+        primitive: box(),
+        first: transform("primitive", [
+          {
+            kind: "translate",
+            value: [length(1), length(0), length(0)],
+          },
+          {
+            kind: "scale",
+            value: [scalar(2), scalar(2), scalar(2)],
+          },
+        ]),
+        second: transform("first", [
+          {
+            kind: "mirror",
+            normal: [scalar(1), scalar(0), scalar(0)],
+          },
+        ]),
+        bodies: bodySet([
+          member("first", "first"),
+          member("second", "second"),
+        ]),
+      },
+      outputs: { bodies: { node: "bodies", kind: "bodySet" } },
+    });
+
+    const exactHarness = createKernelHarness();
+    const exact = await evaluateBodySetOutputsV7(
+      exactHarness.kernel,
+      document,
+      {
+        evaluationLimits: {
+          maxDistinctSolids: 1,
+          maxSolidGraphNodes: 3,
+          maxSolidDependencyLinks: 2,
+          maxTransformOperations: 3,
+        },
+      },
+    );
+    expect(exact.ok, JSON.stringify(exact.diagnostics)).toBe(true);
+    if (exact.ok) exact.value.dispose();
+    expect(exactHarness.primitiveCalls).toHaveLength(1);
+    expect(exactHarness.transformCalls).toHaveLength(2);
+    expect(exactHarness.live.size).toBe(0);
+
+    for (const testCase of [
+      {
+        resource: "maxSolidGraphNodes",
+        evaluationLimits: { maxSolidGraphNodes: 2 },
+        limit: 2,
+        actual: 3,
+      },
+      {
+        resource: "maxSolidDependencyLinks",
+        evaluationLimits: { maxSolidDependencyLinks: 1 },
+        limit: 1,
+        actual: 2,
+      },
+      {
+        resource: "maxTransformOperations",
+        evaluationLimits: { maxTransformOperations: 2 },
+        limit: 2,
+        actual: 3,
+      },
+    ] as const) {
+      const harness = createKernelHarness();
+      const result = await evaluateBodySetOutputsV7(
+        harness.kernel,
+        document,
+        { evaluationLimits: testCase.evaluationLimits },
+      );
+      expectFailureCode(result, "RESOURCE_LIMIT_EXCEEDED");
+      if (!result.ok) {
+        expect(result.diagnostics).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              details: expect.objectContaining({
+                resource: testCase.resource,
+                limit: testCase.limit,
+                actual: testCase.actual,
+              }),
+            }),
+          ]),
+        );
+      }
+      expect(harness.primitiveCalls).toHaveLength(0);
+      expect(harness.transformCalls).toHaveLength(0);
+      expect(harness.live.size).toBe(0);
+    }
   });
 
   it("rejects accessor-backed options without invoking accessors", async () => {
@@ -1166,6 +1622,39 @@ describe("staged document-v7 body-set output evaluation", () => {
     expect(primitiveHarness.disposed).toHaveLength(1);
     expect(primitiveHarness.live.size).toBe(0);
 
+    const transformDocument = await bodySetDocument({
+      nodes: {
+        primitive: box(),
+        transformed: transform("primitive", [
+          {
+            kind: "translate",
+            value: [length(1), length(0), length(0)],
+          },
+        ]),
+        bodies: bodySet([member("transformed", "transformed")]),
+      },
+      outputs: { bodies: { node: "bodies", kind: "bodySet" } },
+    });
+    const transformController = new AbortController();
+    const transformHarness = createKernelHarness({
+      transformHook: (_input, _operations, _context, shape) => {
+        transformController.abort();
+        return shape;
+      },
+    });
+    const duringTransform = await evaluateBodySetOutputsV7(
+      transformHarness.kernel,
+      transformDocument,
+      { signal: transformController.signal },
+    );
+    expectFailureCode(duringTransform, "EVALUATION_ABORTED");
+    expect(transformHarness.primitiveCalls).toHaveLength(1);
+    expect(transformHarness.transformCalls).toHaveLength(1);
+    expect(
+      transformHarness.disposed.map(({ serial }) => serial).sort(),
+    ).toEqual([0, 1]);
+    expect(transformHarness.live.size).toBe(0);
+
     const statusController = new AbortController();
     const statusHarness = createKernelHarness({
       statusHook: () => {
@@ -1237,6 +1726,87 @@ describe("staged document-v7 body-set output evaluation", () => {
     expectFailureCode(duringImport, "EVALUATION_ABORTED");
     expect(importHarness.disposed).toHaveLength(1);
     expect(importHarness.live.size).toBe(0);
+  });
+
+  it("rejects transform ownership when cancellation wins the post-await boundary", async () => {
+    const document = await bodySetDocument({
+      nodes: {
+        primitive: box(),
+        transformed: transform("primitive", [
+          {
+            kind: "translate",
+            value: [length(1), length(0), length(0)],
+          },
+        ]),
+        bodies: bodySet([member("transformed", "transformed")]),
+      },
+      outputs: { bodies: { node: "bodies", kind: "bodySet" } },
+    });
+    const controller = new AbortController();
+    const harness = createKernelHarness({
+      transformHook: (_input, _operations, _context, shape) => {
+        queueMicrotask(() => controller.abort());
+        return shape;
+      },
+    });
+
+    const result = await evaluateBodySetOutputsV7(
+      harness.kernel,
+      document,
+      { signal: controller.signal },
+    );
+
+    expectFailureCode(result, "EVALUATION_ABORTED");
+    expect(harness.primitiveCalls).toHaveLength(1);
+    expect(harness.transformCalls).toHaveLength(1);
+    expect(harness.disposed.map(({ serial }) => serial).sort()).toEqual([0, 1]);
+    expect(harness.live.size).toBe(0);
+
+    const originalNumberIsFinite = Number.isFinite;
+    const integrityController = new AbortController();
+    let poisonedCalls = 0;
+    const integrityHarness = createKernelHarness({
+      transformHook: (_input, _operations, _context, shape) => {
+        queueMicrotask(() => integrityController.abort());
+        return shape;
+      },
+      disposeHook: (_shape, callIndex) => {
+        if (callIndex !== 0) return;
+        Number.isFinite = ((value: unknown): boolean => {
+          poisonedCalls += 1;
+          return originalNumberIsFinite(value);
+        }) as typeof Number.isFinite;
+      },
+    });
+    let integrityResult:
+      | Awaited<ReturnType<typeof evaluateBodySetOutputsV7>>
+      | undefined;
+    try {
+      integrityResult = await evaluateBodySetOutputsV7(
+        integrityHarness.kernel,
+        document,
+        { signal: integrityController.signal },
+      );
+    } finally {
+      Number.isFinite = originalNumberIsFinite;
+    }
+
+    expect(integrityResult).toBeDefined();
+    expectFailureCode(integrityResult!, "IR_INVALID");
+    if (integrityResult !== undefined && !integrityResult.ok) {
+      expect(integrityResult.diagnostics).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            details: expect.objectContaining({ runtimeIntegrity: false }),
+          }),
+        ]),
+      );
+    }
+    expect(poisonedCalls).toBe(0);
+    expect(integrityHarness.disposed.map(({ serial }) => serial).sort()).toEqual(
+      [0, 1],
+    );
+    expect(integrityHarness.live.size).toBe(0);
   });
 
   it("contains opaque resolver, primitive, and status failures transactionally", async () => {
