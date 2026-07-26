@@ -5016,6 +5016,124 @@ const BODY_SET_SOLID_DIAGNOSTICS =
     capabilityFailure: bodySetCapabilityFailure,
   });
 
+function validateStagedBooleanExactEvolutionCapabilities(
+  property: ImportedBodyOwnDataValue,
+  advertisedFeatures: readonly unknown[],
+  exact: boolean,
+  kernelId: string,
+  nodeId: NodeId,
+  signal: AbortSignal | undefined,
+  diagnostics: StagedV7SolidDiagnosticContext,
+): CadResult<undefined> {
+  if (
+    property.kind === "missing" ||
+    (property.kind === "data" && property.value === undefined)
+  ) {
+    return success(undefined);
+  }
+
+  const malformed = (
+    reason: string,
+    details: Readonly<Record<string, unknown>> = {},
+  ): CadResult<never> =>
+    diagnostics.kernelFailure(
+      kernelId,
+      `Kernel '${kernelId}' declares malformed exact indexed topology evolution metadata`,
+      {
+        node: nodeId,
+        path: `/nodes/${nodeId}`,
+        details: {
+          protocolViolation: true,
+          kind: "exactIndexedTopologyEvolution",
+          capability: "boolean",
+          reason,
+          ...details,
+        },
+      },
+    );
+
+  if (property.kind !== "data") {
+    return malformed("capability metadata must use an own data property");
+  }
+  const snapshot = preflightDesignDocumentValue(
+    property.value,
+    IMPORTED_BODY_CAPABILITY_SNAPSHOT_LIMITS,
+    { strictV7Snapshot: true },
+  );
+  const afterSnapshot = diagnostics.postBoundaryFailure(signal, nodeId);
+  if (afterSnapshot !== undefined) return afterSnapshot;
+  if (
+    !snapshot.ok ||
+    typeof snapshot.value !== "object" ||
+    snapshot.value === null ||
+    importedBodyArray(snapshot.value)
+  ) {
+    return malformed("capability metadata must be a safe plain object");
+  }
+
+  const protocolVersion = importedBodyOwnDataValue(
+    snapshot.value,
+    "protocolVersion",
+  );
+  const features = importedBodyOwnDataValue(snapshot.value, "features");
+  if (
+    protocolVersion.kind !== "data" ||
+    protocolVersion.value !==
+      EXACT_INDEXED_TOPOLOGY_EVOLUTION_PROTOCOL_VERSION
+  ) {
+    return malformed("unsupported protocol version", {
+      expectedProtocolVersion:
+        EXACT_INDEXED_TOPOLOGY_EVOLUTION_PROTOCOL_VERSION,
+      actualProtocolVersion:
+        protocolVersion.kind === "data" &&
+        (typeof protocolVersion.value === "string" ||
+          typeof protocolVersion.value === "number" ||
+          typeof protocolVersion.value === "boolean" ||
+          protocolVersion.value === null)
+          ? protocolVersion.value
+          : protocolVersion.kind,
+    });
+  }
+  if (features.kind !== "data" || !importedBodyArray(features.value)) {
+    return malformed("features must be a dense array of feature names");
+  }
+
+  const exactFeatures = features.value;
+  const seenFeatures = new ImportedBodySet<string>();
+  for (let index = 0; index < exactFeatures.length; index += 1) {
+    const feature = exactFeatures[index];
+    if (typeof feature !== "string") {
+      return malformed("features must be a dense array of feature names");
+    }
+    if (importedBodySetHasValue(seenFeatures, feature)) {
+      return malformed("features must not contain duplicates", { feature });
+    }
+    importedBodySetAddValue(seenFeatures, feature);
+
+    let declared = false;
+    for (
+      let declaredIndex = 0;
+      declaredIndex < advertisedFeatures.length;
+      declaredIndex += 1
+    ) {
+      if (advertisedFeatures[declaredIndex] === feature) {
+        declared = true;
+        break;
+      }
+    }
+    if (!declared) {
+      return malformed(
+        "exact evolution features must be declared kernel features",
+        { feature },
+      );
+    }
+  }
+  if (!exact) {
+    return malformed("exact evolution requires an exact kernel");
+  }
+  return success(undefined);
+}
+
 function captureBodySetKernelAccess(
   kernel: GeometryKernel,
   plan: StagedSolidGraphPlanV7,
@@ -5107,6 +5225,15 @@ function captureBodySetKernelAccess(
     );
     const afterTopology = postBoundaryFailure(signal);
     if (afterTopology !== undefined) return afterTopology;
+    const exactEvolutionProperty: ImportedBodyOwnDataValue =
+      firstBooleanNode === undefined
+        ? { kind: "missing" }
+        : importedBodyOwnDataValue(
+            rawCapabilities,
+            "exactIndexedTopologyEvolution",
+          );
+    const afterExactEvolution = postBoundaryFailure(signal);
+    if (afterExactEvolution !== undefined) return afterExactEvolution;
     if (
       protocolProperty.kind !== "data" ||
       representationProperty.kind !== "data" ||
@@ -5293,6 +5420,19 @@ function captureBodySetKernelAccess(
         "transform",
         `Kernel '${id}' does not support feature 'transform'`,
       );
+    }
+    if (firstBooleanNode !== undefined) {
+      const exactEvolution =
+        validateStagedBooleanExactEvolutionCapabilities(
+          exactEvolutionProperty,
+          advertisedFeatures,
+          exact,
+          id,
+          firstBooleanNode,
+          signal,
+          diagnostics,
+        );
+      if (!exactEvolution.ok) return exactEvolution;
     }
 
     const nativeExportsSnapshot = preflightDesignDocumentValue(
@@ -5736,11 +5876,12 @@ function validateStagedSolidGraphShape(
   access: BodySetKernelAccess,
   shape: KernelShape,
   nodeId: NodeId,
-  nodeKind: StagedSolidGraphNodeV7["kind"],
+  node: StagedSolidGraphNodeV7,
   signal: AbortSignal | undefined,
   diagnostics: StagedV7SolidDiagnosticContext = BODY_SET_SOLID_DIAGNOSTICS,
 ): CadResult<undefined> {
   const { postBoundaryFailure, kernelFailure } = diagnostics;
+  const nodeKind = node.kind;
   try {
     const rawStatus = importedBodyApply<unknown>(
       access.status,
@@ -5773,7 +5914,8 @@ function validateStagedSolidGraphShape(
     }
     if (!statusOk.value) {
       if (
-        nodeKind === "boolean" &&
+        node.kind === "boolean" &&
+        node.operation !== "union" &&
         statusCode.value === "NULL_SHAPE"
       ) {
         return failure(
@@ -5832,10 +5974,11 @@ function validateStagedSolidGraphShape(
         [capturedVolume],
       );
     if (
-      nodeKind === "boolean" &&
+      node.kind === "boolean" &&
+      node.operation !== "union" &&
       capturedVolume !== undefined &&
       finiteVolume &&
-      !(capturedVolume > 0)
+      capturedVolume === 0
     ) {
       return failure(
         diagnostic(
@@ -6542,7 +6685,7 @@ async function evaluateStagedSolidGraphV7(
       kernelAccess.value,
       shape,
       nodeId,
-      node.kind,
+      node,
       signal,
       diagnostics,
     );
