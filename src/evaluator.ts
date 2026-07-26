@@ -2408,9 +2408,9 @@ export interface BodySetEvaluationLimitsV7 {
   readonly maxBodySetMembers: number;
   /** Distinct primitive and imported-body nodes acquired from the kernel. */
   readonly maxDistinctSolids: number;
-  /** Distinct primitive, imported-body, and transform nodes in the closure. */
+  /** Distinct primitive, imported-body, transform, and Boolean nodes. */
   readonly maxSolidGraphNodes: number;
-  /** Solid input references traversed across the selected closure. */
+  /** Every transform input and authored Boolean operand reference. */
   readonly maxSolidDependencyLinks: number;
   /** Authored operations across distinct transform nodes in the closure. */
   readonly maxTransformOperations: number;
@@ -2456,9 +2456,9 @@ export interface PartEvaluationLimitsV7 {
   readonly maxPartBodies: number;
   /** Distinct primitive and imported-body nodes acquired from the kernel. */
   readonly maxDistinctSolids: number;
-  /** Distinct primitive, imported-body, and transform nodes in the closure. */
+  /** Distinct primitive, imported-body, transform, and Boolean nodes. */
   readonly maxSolidGraphNodes: number;
-  /** Solid input references traversed across the selected closure. */
+  /** Every transform input and authored Boolean operand reference. */
   readonly maxSolidDependencyLinks: number;
   /** Authored operations across distinct transform nodes in the closure. */
   readonly maxTransformOperations: number;
@@ -4009,6 +4009,7 @@ interface BodySetKernelAccess extends StagedV7SolidKernelAccess {
   readonly importDocumentBody?: NonNullable<
     GeometryKernel["importDocumentBody"]
   >;
+  readonly boolean?: NonNullable<GeometryKernel["boolean"]>;
   readonly transform?: NonNullable<GeometryKernel["transform"]>;
   readonly status: GeometryKernel["status"];
   readonly disposeShape: GeometryKernel["disposeShape"];
@@ -4994,41 +4995,168 @@ function bodySetPostBoundaryFailure(
   return undefined;
 }
 
-interface StagedV7LeafDiagnosticContext {
+interface StagedV7SolidDiagnosticContext {
   readonly phase: string;
   readonly capabilityScope: string;
-  readonly leafLabel: string;
-  readonly leafFailureLabel: string;
+  readonly solidLabel: string;
+  readonly solidFailureLabel: string;
   readonly postBoundaryFailure: typeof bodySetPostBoundaryFailure;
   readonly kernelFailure: typeof bodySetKernelFailure;
   readonly capabilityFailure: typeof bodySetCapabilityFailure;
 }
 
-const BODY_SET_LEAF_DIAGNOSTICS =
-  Object.freeze<StagedV7LeafDiagnosticContext>({
+const BODY_SET_SOLID_DIAGNOSTICS =
+  Object.freeze<StagedV7SolidDiagnosticContext>({
     phase: BODY_SET_EVALUATION_PHASE,
     capabilityScope: "body-set",
-    leafLabel: "body-set leaf",
-    leafFailureLabel: "Body-set leaf",
+    solidLabel: "body-set solid",
+    solidFailureLabel: "Body-set solid",
     postBoundaryFailure: bodySetPostBoundaryFailure,
     kernelFailure: bodySetKernelFailure,
     capabilityFailure: bodySetCapabilityFailure,
   });
 
+function validateStagedBooleanExactEvolutionCapabilities(
+  property: ImportedBodyOwnDataValue,
+  advertisedFeatures: readonly unknown[],
+  exact: boolean,
+  kernelId: string,
+  nodeId: NodeId,
+  signal: AbortSignal | undefined,
+  diagnostics: StagedV7SolidDiagnosticContext,
+): CadResult<undefined> {
+  if (
+    property.kind === "missing" ||
+    (property.kind === "data" && property.value === undefined)
+  ) {
+    return success(undefined);
+  }
+
+  const malformed = (
+    reason: string,
+    details: Readonly<Record<string, unknown>> = {},
+  ): CadResult<never> =>
+    diagnostics.kernelFailure(
+      kernelId,
+      `Kernel '${kernelId}' declares malformed exact indexed topology evolution metadata`,
+      {
+        node: nodeId,
+        path: `/nodes/${nodeId}`,
+        details: {
+          protocolViolation: true,
+          kind: "exactIndexedTopologyEvolution",
+          capability: "boolean",
+          reason,
+          ...details,
+        },
+      },
+    );
+
+  if (property.kind !== "data") {
+    return malformed("capability metadata must use an own data property");
+  }
+  const snapshot = preflightDesignDocumentValue(
+    property.value,
+    IMPORTED_BODY_CAPABILITY_SNAPSHOT_LIMITS,
+    { strictV7Snapshot: true },
+  );
+  const afterSnapshot = diagnostics.postBoundaryFailure(signal, nodeId);
+  if (afterSnapshot !== undefined) return afterSnapshot;
+  if (
+    !snapshot.ok ||
+    typeof snapshot.value !== "object" ||
+    snapshot.value === null ||
+    importedBodyArray(snapshot.value)
+  ) {
+    return malformed("capability metadata must be a safe plain object");
+  }
+
+  const protocolVersion = importedBodyOwnDataValue(
+    snapshot.value,
+    "protocolVersion",
+  );
+  const features = importedBodyOwnDataValue(snapshot.value, "features");
+  if (
+    protocolVersion.kind !== "data" ||
+    protocolVersion.value !==
+      EXACT_INDEXED_TOPOLOGY_EVOLUTION_PROTOCOL_VERSION
+  ) {
+    return malformed("unsupported protocol version", {
+      expectedProtocolVersion:
+        EXACT_INDEXED_TOPOLOGY_EVOLUTION_PROTOCOL_VERSION,
+      actualProtocolVersion:
+        protocolVersion.kind === "data" &&
+        (typeof protocolVersion.value === "string" ||
+          typeof protocolVersion.value === "number" ||
+          typeof protocolVersion.value === "boolean" ||
+          protocolVersion.value === null)
+          ? protocolVersion.value
+          : protocolVersion.kind,
+    });
+  }
+  if (features.kind !== "data" || !importedBodyArray(features.value)) {
+    return malformed("features must be a dense array of feature names");
+  }
+
+  const exactFeatures = features.value;
+  const seenFeatures = new ImportedBodySet<string>();
+  for (let index = 0; index < exactFeatures.length; index += 1) {
+    const feature = exactFeatures[index];
+    if (typeof feature !== "string") {
+      return malformed("features must be a dense array of feature names");
+    }
+    if (importedBodySetHasValue(seenFeatures, feature)) {
+      return malformed("features must not contain duplicates", { feature });
+    }
+    importedBodySetAddValue(seenFeatures, feature);
+
+    let declared = false;
+    for (
+      let declaredIndex = 0;
+      declaredIndex < advertisedFeatures.length;
+      declaredIndex += 1
+    ) {
+      if (advertisedFeatures[declaredIndex] === feature) {
+        declared = true;
+        break;
+      }
+    }
+    if (!declared) {
+      return malformed(
+        "exact evolution features must be declared kernel features",
+        { feature },
+      );
+    }
+  }
+  if (!exact) {
+    return malformed("exact evolution requires an exact kernel");
+  }
+  return success(undefined);
+}
+
 function captureBodySetKernelAccess(
   kernel: GeometryKernel,
   plan: StagedSolidGraphPlanV7,
   signal: AbortSignal | undefined,
-  diagnostics: StagedV7LeafDiagnosticContext = BODY_SET_LEAF_DIAGNOSTICS,
+  diagnostics: StagedV7SolidDiagnosticContext = BODY_SET_SOLID_DIAGNOSTICS,
 ): CadResult<BodySetKernelAccess> {
   const orderedLeaves = plan.leafNodes;
+  let firstBooleanNode: NodeId | undefined;
   let firstTransformNode: NodeId | undefined;
   for (let index = 0; index < plan.orderedNodes.length; index += 1) {
     const [nodeId, node] = plan.orderedNodes[index]!;
-    if (node.kind === "transform") {
+    if (node.kind === "boolean" && firstBooleanNode === undefined) {
+      firstBooleanNode = nodeId;
+    } else if (
+      node.kind === "transform" &&
+      firstTransformNode === undefined
+    ) {
       firstTransformNode = nodeId;
-      break;
     }
+    if (
+      firstBooleanNode !== undefined &&
+      firstTransformNode !== undefined
+    ) break;
   }
   const {
     postBoundaryFailure,
@@ -5097,6 +5225,15 @@ function captureBodySetKernelAccess(
     );
     const afterTopology = postBoundaryFailure(signal);
     if (afterTopology !== undefined) return afterTopology;
+    const exactEvolutionProperty: ImportedBodyOwnDataValue =
+      firstBooleanNode === undefined
+        ? { kind: "missing" }
+        : importedBodyOwnDataValue(
+            rawCapabilities,
+            "exactIndexedTopologyEvolution",
+          );
+    const afterExactEvolution = postBoundaryFailure(signal);
+    if (afterExactEvolution !== undefined) return afterExactEvolution;
     if (
       protocolProperty.kind !== "data" ||
       representationProperty.kind !== "data" ||
@@ -5228,6 +5365,7 @@ function captureBodySetKernelAccess(
       );
     }
     const advertisedFeatures = featureSnapshot.value;
+    let booleanAdvertised = false;
     let transformAdvertised = false;
     for (
       let index = 0;
@@ -5262,7 +5400,17 @@ function captureBodySetKernelAccess(
           },
         );
       }
+      if (feature === "boolean") booleanAdvertised = true;
       if (feature === "transform") transformAdvertised = true;
+    }
+    if (firstBooleanNode !== undefined && !booleanAdvertised) {
+      return capabilityFailure(
+        id,
+        firstBooleanNode,
+        "feature",
+        "boolean",
+        `Kernel '${id}' does not support feature 'boolean'`,
+      );
     }
     if (firstTransformNode !== undefined && !transformAdvertised) {
       return capabilityFailure(
@@ -5272,6 +5420,19 @@ function captureBodySetKernelAccess(
         "transform",
         `Kernel '${id}' does not support feature 'transform'`,
       );
+    }
+    if (firstBooleanNode !== undefined) {
+      const exactEvolution =
+        validateStagedBooleanExactEvolutionCapabilities(
+          exactEvolutionProperty,
+          advertisedFeatures,
+          exact,
+          id,
+          firstBooleanNode,
+          signal,
+          diagnostics,
+        );
+      if (!exactEvolution.ok) return exactEvolution;
     }
 
     const nativeExportsSnapshot = preflightDesignDocumentValue(
@@ -5583,6 +5744,31 @@ function captureBodySetKernelAccess(
       }
       importDocumentBody = method;
     }
+    let boolean: BodySetKernelAccess["boolean"];
+    if (firstBooleanNode !== undefined) {
+      const method = kernel.boolean;
+      const afterMethod = postBoundaryFailure(
+        signal,
+        firstBooleanNode,
+      );
+      if (afterMethod !== undefined) return afterMethod;
+      if (typeof method !== "function") {
+        return kernelFailure(
+          id,
+          `Kernel '${id}' advertises feature 'boolean' without implementing it`,
+          {
+            node: firstBooleanNode,
+            path: `/nodes/${firstBooleanNode}`,
+            details: {
+              protocolViolation: true,
+              kind: "feature",
+              capability: "boolean",
+            },
+          },
+        );
+      }
+      boolean = method;
+    }
     let transform: BodySetKernelAccess["transform"];
     if (firstTransformNode !== undefined) {
       const method = kernel.transform;
@@ -5661,6 +5847,7 @@ function captureBodySetKernelAccess(
             ...(importDocumentBody === undefined
               ? {}
               : { importDocumentBody }),
+            ...(boolean === undefined ? {} : { boolean }),
             ...(transform === undefined ? {} : { transform }),
             status,
             measure,
@@ -5684,16 +5871,17 @@ function captureBodySetKernelAccess(
   }
 }
 
-function validateBodySetAcquiredShape(
+function validateStagedSolidGraphShape(
   kernel: GeometryKernel,
   access: BodySetKernelAccess,
   shape: KernelShape,
   nodeId: NodeId,
-  nodeKind: StagedSolidGraphNodeV7["kind"],
+  node: StagedSolidGraphNodeV7,
   signal: AbortSignal | undefined,
-  diagnostics: StagedV7LeafDiagnosticContext = BODY_SET_LEAF_DIAGNOSTICS,
+  diagnostics: StagedV7SolidDiagnosticContext = BODY_SET_SOLID_DIAGNOSTICS,
 ): CadResult<undefined> {
   const { postBoundaryFailure, kernelFailure } = diagnostics;
+  const nodeKind = node.kind;
   try {
     const rawStatus = importedBodyApply<unknown>(
       access.status,
@@ -5716,7 +5904,7 @@ function validateBodySetAcquiredShape(
     ) {
       return kernelFailure(
         access.id,
-        `Kernel '${access.id}' returned malformed status for ${diagnostics.leafLabel} '${nodeId}'`,
+        `Kernel '${access.id}' returned malformed status for ${diagnostics.solidLabel} '${nodeId}'`,
         {
           node: nodeId,
           path: `/nodes/${nodeId}`,
@@ -5725,9 +5913,31 @@ function validateBodySetAcquiredShape(
       );
     }
     if (!statusOk.value) {
+      if (
+        node.kind === "boolean" &&
+        node.operation !== "union" &&
+        statusCode.value === "NULL_SHAPE"
+      ) {
+        return failure(
+          diagnostic(
+            "EMPTY_RESULT",
+            `Boolean feature '${nodeId}' produced no solid`,
+            {
+              severity: "error",
+              node: nodeId,
+              path: `/nodes/${nodeId}`,
+              details: {
+                phase: diagnostics.phase,
+                kernel: access.id,
+                status: statusCode.value,
+              },
+            },
+          ),
+        );
+      }
       return kernelFailure(
         access.id,
-        `Kernel '${access.id}' returned an invalid ${diagnostics.leafLabel} '${nodeId}'`,
+        `Kernel '${access.id}' returned an invalid ${diagnostics.solidLabel} '${nodeId}'`,
         {
           node: nodeId,
           path: `/nodes/${nodeId}`,
@@ -5752,19 +5962,49 @@ function validateBodySetAcquiredShape(
     if (afterMeasurementCapture !== undefined) {
       return afterMeasurementCapture;
     }
-    if (
-      volume.kind !== "data" ||
-      typeof volume.value !== "number" ||
-      !importedBodyApply<boolean>(
+    const capturedVolume =
+      volume.kind === "data" && typeof volume.value === "number"
+        ? volume.value
+        : undefined;
+    const finiteVolume =
+      capturedVolume !== undefined &&
+      importedBodyApply<boolean>(
         importedBodyNumberIsFinite,
         Number,
-        [volume.value],
-      ) ||
-      !(volume.value > 0)
+        [capturedVolume],
+      );
+    if (
+      node.kind === "boolean" &&
+      node.operation !== "union" &&
+      capturedVolume !== undefined &&
+      finiteVolume &&
+      capturedVolume === 0
+    ) {
+      return failure(
+        diagnostic(
+          "EMPTY_RESULT",
+          `Boolean feature '${nodeId}' produced no positive-volume solid`,
+          {
+            severity: "error",
+            node: nodeId,
+            path: `/nodes/${nodeId}`,
+            details: {
+              phase: diagnostics.phase,
+              kernel: access.id,
+              volume: capturedVolume,
+            },
+          },
+        ),
+      );
+    }
+    if (
+      capturedVolume === undefined ||
+      !finiteVolume ||
+      !(capturedVolume > 0)
     ) {
       return kernelFailure(
         access.id,
-        `Kernel '${access.id}' returned a non-positive ${diagnostics.leafLabel} '${nodeId}'`,
+        `Kernel '${access.id}' returned a non-positive ${diagnostics.solidLabel} '${nodeId}'`,
         {
           node: nodeId,
           path: `/nodes/${nodeId}`,
@@ -5789,7 +6029,7 @@ function validateBodySetAcquiredShape(
     if (afterFailure !== undefined) return afterFailure;
     return kernelFailure(
       access.id,
-      `Kernel '${access.id}' could not validate ${diagnostics.leafLabel} '${nodeId}'`,
+      `Kernel '${access.id}' could not validate ${diagnostics.solidLabel} '${nodeId}'`,
       {
         node: nodeId,
         path: `/nodes/${nodeId}`,
@@ -5798,7 +6038,7 @@ function validateBodySetAcquiredShape(
           nodeKind,
           cause: bodySetThrownCause(
             error,
-            `${diagnostics.leafFailureLabel} validation failed with an opaque value`,
+            `${diagnostics.solidFailureLabel} validation failed with an opaque value`,
           ),
         },
       },
@@ -5821,7 +6061,7 @@ interface EvaluateStagedSolidGraphV7Options {
   readonly resolver?: ResourceResolverV7;
   readonly resourceLimits: ResourceResolutionLimitsV7;
   readonly signal?: AbortSignal;
-  readonly diagnostics: StagedV7LeafDiagnosticContext;
+  readonly diagnostics: StagedV7SolidDiagnosticContext;
 }
 
 function resolvedTransformOperationV7(
@@ -5829,7 +6069,7 @@ function resolvedTransformOperationV7(
   operation: TransformOperationIR,
   operationIndex: number,
   expression: (value: ExpressionIR) => number,
-  diagnostics: StagedV7LeafDiagnosticContext,
+  diagnostics: StagedV7SolidDiagnosticContext,
 ): CadResult<ResolvedTransformOperation> {
   const field = operation.kind === "mirror" ? "normal" : "value";
   const source =
@@ -5982,6 +6222,7 @@ async function evaluateStagedSolidGraphV7(
     const boundary = postBoundaryFailure(signal, nodeId);
     if (boundary !== undefined) return boundary;
     if (node.kind === "importedBody") continue;
+    if (node.kind === "boolean") continue;
     if (node.kind === "transform") {
       const operations = new Array<ResolvedTransformOperation>(
         node.operations.length,
@@ -6090,7 +6331,7 @@ async function evaluateStagedSolidGraphV7(
             ? {}
             : { segments: node.segments }),
         });
-      } else {
+      } else if (node.kind === "sphere") {
         const radius = expression(node.radius);
         if (
           !importedBodyApply<boolean>(
@@ -6233,7 +6474,7 @@ async function evaluateStagedSolidGraphV7(
           return failAfterCleanup(
             kernelFailure(
               kernelAccess.value.id,
-              `Verified resource '${node.resource}' is unavailable for ${diagnostics.leafLabel} '${nodeId}'`,
+              `Verified resource '${node.resource}' is unavailable for ${diagnostics.solidLabel} '${nodeId}'`,
               {
                 node: nodeId,
                 path: `/nodes/${nodeId}/resource`,
@@ -6250,6 +6491,69 @@ async function evaluateStagedSolidGraphV7(
           kernelAccess.value.importDocumentBody!,
           kernel,
           [bytes, importedBodyImportOptions(node), context],
+        );
+      } else if (node.kind === "boolean") {
+        const targetShape = importedBodyMapGetValue(
+          shapesByNode,
+          node.target.node,
+        );
+        if (targetShape === undefined) {
+          return failAfterCleanup(
+            kernelFailure(
+              kernelAccess.value.id,
+              `Solid graph Boolean '${nodeId}' has no evaluated target`,
+              {
+                node: nodeId,
+                path: `/nodes/${nodeId}/target`,
+                details: {
+                  protocolViolation: true,
+                  referencedNode: node.target.node,
+                },
+              },
+            ),
+          );
+        }
+        const toolShapes = new Array<KernelShape>();
+        for (
+          let toolIndex = 0;
+          toolIndex < node.tools.length;
+          toolIndex += 1
+        ) {
+          const referencedNode = node.tools[toolIndex]!.node;
+          const toolShape = importedBodyMapGetValue(
+            shapesByNode,
+            referencedNode,
+          );
+          if (toolShape === undefined) {
+            return failAfterCleanup(
+              kernelFailure(
+                kernelAccess.value.id,
+                `Solid graph Boolean '${nodeId}' has no evaluated tool at index ${toolIndex}`,
+                {
+                  node: nodeId,
+                  path: `/nodes/${nodeId}/tools/${toolIndex}`,
+                  details: {
+                    protocolViolation: true,
+                    referencedNode,
+                  },
+                },
+              ),
+            );
+          }
+          importedBodyArrayAppend(toolShapes, toolShape);
+        }
+        importedBodyApply<void>(importedBodyObjectFreeze, Object, [
+          toolShapes,
+        ]);
+        shape = importedBodyApply<KernelShape>(
+          kernelAccess.value.boolean!,
+          kernel,
+          [
+            node.operation,
+            targetShape,
+            toolShapes,
+            context,
+          ],
         );
       } else if (node.kind === "transform") {
         const inputShape = importedBodyMapGetValue(
@@ -6376,12 +6680,12 @@ async function evaluateStagedSolidGraphV7(
     if (afterAcquisition !== undefined) {
       return failAfterCleanup(afterAcquisition);
     }
-    const validated = validateBodySetAcquiredShape(
+    const validated = validateStagedSolidGraphShape(
       kernel,
       kernelAccess.value,
       shape,
       nodeId,
-      node.kind,
+      node,
       signal,
       diagnostics,
     );
@@ -6409,8 +6713,8 @@ async function evaluateStagedSolidGraphV7(
 
 /**
  * Evaluates direct document-v7 `bodySet` outputs whose authored members
- * reference bounded graphs of box, cylinder, sphere, importedBody, and
- * transform nodes.
+ * reference bounded graphs of box, cylinder, sphere, importedBody, transform,
+ * and Boolean nodes.
  *
  * This source export deliberately remains absent from `src/index.ts`. The
  * supplied kernel is borrowed. Every failure disposes each distinct acquired
@@ -6678,7 +6982,7 @@ export async function evaluateBodySetOutputsV7(
     ...(options.signal === undefined
       ? {}
       : { signal: options.signal }),
-    diagnostics: BODY_SET_LEAF_DIAGNOSTICS,
+    diagnostics: BODY_SET_SOLID_DIAGNOSTICS,
   });
   const afterSolidGraph = bodySetPostBoundaryFailure(options.signal);
   if (afterSolidGraph !== undefined) {
@@ -7130,12 +7434,12 @@ function partCapabilityFailure(
   );
 }
 
-const PART_LEAF_DIAGNOSTICS =
-  Object.freeze<StagedV7LeafDiagnosticContext>({
+const PART_SOLID_DIAGNOSTICS =
+  Object.freeze<StagedV7SolidDiagnosticContext>({
     phase: PART_EVALUATION_PHASE,
     capabilityScope: "part",
-    leafLabel: "part leaf",
-    leafFailureLabel: "Part leaf",
+    solidLabel: "part solid",
+    solidFailureLabel: "Part solid",
     postBoundaryFailure: partPostBoundaryFailure,
     kernelFailure: partKernelFailure,
     capabilityFailure: partCapabilityFailure,
@@ -7288,6 +7592,7 @@ export async function evaluatePartOutputsV7(
         geometryNode.kind === "cylinder" ||
         geometryNode.kind === "sphere" ||
         geometryNode.kind === "importedBody" ||
+        geometryNode.kind === "boolean" ||
         geometryNode.kind === "transform")
     ) {
       geometry = {
@@ -7362,6 +7667,7 @@ export async function evaluatePartOutputsV7(
                 "cylinder",
                 "sphere",
                 "importedBody",
+                "boolean",
                 "transform",
                 "bodySet",
               ],
@@ -7691,7 +7997,7 @@ export async function evaluatePartOutputsV7(
     ...(options.signal === undefined
       ? {}
       : { signal: options.signal }),
-    diagnostics: PART_LEAF_DIAGNOSTICS,
+    diagnostics: PART_SOLID_DIAGNOSTICS,
   });
   const afterSolidGraph = partPostBoundaryFailure(options.signal);
   if (afterSolidGraph !== undefined) {

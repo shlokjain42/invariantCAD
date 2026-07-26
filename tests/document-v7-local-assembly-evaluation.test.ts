@@ -326,6 +326,7 @@ function nestedConfiguredAssemblyDocument(): DesignDocumentV7 {
 interface InstrumentedKernel {
   readonly kernel: GeometryKernel;
   readonly boxCalls: ReturnType<typeof vi.fn>;
+  readonly booleanCalls: ReturnType<typeof vi.fn>;
   readonly transformCalls: ReturnType<typeof vi.fn>;
   readonly disposedShapes: KernelShape[];
   readonly disposeKernel: ReturnType<typeof vi.fn>;
@@ -364,12 +365,20 @@ async function instrumentedManifold(
       >
     ) => base.transform!(...arguments_),
   );
+  const booleanCalls = vi.fn(
+    (
+      ...arguments_: Parameters<
+        NonNullable<GeometryKernel["boolean"]>
+      >
+    ) => base.boolean!(...arguments_),
+  );
   const disposedShapes: KernelShape[] = [];
   const disposeKernel = vi.fn();
   const kernel: GeometryKernel = {
     id: base.id,
     capabilities: base.capabilities,
     box: (...arguments_) => boxCalls(...arguments_),
+    boolean: (...arguments_) => booleanCalls(...arguments_),
     transform: (...arguments_) => transformCalls(...arguments_),
     mesh(shape, options) {
       const valid = base.mesh(shape, options);
@@ -388,11 +397,79 @@ async function instrumentedManifold(
   return {
     kernel,
     boxCalls,
+    booleanCalls,
     transformCalls,
     disposedShapes,
     disposeKernel,
     disposeBase: () => base.dispose(),
   };
+}
+
+function booleanNestedAssemblyDocument(
+  suppressWide = false,
+): DesignDocumentV7 {
+  const cad = stagedBodySetDesignV7(
+    "boolean-nested-local-assembly",
+  );
+  const width = cad.parameter.length("width", mm(4));
+  cad.configuration("wide", (configuration) => {
+    configuration.parameter(width, mm(8));
+  });
+  const target = cad.box("target", {
+    size: [width, mm(2), mm(3)],
+  });
+  const firstTool = cad.box("first-tool", {
+    size: [mm(2), mm(2), mm(3)],
+  });
+  const secondTool = cad.box("second-tool", {
+    size: [mm(1), mm(2), mm(3)],
+  });
+  const movedFirst = cad.translate("moved-first", firstTool, [
+    width,
+    mm(0),
+    mm(0),
+  ]);
+  const movedSecond = cad.translate("moved-second", secondTool, [
+    width.add(mm(2)),
+    mm(0),
+    mm(0),
+  ]);
+  const combined = cad.union("combined", target, [
+    movedFirst,
+    movedSecond,
+  ]);
+  const part = cad.part("part", combined, {
+    partNumber: "BOOLEAN-001",
+    massDensity: kgPerCubicMillimeter(1e-6),
+  });
+  const child = cad.assembly("child", (instances) => {
+    instances.instance("leaf", part, {
+      placement: [tf.translate([mm(0), mm(10), mm(0)])],
+    });
+  });
+  const root = cad.assembly("root", (instances) => {
+    instances.instance("base", child, {
+      configuration: { mode: "base" },
+    });
+    instances.instance("wide-first", child, {
+      configuration: {
+        mode: "named",
+        id: "wide" as ConfigurationId,
+      },
+      placement: [tf.translate([mm(20), mm(0), mm(0)])],
+      suppressed: suppressWide,
+    });
+    instances.instance("wide-second", child, {
+      configuration: {
+        mode: "named",
+        id: "wide" as ConfigurationId,
+      },
+      placement: [tf.translate([mm(40), mm(0), mm(0)])],
+      suppressed: suppressWide,
+    });
+  });
+  cad.output("product", root);
+  return cad.build();
 }
 
 function transformedNestedAssemblyDocument(
@@ -965,6 +1042,255 @@ describe("staged Document v7 local assembly evaluation", () => {
     }
     expect(harness.boxCalls).toHaveBeenCalledTimes(1);
     expect(harness.disposedShapes).toHaveLength(1);
+  });
+
+  it("evaluates configured Boolean parts through nested assemblies with ordered calls and contextual reuse", async () => {
+    const harness = await instrumentedManifold();
+    const result = await evaluateLocalAssemblyOutputsV7(
+      harness.kernel,
+      booleanNestedAssemblyDocument(),
+      { outputs: ["product"] },
+    );
+    expect(result.ok, JSON.stringify(result.diagnostics)).toBe(true);
+    if (!result.ok) {
+      harness.disposeBase();
+      return;
+    }
+    try {
+      const product = result.value.output("product");
+      expect(
+        product.occurrences.map((occurrence) => ({
+          path: occurrence.path,
+          configuration: occurrence.configurationId,
+          translation: [
+            occurrence.transform[12],
+            occurrence.transform[13],
+            occurrence.transform[14],
+          ],
+        })),
+      ).toEqual([
+        {
+          path: ["base", "leaf"],
+          configuration: null,
+          translation: [0, 10, 0],
+        },
+        {
+          path: ["wide-first", "leaf"],
+          configuration: "wide",
+          translation: [20, 10, 0],
+        },
+        {
+          path: ["wide-second", "leaf"],
+          configuration: "wide",
+          translation: [40, 10, 0],
+        },
+      ]);
+      expect(product.occurrences[0]!.part).not.toBe(
+        product.occurrences[1]!.part,
+      );
+      expect(product.occurrences[1]!.part).toBe(
+        product.occurrences[2]!.part,
+      );
+      expect(
+        product.occurrences.map((occurrence) =>
+          occurrence.part.geometry.kind === "solid"
+            ? occurrence.part.geometry.solid.measure().volume
+            : null,
+        ),
+      ).toEqual([42, 66, 66]);
+
+      expect(harness.boxCalls).toHaveBeenCalledTimes(6);
+      expect(harness.transformCalls).toHaveBeenCalledTimes(4);
+      expect(harness.booleanCalls).toHaveBeenCalledTimes(2);
+      for (let contextIndex = 0; contextIndex < 2; contextIndex += 1) {
+        const boxOffset = contextIndex * 3;
+        const transformOffset = contextIndex * 2;
+        const booleanCall =
+          harness.booleanCalls.mock.calls[contextIndex]!;
+        expect(booleanCall[0]).toBe("union");
+        expect(booleanCall[1]).toBe(
+          harness.boxCalls.mock.results[boxOffset]!.value,
+        );
+        expect(booleanCall[2]).toEqual([
+          harness.transformCalls.mock.results[transformOffset]!.value,
+          harness.transformCalls.mock.results[transformOffset + 1]!
+            .value,
+        ]);
+        expect(booleanCall[3]).toMatchObject({ feature: "combined" });
+        expect(
+          harness.transformCalls.mock.calls[transformOffset]![1],
+        ).toEqual([
+          {
+            kind: "translate",
+            value: [contextIndex === 0 ? 4 : 8, 0, 0],
+          },
+        ]);
+        expect(
+          harness.transformCalls.mock.calls[transformOffset + 1]![1],
+        ).toEqual([
+          {
+            kind: "translate",
+            value: [contextIndex === 0 ? 6 : 10, 0, 0],
+          },
+        ]);
+      }
+
+      const bounds = meshBounds(product.mesh());
+      expect(bounds.min[0]).toBeCloseTo(0, 6);
+      expect(bounds.min[1]).toBeCloseTo(10, 6);
+      expect(bounds.min[2]).toBeCloseTo(0, 6);
+      expect(bounds.max[0]).toBeCloseTo(51, 6);
+      expect(bounds.max[1]).toBeCloseTo(12, 6);
+      expect(bounds.max[2]).toBeCloseTo(3, 6);
+
+      const bom = product.billOfMaterials();
+      expect(bom.ok, JSON.stringify(bom.diagnostics)).toBe(true);
+      if (bom.ok) {
+        expect(
+          bom.value.items.map((item) => ({
+            configuration: item.effectiveConfigurationId,
+            quantity: item.quantity,
+            definitionMass: item.definitionMass,
+            totalMass: item.totalMass,
+          })),
+        ).toEqual([
+          {
+            configuration: null,
+            quantity: 1,
+            definitionMass: expect.closeTo(42e-6, 12),
+            totalMass: expect.closeTo(42e-6, 12),
+          },
+          {
+            configuration: "wide",
+            quantity: 2,
+            definitionMass: expect.closeTo(66e-6, 12),
+            totalMass: expect.closeTo(132e-6, 12),
+          },
+        ]);
+        expect(bom.value.totalQuantity).toBe(3);
+        expect(bom.value.totalMass).toBeCloseTo(174e-6, 12);
+      }
+      const physical = product.physicalMassProperties();
+      expect(
+        physical.ok,
+        JSON.stringify(physical.diagnostics),
+      ).toBe(true);
+      if (physical.ok) {
+        expect(physical.value.mass).toBeCloseTo(174e-6, 12);
+      }
+    } finally {
+      result.value.dispose();
+      harness.disposeBase();
+    }
+    expect(harness.disposedShapes).toHaveLength(12);
+  });
+
+  it("prunes suppressed Boolean contexts before graph charging or kernel work", async () => {
+    const harness = await instrumentedManifold();
+    const result = await evaluateLocalAssemblyOutputsV7(
+      harness.kernel,
+      booleanNestedAssemblyDocument(true),
+      {
+        outputs: ["product"],
+        evaluationLimits: {
+          maxDistinctSolids: 3,
+          maxSolidGraphNodes: 6,
+          maxSolidDependencyLinks: 5,
+          maxTransformOperations: 2,
+        },
+      },
+    );
+    expect(result.ok, JSON.stringify(result.diagnostics)).toBe(true);
+    if (!result.ok) {
+      harness.disposeBase();
+      return;
+    }
+    try {
+      const product = result.value.output("product");
+      expect(
+        product.occurrences.map((occurrence) => occurrence.path),
+      ).toEqual([["base", "leaf"]]);
+      expect(harness.boxCalls).toHaveBeenCalledTimes(3);
+      expect(harness.transformCalls).toHaveBeenCalledTimes(2);
+      expect(harness.booleanCalls).toHaveBeenCalledTimes(1);
+      const physical = product.physicalMassProperties();
+      expect(
+        physical.ok,
+        JSON.stringify(physical.diagnostics),
+      ).toBe(true);
+      if (physical.ok) {
+        expect(physical.value.mass).toBeCloseTo(42e-6, 12);
+      }
+    } finally {
+      result.value.dispose();
+      harness.disposeBase();
+    }
+    expect(harness.disposedShapes).toHaveLength(6);
+  });
+
+  it("meters Boolean solid graphs globally by configuration context at exact ceilings", async () => {
+    const document = booleanNestedAssemblyDocument();
+    const cases = [
+      {
+        resource: "maxSolidGraphNodes" as const,
+        limit: 11,
+        actual: 12,
+      },
+      {
+        resource: "maxSolidDependencyLinks" as const,
+        limit: 9,
+        actual: 10,
+      },
+    ];
+    const harness = await instrumentedManifold();
+    for (const testCase of cases) {
+      const result = await evaluateLocalAssemblyOutputsV7(
+        harness.kernel,
+        document,
+        {
+          outputs: ["product"],
+          evaluationLimits: {
+            [testCase.resource]: testCase.limit,
+          },
+        },
+      );
+      expect(result.ok, testCase.resource).toBe(false);
+      if (!result.ok) {
+        expect(result.diagnostics[0]).toMatchObject({
+          code: "RESOURCE_LIMIT_EXCEEDED",
+          details: {
+            resource: testCase.resource,
+            limit: testCase.limit,
+            actual: testCase.actual,
+          },
+        });
+      }
+    }
+    expect(harness.boxCalls).not.toHaveBeenCalled();
+    expect(harness.transformCalls).not.toHaveBeenCalled();
+    expect(harness.booleanCalls).not.toHaveBeenCalled();
+
+    const exact = await evaluateLocalAssemblyOutputsV7(
+      harness.kernel,
+      document,
+      {
+        outputs: ["product"],
+        evaluationLimits: {
+          maxSolidGraphNodes: 12,
+          maxSolidDependencyLinks: 10,
+        },
+      },
+    );
+    expect(exact.ok, JSON.stringify(exact.diagnostics)).toBe(true);
+    if (exact.ok) {
+      expect(exact.value.output("product").occurrences).toHaveLength(3);
+      exact.value.dispose();
+    }
+    expect(harness.boxCalls).toHaveBeenCalledTimes(6);
+    expect(harness.transformCalls).toHaveBeenCalledTimes(4);
+    expect(harness.booleanCalls).toHaveBeenCalledTimes(2);
+    expect(harness.disposedShapes).toHaveLength(12);
+    harness.disposeBase();
   });
 
   it("evaluates transformed part-local geometry through nested placements and reuses configuration contexts", async () => {

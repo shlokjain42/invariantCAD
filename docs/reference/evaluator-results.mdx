@@ -70,20 +70,21 @@ model; an aggregate export follows the current evaluated geometry behavior.
 ## Repository-only staged Document v7 geometry, local assemblies, and datums
 
 The repository-only `stagedBodySetDesignV7(...)` facade can now author the
-bounded primitive/import/transform solid DAG admitted by the staged import,
-body-set, part, and nested local-assembly evaluators, plus the nodes admitted
-by the datum resolver, without hand-writing v7 IR. It admits typed length,
-angle, mass-density, and scalar parameters; named parameter, part-material,
-and assembly-instance-suppression configurations; document-owned materials;
-boxes, cylinders, spheres; ordered solid transforms and typed
+bounded primitive/import/Boolean/transform solid DAG admitted by the staged
+import, body-set, part, and nested local-assembly evaluators, plus the nodes
+admitted by the datum resolver, without hand-writing v7 IR. It admits typed
+length, angle, mass-density, and scalar parameters; named parameter,
+part-material, and assembly-instance-suppression configurations;
+document-owned materials; boxes, cylinders, spheres; ordered
+union/subtract/intersect nodes; ordered solid transforms and typed
 translate/rotate/scale/mirror conveniences; content commitments; imported
 bodies; body sets; parts over one staged solid DAG root or body set; acyclic
 local assemblies containing owned parts or previously completed local
 assemblies; and datum points, axes, planes, and coordinate systems. Outputs may
 directly reference an imported body, body set, part, or staged local assembly;
-generic primitive or transformed-solid outputs remain unsupported. Datums are
-selected separately by node ID and are never design outputs. The built
-`DesignDocumentV7` is detached, deeply frozen, and accepted by strict v7
+generic primitive, Boolean, or transformed-solid outputs remain unsupported.
+Datums are selected separately by node ID and are never design outputs. The
+built `DesignDocumentV7` is detached, deeply frozen, and accepted by strict v7
 parsing and semantic validation; `build({ limits })` can apply partial
 `DesignDocumentLimits` overrides and raises a `CadError` rather than returning
 an invalid document. The facade is not a root or package-subpath export and
@@ -156,29 +157,43 @@ overrides through `maxSelectedOutputs`, `maxBodySetMembers`,
 Each evaluated body-set output retains the authored member sequence and each
 member's stable ID, optional name, and detached metadata. Every listed member
 is active; this slice does not select or infer a primary body. A member may
-reference an owned box, cylinder, sphere, imported-body leaf, or any transform
-DAG rooted in those leaves. The planner walks the selected closure iteratively
-in dependency-first order. Shared leaves and transform nodes are evaluated
-once per call without deduplicating the memberships that refer to them. Native
-primitive and transform expressions resolve against the base or selected
-named configuration and the admitted caller parameter values.
+reference an owned box, cylinder, sphere, imported-body leaf, or any bounded
+Boolean/transform DAG rooted in those leaves. The planner walks the selected
+closure iteratively in dependency-first order. A Boolean evaluates its target
+first and tools in authored order; every target/tool edge counts toward
+`maxSolidDependencyLinks`, including repeated references. Shared leaves,
+Booleans, and transform nodes are evaluated once per effective configuration
+without deduplicating the memberships that refer to them. Native primitive and
+transform expressions resolve against the base or selected named configuration
+and the admitted caller parameter values.
 
 The result records the kernel `representation` as `"mesh"`, `"brep"`, or
 `"sdf"`, while `exact` mirrors the captured kernel capability. Stock OCCT
-evaluates native primitive/transform graphs as exact B-Rep; Manifold evaluates
-them as approximate mesh geometry. The evaluator uses the selected kernel
-only: it neither retries an OCCT failure on Manifold nor silently converts an
-exact graph to mesh. Any imported member, including one below transforms,
-requires verified caller-resolved bytes and the strong exact B-Rep
-single-solid document-body import capability; weak native import and mesh
-fallback are not used.
+evaluates native primitive/Boolean/transform graphs as exact B-Rep; its Boolean
+history is partial. An owned facade can supply complete Boolean evolution only
+through the existing valid feature-scoped exact indexed-evolution contract.
+That operation-local promise does not upgrade partial history already carried
+by an imported or otherwise partial operand, and the result's `exact` flag
+describes geometry rather than complete persistent history. Manifold evaluates
+the same native graph as approximate mesh geometry and has no topology snapshot
+contract. The evaluator uses the selected kernel only: it neither retries an
+OCCT failure on Manifold nor silently converts an exact graph to mesh. Any
+imported member, including one below Booleans or transforms, requires verified
+caller-resolved bytes and the strong exact B-Rep single-solid document-body
+import capability; weak native import and mesh fallback are not used.
 
 Transform components must resolve to finite values. Scale components must be
-nonzero, and mirror normals must be finite and nonzero. The kernel must both
-advertise and implement the transform feature, and each graph node must return
-a fresh valid positive-volume shape. Capability mismatch, malformed output,
-shape aliasing, cancellation, or any later failure releases every acquired
-shape exactly once.
+nonzero, and mirror normals must be finite and nonzero. The kernel must
+advertise the selected `boolean` or `transform` feature and implement its
+corresponding method before resource resolution or shape acquisition. A
+present malformed exact-evolution capability envelope is authoritative
+protocol failure, not a partial-history downgrade. Each graph node must return
+a fresh valid owned shape. A subtraction or intersection null shape or exactly
+zero volume becomes structured `EMPTY_RESULT`; an impossible empty union and
+negative, non-finite, or malformed volume remain kernel protocol failures.
+Staged evaluation has no `allowEmpty` option. Capability mismatch, malformed
+output, shape aliasing, cancellation, emptiness, or any later failure releases
+every acquired shape exactly once.
 
 `EvaluatedBodySetDesignV7` exposes the selected `configurationId`, resolved
 `parameters`, structured `diagnostics`, deterministic `outputNames`,
@@ -206,13 +221,13 @@ or create a kernel compound.
 The source-only
 `evaluatePartOutputsV7(kernel, document, options)` operation selects only
 outputs that directly reference a Document v7 `part` node. The part's geometry
-must reference either a supported primitive/import/transform solid DAG root or
-a body set admitted by the staged body-set evaluator. The source-only
+must reference either a supported primitive/import/Boolean/transform solid DAG
+root or a body set admitted by the staged body-set evaluator. The source-only
 `stagedBodySetDesignV7(...)` facade constructs exactly those part documents
 through `material(...)`, `part(...)`, typed configuration
 `.partMaterial(...)`, and direct part `output(...)`; it does not admit another
-part, a Boolean-produced solid, or a body set/part/assembly as a transform
-input. Its source-only evaluation contract types are
+part, or a body set/part/assembly as a Boolean or transform input. Its
+source-only evaluation contract types are
 `EvaluatePartOutputsV7Options`,
 `PartEvaluationLimitsV7`, `EvaluatedPartDesignV7`,
 `EvaluatedPartGeometryV7`, and `EvaluatedPartV7`.
@@ -225,8 +240,8 @@ detached metadata, legacy material label, effective material identity and
 definition, density, and density source. Its `geometry` is an explicit
 discriminated union:
 
-- `"solid"` retains the source primitive, imported-body, or transform root and
-  one owned `EvaluatedSolid`.
+- `"solid"` retains the source primitive, imported-body, Boolean, or transform
+  root and one owned `EvaluatedSolid`.
 - `"bodySet"` retains the source body-set node and one
   `EvaluatedBodySetV7`, including its ordered authored memberships.
 
@@ -266,8 +281,8 @@ Part evaluation accepts the same configuration, parameter, output, resolver,
 resource-limit, document-limit, and cancellation boundaries as body-set
 evaluation. Its evaluation limits bound selected outputs, parameter overrides,
 authored part-body memberships, distinct acquired solid leaves, all solid-graph
-nodes, transform dependency links, authored transform operations, and resolved
-material definitions through `maxSelectedOutputs`,
+nodes, all Boolean and transform dependency links, authored transform
+operations, and resolved material definitions through `maxSelectedOutputs`,
 `maxParameterOverrides`, `maxPartBodies`, `maxDistinctSolids`,
 `maxSolidGraphNodes`, `maxSolidDependencyLinks`,
 `maxTransformOperations`, and `maxResolvedMaterials`. These limits bound
@@ -330,8 +345,8 @@ configuration batch when multiple admitted parts reference it. Different
 effective configurations remain different evaluation states even when their
 current numeric values happen to match. This is neither a cross-run cache nor a
 persistent geometry-equivalence claim. A local part may retain the same
-supported transformed single-solid or multibody geometry as a direct staged
-part, including commitment-verified imported leaves.
+supported Boolean/transformed single-solid or multibody geometry as a direct
+staged part, including commitment-verified imported leaves.
 
 `EvaluatedLocalAssemblyDesignV7` exposes the selected root
 `configurationId`, resolved caller-visible parameters, structured diagnostics,
@@ -359,12 +374,14 @@ Assembly evaluation separately bounds selected outputs, caller parameter
 overrides, assembly nesting depth, authored instances scanned, active
 occurrences, aggregate stored leaf-path segments, placement operations,
 effective part contexts, part-body memberships, distinct acquired leaves,
-solid-graph nodes, transform dependency links, transform operations, and
-resolved materials. `maxSolidGraphNodes`, `maxSolidDependencyLinks`, and
+solid-graph nodes, Boolean/transform dependency links, transform operations,
+and resolved materials. `maxSolidGraphNodes`, `maxSolidDependencyLinks`, and
 `maxTransformOperations` are counted globally by `(node, effective
 configuration)` across the complete active assembly tree. Repeated occurrences
 in one context share those charges, different contexts are charged separately,
-and suppressed subtrees are pruned before the counters advance. The explicit
+and suppressed subtrees are pruned before the counters advance. Boolean target
+and tool edges, including repeated references, and transform input edges all
+contribute to the dependency count. The explicit
 nesting ceilings are `maxAssemblyDepth` (default `64`, where the selected root
 definition is depth one) and `maxOccurrencePathSegments` (default `1,000,000`,
 the sum of full path lengths retained for emitted part leaves).
@@ -392,16 +409,17 @@ never disposed by the staged design.
 
 The staged geometry slices still exclude external component evaluation,
 cyclic local-assembly graphs, datum-backed sketches, healing, location I/O,
-Boolean solid inputs, transforms over body sets/parts/assemblies, other
+Boolean or transform inputs that are body sets/parts/assemblies, other
 body-consuming operations, and general solid graphs beyond
-primitive/import/transform DAGs. Generic primitive or transformed-solid
-outputs remain unsupported; a transformed solid must be retained by a body set
-or part. The slices add no mates, joints, degrees-of-freedom solving, motion,
-contact, interference, collision, assembly-wide topology, aggregate geometric
-`measure()`, exact aggregate STEP/BREP, or cross-run cache. The separate datum
-resolver and local-assembly evaluator do not widen the package-root
-`EvaluatedOutput` union, public document alias, builder, evaluator, CLI, or
-migration target; those remain on the frozen v6 surface.
+primitive/import/Boolean/transform DAGs. Generic primitive, Boolean, or
+transformed-solid outputs remain unsupported; a solid result must be retained
+by a body set or part. The slices add no mates, joints,
+degrees-of-freedom solving, motion, contact, interference, collision,
+assembly-wide topology, aggregate geometric `measure()`, exact aggregate
+STEP/BREP, or cross-run cache. The separate datum resolver and local-assembly
+evaluator do not widen the package-root `EvaluatedOutput` union, public
+document alias, builder, evaluator, CLI, or migration target; those remain on
+the frozen v6 surface.
 
 ## Lifetime
 

@@ -590,6 +590,222 @@ describe("staged document-v7 body-set authoring", () => {
     expectDeepFrozen(document);
   });
 
+  it("authors composable Boolean solid graphs without admitting direct solid outputs", () => {
+    const cad = stagedBodySetDesignV7("authored-boolean-graph");
+    const target = cad.box("target", {
+      size: [mm(20), mm(12), mm(4)],
+      center: true,
+    });
+    const firstTool = cad.cylinder("first-tool", {
+      height: mm(8),
+      radius: mm(2),
+      center: true,
+    });
+    const secondToolSource = cad.sphere("second-tool-source", {
+      radius: mm(3),
+    });
+    const secondTool = cad.translate(
+      "second-tool",
+      secondToolSource,
+      [mm(6), mm(0), mm(0)],
+    );
+    const subtractTools: StagedSolidRefV7[] = [
+      firstTool,
+      secondTool,
+    ];
+    const cut = cad.subtract("cut", target, subtractTools);
+    subtractTools.reverse();
+    subtractTools.push(target);
+
+    const bossSource = cad.cylinder("boss-source", {
+      height: mm(4),
+      radius: mm(3),
+      center: true,
+    });
+    const boss = cad.translate("boss", bossSource, [
+      mm(-6),
+      mm(0),
+      mm(0),
+    ]);
+    const joined = cad.union("joined", cut, [boss]);
+    const clipped = cad.intersect("clipped", joined, [target]);
+    const moved = cad.translate("moved", clipped, [
+      mm(0),
+      mm(10),
+      mm(0),
+    ]);
+    const bodies = cad.bodySet("bodies", [
+      { id: "cut", solid: cut },
+      { id: "joined", solid: joined },
+      { id: "moved", solid: moved },
+    ]);
+    const part = cad.part("part", clipped);
+    cad.output("bodies", bodies);
+    cad.output("part", part);
+
+    expect(cut).toBeInstanceOf(StagedSolidRefV7);
+    expect(cut).not.toBeInstanceOf(StagedBodyLeafRefV7);
+    expect(Object.isFrozen(cut)).toBe(true);
+    expect(() => cad.output("direct", clipped as never)).toThrow(
+      /only owned|output|reference/i,
+    );
+
+    const document = cad.build();
+    expect(document.nodes).toMatchObject({
+      cut: {
+        kind: "boolean",
+        operation: "subtract",
+        target: { node: "target", kind: "solid" },
+        tools: [
+          { node: "first-tool", kind: "solid" },
+          { node: "second-tool", kind: "solid" },
+        ],
+      },
+      joined: {
+        kind: "boolean",
+        operation: "union",
+        target: { node: "cut", kind: "solid" },
+        tools: [{ node: "boss", kind: "solid" }],
+      },
+      clipped: {
+        kind: "boolean",
+        operation: "intersect",
+        target: { node: "joined", kind: "solid" },
+        tools: [{ node: "target", kind: "solid" }],
+      },
+      moved: {
+        kind: "transform",
+        input: { node: "clipped", kind: "solid" },
+      },
+      bodies: {
+        kind: "bodySet",
+        bodies: [
+          { id: "cut", solid: { node: "cut", kind: "solid" } },
+          {
+            id: "joined",
+            solid: { node: "joined", kind: "solid" },
+          },
+          { id: "moved", solid: { node: "moved", kind: "solid" } },
+        ],
+      },
+      part: {
+        kind: "part",
+        geometry: { node: "clipped", kind: "solid" },
+      },
+    });
+    expect(document.outputs).toEqual({
+      bodies: { node: "bodies", kind: "bodySet" },
+      part: { node: "part", kind: "part" },
+    });
+    expectDeepFrozen(document);
+  });
+
+  it("hardens Boolean tool capture without partially publishing failed nodes", () => {
+    const first = stagedBodySetDesignV7("first-boolean-owner");
+    const second = stagedBodySetDesignV7("second-boolean-owner");
+    const target = first.box("target", {
+      size: [mm(4), mm(4), mm(4)],
+    });
+    const ownedTool = first.sphere("owned-tool", { radius: mm(1) });
+    const replacementTool = first.cylinder("replacement-tool", {
+      height: mm(4),
+      radius: mm(1),
+    });
+    const foreignTarget = second.box("foreign-target", {
+      size: [mm(2), mm(2), mm(2)],
+    });
+    const foreignTool = second.sphere("foreign-tool", {
+      radius: mm(1),
+    });
+
+    let accessorInvoked = false;
+    const accessorTools = [ownedTool];
+    Object.defineProperty(accessorTools, "0", {
+      configurable: true,
+      enumerable: true,
+      get() {
+        accessorInvoked = true;
+        return ownedTool;
+      },
+    });
+    expect(() =>
+      first.union("foreign-target-result", foreignTarget, accessorTools),
+    ).toThrow(/solid|design|owner|boundar/i);
+    expect(accessorInvoked).toBe(false);
+    expect(() =>
+      first.union("accessor-tools", target, accessorTools),
+    ).toThrow(/own data|dense|tool/i);
+    expect(accessorInvoked).toBe(false);
+
+    expect(() => first.union("empty-tools", target, [])).toThrow(
+      /at least one|tool|empty/i,
+    );
+    expect(() =>
+      first.subtract("non-array-tools", target, {} as never),
+    ).toThrow(/array|tool/i);
+    expect(() =>
+      first.intersect(
+        "sparse-tools",
+        target,
+        new Array(1) as StagedSolidRefV7[],
+      ),
+    ).toThrow(/dense|sparse|tool/i);
+    expect(() =>
+      first.union("foreign-tool-result", target, [foreignTool]),
+    ).toThrow(/solid|design|owner|boundar/i);
+    expect(() =>
+      first.subtract(
+        "forged-target",
+        new StagedSolidRefV7(first, target.node),
+        [ownedTool],
+      ),
+    ).toThrow(/solid|design|owner|boundar/i);
+    expect(() =>
+      first.intersect("forged-tool", target, [
+        new StagedSolidRefV7(first, ownedTool.node),
+      ]),
+    ).toThrow(/solid|design|owner|boundar/i);
+
+    const mutatingTarget: StagedSolidRefV7[] = [ownedTool];
+    const mutatingTools = new Proxy(mutatingTarget, {
+      ownKeys(value): (string | symbol)[] {
+        value.push(replacementTool);
+        return Reflect.ownKeys(value);
+      },
+    });
+    expect(() =>
+      first.union("mutating-tools", target, mutatingTools),
+    ).toThrow(/dense|tool|read safely/i);
+
+    const detachedTools: StagedSolidRefV7[] = [ownedTool];
+    first.union("detached-tools", target, detachedTools);
+    detachedTools[0] = replacementTool;
+    detachedTools.push(target);
+
+    const document = first.build();
+    for (const id of [
+      "foreign-target-result",
+      "accessor-tools",
+      "empty-tools",
+      "non-array-tools",
+      "sparse-tools",
+      "foreign-tool-result",
+      "forged-target",
+      "forged-tool",
+      "mutating-tools",
+    ]) {
+      expect(document.nodes).not.toHaveProperty(id);
+    }
+    expect(document.nodes).toMatchObject({
+      "detached-tools": {
+        kind: "boolean",
+        operation: "union",
+        target: { node: "target", kind: "solid" },
+        tools: [{ node: "owned-tool", kind: "solid" }],
+      },
+    });
+  });
+
   it("hardens transform capture and rejects foreign or forged solid handles", () => {
     const first = stagedBodySetDesignV7("first-transform-owner");
     const second = stagedBodySetDesignV7("second-transform-owner");
@@ -1183,6 +1399,17 @@ describe("authored staged document-v7 native evaluation", () => {
       scalar(0),
       scalar(0),
     ]);
+    const holeTool = cad.cylinder("hole-tool", {
+      height: mm(4),
+      radius: mm(0.5),
+      segments: 32,
+    });
+    const positionedHole = cad.translate(
+      "positioned-hole",
+      holeTool,
+      [width.mul(0.5), mm(1.5), mm(0)],
+    );
+    const drilled = cad.subtract("drilled", box, [positionedHole]);
     const cylinder = cad.cylinder("cylinder", {
       height: mm(5),
       radius: mm(2),
@@ -1192,6 +1419,7 @@ describe("authored staged document-v7 native evaluation", () => {
       { id: "box", solid: box, name: "Configured box" },
       { id: "box-alias", solid: box },
       { id: "transformed", solid: transformed },
+      { id: "drilled", solid: drilled },
       { id: "cylinder", solid: cylinder },
     ]);
     cad.output("bodies", bodies);
@@ -1211,6 +1439,7 @@ describe("authored staged document-v7 native evaluation", () => {
           "box",
           "box-alias",
           "transformed",
+          "drilled",
           "cylinder",
         ]);
         expect(output.body("box").solid.measure().volume).toBeCloseTo(24, 8);
@@ -1221,6 +1450,12 @@ describe("authored staged document-v7 native evaluation", () => {
         expect(
           output.body("transformed").solid.measure().volume,
         ).toBeCloseTo(48, 8);
+        expect(output.body("drilled").solid.measure().volume).toBeLessThan(
+          24,
+        );
+        expect(output.body("drilled").solid.measure().volume).toBeGreaterThan(
+          20,
+        );
         expect(output.body("cylinder").solid.measure().volume).toBeCloseTo(
           Math.PI * 20,
           0,
@@ -1252,11 +1487,70 @@ describe("authored staged document-v7 native evaluation", () => {
             .body("transformed")
             .solid.measure().volume,
         ).toBeCloseTo(120, 8);
+        expect(
+          configured.value.output("bodies").body("drilled").solid.measure()
+            .volume,
+        ).toBeLessThan(60);
+        expect(
+          configured.value.output("bodies").body("drilled").solid.measure()
+            .volume,
+        ).toBeGreaterThan(56);
       } finally {
         configured.value.dispose();
       }
     } finally {
       kernel.dispose();
+    }
+  }, 30_000);
+
+  it("classifies disjoint real-kernel intersections as empty without leaking shapes", async () => {
+    const cad = stagedBodySetDesignV7("real-empty-boolean");
+    const target = cad.box("target", {
+      size: [mm(2), mm(2), mm(2)],
+    });
+    const toolSource = cad.box("tool-source", {
+      size: [mm(2), mm(2), mm(2)],
+    });
+    const tool = cad.translate("tool", toolSource, [
+      mm(10),
+      mm(0),
+      mm(0),
+    ]);
+    const empty = cad.intersect("empty", target, [tool]);
+    const bodies = cad.bodySet("bodies", [
+      { id: "empty", solid: empty },
+    ]);
+    cad.output("bodies", bodies);
+    const document = cad.build();
+
+    for (const kernel of [
+      await createManifoldKernel(),
+      await createOcctKernel(),
+    ]) {
+      const liveShapes = (
+        kernel as GeometryKernel & {
+          readonly liveShapes: ReadonlySet<unknown>;
+        }
+      ).liveShapes;
+      const liveBefore = liveShapes.size;
+      try {
+        const result = await evaluateBodySetOutputsV7(kernel, document);
+        expect(result.ok, kernel.id).toBe(false);
+        if (!result.ok) {
+          expect(result.diagnostics).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                code: "EMPTY_RESULT",
+                node: "empty",
+                path: "/nodes/empty",
+              }),
+            ]),
+          );
+        }
+        expect(liveShapes.size).toBe(liveBefore);
+      } finally {
+        kernel.dispose();
+      }
     }
   }, 30_000);
 });
@@ -1307,12 +1601,27 @@ describe("authored staged document-v7 exact import evaluation", () => {
       scalar(1),
       scalar(1),
     ]);
+    const booleanTool = cad.box("boolean-tool", {
+      size: [mm(1), mm(3), mm(4)],
+    });
+    const cutImported = cad.subtract(
+      "cut-imported",
+      imported,
+      [booleanTool],
+    );
+    const transformedCut = cad.translate(
+      "transformed-cut",
+      cutImported,
+      [mm(0), mm(10), mm(0)],
+    );
     const bodies = cad.bodySet("bodies", [
       { id: "imported", solid: imported, name: "Imported STEP" },
       { id: "transformed-imported", solid: transformedImported },
       { id: "native", solid: native, name: "Native box" },
       { id: "native-alias", solid: native },
       { id: "transformed-native", solid: transformedNative },
+      { id: "cut-imported", solid: cutImported },
+      { id: "transformed-cut", solid: transformedCut },
     ]);
     cad.output("imported-output", imported);
     cad.output("body-set-output", bodies);
@@ -1384,6 +1693,8 @@ describe("authored staged document-v7 exact import evaluation", () => {
           "native",
           "native-alias",
           "transformed-native",
+          "cut-imported",
+          "transformed-cut",
         ]);
         expect(output.representation).toBe("brep");
         expect(output.exact).toBe(true);
@@ -1405,6 +1716,12 @@ describe("authored staged document-v7 exact import evaluation", () => {
         expect(
           output.body("transformed-native").solid.measure().volume,
         ).toBeCloseTo(48, 8);
+        expect(
+          output.body("cut-imported").solid.measure().volume,
+        ).toBeCloseTo(12, 8);
+        expect(
+          output.body("transformed-cut").solid.measure().volume,
+        ).toBeCloseTo(12, 8);
         expect(
           output.body("transformed-imported").solid.topology(),
         ).toMatchObject({
@@ -1430,8 +1747,21 @@ describe("authored staged document-v7 exact import evaluation", () => {
             ),
           ).toBe(true);
         }
+        expect(output.body("cut-imported").solid.topology()).toMatchObject({
+          ok: true,
+          value: { history: "partial" },
+        });
+        expect(
+          output.body("transformed-cut").solid.topology(),
+        ).toMatchObject({
+          ok: true,
+          value: { history: "partial" },
+        });
         expect(
           output.body("native").solid.export("step").byteLength,
+        ).toBeGreaterThan(100);
+        expect(
+          output.body("cut-imported").solid.export("step").byteLength,
         ).toBeGreaterThan(100);
         expect(output.mesh().indices.length).toBeGreaterThan(30);
         expect(output.export("stl")).toBeInstanceOf(Uint8Array);

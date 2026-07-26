@@ -356,6 +356,56 @@ describe("staged document-v7 part authoring", () => {
     });
   });
 
+  it("accepts Boolean solid geometry and later transforms without exposing either directly", () => {
+    const cad = stagedBodySetDesignV7("boolean-part-authoring");
+    const target = cad.box("target", {
+      size: [mm(12), mm(8), mm(4)],
+      center: true,
+    });
+    const tool = cad.cylinder("tool", {
+      height: mm(8),
+      radius: mm(2),
+      center: true,
+    });
+    const cut = cad.subtract("cut", target, [tool]);
+    const moved = cad.translate("moved", cut, [
+      mm(10),
+      mm(0),
+      mm(0),
+    ]);
+    const part = cad.part("part", moved, {
+      partNumber: "BOOLEAN-001",
+    });
+    cad.output("part", part);
+
+    expect(() => cad.output("cut", cut as never)).toThrow(
+      /only owned|output|reference/i,
+    );
+    expect(() => cad.output("moved", moved as never)).toThrow(
+      /only owned|output|reference/i,
+    );
+    expect(cad.build().nodes).toMatchObject({
+      cut: {
+        kind: "boolean",
+        operation: "subtract",
+        target: { node: "target", kind: "solid" },
+        tools: [{ node: "tool", kind: "solid" }],
+      },
+      moved: {
+        kind: "transform",
+        input: { node: "cut", kind: "solid" },
+      },
+      part: {
+        kind: "part",
+        geometry: { node: "moved", kind: "solid" },
+        partNumber: "BOOLEAN-001",
+      },
+    });
+    expect(cad.build().outputs).toEqual({
+      part: { node: "part", kind: "part" },
+    });
+  });
+
   it("rejects foreign and forged geometry, material, part, and configuration handles", () => {
     const first = stagedBodySetDesignV7("first");
     const second = stagedBodySetDesignV7("second");

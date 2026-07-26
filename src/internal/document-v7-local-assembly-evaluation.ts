@@ -1540,6 +1540,7 @@ function partGeometryBodyCount(
         "cylinder",
         "sphere",
         "importedBody",
+        "boolean",
         "transform",
         "bodySet",
       ],

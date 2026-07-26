@@ -44,6 +44,7 @@ import {
   DOCUMENT_VERSION_V7,
   type AssemblyInstanceIRV7,
   type AssemblyNodeIRV7,
+  type BooleanNodeIR,
   type BodySetMemberIRV7,
   type CoordinateSystemNodeIRV7,
   type DatumAxisNodeIRV7,
@@ -952,8 +953,9 @@ export class StagedResourceRefV7 {
 /**
  * General executable solid reference owned by one staged builder.
  *
- * This handle currently covers native/imported leaves and transform nodes.
- * Additional solid-producing graph nodes remain outside this executable slice.
+ * This handle currently covers native/imported leaves, Boolean results, and
+ * transform nodes. Additional solid-producing graph nodes remain outside this
+ * executable slice.
  *
  * @internal
  */
@@ -1688,6 +1690,77 @@ export class StagedBodySetDesignBuilderV7 {
     return this.#registerLeaf(
       new StagedBodyLeafRefV7(this, reference.node),
     );
+  }
+
+  #boolean(
+    id: string,
+    operation: BooleanNodeIR["operation"],
+    target: StagedSolidRefV7,
+    tools: readonly StagedSolidRefV7[],
+  ): StagedSolidRefV7 {
+    this.#assertSolidOwned(target);
+    const capturedTools = captureDenseOwnDataArray(
+      tools,
+      `Boolean '${id}' tools`,
+      {
+        maximumLength:
+          DEFAULT_DESIGN_DOCUMENT_LIMITS.maxStructuralValues,
+      },
+    );
+    if (capturedTools.length === 0) {
+      throw new TypeError(
+        `Boolean '${id}' requires at least one tool solid`,
+      );
+    }
+    const toolReferences = authoringDenseArray<RefIRV7<"solid">>(
+      capturedTools.length,
+    );
+    for (let index = 0; index < capturedTools.length; index += 1) {
+      const tool = capturedTools[index] as StagedSolidRefV7;
+      this.#assertSolidOwned(tool);
+      authoringDefineArraySlot(toolReferences, index, {
+        node: tool.node,
+        kind: "solid",
+      });
+    }
+
+    const key = this.#assertNodeAvailable(id);
+    const node: BooleanNodeIR = {
+      kind: "boolean",
+      operation,
+      target: { node: target.node, kind: "solid" },
+      tools: authoringFreeze(toolReferences),
+    };
+    const definition = deepFreeze(node);
+    const reference = new StagedSolidRefV7(this, key);
+    authoringWeakSetInsert(this.#solidHandles, reference);
+    authoringSetInsert(this.#nodeIds, key);
+    this.#nodeRecords[key] = definition;
+    return reference;
+  }
+
+  union(
+    id: string,
+    target: StagedSolidRefV7,
+    tools: readonly StagedSolidRefV7[],
+  ): StagedSolidRefV7 {
+    return this.#boolean(id, "union", target, tools);
+  }
+
+  subtract(
+    id: string,
+    target: StagedSolidRefV7,
+    tools: readonly StagedSolidRefV7[],
+  ): StagedSolidRefV7 {
+    return this.#boolean(id, "subtract", target, tools);
+  }
+
+  intersect(
+    id: string,
+    target: StagedSolidRefV7,
+    tools: readonly StagedSolidRefV7[],
+  ): StagedSolidRefV7 {
+    return this.#boolean(id, "intersect", target, tools);
   }
 
   transform(

@@ -77,9 +77,9 @@ stagedBodySetDesignV7(
 ```
 
 This is a deliberately narrow facade for authoring bounded
-primitive/import/transform solid DAGs, acyclic nested local assemblies, and
-datum nodes admitted by the four staged v7 geometry evaluators and the datum
-resolver. Its implementation lives in
+primitive/import/Boolean/transform solid DAGs, acyclic nested local assemblies,
+and datum nodes admitted by the four staged v7 geometry evaluators and the
+datum resolver. Its implementation lives in
 `src/internal/document-v7-body-set-authoring.ts`; it is not exported from the
 package root or any package subpath. The public `design(...)` builder,
 `DesignDocument` alias, evaluator, and migration target remain on frozen v6.
@@ -100,9 +100,12 @@ complete admitted surface is:
 | `box(...)`, `cylinder(...)`, `sphere(...)` | `StagedBodyLeafRefV7` | Direct primitive leaves with the v6-shaped typed length-expression API |
 | `resource(id, commitment)` | `StagedResourceRefV7` | Explicit SHA-256 digest, byte length, media type, ordered location hints, and detached metadata |
 | `importedBody(id, resource, options)` | `StagedImportedBodyRefV7` | Direct STEP or text/binary BREP leaf with a strong single-solid policy |
+| `union(id, target, tools)` | `StagedSolidRefV7` | Ordered Boolean union of one owned target and one or more owned staged solid tools |
+| `subtract(id, target, tools)` | `StagedSolidRefV7` | Multi-tool Boolean subtraction that removes the complete authored tool set from one owned target |
+| `intersect(id, target, tools)` | `StagedSolidRefV7` | Ordered Boolean intersection of one owned target and one or more owned staged solid tools |
 | `transform(id, solid, operations)` | `StagedSolidRefV7` | One or more ordered translate/rotate/scale/mirror operations over an owned staged solid |
 | `translate(...)`, `rotate(...)`, `scale(...)`, `mirror(...)` | `StagedSolidRefV7` | Typed one-operation conveniences that can be chained into a solid DAG |
-| `bodySet(id, members)` | `StagedBodySetRefV7` | Dense non-empty ordered memberships whose roots are owned primitive/import/transform solid DAGs |
+| `bodySet(id, members)` | `StagedBodySetRefV7` | Dense non-empty ordered memberships whose roots are owned primitive/import/Boolean/transform solid DAGs |
 | `part(id, geometry, options?)` | `PartRef` | One owned staged solid DAG root or one owned body set, with part and material intent |
 | `assembly(id, build)` | `AssemblyRef` | Fixed-placement instances of owned local parts or previously completed local assemblies through `StagedLocalAssemblyBuilderV7` |
 | `datumPoint(...)` | Owned datum handle | Parametric position from three length expressions |
@@ -134,6 +137,24 @@ part(
   geometry: StagedSolidRefV7 | StagedBodySetRefV7,
   options?: PartOptions,
 ): PartRef
+
+union(
+  id: string,
+  target: StagedSolidRefV7,
+  tools: readonly StagedSolidRefV7[],
+): StagedSolidRefV7
+
+subtract(
+  id: string,
+  target: StagedSolidRefV7,
+  tools: readonly StagedSolidRefV7[],
+): StagedSolidRefV7
+
+intersect(
+  id: string,
+  target: StagedSolidRefV7,
+  tools: readonly StagedSolidRefV7[],
+): StagedSolidRefV7
 
 transform(
   id: string,
@@ -213,8 +234,9 @@ A body-set member keeps its stable ID, authored position, optional name, and
 detached JSON metadata; multiple memberships may deliberately reference the
 same owned solid DAG root. Every listed member is active, and the facade
 neither selects nor infers a primary body. A staged part wraps either one owned
-primitive, imported-body, or transformed-solid DAG root, or one owned body
-set. It cannot wrap another part, assembly, or body set as a transform input.
+primitive, imported-body, Boolean, or transformed-solid DAG root, or one owned
+body set. It cannot wrap another part or assembly, or use a body set, part, or
+assembly as a Boolean or transform input.
 
 `material(...)` authors a document-owned definition with an explicit
 mass-density expression. `part(...)` accepts the existing `PartOptions`
@@ -227,21 +249,31 @@ still wins. A legacy label and a material name never perform catalogue lookup.
 Length, angle, density, and scalar parameters may be specialized by a named
 configuration and then by bounded caller overrides during evaluation.
 
-### Staged solid transform DAGs
+### Staged solid Boolean and transform DAGs
 
 `StagedSolidRefV7` is the owner-bound handle shared by direct primitive leaves,
-imported-body leaves, and transform results. `transform(...)` requires at least
-one operation and captures its dense ordered operation list as plain own data.
+imported-body leaves, Boolean results, and transform results. `union(...)`,
+`subtract(...)`, and `intersect(...)` require one target plus a dense,
+non-empty tool list. Every operand must be a solid handle issued by the same
+builder. A Boolean result can feed a later Boolean, transform, body-set
+membership, or part. The evaluator invokes exactly one kernel Boolean with the
+target plus a frozen tool array in authored order. Backend implementation
+strategy is kernel-owned, but it may not reorder operands or reinterpret the
+authored operation.
+
+`transform(...)` requires at least one operation and captures its dense ordered
+operation list as plain own data.
 `translate(...)`, `rotate(...)`, `scale(...)`, and `mirror(...)` author one
 typed operation each; their vectors use length, angle, scalar, and scalar
 expressions respectively. A transform result can feed another transform, a
-body-set membership, or a part's single-solid geometry.
+Boolean, body-set membership, or a part's single-solid geometry.
 
 The staged evaluator plans the selected closure iteratively, deduplicates
-shared nodes, and executes every dependency before its consuming transform.
-`maxDistinctSolids` counts primitive and imported leaves.
+shared nodes, and executes every dependency before its consuming Boolean or
+transform. `maxDistinctSolids` counts primitive and imported leaves.
 `maxSolidGraphNodes` counts all distinct admitted solid nodes,
-`maxSolidDependencyLinks` counts transform input edges, and
+`maxSolidDependencyLinks` counts every transform input edge plus every Boolean
+target and tool edge, including repeated tool references, and
 `maxTransformOperations` counts the ordered operations stored on distinct
 transform nodes. Each defaults to `100,000` in the staged body-set, part, and
 local-assembly evaluators.
@@ -252,21 +284,41 @@ must advertise and implement `transform`; each transform must return a fresh,
 valid, positive-volume owned shape. Failure is transactional and releases all
 shapes created for the graph.
 
+The selected kernel must advertise the `boolean` feature and implement the
+Boolean method before resource resolution or shape acquisition. Every created
+node must return a fresh, valid owned shape. A subtraction or intersection that
+returns a null shape or exactly zero volume fails with `EMPTY_RESULT`; an
+impossible empty union, negative/non-finite volume, or any returned shape that
+aliases an owned operand or earlier result fails as a kernel protocol
+violation. Repeated authored operand references remain allowed and are charged
+as separate dependency edges. Staged evaluation has no `allowEmpty` option.
+Failure is transactional and releases every acquired intermediate exactly
+once.
+
 Stock OCCT evaluates this graph as exact B-Rep geometry and retains its normal
-per-solid topology/native-export capabilities. Manifold evaluates the native
-primitive/transform graph as an approximate mesh. The evaluator never retries
-an exact failure on Manifold or silently converts an exact graph to a mesh
-graph. Any imported leaf, transformed or not, additionally requires the strong
-exact B-Rep single-solid document-import capability, so it cannot fall back to
-Manifold's weak or absent import path.
+per-solid topology/native-export capabilities. Its Boolean history remains
+partial unless an owned facade honestly advertises the existing
+feature-scoped exact indexed-evolution protocol for `boolean`. A present
+malformed exact-evolution envelope fails before resource or kernel work rather
+than silently downgrading history. That promise covers the current Boolean
+operation; it does not upgrade partial history already carried by an imported
+or otherwise partial operand, and `exact: true` describes geometry rather than
+complete persistent history. Manifold evaluates native
+primitive/Boolean/transform graphs as approximate mesh geometry and exposes no
+topology snapshots. The evaluator never retries an exact failure on Manifold
+or silently converts an exact graph to a mesh graph. Any imported leaf,
+transformed or Boolean-composed, additionally requires the strong exact B-Rep
+single-solid document-import capability, so it cannot fall back to Manifold's
+weak or absent import path.
 
 This is not general shape algebra. A transform input must be an owned
-`StagedSolidRefV7` created by a primitive, imported body, or prior transform;
-the facade does not author Boolean solids, and a body set, part, or assembly
-cannot be transformed. A generic or transformed solid also cannot be
-published directly by `output(...)`: it must be retained by a body set or
-part. The one exception to generic-solid output is the narrower direct
-`StagedImportedBodyRefV7` output already admitted by the import evaluator.
+`StagedSolidRefV7` created by a primitive, imported body, Boolean, or prior
+transform, and the same restriction applies to every Boolean operand. A body
+set, part, or assembly cannot be Boolean-composed or transformed. A generic
+Boolean or transformed solid also cannot be published directly by
+`output(...)`: it must be retained by a body set or part. The one exception to
+generic-solid output is the narrower direct `StagedImportedBodyRefV7` output
+already admitted by the import evaluator.
 
 ### Nested local assemblies
 
@@ -316,7 +368,7 @@ create a persistent or cross-run cache commitment.
 Local-assembly evaluation separately bounds nesting with `maxAssemblyDepth` and
 the aggregate stored leaf-path length with `maxOccurrencePathSegments`, in
 addition to its instance, occurrence, placement, part, solid, material, and
-resource ceilings. Solid-graph nodes, transform input edges, and transform
+resource ceilings. Solid-graph nodes, all solid dependency edges, and transform
 operations are counted globally by `(node, effective configuration)` across
 the active product tree. Repeated occurrences in the same context reuse that
 count, different contexts are charged independently, and suppressed subtrees
@@ -371,11 +423,12 @@ caller-selected document limits and strict v7 validation before returning the
 detached, recursively frozen document.
 
 This facade does not author generic solid or direct primitive outputs,
-external occurrences, cyclic assembly graphs, datum-backed sketches, Boolean
-nodes, transforms over body sets/parts/assemblies, other body-consuming
-features, per-body materials, or general solid graphs beyond
-primitive/import/transform DAGs. It also does not add datum design outputs, CLI
-support, location I/O, reader inference, healing, a primary-body rule,
+external occurrences, cyclic assembly graphs, datum-backed sketches, Booleans
+over body sets/parts/assemblies, transforms over body sets/parts/assemblies,
+other body-consuming features, per-body materials, or general solid graphs
+beyond primitive/import/Boolean/transform DAGs. It also does not add datum
+design outputs, CLI support, location I/O, reader inference, healing, a
+primary-body rule,
 cross-body or assembly topology, aggregate geometric measurement, mates,
 motion, interference/collision, or exact aggregate STEP/BREP export. Part- and
 assembly-level STL/OBJ export is an aggregate tessellation view and is
