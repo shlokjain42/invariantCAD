@@ -84,9 +84,12 @@ invariantcad inspect model.json \
   --parameter=draftAngle=0.03490658503988659
 ```
 
-Inline values use finite JSON-number syntax. Parameter names use the same ID
-grammar as authored parameters. Lengths are millimetres, angles are radians,
-mass density is `kg/mm³`, and scalars are unitless.
+Inline values use finite JSON-number syntax. The name is the exact stored
+parameter key, including keys preserved by directly evaluable frozen legacy
+documents that the current builder would not author. The assignment is split
+at its final `=`, so a stored key containing `=` remains addressable. Lengths
+are millimetres, angles are radians, mass density is `kg/mm³`, and scalars are
+unitless.
 
 Choose either `--parameters` or one or more `--parameter` options. Supplying
 both is a usage error instead of creating an implicit file-versus-command-line
@@ -100,6 +103,9 @@ arguments, missing values, malformed inline parameters, and duplicate
 single-value options fail before document reading, kernel initialization,
 evaluation, or export. These failures write the reason and usage text to stderr
 and return exit code 2; the CLI never silently ignores a misspelled option.
+Command-scoped help validates any supplied option values without requiring or
+reading a document. For evaluation commands, a parameter file is read and
+validated before the selected geometry kernel is initialized.
 
 ## Exit codes
 

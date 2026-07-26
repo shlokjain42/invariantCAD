@@ -70,6 +70,10 @@ describe("CLI", () => {
         option: "stray-document.json",
       },
       {
+        arguments: ["inspect", ""],
+        option: "document path",
+      },
+      {
         arguments: ["validate", missingDocument, "--kernel", "manifold"],
         option: "--kernel",
       },
@@ -146,6 +150,10 @@ describe("CLI", () => {
         arguments: ["inspect", missingDocument, "--configuration="],
         option: "--configuration",
       },
+      {
+        arguments: ["inspect", "--help", "--kernel", "not-a-kernel"],
+        option: "not-a-kernel",
+      },
     ] as const;
 
     for (const testCase of cases) {
@@ -170,8 +178,6 @@ describe("CLI", () => {
     );
     const malformed = [
       ["inspect", missingDocument, "--parameter", "width"],
-      ["inspect", missingDocument, "--parameter", "=5"],
-      ["inspect", missingDocument, "--parameter", "1width=5"],
       ["inspect", missingDocument, "--parameter", "width="],
       ["inspect", missingDocument, "--parameter", "width=NaN"],
       ["inspect", missingDocument, "--parameter", "width=Infinity"],
@@ -179,6 +185,8 @@ describe("CLI", () => {
       ["inspect", missingDocument, "--parameter", "width=+5"],
       ["inspect", missingDocument, "--parameter", "width=.5"],
       ["inspect", missingDocument, "--parameter", "width=5mm"],
+      ["inspect", missingDocument, "--parameter", "width=true"],
+      ["inspect", missingDocument, "--parameter", "width=null"],
       [
         "inspect",
         missingDocument,
@@ -189,6 +197,22 @@ describe("CLI", () => {
       [
         "inspect",
         missingDocument,
+        "--parameters",
+        "values.json",
+        "--parameter",
+        "width=5",
+      ],
+      ["inspect", "--help", "--parameter", "width=NaN"],
+      [
+        "inspect",
+        "--help",
+        "--parameter",
+        "width=5",
+        "--parameter=width=6",
+      ],
+      [
+        "inspect",
+        "--help",
         "--parameters",
         "values.json",
         "--parameter",
@@ -220,28 +244,36 @@ describe("CLI", () => {
       const moved = cad.transform("moved", solid, [
         tf.translate(vec3(offset, mm(0), mm(0))),
       ]);
+      const part = cad.part("part", moved, {
+        massDensity: kgPerCubicMeter(1_000),
+      });
       cad.configuration("configured", (configuration) => {
         configuration.parameter(width, mm(5));
         configuration.parameter(height, mm(6));
         configuration.parameter(offset, mm(10));
       });
       cad.output("moved", moved);
+      cad.output("part", part);
 
       const documentPath = join(directory, "model.json");
+      const exportPath = join(directory, "moved.obj");
       await writeFile(documentPath, stringifyDocument(cad.build()));
 
-      const result = invokeCli([
-        "inspect",
-        documentPath,
+      const overrides = [
         "--configuration",
         "configured",
-        "--output",
-        "moved",
         "--parameter",
         "width=7.5",
         "--parameter=height=8e0",
         "--parameter",
         "offset=-1.25e1",
+      ] as const;
+      const result = invokeCli([
+        "inspect",
+        documentPath,
+        "--output",
+        "moved",
+        ...overrides,
       ]);
 
       expect(result.status).toBe(0);
@@ -258,6 +290,101 @@ describe("CLI", () => {
       expect(report.moved.volume).toBeCloseTo(240, 10);
       expect(report.moved.boundingBox.min).toEqual([-12.5, 0, 0]);
       expect(report.moved.boundingBox.max).toEqual([-5, 8, 4]);
+
+      const bomResult = invokeCli([
+        "bom",
+        documentPath,
+        "--output",
+        "part",
+        ...overrides,
+      ]);
+      expect(bomResult.status).toBe(0);
+      expect(bomResult.stderr).toBe("");
+      const bom = JSON.parse(bomResult.stdout) as {
+        readonly totalQuantity: number;
+        readonly totalMass: number | null;
+      };
+      expect(bom.totalQuantity).toBe(1);
+      expect(bom.totalMass).toBeCloseTo(0.00024, 12);
+
+      const exportResult = invokeCli([
+        "export",
+        documentPath,
+        "--output",
+        "moved",
+        "--to",
+        exportPath,
+        ...overrides,
+      ]);
+      expect(exportResult.status).toBe(0);
+      expect(exportResult.stderr).toBe("");
+      const vertices = (await readFile(exportPath, "utf8"))
+        .split("\n")
+        .filter((line) => line.startsWith("v "))
+        .map((line) => line.split(/\s+/).slice(1).map(Number));
+      expect(vertices.length).toBeGreaterThan(0);
+      expect(Math.min(...vertices.map((vertex) => vertex[0]!))).toBeCloseTo(
+        -12.5,
+        10,
+      );
+      expect(Math.max(...vertices.map((vertex) => vertex[0]!))).toBeCloseTo(
+        -5,
+        10,
+      );
+      expect(Math.max(...vertices.map((vertex) => vertex[1]!))).toBeCloseTo(
+        8,
+        10,
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it("addresses exact parameter keys in directly evaluable legacy documents", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "invariantcad-cli-"));
+    try {
+      const cad = design("cli-legacy-parameter-key");
+      const width = cad.parameter.length("width", mm(2));
+      cad.output(
+        "solid",
+        cad.box("solid", { size: vec3(width, mm(3), mm(4)) }),
+      );
+      const current = stringifyDocument(cad.build());
+      const legacyEqualsPath = join(directory, "legacy-equals.json");
+      const legacyEmptyPath = join(directory, "legacy-empty.json");
+      await writeFile(
+        legacyEqualsPath,
+        current.replaceAll('"width"', '"legacy=width"'),
+      );
+      await writeFile(
+        legacyEmptyPath,
+        current.replaceAll('"width"', '""'),
+      );
+
+      const equalsResult = invokeCli([
+        "inspect",
+        legacyEqualsPath,
+        "--parameter=legacy=width=5",
+      ]);
+      expect(equalsResult.status).toBe(0);
+      expect(equalsResult.stderr).toBe("");
+      expect(
+        (JSON.parse(equalsResult.stdout) as { solid: { volume: number } }).solid
+          .volume,
+      ).toBeCloseTo(60, 10);
+
+      const emptyResult = invokeCli([
+        "inspect",
+        legacyEmptyPath,
+        "--parameter",
+        "=7",
+      ]);
+      expect(emptyResult.status).toBe(0);
+      expect(emptyResult.stderr).toBe("");
+      expect(
+        (JSON.parse(emptyResult.stdout) as { solid: { volume: number } }).solid
+          .volume,
+      ).toBeCloseTo(84, 10);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

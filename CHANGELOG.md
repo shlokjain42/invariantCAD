@@ -8,14 +8,19 @@
   malformed inline parameter assignments with usage exit code 2 before
   document I/O or kernel initialization. `inspect`, `bom`, and `export` accept
   repeatable `--parameter name=value` and `--parameter=name=value` overrides
-  using finite JSON-number syntax and the authored parameter-ID grammar.
+  using finite JSON-number syntax. Names address exact stored parameter keys,
+  including keys preserved by directly evaluable frozen legacy documents; the
+  final `=` separates the key from its value.
   Inline overrides take precedence over named configurations and document
   defaults. They are intentionally mutually exclusive with the existing
   `--parameters values.json` input so automation cannot depend on an implicit
   file-versus-command-line precedence rule. Syntactically valid unknown
   parameter IDs still flow to the evaluator's structured
   `PARAMETER_MISSING` diagnostic, while the installed-package smoke gate proves
-  strict preflight and repeatable overrides through the packed binary.
+  representative strict-preflight failures and repeatable inspect, BOM, and
+  export overrides through the packed binary. Command-scoped help validates
+  supplied option values, and parameter files are loaded before geometry-kernel
+  initialization.
 - Added source-only staged 0.2 product evaluation for external part and fixed
   subassembly occurrences. The repository-only
   `stagedBodySetDesignV7(...)` facade can bind a committed InvariantCAD

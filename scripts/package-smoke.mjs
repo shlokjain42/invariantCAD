@@ -1526,6 +1526,31 @@ try {
       "missing-cli-document.invariantcad.json",
       "stray-document.json",
     ],
+    ["inspect", ""],
+    [
+      "validate",
+      "missing-cli-document.invariantcad.json",
+      "--kernel",
+      "manifold",
+    ],
+    [
+      "inspect",
+      "missing-cli-document.invariantcad.json",
+      "--kernel",
+    ],
+    [
+      "inspect",
+      "missing-cli-document.invariantcad.json",
+      "--kernel",
+      "manifold",
+      "--kernel=occt",
+    ],
+    [
+      "inspect",
+      "missing-cli-document.invariantcad.json",
+      "--parameter",
+      "cli-width=NaN",
+    ],
     [
       "inspect",
       "missing-cli-document.invariantcad.json",
@@ -1533,6 +1558,15 @@ try {
       "missing-parameters.json",
       "--parameter",
       "cli-width=5",
+    ],
+    ["inspect", "--help", "--kernel", "not-a-kernel"],
+    [
+      "export",
+      "missing-cli-document.invariantcad.json",
+      "--to",
+      "model.stl",
+      "--format",
+      "not-a-format",
     ],
   ]) {
     const invalidResult = runResult(bin, invalidArguments, consumer);
@@ -1583,6 +1617,61 @@ try {
   );
   if (Math.abs(inlineParameterInspection.solid.volume - 120) > 1e-7) {
     throw new Error("Installed CLI ignored repeatable inline parameters");
+  }
+  const inlineParameterBom = JSON.parse(
+    run(
+      bin,
+      [
+        "bom",
+        "model-mass.invariantcad.json",
+        "--output",
+        "assembly",
+        "--parameter",
+        "cli-width=5",
+        "--parameter=cli-height=6e0",
+      ],
+      consumer,
+      { printOutput: false },
+    ),
+  );
+  if (
+    inlineParameterBom.totalQuantity !== 2 ||
+    Math.abs(inlineParameterBom.totalMass - 0.001884) > 1e-12
+  ) {
+    throw new Error("Installed CLI BOM ignored repeatable inline parameters");
+  }
+  run(
+    bin,
+    [
+      "export",
+      "model-mass.invariantcad.json",
+      "--output",
+      "solid",
+      "--parameter",
+      "cli-width=5",
+      "--parameter=cli-height=6e0",
+      "--to",
+      "inline-parameters.obj",
+    ],
+    consumer,
+    { printOutput: false },
+  );
+  const inlineParameterVertices = (
+    await readFile(join(consumer, "inline-parameters.obj"), "utf8")
+  )
+    .split("\n")
+    .filter((line) => line.startsWith("v "))
+    .map((line) => line.split(/\s+/).slice(1).map(Number));
+  if (
+    inlineParameterVertices.length === 0 ||
+    Math.abs(
+      Math.max(...inlineParameterVertices.map((vertex) => vertex[0])) - 5,
+    ) > 1e-7 ||
+    Math.abs(
+      Math.max(...inlineParameterVertices.map((vertex) => vertex[1])) - 6,
+    ) > 1e-7
+  ) {
+    throw new Error("Installed CLI export ignored repeatable inline parameters");
   }
   if (
     massInspection.solid.principalInertia.moments.join(",") !== "26,40,50" ||

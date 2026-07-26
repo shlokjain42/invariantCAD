@@ -15,7 +15,6 @@ import {
   worldRadiiOfGyration,
   type PhysicalMassProperties,
 } from "./mass-properties.js";
-import { parameterId } from "./core/ids.js";
 import { parseDocument } from "./serialization.js";
 import type { Diagnostic } from "./core/result.js";
 
@@ -31,13 +30,18 @@ type CliValueOption =
 
 interface ParsedArguments {
   readonly command: CliCommand;
-  readonly documentPath: string;
+  readonly documentPath: string | undefined;
+  readonly help: boolean;
   readonly options: ReadonlyMap<CliValueOption, readonly string[]>;
 }
 
 type ParsedArgumentsResult =
-  | { readonly ok: true; readonly help: true }
-  | { readonly ok: true; readonly help: false; readonly value: ParsedArguments }
+  | { readonly ok: true; readonly globalHelp: true }
+  | {
+      readonly ok: true;
+      readonly globalHelp: false;
+      readonly value: ParsedArguments;
+    }
   | { readonly ok: false; readonly message: string };
 
 const COMMAND_OPTIONS: Readonly<
@@ -83,11 +87,11 @@ function isValueOption(value: string): value is CliValueOption {
 function parseArguments(values: readonly string[]): ParsedArgumentsResult {
   const command = values[0];
   if (command === undefined) {
-    return { ok: true, help: true };
+    return { ok: true, globalHelp: true };
   }
   if (command === "--help" || command === "-h") {
     return values.length === 1
-      ? { ok: true, help: true }
+      ? { ok: true, globalHelp: true }
       : {
           ok: false,
           message: `Unexpected argument '${values[1]}' after '${command}'`,
@@ -180,21 +184,26 @@ function parseArguments(values: readonly string[]): ParsedArgumentsResult {
       message: `Unexpected positional argument '${positional[1]}'`,
     };
   }
-  if (help) {
-    return { ok: true, help: true };
-  }
-  if (positional.length === 0) {
+  const documentPath = positional[0];
+  if (!help && documentPath === undefined) {
     return {
       ok: false,
       message: `Command '${command}' requires one document path`,
     };
   }
+  if (documentPath !== undefined && documentPath.length === 0) {
+    return {
+      ok: false,
+      message: `Command '${command}' requires a non-empty document path`,
+    };
+  }
   return {
     ok: true,
-    help: false,
+    globalHelp: false,
     value: {
       command,
-      documentPath: positional[0]!,
+      documentPath,
+      help,
       options,
     },
   };
@@ -251,25 +260,14 @@ function parseInlineParameters(
 ): InlineParametersResult {
   const output = Object.create(null) as Record<string, number>;
   for (const assignment of assignments) {
-    const equalsIndex = assignment.indexOf("=");
-    if (equalsIndex <= 0 || equalsIndex === assignment.length - 1) {
+    const equalsIndex = assignment.lastIndexOf("=");
+    if (equalsIndex === -1 || equalsIndex === assignment.length - 1) {
       return {
         ok: false,
         message: `Invalid --parameter '${assignment}'; expected name=value`,
       };
     }
     const name = assignment.slice(0, equalsIndex);
-    try {
-      parameterId(name);
-    } catch (error: unknown) {
-      return {
-        ok: false,
-        message:
-          error instanceof Error
-            ? error.message
-            : `Parameter ID '${name}' is invalid`,
-      };
-    }
     if (Object.hasOwn(output, name)) {
       return {
         ok: false,
@@ -386,7 +384,7 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
   if (!parsedArguments.ok) {
     return usageError(parsedArguments.message);
   }
-  if (parsedArguments.help) {
+  if (parsedArguments.globalHelp) {
     process.stdout.write(usage());
     return 0;
   }
@@ -414,23 +412,34 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
     return usageError(inlineParameters.message);
   }
   const requestedOutput = option(args, "output");
-  if (args.command === "bom" && requestedOutput === undefined) {
-    return usageError("bom requires --output <name>");
-  }
   const destination = option(args, "to");
-  if (args.command === "export" && destination === undefined) {
-    return usageError("export requires --to <path>");
-  }
-
+  const requestedFormat = option(args, "format");
   let exportFormat: ShapeExportFormat | undefined;
-  if (args.command === "export" && destination !== undefined) {
+  if (
+    args.command === "export" &&
+    (destination !== undefined || requestedFormat !== undefined)
+  ) {
     try {
-      exportFormat = inferFormat(destination, option(args, "format"));
+      exportFormat = inferFormat(destination ?? "model.stl", requestedFormat);
     } catch (error: unknown) {
       return usageError(
         error instanceof Error ? error.message : "Invalid export format",
       );
     }
+  }
+
+  if (args.help) {
+    process.stdout.write(usage());
+    return 0;
+  }
+  if (args.command === "bom" && requestedOutput === undefined) {
+    return usageError("bom requires --output <name>");
+  }
+  if (args.command === "export" && destination === undefined) {
+    return usageError("export requires --to <path>");
+  }
+  if (args.documentPath === undefined) {
+    return usageError(`Command '${args.command}' requires one document path`);
   }
 
   const parsed = parseDocument(await readFile(args.documentPath, "utf8"));
@@ -442,6 +451,10 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
     process.stdout.write(`Valid InvariantCAD v${parsed.value.version} document: ${parsed.value.name}\n`);
     return 0;
   }
+  const parameterOverrides = await loadParameters(
+    parametersPath,
+    inlineParameters.value,
+  );
   const exactExport =
     exportFormat === "step" ||
     exportFormat === "brep" ||
@@ -455,10 +468,7 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
       : await createEvaluator();
   try {
     const evaluated = await evaluator.evaluate(parsed.value, {
-      parameters: await loadParameters(
-        parametersPath,
-        inlineParameters.value,
-      ),
+      parameters: parameterOverrides,
       ...(requestedConfiguration !== undefined
         ? { configuration: requestedConfiguration }
         : {}),
@@ -522,7 +532,7 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
           : evaluated.value.outputNames[0];
       if (outputName === undefined) throw new Error("No output is available to export");
       const data = evaluated.value.output(outputName).export(
-        exportFormat ?? inferFormat(destination, option(args, "format")),
+        exportFormat ?? inferFormat(destination, requestedFormat),
       );
       await writeFile(destination, data);
       process.stdout.write(`Wrote ${destination}\n`);
