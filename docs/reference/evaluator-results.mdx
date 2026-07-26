@@ -99,12 +99,13 @@ not widen the ordinary v6 `DesignDocument`, `Evaluator.evaluate(...)`, or
 | `export(format, options?)` | `Uint8Array \| string` | Same capability-gated single-solid export boundary as an evaluated solid |
 | `dispose()` | `void` | Releases this result's imported shape; does not dispose the evaluator or kernel |
 
-Evaluation accepts a caller resolver, `maxResourceBytes`, document limits, and
-an abort signal. It verifies the authored byte length and SHA-256 digest before
-native parsing, requires the strong document-body import capability for the
-exact format/unit pair, and returns structured diagnostics for missing
-resolution, integrity mismatch, limits, cancellation, or kernel failure. Read
-the [verified single-body workflow](/interchange/import-export#verified-single-body-import)
+Evaluation accepts a caller resolver, `resourceLimits.maxResourceBytes`,
+document limits, and an abort signal. It verifies the authored byte length and
+SHA-256 digest before native parsing, requires the strong document-body import
+capability for the exact format/unit pair, and returns structured diagnostics
+for missing resolution, integrity mismatch, limits, cancellation, or kernel
+failure. Read the
+[verified single-body workflow](/interchange/import-export#verified-single-body-import)
 for the closed format/media/unit policy and executable round trip.
 
 ## Repository-only staged geometry, products, and datums
