@@ -69,6 +69,28 @@ function localPartInstance(
   };
 }
 
+function localAssemblyInstance(
+  id: string,
+  node: string,
+  configuration: AssemblyInstanceIRV7["configuration"],
+  placement: AssemblyInstanceIRV7["placement"] = [],
+  suppressed = false,
+): AssemblyInstanceIRV7 {
+  return {
+    id: id as EntityId,
+    component: {
+      source: "local",
+      reference: {
+        node: node as NodeId,
+        kind: "assembly",
+      },
+    },
+    configuration,
+    placement,
+    suppressed,
+  };
+}
+
 function configuredAssemblyDocument(): DesignDocumentV7 {
   const nodes: Record<string, NodeIRV7> = {
     solid: {
@@ -162,6 +184,131 @@ function configuredAssemblyDocument(): DesignDocumentV7 {
       product: { node: "assembly" as NodeId, kind: "assembly" },
       alias: { node: "assembly" as NodeId, kind: "assembly" },
       empty: { node: "empty" as NodeId, kind: "assembly" },
+    },
+  } as unknown as DesignDocumentV7;
+}
+
+function nestedConfiguredAssemblyDocument(): DesignDocumentV7 {
+  const xByWidth: AssemblyInstanceIRV7["placement"] = [
+    {
+      kind: "translate" as const,
+      value: [
+        parameter("length", "width"),
+        literal("length", 0),
+        literal("length", 0),
+      ],
+    },
+  ];
+  const yByWidth: AssemblyInstanceIRV7["placement"] = [
+    {
+      kind: "translate" as const,
+      value: [
+        literal("length", 0),
+        parameter("length", "width"),
+        literal("length", 0),
+      ],
+    },
+  ];
+  return {
+    schema: DOCUMENT_SCHEMA_V7,
+    version: DOCUMENT_VERSION_V7,
+    name: "nested-local-assembly-evaluation",
+    units: { length: "mm", angle: "rad", mass: "kg" },
+    parameters: {
+      width: {
+        dimension: "length",
+        default: literal("length", 10),
+      },
+    },
+    materials: {
+      steel: {
+        name: "Steel",
+        massDensity: literal("massDensity", 1e-6),
+      },
+    },
+    configurations: {
+      root: {
+        parameterOverrides: {
+          width: literal("length", 5),
+        },
+      },
+      wide: {
+        parameterOverrides: {
+          width: literal("length", 20),
+        },
+      },
+    },
+    nodes: {
+      solid: {
+        kind: "box",
+        size: [
+          parameter("length", "width"),
+          literal("length", 2),
+          literal("length", 3),
+        ],
+        center: false,
+      },
+      part: {
+        kind: "part",
+        geometry: { node: "solid" as NodeId, kind: "solid" },
+        partNumber: "NEST-001",
+        materialId: "steel" as never,
+      },
+      leafAssembly: {
+        kind: "assembly",
+        instances: [
+          localPartInstance(
+            "leaf",
+            { mode: "inherit" },
+            xByWidth,
+          ),
+        ],
+      },
+      middle: {
+        kind: "assembly",
+        instances: [
+          localAssemblyInstance(
+            "inner",
+            "leafAssembly",
+            { mode: "inherit" },
+            yByWidth,
+          ),
+          localPartInstance("direct", { mode: "inherit" }),
+        ],
+      },
+      rootAssembly: {
+        kind: "assembly",
+        instances: [
+          localAssemblyInstance(
+            "left",
+            "middle",
+            { mode: "named", id: "wide" as ConfigurationId },
+            xByWidth,
+          ),
+          localAssemblyInstance(
+            "right",
+            "middle",
+            { mode: "base" },
+            [
+              {
+                kind: "translate",
+                value: [
+                  literal("length", -100),
+                  literal("length", 0),
+                  literal("length", 0),
+                ],
+              },
+            ],
+          ),
+          localPartInstance("rootPart", { mode: "inherit" }),
+        ],
+      },
+    },
+    outputs: {
+      product: {
+        node: "rootAssembly" as NodeId,
+        kind: "assembly",
+      },
     },
   } as unknown as DesignDocumentV7;
 }
@@ -503,6 +650,218 @@ describe("staged Document v7 local assembly evaluation", () => {
     expect(harness.disposeKernel).not.toHaveBeenCalled();
   });
 
+  it("flattens nested assemblies in authored depth-first order with contextual placements and identity", async () => {
+    const harness = await instrumentedManifold();
+    const result = await evaluateLocalAssemblyOutputsV7(
+      harness.kernel,
+      nestedConfiguredAssemblyDocument(),
+      {
+        configuration: "root",
+        outputs: ["product"],
+      },
+    );
+    expect(result.ok, JSON.stringify(result.diagnostics)).toBe(true);
+    if (!result.ok) {
+      harness.disposeBase();
+      return;
+    }
+    try {
+      const product = result.value.output("product");
+      expect(
+        product.occurrences.map((occurrence) => ({
+          id: occurrence.id,
+          path: occurrence.path,
+          configuration: occurrence.configurationId,
+          translation: [
+            occurrence.transform[12],
+            occurrence.transform[13],
+            occurrence.transform[14],
+          ],
+        })),
+      ).toEqual([
+        {
+          id: "leaf",
+          path: ["left", "inner", "leaf"],
+          configuration: "wide",
+          translation: [25, 20, 0],
+        },
+        {
+          id: "direct",
+          path: ["left", "direct"],
+          configuration: "wide",
+          translation: [5, 0, 0],
+        },
+        {
+          id: "leaf",
+          path: ["right", "inner", "leaf"],
+          configuration: null,
+          translation: [-90, 10, 0],
+        },
+        {
+          id: "direct",
+          path: ["right", "direct"],
+          configuration: null,
+          translation: [-100, 0, 0],
+        },
+        {
+          id: "rootPart",
+          path: ["rootPart"],
+          configuration: "root",
+          translation: [0, 0, 0],
+        },
+      ]);
+      expect(
+        product.occurrences.every(
+          (occurrence) =>
+            Object.isFrozen(occurrence) &&
+            Object.isFrozen(occurrence.path) &&
+            Object.isFrozen(occurrence.transform),
+        ),
+      ).toBe(true);
+      expect(product.occurrences[0]!.part).toBe(
+        product.occurrences[1]!.part,
+      );
+      expect(product.occurrences[2]!.part).toBe(
+        product.occurrences[3]!.part,
+      );
+      expect(product.occurrences[0]!.part).not.toBe(
+        product.occurrences[2]!.part,
+      );
+      expect(product.occurrences[4]!.part).not.toBe(
+        product.occurrences[0]!.part,
+      );
+      expect(product.occurrences[4]!.part).not.toBe(
+        product.occurrences[2]!.part,
+      );
+      expect(harness.boxCalls).toHaveBeenCalledTimes(3);
+
+      const bom = product.billOfMaterials();
+      expect(bom.ok, JSON.stringify(bom.diagnostics)).toBe(true);
+      if (bom.ok) {
+        expect(
+          bom.value.items.map((item) => ({
+            configuration: item.effectiveConfigurationId,
+            quantity: item.quantity,
+            paths: item.occurrencePaths,
+          })),
+        ).toEqual([
+          {
+            configuration: null,
+            quantity: 2,
+            paths: [
+              ["right", "inner", "leaf"],
+              ["right", "direct"],
+            ],
+          },
+          {
+            configuration: "root",
+            quantity: 1,
+            paths: [["rootPart"]],
+          },
+          {
+            configuration: "wide",
+            quantity: 2,
+            paths: [
+              ["left", "inner", "leaf"],
+              ["left", "direct"],
+            ],
+          },
+        ]);
+        expect(bom.value.totalQuantity).toBe(5);
+        expect(bom.value.totalMass).toBeCloseTo(390e-6, 12);
+      }
+      const physical = product.physicalMassProperties();
+      expect(physical.ok, JSON.stringify(physical.diagnostics)).toBe(true);
+      if (physical.ok) {
+        expect(physical.value.mass).toBeCloseTo(390e-6, 12);
+      }
+      expect(product.mesh().indices.length).toBeGreaterThan(0);
+    } finally {
+      result.value.dispose();
+      result.value.dispose();
+      harness.disposeBase();
+    }
+    expect(harness.disposedShapes).toHaveLength(3);
+    expect(harness.disposeKernel).not.toHaveBeenCalled();
+  });
+
+  it("applies definition-scoped suppression and explicit false unsuppression in each nested context", async () => {
+    const document = nestedConfiguredAssemblyDocument();
+    const nodes = document.nodes as Record<string, NodeIRV7>;
+    const leafAssembly = nodes.leafAssembly as AssemblyNodeIRV7;
+    nodes.leafAssembly = {
+      kind: "assembly",
+      instances: [
+        localPartInstance("ordinary", { mode: "inherit" }),
+        {
+          ...localPartInstance("revived", { mode: "inherit" }),
+          suppressed: true,
+        },
+      ],
+    };
+    const rootAssembly = nodes.rootAssembly as AssemblyNodeIRV7;
+    nodes.rootAssembly = {
+      kind: "assembly",
+      instances: rootAssembly.instances.map((instance) =>
+        instance.id === "right"
+          ? { ...instance, suppressed: true }
+          : instance,
+      ),
+    };
+    const configurations = document.configurations as Record<
+      string,
+      NonNullable<
+        DesignDocumentV7["configurations"]
+      >[ConfigurationId]
+    >;
+    configurations.root = {
+      ...configurations.root,
+      instanceSuppressions: {
+        ["rootAssembly" as NodeId]: {
+          ["right" as EntityId]: false,
+        },
+      },
+    };
+    configurations.wide = {
+      ...configurations.wide,
+      instanceSuppressions: {
+        ["leafAssembly" as NodeId]: {
+          ["ordinary" as EntityId]: true,
+          ["revived" as EntityId]: false,
+        },
+      },
+    };
+
+    const harness = await instrumentedManifold();
+    const result = await evaluateLocalAssemblyOutputsV7(
+      harness.kernel,
+      document,
+      { configuration: "root", outputs: ["product"] },
+    );
+    expect(result.ok, JSON.stringify(result.diagnostics)).toBe(true);
+    if (result.ok) {
+      try {
+        expect(
+          result.value
+            .output("product")
+            .occurrences.map((occurrence) => occurrence.path),
+        ).toEqual([
+          ["left", "inner", "revived"],
+          ["left", "direct"],
+          ["right", "inner", "ordinary"],
+          ["right", "direct"],
+          ["rootPart"],
+        ]);
+      } finally {
+        result.value.dispose();
+      }
+    }
+    expect(harness.boxCalls).toHaveBeenCalledTimes(3);
+    expect(harness.disposedShapes).toHaveLength(3);
+    harness.disposeBase();
+    expect(leafAssembly.instances).toHaveLength(1);
+  });
+
   it("applies caller parameters after every occurrence-selected configuration", async () => {
     const harness = await instrumentedManifold();
     const result = await evaluateLocalAssemblyOutputsV7(
@@ -533,7 +892,7 @@ describe("staged Document v7 local assembly evaluation", () => {
     harness.disposeBase();
   });
 
-  it("keeps suppressed unsupported components inert and rejects active ones before kernel or resolver work", async () => {
+  it("keeps suppressed external components inert and rejects active ones before kernel or resolver work", async () => {
     const document = configuredAssemblyDocument();
     const nodes = document.nodes as Record<string, NodeIRV7>;
     nodes.nested = {
@@ -613,18 +972,38 @@ describe("staged Document v7 local assembly evaluation", () => {
     expect(resolver).not.toHaveBeenCalled();
     expect(harness.boxCalls).not.toHaveBeenCalled();
 
-    for (const configuration of ["exposeExternal", "exposeNested"]) {
-      const rejected = await evaluateLocalAssemblyOutputsV7(
-        harness.kernel,
-        guarded,
-        { configuration, outputs: ["guard"], resolver },
-      );
-      expect(rejected.ok).toBe(false);
-      if (!rejected.ok) {
-        expect(rejected.diagnostics[0]).toMatchObject({
-          code: "EVALUATION_UNSUPPORTED",
-        });
-      }
+    const nestedResult = await evaluateLocalAssemblyOutputsV7(
+      harness.kernel,
+      guarded,
+      {
+        configuration: "exposeNested",
+        outputs: ["guard"],
+        resolver,
+      },
+    );
+    expect(
+      nestedResult.ok,
+      JSON.stringify(nestedResult.diagnostics),
+    ).toBe(true);
+    if (nestedResult.ok) {
+      expect(nestedResult.value.output("guard").occurrences).toEqual([]);
+      nestedResult.value.dispose();
+    }
+
+    const rejected = await evaluateLocalAssemblyOutputsV7(
+      harness.kernel,
+      guarded,
+      {
+        configuration: "exposeExternal",
+        outputs: ["guard"],
+        resolver,
+      },
+    );
+    expect(rejected.ok).toBe(false);
+    if (!rejected.ok) {
+      expect(rejected.diagnostics[0]).toMatchObject({
+        code: "EVALUATION_UNSUPPORTED",
+      });
     }
     expect(resolver).not.toHaveBeenCalled();
     expect(harness.boxCalls).not.toHaveBeenCalled();
@@ -714,7 +1093,17 @@ describe("staged Document v7 local assembly evaluation", () => {
         parameters: { width: 12 },
       },
       {
+        resource: "maxAssemblyDepth",
+        limit: 0,
+        actual: 1,
+      },
+      {
         resource: "maxScannedInstances",
+        limit: 3,
+        actual: 4,
+      },
+      {
+        resource: "maxOccurrencePathSegments",
         limit: 3,
         actual: 4,
       },
@@ -754,6 +1143,67 @@ describe("staged Document v7 local assembly evaluation", () => {
           ...(testCase.parameters === undefined
             ? {}
             : { parameters: testCase.parameters }),
+          evaluationLimits: {
+            [testCase.resource]: testCase.limit,
+          },
+        },
+      );
+      expect(result.ok, testCase.resource).toBe(false);
+      if (!result.ok) {
+        expect(result.diagnostics[0]).toMatchObject({
+          code: "RESOURCE_LIMIT_EXCEEDED",
+          details: {
+            resource: testCase.resource,
+            limit: testCase.limit,
+            actual: testCase.actual,
+          },
+        });
+      }
+    }
+    expect(harness.boxCalls).not.toHaveBeenCalled();
+    harness.disposeBase();
+  });
+
+  it("meters repeated nested expansion, active edges, depth, placements, and stored path segments before kernel work", async () => {
+    const cases: readonly {
+      readonly resource: keyof LocalAssemblyEvaluationLimitsV7;
+      readonly limit: number;
+      readonly actual: number;
+    }[] = [
+      {
+        resource: "maxAssemblyDepth",
+        limit: 2,
+        actual: 3,
+      },
+      {
+        resource: "maxScannedInstances",
+        limit: 8,
+        actual: 9,
+      },
+      {
+        resource: "maxActiveOccurrences",
+        limit: 8,
+        actual: 9,
+      },
+      {
+        resource: "maxPlacementOperations",
+        limit: 5,
+        actual: 6,
+      },
+      {
+        resource: "maxOccurrencePathSegments",
+        limit: 10,
+        actual: 11,
+      },
+    ];
+    const harness = await instrumentedManifold();
+    for (const testCase of cases) {
+      const result = await evaluateLocalAssemblyOutputsV7(
+        harness.kernel,
+        nestedConfiguredAssemblyDocument(),
+        {
+          configuration: "root",
+          outputs: ["product"],
           evaluationLimits: {
             [testCase.resource]: testCase.limit,
           },
@@ -1333,7 +1783,7 @@ describe("staged Document v7 local assembly evaluation", () => {
     expect(disposeShape).toHaveBeenCalledOnce();
   });
 
-  it("evaluates and disposes a placed local assembly with the stock OCCT kernel", async () => {
+  it("evaluates and disposes a nested placed local assembly with the stock OCCT kernel", async () => {
     const base = configuredAssemblyDocument();
     const document = {
       schema: base.schema,
@@ -1344,7 +1794,7 @@ describe("staged Document v7 local assembly evaluation", () => {
       materials: base.materials,
       nodes: {
         ...base.nodes,
-        assembly: {
+        subassembly: {
           kind: "assembly",
           instances: [
             localPartInstance(
@@ -1370,6 +1820,26 @@ describe("staged Document v7 local assembly evaluation", () => {
                   value: [
                     literal("length", 8),
                     literal("length", 0),
+                    literal("length", 0),
+                  ],
+                },
+              ],
+            ),
+          ],
+        },
+        assembly: {
+          kind: "assembly",
+          instances: [
+            localAssemblyInstance(
+              "sub",
+              "subassembly",
+              { mode: "base" },
+              [
+                {
+                  kind: "translate",
+                  value: [
+                    literal("length", 0),
+                    literal("length", 4),
                     literal("length", 0),
                   ],
                 },
@@ -1407,9 +1877,18 @@ describe("staged Document v7 local assembly evaluation", () => {
         expect(product.occurrences).toHaveLength(2);
         expect(
           product.occurrences.map(
-            (occurrence) => occurrence.transform[12],
+            (occurrence) => ({
+              path: occurrence.path,
+              translation: [
+                occurrence.transform[12],
+                occurrence.transform[13],
+              ],
+            }),
           ),
-        ).toEqual([-8, 8]);
+        ).toEqual([
+          { path: ["sub", "left"], translation: [-8, 4] },
+          { path: ["sub", "right"], translation: [8, 4] },
+        ]);
         expect(product.occurrences[0]!.part).toBe(
           product.occurrences[1]!.part,
         );
@@ -1440,6 +1919,59 @@ describe("staged Document v7 local assembly evaluation", () => {
       kernel.dispose();
     }
     expect(retained?.indices.length).toBeGreaterThan(0);
+  });
+
+  it("rejects finite parent and child placements whose nested composition overflows before kernel work", async () => {
+    const document = configuredAssemblyDocument();
+    const scale: AssemblyInstanceIRV7["placement"] = [
+      {
+        kind: "scale" as const,
+        value: [
+          literal("scalar", 1e200),
+          literal("scalar", 1),
+          literal("scalar", 1),
+        ],
+      },
+    ];
+    const nodes = document.nodes as Record<string, NodeIRV7>;
+    nodes.nestedScale = {
+      kind: "assembly",
+      instances: [
+        localPartInstance("part", { mode: "base" }, scale),
+      ],
+    };
+    nodes.assembly = {
+      kind: "assembly",
+      instances: [
+        localAssemblyInstance(
+          "nested",
+          "nestedScale",
+          { mode: "base" },
+          scale,
+        ),
+      ],
+    };
+    const harness = await instrumentedManifold();
+    const result = await evaluateLocalAssemblyOutputsV7(
+      harness.kernel,
+      document,
+      { outputs: ["product"] },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.diagnostics[0]).toMatchObject({
+        code: "FEATURE_INVALID",
+        node: "nestedScale",
+        path: "/nodes/nestedScale/instances/0/placement",
+        details: {
+          phase: "documentV7LocalAssemblyEvaluation",
+          occurrencePath: ["nested", "part"],
+          value: "non-finite",
+        },
+      });
+    }
+    expect(harness.boxCalls).not.toHaveBeenCalled();
+    harness.disposeBase();
   });
 
   it("rejects finite placement operands whose composed matrix overflows before kernel work", async () => {
