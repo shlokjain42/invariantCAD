@@ -7,8 +7,11 @@ import type { ResourceId } from "../src/core/ids.js";
 import {
   EvaluatedSolid,
   EvaluatedPartV7,
+  executePreparedPartOutputsV7,
   type EvaluatedPartDesignV7,
   evaluatePartOutputsV7,
+  preflightPreparedPartOutputsV7,
+  preparePartOutputsV7,
 } from "../src/evaluator.js";
 import {
   kgPerCubicMillimeter,
@@ -49,8 +52,9 @@ import {
 import { createManifoldKernel } from "../src/manifold-kernel.js";
 import { createOcctKernel } from "../src/occt-kernel.js";
 import type { KernelTopologySnapshot } from "../src/protocol/topology.js";
-import type {
-  ResourceResolverRequestV7,
+import {
+  resolveResourcesV7,
+  type ResourceResolverRequestV7,
 } from "../src/resource-resolution.js";
 import * as publicApi from "../src/index.js";
 
@@ -630,6 +634,217 @@ function expectPartResult(
 }
 
 describe("staged document-v7 part output evaluation", () => {
+  it("prepares resource scope and aggregate metrics without resolver or kernel work", async () => {
+    const aBytes = encoder.encode("resource-a");
+    const zBytes = encoder.encode("resource-z");
+    const document = await partDocument({
+      resources: { zResource: zBytes, aResource: aBytes },
+      materials: {
+        aluminum: {
+          name: "Aluminum",
+          massDensity: density(2.7e-6),
+        },
+      },
+      nodes: {
+        zLeaf: importedBody("zResource"),
+        aLeaf: importedBody("aResource"),
+        bodies: bodySet([
+          member("z", "zLeaf"),
+          member("a", "aLeaf"),
+        ]),
+        preparedPart: part("bodies", "bodySet", {
+          materialId: "aluminum" as never,
+        }),
+      },
+      outputs: {
+        prepared: { node: "preparedPart", kind: "part" },
+      },
+    });
+    const requests: ResourceResolverRequestV7[] = [];
+    const resolver = vi.fn(
+      resolverFor(
+        { aResource: aBytes, zResource: zBytes },
+        requests,
+      ),
+    );
+
+    const prepared = preparePartOutputsV7(document, { resolver });
+    expect(prepared.ok, JSON.stringify(prepared.diagnostics)).toBe(true);
+    if (!prepared.ok) return;
+    expect(resolver).not.toHaveBeenCalled();
+    expect(prepared.value.resourceIds).toEqual([
+      "aResource",
+      "zResource",
+    ]);
+    expect(Object.isFrozen(prepared.value.resourceIds)).toBe(true);
+    expect(prepared.value.metrics).toEqual({
+      selectedOutputs: 1,
+      partBodies: 2,
+      distinctSolids: 2,
+      solidGraphNodes: 2,
+      solidDependencyLinks: 0,
+      transformOperations: 0,
+      resolvedMaterials: 1,
+    });
+    expect(Object.isFrozen(prepared.value.metrics)).toBe(true);
+    expect(Object.isFrozen(prepared.value)).toBe(true);
+
+    const harness = createKernelHarness();
+    const retained = preflightPreparedPartOutputsV7(
+      harness.kernel,
+      prepared.value,
+    );
+    expect(retained.ok, JSON.stringify(retained.diagnostics)).toBe(true);
+    if (!retained.ok) return;
+    expect(resolver).not.toHaveBeenCalled();
+    expect(harness.importCalls).toHaveLength(0);
+
+    const resources = await resolveResourcesV7(
+      document.resources ?? {},
+      prepared.value.resourceIds,
+      { resolver },
+    );
+    expect(resources.ok, JSON.stringify(resources.diagnostics)).toBe(true);
+    if (!resources.ok) return;
+    expect(requests.map(({ id }) => id)).toEqual([
+      "aResource",
+      "zResource",
+    ]);
+    const resolverCallsBeforeExecute = resolver.mock.calls.length;
+
+    const executed = await executePreparedPartOutputsV7(
+      harness.kernel,
+      prepared.value,
+      retained.value,
+      resources.value,
+    );
+    expect(executed.ok, JSON.stringify(executed.diagnostics)).toBe(true);
+    if (!executed.ok) return;
+    expect(resolver).toHaveBeenCalledTimes(resolverCallsBeforeExecute);
+    expect(executed.value.outputNames).toEqual(["prepared"]);
+    expect(
+      executed.value.output("prepared").geometry.kind,
+    ).toBe("bodySet");
+    executed.value.dispose();
+    expect(harness.importCalls).toHaveLength(2);
+    expect(harness.live.size).toBe(0);
+  });
+
+  it("retains each stateful kernel property before direct resource I/O", async () => {
+    const bytes = encoder.encode("stateful-kernel-boundary");
+    const document = await partDocument({
+      resources: { imported: bytes },
+      nodes: {
+        imported: importedBody("imported"),
+        tool: box(),
+        shifted: transform("tool", [
+          {
+            kind: "translate",
+            value: [length(1), length(0), length(0)],
+          },
+        ]),
+        cut: booleanSolid("subtract", "imported", ["shifted"]),
+        part: part("cut", "solid"),
+      },
+      outputs: { part: { node: "part", kind: "part" } },
+    });
+    const harness = createKernelHarness();
+    const events: string[] = [];
+    const reads = new Map<PropertyKey, number>();
+    const kernel = new Proxy(harness.kernel, {
+      get(target, property, receiver) {
+        reads.set(property, (reads.get(property) ?? 0) + 1);
+        events.push(`get:${String(property)}`);
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    const resolver = vi.fn((request: ResourceResolverRequestV7) => {
+      events.push(`resolve:${request.id}`);
+      return bytes;
+    });
+
+    const result = await evaluatePartOutputsV7(kernel, document, {
+      resolver,
+    });
+    const evaluated = expectPartResult(result);
+    const requiredReads = [
+      "id",
+      "capabilities",
+      "box",
+      "importDocumentBody",
+      "transform",
+      "boolean",
+      "status",
+      "measure",
+      "mesh",
+      "topology",
+      "exportShape",
+      "disposeShape",
+    ] as const;
+    for (let index = 0; index < requiredReads.length; index += 1) {
+      expect(reads.get(requiredReads[index]!)).toBe(1);
+    }
+    const resolverIndex = events.indexOf("resolve:imported");
+    expect(resolverIndex).toBeGreaterThan(-1);
+    expect(
+      events.slice(resolverIndex + 1).some((event) =>
+        event.startsWith("get:"),
+      ),
+    ).toBe(false);
+    const readsAfterEvaluation = new Map(reads);
+    const output = evaluated.output("part");
+    if (output.geometry.kind === "solid") {
+      output.geometry.solid.measure();
+    }
+    evaluated.dispose();
+    expect(reads).toEqual(readsAfterEvaluation);
+    expect(harness.live.size).toBe(0);
+  });
+
+  it("rejects forged or mismatched prepared pipeline handles before construction", async () => {
+    const document = await partDocument({
+      nodes: {
+        leaf: box(),
+        part: part("leaf", "solid"),
+      },
+      outputs: { part: { node: "part", kind: "part" } },
+    });
+    const harness = createKernelHarness();
+    const forgedPrepared = preflightPreparedPartOutputsV7(
+      harness.kernel,
+      Object.freeze({}) as never,
+    );
+    expectFailureCode(forgedPrepared, "IR_INVALID");
+    expect(harness.primitiveCalls).toHaveLength(0);
+
+    const prepared = preparePartOutputsV7(document);
+    expect(prepared.ok).toBe(true);
+    if (!prepared.ok) return;
+    const retained = preflightPreparedPartOutputsV7(
+      harness.kernel,
+      prepared.value,
+    );
+    expect(retained.ok).toBe(true);
+    if (!retained.ok) return;
+
+    const forgedAccess = await executePreparedPartOutputsV7(
+      harness.kernel,
+      prepared.value,
+      Object.freeze({}) as never,
+    );
+    expectFailureCode(forgedAccess, "IR_INVALID");
+    expect(harness.primitiveCalls).toHaveLength(0);
+
+    const otherHarness = createKernelHarness();
+    const mismatchedKernel = await executePreparedPartOutputsV7(
+      otherHarness.kernel,
+      prepared.value,
+      retained.value,
+    );
+    expectFailureCode(mismatchedKernel, "IR_INVALID");
+    expect(otherHarness.primitiveCalls).toHaveLength(0);
+  });
+
   it("selects direct parts in caller order, deduplicates aliases, and preserves detached identity", async () => {
     const metadata = { revision: 2, nested: { finish: "ground" } };
     const document = await partDocument({
