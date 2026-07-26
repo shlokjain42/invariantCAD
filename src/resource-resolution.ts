@@ -14,6 +14,24 @@ import {
   documentV7RuntimeIntrinsicsAreIntact,
 } from "./internal/document-v7-runtime-integrity.js";
 
+/**
+ * The document registry whose resource commitment is being resolved.
+ *
+ * External scope identity includes the root-document resource commitment so
+ * two external documents may safely reuse the same document-local resource ID.
+ *
+ * @internal
+ */
+export type DocumentV7ResourceScope =
+  | {
+      readonly source: "root";
+    }
+  | {
+      readonly source: "external";
+      readonly resource: ResourceId;
+      readonly digest: ResourceDigestIR;
+    };
+
 export interface ResourceResolverRequestV7 {
   readonly id: ResourceId;
   readonly digest: ResourceDigestIR;
@@ -21,6 +39,13 @@ export interface ResourceResolverRequestV7 {
   readonly mediaType: string;
   readonly locations?: readonly string[];
   readonly signal?: AbortSignal;
+  /**
+   * Present only for document-scoped session resolution. Ordinary
+   * `resolveResourcesV7` calls omit this property.
+   *
+   * @internal
+   */
+  readonly documentScope?: DocumentV7ResourceScope;
 }
 
 export type ResourceResolverV7 = (
@@ -64,12 +89,20 @@ export interface ResolvedResourcesV7 {
   read(id: ResourceId): Uint8Array | undefined;
 }
 
-interface CapturedResourceDefinition {
+/** Detached resource commitment produced by v7 resolution preflight. @internal */
+export interface CapturedResourceDefinitionV7 {
   readonly id: ResourceId;
   readonly digest: ResourceDigestIR;
   readonly byteLength: number;
   readonly mediaType: string;
   readonly locations: readonly string[] | undefined;
+}
+
+/** Detached, fully preflighted input for one v7 resolution batch. @internal */
+export interface ResourceResolutionPlanV7 {
+  readonly ids: readonly ResourceId[];
+  readonly definitions: readonly CapturedResourceDefinitionV7[];
+  readonly committedByteLength: number;
 }
 
 interface CapturedResolveOptions {
@@ -330,7 +363,7 @@ function resolutionFailure<T = never>(
 }
 
 function integrityFailure<T = never>(
-  definition: CapturedResourceDefinition,
+  definition: CapturedResourceDefinitionV7,
   message: string,
   details: Readonly<Record<string, unknown>> = {},
 ): CadResult<T> {
@@ -641,7 +674,7 @@ function captureDefinition(
   id: ResourceId,
   value: unknown,
   signal: AbortSignal | undefined,
-): CadResult<CapturedResourceDefinition> {
+): CadResult<CapturedResourceDefinitionV7> {
   let digest: unknown;
   let byteLength: unknown;
   let mediaType: unknown;
@@ -746,7 +779,7 @@ function captureDefinition(
   captured.mediaType = mediaType;
   captured.locations = locations.value;
   return success(
-    intrinsicObjectFreeze(captured) as CapturedResourceDefinition,
+    intrinsicObjectFreeze(captured) as CapturedResourceDefinitionV7,
   );
 }
 
@@ -755,12 +788,12 @@ function captureDefinitions(
   ids: readonly ResourceId[],
   limits: ResourceResolutionLimitsV7,
   signal: AbortSignal | undefined,
-): CadResult<readonly CapturedResourceDefinition[]> {
+): CadResult<readonly CapturedResourceDefinitionV7[]> {
   try {
     if (!isPlainRecord(definitions)) {
       return invalidInput("Resource definitions must be a plain record");
     }
-    const captured: CapturedResourceDefinition[] = [];
+    const captured: CapturedResourceDefinitionV7[] = [];
     let total = 0;
     for (let index = 0; index < ids.length; index += 1) {
       const id = ids[index]!;
@@ -814,6 +847,59 @@ function captureDefinitions(
   } catch {
     return invalidInput("Resource definitions could not be read safely");
   }
+}
+
+/**
+ * Captures and validates one complete resource batch without invoking a
+ * resolver. Callers may compose multiple plans and enforce aggregate limits
+ * before beginning any I/O.
+ *
+ * @internal
+ */
+export function preflightResourceResolutionV7(
+  definitions: Readonly<Record<string, ResourceDefinitionIR>>,
+  requestedIds: readonly ResourceId[],
+  limits: ResourceResolutionLimitsV7,
+  signal?: AbortSignal,
+): CadResult<ResourceResolutionPlanV7> {
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return runtimeIntegrityFailure();
+  }
+  if (isAborted(signal)) return abortFailure();
+  const capturedIds = captureRequestedIds(requestedIds, limits, signal);
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return runtimeIntegrityFailure();
+  }
+  if (isAborted(signal)) return abortFailure();
+  if (!capturedIds.ok) return capturedIds;
+  const capturedDefinitions = captureDefinitions(
+    definitions,
+    capturedIds.value,
+    limits,
+    signal,
+  );
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return runtimeIntegrityFailure();
+  }
+  if (isAborted(signal)) return abortFailure();
+  if (!capturedDefinitions.ok) return capturedDefinitions;
+
+  let committedByteLength = 0;
+  for (
+    let index = 0;
+    index < capturedDefinitions.value.length;
+    index += 1
+  ) {
+    committedByteLength +=
+      capturedDefinitions.value[index]!.byteLength;
+  }
+  return success(
+    intrinsicObjectFreeze({
+      ids: capturedIds.value,
+      definitions: capturedDefinitions.value,
+      committedByteLength,
+    }),
+  );
 }
 
 function hasArrayBufferBrand(value: unknown): value is ArrayBuffer {
@@ -1112,7 +1198,8 @@ export async function resolveResourcesV7(
   if (!capturedOptions.ok) return capturedOptions;
   if (isAborted(capturedOptions.value.signal)) return abortFailure();
 
-  const capturedIds = captureRequestedIds(
+  const plan = preflightResourceResolutionV7(
+    definitions,
     requestedIds,
     capturedOptions.value.limits,
     capturedOptions.value.signal,
@@ -1121,22 +1208,11 @@ export async function resolveResourcesV7(
     return runtimeIntegrityFailure();
   }
   if (isAborted(capturedOptions.value.signal)) return abortFailure();
-  if (!capturedIds.ok) return capturedIds;
-  const capturedDefinitions = captureDefinitions(
-    definitions,
-    capturedIds.value,
-    capturedOptions.value.limits,
-    capturedOptions.value.signal,
-  );
-  if (!documentV7RuntimeIntrinsicsAreIntact()) {
-    return runtimeIntegrityFailure();
-  }
-  if (isAborted(capturedOptions.value.signal)) return abortFailure();
-  if (!capturedDefinitions.ok) return capturedDefinitions;
+  if (!plan.ok) return plan;
 
-  if (capturedDefinitions.value.length === 0) {
+  if (plan.value.definitions.length === 0) {
     return success(
-      createResolvedResources(capturedIds.value, new IntrinsicMap()),
+      createResolvedResources(plan.value.ids, new IntrinsicMap()),
     );
   }
   const resolver = capturedOptions.value.resolver;
@@ -1149,7 +1225,7 @@ export async function resolveResourcesV7(
           severity: "error",
           details: {
             phase: "resourceResolution",
-            resources: capturedIds.value.length,
+            resources: plan.value.ids.length,
           },
         },
       ),
@@ -1160,10 +1236,10 @@ export async function resolveResourcesV7(
   let consumedBytes = 0;
   for (
     let definitionIndex = 0;
-    definitionIndex < capturedDefinitions.value.length;
+    definitionIndex < plan.value.definitions.length;
     definitionIndex += 1
   ) {
-    const definition = capturedDefinitions.value[definitionIndex]!;
+    const definition = plan.value.definitions[definitionIndex]!;
     if (!documentV7RuntimeIntrinsicsAreIntact()) {
       return runtimeIntegrityFailure();
     }
@@ -1315,5 +1391,5 @@ export async function resolveResourcesV7(
     return runtimeIntegrityFailure();
   }
   if (isAborted(capturedOptions.value.signal)) return abortFailure();
-  return success(createResolvedResources(capturedIds.value, resolved));
+  return success(createResolvedResources(plan.value.ids, resolved));
 }

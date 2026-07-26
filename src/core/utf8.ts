@@ -4,6 +4,21 @@ const intrinsicStringCharCodeAt = String.prototype.charCodeAt;
 const reflectApply = Reflect.apply;
 const textEncoder = new TextEncoder();
 const fatalTextDecoder = new TextDecoder("utf-8", { fatal: true });
+const fatalTextDecoderDecode = TextDecoder.prototype.decode;
+
+/**
+ * Decodes one complete UTF-8 payload without replacement characters.
+ *
+ * Callers that own protocol byte ceilings must check the encoded byte length
+ * before invoking this helper.
+ */
+export function decodeUtf8Fatal(value: Uint8Array): string {
+  return reflectApply(
+    fatalTextDecoderDecode,
+    fatalTextDecoder,
+    [value],
+  ) as string;
+}
 
 /**
  * Counts one string's TextEncoder-equivalent UTF-8 bytes without constructing
@@ -83,7 +98,7 @@ export function isCanonicalUtf8StringWithin(
     const bytes = textEncoder.encode(value);
     return (
       bytes.byteLength <= maximumBytes &&
-      fatalTextDecoder.decode(bytes) === value
+      decodeUtf8Fatal(bytes) === value
     );
   } catch {
     return false;

@@ -219,72 +219,89 @@ transform operations with `maxDistinctSolids`, `maxSolidGraphNodes`,
 exact-evolution capability envelope fails before resolver or kernel work; it is
 not silently treated as partial history.
 
-## Repository-only Document v7 nested local assemblies
+## Repository-only staged 0.2 product assemblies
 
-The staged facade can wrap those admitted parts and already-completed local
-assemblies in an acyclic fixed-placement assembly graph through `assembly(...)`
-and its `StagedLocalAssemblyBuilderV7` callback, publish a containing assembly
-as an output, and evaluate it with the source-only
-`evaluateLocalAssemblyOutputsV7(...)` operation. A staged configuration can
-call `instanceSuppressed(assembly, instanceId, suppressed?)`. The configuration
+The staged facade can wrap admitted local parts and already-completed local
+assemblies in an acyclic fixed-placement graph through `assembly(...)`. It can
+also bind one named part output from a committed InvariantCAD document resource
+with `externalPart(resource, output)` and place that external part beside local
+components. The source-only `evaluateProductAssemblyOutputsV7(...)` operation
+evaluates the resulting product. A staged configuration can call
+`instanceSuppressed(assembly, instanceId, suppressed?)`; the configuration
 active for each containing assembly overrides that definition's authored
-suppression; passing `false` therefore reactivates an instance authored as
-suppressed.
+suppression, and `false` reactivates an instance authored as suppressed.
 
-This is deliberately different from widening the public v6 semantics described
-above. Each staged v7 instance also carries one child configuration selector:
+This entire section describes repository-only work staged for 0.2. It is not
+available from the public 0.1.1 package root, a package subpath, the public
+builder/evaluator, or the CLI, and the public document alias and migration target
+remain v6.
 
-| Selector | Effective child context |
-| --- | --- |
-| `inherit` | The configuration active for the containing assembly |
-| `base` | The base document, regardless of the containing assembly's context |
-| `named` | The referenced document-owned named configuration |
+Each staged v7 instance carries one child configuration selector. Local and
+external components interpret the same selector at different document
+boundaries:
 
-That selected context controls a referenced child assembly's own suppression
-and placement expressions, or a referenced part's geometry and product intent.
-Caller parameter overrides then specialize every selected context for that one
-evaluation. Active part leaves are emitted in authored depth-first order with
-full root-to-leaf occurrence paths. Placement operations execute in authored
-order on each edge and compose parent first into a root-relative transform.
+| Selector | Local child | External part child |
+| --- | --- | --- |
+| `inherit` | Uses the configuration active for the containing assembly | Maps parent base to child base, or a parent named configuration to the same ID in the child document |
+| `base` | Uses the root document's base context | Uses the child document's base context |
+| `named` | Uses the referenced root-document configuration | Uses the explicitly referenced child-document configuration |
 
-The evaluator reuses one evaluated part result for equal
-`(part, effective configuration)` states within the call, but keeps every full
-occurrence path and quantity. Direct part evaluation may also acquire a solid
-DAG—including shared Boolean nodes—once per configuration batch when multiple
-admitted parts reference it. Different effective configurations resolve and
-charge separate operand graphs even when their current numeric results happen
-to match. It does not infer geometric equivalence between contexts and
-establishes no cross-run cache.
+The chosen external child context controls that part's geometry, material,
+density, and product intent. Root caller parameter overrides specialize
+selected contexts in the root document only. They never cross the external
+document boundary, so a same-named child parameter keeps the value defined by
+the child's base or named configuration. A selected child configuration that
+does not exist returns `CONFIGURATION_MISSING` with parent occurrence and child
+configuration-path provenance after document admission and before geometry
+work; evaluation does not fall back to base.
 
-The contextual BOM keeps unlike `(part, effective configuration)` states in
-separate deterministic rows. Each row records its stable full occurrence
-paths, effective material and density provenance, definition mass, placed total
-mass, and quantity. Occurrences sharing one context aggregate quantity
-normally. Missing density leaves the affected row and overall total incomplete,
-with diagnostics instead of an invented zero. Physical mass applies each
-context's density to every single- or multibody part membership, then uses the
-root-relative affine placement before combining mass, center of mass, and
-inertia. Aliases and overlaps still count per authored membership and
-occurrence; this is not interference subtraction or a Boolean union.
+Active part leaves retain full root-to-leaf occurrence paths. Placement
+operations execute in authored order on each edge and compose parent first into
+a root-relative transform. Local parts reuse one evaluated result for equal
+`(part, effective configuration)` states. External parts reuse one result for
+equal `(resource, output, effective child configuration)` states. Neither rule
+collapses occurrences or quantities, and neither is a cross-run cache or a
+geometric-equivalence claim. Different child output names remain distinct
+component identities even when both outputs alias the same child part.
 
-Suppression is decided before a component is admitted, so a suppressed nested
-edge prunes its entire subtree, including external or otherwise unsupported
-descendants. Traversal is bounded by `maxAssemblyDepth`,
-`maxOccurrencePathSegments`, scanned-instance, active-occurrence, placement,
-and downstream part/resource ceilings. The assembly-wide
-`maxSolidGraphNodes`, `maxSolidDependencyLinks`, and
-`maxTransformOperations` counters charge each `(solid node, effective
-configuration)` once across the active tree; dependency counting includes
-every Boolean target/tool edge and transform input edge, including repeated
-references. Repeated occurrences in the same context share that work,
+The contextual BOM keeps unlike component/configuration states in separate,
+deterministically ordered rows. A local component records its part node. An
+external component additionally records the committed document resource,
+digest, byte length, requested output, admitted source version, and child part
+node. Repeated occurrences of the same external output and child configuration
+aggregate quantity normally; distinct output aliases retain separate BOM rows.
+Every row records stable occurrence paths, effective material and density
+provenance, definition mass, placed total mass, and quantity. Missing density
+leaves the affected row and overall total incomplete, with diagnostics instead
+of an invented zero.
+
+Physical mass applies each context's density to every single- or multibody part
+membership, then uses the root-relative affine placement before combining mass,
+center of mass, and inertia. Aliases and overlaps still count per authored
+membership and occurrence; this is not interference subtraction or a Boolean
+union.
+
+Suppression is decided before component admission, so a suppressed edge prunes
+its entire subtree without resolving an external document. Traversal is bounded
+by `maxAssemblyDepth`, `maxOccurrencePathSegments`, scanned-instance,
+active-occurrence, placement, `maxExternalDocuments`, and downstream
+part/resource ceilings. Solid nodes, Boolean target/tool and transform input
+edges, and authored transform operations remain bounded across the active
+product. Repeated occurrences in one effective context share that work,
 different contexts are charged independently, and suppressed subtrees
-contribute nothing. Active external components and cyclic local-assembly graphs
-are rejected before resolver or kernel work. The staged slice does not provide
-external-document evaluation, per-body materials, mates, joints, DOF, motion,
-contact, interference/collision, assembly topology, aggregate geometric
-measurement, or exact assembly STEP/BREP export. Its
-aggregate mesh, STL, and OBJ are approximate/lossy tessellation views, and
-Document v7 remains repository-only.
+contribute nothing.
+
+Only external outputs admitted by the existing staged part evaluator are
+supported: one part over a supported solid DAG or body set. External assembly
+outputs and other child part feature families remain unsupported. For example,
+a migrated v6 part backed by an extrusion fails with
+`EVALUATION_UNSUPPORTED` before child geometry or scoped resource work rather
+than silently widening the staged evaluator. Recursive external product
+expansion, cross-document parameter overrides, per-body materials, mates,
+joints, DOF, motion, contact, interference/collision, product topology,
+aggregate geometric measurement, and exact aggregate STEP/BREP export also
+remain unsupported. Product mesh, binary/ASCII STL, and OBJ are
+approximate/lossy aggregate tessellation views.
 
 ## Runtime parameter overrides
 

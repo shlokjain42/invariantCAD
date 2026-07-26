@@ -24,6 +24,7 @@ const IntrinsicSet = Set;
 const IntrinsicString = String;
 const IntrinsicSymbol = Symbol;
 const IntrinsicSyntaxError = SyntaxError;
+const IntrinsicTextDecoder = TextDecoder;
 const IntrinsicTextEncoder = TextEncoder;
 const IntrinsicTypeError = TypeError;
 const IntrinsicUint8Array = Uint8Array;
@@ -295,6 +296,7 @@ for (const owner of [
   IntrinsicSet.prototype,
   IntrinsicString.prototype,
   IntrinsicSyntaxError.prototype,
+  IntrinsicTextDecoder.prototype,
   IntrinsicTextEncoder.prototype,
   IntrinsicTypeError.prototype,
   IntrinsicUint8Array.prototype,
@@ -411,6 +413,7 @@ const SELECTED_PROPERTIES = [
   [IntrinsicWeakSet, ["prototype"]],
   [IntrinsicRegExp, ["prototype"]],
   [IntrinsicString, ["prototype"]],
+  [IntrinsicTextDecoder, ["prototype"]],
   [IntrinsicTextEncoder, ["prototype"]],
   [IntrinsicUint8Array, ["prototype"]],
   [IntrinsicUint32Array, ["prototype"]],
@@ -458,6 +461,7 @@ const GLOBAL_BINDING_NAMES = [
   "String",
   "Symbol",
   "SyntaxError",
+  "TextDecoder",
   "TextEncoder",
   "TypeError",
   "Uint8Array",

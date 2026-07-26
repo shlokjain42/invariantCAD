@@ -108,7 +108,8 @@ or body-set feature node. The repository now contains
 admitted by the staged evaluators. This is executable Document v7 evidence, not
 an end-user package workflow: the package-root document alias, builder,
 evaluator, and migration target remain on the frozen v6 model, and no package
-subpath exposes the facade.
+subpath exposes the facade. These changes are source-only work staged for 0.2,
+not capabilities in the public 0.1.1 package.
 
 The staged facade authors:
 
@@ -128,11 +129,14 @@ The staged facade authors:
 - owner-bound body sets whose dense, non-empty ordered memberships reference
   facade-created primitive/import/Boolean/transform DAG roots;
 - owner-bound parts whose geometry is one staged solid DAG root or one admitted
-  body set; and
-- acyclic nested fixed-placement assemblies whose instances reference owned
-  local parts or already-completed local assemblies and select inherited, base,
-  or named child configuration contexts, plus outputs that directly target an
-  imported body, body set, part, or staged local assembly.
+  body set;
+- external-part handles that bind one named part output from a committed
+  InvariantCAD document resource without publishing a local feature node; and
+- acyclic nested fixed-placement product assemblies whose instances reference
+  owned local parts, already-completed local assemblies, or those external-part
+  handles and select inherited, base, or named child configuration contexts,
+  plus outputs that directly target an imported body, body set, part, or staged
+  product assembly.
 
 Every imported node fixes healing to `none` and expects one solid. Its explicit
 format chooses the reader; committed `mediaType` is provenance and resolver
@@ -171,15 +175,48 @@ The repository has four source-only staged geometry-evaluator slices:
   admitted by the preceding slice. The staged facade authors exactly this part
   boundary through `material(...)`, `part(...)`, configuration
   `.partMaterial(...)`, and direct part `output(...)`.
-- A direct local-assembly output iteratively expands active local assemblies in
-  authored depth-first leaf order. It preserves full root-to-leaf occurrence
-  paths, root-relative placements composed parent first, and each part
-  occurrence's effective `inherit`, `base`, or named configuration context.
-  Every containing assembly's context controls that definition's suppression
-  and placement expressions, including explicit `false` unsuppression, before
-  component admission. Active local parts may use the same single-solid or
-  multibody geometry as the direct part slice, including verified imported
-  leaves.
+- A product-assembly output iteratively expands active local assemblies and
+  resolves active external part outputs. It preserves full root-to-leaf
+  occurrence paths, root-relative placements composed parent first, and each
+  part occurrence's effective `inherit`, `base`, or named configuration
+  context. Every containing assembly's context controls that definition's
+  suppression and placement expressions, including explicit `false`
+  unsuppression, before component admission. Active local and external parts
+  may use the same single-solid or multibody geometry admitted by the direct
+  part slice, including verified imported leaves.
+
+### Document-scoped external resources
+
+The staged product evaluator resolves external document JSON from the root
+document's resource registry before resolving geometry resources declared by
+those children. Its resolver requests carry a frozen `documentScope`:
+
+```ts
+type DocumentV7ResourceScope =
+  | { readonly source: "root" }
+  | {
+      readonly source: "external";
+      readonly resource: ResourceId;
+      readonly digest: ResourceDigestIR;
+    };
+```
+
+The root scope identifies commitments in the product document, including each
+external document. An external scope identifies the admitted child registry by
+the root resource ID and digest. Resolver implementations for this staged
+operation must use both the scope and `request.id`: two child documents may
+legitimately reuse the same document-local resource ID while resolving
+different committed bytes. Ordinary `resolveResourcesV7(...)` requests remain
+unscoped; `documentScope` belongs to this repository-only staged session, not a
+new public 0.1.1 resolver contract.
+
+Resolution is deterministic and two-phase. All selected external document
+commitments are preflighted and resolved before child part preparation.
+Prepared child batches and kernel capabilities are then preflighted before any
+child geometry resource callback, and all child geometry bytes are admitted
+before document-body import callbacks run. Repeated
+`(documentScope, resourceId)` commitments reuse verified retained bytes; the
+same resource ID in a different scope remains distinct.
 
 Native primitive/Boolean/transform body sets can run on either exact or
 approximate kernels, and the result records the kernel representation as
@@ -202,6 +239,10 @@ subtracts a native tool, transforms the result, inspects partial topology,
 exports STEP, and restores the native ownership baseline. Separate real
 Manifold evidence evaluates configuration-sensitive native Boolean graphs
 through nested products, BOM, mass, suppression, limits, and complete cleanup.
+External-product OCCT evidence separately resolves a child document and its
+scoped STEP resource, reuses the exact child part across two occurrences,
+exports that retained child solid as STEP, and restores the native ownership
+baseline.
 
 The staged body-set result owns its distinct kernel shapes until disposal.
 Each member can produce a detached mesh and measurements. Topology and native
@@ -254,16 +295,22 @@ measurement, exact aggregate STEP/BREP, a cross-body topology namespace,
 interference subtraction, or primary-body inference. Bare body sets still have
 no aggregate mass contract; the part supplies the uniform-density semantics.
 
-For a nested local assembly, repeated part instances retain distinct full
-occurrence paths and BOM quantities. One evaluated part result is reused for
-equal `(part, effective configuration)` contexts within one evaluation call.
-Within each effective-configuration batch, direct part evaluation may also
-acquire a shared solid DAG once even when multiple admitted parts reference it.
-Neither optimization is a cross-run cache or geometry-equivalence claim.
-Aggregate assembly mesh, binary/ASCII STL, and OBJ apply each root-relative
-occurrence placement and remain approximate/lossy. The contextual BOM keeps
-unlike part/configuration states separate, while physical mass applies each
-effective density and placement before combining mass, center of mass, and
+For a product assembly, repeated part instances retain distinct full occurrence
+paths and BOM quantities. One local part result is reused for equal
+`(part, effective configuration)` contexts; one external part result is reused
+for equal `(resource, output, effective child configuration)` contexts.
+Distinct external output aliases retain distinct component and BOM identity,
+even when the child document points both names at the same part. Neither
+optimization is a cross-run cache or geometry-equivalence claim.
+
+Aggregate product mesh, binary/ASCII STL, and OBJ apply each root-relative
+occurrence placement and remain approximate/lossy. Exact native export remains
+available from a retained child solid when its kernel supports the requested
+format: the stock-OCCT product evidence exports the child as STEP. The product
+itself rejects STEP/BREP aggregate export with `EXPORT_UNSUPPORTED`; evaluation
+does not fuse child solids or invent a compound. The contextual BOM keeps
+unlike component/configuration states separate, while physical mass applies
+each effective density and placement before combining mass, center of mass, and
 inertia.
 
 A suppressed assembly edge prunes its entire subtree before descendant
@@ -274,10 +321,14 @@ target/tool and transform input edges, and transform operations are counted
 globally by `(node, effective configuration)` across active occurrences:
 repeated occurrences in one context share the charge, while different contexts
 are independent. Repeated Boolean references still charge every authored edge.
-An active external component is rejected before resolver or kernel work. The
-facade cannot construct a cycle because it accepts only already-completed
-same-builder assembly handles; strict document admission and evaluation reject
-hand-authored recursive graphs.
+An active external part is resolved only after its committed child document has
+been admitted. Child `inherit` maps parent base to child base or a parent named
+configuration to the same child ID; explicit `base` and `named` selectors
+target the child directly. Root caller parameter overrides never flow into the
+child. External assembly outputs and recursive external products are rejected
+before child resolver or kernel work. The facade cannot construct a local cycle
+because it accepts only already-completed same-builder assembly handles; strict
+document admission and evaluation reject hand-authored recursive local graphs.
 
 The authoring facade, all four staged geometry-evaluator slices, and the
 kernel-independent datum resolver remain repository-only: none is exported by
@@ -285,10 +336,14 @@ the package root, available from a package subpath, or integrated with the
 public builder or CLI. The facade can author datum points, axes, planes, and
 coordinate systems, but they are resolved by selected node ID rather than
 published as design outputs or consumed by sketches or shape algebra. It still
-does not author external occurrences, cyclic local-assembly graphs, Boolean or
-transform inputs that are body sets, parts, or assemblies, other
-body-consuming operations, per-body materials, or general solid graphs beyond
-primitive/import/Boolean/transform DAGs. The facade cannot publish a direct
+does not author external assembly handles, recursive external products, cyclic
+local-assembly graphs, Boolean or transform inputs that are body sets, parts,
+or assemblies, other body-consuming operations, per-body materials, or general
+solid graphs beyond primitive/import/Boolean/transform DAGs. An external child
+output must be a part admitted by that existing staged part evaluator; the
+product evaluator does not widen the child's supported feature families. A
+migrated v6 part backed by an extrusion, for example, is rejected before
+geometry or scoped child-resource work. The facade cannot publish a direct
 primitive, generic Boolean, or transformed-solid output either; generic solid
 geometry must be retained by a body set or part. The narrower imported-body
 handle remains the only directly publishable solid-like staged reference. The

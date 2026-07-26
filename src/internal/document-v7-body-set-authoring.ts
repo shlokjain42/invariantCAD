@@ -52,6 +52,7 @@ import {
   type DatumPointNodeIRV7,
   type DesignConfigurationIR,
   type DesignDocumentV7,
+  type ExternalAssemblyComponentIRV7,
   type ImportedBodyNodeIRV7,
   type ImportedBodyLengthUnitV7,
   type MaterialDefinitionIR,
@@ -84,9 +85,14 @@ const STAGED_LOCAL_ASSEMBLY_TO_IR = Symbol(
 const STAGED_DATUM_REFERENCE_CONSTRUCTION = Symbol(
   "InvariantCAD.StagedDatumReferenceConstructionV7",
 );
+const STAGED_EXTERNAL_PART_REFERENCE_CONSTRUCTION = Symbol(
+  "InvariantCAD.StagedExternalPartReferenceConstructionV7",
+);
 const RESOURCE_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
 const RESOURCE_MEDIA_TYPE_PATTERN =
   /^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+(?:\s*;.*)?$/;
+const INVARIANT_CAD_DOCUMENT_MEDIA_TYPE =
+  "application/vnd.invariantcad.document+json";
 
 interface StagedParameterIdentityV7 {
   readonly id: ParameterId;
@@ -951,6 +957,40 @@ export class StagedResourceRefV7 {
 }
 
 /**
+ * Owner-bound reference to one part output in an external InvariantCAD
+ * document resource.
+ *
+ * The handle is occurrence intent rather than a feature node. Creating it
+ * therefore does not publish a node or an output in the owning document.
+ *
+ * @internal
+ */
+export class StagedExternalPartRefV7 {
+  readonly source = "external" as const;
+  readonly outputKind = "part" as const;
+  readonly resource: ResourceId;
+  readonly output: string;
+  readonly [STAGED_BODY_SET_DESIGN_OWNER]: StagedBodySetDesignBuilderV7;
+
+  constructor(
+    owner: StagedBodySetDesignBuilderV7,
+    resource: ResourceId,
+    output: string,
+    construction: unknown,
+  ) {
+    if (construction !== STAGED_EXTERNAL_PART_REFERENCE_CONSTRUCTION) {
+      throw new TypeError(
+        "Staged external part references can only be created by their owning design",
+      );
+    }
+    this[STAGED_BODY_SET_DESIGN_OWNER] = owner;
+    this.resource = resource;
+    this.output = output;
+    authoringFreeze(this);
+  }
+}
+
+/**
  * General executable solid reference owned by one staged builder.
  *
  * This handle currently covers native/imported leaves, Boolean results, and
@@ -1100,10 +1140,8 @@ export class StagedCoordinateSystemRefV7 extends StagedDatumRefV7<"coordinateSys
 }
 
 /**
- * Local part and nested-assembly authoring for the executable staged graph.
- *
- * External document occurrences remain outside this slice even though the
- * frozen v7 grammar already reserves them.
+ * Local part, nested-assembly, and external-part authoring for the executable
+ * staged graph.
  *
  * @internal
  */
@@ -1112,6 +1150,11 @@ export class StagedLocalAssemblyBuilderV7 {
   readonly #assemblyHandles: WeakSet<object>;
   readonly #partHandleIds: WeakMap<object, NodeId>;
   readonly #assemblyHandleIds: WeakMap<object, NodeId>;
+  readonly #externalPartHandles: WeakSet<object>;
+  readonly #externalPartComponents: WeakMap<
+    object,
+    ExternalAssemblyComponentIRV7
+  >;
   readonly #instances: AssemblyInstanceIRV7[] = [];
   readonly #instanceIds = new AuthoringSet<EntityId>();
 
@@ -1120,17 +1163,24 @@ export class StagedLocalAssemblyBuilderV7 {
     assemblyHandles: WeakSet<object>,
     partHandleIds: WeakMap<object, NodeId>,
     assemblyHandleIds: WeakMap<object, NodeId>,
+    externalPartHandles: WeakSet<object>,
+    externalPartComponents: WeakMap<
+      object,
+      ExternalAssemblyComponentIRV7
+    >,
   ) {
     this.#partHandles = partHandles;
     this.#assemblyHandles = assemblyHandles;
     this.#partHandleIds = partHandleIds;
     this.#assemblyHandleIds = assemblyHandleIds;
+    this.#externalPartHandles = externalPartHandles;
+    this.#externalPartComponents = externalPartComponents;
     authoringFreeze(this);
   }
 
   instance(
     id: string,
-    component: PartRef | AssemblyRef,
+    component: PartRef | AssemblyRef | StagedExternalPartRefV7,
     options: StagedLocalAssemblyInstanceOptionsV7 = {},
   ): this {
     const partNode = authoringWeakMapRead(
@@ -1141,12 +1191,24 @@ export class StagedLocalAssemblyBuilderV7 {
       this.#assemblyHandleIds,
       component,
     );
-    let componentReference: RefIRV7<"part" | "assembly">;
+    const externalPartComponent = authoringWeakMapRead(
+      this.#externalPartComponents,
+      component,
+    );
+    let componentReference:
+      | {
+          readonly source: "local";
+          readonly reference: RefIRV7<"part" | "assembly">;
+        }
+      | ExternalAssemblyComponentIRV7;
     if (
       partNode !== undefined &&
       authoringWeakSetContains(this.#partHandles, component)
     ) {
-      componentReference = { node: partNode, kind: "part" };
+      componentReference = {
+        source: "local",
+        reference: { node: partNode, kind: "part" },
+      };
     } else if (
       assemblyNode !== undefined &&
       authoringWeakSetContains(this.#assemblyHandles, component)
@@ -1154,9 +1216,17 @@ export class StagedLocalAssemblyBuilderV7 {
       // Only already-completed assemblies have an owned handle, so authored
       // nested graphs are acyclic by construction.
       componentReference = {
-        node: assemblyNode,
-        kind: "assembly",
+        source: "local",
+        reference: {
+          node: assemblyNode,
+          kind: "assembly",
+        },
       };
+    } else if (
+      externalPartComponent !== undefined &&
+      authoringWeakSetContains(this.#externalPartHandles, component)
+    ) {
+      componentReference = externalPartComponent;
     } else {
       throw new TypeError(
         "Assembly components cannot cross staged design boundaries",
@@ -1203,10 +1273,7 @@ export class StagedLocalAssemblyBuilderV7 {
           );
     const instance: AssemblyInstanceIRV7 = deepFreeze({
       id: stableId,
-      component: {
-        source: "local",
-        reference: componentReference,
-      },
+      component: componentReference,
       configuration,
       placement,
       suppressed: captured.suppressed ?? false,
@@ -1492,6 +1559,10 @@ export class StagedBodySetDesignBuilderV7 {
     MaterialId
   >();
   readonly #resourceHandles = new AuthoringWeakSet<object>();
+  readonly #resourceHandleIds = new AuthoringWeakMap<
+    object,
+    ResourceId
+  >();
   readonly #solidHandles = new AuthoringWeakSet<object>();
   readonly #importedBodyHandles = new AuthoringWeakSet<object>();
   readonly #bodySetHandles = new AuthoringWeakSet<object>();
@@ -1502,6 +1573,11 @@ export class StagedBodySetDesignBuilderV7 {
   readonly #assemblyHandleInstanceIds = new AuthoringWeakMap<
     object,
     ReadonlySet<EntityId>
+  >();
+  readonly #externalPartHandles = new AuthoringWeakSet<object>();
+  readonly #externalPartComponents = new AuthoringWeakMap<
+    object,
+    ExternalAssemblyComponentIRV7
   >();
   readonly #parameterHandles = new AuthoringWeakMap<
     object,
@@ -2250,6 +2326,8 @@ export class StagedBodySetDesignBuilderV7 {
         this.#assemblyHandles,
         this.#partHandleIds,
         this.#assemblyHandleIds,
+        this.#externalPartHandles,
+        this.#externalPartComponents,
       );
       build(builder);
       const instances = authoringApply<
@@ -2396,10 +2474,61 @@ export class StagedBodySetDesignBuilderV7 {
     });
     const reference = new StagedResourceRefV7(this, key);
     authoringWeakSetInsert(this.#resourceHandles, reference);
+    authoringWeakMapWrite(this.#resourceHandleIds, reference, key);
     this.#resourceRecords[key] = definition;
     this.#resourceCount += 1;
     this.#resourceLocationCount += locations?.length ?? 0;
     this.#resourceLocationBytes += addedLocationBytes;
+    return reference;
+  }
+
+  /**
+   * Binds an external document resource and one of its part outputs for use by
+   * this design's assemblies. No feature node is published.
+   *
+   * @internal
+   */
+  externalPart(
+    resource: StagedResourceRefV7,
+    output: string,
+  ): StagedExternalPartRefV7 {
+    const resourceKey = authoringWeakMapRead(
+      this.#resourceHandleIds,
+      resource,
+    );
+    if (
+      resourceKey === undefined ||
+      !authoringWeakSetContains(this.#resourceHandles, resource)
+    ) {
+      throw new TypeError(
+        "Resources cannot cross staged design boundaries",
+      );
+    }
+    const definition = this.#resourceRecords[resourceKey];
+    if (definition?.mediaType !== INVARIANT_CAD_DOCUMENT_MEDIA_TYPE) {
+      throw new TypeError(
+        `External parts require resource mediaType '${INVARIANT_CAD_DOCUMENT_MEDIA_TYPE}'`,
+      );
+    }
+    assertValidId(output, "External part output");
+    const component = deepFreeze({
+      source: "external" as const,
+      resource: resourceKey,
+      output,
+      outputKind: "part" as const,
+    });
+    const reference = new StagedExternalPartRefV7(
+      this,
+      resourceKey,
+      output,
+      STAGED_EXTERNAL_PART_REFERENCE_CONSTRUCTION,
+    );
+    authoringWeakSetInsert(this.#externalPartHandles, reference);
+    authoringWeakMapWrite(
+      this.#externalPartComponents,
+      reference,
+      component,
+    );
     return reference;
   }
 

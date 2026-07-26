@@ -33,6 +33,10 @@ Capabilities are never inferred from a roadmap item. The
 [support matrix](/reference/support-matrix) and runtime capability reports are
 the authority for usable behavior.
 
+The Document v7 product work described below is source-only staging for 0.2.
+It is not available in the public 0.1.1 package unless a later roadmap entry
+explicitly marks it published.
+
 ## Current baseline
 
 ### Published in 0.1.0
@@ -106,8 +110,8 @@ formats, threat boundary, evidence, non-claims, and promotion gates live in the
 not in the product roadmap.
 
 Document v7 resource resolution, datums, richer shape algebra, body-set and
-multibody results, imported-body nodes, external occurrences, and feature-hash
-protocol v2 are also staged internally. A source-only
+multibody results, imported-body nodes, external part occurrences, and
+feature-hash protocol v2 are also staged internally. A source-only
 `stagedBodySetDesignV7(...)` facade now authors the bounded product graph
 admitted by the staged evaluators and datum resolver: typed length, angle,
 mass-density, and scalar parameters; named parameter, part-material, and
@@ -116,10 +120,12 @@ cylinders, spheres; primitive/import/Boolean/transform solid DAGs with ordered
 union, subtraction, intersection, translate, rotate, scale, and mirror
 operations; content-addressed resource commitments; imported-body leaves; body
 sets; parts over one solid DAG root or body set; acyclic nested fixed-placement
-assemblies of local parts and already-completed local assemblies with
-per-occurrence configuration selectors; datum points, axes, planes, and
-coordinate systems; and direct imported-body/body-set/part/local-assembly
-outputs. Generic primitive, Boolean, or transformed-solid outputs remain
+assemblies that mix local parts, already-completed local assemblies, and
+external handles naming one part output from a committed child document;
+per-occurrence inherited, base, or named configuration selectors; datum points,
+axes, planes, and coordinate systems; and direct
+imported-body/body-set/part/product-assembly outputs. Generic primitive,
+Boolean, or transformed-solid outputs and external assembly handles remain
 unsupported. Datums remain addressable nodes rather than design outputs. The
 facade produces detached, deeply frozen, strictly valid v7 documents while
 enforcing namespaces, typed builder ownership, exact plain own-data options,
@@ -148,27 +154,38 @@ single-solid/body-set result union. The staged facade now constructs that exact
 part boundary, including typed material definitions, part metadata, explicit
 density, and named material substitution.
 
-A fourth geometry operation, `evaluateLocalAssemblyOutputsV7(...)`, evaluates
-selected outputs whose acyclic nested instances reference local parts or local
-assemblies. Iterative expansion emits active part leaves in authored
-depth-first order with full root-to-leaf occurrence paths. Every containing
-assembly's effective configuration controls its definition-scoped suppression
-and placement expressions; each edge then selects an inherited, base, or named
-child context, and caller parameter overrides apply in every context.
-Placements compose parent first into root-relative transforms. One part result
-is reused per effective `(part, configuration)` state, and solid-DAG
-acquisition is deduplicated by node within each configuration batch, without
-collapsing occurrences, multibody memberships, or contextual BOM rows.
-Aggregate mesh/STL/OBJ remains approximate/lossy, while physical mass composes
-each occurrence's effective density and placement. Suppressed assembly edges
-prune their full subtree; active external components fail before resource
-resolution or kernel work. Nesting and retained identity are bounded by
-`maxAssemblyDepth` and `maxOccurrencePathSegments`. Solid nodes, Boolean and
-transform dependency links, and authored transform operations are
-independently bounded by `maxSolidGraphNodes`, `maxSolidDependencyLinks`, and
-`maxTransformOperations`; every Boolean target/tool edge is charged, including
-repeated references, and assembly evaluation charges graph work globally by
-`(node, effective configuration)` across the active tree.
+A fourth geometry operation,
+`evaluateProductAssemblyOutputsV7(...)`, evaluates selected products whose
+acyclic local graph may contain local parts, local subassemblies, and external
+part outputs. Iterative expansion emits active part leaves with full
+root-to-leaf occurrence paths and parent-first root-relative placements. Every
+containing assembly's effective configuration controls its definition-scoped
+suppression and placement expressions. A local edge then selects an inherited,
+base, or named root-document context. For an external edge, `inherit` maps root
+base to child base or a named parent ID to the same child ID; `base` and `named`
+select the child directly. Root caller parameter overrides never enter an
+external document.
+
+One local part result is reused per effective `(part, configuration)` state,
+and one external part result is reused per
+`(resource, output, child configuration)` state, without collapsing
+occurrences, multibody memberships, output-alias identity, or contextual BOM
+rows. External component and diagnostic provenance retains the committed
+document identity, selected output, and full occurrence path without
+overwriting a child-owned resource/output cause; admitted-child diagnostics
+also retain digest, byte length, source version, and child node/path.
+Aggregate mesh/STL/OBJ remains approximate/lossy. An exact child solid keeps
+capability-gated per-solid export, while exact aggregate product STEP/BREP
+remains unsupported.
+
+The resolver sees frozen root-versus-external `documentScope` descriptors, so
+two child documents can safely reuse one document-local resource ID. External
+document JSON resolves before child geometry resources; resource counts and
+bytes are cumulative across both phases. Suppressed assembly edges prune their
+full subtree. Nesting, external-document count, retained identity, solid nodes,
+Boolean/transform dependency links, and transform operations remain
+independently bounded. Failure releases prior child geometry transactionally,
+and the operation continues to borrow rather than own the kernel.
 
 A separate source-only operation, `evaluateDatumNodesV7(...)`, resolves
 selected datum node IDs without a geometry kernel. Parameter values follow
@@ -189,17 +206,17 @@ uniform density and additive independent-body physical-mass semantics, with
 aliases and overlaps counted per authored membership, plus a one-row BOM.
 Those numeric properties inherit backend measurement quality. Bare body sets
 still have no aggregate mass; exact aggregate STEP/BREP, aggregate geometric
-measurement or topology, external occurrence evaluation, healing, and location
-I/O remain unsupported. Local-assembly exact aggregate
-export, aggregate geometric measurement or topology, cyclic graphs, mates,
+measurement or topology, healing, and location I/O remain unsupported. Product
+exact aggregate export, aggregate geometric measurement or topology, external
+assembly outputs, recursive external products, cyclic local graphs, mates,
 motion, and interference/collision are also unsupported. `mediaType` remains
 committed provenance pending a versioned format-to-media-type policy. The
-facade still excludes external occurrences, datum-backed sketches, transforms
-or Booleans over body sets/parts/assemblies, other body-consuming operations,
+facade still excludes external assemblies, datum-backed sketches, transforms or
+Booleans over body sets/parts/assemblies, other body-consuming operations,
 per-body materials, and general solid graphs beyond
 primitive/import/Boolean/transform DAGs, including generic solid and direct
-primitive outputs. These are correctness-tested design inputs for Milestone 1,
-not public authoring or evaluation capabilities. No root export, package
+primitive outputs. These are correctness-tested source inputs staged for 0.2,
+not public 0.1.1 authoring or evaluation capabilities. No root export, package
 subpath, or CLI surface was added; the public document alias and migration
 target remain v6.
 
@@ -328,15 +345,17 @@ document model. Their identities and resource inputs are reproducible.
 The repository-only facade and staged evaluators now exercise that workflow for
 direct imported bodies, bounded primitive/import/Boolean/transform body sets,
 and directly authored typed parts and material intent over those geometries,
-including acyclic nested local fixed-placement assemblies. Real Manifold
-acceptance evidence covers configuration-sensitive Boolean products, BOM,
-mass, suppression, limits, and cleanup. Real stock-OCCT evidence resolves a
-committed STEP body, subtracts a native tool, transforms the result, inspects
-partial topology, exports STEP, and restores the native ownership baseline.
-The milestone remains in progress because this evidence is source-only and
-does not yet cover public v7 promotion, external product
-documents/components, datum-backed modeling, other body-consuming operations,
-or the wider shape algebra.
+including acyclic nested fixed-placement products with external part outputs.
+Real Manifold acceptance evidence covers child configuration selection, parent
+override isolation, contextual reuse and BOM identity, suppression, cumulative
+limits, provenance, and cleanup. Real stock-OCCT evidence resolves a committed
+external document and its scoped STEP body, retains exact child topology and
+STEP export, produces a placed aggregate mesh/STL view, and restores the native
+ownership baseline. The milestone remains in progress because all of this
+Document v7 evidence is source-only staging for 0.2. It does not yet cover
+public v7 promotion, external assembly products or scalable recursive component
+libraries, datum-backed modeling, other body-consuming operations, or the wider
+shape algebra; none of it is part of public 0.1.1.
 
 ## Milestone 2 — everyday part modeling
 

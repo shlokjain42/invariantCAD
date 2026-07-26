@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import * as publicApi from "../src/index.js";
 import { design, plane } from "../src/design.js";
 import {
   kgPerCubicMeter,
@@ -32,9 +33,12 @@ import {
   DesignDocumentV6Schema,
 } from "../src/schema.js";
 import {
+  admitDocumentBytesToV7,
+  admitDocumentToV7,
   migrateDocumentToV7,
   parseDocumentValue,
   parseDocumentValueV7,
+  parseDocumentToV7,
   stringifyDocument,
   stringifyDocumentV7,
 } from "../src/serialization.js";
@@ -336,6 +340,248 @@ describe("staged document-v7 migration boundary", () => {
     expect(stringifyDocumentV7(second.value)).toBe(
       stringifyDocumentV7(first.value),
     );
+  });
+
+  it("admits raw text and fatal UTF-8 bytes from every frozen document grammar", () => {
+    const encoder = new TextEncoder();
+    for (const [schema, version, parser] of legacyVersions) {
+      const source = parser.parse({
+        ...legacyAssemblyDocument(),
+        schema,
+        version,
+      }) as DesignDocument;
+      const text = stringifyDocument(source);
+      const admittedText = admitDocumentToV7(text);
+      expect(admittedText.ok, `document v${version} text`).toBe(true);
+      if (!admittedText.ok) continue;
+      expect(admittedText.value.sourceVersion).toBe(version);
+      expect(admittedText.value.document.version).toBe(
+        DOCUMENT_VERSION_V7,
+      );
+      expect(Object.isFrozen(admittedText.value.document)).toBe(true);
+      expect(
+        (
+          admittedText.value.document.nodes as unknown as Readonly<
+            Record<string, unknown>
+          >
+        ).assembly,
+      ).toMatchObject({
+        kind: "assembly",
+        instances: [
+          {
+            component: {
+              source: "local",
+              reference: { node: "part", kind: "part" },
+            },
+            configuration: { mode: "inherit" },
+          },
+        ],
+      });
+
+      const bytes = encoder.encode(text);
+      const admittedBytes = admitDocumentBytesToV7(bytes);
+      expect(admittedBytes.ok, `document v${version} bytes`).toBe(true);
+      if (!admittedBytes.ok) continue;
+      expect(admittedBytes.value.sourceVersion).toBe(version);
+      expect(admittedBytes.value.document).toEqual(
+        admittedText.value.document,
+      );
+
+      const documentOnly = parseDocumentToV7(text);
+      expect(documentOnly.ok, `document v${version} convenience`).toBe(
+        true,
+      );
+      if (documentOnly.ok) {
+        expect(documentOnly.value).toEqual(
+          admittedText.value.document,
+        );
+      }
+    }
+
+    const stagedText = stringifyDocumentV7(stagedV7Document());
+    const staged = admitDocumentToV7(stagedText);
+    expect(staged.ok).toBe(true);
+    if (staged.ok) {
+      expect(staged.value.sourceVersion).toBe(DOCUMENT_VERSION_V7);
+      expect(staged.value.document.resources).toEqual(
+        stagedV7Document().resources,
+      );
+    }
+  });
+
+  it("rejects duplicate decoded members and malformed resource bytes before admission", () => {
+    const source = stringifyDocument(legacyAssemblyDocument());
+    const duplicate = String.raw`{"na\u006de":"shadowed",${source.slice(1)}`;
+    expect(admitDocumentToV7(duplicate)).toMatchObject({
+      ok: false,
+      diagnostics: [
+        {
+          code: "IR_INVALID",
+          message:
+            "Design-document JSON contains a duplicate object member name",
+          details: {
+            reason: "duplicate-json-member",
+          },
+        },
+      ],
+    });
+
+    expect(
+      admitDocumentBytesToV7(Uint8Array.of(0x7b, 0x22, 0xc3, 0x28)),
+    ).toMatchObject({
+      ok: false,
+      diagnostics: [
+        {
+          code: "IR_INVALID",
+          message: "Design-document bytes are not valid UTF-8",
+          details: {
+            reason: "invalid-utf8",
+          },
+        },
+      ],
+    });
+
+    const bytes = new TextEncoder().encode(source);
+    expect(
+      admitDocumentBytesToV7(bytes, {
+        limits: { maxDocumentBytes: bytes.byteLength - 1 },
+      }),
+    ).toMatchObject({
+      ok: false,
+      diagnostics: [
+        {
+          code: "IR_INVALID",
+          details: {
+            resource: "maxDocumentBytes",
+            limit: bytes.byteLength - 1,
+            actual: bytes.byteLength,
+          },
+        },
+      ],
+    });
+    const stagedBytes = new TextEncoder().encode(
+      stringifyDocumentV7(stagedV7Document()),
+    );
+    expect(
+      admitDocumentBytesToV7(stagedBytes, {
+        limits: { maxDocumentBytes: stagedBytes.byteLength },
+      }).ok,
+    ).toBe(true);
+  });
+
+  it("contains revoked and opaque byte-input failures", () => {
+    const revoked = Proxy.revocable(new Uint8Array(), {});
+    revoked.revoke();
+    let revokedResult:
+      | ReturnType<typeof admitDocumentBytesToV7>
+      | undefined;
+    expect(() => {
+      revokedResult = admitDocumentBytesToV7(revoked.proxy);
+    }).not.toThrow();
+    expect(revokedResult?.ok).toBe(false);
+
+    const opaque = Proxy.revocable({}, {});
+    opaque.revoke();
+    const throwing = new Proxy(new Uint8Array(), {
+      getPrototypeOf(): never {
+        throw opaque.proxy;
+      },
+    });
+    let opaqueResult:
+      | ReturnType<typeof admitDocumentBytesToV7>
+      | undefined;
+    expect(() => {
+      opaqueResult = admitDocumentBytesToV7(throwing);
+    }).not.toThrow();
+    expect(opaqueResult?.ok).toBe(false);
+  });
+
+  it("fails closed if TextDecoder changes before resource-byte decoding", () => {
+    const source = new TextEncoder().encode(
+      stringifyDocument(legacyAssemblyDocument()),
+    );
+    const descriptor = Object.getOwnPropertyDescriptor(
+      globalThis,
+      "TextDecoder",
+    );
+    expect(descriptor).toBeDefined();
+    if (descriptor === undefined) return;
+    let result:
+      | ReturnType<typeof admitDocumentBytesToV7>
+      | undefined;
+    try {
+      result = admitDocumentBytesToV7(
+        source,
+        Object.defineProperty({}, "limits", {
+          enumerable: true,
+          get(): object {
+            Object.defineProperty(globalThis, "TextDecoder", {
+              configurable: true,
+              value: class PoisonedTextDecoder {},
+              writable: true,
+            });
+            return {};
+          },
+        }),
+      );
+    } finally {
+      Object.defineProperty(globalThis, "TextDecoder", descriptor);
+    }
+    expect(result).toMatchObject({
+      ok: false,
+      diagnostics: [
+        {
+          code: "IR_INVALID",
+          message:
+            "Document-v7 runtime intrinsics changed during the operation",
+        },
+      ],
+    });
+
+    const decodeDescriptor = Object.getOwnPropertyDescriptor(
+      TextDecoder.prototype,
+      "decode",
+    );
+    expect(decodeDescriptor).toBeDefined();
+    if (decodeDescriptor === undefined) return;
+    try {
+      result = admitDocumentBytesToV7(
+        source,
+        Object.defineProperty({}, "limits", {
+          enumerable: true,
+          get(): object {
+            Object.defineProperty(TextDecoder.prototype, "decode", {
+              configurable: true,
+              value: (): string => "{}",
+              writable: true,
+            });
+            return {};
+          },
+        }),
+      );
+    } finally {
+      Object.defineProperty(
+        TextDecoder.prototype,
+        "decode",
+        decodeDescriptor,
+      );
+    }
+    expect(result).toMatchObject({
+      ok: false,
+      diagnostics: [
+        {
+          code: "IR_INVALID",
+          message:
+            "Document-v7 runtime intrinsics changed during the operation",
+        },
+      ],
+    });
+  });
+
+  it("keeps compatible raw-document admission out of the package root", () => {
+    expect("admitDocumentToV7" in publicApi).toBe(false);
+    expect("admitDocumentBytesToV7" in publicApi).toBe(false);
+    expect("parseDocumentToV7" in publicApi).toBe(false);
   });
 
   it("captures caller-owned document data once and reads limits once", () => {

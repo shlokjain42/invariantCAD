@@ -1681,7 +1681,7 @@ describe("staged Document v7 local assembly evaluation", () => {
     harness.disposeBase();
   });
 
-  it("keeps suppressed external components inert and rejects active ones before kernel or resolver work", async () => {
+  it("keeps suppressed external components inert and resolves active document commitments before kernel work", async () => {
     const document = configuredAssemblyDocument();
     const nodes = document.nodes as Record<string, NodeIRV7>;
     nodes.nested = {
@@ -1791,10 +1791,10 @@ describe("staged Document v7 local assembly evaluation", () => {
     expect(rejected.ok).toBe(false);
     if (!rejected.ok) {
       expect(rejected.diagnostics[0]).toMatchObject({
-        code: "EVALUATION_UNSUPPORTED",
+        code: "RESOURCE_RESOLUTION_FAILED",
       });
     }
-    expect(resolver).not.toHaveBeenCalled();
+    expect(resolver).toHaveBeenCalledTimes(1);
     expect(harness.boxCalls).not.toHaveBeenCalled();
     harness.disposeBase();
   });
@@ -2423,18 +2423,18 @@ describe("staged Document v7 local assembly evaluation", () => {
 
   it("contains a rejected child batch and rolls back completed configuration owners", async () => {
     const harness = await instrumentedManifold();
-    const evaluatePartOutputsV7 =
-      evaluatorModule.evaluatePartOutputsV7;
+    const executePreparedPartOutputsV7 =
+      evaluatorModule.executePreparedPartOutputsV7;
     let calls = 0;
     const child = vi
-      .spyOn(evaluatorModule, "evaluatePartOutputsV7")
+      .spyOn(evaluatorModule, "executePreparedPartOutputsV7")
       .mockImplementation(async (...arguments_) => {
         const index = calls;
         calls += 1;
         if (index === 1) {
           throw Symbol("opaque-child-rejection");
         }
-        return evaluatePartOutputsV7(...arguments_);
+        return executePreparedPartOutputsV7(...arguments_);
       });
     try {
       const result = await evaluateLocalAssemblyOutputsV7(
@@ -2715,6 +2715,7 @@ describe("staged Document v7 local assembly evaluation", () => {
       byteLength: bytes.byteLength,
       mediaType: "model/step",
       locations: ["project://fixtures/imported.step"],
+      documentScope: { source: "root" },
     });
     expect(importDocumentBody).toHaveBeenCalledTimes(1);
     expect(importDocumentBody.mock.calls[0]?.[0]).toEqual(bytes);

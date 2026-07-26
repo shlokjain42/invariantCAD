@@ -2433,6 +2433,45 @@ export const DEFAULT_BODY_SET_EVALUATION_LIMITS_V7:
  *
  * @internal
  */
+declare const preparedPartOutputsV7Brand: unique symbol;
+declare const preparedPartKernelAccessV7Brand: unique symbol;
+
+/** Aggregate work admitted by one prepared staged part evaluation. @internal */
+export interface PreparedPartEvaluationMetricsV7 {
+  readonly selectedOutputs: number;
+  readonly partBodies: number;
+  readonly distinctSolids: number;
+  readonly solidGraphNodes: number;
+  readonly solidDependencyLinks: number;
+  readonly transformOperations: number;
+  readonly resolvedMaterials: number;
+}
+
+/**
+ * Owner-checked, opaque prepared part evaluation.
+ *
+ * Preparation performs document capture, selection, configuration, parameter,
+ * material, planning, and scalar-expression work. It performs no resolver or
+ * geometry-kernel access.
+ *
+ * @internal
+ */
+export interface PreparedPartOutputsV7 {
+  readonly resourceIds: readonly ResourceId[];
+  readonly metrics: PreparedPartEvaluationMetricsV7;
+  readonly [preparedPartOutputsV7Brand]: true;
+}
+
+/**
+ * Owner-checked retained kernel observation for one prepared part evaluation.
+ *
+ * @internal
+ */
+export interface PreparedPartKernelAccessV7 {
+  readonly kernelId: string;
+  readonly [preparedPartKernelAccessV7Brand]: true;
+}
+
 export interface EvaluatePartOutputsV7Options {
   readonly configuration?: string;
   /**
@@ -6053,6 +6092,19 @@ interface EvaluatedStagedSolidGraphV7 {
   readonly dispose: () => void;
 }
 
+interface PreparedStagedSolidGraphV7 {
+  readonly plan: StagedSolidGraphPlanV7;
+  readonly resolvedPrimitives: Map<
+    NodeId,
+    ResolvedBodySetPrimitiveV7
+  >;
+  readonly resolvedTransforms: Map<
+    NodeId,
+    readonly ResolvedTransformOperation[]
+  >;
+  readonly resourceIds: readonly ResourceId[];
+}
+
 interface EvaluateStagedSolidGraphV7Options {
   readonly kernel: GeometryKernel;
   readonly document: DesignDocumentV7;
@@ -6062,6 +6114,14 @@ interface EvaluateStagedSolidGraphV7Options {
   readonly resourceLimits: ResourceResolutionLimitsV7;
   readonly signal?: AbortSignal;
   readonly diagnostics: StagedV7SolidDiagnosticContext;
+  /**
+   * Internal retained pipeline inputs. When supplied together, this evaluator
+   * performs no expression work, capability observation, or resource I/O.
+   */
+  readonly prepared?: PreparedStagedSolidGraphV7;
+  readonly access?: BodySetKernelAccess;
+  readonly resolvedResources?: ResolvedResourcesV7;
+  readonly resourcesArePreResolved?: boolean;
 }
 
 function resolvedTransformOperationV7(
@@ -6197,22 +6257,13 @@ function resolvedTransformOperationV7(
   );
 }
 
-async function evaluateStagedSolidGraphV7(
-  options: EvaluateStagedSolidGraphV7Options,
-): Promise<CadResult<EvaluatedStagedSolidGraphV7>> {
-  const {
-    kernel,
-    document,
-    plan,
-    expression,
-    signal,
-    diagnostics,
-  } = options;
-  const {
-    postBoundaryFailure,
-    kernelFailure,
-  } = diagnostics;
-
+function prepareStagedSolidGraphV7(
+  plan: StagedSolidGraphPlanV7,
+  expression: (value: ExpressionIR) => number,
+  signal: AbortSignal | undefined,
+  diagnostics: StagedV7SolidDiagnosticContext,
+): CadResult<PreparedStagedSolidGraphV7> {
+  const { postBoundaryFailure } = diagnostics;
   const resolvedPrimitives =
     new ImportedBodyMap<NodeId, ResolvedBodySetPrimitiveV7>();
   const resolvedTransforms =
@@ -6221,8 +6272,7 @@ async function evaluateStagedSolidGraphV7(
     const [nodeId, node] = plan.orderedNodes[index]!;
     const boundary = postBoundaryFailure(signal, nodeId);
     if (boundary !== undefined) return boundary;
-    if (node.kind === "importedBody") continue;
-    if (node.kind === "boolean") continue;
+    if (node.kind === "importedBody" || node.kind === "boolean") continue;
     if (node.kind === "transform") {
       const operations = new Array<ResolvedTransformOperation>(
         node.operations.length,
@@ -6245,11 +6295,7 @@ async function evaluateStagedSolidGraphV7(
       importedBodyApply<void>(importedBodyObjectFreeze, Object, [
         operations,
       ]);
-      importedBodyMapSetValue(
-        resolvedTransforms,
-        nodeId,
-        operations,
-      );
+      importedBodyMapSetValue(resolvedTransforms, nodeId, operations);
       continue;
     }
     try {
@@ -6282,7 +6328,7 @@ async function evaluateStagedSolidGraphV7(
             );
           }
         }
-        resolvedPrimitives.set(nodeId, {
+        importedBodyMapSetValue(resolvedPrimitives, nodeId, {
           kind: "box",
           size: size as unknown as Vec3,
           center: node.center,
@@ -6321,7 +6367,7 @@ async function evaluateStagedSolidGraphV7(
             );
           }
         }
-        resolvedPrimitives.set(nodeId, {
+        importedBodyMapSetValue(resolvedPrimitives, nodeId, {
           kind: "cylinder",
           height,
           radiusBottom,
@@ -6357,7 +6403,7 @@ async function evaluateStagedSolidGraphV7(
             ),
           );
         }
-        resolvedPrimitives.set(nodeId, {
+        importedBodyMapSetValue(resolvedPrimitives, nodeId, {
           kind: "sphere",
           radius,
           ...(node.segments === undefined
@@ -6386,16 +6432,6 @@ async function evaluateStagedSolidGraphV7(
     }
   }
 
-  const kernelAccess = captureBodySetKernelAccess(
-    kernel,
-    plan,
-    signal,
-    diagnostics,
-  );
-  const afterKernelCapture = postBoundaryFailure(signal);
-  if (afterKernelCapture !== undefined) return afterKernelCapture;
-  if (!kernelAccess.ok) return kernelAccess;
-
   const resourceIds: ResourceId[] = [];
   const seenResourceIds = new ImportedBodySet<ResourceId>();
   for (let index = 0; index < plan.leafNodes.length; index += 1) {
@@ -6409,11 +6445,62 @@ async function evaluateStagedSolidGraphV7(
     importedBodySetAddValue(seenResourceIds, node.resource);
     importedBodyArrayAppend(resourceIds, node.resource);
   }
-  let resolvedResources: ResolvedResourcesV7 | undefined;
-  if (resourceIds.length > 0) {
+  importedBodyArraySortLexically(resourceIds);
+  importedBodyApply<void>(importedBodyObjectFreeze, Object, [resourceIds]);
+  return success({
+    plan,
+    resolvedPrimitives,
+    resolvedTransforms,
+    resourceIds,
+  });
+}
+
+async function evaluateStagedSolidGraphV7(
+  options: EvaluateStagedSolidGraphV7Options,
+): Promise<CadResult<EvaluatedStagedSolidGraphV7>> {
+  const {
+    kernel,
+    document,
+    plan,
+    expression,
+    signal,
+    diagnostics,
+  } = options;
+  const {
+    postBoundaryFailure,
+    kernelFailure,
+  } = diagnostics;
+
+  const preparedResult =
+    options.prepared === undefined
+      ? prepareStagedSolidGraphV7(
+          plan,
+          expression,
+          signal,
+          diagnostics,
+        )
+      : success(options.prepared);
+  if (!preparedResult.ok) return preparedResult;
+  const prepared = preparedResult.value;
+  const resolvedPrimitives = prepared.resolvedPrimitives;
+  const resolvedTransforms = prepared.resolvedTransforms;
+
+  const kernelAccess =
+    options.access === undefined
+      ? captureBodySetKernelAccess(kernel, plan, signal, diagnostics)
+      : success(options.access);
+  const afterKernelCapture = postBoundaryFailure(signal);
+  if (afterKernelCapture !== undefined) return afterKernelCapture;
+  if (!kernelAccess.ok) return kernelAccess;
+
+  let resolvedResources = options.resolvedResources;
+  if (
+    prepared.resourceIds.length > 0 &&
+    options.resourcesArePreResolved !== true
+  ) {
     const resolved = await resolveResourcesV7(
       document.resources ?? {},
-      resourceIds,
+      prepared.resourceIds,
       {
         ...(options.resolver === undefined
           ? {}
@@ -7130,6 +7217,121 @@ interface ResolvedPartDefinitionV7 {
   readonly massDensitySource?: MassDensitySource;
 }
 
+interface PreparedPartOutputsV7State {
+  readonly options: CapturedPartOutputsV7Options;
+  readonly document: DesignDocumentV7;
+  readonly selectedOutputs: readonly SelectedPartOutputV7[];
+  readonly selectedConfigurationId: ConfigurationId | null;
+  readonly publicParameters: Readonly<Record<string, number>>;
+  readonly diagnostics: readonly Diagnostic[];
+  readonly resolvedParts: ReadonlyMap<NodeId, ResolvedPartDefinitionV7>;
+  readonly expression: (value: ExpressionIR) => number;
+  readonly solidGraph: PreparedStagedSolidGraphV7;
+}
+
+interface PreparedPartKernelAccessV7State {
+  readonly prepared: PreparedPartOutputsV7;
+  readonly kernel: GeometryKernel;
+  readonly access: BodySetKernelAccess;
+}
+
+const preparedPartOutputsV7States =
+  new WeakMap<object, PreparedPartOutputsV7State>();
+const preparedPartKernelAccessV7States =
+  new WeakMap<object, PreparedPartKernelAccessV7State>();
+const preparedPartWeakMapGet = WeakMap.prototype.get;
+const preparedPartWeakMapSet = WeakMap.prototype.set;
+
+function preparedPartState(
+  prepared: PreparedPartOutputsV7,
+): PreparedPartOutputsV7State | undefined {
+  return importedBodyApply<PreparedPartOutputsV7State | undefined>(
+    preparedPartWeakMapGet,
+    preparedPartOutputsV7States,
+    [prepared],
+  );
+}
+
+function preparedPartKernelState(
+  access: PreparedPartKernelAccessV7,
+): PreparedPartKernelAccessV7State | undefined {
+  return importedBodyApply<PreparedPartKernelAccessV7State | undefined>(
+    preparedPartWeakMapGet,
+    preparedPartKernelAccessV7States,
+    [access],
+  );
+}
+
+function createPreparedPartOutputsV7(
+  resourceIds: readonly ResourceId[],
+  metrics: PreparedPartEvaluationMetricsV7,
+  state: PreparedPartOutputsV7State,
+): PreparedPartOutputsV7 {
+  const prepared = importedBodyApply<Record<string, unknown>>(
+    importedBodyObjectCreate,
+    Object,
+    [null],
+  );
+  importedBodyApply<void>(importedBodyObjectDefineProperty, Object, [
+    prepared,
+    "resourceIds",
+    {
+      configurable: false,
+      enumerable: true,
+      writable: false,
+      value: resourceIds,
+    },
+  ]);
+  importedBodyApply<void>(importedBodyObjectDefineProperty, Object, [
+    prepared,
+    "metrics",
+    {
+      configurable: false,
+      enumerable: true,
+      writable: false,
+      value: metrics,
+    },
+  ]);
+  importedBodyApply<void>(importedBodyObjectFreeze, Object, [prepared]);
+  const result = prepared as unknown as PreparedPartOutputsV7;
+  importedBodyApply<void>(
+    preparedPartWeakMapSet,
+    preparedPartOutputsV7States,
+    [result, state],
+  );
+  return result;
+}
+
+function createPreparedPartKernelAccessV7(
+  prepared: PreparedPartOutputsV7,
+  kernel: GeometryKernel,
+  access: BodySetKernelAccess,
+): PreparedPartKernelAccessV7 {
+  const retained = importedBodyApply<Record<string, unknown>>(
+    importedBodyObjectCreate,
+    Object,
+    [null],
+  );
+  importedBodyApply<void>(importedBodyObjectDefineProperty, Object, [
+    retained,
+    "kernelId",
+    {
+      configurable: false,
+      enumerable: true,
+      writable: false,
+      value: access.id,
+    },
+  ]);
+  importedBodyApply<void>(importedBodyObjectFreeze, Object, [retained]);
+  const result = retained as unknown as PreparedPartKernelAccessV7;
+  importedBodyApply<void>(
+    preparedPartWeakMapSet,
+    preparedPartKernelAccessV7States,
+    [result, { prepared, kernel, access }],
+  );
+  return result;
+}
+
 const PART_EVALUATION_PHASE = "documentV7PartEvaluation";
 const PART_EVALUATION_OPTION_KEYS = Object.freeze([
   "configuration",
@@ -7446,20 +7648,15 @@ const PART_SOLID_DIAGNOSTICS =
   });
 
 /**
- * Evaluates direct document-v7 `part` outputs whose geometry references a
- * bounded admitted solid graph or a directly supported body set.
- *
- * This source export deliberately remains absent from `src/index.ts`. The
- * supplied kernel is borrowed. Every failure disposes each distinct acquired
- * shape exactly once; a successful result owns those shapes until `dispose()`.
+ * Captures and prepares direct document-v7 `part` outputs without observing a
+ * resolver or geometry kernel.
  *
  * @internal
  */
-export async function evaluatePartOutputsV7(
-  kernel: GeometryKernel,
+export function preparePartOutputsV7(
   inputDocument: DesignDocumentV7,
   inputOptions: EvaluatePartOutputsV7Options = {},
-): Promise<CadResult<EvaluatedPartDesignV7>> {
+): CadResult<PreparedPartOutputsV7> {
   if (!documentV7RuntimeIntrinsicsAreIntact()) {
     return partRuntimeIntegrityFailure();
   }
@@ -7985,19 +8182,197 @@ export async function evaluatePartOutputsV7(
     );
   }
 
+  const preparedSolidGraph = prepareStagedSolidGraphV7(
+    solidPlan.value,
+    expression,
+    options.signal,
+    PART_SOLID_DIAGNOSTICS,
+  );
+  const afterSolidPreparation = partPostBoundaryFailure(options.signal);
+  if (afterSolidPreparation !== undefined) return afterSolidPreparation;
+  if (!preparedSolidGraph.ok) return preparedSolidGraph;
+
+  const publicParameters = importedBodyApply<Record<string, number>>(
+    importedBodyObjectCreate,
+    Object,
+    [null],
+  );
+  for (const [id, value] of parameterValues) {
+    importedBodyApply<void>(importedBodyObjectDefineProperty, Object, [
+      publicParameters,
+      id,
+      {
+        configurable: false,
+        enumerable: true,
+        writable: false,
+        value,
+      },
+    ]);
+  }
+  importedBodyApply<void>(importedBodyObjectFreeze, Object, [
+    publicParameters,
+  ]);
+  importedBodyApply<void>(importedBodyObjectFreeze, Object, [
+    selectedOutputs,
+  ]);
+  const frozenDiagnostics = importedBodyApply<readonly Diagnostic[]>(
+    importedBodyObjectFreeze,
+    Object,
+    [diagnostics],
+  );
+  const metrics = importedBodyApply<PreparedPartEvaluationMetricsV7>(
+    importedBodyObjectFreeze,
+    Object,
+    [
+      {
+        selectedOutputs: selectedOutputs.length,
+        partBodies: selectedBodyCount,
+        distinctSolids: solidPlan.value.leafNodes.length,
+        solidGraphNodes: solidPlan.value.graphNodeCount,
+        solidDependencyLinks: solidPlan.value.dependencyLinkCount,
+        transformOperations: solidPlan.value.transformOperationCount,
+        resolvedMaterials: materialIds.length,
+      },
+    ],
+  );
+  const prepared = createPreparedPartOutputsV7(
+    preparedSolidGraph.value.resourceIds,
+    metrics,
+    importedBodyApply<PreparedPartOutputsV7State>(
+      importedBodyObjectFreeze,
+      Object,
+      [
+        {
+          options,
+          document,
+          selectedOutputs,
+          selectedConfigurationId,
+          publicParameters,
+          diagnostics: frozenDiagnostics,
+          resolvedParts,
+          expression,
+          solidGraph: preparedSolidGraph.value,
+        },
+      ],
+    ),
+  );
+  const beforePreparedSuccess = partPostBoundaryFailure(options.signal);
+  if (beforePreparedSuccess !== undefined) return beforePreparedSuccess;
+  return success(prepared, frozenDiagnostics);
+}
+
+/**
+ * Captures all geometry-kernel access needed by one owned prepared part.
+ *
+ * No resource is resolved and no shape is constructed by this boundary.
+ *
+ * @internal
+ */
+export function preflightPreparedPartOutputsV7(
+  kernel: GeometryKernel,
+  prepared: PreparedPartOutputsV7,
+): CadResult<PreparedPartKernelAccessV7> {
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return partRuntimeIntegrityFailure();
+  }
+  const state = preparedPartState(prepared);
+  if (state === undefined) {
+    return failure(
+      diagnostic(
+        "IR_INVALID",
+        "Prepared part evaluation is not owned by this evaluator module",
+        {
+          severity: "error",
+          details: {
+            phase: PART_EVALUATION_PHASE,
+            preparedOwner: false,
+          },
+        },
+      ),
+    );
+  }
+  const boundary = partPostBoundaryFailure(state.options.signal);
+  if (boundary !== undefined) return boundary;
+  const captured = captureBodySetKernelAccess(
+    kernel,
+    state.solidGraph.plan,
+    state.options.signal,
+    PART_SOLID_DIAGNOSTICS,
+  );
+  const afterCapture = partPostBoundaryFailure(state.options.signal);
+  if (afterCapture !== undefined) return afterCapture;
+  if (!captured.ok) return captured;
+  return success(
+    createPreparedPartKernelAccessV7(prepared, kernel, captured.value),
+    state.diagnostics,
+  );
+}
+
+/**
+ * Executes one owned prepared part using its exact retained kernel access and
+ * caller-supplied verified resources.
+ *
+ * @internal
+ */
+export async function executePreparedPartOutputsV7(
+  kernel: GeometryKernel,
+  prepared: PreparedPartOutputsV7,
+  retainedAccess: PreparedPartKernelAccessV7,
+  resolvedResources?: ResolvedResourcesV7,
+): Promise<CadResult<EvaluatedPartDesignV7>> {
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return partRuntimeIntegrityFailure();
+  }
+  const state = preparedPartState(prepared);
+  const retained = preparedPartKernelState(retainedAccess);
+  if (
+    state === undefined ||
+    retained === undefined ||
+    retained.prepared !== prepared ||
+    retained.kernel !== kernel
+  ) {
+    return failure(
+      diagnostic(
+        "IR_INVALID",
+        "Prepared part kernel access does not belong to this evaluation",
+        {
+          severity: "error",
+          details: {
+            phase: PART_EVALUATION_PHASE,
+            preparedOwner: state !== undefined,
+            accessOwner: retained !== undefined,
+            preparedMatches: retained?.prepared === prepared,
+            kernelMatches: retained?.kernel === kernel,
+          },
+        },
+      ),
+    );
+  }
+  const {
+    options,
+    document,
+    selectedOutputs,
+    selectedConfigurationId,
+    publicParameters,
+    diagnostics,
+    resolvedParts,
+    expression,
+  } = state;
+  const solidPlan = state.solidGraph.plan;
   const solidGraph = await evaluateStagedSolidGraphV7({
     kernel,
     document,
-    plan: solidPlan.value,
+    plan: solidPlan,
     expression,
-    ...(options.resolver === undefined
-      ? {}
-      : { resolver: options.resolver }),
     resourceLimits: options.resourceLimits,
     ...(options.signal === undefined
       ? {}
       : { signal: options.signal }),
     diagnostics: PART_SOLID_DIAGNOSTICS,
+    prepared: state.solidGraph,
+    access: retained.access,
+    ...(resolvedResources === undefined ? {} : { resolvedResources }),
+    resourcesArePreResolved: true,
   });
   const afterSolidGraph = partPostBoundaryFailure(options.signal);
   if (afterSolidGraph !== undefined) {
@@ -8141,42 +8516,82 @@ export async function evaluatePartOutputsV7(
       new EvaluatedPartV7(selected.name, owner, value),
     );
   }
-  const publicParameters = importedBodyApply<Record<string, number>>(
-    importedBodyObjectCreate,
-    Object,
-    [null],
-  );
-  for (const [id, value] of parameterValues) {
-    importedBodyApply<void>(importedBodyObjectDefineProperty, Object, [
-      publicParameters,
-      id,
-      {
-        configurable: true,
-        enumerable: true,
-        writable: false,
-        value,
-      },
-    ]);
-  }
-  importedBodyApply<void>(importedBodyObjectFreeze, Object, [
-    publicParameters,
-  ]);
   const evaluated = new EvaluatedPartDesignV7(
     owner,
     outputs,
     selectedConfigurationId,
     publicParameters,
-    importedBodyApply<readonly Diagnostic[]>(
-      importedBodyObjectFreeze,
-      Object,
-      [diagnostics],
-    ),
+    diagnostics,
   );
   const finalBoundary = partPostBoundaryFailure(options.signal);
   if (finalBoundary !== undefined) {
     return failAfterCleanup(finalBoundary);
   }
   return success(evaluated, diagnostics);
+}
+
+/**
+ * Evaluates direct document-v7 `part` outputs whose geometry references a
+ * bounded admitted solid graph or a directly supported body set.
+ *
+ * This behavior-compatible convenience boundary prepares all document work,
+ * retains one kernel preflight, resolves verified resources, and then executes
+ * without observing kernel capabilities a second time.
+ *
+ * @internal
+ */
+export async function evaluatePartOutputsV7(
+  kernel: GeometryKernel,
+  inputDocument: DesignDocumentV7,
+  inputOptions: EvaluatePartOutputsV7Options = {},
+): Promise<CadResult<EvaluatedPartDesignV7>> {
+  const prepared = preparePartOutputsV7(inputDocument, inputOptions);
+  if (!prepared.ok) return prepared;
+  const retained = preflightPreparedPartOutputsV7(kernel, prepared.value);
+  if (!retained.ok) return retained;
+  const state = preparedPartState(prepared.value);
+  if (state === undefined) {
+    return failure(
+      diagnostic(
+        "IR_INVALID",
+        "Prepared part evaluation lost its owned state",
+        {
+          severity: "error",
+          details: {
+            phase: PART_EVALUATION_PHASE,
+            preparedOwner: false,
+          },
+        },
+      ),
+    );
+  }
+
+  let resolvedResources: ResolvedResourcesV7 | undefined;
+  if (prepared.value.resourceIds.length > 0) {
+    const resolved = await resolveResourcesV7(
+      state.document.resources ?? {},
+      prepared.value.resourceIds,
+      {
+        ...(state.options.resolver === undefined
+          ? {}
+          : { resolver: state.options.resolver }),
+        limits: state.options.resourceLimits,
+        ...(state.options.signal === undefined
+          ? {}
+          : { signal: state.options.signal }),
+      },
+    );
+    const afterResources = partPostBoundaryFailure(state.options.signal);
+    if (afterResources !== undefined) return afterResources;
+    if (!resolved.ok) return resolved;
+    resolvedResources = resolved.value;
+  }
+  return executePreparedPartOutputsV7(
+    kernel,
+    prepared.value,
+    retained.value,
+    resolvedResources,
+  );
 }
 
 export class Evaluator {

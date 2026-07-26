@@ -143,6 +143,65 @@ matching, exact native evolution reports, conformance witnesses, and artifact
 sizes. Raising a limit changes the accepted workload and should be reviewed
 like a resource-policy change.
 
+## Source-only staged 0.2 external products
+
+The repository-only Document v7 product evaluator adds a document-scoped
+resource boundary for external part occurrences. This is source-only work
+staged for 0.2, not a public 0.1.1 evaluator or resolver API.
+
+Resolver requests made by this operation include a frozen `documentScope`.
+`{ source: "root" }` identifies commitments in the product document. A child
+resource uses
+`{ source: "external", resource: <root resource ID>, digest: <root digest> }`.
+The scope is part of resource identity: the same `resourceId` in two admitted
+child documents represents two distinct commitments. Repeating the same
+`(documentScope, resourceId)` reuses the verified bytes. Ordinary
+`resolveResourcesV7(...)` calls omit `documentScope`.
+
+The product uses one cumulative resource-resolution session across external
+document JSON and later child geometry:
+
+| Ceiling | Staged product behavior |
+| --- | --- |
+| `maxRequestedResourceIds` | Bounds distinct scoped requests retained by the session |
+| `maxResolvedResources` | Bounds distinct scoped resources resolved across every phase |
+| `maxResourceBytes` | Bounds each individual committed resource |
+| `maxTotalResourceBytes` | Bounds all committed bytes retained across every phase |
+| `maxExternalDocuments` | Bounds distinct active external document resources before resolver or kernel work |
+
+Each resolution phase is fully preflighted, including its effect on cumulative
+counts and committed bytes, before a resolver callback for that phase. A later
+phase that would exceed the shared budget therefore fails before any child
+geometry callback, even when earlier external document JSON has already been
+resolved. Suppressed branches are pruned before external-document admission and
+do not consume these product-work ceilings.
+
+An occurrence-specific external child failure is reported at the parent
+occurrence's component pointer. Structured details always add
+`componentResource`, the selected `output`/`outputKind`, and the full
+`occurrencePath`. After the child document is admitted, details also include
+its `digest`, `byteLength`, and admitted `sourceVersion`. If the child
+diagnostic already names its own `resource`, that value is preserved instead
+of being overwritten. A child-owned output is preserved separately as
+`childOutput`, while `output` continues to name the external component output
+selected by the parent. The original child location is preserved as
+`childNode` and `childPath` when supplied. Deferred external BOM warnings keep
+the same component provenance, so applications can identify both the product
+occurrence and the child-document cause without parsing message text.
+
+An aggregate first-phase limit or preflight failure that cannot be attributed
+to one external component remains aggregate. The evaluator does not attach it
+to an arbitrary first occurrence merely to supply a component pointer.
+
+Unsupported external assembly outputs fail before child resolver or kernel
+work. A missing child configuration and an unsupported migrated-v6 extrusion
+part both preserve parent/child provenance and fail before child geometry work.
+If later child evaluation fails, every earlier acquired or intermediate shape
+is released exactly once. Successful product results retain their child shapes
+until product disposal. The supplied kernel is borrowed in both cases and is
+never disposed by the staged operation; verified resource bytes are cleared
+when its operation-scoped session ends.
+
 ## Debugging workflow
 
 1. Preserve the full diagnostic object.

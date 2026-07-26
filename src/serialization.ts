@@ -5,7 +5,10 @@ import {
   canonicalStringifyProtocolWithin,
   deepFreeze,
 } from "./core/json.js";
-import { utf8ByteLengthWithin } from "./core/utf8.js";
+import {
+  decodeUtf8Fatal,
+  utf8ByteLengthWithin,
+} from "./core/utf8.js";
 import {
   diagnostic,
   failure,
@@ -17,6 +20,7 @@ import {
 import {
   DOCUMENT_SCHEMA_V6,
   DOCUMENT_SCHEMA_V7,
+  DOCUMENT_VERSION_V1,
   DOCUMENT_VERSION_V2,
   DOCUMENT_VERSION_V3,
   DOCUMENT_VERSION_V4,
@@ -68,6 +72,16 @@ const SerializationIntrinsicArrayPrototype = Array.prototype;
 const SerializationIntrinsicJson = JSON;
 const SerializationIntrinsicObject = Object;
 const SerializationIntrinsicReflect = Reflect;
+const SerializationIntrinsicUint8Array = Uint8Array;
+const SerializationIntrinsicTypedArrayPrototype =
+  SerializationIntrinsicObject.getPrototypeOf(
+    SerializationIntrinsicUint8Array.prototype,
+  );
+const serializationIntrinsicTypedArrayByteLength =
+  SerializationIntrinsicObject.getOwnPropertyDescriptor(
+    SerializationIntrinsicTypedArrayPrototype,
+    "byteLength",
+  )?.get;
 const serializationIntrinsicArrayIsArray =
   SerializationIntrinsicArray.isArray;
 const serializationIntrinsicArrayMap =
@@ -114,6 +128,17 @@ function serializationArrayIsArray(
     SerializationIntrinsicArray,
     [value],
   ) as boolean;
+}
+
+function serializationUint8ArrayByteLength(value: Uint8Array): number {
+  if (serializationIntrinsicTypedArrayByteLength === undefined) {
+    throw new TypeError("Uint8Array byteLength intrinsic is unavailable");
+  }
+  return serializationReflectApply(
+    serializationIntrinsicTypedArrayByteLength,
+    value,
+    [],
+  ) as number;
 }
 
 function serializationObjectHasOwn(
@@ -690,35 +715,54 @@ export function parseDocument(
   return parseDocumentValueWithLimits(value, normalizedLimits.value);
 }
 
-/**
- * Parses only the isolated staged document-v7 grammar and rejects repeated
- * object member names from the raw JSON text. Ordinary parsing stays frozen on
- * v1-v6 until the complete runtime switch.
- */
-export function parseDocumentV7(
-  text: string,
-  options: ParseDocumentOptions = {},
-): CadResult<DesignDocumentV7> {
-  if (typeof text !== "string") {
-    return failure(
-      diagnostic(
-        "IR_INVALID",
-        "Document-v7 text must be a primitive string",
-        { severity: "error" },
-      ),
-    );
-  }
-  const source = text;
-  const normalizedLimits = parseV7Limits(options);
-  if (!documentV7RuntimeIntrinsicsAreIntact()) {
-    return serializationIntegrityFailure();
-  }
-  if (!normalizedLimits.ok) return normalizedLimits;
+interface CapturedDocumentTextV7Boundary {
+  readonly snapshot: unknown;
+  readonly limits: DesignDocumentLimits;
+}
+
+export type AdmittedDocumentSourceVersion =
+  | typeof DOCUMENT_VERSION_V1
+  | typeof DOCUMENT_VERSION_V2
+  | typeof DOCUMENT_VERSION_V3
+  | typeof DOCUMENT_VERSION_V4
+  | typeof DOCUMENT_VERSION_V5
+  | typeof DOCUMENT_VERSION_V6
+  | typeof DOCUMENT_VERSION_V7;
+
+/** Source-version provenance retained by the internal composition boundary. */
+export interface AdmittedDesignDocumentV7 {
+  readonly document: DesignDocumentV7;
+  readonly sourceVersion: AdmittedDocumentSourceVersion;
+}
+
+interface DocumentTextV7BoundaryMessages {
+  readonly primitiveText: string;
+  readonly memberAudit: string;
+  readonly duplicateMember: string;
+}
+
+const STAGED_DOCUMENT_V7_TEXT_MESSAGES: DocumentTextV7BoundaryMessages = {
+  primitiveText: "Document-v7 text must be a primitive string",
+  memberAudit: "Document-v7 JSON member names could not be audited safely",
+  duplicateMember: "Document-v7 JSON contains a duplicate object member name",
+};
+
+const COMPATIBLE_DOCUMENT_TEXT_MESSAGES: DocumentTextV7BoundaryMessages = {
+  primitiveText: "Design-document text must be a primitive string",
+  memberAudit: "Design-document JSON member names could not be audited safely",
+  duplicateMember: "Design-document JSON contains a duplicate object member name",
+};
+
+function captureDocumentTextV7WithLimits(
+  source: string,
+  limits: DesignDocumentLimits,
+  messages: DocumentTextV7BoundaryMessages,
+): CadResult<CapturedDocumentTextV7Boundary> {
   let documentBytes: number | undefined;
   try {
     documentBytes = utf8ByteLengthWithin(
       source,
-      normalizedLimits.value.maxDocumentBytes,
+      limits.maxDocumentBytes,
     );
   } catch {
     if (!documentV7RuntimeIntrinsicsAreIntact()) {
@@ -739,17 +783,16 @@ export function parseDocumentV7(
     return failure(
       diagnostic(
         "IR_INVALID",
-        `Design-document maxDocumentBytes limit ${normalizedLimits.value.maxDocumentBytes} was exceeded before UTF-8 buffer materialization`,
+        `Design-document maxDocumentBytes limit ${limits.maxDocumentBytes} was exceeded before UTF-8 buffer materialization`,
         {
           severity: "error",
           details: {
             resource: "maxDocumentBytes",
-            limit: normalizedLimits.value.maxDocumentBytes,
+            limit: limits.maxDocumentBytes,
             actualAtLeast:
-              source.length >
-              normalizedLimits.value.maxDocumentBytes
+              source.length > limits.maxDocumentBytes
                 ? source.length
-                : normalizedLimits.value.maxDocumentBytes + 1,
+                : limits.maxDocumentBytes + 1,
           },
         },
       ),
@@ -774,14 +817,11 @@ export function parseDocumentV7(
   if (!documentV7RuntimeIntrinsicsAreIntact()) {
     return serializationIntegrityFailure();
   }
-  const preflight = preflightDocumentValueV7WithLimits(
-    value,
-    normalizedLimits.value,
-  );
+  const preflight = preflightDocumentValueV7WithLimits(value, limits);
   if (!preflight.ok) return preflight;
   let memberAudit: ReturnType<typeof auditJsonMemberNames>;
   try {
-    memberAudit = auditJsonMemberNames(source, normalizedLimits.value);
+    memberAudit = auditJsonMemberNames(source, limits);
   } catch {
     if (!documentV7RuntimeIntrinsicsAreIntact()) {
       return serializationIntegrityFailure();
@@ -789,7 +829,7 @@ export function parseDocumentV7(
     return failure(
       diagnostic(
         "IR_INVALID",
-        "Document-v7 JSON member names could not be audited safely",
+        messages.memberAudit,
         {
           severity: "error",
           details: {
@@ -822,7 +862,7 @@ export function parseDocumentV7(
     return failure(
       diagnostic(
         "IR_INVALID",
-        "Document-v7 JSON contains a duplicate object member name",
+        messages.duplicateMember,
         {
           severity: "error",
           details: {
@@ -832,7 +872,250 @@ export function parseDocumentV7(
       ),
     );
   }
-  return validateDocumentV7Snapshot(preflight.value);
+  return success({
+    snapshot: preflight.value,
+    limits,
+  });
+}
+
+function captureDocumentTextV7Boundary(
+  text: string,
+  options: ParseDocumentOptions,
+  messages: DocumentTextV7BoundaryMessages,
+): CadResult<CapturedDocumentTextV7Boundary> {
+  if (typeof text !== "string") {
+    return failure(
+      diagnostic(
+        "IR_INVALID",
+        messages.primitiveText,
+        { severity: "error" },
+      ),
+    );
+  }
+  const source = text;
+  const normalizedLimits = parseV7Limits(options);
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return serializationIntegrityFailure();
+  }
+  if (!normalizedLimits.ok) return normalizedLimits;
+  return captureDocumentTextV7WithLimits(
+    source,
+    normalizedLimits.value,
+    messages,
+  );
+}
+
+/**
+ * Parses only the isolated staged document-v7 grammar and rejects repeated
+ * object member names from the raw JSON text. Ordinary parsing stays frozen on
+ * v1-v6 until the complete runtime switch.
+ */
+export function parseDocumentV7(
+  text: string,
+  options: ParseDocumentOptions = {},
+): CadResult<DesignDocumentV7> {
+  const captured = captureDocumentTextV7Boundary(
+    text,
+    options,
+    STAGED_DOCUMENT_V7_TEXT_MESSAGES,
+  );
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return serializationIntegrityFailure();
+  }
+  return captured.ok
+    ? validateDocumentV7Snapshot(captured.value.snapshot)
+    : captured;
+}
+
+function capturedDocumentSourceVersion(
+  snapshot: unknown,
+): AdmittedDocumentSourceVersion | undefined {
+  if (
+    typeof snapshot !== "object" ||
+    snapshot === null ||
+    serializationArrayIsArray(snapshot)
+  ) {
+    return undefined;
+  }
+  const version = (
+    snapshot as Readonly<Record<string, unknown>>
+  ).version;
+  return version === DOCUMENT_VERSION_V1 ||
+    version === DOCUMENT_VERSION_V2 ||
+    version === DOCUMENT_VERSION_V3 ||
+    version === DOCUMENT_VERSION_V4 ||
+    version === DOCUMENT_VERSION_V5 ||
+    version === DOCUMENT_VERSION_V6 ||
+    version === DOCUMENT_VERSION_V7
+    ? version
+    : undefined;
+}
+
+function admitCapturedDocumentToV7(
+  captured: CapturedDocumentTextV7Boundary,
+): CadResult<AdmittedDesignDocumentV7> {
+  const sourceVersion = capturedDocumentSourceVersion(
+    captured.snapshot,
+  );
+  const migrated = migrateTrustedDocumentSnapshotToV7(
+    captured.snapshot,
+    captured.limits,
+  );
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return serializationIntegrityFailure();
+  }
+  if (!migrated.ok) return migrated;
+  if (sourceVersion === undefined) {
+    return failure(
+      diagnostic(
+        "IR_INVALID",
+        "Design-document version is malformed or unsupported",
+        {
+          severity: "error",
+          path: "/version",
+        },
+      ),
+    );
+  }
+  return success(
+    {
+      document: migrated.value,
+      sourceVersion,
+    },
+    migrated.diagnostics,
+  );
+}
+
+/**
+ * Admits raw JSON from any frozen public document grammar or the staged v7
+ * grammar into one detached, validated v7 snapshot while retaining the
+ * authored source version for provenance. This internal composition boundary
+ * is intentionally not re-exported from the package root.
+ */
+export function admitDocumentToV7(
+  text: string,
+  options: ParseDocumentOptions = {},
+): CadResult<AdmittedDesignDocumentV7> {
+  const captured = captureDocumentTextV7Boundary(
+    text,
+    options,
+    COMPATIBLE_DOCUMENT_TEXT_MESSAGES,
+  );
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return serializationIntegrityFailure();
+  }
+  return captured.ok ? admitCapturedDocumentToV7(captured.value) : captured;
+}
+
+/** Document-only convenience form of {@link admitDocumentToV7}. */
+export function parseDocumentToV7(
+  text: string,
+  options: ParseDocumentOptions = {},
+): CadResult<DesignDocumentV7> {
+  const admitted = admitDocumentToV7(text, options);
+  return admitted.ok
+    ? success(admitted.value.document, admitted.diagnostics)
+    : admitted;
+}
+
+/**
+ * Fatal UTF-8 byte form of {@link admitDocumentToV7} for resolved document
+ * resources. The encoded payload is bounded before decoding and retains source
+ * version provenance without parsing the JSON twice.
+ */
+export function admitDocumentBytesToV7(
+  bytes: Uint8Array,
+  options: ParseDocumentOptions = {},
+): CadResult<AdmittedDesignDocumentV7> {
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return serializationIntegrityFailure();
+  }
+  let isUint8Array: boolean;
+  let byteLength: number;
+  try {
+    isUint8Array = bytes instanceof SerializationIntrinsicUint8Array;
+    if (isUint8Array) {
+      byteLength = serializationUint8ArrayByteLength(bytes);
+    } else {
+      byteLength = 0;
+    }
+  } catch {
+    if (!documentV7RuntimeIntrinsicsAreIntact()) {
+      return serializationIntegrityFailure();
+    }
+    return failure(
+      diagnostic(
+        "IR_INVALID",
+        "Design-document bytes could not be read safely",
+        { severity: "error" },
+      ),
+    );
+  }
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return serializationIntegrityFailure();
+  }
+  if (!isUint8Array) {
+    return failure(
+      diagnostic(
+        "IR_INVALID",
+        "Design-document bytes must be a Uint8Array",
+        { severity: "error" },
+      ),
+    );
+  }
+  const normalizedLimits = parseV7Limits(options);
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return serializationIntegrityFailure();
+  }
+  if (!normalizedLimits.ok) return normalizedLimits;
+  if (byteLength > normalizedLimits.value.maxDocumentBytes) {
+    return failure(
+      diagnostic(
+        "IR_INVALID",
+        `Design-document maxDocumentBytes limit ${normalizedLimits.value.maxDocumentBytes} was exceeded by ${byteLength}`,
+        {
+          severity: "error",
+          details: {
+            resource: "maxDocumentBytes",
+            limit: normalizedLimits.value.maxDocumentBytes,
+            actual: byteLength,
+          },
+        },
+      ),
+    );
+  }
+  let text: string;
+  try {
+    text = decodeUtf8Fatal(bytes);
+  } catch {
+    if (!documentV7RuntimeIntrinsicsAreIntact()) {
+      return serializationIntegrityFailure();
+    }
+    return failure(
+      diagnostic(
+        "IR_INVALID",
+        "Design-document bytes are not valid UTF-8",
+        {
+          severity: "error",
+          details: {
+            reason: "invalid-utf8",
+          },
+        },
+      ),
+    );
+  }
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return serializationIntegrityFailure();
+  }
+  const captured = captureDocumentTextV7WithLimits(
+    text,
+    normalizedLimits.value,
+    COMPATIBLE_DOCUMENT_TEXT_MESSAGES,
+  );
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return serializationIntegrityFailure();
+  }
+  return captured.ok ? admitCapturedDocumentToV7(captured.value) : captured;
 }
 
 export function parseDocumentValue(
@@ -1167,7 +1450,16 @@ export function migrateDocumentToV7(
   }
   if (!preflight.ok) return preflight;
 
-  const snapshot = preflight.value;
+  return migrateTrustedDocumentSnapshotToV7(
+    preflight.value,
+    normalizedLimits.value,
+  );
+}
+
+function migrateTrustedDocumentSnapshotToV7(
+  snapshot: unknown,
+  limits: DesignDocumentLimits,
+): CadResult<DesignDocumentV7> {
   const snapshotRecord =
     typeof snapshot === "object" &&
     snapshot !== null &&
@@ -1180,7 +1472,7 @@ export function migrateDocumentToV7(
     // precise schema diagnostic and the exact byte check is retried afterward.
     const earlyBytes = checkDocumentV7CanonicalByteLimit(
       snapshot as DesignDocumentV7,
-      normalizedLimits.value,
+      limits,
     );
     if (!documentV7RuntimeIntrinsicsAreIntact()) {
       return serializationIntegrityFailure();
@@ -1196,7 +1488,7 @@ export function migrateDocumentToV7(
     if (!earlyBytes.ok) {
       const bytes = checkDocumentV7CanonicalByteLimit(
         parsedV7.value,
-        normalizedLimits.value,
+        limits,
       );
       if (!bytes.ok) {
         return {
@@ -1241,7 +1533,7 @@ export function migrateDocumentToV7(
   }
   const limitCheck = checkTrustedDesignDocumentSnapshotLimits(
     candidate,
-    normalizedLimits.value,
+    limits,
   );
   if (!documentV7RuntimeIntrinsicsAreIntact()) {
     return serializationIntegrityFailure();
@@ -1258,7 +1550,7 @@ export function migrateDocumentToV7(
 
   const bytes = checkDocumentV7CanonicalByteLimit(
     candidate,
-    normalizedLimits.value,
+    limits,
   );
   if (!documentV7RuntimeIntrinsicsAreIntact()) {
     return serializationIntegrityFailure();
