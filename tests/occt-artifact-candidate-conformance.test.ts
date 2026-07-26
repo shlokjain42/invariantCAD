@@ -2,18 +2,18 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { inspectKernelShapeArtifactSupport } from "../src/artifact-cache.js";
 import {
-  auditKernelShapeArtifactCodec,
+  auditKernelShapeArtifactCodecV2,
   hashKernelShapeArtifactFixtureWitness,
-  hashKernelShapeSemanticObservation,
+  hashKernelShapeSemanticObservationV2,
   type KernelShapeArtifactFixtureWitness,
-  type KernelShapeArtifactSemanticWitness,
-  type KernelShapeArtifactWitness,
+  type KernelShapeArtifactSemanticWitnessV2,
+  type KernelShapeArtifactWitnessV2,
 } from "../src/conformance.js";
 import { getOcctShapeArtifactCodecCandidate } from "../src/internal/occt-artifact-candidate.js";
 import type { GeometryKernel } from "../src/kernel.js";
 import { createOcctKernel } from "../src/occt-kernel.js";
 import {
-  observeKernelShapeSemantics,
+  observeKernelShapeSemanticsV2,
   type KernelShapeSemanticNotApplicableFeature,
   type KernelShapeSemanticObservationPlan,
 } from "../src/shape-semantic-observation.js";
@@ -36,7 +36,7 @@ const LEGACY_V1_FIXTURE_URL = new URL(
 );
 
 const EXPECTED_SEMANTIC =
-  "invariantcad:kernel-shape-semantic:v1:sha256:40ae684e4a2fad512f54e1f1be4443acf7faf2f34fc6b281c7b816d8d3366cb2" as const satisfies KernelShapeArtifactSemanticWitness;
+  "invariantcad:kernel-shape-semantic:v2:sha256:b99dd9c39b950700dd22c8be6255db6e816e1a51668f415bf84b80c4c200d588" as const satisfies KernelShapeArtifactSemanticWitnessV2;
 const EXPECTED_FIXTURE =
   "invariantcad:kernel-shape-artifact-fixture:v1:sha256:4279e9f76ab1e41dae47b28aea9c426ffa8b5f329ab624f137c65f6881e23918" as const satisfies KernelShapeArtifactFixtureWitness;
 const EXPECTED_LEGACY_V2_FIXTURE =
@@ -115,7 +115,7 @@ const NOT_APPLICABLE_FEATURES: readonly KernelShapeSemanticNotApplicableFeature[
   ]);
 
 const OBSERVATION_PLAN: KernelShapeSemanticObservationPlan = Object.freeze({
-  id: "occt-shape-artifact-candidate-release-v1",
+  id: "occt-shape-artifact-candidate-release-v2",
   meshes: Object.freeze([{ id: "default" }]),
   topology: "required",
   nativeExchanges: Object.freeze([]),
@@ -123,12 +123,12 @@ const OBSERVATION_PLAN: KernelShapeSemanticObservationPlan = Object.freeze({
   notApplicableFeatures: NOT_APPLICABLE_FEATURES,
 });
 
-const witness: KernelShapeArtifactWitness = async (
+const witness: KernelShapeArtifactWitnessV2 = async (
   kernel,
   shape,
   context,
 ) => {
-  const observation = await observeKernelShapeSemantics(
+  const observation = await observeKernelShapeSemanticsV2(
     kernel,
     shape,
     OBSERVATION_PLAN,
@@ -138,7 +138,7 @@ const witness: KernelShapeArtifactWitness = async (
     },
   );
   if (!observation.ok) return observation;
-  return hashKernelShapeSemanticObservation(observation.value, {
+  return hashKernelShapeSemanticObservationV2(observation.value, {
     maxBytes: context.maxBytes,
     ...(context.signal === undefined ? {} : { signal: context.signal }),
   });
@@ -232,7 +232,7 @@ describe("OCCT candidate shape-artifact conformance gate", () => {
     }
 
     const golden = await goldenArtifact();
-    const result = await auditKernelShapeArtifactCodec({
+    const result = await auditKernelShapeArtifactCodecV2({
       target: {
         mode: "candidate",
         create: candidateTarget,
@@ -286,6 +286,7 @@ describe("OCCT candidate shape-artifact conformance gate", () => {
     if (!result.ok) return;
     expect(result.value).toMatchObject({
       kind: "kernel-shape-artifact-codec-audit-evidence",
+      auditProtocolVersion: 2,
       mode: "candidate",
       advertisement: "unadvertised",
       certifiesCompatibility: false,
@@ -306,6 +307,10 @@ describe("OCCT candidate shape-artifact conformance gate", () => {
       "golden-decode",
       "current-runtime-self-round-trip",
     ]);
+    for (const item of result.value.cases) {
+      expect(item.expectedWitness).toBe(EXPECTED_SEMANTIC);
+      expect(item.observedWitness).toBe(EXPECTED_SEMANTIC);
+    }
     expect(result.value.cases[0]?.checks).toContain("golden-artifact-witness");
     expect(result.value.cases[1]?.checks).toContain(
       "pre-witness-source-cross-instance-decode",

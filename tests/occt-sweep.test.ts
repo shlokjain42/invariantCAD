@@ -338,7 +338,7 @@ describe("OCCT bounded solid sweep", () => {
         expect(measured.surfaceArea).toBeCloseTo(136, 8);
         expectVectorClose(measured.boundingBox.min, [-1, -2, 0]);
         expectVectorClose(measured.boundingBox.max, [1, 2, 10]);
-        expect(measured.genus).toBe(0);
+        expect(measured.genus).toBeNull();
 
         const snapshot = topology(kernel, shape);
         expectClosedSolidTopology(snapshot, 6, 12);
@@ -459,7 +459,7 @@ describe("OCCT bounded solid sweep", () => {
         expect(measured.volume).toBeCloseTo(240, 8);
         expectVectorClose(measured.boundingBox.min, [-1, -2, 0]);
         expectVectorClose(measured.boundingBox.max, [12, 10, 11]);
-        expect(measured.genus).toBe(0);
+        expect(measured.genus).toBeNull();
 
         const snapshot = topology(kernel, shape);
         expectClosedSolidTopology(snapshot, 14, 28);

@@ -18,6 +18,7 @@ and deployment needs.
 | STL/OBJ | Yes | Yes, through tessellation | Yes, through tessellation |
 | STEP/BREP | No | Yes | Yes |
 | Exact topology snapshot | No | Yes | Yes |
+| Genus | Exact per connected mesh component | Unsupported (`null`) | Unsupported (`null`) |
 | Draft | No | No | Yes, bounded ABI contract |
 | Complete exact feature evolution | No | Partial | Selected Boolean/treatment/offset feature slices |
 | Browser release test | Chromium | Chromium | Repository/local conformance only |
@@ -85,9 +86,14 @@ feature, it checks:
 - strong single-body import format and unit mode
 - topology evidence surfaces and signature fingerprint
 - exact indexed topology evolution when a stronger contract is required
+- versioned measurement semantics such as exact or unsupported genus
 
 Malformed metadata fails separately from absent support. A kernel cannot obtain
 behavior merely by defining an unadvertised method.
+
+Use `inspectKernelMeasurementCapabilities(...)` or
+`kernelSupports(capabilities, "measurement", "genus")` for discovery. A numeric
+measurement is exact for the backend representation; `null` means unsupported.
 
 `nativeImports` is the weak exchange declaration. Document-backed imported
 bodies require the separate versioned `documentBodyImport` envelope and a

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   COMPOSITE_SWEEP_REFINEMENT_PROTOCOL_VERSION,
   inspectKernelDocumentBodyImportCapabilities,
+  inspectKernelMeasurementCapabilities,
   inspectKernelShapeArtifactSupport,
   kernelSupports,
   kernelSupportsDocumentBodyImport,
@@ -123,6 +124,24 @@ export function geometryKernelConformance(
         expect.objectContaining({ ok: true }),
       );
       const measurement = kernel.measure(shape);
+      const measurementCapabilities =
+        inspectKernelMeasurementCapabilities(kernel.capabilities);
+      expect(measurementCapabilities.status).not.toBe("malformed");
+      if (measurementCapabilities.status === "valid") {
+        if (
+          measurementCapabilities.capabilities.genus ===
+          "exact-per-connected-component"
+        ) {
+          expect(measurement.genus).not.toBeNull();
+          if (measurement.genus === null) {
+            throw new Error("Kernel advertised exact genus but returned null");
+          }
+          expect(Number.isSafeInteger(measurement.genus)).toBe(true);
+          expect(measurement.genus).toBeGreaterThanOrEqual(0);
+        } else {
+          expect(measurement.genus).toBeNull();
+        }
+      }
       expect(Number.isFinite(measurement.volume)).toBe(true);
       expect(Number.isFinite(measurement.surfaceArea)).toBe(true);
       expect(measurement.volume).toBeGreaterThan(0);
@@ -258,6 +277,9 @@ export function geometryKernelConformance(
       const documentBodyImport =
         inspectKernelDocumentBodyImportCapabilities(kernel.capabilities);
       expect(documentBodyImport.status).not.toBe("malformed");
+      expect(
+        inspectKernelMeasurementCapabilities(kernel.capabilities).status,
+      ).toBe("valid");
       if (documentBodyImport.status === "valid") {
         expect(kernel.importDocumentBody).toBeTypeOf("function");
         const formats = documentBodyImport.capabilities.formats;

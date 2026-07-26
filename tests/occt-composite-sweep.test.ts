@@ -586,7 +586,7 @@ describe("OCCT exact composite solid sweep", () => {
         expect(measured.surfaceArea).toBeCloseTo(136 + 30 * Math.PI, 8);
         expectVectorClose(measured.boundingBox.min, [-1, -2, 0]);
         expectVectorClose(measured.boundingBox.max, [10, 2, 11]);
-        expect(measured.genus).toBe(0);
+        expect(measured.genus).toBeNull();
 
         const snapshot = topology(kernel, shape);
         expectClosedSolidTopology(snapshot, 14, 28);
@@ -669,7 +669,7 @@ describe("OCCT exact composite solid sweep", () => {
         const measured = kernel.measure(shape);
         expect(measured.volume).toBeCloseTo((160 * Math.PI) / 3, 7);
         expect(measured.surfaceArea).toBeCloseTo(80 * Math.PI + 16, 7);
-        expect(measured.genus).toBe(0);
+        expect(measured.genus).toBeNull();
 
         const snapshot = topology(kernel, shape);
         expectClosedSolidTopology(snapshot, 10, 20);

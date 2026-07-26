@@ -23,14 +23,19 @@ import {
 import { isCanonicalUtf8StringWithin } from "./core/utf8.js";
 import {
   encodeKernelShapeSemanticObservation,
+  encodeKernelShapeSemanticObservationV2,
   type KernelShapeSemanticObservation,
+  type KernelShapeSemanticObservationV2,
 } from "./shape-semantic-observation.js";
 
 export {
   DEFAULT_KERNEL_SHAPE_SEMANTIC_OBSERVATION_LIMITS,
   KERNEL_SHAPE_SEMANTIC_OBSERVATION_PROTOCOL_VERSION,
+  KERNEL_SHAPE_SEMANTIC_OBSERVATION_PROTOCOL_VERSION_V2,
   encodeKernelShapeSemanticObservation,
+  encodeKernelShapeSemanticObservationV2,
   observeKernelShapeSemantics,
+  observeKernelShapeSemanticsV2,
   type KernelShapeSemanticCurveV1,
   type KernelShapeSemanticEdgeV1,
   type KernelShapeSemanticEncodedFloat32,
@@ -40,20 +45,25 @@ export {
   type KernelShapeSemanticFaceV1,
   type KernelShapeSemanticLineageV1,
   type KernelShapeSemanticMeasurementsV1,
+  type KernelShapeSemanticMeasurementsV2,
   type KernelShapeSemanticMeshOptionsV1,
   type KernelShapeSemanticMeshRequest,
   type KernelShapeSemanticMeshV1,
   type KernelShapeSemanticNativeExchangeV1,
+  type KernelShapeSemanticNativeExchangeV2,
   type KernelShapeSemanticNotApplicableFeature,
   type KernelShapeSemanticObservation,
   type KernelShapeSemanticObservationLimits,
   type KernelShapeSemanticObservationPlan,
   type KernelShapeSemanticObservationV1,
+  type KernelShapeSemanticObservationV2,
   type KernelShapeSemanticOrientedTriangleV1,
   type KernelShapeSemanticProbe,
   type KernelShapeSemanticProbeContext,
   type KernelShapeSemanticProbeObservationV1,
+  type KernelShapeSemanticProbeObservationV2,
   type KernelShapeSemanticSnapshotV1,
+  type KernelShapeSemanticSnapshotV2,
   type KernelShapeSemanticStatusV1,
   type KernelShapeSemanticSurfaceV1,
   type KernelShapeSemanticTopologyV1,
@@ -62,13 +72,18 @@ export {
 } from "./shape-semantic-observation.js";
 
 export const KERNEL_SHAPE_ARTIFACT_CODEC_AUDIT_PROTOCOL_VERSION = 1 as const;
+export const KERNEL_SHAPE_ARTIFACT_CODEC_AUDIT_PROTOCOL_VERSION_V2 = 2 as const;
 export const KERNEL_SHAPE_ARTIFACT_SEMANTIC_WITNESS_PREFIX =
   "invariantcad:kernel-shape-semantic:v1:sha256:" as const;
+export const KERNEL_SHAPE_ARTIFACT_SEMANTIC_WITNESS_PREFIX_V2 =
+  "invariantcad:kernel-shape-semantic:v2:sha256:" as const;
 export const KERNEL_SHAPE_ARTIFACT_FIXTURE_WITNESS_PREFIX =
   "invariantcad:kernel-shape-artifact-fixture:v1:sha256:" as const;
 
 export type KernelShapeArtifactSemanticWitness =
   `${typeof KERNEL_SHAPE_ARTIFACT_SEMANTIC_WITNESS_PREFIX}${string}`;
+export type KernelShapeArtifactSemanticWitnessV2 =
+  `${typeof KERNEL_SHAPE_ARTIFACT_SEMANTIC_WITNESS_PREFIX_V2}${string}`;
 export type KernelShapeArtifactFixtureWitness =
   `${typeof KERNEL_SHAPE_ARTIFACT_FIXTURE_WITNESS_PREFIX}${string}`;
 
@@ -130,6 +145,12 @@ export type KernelShapeArtifactWitness = (
   context: KernelShapeArtifactWitnessContext,
 ) => Awaitable<CadResult<KernelShapeArtifactSemanticWitness>>;
 
+export type KernelShapeArtifactWitnessV2 = (
+  kernel: GeometryKernel,
+  shape: KernelShape,
+  context: KernelShapeArtifactWitnessContext,
+) => Awaitable<CadResult<KernelShapeArtifactSemanticWitnessV2>>;
+
 interface KernelShapeArtifactCodecAuditCaseBase {
   /** Stable case identifier used only by the audit report. */
   readonly id: string;
@@ -164,12 +185,48 @@ export type KernelShapeArtifactCodecAuditCase =
   | KernelShapeArtifactSelfRoundTripCase
   | KernelShapeArtifactGoldenDecodeCase;
 
+interface KernelShapeArtifactCodecAuditCaseBaseV2 {
+  /** Stable case identifier used only by the audit report. */
+  readonly id: string;
+  /** Stable feature label passed through to the backend codec context. */
+  readonly feature: string;
+  readonly expectedWitness: KernelShapeArtifactSemanticWitnessV2;
+  /**
+   * Produces a bounded, key-neutral protocol-v2 digest. The callback borrows
+   * the shape and must leave it live.
+   */
+  readonly witness: KernelShapeArtifactWitnessV2;
+}
+
+export interface KernelShapeArtifactSelfRoundTripCaseV2
+  extends KernelShapeArtifactCodecAuditCaseBaseV2 {
+  readonly scope: "current-runtime-self-round-trip";
+  readonly createSource: KernelShapeArtifactSelfRoundTripCase["createSource"];
+}
+
+export interface KernelShapeArtifactGoldenDecodeCaseV2
+  extends KernelShapeArtifactCodecAuditCaseBaseV2 {
+  readonly scope: "golden-decode";
+  /** Borrowed by the caller; the audit snapshots it before its first await. */
+  readonly artifact: Uint8Array;
+  readonly expectedArtifactWitness: KernelShapeArtifactFixtureWitness;
+}
+
+export type KernelShapeArtifactCodecAuditCaseV2 =
+  | KernelShapeArtifactSelfRoundTripCaseV2
+  | KernelShapeArtifactGoldenDecodeCaseV2;
+
 export interface AuditKernelShapeArtifactCodecOptions {
   readonly target: KernelShapeArtifactCodecAuditTarget;
   readonly expectedIdentity: KernelShapeArtifactExpectedIdentity;
   readonly cases: readonly KernelShapeArtifactCodecAuditCase[];
   readonly limits?: Partial<KernelShapeArtifactCodecAuditLimits>;
   readonly signal?: AbortSignal;
+}
+
+export interface AuditKernelShapeArtifactCodecOptionsV2
+  extends Omit<AuditKernelShapeArtifactCodecOptions, "cases"> {
+  readonly cases: readonly KernelShapeArtifactCodecAuditCaseV2[];
 }
 
 export interface KernelShapeArtifactAuditArtifactEvidence {
@@ -238,12 +295,58 @@ export interface KernelShapeArtifactCodecAuditEvidence {
   readonly disclaimer: "Finite audit evidence; not certification or a cache-eligibility proof";
 }
 
+export interface KernelShapeArtifactCodecCaseEvidenceV2
+  extends Omit<
+    KernelShapeArtifactCodecCaseEvidence,
+    "expectedWitness" | "observedWitness"
+  > {
+  readonly expectedWitness: KernelShapeArtifactSemanticWitnessV2;
+  readonly observedWitness: KernelShapeArtifactSemanticWitnessV2;
+}
+
+export interface KernelShapeArtifactCodecAuditEvidenceV2
+  extends Omit<
+    KernelShapeArtifactCodecAuditEvidence,
+    "auditProtocolVersion" | "cases"
+  > {
+  readonly auditProtocolVersion: typeof KERNEL_SHAPE_ARTIFACT_CODEC_AUDIT_PROTOCOL_VERSION_V2;
+  readonly cases: readonly KernelShapeArtifactCodecCaseEvidenceV2[];
+}
+
+type KernelShapeArtifactSemanticWitnessInternal =
+  | KernelShapeArtifactSemanticWitness
+  | KernelShapeArtifactSemanticWitnessV2;
+type KernelShapeArtifactWitnessInternal = (
+  kernel: GeometryKernel,
+  shape: KernelShape,
+  context: KernelShapeArtifactWitnessContext,
+) => Awaitable<CadResult<KernelShapeArtifactSemanticWitnessInternal>>;
+type KernelShapeArtifactCodecAuditProtocolVersion =
+  | typeof KERNEL_SHAPE_ARTIFACT_CODEC_AUDIT_PROTOCOL_VERSION
+  | typeof KERNEL_SHAPE_ARTIFACT_CODEC_AUDIT_PROTOCOL_VERSION_V2;
+interface KernelShapeArtifactCodecCaseEvidenceInternal
+  extends Omit<
+    KernelShapeArtifactCodecCaseEvidence,
+    "expectedWitness" | "observedWitness"
+  > {
+  readonly expectedWitness: KernelShapeArtifactSemanticWitnessInternal;
+  readonly observedWitness: KernelShapeArtifactSemanticWitnessInternal;
+}
+interface KernelShapeArtifactCodecAuditEvidenceInternal
+  extends Omit<
+    KernelShapeArtifactCodecAuditEvidence,
+    "auditProtocolVersion" | "cases"
+  > {
+  readonly auditProtocolVersion: KernelShapeArtifactCodecAuditProtocolVersion;
+  readonly cases: readonly KernelShapeArtifactCodecCaseEvidenceInternal[];
+}
+
 interface CapturedSelfCase {
   readonly id: string;
   readonly feature: string;
   readonly scope: "current-runtime-self-round-trip";
-  readonly expectedWitness: KernelShapeArtifactSemanticWitness;
-  readonly witness: KernelShapeArtifactWitness;
+  readonly expectedWitness: KernelShapeArtifactSemanticWitnessInternal;
+  readonly witness: KernelShapeArtifactWitnessInternal;
   readonly createSource: KernelShapeArtifactSelfRoundTripCase["createSource"];
 }
 
@@ -251,8 +354,8 @@ interface CapturedGoldenCase {
   readonly id: string;
   readonly feature: string;
   readonly scope: "golden-decode";
-  readonly expectedWitness: KernelShapeArtifactSemanticWitness;
-  readonly witness: KernelShapeArtifactWitness;
+  readonly expectedWitness: KernelShapeArtifactSemanticWitnessInternal;
+  readonly witness: KernelShapeArtifactWitnessInternal;
   readonly artifact: Uint8Array;
   readonly expectedArtifactWitness: KernelShapeArtifactFixtureWitness;
 }
@@ -607,6 +710,7 @@ function captureSignal(value: unknown): CadResult<AbortSignal | undefined> {
 function captureCases(
   raw: unknown,
   limits: KernelShapeArtifactCodecAuditLimits,
+  semanticWitnessPrefix: string,
 ): CadResult<readonly CapturedCase[]> {
   try {
     if (!Array.isArray(raw) || raw.length === 0) {
@@ -666,7 +770,7 @@ function captureCases(
         identifiers.has(value.id) ||
         !taggedDigest(
           value.expectedWitness,
-          KERNEL_SHAPE_ARTIFACT_SEMANTIC_WITNESS_PREFIX,
+          semanticWitnessPrefix,
         ) ||
         typeof value.witness !== "function"
       ) {
@@ -687,8 +791,9 @@ function captureCases(
             id: value.id,
             feature: value.feature,
             scope: "current-runtime-self-round-trip",
-            expectedWitness: value.expectedWitness as KernelShapeArtifactSemanticWitness,
-            witness: value.witness as KernelShapeArtifactWitness,
+            expectedWitness:
+              value.expectedWitness as KernelShapeArtifactSemanticWitnessInternal,
+            witness: value.witness as KernelShapeArtifactWitnessInternal,
             createSource:
               value.createSource as KernelShapeArtifactSelfRoundTripCase["createSource"],
           }),
@@ -736,8 +841,9 @@ function captureCases(
             id: value.id,
             feature: value.feature,
             scope: "golden-decode",
-            expectedWitness: value.expectedWitness as KernelShapeArtifactSemanticWitness,
-            witness: value.witness as KernelShapeArtifactWitness,
+            expectedWitness:
+              value.expectedWitness as KernelShapeArtifactSemanticWitnessInternal,
+            witness: value.witness as KernelShapeArtifactWitnessInternal,
             artifact,
             expectedArtifactWitness:
               value.expectedArtifactWitness as KernelShapeArtifactFixtureWitness,
@@ -758,7 +864,10 @@ function captureCases(
   }
 }
 
-function captureOptions(raw: unknown): CadResult<CapturedOptions> {
+function captureOptions(
+  raw: unknown,
+  semanticWitnessPrefix: string,
+): CadResult<CapturedOptions> {
   try {
     if (
       !isPlainRecord(raw) ||
@@ -782,7 +891,11 @@ function captureOptions(raw: unknown): CadResult<CapturedOptions> {
     if (!expectedIdentity.ok) return expectedIdentity;
     const signal = captureSignal(raw.signal);
     if (!signal.ok) return signal;
-    const cases = captureCases(raw.cases, limits.value);
+    const cases = captureCases(
+      raw.cases,
+      limits.value,
+      semanticWitnessPrefix,
+    );
     if (!cases.ok) return cases;
     return success(
       Object.freeze({
@@ -924,11 +1037,20 @@ export async function hashKernelShapeArtifactSemanticWitness(
     : result;
 }
 
-/** Encodes and hashes one repository-canonical semantic observation. */
-export async function hashKernelShapeSemanticObservation(
-  observation: KernelShapeSemanticObservation,
+async function hashCapturedKernelShapeSemanticObservation<
+  Observation extends
+    | KernelShapeSemanticObservation
+    | KernelShapeSemanticObservationV2,
+  Witness extends string,
+>(
+  observation: Observation,
+  encode: (
+    value: Observation,
+    options: { readonly maxBytes?: number },
+  ) => CadResult<Uint8Array>,
+  prefix: string,
   options?: { readonly maxBytes?: number; readonly signal?: AbortSignal },
-): Promise<CadResult<KernelShapeArtifactSemanticWitness>> {
+): Promise<CadResult<Witness>> {
   let maximum: number | undefined;
   let signal: AbortSignal | undefined;
   try {
@@ -965,16 +1087,43 @@ export async function hashKernelShapeSemanticObservation(
   ) {
     return failure(abortDiagnostic("Semantic observation hashing was aborted"));
   }
-  const encoded = encodeKernelShapeSemanticObservation(observation, {
+  const encoded = encode(observation, {
     ...(maximum === undefined ? {} : { maxBytes: maximum }),
   });
   if (!encoded.ok) return encoded;
-  return hashKernelShapeArtifactSemanticWitness(encoded.value, {
+  const result = await hashBounded(encoded.value, prefix, {
     ...(maximum === undefined ? {} : { maxBytes: maximum }),
     ...(capturedSignal.value === undefined
       ? {}
       : { signal: capturedSignal.value }),
   });
+  return result.ok ? success(result.value as Witness) : result;
+}
+
+/** Encodes and hashes one repository-canonical protocol-v1 semantic observation. */
+export function hashKernelShapeSemanticObservation(
+  observation: KernelShapeSemanticObservation,
+  options?: { readonly maxBytes?: number; readonly signal?: AbortSignal },
+): Promise<CadResult<KernelShapeArtifactSemanticWitness>> {
+  return hashCapturedKernelShapeSemanticObservation(
+    observation,
+    encodeKernelShapeSemanticObservation,
+    KERNEL_SHAPE_ARTIFACT_SEMANTIC_WITNESS_PREFIX,
+    options,
+  );
+}
+
+/** Encodes and hashes one repository-canonical protocol-v2 semantic observation. */
+export function hashKernelShapeSemanticObservationV2(
+  observation: KernelShapeSemanticObservationV2,
+  options?: { readonly maxBytes?: number; readonly signal?: AbortSignal },
+): Promise<CadResult<KernelShapeArtifactSemanticWitnessV2>> {
+  return hashCapturedKernelShapeSemanticObservation(
+    observation,
+    encodeKernelShapeSemanticObservationV2,
+    KERNEL_SHAPE_ARTIFACT_SEMANTIC_WITNESS_PREFIX_V2,
+    options,
+  );
 }
 
 /** Hashes immutable golden bytes under a distinct fixture domain. */
@@ -1190,10 +1339,12 @@ function detachOrMutate(bytes: Uint8Array): void {
  * Audits finite runtime evidence for an explicitly identified shape codec.
  * Passing is deliberately not a certification or cache-eligibility token.
  */
-export async function auditKernelShapeArtifactCodec(
-  options: AuditKernelShapeArtifactCodecOptions,
-): Promise<CadResult<KernelShapeArtifactCodecAuditEvidence>> {
-  const captured = captureOptions(options);
+async function auditKernelShapeArtifactCodecProtocol(
+  options: AuditKernelShapeArtifactCodecOptions | AuditKernelShapeArtifactCodecOptionsV2,
+  semanticWitnessPrefix: string,
+  auditProtocolVersion: KernelShapeArtifactCodecAuditProtocolVersion,
+): Promise<CadResult<KernelShapeArtifactCodecAuditEvidenceInternal>> {
+  const captured = captureOptions(options, semanticWitnessPrefix);
   if (!captured.ok) return captured;
   const configuration = captured.value;
   if (
@@ -1206,10 +1357,10 @@ export async function auditKernelShapeArtifactCodec(
   const runtimes: BoundRuntime[] = [];
   const disposedKernels = new Set<GeometryKernel>();
   const shapes: TrackedShape[] = [];
-  const caseEvidence: KernelShapeArtifactCodecCaseEvidence[] = [];
+  const caseEvidence: KernelShapeArtifactCodecCaseEvidenceInternal[] = [];
   let operations = 0;
   let artifactBytes = 0;
-  let outcome: CadResult<KernelShapeArtifactCodecAuditEvidence> | undefined;
+  let outcome: CadResult<KernelShapeArtifactCodecAuditEvidenceInternal> | undefined;
   const cleanupDiagnostics: Diagnostic[] = [];
 
   const disposeRuntime = (
@@ -1336,7 +1487,7 @@ export async function auditKernelShapeArtifactCodec(
     item: CapturedCase,
     tracked: TrackedShape,
     label: string,
-  ): Promise<KernelShapeArtifactSemanticWitness> => {
+  ): Promise<KernelShapeArtifactSemanticWitnessInternal> => {
     if (!tracked.live) throw kernelFailure(`${label} attempted to witness a disposed shape`);
     operation();
     try {
@@ -1355,7 +1506,7 @@ export async function auditKernelShapeArtifactCodec(
         `${label} status check threw: ${safeErrorMessage(error)}`,
       );
     }
-    let result: CadResult<KernelShapeArtifactSemanticWitness>;
+    let result: CadResult<KernelShapeArtifactSemanticWitnessInternal>;
     try {
       result = await item.witness(tracked.runtime.kernel, tracked.shape, {
         ...(configuration.signal === undefined
@@ -1385,7 +1536,7 @@ export async function auditKernelShapeArtifactCodec(
     if (
       !taggedDigest(
         result.value,
-        KERNEL_SHAPE_ARTIFACT_SEMANTIC_WITNESS_PREFIX,
+        semanticWitnessPrefix,
       )
     ) {
       throw malformedCodecFailure(`${label} witness returned a malformed digest`);
@@ -1674,7 +1825,7 @@ export async function auditKernelShapeArtifactCodec(
       throwIfAborted(configuration.signal);
       const artifacts: KernelShapeArtifactAuditArtifactEvidence[] = [];
       const checks: KernelShapeArtifactCodecAuditCheck[] = [];
-      let observed: KernelShapeArtifactSemanticWitness;
+      let observed: KernelShapeArtifactSemanticWitnessInternal;
 
       if (item.scope === "current-runtime-self-round-trip") {
         // Exercise one independently created source on dedicated fresh runtime
@@ -2089,8 +2240,7 @@ export async function auditKernelShapeArtifactCodec(
     outcome = success(
       deepFreeze({
         kind: "kernel-shape-artifact-codec-audit-evidence" as const,
-        auditProtocolVersion:
-          KERNEL_SHAPE_ARTIFACT_CODEC_AUDIT_PROTOCOL_VERSION,
+        auditProtocolVersion,
         certifiesCompatibility: false as const,
         mode: configuration.mode,
         advertisement:
@@ -2178,4 +2328,32 @@ export async function auditKernelShapeArtifactCodec(
       ),
     )
   );
+}
+
+/**
+ * Audits finite runtime evidence using protocol-v1 semantic witnesses.
+ * Passing is deliberately not a certification or cache-eligibility token.
+ */
+export function auditKernelShapeArtifactCodec(
+  options: AuditKernelShapeArtifactCodecOptions,
+): Promise<CadResult<KernelShapeArtifactCodecAuditEvidence>> {
+  return auditKernelShapeArtifactCodecProtocol(
+    options,
+    KERNEL_SHAPE_ARTIFACT_SEMANTIC_WITNESS_PREFIX,
+    KERNEL_SHAPE_ARTIFACT_CODEC_AUDIT_PROTOCOL_VERSION,
+  ) as Promise<CadResult<KernelShapeArtifactCodecAuditEvidence>>;
+}
+
+/**
+ * Audits finite runtime evidence using protocol-v2 semantic witnesses.
+ * V2 witness acceptance is explicit and never widens the protocol-v1 audit.
+ */
+export function auditKernelShapeArtifactCodecV2(
+  options: AuditKernelShapeArtifactCodecOptionsV2,
+): Promise<CadResult<KernelShapeArtifactCodecAuditEvidenceV2>> {
+  return auditKernelShapeArtifactCodecProtocol(
+    options,
+    KERNEL_SHAPE_ARTIFACT_SEMANTIC_WITNESS_PREFIX_V2,
+    KERNEL_SHAPE_ARTIFACT_CODEC_AUDIT_PROTOCOL_VERSION_V2,
+  ) as Promise<CadResult<KernelShapeArtifactCodecAuditEvidenceV2>>;
 }

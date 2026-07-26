@@ -461,7 +461,7 @@ describe("OCCT ruled solid loft", () => {
         expect(measured.volume).toBeCloseTo(1_400 / 3, 8);
         expectVectorClose(measured.boundingBox.min, [-5, -4, 0]);
         expectVectorClose(measured.boundingBox.max, [5, 4, 10]);
-        expect(measured.genus).toBe(0);
+        expect(measured.genus).toBeNull();
 
         const snapshot = topology(kernel, shape);
         expect(snapshot.faces).toHaveLength(6);
@@ -552,7 +552,7 @@ describe("OCCT ruled solid loft", () => {
         expect(measured.volume).toBeCloseTo(1_672 / 3, 8);
         expectVectorClose(measured.boundingBox.min, [-5, -5, 0]);
         expectVectorClose(measured.boundingBox.max, [5, 5, 10]);
-        expect(measured.genus).toBe(0);
+        expect(measured.genus).toBeNull();
 
         const snapshot = topology(kernel, shape);
         expect(snapshot.faces).toHaveLength(10);

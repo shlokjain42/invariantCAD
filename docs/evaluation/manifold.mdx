@@ -42,7 +42,7 @@ The 0.1 adapter supports:
 - union, subtraction, and intersection
 - translation, rotation, scale, and mirror
 - twist/top-scale extrusion
-- mesh extraction and mesh-derived measurements
+- mesh extraction, native measurements, and exact per-component mesh genus
 - binary/ASCII STL and OBJ through shared exporters
 
 It does not advertise exact B-Rep, native STEP/BREP, semantic topology
@@ -53,7 +53,10 @@ snapshots, exact fillets/chamfers/shells/offsets, lofts, or path sweeps.
 Manifold computes robust solids internally, but its public mesh carries
 Float32 vertex positions. Measurement methods call native Manifold volume,
 surface-area, bounding-box, and tolerance functions and combine those with
-bounded mesh integration for tensor properties.
+bounded mesh integration for tensor properties. Genus is evaluated on every
+fresh component returned by `decompose()`, validated as a nonnegative safe
+integer, safe-summed, and cleaned up transactionally. That claim is exact for
+the Manifold mesh representation, not an assertion about a source B-Rep.
 
 A public mesh round-trip is not a lossless native shape codec. InvariantCAD
 therefore does not advertise shape-artifact persistence for Manifold 3.5.1.

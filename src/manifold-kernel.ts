@@ -4,13 +4,14 @@ import initializeManifold, {
   type Mat4 as ManifoldMat4,
 } from "./vendor/manifold-3d/manifold.js";
 import type { Mat4, Vec3 } from "./core/math.js";
-import type {
-  GeometryKernel,
-  KernelCapabilities,
-  KernelShape,
-  MeshData,
-  ResolvedTransformOperation,
-  ShapeMeasurements,
+import {
+  KERNEL_MEASUREMENT_PROTOCOL_VERSION,
+  type GeometryKernel,
+  type KernelCapabilities,
+  type KernelShape,
+  type MeshData,
+  type ResolvedTransformOperation,
+  type ShapeMeasurements,
 } from "./kernel.js";
 import {
   integrateTriangleMeshMassProperties,
@@ -65,6 +66,49 @@ function asManifoldShape(shape: KernelShape): ManifoldShape {
   return shape;
 }
 
+function exactPerConnectedComponentGenus(
+  manifold: ManifoldSolid,
+): number {
+  const components = manifold.decompose();
+  let genus = 0;
+  let failed = false;
+  let failure: unknown;
+  try {
+    for (const component of components) {
+      const componentGenus = component.genus();
+      if (
+        !Number.isSafeInteger(componentGenus) ||
+        componentGenus < 0
+      ) {
+        throw new RangeError(
+          "Manifold returned an invalid connected-component genus",
+        );
+      }
+      if (genus > Number.MAX_SAFE_INTEGER - componentGenus) {
+        throw new RangeError(
+          "Manifold connected-component genus sum exceeds safe integer range",
+        );
+      }
+      genus += componentGenus;
+    }
+  } catch (error) {
+    failed = true;
+    failure = error;
+  }
+  for (const component of components) {
+    try {
+      component.delete();
+    } catch (error) {
+      if (!failed) {
+        failed = true;
+        failure = error;
+      }
+    }
+  }
+  if (failed) throw failure;
+  return genus;
+}
+
 function matrixFromColumns(a: Vec3, b: Vec3, c: Vec3, origin: Vec3): Mat4 {
   return [
     a[0], a[1], a[2], 0,
@@ -103,6 +147,10 @@ export class ManifoldKernel implements GeometryKernel {
     features: ["extrude", "revolve", "boolean", "transform"],
     nativeImports: [],
     nativeExports: [],
+    measurements: {
+      protocolVersion: KERNEL_MEASUREMENT_PROTOCOL_VERSION,
+      genus: "exact-per-connected-component",
+    },
   };
   private readonly module: ManifoldToplevel;
   private readonly liveShapes = new Set<ManifoldShape>();
@@ -305,7 +353,7 @@ export class ManifoldKernel implements GeometryKernel {
         min: bounds.min as Vec3,
         max: bounds.max as Vec3,
       },
-      genus: manifold.genus(),
+      genus: exactPerConnectedComponentGenus(manifold),
       tolerance,
     };
   }

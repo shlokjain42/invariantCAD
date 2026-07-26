@@ -36,8 +36,8 @@ import type {
   KernelTopologySnapshot,
 } from "../src/protocol/topology.js";
 import {
-  observeKernelShapeSemantics,
-  type KernelShapeSemanticObservation,
+  observeKernelShapeSemanticsV2,
+  type KernelShapeSemanticObservationV2,
   type KernelShapeSemanticObservationPlan,
 } from "../src/shape-semantic-observation.js";
 
@@ -127,7 +127,7 @@ function observationPlan(
   kernel: GeometryKernel,
 ): KernelShapeSemanticObservationPlan {
   return {
-    id: "occt-artifact-candidate-direct-v1",
+    id: "occt-artifact-candidate-direct-v2",
     meshes: [
       { id: "default" },
       {
@@ -153,8 +153,8 @@ async function observe(
   kernel: GeometryKernel,
   shape: KernelShape,
   plan = observationPlan(kernel),
-): Promise<KernelShapeSemanticObservation> {
-  const result = await observeKernelShapeSemantics(kernel, shape, plan);
+): Promise<KernelShapeSemanticObservationV2> {
+  const result = await observeKernelShapeSemanticsV2(kernel, shape, plan);
   expect(result.ok, JSON.stringify(result.diagnostics)).toBe(true);
   if (!result.ok) throw new Error("Expected a semantic observation");
   return result.value;

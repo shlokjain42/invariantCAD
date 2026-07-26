@@ -22,6 +22,14 @@ loft/sweep contracts, Booleans, transforms, fillets, chamfers, shells, offsets,
 topology snapshots, and STEP/BREP exchange. Draft and several complete-history
 refinements are not advertised.
 
+OCCT bounds, surface area, and center of mass are measured from the exact
+native B-Rep. Volume and inertia normally come from the same native shape; the
+documented validated analytic volume-override path for admitted sweep and
+revolve cases replaces the volume and rescales density-one inertia. Genus is
+currently `null`, not zero: the stock and owned facades do not expose the
+degenerate-edge predicate needed to evaluate the B-Rep Euler formula correctly
+for spheres, cones, seams, holes, and disconnected shells.
+
 ## Load a WASM source explicitly
 
 `wasm` accepts a URL, string URL/path, `ArrayBuffer`, or `Uint8Array`:

@@ -16,9 +16,22 @@ console.log(properties.surfaceArea);     // mm^2
 console.log(properties.centerOfMass);    // [x, y, z] in mm, or null
 console.log(properties.inertiaTensor);   // central volumetric inertia, mm^5
 console.log(properties.boundingBox);
-console.log(properties.genus);
+if (properties.genus === null) {
+  console.log("genus is unsupported by this backend/result");
+} else {
+  console.log(properties.genus);         // exact nonnegative integer
+}
 console.log(properties.tolerance);
 ```
+
+`genus` never uses a guessed value. A number is the exact sum of the genera of
+the connected components in the backend representation; `null` means that the
+backend or aggregate result cannot establish that quantity exactly. Manifold
+decomposes the mesh and sums each validated component genus. Stock and owned
+OCCT currently return `null` because their exposed native boundary lacks the
+edge-degeneracy primitive needed for a correct bounded B-Rep computation.
+Assemblies also return `null`: an occurrence mesh is an aggregate view, not a
+Boolean-unioned closed boundary.
 
 The inertia tensor uses the standard mechanics sign convention
 `∫((r · r)I - rrᵀ) dV` about `centerOfMass`, expressed in world axes. It is a
@@ -108,7 +121,9 @@ that combine InvariantCAD output with externally measured components.
 ## Precision source
 
 OCCT measures exact native shapes and verifies certain sweep volumes against
-analytic profile/path oracles. Manifold provides native volume and surface-area
-measurements with mesh-based tensor integration. Check `tolerance` and backend
-representation when comparing results across kernels; equality of authored
-intent does not promise byte-identical floating-point output.
+analytic profile/path oracles, but does not currently report genus. Manifold
+provides native volume and surface-area measurements with mesh-based tensor
+integration and exact genus for its mesh representation. Check `tolerance`,
+nullable capabilities, and backend representation when comparing results
+across kernels; equality of authored intent does not promise byte-identical
+floating-point output.

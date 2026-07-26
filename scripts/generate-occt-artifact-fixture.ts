@@ -3,13 +3,13 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   hashKernelShapeArtifactFixtureWitness,
-  hashKernelShapeSemanticObservation,
+  hashKernelShapeSemanticObservationV2,
 } from "../src/conformance.js";
 import { getOcctShapeArtifactCodecCandidate } from "../src/internal/occt-artifact-candidate.js";
 import type { KernelShape, KernelShapeArtifactCapabilities } from "../src/kernel.js";
 import { createOcctKernel } from "../src/occt-kernel.js";
 import {
-  observeKernelShapeSemantics,
+  observeKernelShapeSemanticsV2,
   type KernelShapeSemanticNotApplicableFeature,
   type KernelShapeSemanticObservationPlan,
 } from "../src/shape-semantic-observation.js";
@@ -107,7 +107,7 @@ const notApplicableFeatures: readonly KernelShapeSemanticNotApplicableFeature[] 
 // format. Keep it stable across a byte-only codec revision so the semantic
 // witness remains an independent control.
 const observationPlan: KernelShapeSemanticObservationPlan = Object.freeze({
-  id: "occt-shape-artifact-candidate-release-v1",
+  id: "occt-shape-artifact-candidate-release-v2",
   meshes: Object.freeze([{ id: "default" }]),
   topology: "required",
   nativeExchanges: Object.freeze([]),
@@ -211,14 +211,14 @@ async function semanticWitness(
   kernel: Awaited<ReturnType<typeof createOcctKernel>>,
   shape: KernelShape,
 ): Promise<string> {
-  const observation = await observeKernelShapeSemantics(
+  const observation = await observeKernelShapeSemanticsV2(
     kernel,
     shape,
     observationPlan,
     { limits: { maxObservationBytes: maximumArtifactBytes } },
   );
   if (!observation.ok) failResult("Semantic observation failed", observation);
-  const witness = await hashKernelShapeSemanticObservation(observation.value, {
+  const witness = await hashKernelShapeSemanticObservationV2(observation.value, {
     maxBytes: maximumArtifactBytes,
   });
   if (!witness.ok) failResult("Semantic witness hashing failed", witness);

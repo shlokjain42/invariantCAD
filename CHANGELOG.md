@@ -2,6 +2,33 @@
 
 ## [Unreleased]
 
+- Replaced the stock/owned OCCT genus heuristic with a capability-correct
+  `ShapeMeasurements.genus: number | null` contract. A number now means the
+  backend proved the exact sum of connected-component genera for its
+  representation; `null` means unsupported and is never treated as exact zero.
+  Manifold advertises protocol-v1 `exact-per-connected-component`, decomposes
+  its mesh, validates and safe-sums every component genus, and transactionally
+  releases all temporary components. Stock and owned OCCT advertise
+  `unsupported` and return `null` for empty and nonempty shapes because the
+  current facade lacks the native degenerate-edge predicate required for a
+  correct bounded B-Rep formula. Assembly aggregates also return `null` because
+  their occurrence mesh is not a Boolean-unioned closed boundary. Volume,
+  surface area, bounds, tolerance, center of mass, inertia, and physical mass
+  properties are unchanged. The optional versioned measurement-capability
+  envelope keeps older custom kernels structurally compatible; its public
+  inspector snapshots valid metadata without invoking accessors and fails
+  closed for malformed metadata, throwing proxy traps, accessors, or revoked
+  values.
+  Semantic-observation v1 remains byte/hash/type compatible and exact-genus
+  only. New explicit v2 observer, encoder, hash, witness, and codec-audit
+  boundaries preserve unsupported genus as `null` under distinct brands and
+  domains rather than widening v1. The private OCCT artifact/process evidence
+  now uses v2 semantic witnesses and version-2 evidence projections. The
+  reviewed `13,735`-byte v3 artifact remains byte-identical with fixture
+  witness
+  `invariantcad:kernel-shape-artifact-fixture:v1:sha256:4279e9f76ab1e41dae47b28aea9c426ffa8b5f329ab624f137c65f6881e23918`;
+  its current semantic witness is
+  `invariantcad:kernel-shape-semantic:v2:sha256:b99dd9c39b950700dd22c8be6255db6e816e1a51668f415bf84b80c4c200d588`.
 - Fixed resolved sketch-profile admission after final parameter and
   configuration evaluation. Before a dependent geometry-kernel feature call,
   the evaluator now certifies the finite, nondegenerate,
@@ -571,7 +598,7 @@
   `nativeIdentityTraversalOccurrences=100000`, and the remaining
   identity/version/limit declarations. The deterministic `13,735`-byte v3
   golden has fixture witness
-  `invariantcad:kernel-shape-artifact-fixture:v1:sha256:8ecfa6ac89142f794c2d55a78e7121ce0805b8abcb5aa64230e7722d99c8c2be`;
+  `invariantcad:kernel-shape-artifact-fixture:v1:sha256:4279e9f76ab1e41dae47b28aea9c426ffa8b5f329ab624f137c65f6881e23918`;
   v1 and v2 are retained only as negative rejection fixtures. A dedicated
   duplicate-occurrence regression gate proves that a one-component artifact
   rejects a substituted two-occurrence BREP transactionally. Stock

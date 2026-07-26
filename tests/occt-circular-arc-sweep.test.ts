@@ -338,7 +338,7 @@ describe("OCCT exact circular-arc solid sweep", () => {
         expect(measured.surfaceArea).toBeCloseTo(30 * Math.PI + 16, 8);
         expectVectorClose(measured.boundingBox.min, [-1, -2, 0]);
         expectVectorClose(measured.boundingBox.max, [5, 2, 6]);
-        expect(measured.genus).toBe(0);
+        expect(measured.genus).toBeNull();
 
         const snapshot = topology(kernel, shape);
         expectClosedSolidTopology(snapshot, 6, 12);
@@ -637,7 +637,7 @@ describe("OCCT exact circular-arc solid sweep", () => {
         const measured = kernel.measure(shape);
         expect(measured.volume).toBeCloseTo((Math.PI * 112) / 3, 8);
         expect(measured.surfaceArea).toBeCloseTo(56 * Math.PI + 16, 8);
-        expect(measured.genus).toBe(0);
+        expect(measured.genus).toBeNull();
         const snapshot = topology(kernel, shape);
         expectClosedSolidTopology(snapshot, 6, 12);
         expectExactSweepCreation(snapshot, {

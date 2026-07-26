@@ -1543,7 +1543,7 @@ export class EvaluatedAssembly {
     return {
       ...massProperties,
       ...geometry,
-      genus: 0,
+      genus: null,
       tolerance: 0,
     };
   }
@@ -2717,13 +2717,14 @@ function capturePartMeasurement(
       [surfaceArea],
     ) ||
     surfaceArea < 0 ||
-    typeof genus !== "number" ||
-    !importedBodyApply<boolean>(
-      importedBodyNumberIsSafeInteger,
-      Number,
-      [genus],
-    ) ||
-    genus < 0 ||
+    (genus !== null &&
+      (typeof genus !== "number" ||
+        !importedBodyApply<boolean>(
+          importedBodyNumberIsSafeInteger,
+          Number,
+          [genus],
+        ) ||
+        genus < 0)) ||
     typeof tolerance !== "number" ||
     !importedBodyApply<boolean>(
       importedBodyNumberIsFinite,
@@ -11825,7 +11826,9 @@ export class Evaluator {
     const requireKernelCapability = (
       kind: Exclude<
         KernelCapabilityKind,
-        "compositeSweepRefinement" | "exactIndexedTopologyEvolution"
+        | "compositeSweepRefinement"
+        | "exactIndexedTopologyEvolution"
+        | "measurement"
       >,
       capability: KernelPrimitive | KernelFeature | KernelExchangeFormat,
       id: NodeId,

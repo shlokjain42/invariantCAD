@@ -38,9 +38,11 @@ export type KernelFeature =
   | "draft";
 /** @see CompositeSweepRefinement */
 export type KernelCompositeSweepRefinement = CompositeSweepRefinement;
+export type KernelMeasurement = "genus";
 export type KernelCapabilityKind =
   | "primitive"
   | "feature"
+  | "measurement"
   | "compositeSweepRefinement"
   | "exactIndexedTopologyEvolution"
   | "nativeImport"
@@ -54,6 +56,7 @@ export const COMPOSITE_SWEEP_REFINEMENT_PROTOCOL_VERSION = 1 as const;
 export const EXACT_INDEXED_TOPOLOGY_EVOLUTION_PROTOCOL_VERSION = 1 as const;
 export const KERNEL_SHAPE_ARTIFACT_PROTOCOL_VERSION = 1 as const;
 export const KERNEL_DOCUMENT_BODY_IMPORT_PROTOCOL_VERSION = 1 as const;
+export const KERNEL_MEASUREMENT_PROTOCOL_VERSION = 1 as const;
 export const KERNEL_SHAPE_ARTIFACT_MAX_COMPATIBILITY_FINGERPRINT_BYTES =
   2_048 as const;
 
@@ -94,6 +97,49 @@ export interface KernelDocumentBodyImportCapabilities {
   readonly protocolVersion: typeof KERNEL_DOCUMENT_BODY_IMPORT_PROTOCOL_VERSION;
   readonly formats: readonly KernelDocumentBodyImportFormatCapabilities[];
 }
+
+export type KernelGenusMeasurementCapability =
+  | "exact-per-connected-component"
+  | "unsupported";
+
+/**
+ * Versioned guarantees for measurements whose semantics differ by backend.
+ *
+ * A numeric genus is only permitted when `genus` is
+ * `exact-per-connected-component`. Unsupported backends return `null`.
+ */
+export interface KernelMeasurementCapabilities {
+  readonly protocolVersion: typeof KERNEL_MEASUREMENT_PROTOCOL_VERSION;
+  readonly genus: KernelGenusMeasurementCapability;
+}
+
+export type KernelMeasurementCapabilitiesMalformedReason =
+  | "uninspectable-metadata"
+  | "not-object"
+  | "unsupported-protocol-version"
+  | "invalid-genus";
+
+export interface KernelMeasurementCapabilitiesAbsent {
+  readonly status: "absent";
+}
+
+export interface KernelMeasurementCapabilitiesValid {
+  readonly status: "valid";
+  /** A validated snapshot, isolated from later mutation of kernel metadata. */
+  readonly capabilities: KernelMeasurementCapabilities;
+}
+
+export interface KernelMeasurementCapabilitiesMalformed {
+  readonly status: "malformed";
+  readonly reason: KernelMeasurementCapabilitiesMalformedReason;
+  readonly message: string;
+  readonly details: Readonly<Record<string, unknown>>;
+}
+
+export type KernelMeasurementCapabilitiesInspection =
+  | KernelMeasurementCapabilitiesAbsent
+  | KernelMeasurementCapabilitiesValid
+  | KernelMeasurementCapabilitiesMalformed;
 
 export type KernelDocumentBodyImportUnits =
   | {
@@ -218,12 +264,156 @@ export interface KernelCapabilities {
   readonly shapeArtifacts?: KernelShapeArtifactCapabilities;
   /** Optional strong single-solid import contract for document resources. */
   readonly documentBodyImport?: KernelDocumentBodyImportCapabilities;
+  /** Optional versioned measurement-semantics contract. */
+  readonly measurements?: KernelMeasurementCapabilities;
 }
 
 function metadataType(value: unknown): string {
   if (value === null) return "null";
   if (Array.isArray(value)) return "array";
   return typeof value;
+}
+
+function metadataDiagnosticValue(value: unknown): unknown {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    value === undefined
+  ) {
+    return value;
+  }
+  try {
+    return metadataType(value);
+  } catch {
+    return typeof value;
+  }
+}
+
+type OwnDataPropertyInspection =
+  | { readonly status: "absent" }
+  | { readonly status: "value"; readonly value: unknown }
+  | { readonly status: "uninspectable" };
+
+function inspectOwnDataProperty(
+  value: object,
+  property: PropertyKey,
+): OwnDataPropertyInspection {
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(value, property);
+    if (descriptor === undefined) return { status: "absent" };
+    if (!("value" in descriptor)) {
+      return { status: "uninspectable" };
+    }
+    return { status: "value", value: descriptor.value };
+  } catch {
+    return { status: "uninspectable" };
+  }
+}
+
+function malformedMeasurementCapabilities(
+  reason: KernelMeasurementCapabilitiesMalformedReason,
+  message: string,
+  details: Readonly<Record<string, unknown>>,
+): KernelMeasurementCapabilitiesMalformed {
+  return { status: "malformed", reason, message, details };
+}
+
+/**
+ * Validates and snapshots the optional measurement-semantics envelope.
+ *
+ * The inspector never invokes accessors and fails closed for proxy traps,
+ * revoked proxies, malformed fields, and unsupported protocol versions.
+ */
+export function inspectKernelMeasurementCapabilities(
+  capabilities: KernelCapabilities,
+): KernelMeasurementCapabilitiesInspection {
+  if (
+    typeof capabilities !== "object" ||
+    capabilities === null
+  ) {
+    return malformedMeasurementCapabilities(
+      "uninspectable-metadata",
+      "Kernel measurement capability metadata could not be inspected",
+      { property: "measurements" },
+    );
+  }
+  const envelope = inspectOwnDataProperty(capabilities, "measurements");
+  if (envelope.status === "absent") return { status: "absent" };
+  if (envelope.status === "uninspectable") {
+    return malformedMeasurementCapabilities(
+      "uninspectable-metadata",
+      "Kernel measurement capability metadata could not be inspected",
+      { property: "measurements" },
+    );
+  }
+  if (envelope.value === undefined) return { status: "absent" };
+
+  const raw = envelope.value;
+  try {
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+      return malformedMeasurementCapabilities(
+        "not-object",
+        "Kernel measurement capability metadata must be an object",
+        { actualType: metadataType(raw) },
+      );
+    }
+  } catch {
+    return malformedMeasurementCapabilities(
+      "uninspectable-metadata",
+      "Kernel measurement capability metadata could not be inspected",
+      { property: "measurements" },
+    );
+  }
+
+  const protocol = inspectOwnDataProperty(raw, "protocolVersion");
+  const genusProperty = inspectOwnDataProperty(raw, "genus");
+  if (
+    protocol.status === "uninspectable" ||
+    genusProperty.status === "uninspectable"
+  ) {
+    return malformedMeasurementCapabilities(
+      "uninspectable-metadata",
+      "Kernel measurement capability metadata must use readable data properties",
+      {
+        property:
+          protocol.status === "uninspectable" ? "protocolVersion" : "genus",
+      },
+    );
+  }
+  const protocolVersion =
+    protocol.status === "value" ? protocol.value : undefined;
+  if (protocolVersion !== KERNEL_MEASUREMENT_PROTOCOL_VERSION) {
+    return malformedMeasurementCapabilities(
+      "unsupported-protocol-version",
+      "Kernel measurement capability metadata uses an unsupported protocol version",
+      {
+        expectedProtocolVersion: KERNEL_MEASUREMENT_PROTOCOL_VERSION,
+        actualProtocolVersion: metadataDiagnosticValue(protocolVersion),
+      },
+    );
+  }
+  const genus = genusProperty.status === "value"
+    ? genusProperty.value
+    : undefined;
+  if (
+    genus !== "exact-per-connected-component" &&
+    genus !== "unsupported"
+  ) {
+    return malformedMeasurementCapabilities(
+      "invalid-genus",
+      "Kernel genus measurement capability is invalid",
+      { genus: metadataDiagnosticValue(genus) },
+    );
+  }
+  return {
+    status: "valid",
+    capabilities: Object.freeze({
+      protocolVersion: KERNEL_MEASUREMENT_PROTOCOL_VERSION,
+      genus,
+    }),
+  };
 }
 
 /**
@@ -542,6 +732,16 @@ function supportedCompositeSweepRefinements(
     : [];
 }
 
+function supportedMeasurements(
+  capabilities: KernelCapabilities,
+): readonly KernelMeasurement[] {
+  const inspection = inspectKernelMeasurementCapabilities(capabilities);
+  return inspection.status === "valid" &&
+    inspection.capabilities.genus === "exact-per-connected-component"
+    ? ["genus"]
+    : [];
+}
+
 export function kernelSupports(
   capabilities: KernelCapabilities,
   kind: "primitive",
@@ -551,6 +751,11 @@ export function kernelSupports(
   capabilities: KernelCapabilities,
   kind: "feature",
   capability: KernelFeature,
+): boolean;
+export function kernelSupports(
+  capabilities: KernelCapabilities,
+  kind: "measurement",
+  capability: KernelMeasurement,
 ): boolean;
 export function kernelSupports(
   capabilities: KernelCapabilities,
@@ -577,6 +782,8 @@ export function kernelSupports(
       ? capabilities.primitives
       : kind === "feature"
         ? capabilities.features
+        : kind === "measurement"
+          ? supportedMeasurements(capabilities)
         : kind === "compositeSweepRefinement"
           ? supportedCompositeSweepRefinements(capabilities)
         : kind === "exactIndexedTopologyEvolution"
@@ -640,7 +847,11 @@ export interface ShapeMeasurements extends VolumetricMassProperties {
   readonly surfaceArea: number;
   /** World-axis-aligned bounds in model coordinates. */
   readonly boundingBox: BoundingBox;
-  readonly genus: number;
+  /**
+   * Exact sum of backend-representation connected-component genera, or `null`
+   * when the kernel/result cannot establish that quantity exactly.
+   */
+  readonly genus: number | null;
   /** Kernel geometric tolerance in model units. */
   readonly tolerance: number;
 }

@@ -16,19 +16,19 @@ The public, framework-neutral runtime audit for that claim is exported from
 separate from the main `invariantcad` entry point so applications do not acquire
 an audit harness through their ordinary modeling imports.
 
-The primary entry point is `auditKernelShapeArtifactCodec(...)`. It returns a
-`CadResult`: a passing run contains deeply frozen, bounded evidence for the
-identity, cases, and operations performed, while a violation returns structured
-diagnostics. It does not mutate a kernel to add codec methods, manufacture a
-compatibility fingerprint, change
-`KernelCapabilities.shapeArtifacts`, or return an eligibility or certification
-token.
+The frozen v1 entry point is `auditKernelShapeArtifactCodec(...)`; the explicit
+nullable-genus v2 entry point is `auditKernelShapeArtifactCodecV2(...)`. Each
+returns a `CadResult`: a passing run contains deeply frozen, bounded evidence
+for the identity, cases, and operations performed, while a violation returns
+structured diagnostics. Neither mutates a kernel to add codec methods,
+manufactures a compatibility fingerprint, changes
+`KernelCapabilities.shapeArtifacts`, or returns an eligibility or
+certification token.
 
-The same entry point exports the repository-owned semantic-observation protocol
-v1: `observeKernelShapeSemantics(...)`,
-`encodeKernelShapeSemanticObservation(...)`, and
-`hashKernelShapeSemanticObservation(...)`. These functions replace ad hoc
-release-witness projections with one bounded canonical observation of the
+The same package exports repository-owned semantic-observation protocols v1 and
+v2. The unsuffixed observer/encoder/hash remain v1; the suffixed `...V2`
+functions preserve unsupported genus as `null`. These functions replace ad hoc
+release-witness projections with bounded canonical observations of the
 evaluator surface. They do not serialize a kernel shape and do not confer codec
 support or cache eligibility.
 
@@ -52,7 +52,8 @@ Candidate mode is evidence for codec development; advertised mode is evidence
 about the already-published runtime surface. Promotion from candidate to
 advertised remains an explicit backend release decision outside the audit.
 
-The following is the minimal candidate shape. The witness and fixture constants
+The following is the minimal protocol-v1 candidate shape. It requires every
+observed shape to have an exact numeric genus. The witness and fixture constants
 must be reviewed, checked-in values rather than values regenerated from the
 runtime being audited:
 
@@ -138,6 +139,15 @@ if (!result.ok) throw new Error(result.diagnostics[0]?.message);
 console.log(result.value.certifiesCompatibility); // always false
 ```
 
+For a kernel/result whose genus may be unsupported, use the fully separate v2
+surface: `auditKernelShapeArtifactCodecV2(...)`,
+`observeKernelShapeSemanticsV2(...)`,
+`hashKernelShapeSemanticObservationV2(...)`,
+`KernelShapeArtifactSemanticWitnessV2`, and
+`KernelShapeArtifactWitnessV2`. The plan and codec identity are otherwise the
+same shape. Do not cast a v2 witness into the v1 example; each audit validates
+its own prefix and evidence protocol.
+
 Advertised mode uses `target: { mode: "advertised", create }`, where `create`
 returns one fresh production `GeometryKernel`; no separate candidate codec is
 accepted. Runtime validation requires at least one self-round-trip case and one
@@ -168,17 +178,19 @@ built-in reference solver artifact-compatible.
 
 ## Witnesses and golden artifacts
 
-Every semantic witness uses the fixed protocol tag and an exact SHA-256 digest;
-case IDs, rather than witness digests, must be unique. The audit still accepts a
-general witness callback, but repository release cases should build it with
+Every semantic witness uses a version-specific protocol tag and an exact
+SHA-256 digest; case IDs, rather than witness digests, must be unique. The
+frozen v1 audit accepts only v1 witnesses built with
 `observeKernelShapeSemantics(...)` and
-`hashKernelShapeSemanticObservation(...)`. The audit creates each source shape
-through the case factory. Its ordinary self-round-trip path observes the source,
-encodes it, decodes it on a separate current kernel instance, and repeatedly
-exact-compares the returned digest; the dedicated pre-witness path below
-intentionally performs its first encode before status or witness observation.
-Multiple cases may deliberately share one witness when they represent the same
-expected semantics.
+`hashKernelShapeSemanticObservation(...)`. The explicit v2 audit accepts only
+v2 witnesses built with the corresponding `...V2` functions. A v2 witness
+cannot be cast or relabeled into v1 admission. The audit creates each source
+shape through the case factory. Its ordinary self-round-trip path observes the
+source, encodes it, decodes it on a separate current kernel instance, and
+repeatedly exact-compares the returned digest; the dedicated pre-witness path
+below intentionally performs its first encode before status or witness
+observation. Multiple cases may deliberately share one witness when they
+represent the same expected semantics.
 
 Golden artifacts are tagged fixtures with committed bytes and an expected
 semantic witness. They exercise decode compatibility independently of the
@@ -196,13 +208,17 @@ process/runtime combination.
 ## Repository semantic observation protocol
 
 `KernelShapeSemanticObservationV1` is a detached, deeply frozen record of one
-reviewed `KernelShapeSemanticObservationPlan`. The plan has a stable ID and at
-least one named mesh request; it also chooses whether topology is omitted,
-observed when supported, or required, and may request native-exchange and
-downstream-feature probes. `encodeKernelShapeSemanticObservation(...)` accepts
-only an observation captured by this runtime and emits bounded canonical-JSON
-UTF-8. `hashKernelShapeSemanticObservation(...)` encodes it and hashes it under
-the ordinary shape-semantic witness domain.
+reviewed `KernelShapeSemanticObservationPlan`. V1 remains exact-genus-only and
+keeps its existing type alias, field order, successful exact-genus canonical
+bytes, capture brand, encoder, and hash prefix. `KernelShapeSemanticObservationV2`
+retains the same bounded projection but permits `measurements.genus` to be
+`null`, including native-exchange and probe snapshots. Its observer, encoder,
+capture brand, hash prefix, witness types, audit cases, and audit evidence are
+separate. The plan has a stable ID and at least one named mesh request; it also
+chooses whether topology is omitted, observed when supported, or required, and
+may request native-exchange and downstream-feature probes. Each encoder accepts
+only an observation of its own version captured by this runtime and emits
+bounded canonical-JSON UTF-8.
 
 The result is an exact **normalized evaluator-semantic quotient**, not a native
 shape dump and not a claim of unrestricted geometric equivalence. It deliberately
@@ -222,9 +238,11 @@ Measurements, mesh options, and topology numbers are finite IEEE-754 binary64
 values encoded as big-endian hexadecimal. Emitted mesh coordinates retain their
 actual Float32 values and are encoded as IEEE-754 binary32 big-endian
 hexadecimal. Negative zero is the only numeric normalization: both `-0` and
-`+0` encode as positive zero. Protocol v1 performs no decimal conversion,
-tolerance rounding, epsilon comparison, NaN substitution, or infinity handling;
-non-finite inputs are protocol failures.
+`+0` encode as positive zero. Neither protocol performs decimal conversion,
+tolerance rounding, epsilon comparison, NaN substitution, or infinity
+handling; non-finite inputs are protocol failures. The only v2 measurement
+extension is the exact distinction between unsupported genus `null` and
+encoded exact genus zero.
 
 Each indexed mesh becomes a sorted multiset of oriented triangles. A triangle
 is represented by its three encoded coordinate triples. Cyclic corner rotations
@@ -548,9 +566,11 @@ The repository gate combines direct cold/warm, state, corruption, byte,
 ownership, alternate-valid-BREP, and downstream-selection cases with one
 committed deterministic stock-runtime v3 asymmetric-box artifact. It is
 `13,735` bytes and has fixture witness
-`invariantcad:kernel-shape-artifact-fixture:v1:sha256:8ecfa6ac89142f794c2d55a78e7121ce0805b8abcb5aa64230e7722d99c8c2be`.
-The byte-format revision leaves the independent semantic witness unchanged at
-`invariantcad:kernel-shape-semantic:v1:sha256:40ae684e4a2fad512f54e1f1be4443acf7faf2f34fc6b281c7b816d8d3366cb2`.
+`invariantcad:kernel-shape-artifact-fixture:v1:sha256:4279e9f76ab1e41dae47b28aea9c426ffa8b5f329ab624f137c65f6881e23918`.
+The current independent semantic witness is
+`invariantcad:kernel-shape-semantic:v2:sha256:b99dd9c39b950700dd22c8be6255db6e816e1a51668f415bf84b80c4c200d588`.
+The semantic version changed only to preserve OCCT's unsupported genus as
+`null`; the reviewed v3 artifact bytes and fixture witness did not change.
 The former v1 and v2 fixtures remain committed only as a negative fail-closed
 corpus: the v3 decoder must reject both before native restoration. Verify the
 reviewed v3 fixture without writing by running:
