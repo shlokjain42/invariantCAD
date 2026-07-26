@@ -18,6 +18,8 @@ test("loads both WASM kernels and confines artifact/evaluator native work to dis
   expect(result.occt.edges).toBe(12);
   expect(result.occt.vertices).toBe(8);
   expect(result.occt.stepBytes).toBeGreaterThan(100);
+  expect(result.occt.stepDeterministic).toBe(true);
+  expect(result.occt.stepMetadataDeterministic).toBe(true);
   expect(result.occt.crossRealmWasmUrlCaptured).toBe(true);
 
   expect(result.artifactWorker.fixture.byteLength).toBe(13_735);

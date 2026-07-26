@@ -77,6 +77,20 @@ converts the value.
 | Text BREP | No | Yes |
 | Binary BREP | No | Yes |
 
+<Note>
+  The strong deterministic STEP paragraph below describes the unreleased 0.2
+  line. The exchange table above remains the published 0.1.1 boundary.
+</Note>
+
+The bundled zero-override stock OCCT runtime additionally advertises
+single-solid deterministic STEP export protocol v1: identical bytes require
+the same backend shape representation, resolved metadata/options,
+implementation, and exact runtime artifact. Explicit `wasm`, `moduleFactory`,
+and attested runtimes retain weak raw STEP and omit this envelope until
+separately qualified. This is narrower than geometric canonicalization and
+does not make STEP a portable artifact or cache format. Exact aggregate
+body-set and assembly STEP remains unsupported.
+
 ## Runtime coverage
 
 | Environment | Release gate |

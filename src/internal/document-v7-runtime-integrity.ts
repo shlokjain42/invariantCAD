@@ -6,7 +6,9 @@
 
 const IntrinsicArray = Array;
 const IntrinsicArrayBuffer = ArrayBuffer;
+const IntrinsicAbortSignal = AbortSignal;
 const IntrinsicDataView = DataView;
+const IntrinsicDOMException = DOMException;
 const IntrinsicError = Error;
 const IntrinsicFloat32Array = Float32Array;
 const IntrinsicFunction = Function;
@@ -284,7 +286,9 @@ const completeOwners = new IntrinsicArray<object>();
 for (const owner of [
   IntrinsicArray.prototype,
   IntrinsicArrayBuffer.prototype,
+  IntrinsicAbortSignal.prototype,
   IntrinsicDataView.prototype,
+  IntrinsicDOMException.prototype,
   IntrinsicError.prototype,
   IntrinsicFloat32Array.prototype,
   IntrinsicFunction.prototype,
@@ -394,13 +398,15 @@ const SELECTED_PROPERTIES = [
       "tan",
     ],
   ],
-  [IntrinsicReflect, ["apply", "ownKeys"]],
+  [IntrinsicReflect, ["apply", "has", "ownKeys"]],
   [IntrinsicJSON, ["parse", "stringify"]],
   [
     IntrinsicSymbol,
     ["iterator", "hasInstance", "species"],
   ],
   [IntrinsicPromise, ["prototype", "resolve", "all"]],
+  [IntrinsicAbortSignal, ["prototype"]],
+  [IntrinsicDOMException, ["prototype"]],
   [IntrinsicRangeError, ["prototype"]],
   [IntrinsicError, ["prototype"]],
   [IntrinsicTypeError, ["prototype"]],
@@ -441,9 +447,11 @@ for (let ownerIndex = 0; ownerIndex < SELECTED_PROPERTIES.length; ownerIndex += 
 }
 
 const GLOBAL_BINDING_NAMES = [
+  "AbortSignal",
   "Array",
   "ArrayBuffer",
   "DataView",
+  "DOMException",
   "Error",
   "Float32Array",
   "Function",

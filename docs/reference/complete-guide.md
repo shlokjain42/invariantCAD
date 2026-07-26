@@ -1,10 +1,10 @@
 ---
-title: "Complete 0.1 guide"
-description: "The exhaustive InvariantCAD 0.1 modeling, evaluation, topology, assembly, browser, and protocol guide."
+title: "Complete guide"
+description: "The exhaustive published 0.1 foundation guide with clearly marked unreleased 0.2 contracts."
 icon: "book-open"
 ---
 
-# Complete InvariantCAD 0.1 guide
+# Complete InvariantCAD guide
 
 Comprehensive, type-safe CAD-as-code for TypeScript.
 
@@ -179,6 +179,37 @@ exported through STEP/BREP. The complete example above evaluates one document
 with both backends, exports a detached STEP `Uint8Array`, disposes each
 successful evaluated design, and handles the caller-owned-kernel failure path
 before evaluator ownership transfers.
+
+<Note>
+  The deterministic STEP contract below is implemented for the unreleased 0.2
+  line. The current 0.1.1 package provides ordinary weak native STEP export.
+</Note>
+
+The bundled zero-override stock runtime's optional
+`KERNEL_STEP_EXPORT_PROTOCOL_VERSION === 1` capability makes single-product
+AP214IS bytes deterministic for the same backend shape representation, export
+options, metadata, implementation, and exact runtime artifact. It is stronger
+than the `nativeExports` availability flag, but it is not geometric
+canonicalization or a cross-runtime cache key. The STEP-only
+`output.export("step", { metadata?, signal?, maxOutputBytes? })` overload uses
+document/output/part identity defaults and a fixed
+`1970-01-01T00:00:00` timestamp. The five resolved metadata strings have a
+64 KiB UTF-8 budget. The timestamp retains its exact calendar syntax; the four
+identity/description fields support Unicode scalars. Apostrophes use STEP
+doubling; literal backslashes and non-ASCII Unicode scalars use Part 21
+`\X2\...\X0\`/`\X4\...\X0\` directives; control characters and unpaired
+surrogates are rejected. Metadata is validated and encoded before the native
+writer starts. Encoding expansion counts
+toward the 64 MiB default transformed-output ceiling, and structural post-write
+scanning is bounded and cancellable. `maxOutputBytes` does not bound peak native
+allocation: the synchronous stock writer cannot be interrupted or bounded
+before it materializes its original full string. Material, configuration,
+arbitrary document/part metadata, and aggregate assembly/body-set STEP are not
+mapped.
+
+Explicit `wasm`, `moduleFactory`, and `attestedRuntime` initialization retains
+weak raw STEP export and omits this strong envelope until that exact writer
+artifact is separately qualified.
 
 The backend is explicitly selected; a design document never contains OCCT handles or backend-specific objects. The default `createOcctKernel()` loads stock `occt-wasm` and supports the exact geometry features listed below except draft, but its Boolean, fillet/chamfer, and shell/offset topology history is partial. Draft, complete exact multi-input Boolean, fillet/chamfer, and shell/offset evolution, plus the stronger major multi-arc/eccentric-profile composite guarantees, are advertised only when the matched InvariantCAD-owned facade ABI 0.9 build passes the exact facade probe. A caller can supply that pair directly through `moduleFactory` plus optional `wasm`, or preferably verify a reviewed bundle first with the Node/browser attested loader and pass its opaque `attestedRuntime`. ABI 0.9 retains the complete ABI 0.6 modeling/history surface, ABI 0.7's bounded artifact transport, and ABI 0.8's private cumulative native allocation-request budget, then adds exact owned-profile BinTools-v4 structural preflight only for the repository-private candidate; it does not advertise a shape-artifact codec. The repository can turn that local build into a verified, package-neutral bundle, but applications must still acquire and supply its runtime explicitly. See [Browser initialization](#browser-initialization) and [OCCT runtime attestation](/evaluation/occt-runtime-attestation).
 

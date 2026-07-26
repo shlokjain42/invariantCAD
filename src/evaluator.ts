@@ -63,10 +63,13 @@ import {
 } from "./ir.js";
 import {
   COMPOSITE_SWEEP_REFINEMENT_PROTOCOL_VERSION,
+  DEFAULT_KERNEL_STEP_EXPORT_TIMESTAMP,
   EXACT_INDEXED_TOPOLOGY_EVOLUTION_PROTOCOL_VERSION,
   GEOMETRY_KERNEL_PROTOCOL_VERSION,
+  KERNEL_STEP_EXPORT_PROTOCOL_VERSION,
   inspectKernelCompositeSweepCapabilities,
   inspectKernelDocumentBodyImportCapabilities,
+  inspectKernelStepExportCapabilities,
   mergeMeshes,
   transformMesh,
   type BoundingBox,
@@ -80,6 +83,8 @@ import {
   type KernelPrimitive,
   type KernelRepresentation,
   type KernelShape,
+  type KernelShapeExportContext,
+  type KernelStepExportMetadata,
   type MeshData,
   type MeshOptions,
   type ResolvedTransformOperation,
@@ -173,6 +178,7 @@ import {
 import {
   DOCUMENT_V7_RUNTIME_INTEGRITY_MESSAGE,
   documentV7RuntimeIntrinsicsAreIntact,
+  throwDocumentV7RuntimeIntegrityError,
 } from "./internal/document-v7-runtime-integrity.js";
 import {
   planStagedSolidGraphV7,
@@ -188,6 +194,51 @@ export type ParameterOverride = EvaluationParameterOverride;
 export type ShapeExportFormat = MeshExportFormat | KernelExchangeFormat;
 export type BinaryShapeExportFormat = "stl" | KernelExchangeFormat;
 export type TextShapeExportFormat = Exclude<MeshExportFormat, "stl">;
+
+/**
+ * Caller-authored overrides for deterministic single-shape STEP metadata.
+ *
+ * The four identity/description overrides support Unicode scalar values other
+ * than C0/C1 controls; unpaired UTF-16 surrogates are rejected. The OCCT
+ * backend represents reverse solidus and non-ASCII values with Part 21 X2/X4
+ * directives. An overridden `fileName`, `productId`, or `productName` must be
+ * nonempty. `timestamp` must be a real `YYYY-MM-DDTHH:MM:SS` calendar value.
+ */
+export interface StepExportMetadata {
+  /** Overrides STEP `FILE_NAME`; this need not be a filesystem path. */
+  readonly fileName?: string;
+  /** Overrides the fixed default with `YYYY-MM-DDTHH:MM:SS`. */
+  readonly timestamp?: string;
+  /** Overrides the exported single-product identifier. */
+  readonly productId?: string;
+  /** Overrides the exported single-product name. */
+  readonly productName?: string;
+  /** Overrides the exported single-product description. */
+  readonly productDescription?: string;
+}
+
+/**
+ * Options for the strong versioned STEP-export contract.
+ *
+ * Passing any options object, including `{}`, requires a valid kernel
+ * `stepExport` envelope. Otherwise export fails with
+ * `KERNEL_CAPABILITY_MISSING`. Omitting the second argument remains compatible
+ * with weak native exporters, while supporting kernels automatically use
+ * their strong deterministic defaults. Invalid option structure, metadata
+ * content, calendar values, or authored-metadata size fail with
+ * `EXPORT_OPTIONS_INVALID` and an option-relative JSON-Pointer path.
+ */
+export interface StepExportOptions {
+  /** Caller-authored overrides merged over document and part identity. */
+  readonly metadata?: StepExportMetadata;
+  /** Synchronous cancellation state inspected without invoking shadows. */
+  readonly signal?: AbortSignal;
+  /**
+   * Optional ceiling for the returned STEP bytes; the kernel's advertised
+   * ceiling still applies. This does not bound native peak allocation.
+   */
+  readonly maxOutputBytes?: number;
+}
 
 export const EVALUATOR_PROFILES = Object.freeze([
   "mesh-preview",
@@ -718,13 +769,35 @@ interface CapturedEvaluationOwnerDisposal {
 
 const evaluationOwnerDisposers =
   new WeakMap<object, CapturedEvaluationOwnerDisposal>();
+const evaluationOwnerDocumentNames = new WeakMap<object, string>();
 const evaluationOwnerDisposerGet = WeakMap.prototype.get;
 const evaluationOwnerDisposerSet = WeakMap.prototype.set;
 const evaluationOwnerReflectApply = Reflect.apply;
+const evaluationOwnerReflectHas = Reflect.has;
+const evaluationOwnerArrayIsArray = Array.isArray;
 const evaluationOwnerArrayFrom = Array.from;
+const evaluationOwnerObjectCreate = Object.create;
 const evaluationOwnerObjectDefineProperty =
   Object.defineProperty;
 const evaluationOwnerObjectFreeze = Object.freeze;
+const evaluationOwnerObjectGetOwnPropertyDescriptor =
+  Object.getOwnPropertyDescriptor;
+const evaluationOwnerObjectGetPrototypeOf = Object.getPrototypeOf;
+const evaluationOwnerObjectHasOwn = Object.hasOwn;
+const evaluationOwnerNumberIsSafeInteger = Number.isSafeInteger;
+const evaluationOwnerStringCharCodeAt = String.prototype.charCodeAt;
+const EvaluationOwnerStepDOMException = DOMException;
+const evaluationOwnerAbortSignalPrototype =
+  typeof AbortSignal === "undefined"
+    ? undefined
+    : AbortSignal.prototype;
+const evaluationOwnerAbortSignalAbortedGetter =
+  evaluationOwnerAbortSignalPrototype === undefined
+    ? undefined
+    : Object.getOwnPropertyDescriptor(
+        evaluationOwnerAbortSignalPrototype,
+        "aborted",
+      )?.get;
 
 function installEvaluationInstanceMethod(
   instance: object,
@@ -882,6 +955,791 @@ function captureEvaluationOwnerDisposer(
   );
 }
 
+function captureEvaluationOwnerDocumentName(
+  owner: EvaluationOwner,
+  documentName: string,
+): void {
+  evaluationOwnerReflectApply(
+    evaluationOwnerDisposerSet,
+    evaluationOwnerDocumentNames,
+    [owner, documentName],
+  );
+}
+
+function evaluationOwnerDocumentName(owner: EvaluationOwner): string {
+  const documentName = evaluationOwnerReflectApply(
+    evaluationOwnerDisposerGet,
+    evaluationOwnerDocumentNames,
+    [owner],
+  ) as string | undefined;
+  if (documentName === undefined) {
+    throw new TypeError("Evaluation owner has no document identity");
+  }
+  return documentName;
+}
+
+interface EvaluatedStepProductIdentity {
+  readonly productId: string;
+  readonly productName: string;
+  readonly productDescription: string;
+}
+
+type StepExportCapabilityState =
+  | {
+      readonly status: "valid";
+      readonly maxMetadataBytes: number;
+    }
+  | { readonly status: "absent" }
+  | {
+      readonly status: "malformed";
+      readonly reason: string;
+    };
+
+interface CapturedStepExportOptions {
+  readonly metadata?: StepExportMetadata;
+  readonly signal?: AbortSignal;
+  readonly maxOutputBytes?: number;
+}
+
+const evaluatedStepProductIdentities =
+  new WeakMap<object, EvaluatedStepProductIdentity>();
+
+function createEvaluationOwnerRecord(): Record<PropertyKey, unknown> {
+  return evaluationOwnerReflectApply(
+    evaluationOwnerObjectCreate,
+    Object,
+    [null],
+  ) as Record<PropertyKey, unknown>;
+}
+
+function defineEvaluationOwnerRecordValue(
+  record: Record<PropertyKey, unknown>,
+  property: PropertyKey,
+  value: unknown,
+): void {
+  evaluationOwnerReflectApply(
+    evaluationOwnerObjectDefineProperty,
+    Object,
+    [
+      record,
+      property,
+      {
+        configurable: false,
+        enumerable: true,
+        writable: false,
+        value,
+      },
+    ],
+  );
+}
+
+function freezeEvaluationOwnerRecord<T extends object>(
+  record: T,
+): T {
+  return evaluationOwnerReflectApply(
+    evaluationOwnerObjectFreeze,
+    Object,
+    [record],
+  ) as T;
+}
+
+function setEvaluatedStepProductIdentity(
+  output: object,
+  identity: EvaluatedStepProductIdentity,
+): void {
+  evaluationOwnerReflectApply(
+    evaluationOwnerDisposerSet,
+    evaluatedStepProductIdentities,
+    [
+      output,
+      evaluationOwnerReflectApply(
+        evaluationOwnerObjectFreeze,
+        Object,
+        [identity],
+      ),
+    ],
+  );
+}
+
+function throwInvalidStepExport(
+  message: string,
+  path: string,
+): never {
+  const value = diagnostic("EXPORT_OPTIONS_INVALID", message, {
+    severity: "error",
+    path,
+    details: { operation: "export", format: "step" },
+  });
+  throw new CadError(value.message, [value]);
+}
+
+function stepExportRecord(
+  value: unknown,
+  label: string,
+  path: string,
+): object {
+  let array = false;
+  try {
+    array = evaluationOwnerReflectApply(
+      evaluationOwnerArrayIsArray,
+      Array,
+      [value],
+    ) as boolean;
+  } catch {
+    throwInvalidStepExport(
+      `${label} could not be inspected safely`,
+      path,
+    );
+  }
+  if (typeof value !== "object" || value === null || array) {
+    throwInvalidStepExport(`${label} must be an object`, path);
+  }
+  return value;
+}
+
+function stepExportOwnDataValue(
+  value: object,
+  property: PropertyKey,
+  label: string,
+  path: string,
+): unknown {
+  let descriptor: PropertyDescriptor | undefined;
+  let inherited = false;
+  try {
+    descriptor = evaluationOwnerReflectApply(
+      evaluationOwnerObjectGetOwnPropertyDescriptor,
+      Object,
+      [value, property],
+    ) as PropertyDescriptor | undefined;
+    if (descriptor === undefined) {
+      inherited = evaluationOwnerReflectApply(
+        evaluationOwnerReflectHas,
+        Reflect,
+        [value, property],
+      ) as boolean;
+    }
+  } catch {
+    throwInvalidStepExport(
+      `${label} could not be inspected safely`,
+      path,
+    );
+  }
+  if (descriptor === undefined) {
+    if (inherited) {
+      throwInvalidStepExport(
+        `${label} must be an own data property`,
+        path,
+      );
+    }
+    return undefined;
+  }
+  if (
+    !(evaluationOwnerReflectApply(
+      evaluationOwnerObjectHasOwn,
+      Object,
+      [descriptor, "value"],
+    ) as boolean)
+  ) {
+    throwInvalidStepExport(
+      `${label} must be an own data property`,
+      path,
+    );
+  }
+  return descriptor.value;
+}
+
+function stepExportOptionalString(
+  value: unknown,
+  label: string,
+  path: string,
+): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") {
+    throwInvalidStepExport(`${label} must be a string`, path);
+  }
+  return value;
+}
+
+function stepExportCodeUnitAt(
+  value: string,
+  index: number,
+): number {
+  return evaluationOwnerReflectApply(
+    evaluationOwnerStringCharCodeAt,
+    value,
+    [index],
+  ) as number;
+}
+
+function validateStepExportTimestamp(
+  value: string,
+  label: string,
+  path: string,
+): void {
+  if (value.length !== 19) {
+    throwInvalidStepExport(
+      `${label} must use YYYY-MM-DDTHH:MM:SS`,
+      path,
+    );
+  }
+  for (let index = 0; index < value.length; index += 1) {
+    const code = stepExportCodeUnitAt(value, index);
+    const separator =
+      index === 4 || index === 7
+        ? 0x2d
+        : index === 10
+          ? 0x54
+          : index === 13 || index === 16
+            ? 0x3a
+            : undefined;
+    if (
+      separator === undefined
+        ? code < 0x30 || code > 0x39
+        : code !== separator
+    ) {
+      throwInvalidStepExport(
+        `${label} must use YYYY-MM-DDTHH:MM:SS`,
+        path,
+      );
+    }
+  }
+
+  const decimalAt = (index: number): number =>
+    stepExportCodeUnitAt(value, index) - 0x30;
+  const decimalPairAt = (index: number): number =>
+    decimalAt(index) * 10 + decimalAt(index + 1);
+  const year =
+    decimalAt(0) * 1_000 +
+    decimalAt(1) * 100 +
+    decimalAt(2) * 10 +
+    decimalAt(3);
+  const month = decimalPairAt(5);
+  const day = decimalPairAt(8);
+  const hour = decimalPairAt(11);
+  const minute = decimalPairAt(14);
+  const second = decimalPairAt(17);
+  const leapYear =
+    year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const monthDays =
+    month === 2
+      ? leapYear
+        ? 29
+        : 28
+      : month === 4 || month === 6 || month === 9 || month === 11
+        ? 30
+        : 31;
+  if (
+    year === 0 ||
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > monthDays ||
+    hour > 23 ||
+    minute > 59 ||
+    second > 59
+  ) {
+    throwInvalidStepExport(
+      `${label} is outside the supported calendar range`,
+      path,
+    );
+  }
+}
+
+function validateStepExportMetadataString(
+  value: string,
+  label: string,
+  path: string,
+  nonempty: boolean,
+  timestamp: boolean,
+  maximumBytes: number,
+  remainingBytes: number,
+): number {
+  if (nonempty && value.length === 0) {
+    throwInvalidStepExport(`${label} must be nonempty`, path);
+  }
+  for (let index = 0; index < value.length; index += 1) {
+    const code = stepExportCodeUnitAt(value, index);
+    let utf8Bytes: number;
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const following = stepExportCodeUnitAt(value, index + 1);
+      if (
+        index + 1 >= value.length ||
+        following < 0xdc00 ||
+        following > 0xdfff
+      ) {
+        throwInvalidStepExport(
+          `${label} must not contain unpaired surrogates`,
+          path,
+        );
+      }
+      utf8Bytes = 4;
+      index += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      throwInvalidStepExport(
+        `${label} must not contain unpaired surrogates`,
+        path,
+      );
+    } else if (code < 0x20 || (code >= 0x7f && code <= 0x9f)) {
+      throwInvalidStepExport(
+        `${label} must not contain control characters`,
+        path,
+      );
+    } else if (code <= 0x7f) {
+      utf8Bytes = 1;
+    } else if (code <= 0x7ff) {
+      utf8Bytes = 2;
+    } else {
+      utf8Bytes = 3;
+    }
+    if (utf8Bytes > remainingBytes) {
+      throwInvalidStepExport(
+        `Resolved STEP metadata exceeds maxMetadataBytes ${maximumBytes}`,
+        path,
+      );
+    }
+    remainingBytes -= utf8Bytes;
+  }
+  if (timestamp) {
+    validateStepExportTimestamp(value, label, path);
+  }
+  return remainingBytes;
+}
+
+function captureStepExportMetadata(
+  value: unknown,
+): StepExportMetadata | undefined {
+  if (value === undefined) return undefined;
+  const metadata = stepExportRecord(
+    value,
+    "STEP export metadata",
+    "/metadata",
+  );
+  const fileName = stepExportOptionalString(
+    stepExportOwnDataValue(
+      metadata,
+      "fileName",
+      "STEP export metadata.fileName",
+      "/metadata/fileName",
+    ),
+    "STEP export metadata.fileName",
+    "/metadata/fileName",
+  );
+  const timestamp = stepExportOptionalString(
+    stepExportOwnDataValue(
+      metadata,
+      "timestamp",
+      "STEP export metadata.timestamp",
+      "/metadata/timestamp",
+    ),
+    "STEP export metadata.timestamp",
+    "/metadata/timestamp",
+  );
+  const productId = stepExportOptionalString(
+    stepExportOwnDataValue(
+      metadata,
+      "productId",
+      "STEP export metadata.productId",
+      "/metadata/productId",
+    ),
+    "STEP export metadata.productId",
+    "/metadata/productId",
+  );
+  const productName = stepExportOptionalString(
+    stepExportOwnDataValue(
+      metadata,
+      "productName",
+      "STEP export metadata.productName",
+      "/metadata/productName",
+    ),
+    "STEP export metadata.productName",
+    "/metadata/productName",
+  );
+  const productDescription = stepExportOptionalString(
+    stepExportOwnDataValue(
+      metadata,
+      "productDescription",
+      "STEP export metadata.productDescription",
+      "/metadata/productDescription",
+    ),
+    "STEP export metadata.productDescription",
+    "/metadata/productDescription",
+  );
+  const captured = createEvaluationOwnerRecord();
+  if (fileName !== undefined) {
+    defineEvaluationOwnerRecordValue(captured, "fileName", fileName);
+  }
+  if (timestamp !== undefined) {
+    defineEvaluationOwnerRecordValue(captured, "timestamp", timestamp);
+  }
+  if (productId !== undefined) {
+    defineEvaluationOwnerRecordValue(captured, "productId", productId);
+  }
+  if (productName !== undefined) {
+    defineEvaluationOwnerRecordValue(captured, "productName", productName);
+  }
+  if (productDescription !== undefined) {
+    defineEvaluationOwnerRecordValue(
+      captured,
+      "productDescription",
+      productDescription,
+    );
+  }
+  return freezeEvaluationOwnerRecord(captured) as StepExportMetadata;
+}
+
+function stepExportSignalAborted(value: unknown): boolean {
+  if (evaluationOwnerAbortSignalAbortedGetter === undefined) {
+    throwInvalidStepExport(
+      "STEP export signal is unsupported in this runtime",
+      "/signal",
+    );
+  }
+  let shadow: PropertyDescriptor | undefined;
+  try {
+    shadow = evaluationOwnerReflectApply(
+      evaluationOwnerObjectGetOwnPropertyDescriptor,
+      Object,
+      [value, "aborted"],
+    ) as PropertyDescriptor | undefined;
+  } catch {
+    throwInvalidStepExport(
+      "STEP export signal could not be inspected safely",
+      "/signal",
+    );
+  }
+  if (shadow !== undefined) {
+    throwInvalidStepExport(
+      "STEP export signal must not shadow AbortSignal.aborted",
+      "/signal",
+    );
+  }
+  let owner: object | null = value as object;
+  let resolvedNativeGetter = false;
+  try {
+    for (let depth = 0; depth < 64 && owner !== null; depth += 1) {
+      const descriptor = evaluationOwnerReflectApply(
+        evaluationOwnerObjectGetOwnPropertyDescriptor,
+        Object,
+        [owner, "aborted"],
+      ) as PropertyDescriptor | undefined;
+      if (descriptor !== undefined) {
+        const data = evaluationOwnerReflectApply(
+          evaluationOwnerObjectHasOwn,
+          Object,
+          [descriptor, "value"],
+        ) as boolean;
+        resolvedNativeGetter =
+          owner === evaluationOwnerAbortSignalPrototype &&
+          !data &&
+          descriptor.get === evaluationOwnerAbortSignalAbortedGetter;
+        break;
+      }
+      owner = evaluationOwnerReflectApply(
+        evaluationOwnerObjectGetPrototypeOf,
+        Object,
+        [owner],
+      ) as object | null;
+    }
+  } catch {
+    throwInvalidStepExport(
+      "STEP export signal prototype could not be inspected safely",
+      "/signal",
+    );
+  }
+  if (!resolvedNativeGetter) {
+    throwInvalidStepExport(
+      "STEP export signal must resolve AbortSignal.aborted through the native runtime getter",
+      "/signal",
+    );
+  }
+  try {
+    const aborted = evaluationOwnerReflectApply(
+      evaluationOwnerAbortSignalAbortedGetter,
+      value,
+      [],
+    );
+    if (typeof aborted === "boolean") return aborted;
+  } catch {
+    throwInvalidStepExport(
+      "STEP export signal must be an AbortSignal",
+      "/signal",
+    );
+  }
+  throwInvalidStepExport(
+    "STEP export signal must be an AbortSignal",
+    "/signal",
+  );
+}
+
+function captureStepExportSignal(value: unknown): AbortSignal | undefined {
+  if (value === undefined) return undefined;
+  stepExportSignalAborted(value);
+  return value as AbortSignal;
+}
+
+function assertCapturedStepExportSignalReady(
+  options: CapturedStepExportOptions | undefined,
+): void {
+  const signal = options?.signal;
+  if (signal !== undefined && stepExportSignalAborted(signal)) {
+    throw new EvaluationOwnerStepDOMException(
+      "STEP export was aborted",
+      "AbortError",
+    );
+  }
+}
+
+function captureStepExportOptions(
+  value: unknown,
+): CapturedStepExportOptions | undefined {
+  if (value === undefined) return undefined;
+  const options = stepExportRecord(value, "STEP export options", "/");
+  const rawMetadata = stepExportOwnDataValue(
+    options,
+    "metadata",
+    "STEP export options.metadata",
+    "/metadata",
+  );
+  const rawSignal = stepExportOwnDataValue(
+    options,
+    "signal",
+    "STEP export options.signal",
+    "/signal",
+  );
+  const rawMaxOutputBytes = stepExportOwnDataValue(
+    options,
+    "maxOutputBytes",
+    "STEP export options.maxOutputBytes",
+    "/maxOutputBytes",
+  );
+  const metadata = captureStepExportMetadata(rawMetadata);
+  const maxOutputBytes = rawMaxOutputBytes;
+  if (
+    maxOutputBytes !== undefined &&
+    (typeof maxOutputBytes !== "number" ||
+      !(evaluationOwnerReflectApply(
+        evaluationOwnerNumberIsSafeInteger,
+        Number,
+        [maxOutputBytes],
+      ) as boolean) ||
+      maxOutputBytes <= 0)
+  ) {
+    throwInvalidStepExport(
+      "STEP export options.maxOutputBytes must be a positive safe integer",
+      "/maxOutputBytes",
+    );
+  }
+  const signal = captureStepExportSignal(rawSignal);
+  const captured = createEvaluationOwnerRecord();
+  if (metadata !== undefined) {
+    defineEvaluationOwnerRecordValue(captured, "metadata", metadata);
+  }
+  if (signal !== undefined) {
+    defineEvaluationOwnerRecordValue(captured, "signal", signal);
+  }
+  if (maxOutputBytes !== undefined) {
+    defineEvaluationOwnerRecordValue(
+      captured,
+      "maxOutputBytes",
+      maxOutputBytes,
+    );
+  }
+  return freezeEvaluationOwnerRecord(
+    captured,
+  ) as CapturedStepExportOptions;
+}
+
+function resolveStepExportMetadataLimit(
+  kernel: GeometryKernel,
+  options: CapturedStepExportOptions | undefined,
+  capturedState?: StepExportCapabilityState,
+  capturedKernelId?: string,
+): number | undefined {
+  let status: "absent" | "malformed";
+  let reason: string | undefined;
+  if (capturedState === undefined) {
+    const inspection = inspectKernelStepExportCapabilities(
+      kernel.capabilities,
+    );
+    if (inspection.status === "valid") {
+      return inspection.capabilities.maxMetadataBytes;
+    }
+    status = inspection.status;
+    reason =
+      inspection.status === "malformed"
+        ? inspection.reason
+        : undefined;
+  } else {
+    if (capturedState.status === "valid") {
+      return capturedState.maxMetadataBytes;
+    }
+    status = capturedState.status;
+    reason =
+      capturedState.status === "malformed"
+        ? capturedState.reason
+        : undefined;
+  }
+  if (options === undefined) return undefined;
+  const kernelId = capturedKernelId ?? kernel.id;
+  const message =
+    status === "absent"
+      ? `Kernel '${kernelId}' does not advertise deterministic STEP export`
+      : `Kernel '${kernelId}' advertises malformed deterministic STEP export metadata`;
+  const value = diagnostic("KERNEL_CAPABILITY_MISSING", message, {
+    severity: "error",
+    details: {
+      kernel: kernelId,
+      capability: "stepExport",
+      status,
+      ...(reason === undefined ? {} : { reason }),
+    },
+  });
+  throw new CadError(value.message, [value]);
+}
+
+function evaluatedStepExportContext(
+  output: object,
+  name: string,
+  owner: EvaluationOwner,
+  maxMetadataBytes: number,
+  options?: CapturedStepExportOptions,
+): KernelShapeExportContext {
+  const identity =
+    (evaluationOwnerReflectApply(
+      evaluationOwnerDisposerGet,
+      evaluatedStepProductIdentities,
+      [output],
+    ) as EvaluatedStepProductIdentity | undefined) ?? {
+      productId: name,
+      productName: name,
+      productDescription: "",
+    };
+  const overrides = options?.metadata;
+  const fileName =
+    overrides?.fileName ?? evaluationOwnerDocumentName(owner);
+  const timestamp =
+    overrides?.timestamp ?? DEFAULT_KERNEL_STEP_EXPORT_TIMESTAMP;
+  const productId = overrides?.productId ?? identity.productId;
+  const productName = overrides?.productName ?? identity.productName;
+  const productDescription =
+    overrides?.productDescription ?? identity.productDescription;
+  let remainingMetadataBytes = maxMetadataBytes;
+  remainingMetadataBytes = validateStepExportMetadataString(
+    fileName,
+    "Resolved STEP metadata.fileName",
+    "/metadata/fileName",
+    true,
+    false,
+    maxMetadataBytes,
+    remainingMetadataBytes,
+  );
+  remainingMetadataBytes = validateStepExportMetadataString(
+    timestamp,
+    "Resolved STEP metadata.timestamp",
+    "/metadata/timestamp",
+    false,
+    true,
+    maxMetadataBytes,
+    remainingMetadataBytes,
+  );
+  remainingMetadataBytes = validateStepExportMetadataString(
+    productId,
+    "Resolved STEP metadata.productId",
+    "/metadata/productId",
+    true,
+    false,
+    maxMetadataBytes,
+    remainingMetadataBytes,
+  );
+  remainingMetadataBytes = validateStepExportMetadataString(
+    productName,
+    "Resolved STEP metadata.productName",
+    "/metadata/productName",
+    true,
+    false,
+    maxMetadataBytes,
+    remainingMetadataBytes,
+  );
+  validateStepExportMetadataString(
+    productDescription,
+    "Resolved STEP metadata.productDescription",
+    "/metadata/productDescription",
+    false,
+    false,
+    maxMetadataBytes,
+    remainingMetadataBytes,
+  );
+  const metadataRecord = createEvaluationOwnerRecord();
+  defineEvaluationOwnerRecordValue(
+    metadataRecord,
+    "fileName",
+    fileName,
+  );
+  defineEvaluationOwnerRecordValue(
+    metadataRecord,
+    "timestamp",
+    timestamp,
+  );
+  defineEvaluationOwnerRecordValue(
+    metadataRecord,
+    "productId",
+    productId,
+  );
+  defineEvaluationOwnerRecordValue(
+    metadataRecord,
+    "productName",
+    productName,
+  );
+  defineEvaluationOwnerRecordValue(
+    metadataRecord,
+    "productDescription",
+    productDescription,
+  );
+  const metadata = freezeEvaluationOwnerRecord(
+    metadataRecord,
+  ) as unknown as KernelStepExportMetadata;
+
+  const stepExportRecord = createEvaluationOwnerRecord();
+  defineEvaluationOwnerRecordValue(
+    stepExportRecord,
+    "protocolVersion",
+    KERNEL_STEP_EXPORT_PROTOCOL_VERSION,
+  );
+  defineEvaluationOwnerRecordValue(
+    stepExportRecord,
+    "metadata",
+    metadata,
+  );
+  if (options?.maxOutputBytes !== undefined) {
+    defineEvaluationOwnerRecordValue(
+      stepExportRecord,
+      "maxOutputBytes",
+      options.maxOutputBytes,
+    );
+  }
+  const stepExport = freezeEvaluationOwnerRecord(stepExportRecord);
+
+  const context = createEvaluationOwnerRecord();
+  defineEvaluationOwnerRecordValue(context, "feature", name);
+  if (options?.signal !== undefined) {
+    defineEvaluationOwnerRecordValue(context, "signal", options.signal);
+  }
+  defineEvaluationOwnerRecordValue(context, "stepExport", stepExport);
+  return freezeEvaluationOwnerRecord(
+    context,
+  ) as KernelShapeExportContext;
+}
+
+function evaluatedWeakExportContext(
+  name: string,
+): KernelShapeExportContext {
+  const context = createEvaluationOwnerRecord();
+  defineEvaluationOwnerRecordValue(context, "feature", name);
+  return freezeEvaluationOwnerRecord(
+    context,
+  ) as KernelShapeExportContext;
+}
+
 export class EvaluatedSolid {
   readonly name: string;
   protected readonly owner: EvaluationOwner;
@@ -891,6 +1749,11 @@ export class EvaluatedSolid {
     this.name = name;
     this.owner = owner;
     this.shape = shape;
+    setEvaluatedStepProductIdentity(this, {
+      productId: name,
+      productName: name,
+      productDescription: "",
+    });
   }
 
   mesh(options?: MeshOptions): MeshData {
@@ -943,10 +1806,26 @@ export class EvaluatedSolid {
     }
   }
 
+  /**
+   * Exports one STEP shape, optionally requesting the strong STEP contract.
+   *
+   * Invalid STEP options throw `CadError` with `EXPORT_OPTIONS_INVALID`;
+   * cancellation continues to throw `AbortError`.
+   */
+  export(format: "step", options?: StepExportOptions): Uint8Array;
   export(format: BinaryShapeExportFormat): Uint8Array;
   export(format: TextShapeExportFormat): string;
   export(format: ShapeExportFormat): Uint8Array | string;
-  export(format: ShapeExportFormat): Uint8Array | string {
+  export(
+    format: ShapeExportFormat,
+    options?: StepExportOptions,
+  ): Uint8Array | string {
+    if (format !== "step" && options !== undefined) {
+      throwInvalidStepExport(
+        "STEP export options require the 'step' format",
+        "/",
+      );
+    }
     if (
       format === "stl" ||
       format === "stl-ascii" ||
@@ -969,15 +1848,39 @@ export class EvaluatedSolid {
       );
       throw new CadError(value.message, [value]);
     }
-    return this.owner.kernel.exportShape(this.shape, format, {
-      feature: this.name,
-    });
+    const capturedOptions =
+      format === "step"
+        ? captureStepExportOptions(options)
+        : undefined;
+    const stepMetadataLimit =
+      format === "step"
+        ? resolveStepExportMetadataLimit(
+            this.owner.kernel,
+            capturedOptions,
+          )
+        : undefined;
+    this.owner.assertLive();
+    assertCapturedStepExportSignalReady(capturedOptions);
+    return this.owner.kernel.exportShape(
+      this.shape,
+      format,
+      stepMetadataLimit !== undefined
+        ? evaluatedStepExportContext(
+            this,
+            this.name,
+            this.owner,
+            stepMetadataLimit,
+            capturedOptions,
+          )
+        : evaluatedWeakExportContext(this.name),
+    );
   }
 }
 
 interface StagedV7SolidKernelAccess {
   readonly id: string;
   readonly nativeExports: readonly KernelExchangeFormat[];
+  readonly stepExport: StepExportCapabilityState;
   readonly mesh: GeometryKernel["mesh"];
   readonly measure: GeometryKernel["measure"];
   readonly topology?: NonNullable<GeometryKernel["topology"]>;
@@ -1089,10 +1992,23 @@ class StagedBodySetEvaluatedSolidV7 extends EvaluatedSolid {
     }
   }
 
+  override export(format: "step", options?: StepExportOptions): Uint8Array;
   override export(format: BinaryShapeExportFormat): Uint8Array;
   override export(format: TextShapeExportFormat): string;
   override export(format: ShapeExportFormat): Uint8Array | string;
-  override export(format: ShapeExportFormat): Uint8Array | string {
+  override export(
+    format: ShapeExportFormat,
+    options?: StepExportOptions,
+  ): Uint8Array | string {
+    if (!documentV7RuntimeIntrinsicsAreIntact()) {
+      throwDocumentV7RuntimeIntegrityError();
+    }
+    if (format !== "step" && options !== undefined) {
+      throwInvalidStepExport(
+        "STEP export options require the 'step' format",
+        "/",
+      );
+    }
     if (
       format === "stl" ||
       format === "stl-ascii" ||
@@ -1124,19 +2040,57 @@ class StagedBodySetEvaluatedSolidV7 extends EvaluatedSolid {
       );
       throw new CadError(value.message, [value]);
     }
-    return evaluationOwnerReflectApply(
-      this.#access.exportShape,
-      this.owner.kernel,
-      [
-        this.shape,
-        format,
-        evaluationOwnerReflectApply(
-          evaluationOwnerObjectFreeze,
-          Object,
-          [{ feature: this.name }],
-        ),
-      ],
-    ) as Uint8Array;
+    try {
+      const capturedOptions =
+        format === "step"
+          ? captureStepExportOptions(options)
+          : undefined;
+      const stepMetadataLimit =
+        format === "step"
+          ? resolveStepExportMetadataLimit(
+              this.owner.kernel,
+              capturedOptions,
+              this.#access.stepExport,
+              this.#access.id,
+            )
+          : undefined;
+      if (!documentV7RuntimeIntrinsicsAreIntact()) {
+        throwDocumentV7RuntimeIntegrityError();
+      }
+      this.owner.assertLive();
+      assertCapturedStepExportSignalReady(capturedOptions);
+      const context =
+        stepMetadataLimit !== undefined
+          ? evaluatedStepExportContext(
+              this,
+              this.name,
+              this.owner,
+              stepMetadataLimit,
+              capturedOptions,
+            )
+          : evaluatedWeakExportContext(this.name);
+      if (!documentV7RuntimeIntrinsicsAreIntact()) {
+        throwDocumentV7RuntimeIntegrityError();
+      }
+      const exported = evaluationOwnerReflectApply(
+        this.#access.exportShape,
+        this.owner.kernel,
+        [
+          this.shape,
+          format,
+          context,
+        ],
+      ) as Uint8Array | string;
+      if (!documentV7RuntimeIntrinsicsAreIntact()) {
+        throwDocumentV7RuntimeIntegrityError();
+      }
+      return exported;
+    } catch (error) {
+      if (!documentV7RuntimeIntrinsicsAreIntact()) {
+        throwDocumentV7RuntimeIntegrityError();
+      }
+      throw error;
+    }
   }
 }
 
@@ -1399,6 +2353,11 @@ export class EvaluatedPart extends EvaluatedSolid {
     this.massDensitySource = part.massDensitySource;
     this.partNode = part.node;
     this.part = part;
+    setEvaluatedStepProductIdentity(this, {
+      productId: nonBlank(part.definition.partNumber) ?? part.node,
+      productName: part.node,
+      productDescription: part.definition.description ?? "",
+    });
   }
 
   billOfMaterials(): CadResult<BillOfMaterials> {
@@ -2840,6 +3799,14 @@ export class EvaluatedPartV7 {
     this.materialDefinition = part.materialDefinition;
     this.massDensity = part.massDensity;
     this.massDensitySource = part.massDensitySource;
+    if (part.geometry.kind === "solid") {
+      setEvaluatedStepProductIdentity(part.geometry.solid, {
+        productId:
+          partV7NonBlank(part.definition.partNumber) ?? part.node,
+        productName: part.node,
+        productDescription: part.definition.description ?? "",
+      });
+    }
     retainEvaluatedPartV7ViewState(
       this,
       evaluationOwnerReflectApply(
@@ -5375,6 +6342,7 @@ export async function evaluateImportedBodyOutputsV7(
     createdShapes,
     null,
   );
+  captureEvaluationOwnerDocumentName(owner, document.name);
   captureEvaluationOwnerDisposer(
     owner,
     createdShapes,
@@ -6647,6 +7615,12 @@ function captureBodySetKernelAccess(
     );
     const afterNativeExports = postBoundaryFailure(signal);
     if (afterNativeExports !== undefined) return afterNativeExports;
+    const stepExportProperty = importedBodyOwnDataValue(
+      rawCapabilities,
+      "stepExport",
+    );
+    const afterStepExport = postBoundaryFailure(signal);
+    if (afterStepExport !== undefined) return afterStepExport;
     const topologyProperty = importedBodyOwnDataValue(
       rawCapabilities,
       "topology",
@@ -6915,6 +7889,55 @@ function captureBodySetKernelAccess(
     importedBodyApply<void>(importedBodyObjectFreeze, Object, [
       nativeExports,
     ]);
+
+    let stepExport: StepExportCapabilityState;
+    if (stepExportProperty.kind === "invalid") {
+      stepExport = importedBodyApply<StepExportCapabilityState>(
+        importedBodyObjectFreeze,
+        Object,
+        [
+          {
+            status: "malformed",
+            reason: "uninspectable-metadata",
+          },
+        ],
+      );
+    } else {
+      const inspection = inspectKernelStepExportCapabilities({
+        protocolVersion: GEOMETRY_KERNEL_PROTOCOL_VERSION,
+        representation,
+        exact,
+        primitives: [],
+        features: [],
+        nativeImports: [],
+        nativeExports: [],
+        ...(stepExportProperty.kind === "data"
+          ? { stepExport: stepExportProperty.value as never }
+          : {}),
+      });
+      const afterStepExportInspection = postBoundaryFailure(signal);
+      if (afterStepExportInspection !== undefined) {
+        return afterStepExportInspection;
+      }
+      stepExport = importedBodyApply<StepExportCapabilityState>(
+        importedBodyObjectFreeze,
+        Object,
+        [
+          inspection.status === "malformed"
+            ? {
+                status: "malformed",
+                reason: inspection.reason,
+              }
+            : inspection.status === "valid"
+              ? {
+                  status: "valid",
+                  maxMetadataBytes:
+                    inspection.capabilities.maxMetadataBytes,
+                }
+              : { status: "absent" },
+        ],
+      );
+    }
 
     let topologyAdvertised = false;
     if (
@@ -7281,6 +8304,7 @@ function captureBodySetKernelAccess(
             measure,
             mesh,
             nativeExports,
+            stepExport,
             ...(topology === undefined ? {} : { topology }),
             ...(exportShape === undefined ? {} : { exportShape }),
             disposeShape,
@@ -8519,6 +9543,7 @@ export async function evaluateBodySetOutputsV7(
     createdShapes,
     selectedConfigurationId,
   );
+  captureEvaluationOwnerDocumentName(owner, document.name);
   captureEvaluationOwnerDisposer(
     owner,
     createdShapes,
@@ -10864,6 +11889,7 @@ async function executePreparedPartOutputsV7InTransaction(
     createdShapes,
     selectedConfigurationId,
   );
+  captureEvaluationOwnerDocumentName(owner, document.name);
   captureEvaluationOwnerDisposer(
     owner,
     createdShapes,
@@ -11143,6 +12169,7 @@ export async function executePreparedProductGeometryOutputsV7(
         solidGraph.value.createdShapes,
         selectedConfigurationId,
       );
+      captureEvaluationOwnerDocumentName(owner, document.name);
       productOwner = owner;
       captureEvaluationOwnerDisposer(
         owner,
@@ -13596,6 +14623,7 @@ export class Evaluator {
         createdShapes,
         selectedConfigurationId,
       );
+      captureEvaluationOwnerDocumentName(owner, document.name);
       const outputs = new Map<string, EvaluatedOutput>();
       for (const [name, value] of rawOutputs) {
         if (value.kind === "solid") {

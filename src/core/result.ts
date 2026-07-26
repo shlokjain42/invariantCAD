@@ -47,6 +47,7 @@ export type DiagnosticCode =
   | "ARTIFACT_CACHE_OPERATION_FAILED"
   | "ARTIFACT_CACHE_ENTRY_INVALID"
   | "ARTIFACT_CACHE_LIMIT_EXCEEDED"
+  | "EXPORT_OPTIONS_INVALID"
   | "EXPORT_UNSUPPORTED";
 
 export interface DiagnosticLocation {
@@ -122,12 +123,24 @@ export function safeErrorMessage(
   }
 }
 
+const resultObjectDefineProperty = Object.defineProperty;
+
 export class CadError extends Error {
-  readonly diagnostics: readonly Diagnostic[];
+  declare readonly diagnostics: readonly Diagnostic[];
 
   constructor(message: string, diagnostics: readonly Diagnostic[]) {
     super(message);
-    this.name = "CadError";
-    this.diagnostics = diagnostics;
+    resultObjectDefineProperty(this, "name", {
+      configurable: true,
+      enumerable: true,
+      value: "CadError",
+      writable: true,
+    });
+    resultObjectDefineProperty(this, "diagnostics", {
+      configurable: true,
+      enumerable: true,
+      value: diagnostics,
+      writable: true,
+    });
   }
 }

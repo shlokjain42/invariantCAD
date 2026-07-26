@@ -2,6 +2,34 @@
 
 ## [Unreleased]
 
+- Made the bundled zero-override stock-OCCT single-product STEP export
+  byte-deterministic under the
+  versioned `KERNEL_STEP_EXPORT_PROTOCOL_VERSION` v1 contract. Evaluated solids
+  and parts now accept `output.export("step", { metadata, signal,
+  maxOutputBytes })`; stable defaults bind the document name, output/part
+  identity, optional part description, and the fixed
+  `1970-01-01T00:00:00` timestamp. A bounded structural Part 21 transformer,
+  rather than a regular-expression rewrite, updates the AP214IS `FILE_NAME`
+  and `PRODUCT` records while preserving geometry and successful re-import.
+  Authored metadata has a 64 KiB UTF-8 budget; apostrophes use STEP doubling,
+  and literal backslashes plus non-ASCII Unicode scalars in the four
+  identity/description fields use Part 21
+  `\X2\`/`\X4\` directives. Control characters and unpaired surrogates fail
+  closed. Metadata is validated and encoded before the native writer starts.
+  Encoded expansion counts toward the default 64 MiB transformed-output
+  ceiling, and scanning is cancellable after the synchronous native writer
+  returns. That ceiling does not bound the native writer's peak allocation. The
+  guarantee applies only to the same backend shape representation, options,
+  metadata, implementation, and exact runtime artifact; it is not geometric
+  canonicalization, cross-runtime cache identity, third-party STEP
+  canonicalization, or exact aggregate assembly/body-set export.
+  Caller-supplied `wasm`, `moduleFactory`, and attested runtimes retain weak raw
+  STEP export and do not advertise the strong envelope without separate writer
+  qualification. Invalid high-level STEP option structure, metadata content,
+  calendar values, and authored-metadata budgets now throw `CadError` with the
+  stable `EXPORT_OPTIONS_INVALID` code and option-relative JSON-Pointer paths;
+  valid cancellation remains `AbortError`, and low-level kernel validation
+  exceptions remain unchanged.
 - Replaced the stock/owned OCCT genus heuristic with a capability-correct
   `ShapeMeasurements.genus: number | null` contract. A number now means the
   backend proved the exact sum of connected-component genera for its

@@ -159,6 +159,70 @@ const textBrep = output.export("brep");
 const binaryBrep = output.export("brep-binary");
 ```
 
+<Note>
+  The deterministic metadata and byte contract below is implemented for the
+  unreleased 0.2 line, not the current 0.1.1 npm package.
+</Note>
+
+The bundled zero-override stock kernel's optional `capabilities.stepExport`
+envelope advertises
+`KERNEL_STEP_EXPORT_PROTOCOL_VERSION === 1`, schema `AP214IS`, byte scope
+`same-shape-representation-and-metadata`, a 64 MiB output ceiling, and a
+64 KiB metadata ceiling. This is a distinct, stronger declaration than
+`nativeExports` containing `"step"`; the latter promises format availability,
+not deterministic bytes. `inspectKernelStepExportCapabilities(...)` snapshots
+and validates this optional envelope without invoking accessors.
+
+Supplying `wasm`, `moduleFactory`, or `attestedRuntime` omits this envelope and
+retains weak raw STEP export. Even an explicitly supplied stock-derived
+artifact is unqualified until a separate exact-writer probe or attestation
+contract exists.
+
+At the evaluated-output boundary,
+`output.export("step", { metadata?, signal?, maxOutputBytes? })` supplies a
+complete resolved metadata request to a supporting kernel. The qualified
+bundled stock runtime writes one AP214IS product, then a purpose-built
+structural Part 21 transformer
+replaces only the relevant `FILE_NAME` and `PRODUCT` string tokens. It validates
+the exchange envelope, section structure, record arity, one-product
+assumption, exact EOF, metadata, entity count, scan work, and resulting byte
+size. It does not use a regular expression or reinterpret geometry.
+
+Default metadata uses the document name for `FILE_NAME`, the fixed
+`1970-01-01T00:00:00` timestamp, and the output alias for an ordinary solid's
+product ID and name. Parts use the part number or part-node ID for product ID,
+the part-node ID for product name, and the authored part description. A caller
+timestamp is accepted only as a valid `YYYY-MM-DDTHH:MM:SS` calendar value and
+is deterministic because it is explicit input. Protocol v1 accepts Unicode
+scalar text in the four identity/description fields: apostrophes are doubled
+for STEP, while literal backslashes and non-ASCII scalars use ISO-10303-21
+`\X2\...\X0\` or `\X4\...\X0\` directives. Control characters and unpaired
+UTF-16 surrogates are rejected.
+
+Material identity, configuration selection, arbitrary document metadata, and
+arbitrary part metadata are not representable through this current mapping.
+Aggregate assembly and body-set exact STEP export remains unsupported.
+
+<Warning>
+  InvariantCAD validates and encodes metadata before starting the stock
+  `occt-wasm` writer. That writer is synchronous and then materializes its
+  original complete STEP string. JavaScript output limits and cancellation
+  cannot interrupt the native call. Once it returns, InvariantCAD checks
+  cancellation and applies bounded, cancellable scanning, entity/work limits,
+  and the final output ceiling. `maxOutputBytes` bounds only the transformed
+  bytes returned to JavaScript; it does not bound the native writer's peak
+  allocation.
+</Warning>
+
+The 64 KiB metadata budget measures the five resolved strings as UTF-8.
+Part 21 escaping can expand Unicode or backslash text, and that expanded form
+counts toward the 64 MiB returned-output ceiling.
+
+The byte guarantee is deliberately narrow: identical bytes require the same
+backend shape representation, options, metadata, implementation, and exact
+runtime artifact. It is not geometric canonicalization, cross-runtime cache
+identity, or a canonicalizer for imported or third-party STEP files.
+
 These methods return bytes or text synchronously from a live evaluated output.
 Generic BREP exchange does not preserve InvariantCAD wrapper lineage, topology
 annotations, cached evaluator state, or durable artifact identity.

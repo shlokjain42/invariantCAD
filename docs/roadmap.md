@@ -97,6 +97,18 @@ The foundation-hardening release added:
 The owned runtime still requires the caller to provide reviewed runtime files.
 The repository does not silently download or distribute that bundle.
 
+### Unreleased for 0.2
+
+- The bundled zero-override stock OCCT runtime now advertises a versioned
+  deterministic single-product AP214IS STEP contract. It supplies closed
+  document/output/part identity defaults, explicit Unicode metadata,
+  caller cancellation and output ceilings, authored-metadata and structural
+  scan limits, repeatable bytes for the same exact runtime inputs, and
+  structured high-level option diagnostics. Explicit runtime overrides retain
+  weak native STEP until separately qualified. This does not claim geometric
+  canonicalization, imported-file canonicalization, exact aggregate STEP,
+  bounded native peak allocation, or a portable artifact/cache format.
+
 ### Repository-only research and staged work
 
 The repository contains a private owned-OCCT shape-artifact candidate and a

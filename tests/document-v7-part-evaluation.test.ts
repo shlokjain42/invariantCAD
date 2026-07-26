@@ -4,6 +4,7 @@ import {
   type ShapeHandle,
 } from "occt-wasm";
 import type { ResourceId } from "../src/core/ids.js";
+import { CadError } from "../src/core/result.js";
 import {
   createExternalAssemblyPartViewV7,
   createPreparedPartShapeOwnershipTransactionV7,
@@ -37,12 +38,14 @@ import {
 } from "../src/ir.js";
 import {
   KERNEL_DOCUMENT_BODY_IMPORT_PROTOCOL_VERSION,
+  KERNEL_STEP_EXPORT_PROTOCOL_VERSION,
   type GeometryKernel,
   type KernelCapabilities,
   type KernelDocumentBodyImportOptions,
   type KernelFeatureContext,
   type KernelPrimitive,
   type KernelShape,
+  type KernelShapeExportContext,
   type MeshData,
   type MeshOptions,
   type ResolvedTransformOperation,
@@ -256,6 +259,14 @@ const strongImportCapabilities = {
   formats: [{ format: "step", unitModes: ["from-file"] }],
 } as const;
 
+const strongStepExportCapabilities = {
+  protocolVersion: KERNEL_STEP_EXPORT_PROTOCOL_VERSION,
+  schema: "AP214IS",
+  byteDeterminism: "same-shape-representation-and-metadata",
+  maxOutputBytes: 1_048_576,
+  maxMetadataBytes: 1_024,
+} as const;
+
 interface FakeShape extends KernelShape {
   readonly serial: number;
   readonly source:
@@ -309,6 +320,7 @@ interface KernelHarness {
 interface KernelHarnessOptions {
   readonly representation?: "mesh" | "brep";
   readonly exact?: boolean;
+  readonly stepExport?: KernelCapabilities["stepExport"];
   readonly primitiveHook?: (
     kind: KernelPrimitive,
     shape: FakeShape,
@@ -343,6 +355,11 @@ interface KernelHarnessOptions {
     shape: FakeShape,
     calls: readonly PrimitiveCall[],
   ) => ShapeMeasurements;
+  readonly exportHook?: (
+    shape: FakeShape,
+    format: string,
+    context: KernelShapeExportContext | undefined,
+  ) => Uint8Array;
   readonly disposeHook?: (shape: FakeShape, callIndex: number) => void;
 }
 
@@ -471,6 +488,9 @@ function createKernelHarness(
       adjacency: true,
     },
     documentBodyImport: strongImportCapabilities,
+    ...(options.stepExport === undefined
+      ? {}
+      : { stepExport: options.stepExport }),
   };
 
   const kernel: GeometryKernel = {
@@ -576,8 +596,13 @@ function createKernelHarness(
     exportShape: (
       shape: KernelShape,
       format,
+      context,
     ): Uint8Array =>
-      encoder.encode(`${format}:${(shape as FakeShape).serial}`),
+      options.exportHook?.(
+        shape as FakeShape,
+        format,
+        context,
+      ) ?? encoder.encode(`${format}:${(shape as FakeShape).serial}`),
     disposeShape: (shape: KernelShape): void => {
       const candidate = shape as FakeShape;
       if (!live.delete(candidate)) {
@@ -2594,9 +2619,343 @@ describe("staged document-v7 part output evaluation", () => {
     expect("EvaluatedPartV7" in publicApi).toBe(false);
     expect("EvaluatedPartDesignV7" in publicApi).toBe(false);
   });
+
+  it("retains the captured kernel id for staged STEP capability errors", async () => {
+    const cad = stagedBodySetDesignV7("captured-step-kernel-id");
+    const body = cad.box("body", {
+      size: [mm(1), mm(2), mm(3)],
+    });
+    cad.output("part", cad.part("part", body));
+    const harness = createKernelHarness();
+    const evaluated = expectPartResult(
+      await evaluatePartOutputsV7(harness.kernel, cad.build()),
+    );
+    let idGetterCalls = 0;
+    Object.defineProperty(harness.kernel, "id", {
+      configurable: true,
+      get() {
+        idGetterCalls += 1;
+        throw Object.create(null);
+      },
+    });
+    try {
+      const output = evaluated.output("part");
+      const geometry = output.geometry;
+      expect(geometry.kind).toBe("solid");
+      if (geometry.kind !== "solid") return;
+      expect(() =>
+        Reflect.apply(geometry.solid.export, geometry.solid, [
+          "step",
+          null,
+        ]),
+      ).toThrow("STEP export options must be an object");
+      expect(() =>
+        Reflect.apply(geometry.solid.export, geometry.solid, [
+          "step",
+          { metadata: null },
+        ]),
+      ).toThrow("STEP export metadata must be an object");
+      expect(() =>
+        geometry.solid.export("step", {}),
+      ).toThrow(
+        "Kernel 'document-v7-part-test' does not advertise deterministic STEP export",
+      );
+      expect(idGetterCalls).toBe(0);
+    } finally {
+      evaluated.dispose();
+    }
+  });
+
+  it("reports staged STEP metadata errors with the public structured contract", async () => {
+    const cad = stagedBodySetDesignV7("structured-staged-step-errors");
+    const body = cad.box("body", {
+      size: [mm(1), mm(2), mm(3)],
+    });
+    cad.output("part", cad.part("part", body));
+    const exportHook = vi.fn(() => encoder.encode("unused"));
+    const harness = createKernelHarness({
+      stepExport: strongStepExportCapabilities,
+      exportHook,
+    });
+    const evaluated = expectPartResult(
+      await evaluatePartOutputsV7(harness.kernel, cad.build()),
+    );
+    try {
+      const output = evaluated.output("part");
+      if (output.geometry.kind !== "solid") {
+        throw new Error("Expected a staged solid output");
+      }
+      let thrown: unknown;
+      try {
+        output.geometry.solid.export("step", {
+          metadata: { timestamp: "2026-02-30T12:00:00" },
+        });
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(CadError);
+      if (!(thrown instanceof CadError)) return;
+      expect(thrown.diagnostics).toEqual([
+        expect.objectContaining({
+          code: "EXPORT_OPTIONS_INVALID",
+          path: "/metadata/timestamp",
+          message: expect.stringContaining(
+            "outside the supported calendar range",
+          ),
+        }),
+      ]);
+      expect(exportHook).not.toHaveBeenCalled();
+    } finally {
+      evaluated.dispose();
+    }
+  });
+
+  it("rechecks staged integrity after signal recapture and before kernel dispatch", async () => {
+    const cad = stagedBodySetDesignV7("staged-step-signal-integrity");
+    const body = cad.box("body", {
+      size: [mm(1), mm(2), mm(3)],
+    });
+    cad.output("part", cad.part("part", body));
+    const exportHook = vi.fn(() => encoder.encode("must-not-dispatch"));
+    const harness = createKernelHarness({
+      stepExport: strongStepExportCapabilities,
+      exportHook,
+    });
+    const evaluated = expectPartResult(
+      await evaluatePartOutputsV7(harness.kernel, cad.build()),
+    );
+    const originalNumberIsFinite = Number.isFinite;
+    let poisonedNumberCalls = 0;
+    let prototypeReads = 0;
+    const controller = new AbortController();
+    const nativeSignalPrototype = Object.getPrototypeOf(controller.signal);
+    const intermediatePrototype = new Proxy(
+      Object.create(nativeSignalPrototype),
+      {
+        getPrototypeOf(target) {
+          prototypeReads += 1;
+          if (prototypeReads === 2) {
+            Number.isFinite = () => {
+              poisonedNumberCalls += 1;
+              return true;
+            };
+          }
+          return Reflect.getPrototypeOf(target);
+        },
+      },
+    );
+    Object.setPrototypeOf(controller.signal, intermediatePrototype);
+
+    let thrown: unknown;
+    try {
+      const output = evaluated.output("part");
+      if (output.geometry.kind !== "solid") {
+        throw new Error("Expected a staged solid output");
+      }
+      output.geometry.solid.export("step", {
+        signal: controller.signal,
+      });
+    } catch (error) {
+      thrown = error;
+    } finally {
+      Number.isFinite = originalNumberIsFinite;
+      evaluated.dispose();
+    }
+
+    expect(thrown).toEqual(
+      expect.objectContaining({
+        message: "Document-v7 runtime intrinsics changed during the operation",
+      }),
+    );
+    expect(prototypeReads).toBe(2);
+    expect(poisonedNumberCalls).toBe(0);
+    expect(exportHook).not.toHaveBeenCalled();
+  });
+
+  it("fails closed across exceptional staged STEP integrity paths", async () => {
+    const cad = stagedBodySetDesignV7("staged-step-integrity");
+    const body = cad.box("body", {
+      size: [mm(1), mm(2), mm(3)],
+    });
+    cad.output("part", cad.part("part", body));
+    const document = cad.build();
+
+    const optionsHarness = createKernelHarness({
+      stepExport: strongStepExportCapabilities,
+    });
+    const optionsEvaluated = expectPartResult(
+      await evaluatePartOutputsV7(optionsHarness.kernel, document),
+    );
+    const optionsOutput = optionsEvaluated.output("part");
+    if (optionsOutput.geometry.kind !== "solid") {
+      optionsEvaluated.dispose();
+      throw new Error("Expected a staged solid output");
+    }
+    const originalTypeError = globalThis.TypeError;
+    let poisonedTypeErrorCalls = 0;
+    const poisonedTypeError = function PoisonedTypeError(): never {
+      poisonedTypeErrorCalls += 1;
+      throw new Error("poisoned TypeError invoked");
+    } as unknown as TypeErrorConstructor;
+    const hostileOptions = new Proxy({}, {
+      getOwnPropertyDescriptor() {
+        globalThis.TypeError = poisonedTypeError;
+        throw Object.create(null);
+      },
+    });
+    let optionsThrown: unknown;
+    try {
+      Reflect.apply(
+        optionsOutput.geometry.solid.export,
+        optionsOutput.geometry.solid,
+        ["step", hostileOptions],
+      );
+    } catch (error) {
+      optionsThrown = error;
+    } finally {
+      globalThis.TypeError = originalTypeError;
+      optionsEvaluated.dispose();
+    }
+    expect(optionsThrown).toEqual(
+      expect.objectContaining({
+        message: "Document-v7 runtime intrinsics changed during the operation",
+      }),
+    );
+    expect(poisonedTypeErrorCalls).toBe(0);
+
+    const originalNumberIsFinite = Number.isFinite;
+    let poisonedNumberCalls = 0;
+    const callbackHarness = createKernelHarness({
+      exportHook() {
+        Number.isFinite = () => {
+          poisonedNumberCalls += 1;
+          throw new Error("poisoned Number.isFinite invoked");
+        };
+        throw Object.create(null);
+      },
+    });
+    const callbackEvaluated = expectPartResult(
+      await evaluatePartOutputsV7(callbackHarness.kernel, document),
+    );
+    const callbackOutput = callbackEvaluated.output("part");
+    if (callbackOutput.geometry.kind !== "solid") {
+      callbackEvaluated.dispose();
+      throw new Error("Expected a staged solid output");
+    }
+    let callbackThrown: unknown;
+    try {
+      callbackOutput.geometry.solid.export("step");
+    } catch (error) {
+      callbackThrown = error;
+    } finally {
+      Number.isFinite = originalNumberIsFinite;
+      callbackEvaluated.dispose();
+    }
+    expect(callbackThrown).toEqual(
+      expect.objectContaining({
+        message: "Document-v7 runtime intrinsics changed during the operation",
+      }),
+    );
+    expect(poisonedNumberCalls).toBe(0);
+
+    const domExceptionDescriptor = Object.getOwnPropertyDescriptor(
+      globalThis,
+      "DOMException",
+    );
+    if (domExceptionDescriptor === undefined) {
+      throw new Error("DOMException descriptor is unavailable");
+    }
+    let poisonedDomExceptionCalls = 0;
+    const signalHarness = createKernelHarness({
+      stepExport: strongStepExportCapabilities,
+    });
+    const signalEvaluated = expectPartResult(
+      await evaluatePartOutputsV7(signalHarness.kernel, document),
+    );
+    const signalOutput = signalEvaluated.output("part");
+    if (signalOutput.geometry.kind !== "solid") {
+      signalEvaluated.dispose();
+      throw new Error("Expected a staged solid output");
+    }
+    const controller = new AbortController();
+    controller.abort();
+    Object.defineProperty(globalThis, "DOMException", {
+      ...domExceptionDescriptor,
+      value: function PoisonedDOMException(): never {
+        poisonedDomExceptionCalls += 1;
+        throw new Error("poisoned DOMException invoked");
+      },
+    });
+    let signalThrown: unknown;
+    try {
+      signalOutput.geometry.solid.export("step", {
+        signal: controller.signal,
+      });
+    } catch (error) {
+      signalThrown = error;
+    } finally {
+      Object.defineProperty(
+        globalThis,
+        "DOMException",
+        domExceptionDescriptor,
+      );
+      signalEvaluated.dispose();
+    }
+    expect(signalThrown).toEqual(
+      expect.objectContaining({
+        message: "Document-v7 runtime intrinsics changed during the operation",
+      }),
+    );
+    expect(poisonedDomExceptionCalls).toBe(0);
+  });
 });
 
 describe("native staged document-v7 part evaluation", () => {
+  it("maps single-solid part identity through every output alias", async () => {
+    const cad = stagedBodySetDesignV7("v7-step-metadata");
+    const body = cad.box("body", {
+      size: [mm(2), mm(3), mm(4)],
+    });
+    const authoredPart = cad.part("singlePart", body, {
+      partNumber: "V7-PN",
+      description: "V7 part description",
+    });
+    cad.output("primary", authoredPart);
+    cad.output("alias", authoredPart);
+    const kernel = await createOcctKernel();
+    try {
+      const evaluated = expectPartResult(
+        await evaluatePartOutputsV7(kernel, cad.build()),
+      );
+      try {
+        const primary = evaluated.output("primary");
+        const alias = evaluated.output("alias");
+        expect(primary.geometry.kind).toBe("solid");
+        expect(alias.geometry.kind).toBe("solid");
+        if (
+          primary.geometry.kind !== "solid" ||
+          alias.geometry.kind !== "solid"
+        ) {
+          return;
+        }
+        const primaryStep = primary.geometry.solid.export("step");
+        const aliasStep = alias.geometry.solid.export("step");
+        expect(aliasStep).toEqual(primaryStep);
+        const text = new TextDecoder().decode(primaryStep);
+        expect(text).toContain(
+          "FILE_NAME('v7-step-metadata','1970-01-01T00:00:00'",
+        );
+        expect(text).toMatch(
+          /PRODUCT\('V7-PN',\s*'singlePart','V7 part description'/u,
+        );
+      } finally {
+        evaluated.dispose();
+      }
+    } finally {
+      kernel.dispose();
+    }
+  }, 30_000);
+
   it("evaluates single-solid and multibody parts with Manifold", async () => {
     const cad = stagedBodySetDesignV7("manifold-part-evaluation");
     const fixture = cad.material("fixture", {

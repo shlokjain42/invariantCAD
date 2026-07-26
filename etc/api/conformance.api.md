@@ -104,7 +104,7 @@ interface Diagnostic {
 }
 
 // @public (undocumented)
-type DiagnosticCode = "IR_INVALID" | "REFERENCE_MISSING" | "REFERENCE_KIND_MISMATCH" | "DUPLICATE_ID" | "GRAPH_CYCLE" | "EXPRESSION_INVALID" | "EXPRESSION_DIMENSION_MISMATCH" | "PARAMETER_MISSING" | "PARAMETER_OUT_OF_RANGE" | "PARAMETER_CYCLE" | "MASS_DENSITY_INVALID" | "MASS_DENSITY_MISSING" | "MASS_PROPERTIES_INVALID" | "BOM_PART_NUMBER_MISSING" | "BOM_PART_NUMBER_DUPLICATE" | "BOM_MATERIAL_MISSING" | "BOM_OUTPUT_UNSUPPORTED" | "CONFIGURATION_MISSING" | "SKETCH_SOLVE_FAILED" | "SKETCH_UNDER_CONSTRAINED" | "SKETCH_OVER_CONSTRAINED" | "SKETCH_NO_CLOSED_REGION" | "FEATURE_INVALID" | "BOOLEAN_FAILED" | "EMPTY_RESULT" | "KERNEL_ERROR" | "KERNEL_CAPABILITY_MISSING" | "TOPOLOGY_SELECTOR_INVALID" | "TOPOLOGY_SELECTION_MISSING" | "TOPOLOGY_SELECTION_AMBIGUOUS" | "TOPOLOGY_HISTORY_UNAVAILABLE" | "TOPOLOGY_SIGNATURE_INVALID" | "TOPOLOGY_SIGNATURE_LIMIT_EXCEEDED" | "TOPOLOGY_FINGERPRINT_MISMATCH" | "TOPOLOGY_MATCH_MISSING" | "TOPOLOGY_MATCH_AMBIGUOUS" | "OUTPUT_MISSING" | "EVALUATION_UNSUPPORTED" | "EVALUATION_ABORTED" | "RESOURCE_RESOLVER_MISSING" | "RESOURCE_RESOLUTION_FAILED" | "RESOURCE_INTEGRITY_MISMATCH" | "RESOURCE_LIMIT_EXCEEDED" | "ARTIFACT_CACHE_OPERATION_FAILED" | "ARTIFACT_CACHE_ENTRY_INVALID" | "ARTIFACT_CACHE_LIMIT_EXCEEDED" | "EXPORT_UNSUPPORTED";
+type DiagnosticCode = "IR_INVALID" | "REFERENCE_MISSING" | "REFERENCE_KIND_MISMATCH" | "DUPLICATE_ID" | "GRAPH_CYCLE" | "EXPRESSION_INVALID" | "EXPRESSION_DIMENSION_MISMATCH" | "PARAMETER_MISSING" | "PARAMETER_OUT_OF_RANGE" | "PARAMETER_CYCLE" | "MASS_DENSITY_INVALID" | "MASS_DENSITY_MISSING" | "MASS_PROPERTIES_INVALID" | "BOM_PART_NUMBER_MISSING" | "BOM_PART_NUMBER_DUPLICATE" | "BOM_MATERIAL_MISSING" | "BOM_OUTPUT_UNSUPPORTED" | "CONFIGURATION_MISSING" | "SKETCH_SOLVE_FAILED" | "SKETCH_UNDER_CONSTRAINED" | "SKETCH_OVER_CONSTRAINED" | "SKETCH_NO_CLOSED_REGION" | "FEATURE_INVALID" | "BOOLEAN_FAILED" | "EMPTY_RESULT" | "KERNEL_ERROR" | "KERNEL_CAPABILITY_MISSING" | "TOPOLOGY_SELECTOR_INVALID" | "TOPOLOGY_SELECTION_MISSING" | "TOPOLOGY_SELECTION_AMBIGUOUS" | "TOPOLOGY_HISTORY_UNAVAILABLE" | "TOPOLOGY_SIGNATURE_INVALID" | "TOPOLOGY_SIGNATURE_LIMIT_EXCEEDED" | "TOPOLOGY_FINGERPRINT_MISMATCH" | "TOPOLOGY_MATCH_MISSING" | "TOPOLOGY_MATCH_AMBIGUOUS" | "OUTPUT_MISSING" | "EVALUATION_UNSUPPORTED" | "EVALUATION_ABORTED" | "RESOURCE_RESOLVER_MISSING" | "RESOURCE_RESOLUTION_FAILED" | "RESOURCE_INTEGRITY_MISMATCH" | "RESOURCE_LIMIT_EXCEEDED" | "ARTIFACT_CACHE_OPERATION_FAILED" | "ARTIFACT_CACHE_ENTRY_INVALID" | "ARTIFACT_CACHE_LIMIT_EXCEEDED" | "EXPORT_OPTIONS_INVALID" | "EXPORT_UNSUPPORTED";
 
 // @public (undocumented)
 interface DiagnosticLocation {
@@ -181,8 +181,8 @@ interface GeometryKernel {
     // Warning: (ae-forgotten-export) The symbol "KernelShapeArtifactContext" needs to be exported by the entry point conformance.d.ts
     // Warning: (ae-forgotten-export) The symbol "Awaitable" needs to be exported by the entry point conformance.d.ts
     encodeShapeArtifact?(shape: KernelShape, context: KernelShapeArtifactContext): Awaitable<Uint8Array>;
-    // (undocumented)
-    exportShape?(shape: KernelShape, format: KernelExchangeFormat, context?: KernelFeatureContext): Uint8Array;
+    // Warning: (ae-forgotten-export) The symbol "KernelShapeExportContext" needs to be exported by the entry point conformance.d.ts
+    exportShape?(shape: KernelShape, format: KernelExchangeFormat, context?: KernelShapeExportContext): Uint8Array;
     // Warning: (ae-forgotten-export) The symbol "ResolvedProfile" needs to be exported by the entry point conformance.d.ts
     //
     // (undocumented)
@@ -314,6 +314,9 @@ export const KERNEL_SHAPE_SEMANTIC_OBSERVATION_PROTOCOL_VERSION: 1;
 // @public (undocumented)
 export const KERNEL_SHAPE_SEMANTIC_OBSERVATION_PROTOCOL_VERSION_V2: 2;
 
+// @public
+const KERNEL_STEP_EXPORT_PROTOCOL_VERSION: 1;
+
 // @public (undocumented)
 const KERNEL_TOPOLOGY_KEY: unique symbol;
 
@@ -355,6 +358,8 @@ interface KernelCapabilities {
     readonly representation: KernelRepresentation;
     // Warning: (ae-forgotten-export) The symbol "KernelShapeArtifactCapabilities" needs to be exported by the entry point conformance.d.ts
     readonly shapeArtifacts?: KernelShapeArtifactCapabilities;
+    // Warning: (ae-forgotten-export) The symbol "KernelStepExportCapabilities" needs to be exported by the entry point conformance.d.ts
+    readonly stepExport?: KernelStepExportCapabilities;
     // Warning: (ae-forgotten-export) The symbol "KernelTopologyCapabilities" needs to be exported by the entry point conformance.d.ts
     //
     // (undocumented)
@@ -754,6 +759,12 @@ export interface KernelShapeArtifactWitnessContext {
 // @public (undocumented)
 export type KernelShapeArtifactWitnessV2 = (kernel: GeometryKernel, shape: KernelShape, context: KernelShapeArtifactWitnessContext) => Awaitable<CadResult<KernelShapeArtifactSemanticWitnessV2>>;
 
+// @public
+interface KernelShapeExportContext extends KernelFeatureContext {
+    // Warning: (ae-forgotten-export) The symbol "KernelStepExportOptions" needs to be exported by the entry point conformance.d.ts
+    readonly stepExport?: KernelStepExportOptions;
+}
+
 // @public (undocumented)
 export interface KernelShapeSemanticCurveV1 {
     // (undocumented)
@@ -1145,6 +1156,33 @@ interface KernelShapeStatus {
     readonly message?: string;
     // (undocumented)
     readonly ok: boolean;
+}
+
+// @public
+interface KernelStepExportCapabilities {
+    readonly byteDeterminism: "same-shape-representation-and-metadata";
+    readonly maxMetadataBytes: number;
+    readonly maxOutputBytes: number;
+    // Warning: (ae-forgotten-export) The symbol "KERNEL_STEP_EXPORT_PROTOCOL_VERSION" needs to be exported by the entry point conformance.d.ts
+    readonly protocolVersion: typeof KERNEL_STEP_EXPORT_PROTOCOL_VERSION;
+    readonly schema: "AP214IS";
+}
+
+// @public
+interface KernelStepExportMetadata {
+    readonly fileName: string;
+    readonly productDescription: string;
+    readonly productId: string;
+    readonly productName: string;
+    readonly timestamp: string;
+}
+
+// @public
+interface KernelStepExportOptions {
+    readonly maxOutputBytes?: number;
+    // Warning: (ae-forgotten-export) The symbol "KernelStepExportMetadata" needs to be exported by the entry point conformance.d.ts
+    readonly metadata: KernelStepExportMetadata;
+    readonly protocolVersion: typeof KERNEL_STEP_EXPORT_PROTOCOL_VERSION;
 }
 
 // @public (undocumented)
@@ -1641,8 +1679,8 @@ interface VolumetricMassProperties {
 // Warnings were encountered during analysis:
 //
 // src/conformance.ts:128:9 - (ae-forgotten-export) The symbol "GeometryKernel" needs to be exported by the entry point conformance.d.ts
-// src/core/result.ts:73:7 - (ae-forgotten-export) The symbol "Diagnostic" needs to be exported by the entry point conformance.d.ts
-// src/kernel.ts:152:7 - (ae-forgotten-export) The symbol "KernelDocumentBodyLengthUnit" needs to be exported by the entry point conformance.d.ts
+// src/core/result.ts:74:7 - (ae-forgotten-export) The symbol "Diagnostic" needs to be exported by the entry point conformance.d.ts
+// src/kernel.ts:302:7 - (ae-forgotten-export) The symbol "KernelDocumentBodyLengthUnit" needs to be exported by the entry point conformance.d.ts
 
 // (No @packageDocumentation comment for this package)
 

@@ -43,7 +43,7 @@ See the [evaluator guide](/evaluation/evaluator) for option semantics.
 | `export("stl")` | `Uint8Array` | Binary STL |
 | `export("stl-ascii")` | `string` | ASCII STL |
 | `export("obj")` | `string` | Wavefront OBJ |
-| `export("step")` | `Uint8Array` | Requires native STEP export |
+| `export("step", options?)` | `Uint8Array` | No-options weak native export is published; deterministic options are an unreleased 0.2 strong contract |
 | `export("brep")` | `Uint8Array` | Requires native text BREP export |
 | `export("brep-binary")` | `Uint8Array` | Requires native binary BREP export |
 
@@ -64,8 +64,9 @@ Provides:
 - `billOfMaterials()`: grouped deterministic BOM result
 - `physicalMassProperties()`: placed density-aware aggregate
 
-Exact native STEP/BREP assembly structure is not a separate 0.1 product-data
-model; an aggregate export follows the current evaluated geometry behavior.
+Exact native STEP/BREP assembly structure is not a public product-data model.
+Assembly export remains mesh-only; exact STEP/BREP must be requested
+from an explicitly retained single solid or part leaf.
 
 ## Repository-only staged geometry, products, and datums
 
@@ -499,3 +500,8 @@ evaluated.dispose();
 Most evaluation failures return diagnostics. Direct `output(name)` misuse,
 post-disposal access, and unsupported direct `export()` formats throw. An
 unsupported export uses `CadError`, which carries its structured diagnostics.
+Invalid high-level STEP option structure or metadata likewise throws
+`CadError` with the unreleased 0.2 `EXPORT_OPTIONS_INVALID` code; its
+JSON-Pointer `path` is relative to `StepExportOptions`, not the design
+document. Valid cancellation signals continue to use `AbortError`, and direct
+low-level kernel exports keep their backend validation exceptions.

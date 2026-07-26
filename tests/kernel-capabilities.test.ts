@@ -3,12 +3,14 @@ import {
   COMPOSITE_SWEEP_REFINEMENT_PROTOCOL_VERSION,
   KERNEL_DOCUMENT_BODY_IMPORT_PROTOCOL_VERSION,
   KERNEL_MEASUREMENT_PROTOCOL_VERSION,
+  KERNEL_STEP_EXPORT_PROTOCOL_VERSION,
   createEvaluator,
   createManifoldKernel,
   design,
   inspectKernelCompositeSweepCapabilities,
   inspectKernelDocumentBodyImportCapabilities,
   inspectKernelMeasurementCapabilities,
+  inspectKernelStepExportCapabilities,
   kernelSupports,
   kernelSupportsDocumentBodyImport,
   mm,
@@ -211,6 +213,498 @@ describe("kernel capability negotiation", () => {
         status: "malformed",
         reason: "invalid-genus",
         details: { genus: "object" },
+      }),
+    );
+  });
+
+  it("negotiates deterministic STEP export with an isolated hostile-safe snapshot", () => {
+    const base: KernelCapabilities = {
+      protocolVersion: 1,
+      representation: "brep",
+      exact: true,
+      primitives: [],
+      features: [],
+      nativeImports: [],
+      nativeExports: ["step"],
+    };
+    expect(inspectKernelStepExportCapabilities(base)).toEqual({
+      status: "absent",
+    });
+    expect(
+      inspectKernelStepExportCapabilities({
+        ...base,
+        stepExport: undefined,
+      } as unknown as KernelCapabilities),
+    ).toEqual({ status: "absent" });
+
+    const metadata: {
+      protocolVersion: number;
+      schema: string;
+      byteDeterminism: string;
+      maxOutputBytes: number;
+      maxMetadataBytes: number;
+    } = {
+      protocolVersion: KERNEL_STEP_EXPORT_PROTOCOL_VERSION,
+      schema: "AP214IS",
+      byteDeterminism: "same-shape-representation-and-metadata",
+      maxOutputBytes: 16_777_216,
+      maxMetadataBytes: 4_096,
+    };
+    const valid = inspectKernelStepExportCapabilities({
+      ...base,
+      stepExport: metadata,
+    } as unknown as KernelCapabilities);
+    expect(valid).toEqual({
+      status: "valid",
+      capabilities: {
+        protocolVersion: KERNEL_STEP_EXPORT_PROTOCOL_VERSION,
+        schema: "AP214IS",
+        byteDeterminism: "same-shape-representation-and-metadata",
+        maxOutputBytes: 16_777_216,
+        maxMetadataBytes: 4_096,
+      },
+    });
+    expect(valid.status === "valid" && Object.isFrozen(valid.capabilities)).toBe(
+      true,
+    );
+    metadata.protocolVersion = KERNEL_STEP_EXPORT_PROTOCOL_VERSION + 1;
+    metadata.schema = "AP203";
+    metadata.byteDeterminism = "none";
+    metadata.maxOutputBytes = 1;
+    metadata.maxMetadataBytes = 1;
+    expect(valid).toEqual({
+      status: "valid",
+      capabilities: {
+        protocolVersion: KERNEL_STEP_EXPORT_PROTOCOL_VERSION,
+        schema: "AP214IS",
+        byteDeterminism: "same-shape-representation-and-metadata",
+        maxOutputBytes: 16_777_216,
+        maxMetadataBytes: 4_096,
+      },
+    });
+
+    for (const limit of [1, Number.MAX_SAFE_INTEGER]) {
+      expect(
+        inspectKernelStepExportCapabilities({
+          ...base,
+          stepExport: {
+            protocolVersion: KERNEL_STEP_EXPORT_PROTOCOL_VERSION,
+            schema: "AP214IS",
+            byteDeterminism: "same-shape-representation-and-metadata",
+            maxOutputBytes: limit,
+            maxMetadataBytes: limit,
+          },
+        }),
+      ).toEqual({
+        status: "valid",
+        capabilities: {
+          protocolVersion: KERNEL_STEP_EXPORT_PROTOCOL_VERSION,
+          schema: "AP214IS",
+          byteDeterminism: "same-shape-representation-and-metadata",
+          maxOutputBytes: limit,
+          maxMetadataBytes: limit,
+        },
+      });
+    }
+
+    const malformedCases: readonly {
+      readonly envelope: unknown;
+      readonly reason: string;
+      readonly details?: Readonly<Record<string, unknown>>;
+    }[] = [
+      {
+        envelope: null,
+        reason: "not-object",
+        details: { actualType: "null" },
+      },
+      {
+        envelope: {
+          protocolVersion: KERNEL_STEP_EXPORT_PROTOCOL_VERSION + 1,
+          schema: "AP214IS",
+          byteDeterminism: "same-shape-representation-and-metadata",
+          maxOutputBytes: 1,
+          maxMetadataBytes: 1,
+        },
+        reason: "unsupported-protocol-version",
+      },
+      {
+        envelope: {
+          protocolVersion: KERNEL_STEP_EXPORT_PROTOCOL_VERSION,
+          schema: "AP203",
+          byteDeterminism: "same-shape-representation-and-metadata",
+          maxOutputBytes: 1,
+          maxMetadataBytes: 1,
+        },
+        reason: "invalid-schema",
+        details: { schema: "AP203" },
+      },
+      {
+        envelope: {
+          protocolVersion: KERNEL_STEP_EXPORT_PROTOCOL_VERSION,
+          schema: "AP214IS",
+          byteDeterminism: "geometrically-equivalent",
+          maxOutputBytes: 1,
+          maxMetadataBytes: 1,
+        },
+        reason: "invalid-byte-determinism",
+        details: { byteDeterminism: "geometrically-equivalent" },
+      },
+      {
+        envelope: {
+          protocolVersion: KERNEL_STEP_EXPORT_PROTOCOL_VERSION,
+          schema: "AP214IS",
+          byteDeterminism: "same-shape-representation-and-metadata",
+          maxOutputBytes: 0,
+          maxMetadataBytes: 1,
+        },
+        reason: "invalid-max-output-bytes",
+        details: { maxOutputBytes: 0 },
+      },
+      {
+        envelope: {
+          protocolVersion: KERNEL_STEP_EXPORT_PROTOCOL_VERSION,
+          schema: "AP214IS",
+          byteDeterminism: "same-shape-representation-and-metadata",
+          maxOutputBytes: 1,
+          maxMetadataBytes: Number.MAX_SAFE_INTEGER + 1,
+        },
+        reason: "invalid-max-metadata-bytes",
+        details: { maxMetadataBytes: Number.MAX_SAFE_INTEGER + 1 },
+      },
+    ];
+    for (const testCase of malformedCases) {
+      expect(
+        inspectKernelStepExportCapabilities({
+          ...base,
+          stepExport: testCase.envelope,
+        } as unknown as KernelCapabilities),
+      ).toEqual(
+        expect.objectContaining({
+          status: "malformed",
+          reason: testCase.reason,
+          ...(testCase.details === undefined
+            ? {}
+            : { details: expect.objectContaining(testCase.details) }),
+        }),
+      );
+    }
+
+    let getterInvocations = 0;
+    const outerAccessor = { ...base } as KernelCapabilities;
+    Object.defineProperty(outerAccessor, "stepExport", {
+      get() {
+        getterInvocations += 1;
+        throw new Error("must not run");
+      },
+    });
+    expect(inspectKernelStepExportCapabilities(outerAccessor)).toEqual(
+      expect.objectContaining({
+        status: "malformed",
+        reason: "uninspectable-metadata",
+        details: { property: "stepExport" },
+      }),
+    );
+    expect(getterInvocations).toBe(0);
+
+    for (const property of [
+      "protocolVersion",
+      "schema",
+      "byteDeterminism",
+      "maxOutputBytes",
+      "maxMetadataBytes",
+    ] as const) {
+      const accessorEnvelope = {
+        protocolVersion: KERNEL_STEP_EXPORT_PROTOCOL_VERSION,
+        schema: "AP214IS",
+        byteDeterminism: "same-shape-representation-and-metadata",
+        maxOutputBytes: 1,
+        maxMetadataBytes: 1,
+      };
+      Object.defineProperty(accessorEnvelope, property, {
+        enumerable: true,
+        get() {
+          getterInvocations += 1;
+          throw new Error("must not run");
+        },
+      });
+      expect(
+        inspectKernelStepExportCapabilities({
+          ...base,
+          stepExport: accessorEnvelope,
+        } as unknown as KernelCapabilities),
+      ).toEqual(
+        expect.objectContaining({
+          status: "malformed",
+          reason: "uninspectable-metadata",
+          details: { property },
+        }),
+      );
+      expect(getterInvocations).toBe(0);
+    }
+
+    const hostileOuter = new Proxy({} as KernelCapabilities, {
+      getOwnPropertyDescriptor() {
+        throw Object.create(null);
+      },
+    });
+    expect(() =>
+      inspectKernelStepExportCapabilities(hostileOuter),
+    ).not.toThrow();
+    expect(inspectKernelStepExportCapabilities(hostileOuter)).toEqual(
+      expect.objectContaining({
+        status: "malformed",
+        reason: "uninspectable-metadata",
+      }),
+    );
+
+    const hostileEnvelope = new Proxy(
+      {},
+      {
+        getOwnPropertyDescriptor() {
+          throw Object.create(null);
+        },
+      },
+    );
+    expect(() =>
+      inspectKernelStepExportCapabilities({
+        ...base,
+        stepExport: hostileEnvelope as never,
+      }),
+    ).not.toThrow();
+    expect(
+      inspectKernelStepExportCapabilities({
+        ...base,
+        stepExport: hostileEnvelope as never,
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        status: "malformed",
+        reason: "uninspectable-metadata",
+      }),
+    );
+
+    const revokedOuter = Proxy.revocable({} as KernelCapabilities, {});
+    revokedOuter.revoke();
+    expect(() =>
+      inspectKernelStepExportCapabilities(revokedOuter.proxy),
+    ).not.toThrow();
+    expect(inspectKernelStepExportCapabilities(revokedOuter.proxy)).toEqual(
+      expect.objectContaining({
+        status: "malformed",
+        reason: "uninspectable-metadata",
+      }),
+    );
+
+    const revokedEnvelope = Proxy.revocable({}, {});
+    const revokedEnvelopeCapabilities = {
+      ...base,
+      stepExport: revokedEnvelope.proxy,
+    } as unknown as KernelCapabilities;
+    revokedEnvelope.revoke();
+    expect(() =>
+      inspectKernelStepExportCapabilities(revokedEnvelopeCapabilities),
+    ).not.toThrow();
+    expect(
+      inspectKernelStepExportCapabilities(revokedEnvelopeCapabilities),
+    ).toEqual(
+      expect.objectContaining({
+        status: "malformed",
+        reason: "uninspectable-metadata",
+      }),
+    );
+  });
+
+  it("retains the STEP inspection boundary after ambient intrinsic mutation", () => {
+    const defineProperty = Object.defineProperty;
+    const originalGetOwnPropertyDescriptor =
+      Object.getOwnPropertyDescriptor;
+    const originalArrayIsArray = Array.isArray;
+    const originalNumberIsSafeInteger = Number.isSafeInteger;
+    const originalObjectFreeze = Object.freeze;
+    let getterInvocations = 0;
+    const accessorEnvelope = {
+      schema: "AP214IS",
+      byteDeterminism: "same-shape-representation-and-metadata",
+      maxOutputBytes: 1_048_576,
+      maxMetadataBytes: 1_024,
+    };
+    defineProperty(accessorEnvelope, "protocolVersion", {
+      enumerable: true,
+      get() {
+        getterInvocations += 1;
+        return KERNEL_STEP_EXPORT_PROTOCOL_VERSION;
+      },
+    });
+    const base = {
+      protocolVersion: 1,
+      representation: "brep",
+      exact: true,
+      primitives: [],
+      features: [],
+      nativeImports: [],
+      nativeExports: ["step"],
+    } as const;
+    let accessorInspection:
+      | ReturnType<typeof inspectKernelStepExportCapabilities>
+      | undefined;
+    let validInspection:
+      | ReturnType<typeof inspectKernelStepExportCapabilities>
+      | undefined;
+
+    try {
+      defineProperty(Object, "getOwnPropertyDescriptor", {
+        configurable: true,
+        writable: true,
+        value(target: object, property: PropertyKey) {
+          const value = (target as Record<PropertyKey, unknown>)[property];
+          return {
+            configurable: true,
+            enumerable: true,
+            writable: true,
+            value,
+          };
+        },
+      });
+      defineProperty(Array, "isArray", {
+        configurable: true,
+        writable: true,
+        value() {
+          throw new Error("mutated Array.isArray must not run");
+        },
+      });
+      defineProperty(Number, "isSafeInteger", {
+        configurable: true,
+        writable: true,
+        value() {
+          return false;
+        },
+      });
+      defineProperty(Object, "freeze", {
+        configurable: true,
+        writable: true,
+        value<T>(value: T): T {
+          return value;
+        },
+      });
+
+      accessorInspection = inspectKernelStepExportCapabilities({
+        ...base,
+        stepExport: accessorEnvelope as never,
+      });
+      validInspection = inspectKernelStepExportCapabilities({
+        ...base,
+        stepExport: {
+          protocolVersion: KERNEL_STEP_EXPORT_PROTOCOL_VERSION,
+          schema: "AP214IS",
+          byteDeterminism:
+            "same-shape-representation-and-metadata",
+          maxOutputBytes: 1_048_576,
+          maxMetadataBytes: 1_024,
+        },
+      });
+    } finally {
+      defineProperty(Object, "getOwnPropertyDescriptor", {
+        configurable: true,
+        writable: true,
+        value: originalGetOwnPropertyDescriptor,
+      });
+      defineProperty(Array, "isArray", {
+        configurable: true,
+        writable: true,
+        value: originalArrayIsArray,
+      });
+      defineProperty(Number, "isSafeInteger", {
+        configurable: true,
+        writable: true,
+        value: originalNumberIsSafeInteger,
+      });
+      defineProperty(Object, "freeze", {
+        configurable: true,
+        writable: true,
+        value: originalObjectFreeze,
+      });
+    }
+
+    expect(getterInvocations).toBe(0);
+    expect(accessorInspection).toEqual(
+      expect.objectContaining({
+        status: "malformed",
+        reason: "uninspectable-metadata",
+        details: { property: "protocolVersion" },
+      }),
+    );
+    expect(validInspection).toEqual(
+      expect.objectContaining({ status: "valid" }),
+    );
+    expect(
+      validInspection?.status === "valid" &&
+        Object.isFrozen(validInspection.capabilities),
+    ).toBe(true);
+  });
+
+  it("does not confuse inherited descriptor fields with data properties", () => {
+    const defineProperty = Object.defineProperty;
+    const inheritedValueDescriptor =
+      Object.getOwnPropertyDescriptor(Object.prototype, "value");
+    const deleteProperty = Reflect.deleteProperty;
+    let getterInvocations = 0;
+    const accessorEnvelope = {};
+    const values = {
+      protocolVersion: KERNEL_STEP_EXPORT_PROTOCOL_VERSION,
+      schema: "AP214IS",
+      byteDeterminism: "same-shape-representation-and-metadata",
+      maxOutputBytes: 1_048_576,
+      maxMetadataBytes: 1_024,
+    } as const;
+    for (const property of Object.keys(values) as (keyof typeof values)[]) {
+      defineProperty(accessorEnvelope, property, {
+        enumerable: true,
+        get() {
+          getterInvocations += 1;
+          return values[property];
+        },
+      });
+    }
+    let inspection:
+      | ReturnType<typeof inspectKernelStepExportCapabilities>
+      | undefined;
+    try {
+      defineProperty(Object.prototype, "value", {
+        configurable: true,
+        get(this: PropertyDescriptor) {
+          return typeof this.get === "function"
+            ? this.get()
+            : undefined;
+        },
+      });
+      inspection = inspectKernelStepExportCapabilities({
+        protocolVersion: 1,
+        representation: "brep",
+        exact: true,
+        primitives: [],
+        features: [],
+        nativeImports: [],
+        nativeExports: ["step"],
+        stepExport: accessorEnvelope as never,
+      });
+    } finally {
+      if (inheritedValueDescriptor === undefined) {
+        deleteProperty(Object.prototype, "value");
+      } else {
+        defineProperty(
+          Object.prototype,
+          "value",
+          inheritedValueDescriptor,
+        );
+      }
+    }
+
+    expect(getterInvocations).toBe(0);
+    expect(inspection).toEqual(
+      expect.objectContaining({
+        status: "malformed",
+        reason: "uninspectable-metadata",
+        details: { property: "protocolVersion" },
       }),
     );
   });

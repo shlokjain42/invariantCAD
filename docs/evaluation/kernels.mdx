@@ -87,6 +87,7 @@ feature, it checks:
 - topology evidence surfaces and signature fingerprint
 - exact indexed topology evolution when a stronger contract is required
 - versioned measurement semantics such as exact or unsupported genus
+- deterministic single-shape STEP metadata, bounds, and byte scope
 
 Malformed metadata fails separately from absent support. A kernel cannot obtain
 behavior merely by defining an unadvertised method.
@@ -94,6 +95,15 @@ behavior merely by defining an unadvertised method.
 Use `inspectKernelMeasurementCapabilities(...)` or
 `kernelSupports(capabilities, "measurement", "genus")` for discovery. A numeric
 measurement is exact for the backend representation; `null` means unsupported.
+The following strong STEP envelope is implemented for the unreleased 0.2 line,
+not the current 0.1.1 npm package.
+Use `inspectKernelStepExportCapabilities(...)` for the optional strong STEP
+envelope. `nativeExports` containing `"step"` promises only that bytes can be
+written. Calling `output.export("step")` without a second argument remains
+compatible with weak kernels; supporting kernels use their deterministic
+defaults. Passing any second argument, including `{}`, requires a valid
+`stepExport` envelope or throws `CadError` with
+`KERNEL_CAPABILITY_MISSING`.
 
 `nativeImports` is the weak exchange declaration. Document-backed imported
 bodies require the separate versioned `documentBodyImport` envelope and a
@@ -117,6 +127,7 @@ feature lineage, or containment of an untrusted native parser.
 - A B-Rep kernel is not automatically exact for every authored feature.
 - Construction support does not imply complete topology history.
 - STEP/BREP exchange does not imply safe backend-owned shape artifact caching.
+- Native STEP export does not imply deterministic metadata or byte equality.
 - Weak native import does not imply the strong document-body import contract.
 - A topology snapshot does not imply persistent signature support.
 - Successful tessellation does not make mesh coordinates analytically exact.
