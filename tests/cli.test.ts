@@ -15,6 +15,14 @@ import {
 
 const projectRoot = fileURLToPath(new URL("..", import.meta.url));
 
+function invokeCli(arguments_: readonly string[]) {
+  return spawnSync(
+    process.execPath,
+    ["--import", "tsx", "src/cli.ts", ...arguments_],
+    { cwd: projectRoot, encoding: "utf8" },
+  );
+}
+
 describe("CLI", () => {
   it("prints help successfully when --help is the first argument", () => {
     const result = spawnSync(
@@ -28,7 +36,260 @@ describe("CLI", () => {
     expect(result.stdout).toContain("InvariantCAD CLI");
     expect(result.stdout).toContain("invariantcad bom");
     expect(result.stdout).toContain("invariantcad export");
+
+    const commandHelp = invokeCli(["inspect", "--help"]);
+    expect(commandHelp.status).toBe(0);
+    expect(commandHelp.stderr).toBe("");
+    expect(commandHelp.stdout).toContain("InvariantCAD CLI");
   });
+
+  it("rejects unknown, stray, inapplicable, missing, and duplicate options before document I/O", () => {
+    const missingDocument = join(
+      tmpdir(),
+      `invariantcad-cli-missing-${process.pid}.json`,
+    );
+    const cases = [
+      {
+        arguments: ["not-a-command", missingDocument],
+        option: "Unknown command",
+      },
+      {
+        arguments: ["--help", "--definitely-not-a-real-option"],
+        option: "--definitely-not-a-real-option",
+      },
+      {
+        arguments: [
+          "validate",
+          missingDocument,
+          "--definitely-not-a-real-option",
+        ],
+        option: "--definitely-not-a-real-option",
+      },
+      {
+        arguments: ["validate", missingDocument, "stray-document.json"],
+        option: "stray-document.json",
+      },
+      {
+        arguments: ["validate", missingDocument, "--kernel", "manifold"],
+        option: "--kernel",
+      },
+      {
+        arguments: [
+          "validate",
+          missingDocument,
+          "--parameter",
+          "width=5",
+        ],
+        option: "--parameter",
+      },
+      {
+        arguments: ["inspect", missingDocument, "--to", "ignored.stl"],
+        option: "--to",
+      },
+      {
+        arguments: ["bom", missingDocument, "--format", "obj"],
+        option: "--format",
+      },
+      {
+        arguments: ["inspect", missingDocument, "--configuration"],
+        option: "--configuration",
+      },
+      {
+        arguments: ["inspect", missingDocument, "--kernel"],
+        option: "--kernel",
+      },
+      {
+        arguments: ["inspect", missingDocument, "--parameters"],
+        option: "--parameters",
+      },
+      {
+        arguments: ["inspect", missingDocument, "--output"],
+        option: "--output",
+      },
+      {
+        arguments: ["inspect", missingDocument, "--parameter"],
+        option: "--parameter",
+      },
+      {
+        arguments: ["bom", missingDocument, "--output"],
+        option: "--output",
+      },
+      {
+        arguments: ["export", missingDocument, "--to"],
+        option: "--to",
+      },
+      {
+        arguments: [
+          "export",
+          missingDocument,
+          "--to",
+          "model.stl",
+          "--format",
+        ],
+        option: "--format",
+      },
+      {
+        arguments: [
+          "inspect",
+          missingDocument,
+          "--kernel",
+          "manifold",
+          "--kernel=occt",
+        ],
+        option: "--kernel",
+      },
+      {
+        arguments: ["inspect", missingDocument, "--help", "--help"],
+        option: "--help",
+      },
+      {
+        arguments: ["inspect", missingDocument, "--configuration="],
+        option: "--configuration",
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const result = invokeCli(testCase.arguments);
+
+      expect(result.status, testCase.arguments.join(" ")).toBe(2);
+      expect(result.stdout, testCase.arguments.join(" ")).toBe("");
+      expect(result.stderr, testCase.arguments.join(" ")).toContain(
+        testCase.option,
+      );
+      expect(result.stderr, testCase.arguments.join(" ")).toContain("Usage:");
+      expect(result.stderr, testCase.arguments.join(" ")).not.toContain(
+        "ENOENT",
+      );
+    }
+  }, 20_000);
+
+  it("rejects malformed or ambiguous inline parameters before document I/O", () => {
+    const missingDocument = join(
+      tmpdir(),
+      `invariantcad-cli-missing-parameters-${process.pid}.json`,
+    );
+    const malformed = [
+      ["inspect", missingDocument, "--parameter", "width"],
+      ["inspect", missingDocument, "--parameter", "=5"],
+      ["inspect", missingDocument, "--parameter", "1width=5"],
+      ["inspect", missingDocument, "--parameter", "width="],
+      ["inspect", missingDocument, "--parameter", "width=NaN"],
+      ["inspect", missingDocument, "--parameter", "width=Infinity"],
+      ["inspect", missingDocument, "--parameter", "width=0x10"],
+      ["inspect", missingDocument, "--parameter", "width=+5"],
+      ["inspect", missingDocument, "--parameter", "width=.5"],
+      ["inspect", missingDocument, "--parameter", "width=5mm"],
+      [
+        "inspect",
+        missingDocument,
+        "--parameter",
+        "width=5",
+        "--parameter=width=6",
+      ],
+      [
+        "inspect",
+        missingDocument,
+        "--parameters",
+        "values.json",
+        "--parameter",
+        "width=5",
+      ],
+    ] as const;
+
+    for (const arguments_ of malformed) {
+      const result = invokeCli(arguments_);
+
+      expect(result.status, arguments_.join(" ")).toBe(2);
+      expect(result.stdout, arguments_.join(" ")).toBe("");
+      expect(result.stderr, arguments_.join(" ")).toContain("parameter");
+      expect(result.stderr, arguments_.join(" ")).toContain("Usage:");
+      expect(result.stderr, arguments_.join(" ")).not.toContain("ENOENT");
+    }
+  }, 15_000);
+
+  it("applies repeatable finite inline parameters above named configurations", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "invariantcad-cli-"));
+    try {
+      const cad = design("cli-inline-parameters");
+      const width = cad.parameter.length("width", mm(2));
+      const height = cad.parameter.length("height", mm(3));
+      const offset = cad.parameter.length("offset", mm(0));
+      const solid = cad.box("solid", {
+        size: vec3(width, height, mm(4)),
+      });
+      const moved = cad.transform("moved", solid, [
+        tf.translate(vec3(offset, mm(0), mm(0))),
+      ]);
+      cad.configuration("configured", (configuration) => {
+        configuration.parameter(width, mm(5));
+        configuration.parameter(height, mm(6));
+        configuration.parameter(offset, mm(10));
+      });
+      cad.output("moved", moved);
+
+      const documentPath = join(directory, "model.json");
+      await writeFile(documentPath, stringifyDocument(cad.build()));
+
+      const result = invokeCli([
+        "inspect",
+        documentPath,
+        "--configuration",
+        "configured",
+        "--output",
+        "moved",
+        "--parameter",
+        "width=7.5",
+        "--parameter=height=8e0",
+        "--parameter",
+        "offset=-1.25e1",
+      ]);
+
+      expect(result.status).toBe(0);
+      expect(result.stderr).toBe("");
+      const report = JSON.parse(result.stdout) as {
+        readonly moved: {
+          readonly volume: number;
+          readonly boundingBox: {
+            readonly min: readonly number[];
+            readonly max: readonly number[];
+          };
+        };
+      };
+      expect(report.moved.volume).toBeCloseTo(240, 10);
+      expect(report.moved.boundingBox.min).toEqual([-12.5, 0, 0]);
+      expect(report.moved.boundingBox.max).toEqual([-5, 8, 4]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it("preserves evaluator diagnostics for syntactically valid unknown inline parameters", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "invariantcad-cli-"));
+    try {
+      const cad = design("cli-unknown-inline-parameter");
+      const width = cad.parameter.length("width", mm(2));
+      cad.output(
+        "solid",
+        cad.box("solid", { size: vec3(width, mm(3), mm(4)) }),
+      );
+      const documentPath = join(directory, "model.json");
+      await writeFile(documentPath, stringifyDocument(cad.build()));
+
+      const result = invokeCli([
+        "inspect",
+        documentPath,
+        "--parameter",
+        "missing=5",
+      ]);
+
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain("PARAMETER_MISSING");
+      expect(result.stderr).toContain("Unknown parameter override 'missing'");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, 15_000);
 
   it("rolls up a nested material-backed assembly with parameter overrides", async () => {
     const directory = await mkdtemp(join(tmpdir(), "invariantcad-cli-"));
@@ -300,7 +561,8 @@ describe("CLI", () => {
         );
         expect(result.status).toBe(2);
         expect(result.stdout).toBe("");
-        expect(result.stderr).toContain("--configuration requires <id>");
+        expect(result.stderr).toContain("--configuration");
+        expect(result.stderr).toContain("requires a value");
       }
 
       const unknown = spawnSync(

@@ -84,6 +84,16 @@ function run(command, arguments_, cwd, options = {}) {
   return result.stdout;
 }
 
+function runResult(command, arguments_, cwd) {
+  const result = spawnSync(command, arguments_, {
+    cwd,
+    encoding: "utf8",
+    maxBuffer: 10 * 1024 * 1024,
+  });
+  if (result.error) throw result.error;
+  return result;
+}
+
 const consumer = await mkdtemp(join(tmpdir(), "invariantcad-package-"));
 try {
   await writeFile(
@@ -290,7 +300,9 @@ try {
       'if (!migratedDocument.ok || migratedDocument.value.version !== 6) throw new Error("Packed v1-to-v6 migration failed");',
       "",
       'const cad = design("package-smoke");',
-      'const solid = cad.box("solid", { size: vec3(mm(2), mm(3), mm(4)) });',
+      'const cliWidth = cad.parameter.length("cli-width", mm(2));',
+      'const cliHeight = cad.parameter.length("cli-height", mm(3));',
+      'const solid = cad.box("solid", { size: vec3(cliWidth, cliHeight, mm(4)) });',
       'const steel = cad.material("test-steel", { name: "Test steel", massDensity: kgPerCubicMeter(7850) });',
       'const part = cad.part("part", solid, { partNumber: "P-001", materialRef: steel });',
       'const assembly = cad.assembly("assembly", (instances) => { instances.instance("first", part); instances.instance("second", part, { placement: [tf.translate(vec3(mm(10), mm(0), mm(0)))] }); });',
@@ -1503,6 +1515,39 @@ try {
     process.platform === "win32" ? "invariantcad.cmd" : "invariantcad",
   );
   run(bin, ["--help"], consumer);
+  for (const invalidArguments of [
+    [
+      "validate",
+      "missing-cli-document.invariantcad.json",
+      "--definitely-not-a-real-option",
+    ],
+    [
+      "validate",
+      "missing-cli-document.invariantcad.json",
+      "stray-document.json",
+    ],
+    [
+      "inspect",
+      "missing-cli-document.invariantcad.json",
+      "--parameters",
+      "missing-parameters.json",
+      "--parameter",
+      "cli-width=5",
+    ],
+  ]) {
+    const invalidResult = runResult(bin, invalidArguments, consumer);
+    if (
+      invalidResult.status !== 2 ||
+      invalidResult.stdout !== "" ||
+      !invalidResult.stderr.includes("Usage:") ||
+      invalidResult.stderr.includes("ENOENT")
+    ) {
+      throw new Error(
+        "Installed CLI did not reject malformed arguments before document I/O: " +
+          invalidArguments.join(" "),
+      );
+    }
+  }
   run(bin, ["validate", "model.invariantcad.json"], consumer);
   run(bin, ["validate", "model-mass.invariantcad.json"], consumer);
   run(bin, ["validate", "model-chamfer.invariantcad.json"], consumer);
@@ -1520,6 +1565,25 @@ try {
       printOutput: false,
     }),
   );
+  const inlineParameterInspection = JSON.parse(
+    run(
+      bin,
+      [
+        "inspect",
+        "model-mass.invariantcad.json",
+        "--output",
+        "solid",
+        "--parameter",
+        "cli-width=5",
+        "--parameter=cli-height=6e0",
+      ],
+      consumer,
+      { printOutput: false },
+    ),
+  );
+  if (Math.abs(inlineParameterInspection.solid.volume - 120) > 1e-7) {
+    throw new Error("Installed CLI ignored repeatable inline parameters");
+  }
   if (
     massInspection.solid.principalInertia.moments.join(",") !== "26,40,50" ||
     Math.abs(massInspection.part.physicalMassProperties.mass - 0.0001884) >

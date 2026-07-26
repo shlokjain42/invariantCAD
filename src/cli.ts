@@ -15,36 +15,189 @@ import {
   worldRadiiOfGyration,
   type PhysicalMassProperties,
 } from "./mass-properties.js";
+import { parameterId } from "./core/ids.js";
 import { parseDocument } from "./serialization.js";
 import type { Diagnostic } from "./core/result.js";
 
+type CliCommand = "validate" | "inspect" | "bom" | "export";
+type CliValueOption =
+  | "configuration"
+  | "kernel"
+  | "parameters"
+  | "parameter"
+  | "output"
+  | "to"
+  | "format";
+
 interface ParsedArguments {
-  readonly command: string | undefined;
-  readonly positional: readonly string[];
-  readonly flags: Readonly<Record<string, string | true>>;
+  readonly command: CliCommand;
+  readonly documentPath: string;
+  readonly options: ReadonlyMap<CliValueOption, readonly string[]>;
 }
 
-function parseArguments(values: readonly string[]): ParsedArguments {
-  const [command, ...rest] = values;
+type ParsedArgumentsResult =
+  | { readonly ok: true; readonly help: true }
+  | { readonly ok: true; readonly help: false; readonly value: ParsedArguments }
+  | { readonly ok: false; readonly message: string };
+
+const COMMAND_OPTIONS: Readonly<
+  Record<CliCommand, readonly CliValueOption[]>
+> = {
+  validate: [],
+  inspect: ["configuration", "kernel", "parameters", "parameter", "output"],
+  bom: ["configuration", "kernel", "parameters", "parameter", "output"],
+  export: [
+    "configuration",
+    "kernel",
+    "parameters",
+    "parameter",
+    "output",
+    "to",
+    "format",
+  ],
+};
+
+const ALL_VALUE_OPTIONS: readonly CliValueOption[] = [
+  "configuration",
+  "kernel",
+  "parameters",
+  "parameter",
+  "output",
+  "to",
+  "format",
+];
+
+function isCommand(value: string): value is CliCommand {
+  return (
+    value === "validate" ||
+    value === "inspect" ||
+    value === "bom" ||
+    value === "export"
+  );
+}
+
+function isValueOption(value: string): value is CliValueOption {
+  return ALL_VALUE_OPTIONS.includes(value as CliValueOption);
+}
+
+function parseArguments(values: readonly string[]): ParsedArgumentsResult {
+  const command = values[0];
+  if (command === undefined) {
+    return { ok: true, help: true };
+  }
+  if (command === "--help" || command === "-h") {
+    return values.length === 1
+      ? { ok: true, help: true }
+      : {
+          ok: false,
+          message: `Unexpected argument '${values[1]}' after '${command}'`,
+        };
+  }
+  if (!isCommand(command)) {
+    return {
+      ok: false,
+      message: `Unknown command '${command}'`,
+    };
+  }
+
   const positional: string[] = [];
-  const flags: Record<string, string | true> = {};
-  for (let index = 0; index < rest.length; index += 1) {
-    const value = rest[index]!;
-    if (!value.startsWith("--")) {
+  const options = new Map<CliValueOption, string[]>();
+  let help = false;
+  let optionsEnded = false;
+  for (let index = 1; index < values.length; index += 1) {
+    const value = values[index]!;
+    if (!optionsEnded && value === "--") {
+      optionsEnded = true;
+      continue;
+    }
+    if (!optionsEnded && (value === "--help" || value === "-h")) {
+      if (help) {
+        return { ok: false, message: "Option '--help' may only be supplied once" };
+      }
+      help = true;
+      continue;
+    }
+    if (!optionsEnded && value.startsWith("-") && !value.startsWith("--")) {
+      return { ok: false, message: `Unknown option '${value}'` };
+    }
+    if (optionsEnded || !value.startsWith("--")) {
       positional.push(value);
       continue;
     }
-    const [rawName, inline] = value.slice(2).split("=", 2);
-    if (inline !== undefined) {
-      flags[rawName!] = inline;
-    } else if (rest[index + 1] !== undefined && !rest[index + 1]!.startsWith("--")) {
-      flags[rawName!] = rest[index + 1]!;
-      index += 1;
-    } else {
-      flags[rawName!] = true;
+
+    const equalsIndex = value.indexOf("=");
+    const rawName = value.slice(
+      2,
+      equalsIndex === -1 ? undefined : equalsIndex,
+    );
+    if (!isValueOption(rawName)) {
+      return {
+        ok: false,
+        message: `Unknown option '--${rawName}'`,
+      };
     }
+    if (!COMMAND_OPTIONS[command].includes(rawName)) {
+      return {
+        ok: false,
+        message: `Option '--${rawName}' is not valid for '${command}'`,
+      };
+    }
+
+    let optionValue: string;
+    if (equalsIndex !== -1) {
+      optionValue = value.slice(equalsIndex + 1);
+    } else {
+      const next = values[index + 1];
+      if (next === undefined || next === "--" || next.startsWith("-")) {
+        return {
+          ok: false,
+          message: `Option '--${rawName}' requires a value`,
+        };
+      }
+      optionValue = next;
+      index += 1;
+    }
+    if (optionValue.length === 0) {
+      return {
+        ok: false,
+        message: `Option '--${rawName}' requires a non-empty value`,
+      };
+    }
+
+    const prior = options.get(rawName);
+    if (prior !== undefined && rawName !== "parameter") {
+      return {
+        ok: false,
+        message: `Option '--${rawName}' may only be supplied once`,
+      };
+    }
+    options.set(rawName, [...(prior ?? []), optionValue]);
   }
-  return { command, positional, flags };
+
+  if (positional.length > 1) {
+    return {
+      ok: false,
+      message: `Unexpected positional argument '${positional[1]}'`,
+    };
+  }
+  if (help) {
+    return { ok: true, help: true };
+  }
+  if (positional.length === 0) {
+    return {
+      ok: false,
+      message: `Command '${command}' requires one document path`,
+    };
+  }
+  return {
+    ok: true,
+    help: false,
+    value: {
+      command,
+      documentPath: positional[0]!,
+      options,
+    },
+  };
 }
 
 function usage(): string {
@@ -52,10 +205,29 @@ function usage(): string {
 
 Usage:
   invariantcad validate <document.json>
-  invariantcad inspect <document.json> [--configuration id] [--kernel manifold|occt] [--parameters values.json]
-  invariantcad bom <document.json> --output name [--configuration id] [--kernel manifold|occt] [--parameters values.json]
-  invariantcad export <document.json> --to model.stl [--configuration id] [--kernel manifold|occt] [--output name] [--format stl|stl-ascii|obj|step|brep|brep-binary] [--parameters values.json]
+  invariantcad inspect <document.json> [--output name] [--configuration id] [--kernel manifold|occt] [--parameters values.json | --parameter name=value ...]
+  invariantcad bom <document.json> --output name [--configuration id] [--kernel manifold|occt] [--parameters values.json | --parameter name=value ...]
+  invariantcad export <document.json> --to model.stl [--configuration id] [--kernel manifold|occt] [--output name] [--format stl|stl-ascii|obj|step|brep|brep-binary] [--parameters values.json | --parameter name=value ...]
 `;
+}
+
+function usageError(message: string): number {
+  process.stderr.write(`${message}\n${usage()}`);
+  return 2;
+}
+
+function option(
+  arguments_: ParsedArguments,
+  name: CliValueOption,
+): string | undefined {
+  return arguments_.options.get(name)?.[0];
+}
+
+function optionValues(
+  arguments_: ParsedArguments,
+  name: CliValueOption,
+): readonly string[] {
+  return arguments_.options.get(name) ?? [];
 }
 
 function formatDiagnostics(diagnostics: readonly Diagnostic[]): string {
@@ -67,13 +239,74 @@ function formatDiagnostics(diagnostics: readonly Diagnostic[]): string {
     .join("\n");
 }
 
-async function loadParameters(path: string | true | undefined): Promise<Record<string, number>> {
-  if (typeof path !== "string") return {};
+type InlineParametersResult =
+  | {
+      readonly ok: true;
+      readonly value: Readonly<Record<string, number>>;
+    }
+  | { readonly ok: false; readonly message: string };
+
+function parseInlineParameters(
+  assignments: readonly string[],
+): InlineParametersResult {
+  const output = Object.create(null) as Record<string, number>;
+  for (const assignment of assignments) {
+    const equalsIndex = assignment.indexOf("=");
+    if (equalsIndex <= 0 || equalsIndex === assignment.length - 1) {
+      return {
+        ok: false,
+        message: `Invalid --parameter '${assignment}'; expected name=value`,
+      };
+    }
+    const name = assignment.slice(0, equalsIndex);
+    try {
+      parameterId(name);
+    } catch (error: unknown) {
+      return {
+        ok: false,
+        message:
+          error instanceof Error
+            ? error.message
+            : `Parameter ID '${name}' is invalid`,
+      };
+    }
+    if (Object.hasOwn(output, name)) {
+      return {
+        ok: false,
+        message: `Parameter '${name}' may only be overridden once`,
+      };
+    }
+    const rawValue = assignment.slice(equalsIndex + 1);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(rawValue) as unknown;
+    } catch {
+      return {
+        ok: false,
+        message: `Parameter '${name}' must use finite JSON-number syntax`,
+      };
+    }
+    if (typeof parsed !== "number" || !Number.isFinite(parsed)) {
+      return {
+        ok: false,
+        message: `Parameter '${name}' must use finite JSON-number syntax`,
+      };
+    }
+    output[name] = parsed;
+  }
+  return { ok: true, value: output };
+}
+
+async function loadParameters(
+  path: string | undefined,
+  inline: Readonly<Record<string, number>>,
+): Promise<Record<string, number>> {
+  if (path === undefined) return { ...inline };
   const value: unknown = JSON.parse(await readFile(path, "utf8"));
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new TypeError("Parameter file must contain a JSON object");
   }
-  const output: Record<string, number> = {};
+  const output = Object.create(null) as Record<string, number>;
   for (const [name, parameter] of Object.entries(value)) {
     if (typeof parameter !== "number" || !Number.isFinite(parameter)) {
       throw new TypeError(`Parameter '${name}' must be a finite number in base units`);
@@ -83,8 +316,8 @@ async function loadParameters(path: string | true | undefined): Promise<Record<s
   return output;
 }
 
-function inferFormat(path: string, explicit?: string | true): ShapeExportFormat {
-  if (typeof explicit === "string") {
+function inferFormat(path: string, explicit?: string): ShapeExportFormat {
+  if (explicit !== undefined) {
     if (
       explicit === "stl" ||
       explicit === "stl-ascii" ||
@@ -149,22 +382,58 @@ function measurements(output: EvaluatedOutput): object {
 }
 
 export async function runCli(argv = process.argv.slice(2)): Promise<number> {
-  const args = parseArguments(argv);
-  if (
-    args.command === undefined ||
-    args.command === "--help" ||
-    args.command === "-h" ||
-    args.flags.help === true
-  ) {
+  const parsedArguments = parseArguments(argv);
+  if (!parsedArguments.ok) {
+    return usageError(parsedArguments.message);
+  }
+  if (parsedArguments.help) {
     process.stdout.write(usage());
     return 0;
   }
-  const documentPath = args.positional[0];
-  if (documentPath === undefined) {
-    process.stderr.write(usage());
-    return 2;
+
+  const args = parsedArguments.value;
+  const requestedConfiguration = option(args, "configuration");
+  const requestedKernel = option(args, "kernel");
+  if (
+    requestedKernel !== undefined &&
+    requestedKernel !== "manifold" &&
+    requestedKernel !== "occt"
+  ) {
+    return usageError(`Unsupported kernel '${requestedKernel}'`);
   }
-  const parsed = parseDocument(await readFile(documentPath, "utf8"));
+  const parametersPath = option(args, "parameters");
+  const inlineParameterAssignments = optionValues(args, "parameter");
+  if (
+    parametersPath !== undefined &&
+    inlineParameterAssignments.length > 0
+  ) {
+    return usageError("--parameters and --parameter cannot be used together");
+  }
+  const inlineParameters = parseInlineParameters(inlineParameterAssignments);
+  if (!inlineParameters.ok) {
+    return usageError(inlineParameters.message);
+  }
+  const requestedOutput = option(args, "output");
+  if (args.command === "bom" && requestedOutput === undefined) {
+    return usageError("bom requires --output <name>");
+  }
+  const destination = option(args, "to");
+  if (args.command === "export" && destination === undefined) {
+    return usageError("export requires --to <path>");
+  }
+
+  let exportFormat: ShapeExportFormat | undefined;
+  if (args.command === "export" && destination !== undefined) {
+    try {
+      exportFormat = inferFormat(destination, option(args, "format"));
+    } catch (error: unknown) {
+      return usageError(
+        error instanceof Error ? error.message : "Invalid export format",
+      );
+    }
+  }
+
+  const parsed = parseDocument(await readFile(args.documentPath, "utf8"));
   if (!parsed.ok) {
     process.stderr.write(`${formatDiagnostics(parsed.diagnostics)}\n`);
     return 1;
@@ -173,37 +442,6 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
     process.stdout.write(`Valid InvariantCAD v${parsed.value.version} document: ${parsed.value.name}\n`);
     return 0;
   }
-  if (
-    args.command !== "inspect" &&
-    args.command !== "bom" &&
-    args.command !== "export"
-  ) {
-    process.stderr.write(`Unknown command '${args.command}'\n${usage()}`);
-    return 2;
-  }
-  if (args.command === "bom" && typeof args.flags.output !== "string") {
-    process.stderr.write("bom requires --output <name>\n");
-    return 2;
-  }
-  const requestedConfiguration = args.flags.configuration;
-  if (requestedConfiguration === true || requestedConfiguration === "") {
-    process.stderr.write("--configuration requires <id>\n");
-    return 2;
-  }
-  const requestedKernel = args.flags.kernel;
-  if (
-    requestedKernel !== undefined &&
-    requestedKernel !== "manifold" &&
-    requestedKernel !== "occt"
-  ) {
-    process.stderr.write(`Unsupported kernel '${String(requestedKernel)}'\n`);
-    return 2;
-  }
-  const destination = args.command === "export" ? args.flags.to : undefined;
-  const exportFormat =
-    typeof destination === "string"
-      ? inferFormat(destination, args.flags.format)
-      : undefined;
   const exactExport =
     exportFormat === "step" ||
     exportFormat === "brep" ||
@@ -217,13 +455,14 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
       : await createEvaluator();
   try {
     const evaluated = await evaluator.evaluate(parsed.value, {
-      parameters: await loadParameters(args.flags.parameters),
-      ...(typeof requestedConfiguration === "string"
+      parameters: await loadParameters(
+        parametersPath,
+        inlineParameters.value,
+      ),
+      ...(requestedConfiguration !== undefined
         ? { configuration: requestedConfiguration }
         : {}),
-      ...(typeof args.flags.output === "string"
-        ? { outputs: [args.flags.output] }
-        : {}),
+      ...(requestedOutput !== undefined ? { outputs: [requestedOutput] } : {}),
     });
     if (!evaluated.ok) {
       process.stderr.write(`${formatDiagnostics(evaluated.diagnostics)}\n`);
@@ -241,7 +480,7 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
         return 0;
       }
       if (args.command === "bom") {
-        const outputName = args.flags.output as string;
+        const outputName = requestedOutput!;
         const output = evaluated.value.output(outputName);
         if (
           !(output instanceof EvaluatedPart) &&
@@ -275,16 +514,15 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
         return 0;
       }
       if (typeof destination !== "string") {
-        process.stderr.write("export requires --to <path>\n");
-        return 2;
+        throw new Error("Export destination was not captured");
       }
       const outputName =
-        typeof args.flags.output === "string"
-          ? args.flags.output
+        requestedOutput !== undefined
+          ? requestedOutput
           : evaluated.value.outputNames[0];
       if (outputName === undefined) throw new Error("No output is available to export");
       const data = evaluated.value.output(outputName).export(
-        exportFormat ?? inferFormat(destination, args.flags.format),
+        exportFormat ?? inferFormat(destination, option(args, "format")),
       );
       await writeFile(destination, data);
       process.stdout.write(`Wrote ${destination}\n`);
