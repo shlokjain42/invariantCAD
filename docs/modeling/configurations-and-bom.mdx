@@ -152,19 +152,23 @@ rollup.
 
 The source tree contains a staged authoring and evaluation path for Document v7
 outputs that directly reference a part. `stagedBodySetDesignV7(...)` now exposes
-source-only `parameter.massDensity(...)`, `material(...)`, `part(...)`,
-configuration `.partMaterial(...)`, and direct part `output(...)` methods in
-addition to its existing direct geometry methods. This is executable protocol
-evidence, not a public package workflow: the package-root builder, document
-alias, evaluator aliases, CLI, and migration target remain v6.
+source-only length, angle, mass-density, and scalar parameters;
+`transform(...)`, `translate(...)`, `rotate(...)`, `scale(...)`, and
+`mirror(...)` solid authoring; `material(...)`; `part(...)`; configuration
+`.partMaterial(...)`; and direct part `output(...)`. This is executable
+protocol evidence, not a public package workflow: the package-root builder,
+document alias, evaluator aliases, CLI, and migration target remain v6.
 
-A staged part's geometry must be one owned direct box, cylinder, sphere, or
-imported-body leaf, or one owned body set composed from those leaves. Parts
-cannot wrap another part, transforms, Booleans, or other downstream feature
-graphs. Materials and parts are builder-owned typed handles; foreign or forged
-handles are rejected. New option records must be exact plain own-data records,
-and accessor-backed or unknown fields are rejected without invoking them.
-Part, material, configuration, and membership metadata is detached before the
+A staged part's geometry must be one owned solid DAG rooted in a box, cylinder,
+sphere, or imported-body leaf, or one owned body set composed from those solid
+DAG roots. The only admitted internal solid node is an ordered transform.
+Transforms can be chained and parameterized by length, angle, or scalar
+expressions. Parts cannot wrap another part, and the facade does not admit a
+Boolean-produced solid or transform a body set, part, or assembly. Materials
+and parts are builder-owned typed handles; foreign or forged handles are
+rejected. New option records must be exact plain own-data records, and
+accessor-backed or unknown fields are rejected without invoking them. Part,
+material, configuration, and membership metadata is detached before the
 document is deeply frozen.
 
 The staged result preserves part number, description, detached metadata,
@@ -192,7 +196,20 @@ The part facade can merge tessellations and export STL or OBJ, all explicitly
 approximate/lossy. Exact export and topology remain per-solid or per-body
 capabilities. Aggregate geometric measurement, cross-body topology, exact
 aggregate STEP/BREP, assemblies, occurrence rollups, interference handling,
-per-body materials, and general part graphs are outside this staged slice.
+per-body materials, Boolean inputs, and general part graphs beyond
+primitive/import/transform DAGs are outside this staged slice. A primitive or
+transformed solid cannot be a direct staged output; it must be retained by a
+part or body set.
+
+Stock OCCT evaluates native and imported transform DAGs as exact B-Rep when the
+imported leaf satisfies the strong exact single-solid document-import
+contract. Manifold evaluates native primitive/transform DAGs as approximate
+mesh geometry and cannot stand in for that import boundary. Evaluation never
+falls back between the two backends. Body-set and part evaluation separately
+bound distinct leaves, all solid-graph nodes, transform input edges, and
+authored transform operations with `maxDistinctSolids`,
+`maxSolidGraphNodes`, `maxSolidDependencyLinks`, and
+`maxTransformOperations`.
 
 ## Repository-only Document v7 nested local assemblies
 
@@ -224,9 +241,9 @@ order on each edge and compose parent first into a root-relative transform.
 
 The evaluator reuses one evaluated part result for equal
 `(part, effective configuration)` states within the call, but keeps every full
-occurrence path and quantity. Direct part evaluation may also acquire a leaf
-node once per configuration batch when multiple admitted parts reference it.
-It does not infer geometric equivalence between contexts and establishes no
+occurrence path and quantity. Direct part evaluation may also acquire a solid
+DAG once per configuration batch when multiple admitted parts reference it. It
+does not infer geometric equivalence between contexts and establishes no
 cross-run cache.
 
 The contextual BOM keeps unlike `(part, effective configuration)` states in
@@ -244,7 +261,12 @@ Suppression is decided before a component is admitted, so a suppressed nested
 edge prunes its entire subtree, including external or otherwise unsupported
 descendants. Traversal is bounded by `maxAssemblyDepth`,
 `maxOccurrencePathSegments`, scanned-instance, active-occurrence, placement,
-and downstream part/resource ceilings. Active external components and cyclic
+and downstream part/resource ceilings. The assembly-wide
+`maxSolidGraphNodes`, `maxSolidDependencyLinks`, and
+`maxTransformOperations` counters charge each `(solid node, effective
+configuration)` once across the active tree. Repeated occurrences in the same
+context share that work, different contexts are charged independently, and
+suppressed subtrees contribute nothing. Active external components and cyclic
 local-assembly graphs are rejected before resolver or kernel work. The staged
 slice does not provide external-document evaluation, per-body materials, mates,
 joints, DOF, motion, contact, interference/collision, assembly topology,

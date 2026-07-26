@@ -170,6 +170,15 @@ import {
   DOCUMENT_V7_RUNTIME_INTEGRITY_MESSAGE,
   documentV7RuntimeIntrinsicsAreIntact,
 } from "./internal/document-v7-runtime-integrity.js";
+import {
+  planStagedSolidGraphV7,
+  stagedSolidNodeIsImportedBodyV7,
+  type StagedSolidGraphLimitsV7,
+  type StagedSolidGraphNodeV7,
+  type StagedSolidGraphPlanV7,
+  type StagedSolidGraphRootV7,
+  type StagedSolidLeafNodeV7,
+} from "./internal/document-v7-solid-graph-evaluation.js";
 
 export type ParameterOverride = EvaluationParameterOverride;
 export type ShapeExportFormat = MeshExportFormat | KernelExchangeFormat;
@@ -2397,18 +2406,27 @@ export interface BodySetEvaluationLimitsV7 {
   readonly maxParameterOverrides: number;
   /** Aggregate authored memberships across the selected outputs. */
   readonly maxBodySetMembers: number;
-  /** Distinct directly referenced leaf nodes acquired from the kernel. */
+  /** Distinct primitive and imported-body nodes acquired from the kernel. */
   readonly maxDistinctSolids: number;
+  /** Distinct primitive, imported-body, and transform nodes in the closure. */
+  readonly maxSolidGraphNodes: number;
+  /** Solid input references traversed across the selected closure. */
+  readonly maxSolidDependencyLinks: number;
+  /** Authored operations across distinct transform nodes in the closure. */
+  readonly maxTransformOperations: number;
 }
 
 /** @internal */
 export const DEFAULT_BODY_SET_EVALUATION_LIMITS_V7:
   BodySetEvaluationLimitsV7 = Object.freeze({
     maxSelectedOutputs: 10_000,
-    maxParameterOverrides: 10_000,
-    maxBodySetMembers: 100_000,
-    maxDistinctSolids: 100_000,
-  });
+  maxParameterOverrides: 10_000,
+  maxBodySetMembers: 100_000,
+  maxDistinctSolids: 100_000,
+  maxSolidGraphNodes: 100_000,
+  maxSolidDependencyLinks: 100_000,
+  maxTransformOperations: 100_000,
+});
 
 /**
  * Source-only options for direct staged document-v7 part evaluation.
@@ -2436,8 +2454,14 @@ export interface PartEvaluationLimitsV7 {
   readonly maxParameterOverrides: number;
   /** Solid parts count once; every authored body-set membership counts once. */
   readonly maxPartBodies: number;
-  /** Distinct directly referenced leaf nodes acquired from the kernel. */
+  /** Distinct primitive and imported-body nodes acquired from the kernel. */
   readonly maxDistinctSolids: number;
+  /** Distinct primitive, imported-body, and transform nodes in the closure. */
+  readonly maxSolidGraphNodes: number;
+  /** Solid input references traversed across the selected closure. */
+  readonly maxSolidDependencyLinks: number;
+  /** Authored operations across distinct transform nodes in the closure. */
+  readonly maxTransformOperations: number;
   /** Every document material is resolved to preserve the v6 material contract. */
   readonly maxResolvedMaterials: number;
 }
@@ -2446,11 +2470,14 @@ export interface PartEvaluationLimitsV7 {
 export const DEFAULT_PART_EVALUATION_LIMITS_V7:
   PartEvaluationLimitsV7 = Object.freeze({
     maxSelectedOutputs: 10_000,
-    maxParameterOverrides: 10_000,
-    maxPartBodies: 100_000,
-    maxDistinctSolids: 100_000,
-    maxResolvedMaterials: 10_000,
-  });
+  maxParameterOverrides: 10_000,
+  maxPartBodies: 100_000,
+  maxDistinctSolids: 100_000,
+  maxSolidGraphNodes: 100_000,
+  maxSolidDependencyLinks: 100_000,
+  maxTransformOperations: 100_000,
+  maxResolvedMaterials: 10_000,
+});
 
 interface CapturedImportedBodyOutputsV7Options {
   readonly outputs?: readonly string[];
@@ -3957,21 +3984,7 @@ export async function evaluateImportedBodyOutputsV7(
   return success(evaluated);
 }
 
-type BodySetLeafNodeV7 = Extract<
-  NodeIRV7,
-  {
-    readonly kind:
-      | "box"
-      | "cylinder"
-      | "sphere"
-      | "importedBody";
-  }
->;
-
-type BodySetPrimitiveNodeV7 = Exclude<
-  BodySetLeafNodeV7,
-  ImportedBodyNodeIRV7
->;
+type BodySetLeafNodeV7 = StagedSolidLeafNodeV7;
 
 interface CapturedStagedV7EvaluationOptions<EvaluationLimits> {
   readonly configuration?: string;
@@ -3996,6 +4009,7 @@ interface BodySetKernelAccess extends StagedV7SolidKernelAccess {
   readonly importDocumentBody?: NonNullable<
     GeometryKernel["importDocumentBody"]
   >;
+  readonly transform?: NonNullable<GeometryKernel["transform"]>;
   readonly status: GeometryKernel["status"];
   readonly disposeShape: GeometryKernel["disposeShape"];
 }
@@ -4042,6 +4056,9 @@ const BODY_SET_EVALUATION_LIMIT_KEYS = Object.freeze([
   "maxParameterOverrides",
   "maxBodySetMembers",
   "maxDistinctSolids",
+  "maxSolidGraphNodes",
+  "maxSolidDependencyLinks",
+  "maxTransformOperations",
 ] as const satisfies readonly (keyof BodySetEvaluationLimitsV7)[]);
 const BODY_SET_DOCUMENT_LIMIT_KEY_COUNT =
   importedBodyObjectKeyList(DEFAULT_DESIGN_DOCUMENT_LIMITS).length;
@@ -4304,6 +4321,12 @@ function captureBodySetEvaluationLimits(
       DEFAULT_BODY_SET_EVALUATION_LIMITS_V7.maxBodySetMembers,
     maxDistinctSolids:
       DEFAULT_BODY_SET_EVALUATION_LIMITS_V7.maxDistinctSolids,
+    maxSolidGraphNodes:
+      DEFAULT_BODY_SET_EVALUATION_LIMITS_V7.maxSolidGraphNodes,
+    maxSolidDependencyLinks:
+      DEFAULT_BODY_SET_EVALUATION_LIMITS_V7.maxSolidDependencyLinks,
+    maxTransformOperations:
+      DEFAULT_BODY_SET_EVALUATION_LIMITS_V7.maxTransformOperations,
   };
   for (
     let index = 0;
@@ -4939,7 +4962,7 @@ function bodySetKernelFailure(
 function bodySetCapabilityFailure(
   kernel: string,
   node: NodeId,
-  kind: "primitive" | "documentBodyImport",
+  kind: "primitive" | "feature" | "documentBodyImport",
   capability: string,
   message: string,
 ): CadResult<never> {
@@ -4994,10 +5017,19 @@ const BODY_SET_LEAF_DIAGNOSTICS =
 
 function captureBodySetKernelAccess(
   kernel: GeometryKernel,
-  orderedLeaves: readonly [NodeId, BodySetLeafNodeV7][],
+  plan: StagedSolidGraphPlanV7,
   signal: AbortSignal | undefined,
   diagnostics: StagedV7LeafDiagnosticContext = BODY_SET_LEAF_DIAGNOSTICS,
 ): CadResult<BodySetKernelAccess> {
+  const orderedLeaves = plan.leafNodes;
+  let firstTransformNode: NodeId | undefined;
+  for (let index = 0; index < plan.orderedNodes.length; index += 1) {
+    const [nodeId, node] = plan.orderedNodes[index]!;
+    if (node.kind === "transform") {
+      firstTransformNode = nodeId;
+      break;
+    }
+  }
   const {
     postBoundaryFailure,
     kernelFailure,
@@ -5041,6 +5073,12 @@ function captureBodySetKernelAccess(
     );
     const afterPrimitives = postBoundaryFailure(signal);
     if (afterPrimitives !== undefined) return afterPrimitives;
+    const featuresProperty = importedBodyOwnDataValue(
+      rawCapabilities,
+      "features",
+    );
+    const afterFeatures = postBoundaryFailure(signal);
+    if (afterFeatures !== undefined) return afterFeatures;
     const importProperty = importedBodyOwnDataValue(
       rawCapabilities,
       "documentBodyImport",
@@ -5064,6 +5102,7 @@ function captureBodySetKernelAccess(
       representationProperty.kind !== "data" ||
       exactProperty.kind !== "data" ||
       primitivesProperty.kind !== "data" ||
+      featuresProperty.kind !== "data" ||
       nativeExportsProperty.kind !== "data" ||
       topologyProperty.kind === "invalid" ||
       (importsRequired && importProperty.kind === "invalid")
@@ -5165,6 +5204,74 @@ function captureBodySetKernelAccess(
           },
         );
       }
+    }
+
+    const featureSnapshot = preflightDesignDocumentValue(
+      featuresProperty.value,
+      IMPORTED_BODY_CAPABILITY_SNAPSHOT_LIMITS,
+      { strictV7Snapshot: true },
+    );
+    const afterFeatureSnapshot = postBoundaryFailure(signal);
+    if (afterFeatureSnapshot !== undefined) {
+      return afterFeatureSnapshot;
+    }
+    if (!featureSnapshot.ok || !importedBodyArray(featureSnapshot.value)) {
+      return kernelFailure(
+        id,
+        `Kernel '${id}' declares unsafe feature capabilities`,
+        {
+          details: {
+            protocolViolation: true,
+            reason: "unsafe-capability-metadata",
+          },
+        },
+      );
+    }
+    const advertisedFeatures = featureSnapshot.value;
+    let transformAdvertised = false;
+    for (
+      let index = 0;
+      index < advertisedFeatures.length;
+      index += 1
+    ) {
+      const feature = advertisedFeatures[index];
+      if (
+        feature !== "extrude" &&
+        feature !== "revolve" &&
+        feature !== "loft" &&
+        feature !== "sweep" &&
+        feature !== "circularArcSweep" &&
+        feature !== "compositeSweep" &&
+        feature !== "boolean" &&
+        feature !== "transform" &&
+        feature !== "fillet" &&
+        feature !== "chamfer" &&
+        feature !== "shell" &&
+        feature !== "offset" &&
+        feature !== "draft"
+      ) {
+        return kernelFailure(
+          id,
+          `Kernel '${id}' declares an invalid feature capability`,
+          {
+            details: {
+              protocolViolation: true,
+              feature:
+                typeof feature === "string" ? feature : typeof feature,
+            },
+          },
+        );
+      }
+      if (feature === "transform") transformAdvertised = true;
+    }
+    if (firstTransformNode !== undefined && !transformAdvertised) {
+      return capabilityFailure(
+        id,
+        firstTransformNode,
+        "feature",
+        "transform",
+        `Kernel '${id}' does not support feature 'transform'`,
+      );
     }
 
     const nativeExportsSnapshot = preflightDesignDocumentValue(
@@ -5476,6 +5583,31 @@ function captureBodySetKernelAccess(
       }
       importDocumentBody = method;
     }
+    let transform: BodySetKernelAccess["transform"];
+    if (firstTransformNode !== undefined) {
+      const method = kernel.transform;
+      const afterMethod = postBoundaryFailure(
+        signal,
+        firstTransformNode,
+      );
+      if (afterMethod !== undefined) return afterMethod;
+      if (typeof method !== "function") {
+        return kernelFailure(
+          id,
+          `Kernel '${id}' advertises feature 'transform' without implementing it`,
+          {
+            node: firstTransformNode,
+            path: `/nodes/${firstTransformNode}`,
+            details: {
+              protocolViolation: true,
+              kind: "feature",
+              capability: "transform",
+            },
+          },
+        );
+      }
+      transform = method;
+    }
     const status = kernel.status;
     const afterStatus = postBoundaryFailure(signal);
     if (afterStatus !== undefined) return afterStatus;
@@ -5529,6 +5661,7 @@ function captureBodySetKernelAccess(
             ...(importDocumentBody === undefined
               ? {}
               : { importDocumentBody }),
+            ...(transform === undefined ? {} : { transform }),
             status,
             measure,
             mesh,
@@ -5556,7 +5689,7 @@ function validateBodySetAcquiredShape(
   access: BodySetKernelAccess,
   shape: KernelShape,
   nodeId: NodeId,
-  nodeKind: BodySetLeafNodeV7["kind"],
+  nodeKind: StagedSolidGraphNodeV7["kind"],
   signal: AbortSignal | undefined,
   diagnostics: StagedV7LeafDiagnosticContext = BODY_SET_LEAF_DIAGNOSTICS,
 ): CadResult<undefined> {
@@ -5673,28 +5806,611 @@ function validateBodySetAcquiredShape(
   }
 }
 
-function bodySetFeatureInvalid(
-  node: NodeId,
-  field: string,
-  message: string,
-  value?: unknown,
-): CadResult<never> {
-  return failure(
-    diagnostic("FEATURE_INVALID", message, {
-      severity: "error",
-      node,
-      path: `/nodes/${node}/${field}`,
-      details: {
-        phase: BODY_SET_EVALUATION_PHASE,
-        ...(value === undefined ? {} : { value }),
-      },
-    }),
+interface EvaluatedStagedSolidGraphV7 {
+  readonly access: BodySetKernelAccess;
+  readonly createdShapes: Set<KernelShape>;
+  readonly shapesByNode: ReadonlyMap<NodeId, KernelShape>;
+  readonly dispose: () => void;
+}
+
+interface EvaluateStagedSolidGraphV7Options {
+  readonly kernel: GeometryKernel;
+  readonly document: DesignDocumentV7;
+  readonly plan: StagedSolidGraphPlanV7;
+  readonly expression: (value: ExpressionIR) => number;
+  readonly resolver?: ResourceResolverV7;
+  readonly resourceLimits: ResourceResolutionLimitsV7;
+  readonly signal?: AbortSignal;
+  readonly diagnostics: StagedV7LeafDiagnosticContext;
+}
+
+function resolvedTransformOperationV7(
+  nodeId: NodeId,
+  operation: TransformOperationIR,
+  operationIndex: number,
+  expression: (value: ExpressionIR) => number,
+  diagnostics: StagedV7LeafDiagnosticContext,
+): CadResult<ResolvedTransformOperation> {
+  const field = operation.kind === "mirror" ? "normal" : "value";
+  const source =
+    operation.kind === "mirror" ? operation.normal : operation.value;
+  const values = new Array<number>(3);
+  try {
+    for (let axis = 0; axis < 3; axis += 1) {
+      values[axis] = expression(source[axis]!);
+    }
+  } catch (error) {
+    return failure(
+      diagnostic(
+        "EXPRESSION_INVALID",
+        bodySetThrownCause(
+          error,
+          `Transform '${nodeId}' operation ${operationIndex} could not be evaluated`,
+        ),
+        {
+          severity: "error",
+          node: nodeId,
+          path: `/nodes/${nodeId}/operations/${operationIndex}/${field}`,
+          details: { phase: diagnostics.phase },
+        },
+      ),
+    );
+  }
+  for (let axis = 0; axis < values.length; axis += 1) {
+    if (
+      !importedBodyApply<boolean>(
+        importedBodyNumberIsFinite,
+        Number,
+        [values[axis]],
+      )
+    ) {
+      return failure(
+        diagnostic(
+          "FEATURE_INVALID",
+          `Transform '${nodeId}' operation ${operationIndex} ${field}/${axis} must be finite`,
+          {
+            severity: "error",
+            node: nodeId,
+            path:
+              `/nodes/${nodeId}/operations/${operationIndex}/` +
+              `${field}/${axis}`,
+            details: {
+              phase: diagnostics.phase,
+              value: values[axis],
+            },
+          },
+        ),
+      );
+    }
+  }
+  const vector = importedBodyApply<Vec3>(
+    importedBodyObjectFreeze,
+    Object,
+    [values],
+  );
+  if (operation.kind === "scale") {
+    for (let axis = 0; axis < vector.length; axis += 1) {
+      if (vector[axis] === 0) {
+        return failure(
+          diagnostic(
+            "FEATURE_INVALID",
+            `Transform '${nodeId}' operation ${operationIndex} scale/${axis} must be non-zero`,
+            {
+              severity: "error",
+              node: nodeId,
+              path:
+                `/nodes/${nodeId}/operations/${operationIndex}/value/` +
+                `${axis}`,
+              details: {
+                phase: diagnostics.phase,
+                value: vector[axis],
+              },
+            },
+          ),
+        );
+      }
+    }
+  }
+  if (operation.kind === "mirror") {
+    const squaredNorm =
+      vector[0] * vector[0] +
+      vector[1] * vector[1] +
+      vector[2] * vector[2];
+    if (
+      !importedBodyApply<boolean>(
+        importedBodyNumberIsFinite,
+        Number,
+        [squaredNorm],
+      ) ||
+      !(squaredNorm > 0)
+    ) {
+      return failure(
+        diagnostic(
+          "FEATURE_INVALID",
+          `Transform '${nodeId}' operation ${operationIndex} mirror normal must be finite and non-zero`,
+          {
+            severity: "error",
+            node: nodeId,
+            path: `/nodes/${nodeId}/operations/${operationIndex}/normal`,
+            details: {
+              phase: diagnostics.phase,
+              squaredNorm,
+            },
+          },
+        ),
+      );
+    }
+    return success(
+      importedBodyApply<ResolvedTransformOperation>(
+        importedBodyObjectFreeze,
+        Object,
+        [{ kind: "mirror", normal: vector }],
+      ),
+    );
+  }
+  return success(
+    importedBodyApply<ResolvedTransformOperation>(
+      importedBodyObjectFreeze,
+      Object,
+      [{ kind: operation.kind, value: vector }],
+    ),
   );
 }
 
+async function evaluateStagedSolidGraphV7(
+  options: EvaluateStagedSolidGraphV7Options,
+): Promise<CadResult<EvaluatedStagedSolidGraphV7>> {
+  const {
+    kernel,
+    document,
+    plan,
+    expression,
+    signal,
+    diagnostics,
+  } = options;
+  const {
+    postBoundaryFailure,
+    kernelFailure,
+  } = diagnostics;
+
+  const resolvedPrimitives =
+    new ImportedBodyMap<NodeId, ResolvedBodySetPrimitiveV7>();
+  const resolvedTransforms =
+    new ImportedBodyMap<NodeId, readonly ResolvedTransformOperation[]>();
+  for (let index = 0; index < plan.orderedNodes.length; index += 1) {
+    const [nodeId, node] = plan.orderedNodes[index]!;
+    const boundary = postBoundaryFailure(signal, nodeId);
+    if (boundary !== undefined) return boundary;
+    if (node.kind === "importedBody") continue;
+    if (node.kind === "transform") {
+      const operations = new Array<ResolvedTransformOperation>(
+        node.operations.length,
+      );
+      for (
+        let operationIndex = 0;
+        operationIndex < node.operations.length;
+        operationIndex += 1
+      ) {
+        const resolved = resolvedTransformOperationV7(
+          nodeId,
+          node.operations[operationIndex]!,
+          operationIndex,
+          expression,
+          diagnostics,
+        );
+        if (!resolved.ok) return resolved;
+        operations[operationIndex] = resolved.value;
+      }
+      importedBodyApply<void>(importedBodyObjectFreeze, Object, [
+        operations,
+      ]);
+      importedBodyMapSetValue(
+        resolvedTransforms,
+        nodeId,
+        operations,
+      );
+      continue;
+    }
+    try {
+      if (node.kind === "box") {
+        const size = new Array<number>(3);
+        for (let axis = 0; axis < 3; axis += 1) {
+          size[axis] = expression(node.size[axis]!);
+          if (
+            !importedBodyApply<boolean>(
+              importedBodyNumberIsFinite,
+              Number,
+              [size[axis]],
+            ) ||
+            !(size[axis]! > 0)
+          ) {
+            return failure(
+              diagnostic(
+                "FEATURE_INVALID",
+                `size/${axis} must be finite and positive`,
+                {
+                  severity: "error",
+                  node: nodeId,
+                  path: `/nodes/${nodeId}/size/${axis}`,
+                  details: {
+                    phase: diagnostics.phase,
+                    value: size[axis],
+                  },
+                },
+              ),
+            );
+          }
+        }
+        resolvedPrimitives.set(nodeId, {
+          kind: "box",
+          size: size as unknown as Vec3,
+          center: node.center,
+        });
+      } else if (node.kind === "cylinder") {
+        const height = expression(node.height);
+        const radiusBottom = expression(node.radiusBottom);
+        const radiusTop = expression(node.radiusTop);
+        for (const [field, value, allowZero] of [
+          ["height", height, false],
+          ["radiusBottom", radiusBottom, false],
+          ["radiusTop", radiusTop, true],
+        ] as const) {
+          if (
+            !importedBodyApply<boolean>(
+              importedBodyNumberIsFinite,
+              Number,
+              [value],
+            ) ||
+            (allowZero ? value < 0 : !(value > 0))
+          ) {
+            return failure(
+              diagnostic(
+                "FEATURE_INVALID",
+                `${field} must be finite and ${allowZero ? "non-negative" : "positive"}`,
+                {
+                  severity: "error",
+                  node: nodeId,
+                  path: `/nodes/${nodeId}/${field}`,
+                  details: {
+                    phase: diagnostics.phase,
+                    value,
+                  },
+                },
+              ),
+            );
+          }
+        }
+        resolvedPrimitives.set(nodeId, {
+          kind: "cylinder",
+          height,
+          radiusBottom,
+          radiusTop,
+          center: node.center,
+          ...(node.segments === undefined
+            ? {}
+            : { segments: node.segments }),
+        });
+      } else {
+        const radius = expression(node.radius);
+        if (
+          !importedBodyApply<boolean>(
+            importedBodyNumberIsFinite,
+            Number,
+            [radius],
+          ) ||
+          !(radius > 0)
+        ) {
+          return failure(
+            diagnostic(
+              "FEATURE_INVALID",
+              "radius must be finite and positive",
+              {
+                severity: "error",
+                node: nodeId,
+                path: `/nodes/${nodeId}/radius`,
+                details: {
+                  phase: diagnostics.phase,
+                  value: radius,
+                },
+              },
+            ),
+          );
+        }
+        resolvedPrimitives.set(nodeId, {
+          kind: "sphere",
+          radius,
+          ...(node.segments === undefined
+            ? {}
+            : { segments: node.segments }),
+        });
+      }
+    } catch (error) {
+      const afterExpression = postBoundaryFailure(signal, nodeId);
+      if (afterExpression !== undefined) return afterExpression;
+      return failure(
+        diagnostic(
+          "EXPRESSION_INVALID",
+          bodySetThrownCause(
+            error,
+            `Primitive leaf '${nodeId}' expressions could not be evaluated`,
+          ),
+          {
+            severity: "error",
+            node: nodeId,
+            path: `/nodes/${nodeId}`,
+            details: { phase: diagnostics.phase },
+          },
+        ),
+      );
+    }
+  }
+
+  const kernelAccess = captureBodySetKernelAccess(
+    kernel,
+    plan,
+    signal,
+    diagnostics,
+  );
+  const afterKernelCapture = postBoundaryFailure(signal);
+  if (afterKernelCapture !== undefined) return afterKernelCapture;
+  if (!kernelAccess.ok) return kernelAccess;
+
+  const resourceIds: ResourceId[] = [];
+  const seenResourceIds = new ImportedBodySet<ResourceId>();
+  for (let index = 0; index < plan.leafNodes.length; index += 1) {
+    const node = plan.leafNodes[index]![1];
+    if (
+      !stagedSolidNodeIsImportedBodyV7(node) ||
+      importedBodySetHasValue(seenResourceIds, node.resource)
+    ) {
+      continue;
+    }
+    importedBodySetAddValue(seenResourceIds, node.resource);
+    importedBodyArrayAppend(resourceIds, node.resource);
+  }
+  let resolvedResources: ResolvedResourcesV7 | undefined;
+  if (resourceIds.length > 0) {
+    const resolved = await resolveResourcesV7(
+      document.resources ?? {},
+      resourceIds,
+      {
+        ...(options.resolver === undefined
+          ? {}
+          : { resolver: options.resolver }),
+        limits: options.resourceLimits,
+        ...(signal === undefined ? {} : { signal }),
+      },
+    );
+    const afterResources = postBoundaryFailure(signal);
+    if (afterResources !== undefined) return afterResources;
+    if (!resolved.ok) return resolved;
+    resolvedResources = resolved.value;
+  }
+
+  const createdShapes = new ImportedBodySet<KernelShape>();
+  const createdShapeList = importedBodyApply<Record<number, KernelShape>>(
+    importedBodyObjectCreate,
+    Object,
+    [null],
+  );
+  let createdShapeCount = 0;
+  const shapesByNode = new ImportedBodyMap<NodeId, KernelShape>();
+  const failAfterCleanup = (
+    result: CadResult<never>,
+  ): CadResult<EvaluatedStagedSolidGraphV7> => {
+    disposeImportedBodyShapes(
+      kernel,
+      kernelAccess.value.disposeShape,
+      createdShapeList,
+      createdShapeCount,
+    );
+    const afterCleanup = postBoundaryFailure(signal);
+    if (afterCleanup !== undefined) return afterCleanup;
+    return result;
+  };
+
+  for (let index = 0; index < plan.orderedNodes.length; index += 1) {
+    const [nodeId, node] = plan.orderedNodes[index]!;
+    const beforeNode = postBoundaryFailure(signal, nodeId);
+    if (beforeNode !== undefined) return failAfterCleanup(beforeNode);
+    let shape: KernelShape;
+    try {
+      const context = importedBodyApply<KernelFeatureContext>(
+        importedBodyObjectFreeze,
+        Object,
+        [
+          {
+            feature: nodeId,
+            ...(signal === undefined ? {} : { signal }),
+          },
+        ],
+      );
+      if (node.kind === "importedBody") {
+        const bytes = resolvedResources?.read(node.resource);
+        const afterRead = postBoundaryFailure(signal, nodeId);
+        if (afterRead !== undefined) return failAfterCleanup(afterRead);
+        if (bytes === undefined) {
+          return failAfterCleanup(
+            kernelFailure(
+              kernelAccess.value.id,
+              `Verified resource '${node.resource}' is unavailable for ${diagnostics.leafLabel} '${nodeId}'`,
+              {
+                node: nodeId,
+                path: `/nodes/${nodeId}/resource`,
+                details: {
+                  protocolViolation: true,
+                  resourceId: node.resource,
+                  format: node.format,
+                },
+              },
+            ),
+          );
+        }
+        shape = importedBodyApply<KernelShape>(
+          kernelAccess.value.importDocumentBody!,
+          kernel,
+          [bytes, importedBodyImportOptions(node), context],
+        );
+      } else if (node.kind === "transform") {
+        const inputShape = importedBodyMapGetValue(
+          shapesByNode,
+          node.input.node,
+        );
+        if (inputShape === undefined) {
+          return failAfterCleanup(
+            kernelFailure(
+              kernelAccess.value.id,
+              `Solid graph transform '${nodeId}' has no evaluated input`,
+              {
+                node: nodeId,
+                path: `/nodes/${nodeId}/input`,
+                details: {
+                  protocolViolation: true,
+                  referencedNode: node.input.node,
+                },
+              },
+            ),
+          );
+        }
+        shape = importedBodyApply<KernelShape>(
+          kernelAccess.value.transform!,
+          kernel,
+          [
+            inputShape,
+            importedBodyMapGetValue(resolvedTransforms, nodeId)!,
+            context,
+          ],
+        );
+      } else {
+        const resolved = importedBodyMapGetValue(
+          resolvedPrimitives,
+          nodeId,
+        )!;
+        if (resolved.kind === "box") {
+          shape = importedBodyApply<KernelShape>(
+            kernelAccess.value.box!,
+            kernel,
+            [resolved.size, resolved.center, context],
+          );
+        } else if (resolved.kind === "cylinder") {
+          shape = importedBodyApply<KernelShape>(
+            kernelAccess.value.cylinder!,
+            kernel,
+            [
+              resolved.height,
+              resolved.radiusBottom,
+              resolved.radiusTop,
+              resolved.center,
+              resolved.segments,
+              context,
+            ],
+          );
+        } else {
+          shape = importedBodyApply<KernelShape>(
+            kernelAccess.value.sphere!,
+            kernel,
+            [resolved.radius, resolved.segments, context],
+          );
+        }
+      }
+    } catch (error) {
+      const afterFailure = postBoundaryFailure(signal, nodeId);
+      if (afterFailure !== undefined) {
+        return failAfterCleanup(afterFailure);
+      }
+      return failAfterCleanup(
+        kernelFailure(
+          kernelAccess.value.id,
+          `Kernel '${kernelAccess.value.id}' failed to construct solid graph node '${nodeId}'`,
+          {
+            node: nodeId,
+            path: `/nodes/${nodeId}`,
+            details: {
+              nodeKind: node.kind,
+              ...(node.kind === "importedBody"
+                ? {
+                    resourceId: node.resource,
+                    format: node.format,
+                    unitMode: node.units.mode,
+                  }
+                : {}),
+              cause: bodySetThrownCause(
+                error,
+                "Solid graph construction failed with an opaque value",
+              ),
+            },
+          },
+        ),
+      );
+    }
+
+    if (importedBodySetHasValue(createdShapes, shape)) {
+      return failAfterCleanup(
+        kernelFailure(
+          kernelAccess.value.id,
+          `Kernel '${kernelAccess.value.id}' reused an owned shape for solid graph node '${nodeId}'`,
+          {
+            node: nodeId,
+            path: `/nodes/${nodeId}`,
+            details: {
+              protocolViolation: true,
+              nodeKind: node.kind,
+            },
+          },
+        ),
+      );
+    }
+    importedBodySetAddValue(createdShapes, shape);
+    importedBodyApply<void>(importedBodyObjectDefineProperty, Object, [
+      createdShapeList,
+      createdShapeCount,
+      {
+        configurable: true,
+        enumerable: true,
+        writable: true,
+        value: shape,
+      },
+    ]);
+    createdShapeCount += 1;
+    const afterAcquisition = postBoundaryFailure(signal, nodeId);
+    if (afterAcquisition !== undefined) {
+      return failAfterCleanup(afterAcquisition);
+    }
+    const validated = validateBodySetAcquiredShape(
+      kernel,
+      kernelAccess.value,
+      shape,
+      nodeId,
+      node.kind,
+      signal,
+      diagnostics,
+    );
+    if (!validated.ok) return failAfterCleanup(validated);
+    importedBodyMapSetValue(shapesByNode, nodeId, shape);
+  }
+
+  const beforeSuccess = postBoundaryFailure(signal);
+  if (beforeSuccess !== undefined) {
+    return failAfterCleanup(beforeSuccess);
+  }
+  return success({
+    access: kernelAccess.value,
+    createdShapes,
+    shapesByNode,
+    dispose: () =>
+      disposeImportedBodyShapes(
+        kernel,
+        kernelAccess.value.disposeShape,
+        createdShapeList,
+        createdShapeCount,
+      ),
+  });
+}
+
 /**
- * Evaluates only direct document-v7 `bodySet` outputs whose authored members
- * directly reference box, cylinder, sphere, or importedBody leaves.
+ * Evaluates direct document-v7 `bodySet` outputs whose authored members
+ * reference bounded graphs of box, cylinder, sphere, importedBody, and
+ * transform nodes.
  *
  * This source export deliberately remains absent from `src/index.ts`. The
  * supplied kernel is borrowed. Every failure disposes each distinct acquired
@@ -5771,7 +6487,7 @@ export async function evaluateBodySetOutputsV7(
   }
 
   const selectedOutputs: SelectedBodySetOutputV7[] = [];
-  const selectedLeaves = new Map<NodeId, BodySetLeafNodeV7>();
+  const solidRoots: StagedSolidGraphRootV7[] = [];
   let selectedMemberCount = 0;
   for (let outputIndex = 0; outputIndex < requested.length; outputIndex += 1) {
     const name = requested[outputIndex]!;
@@ -5845,59 +6561,21 @@ export async function evaluateBodySetOutputsV7(
       bodyIndex += 1
     ) {
       const member = outputNode.bodies[bodyIndex]!;
-      const leaf = importedBodyApply<boolean>(
-        importedBodyObjectHasOwn,
-        Object,
-        [document.nodes, member.solid.node],
-      )
-        ? document.nodes[member.solid.node]
-        : undefined;
-      if (
-        leaf === undefined ||
-        (leaf.kind !== "box" &&
-          leaf.kind !== "cylinder" &&
-          leaf.kind !== "sphere" &&
-          leaf.kind !== "importedBody")
-      ) {
-        return failure(
-          diagnostic(
-            "EVALUATION_UNSUPPORTED",
-            `Body-set member '${member.id}' must directly reference a supported solid leaf`,
-            {
-              severity: "error",
-              node: reference.node,
-              path: `/nodes/${reference.node}/bodies/${bodyIndex}/solid`,
-              details: {
-                phase: BODY_SET_EVALUATION_PHASE,
-                supported: [
-                  "box",
-                  "cylinder",
-                  "sphere",
-                  "importedBody",
-                ],
-                referencedNode: member.solid.node,
-                nodeKind: leaf?.kind,
-              },
-            },
-          ),
-        );
-      }
-      if (!selectedLeaves.has(member.solid.node)) {
-        selectedLeaves.set(member.solid.node, leaf);
-        if (
-          selectedLeaves.size >
-          options.evaluationLimits.maxDistinctSolids
-        ) {
-          return bodySetLimitFailure(
-            "maxDistinctSolids",
-            options.evaluationLimits.maxDistinctSolids,
-            selectedLeaves.size,
-            `/nodes/${reference.node}/bodies/${bodyIndex}/solid`,
-          );
-        }
-      }
+      importedBodyArrayAppend(solidRoots, {
+        node: member.solid.node,
+        path: `/nodes/${reference.node}/bodies/${bodyIndex}/solid`,
+      });
     }
   }
+  const solidPlan = planStagedSolidGraphV7(
+    document,
+    solidRoots,
+    options.evaluationLimits,
+    BODY_SET_EVALUATION_PHASE,
+  );
+  const afterSolidPlan = bodySetPostBoundaryFailure(options.signal);
+  if (afterSolidPlan !== undefined) return afterSolidPlan;
+  if (!solidPlan.ok) return solidPlan;
 
   let selectedConfigurationId: ConfigurationId | null = null;
   let selectedConfiguration: DesignConfigurationIR | undefined;
@@ -5978,10 +6656,6 @@ export async function evaluateBodySetOutputsV7(
     );
   }
 
-  const orderedLeaves = [...selectedLeaves.entries()].sort(
-    ([first], [second]) => lexicalCompare(first, second),
-  );
-  const resolvedPrimitives = new Map<NodeId, ResolvedBodySetPrimitiveV7>();
   const expression = (value: ExpressionIR): number =>
     evaluateExpression(value, {
       resolveParameter: (id) => {
@@ -5992,370 +6666,41 @@ export async function evaluateBodySetOutputsV7(
         return resolved;
       },
     });
-  for (let index = 0; index < orderedLeaves.length; index += 1) {
-    const [nodeId, node] = orderedLeaves[index]!;
-    if (node.kind === "importedBody") continue;
-    try {
-      if (node.kind === "box") {
-        const size = node.size.map(expression) as unknown as Vec3;
-        for (let axis = 0; axis < size.length; axis += 1) {
-          if (
-            !importedBodyApply<boolean>(
-              importedBodyNumberIsFinite,
-              Number,
-              [size[axis]],
-            ) ||
-            !(size[axis]! > 0)
-          ) {
-            return bodySetFeatureInvalid(
-              nodeId,
-              `size/${axis}`,
-              `size/${axis} must be finite and positive`,
-              size[axis],
-            );
-          }
-        }
-        resolvedPrimitives.set(nodeId, {
-          kind: "box",
-          size,
-          center: node.center,
-        });
-      } else if (node.kind === "cylinder") {
-        const height = expression(node.height);
-        const radiusBottom = expression(node.radiusBottom);
-        const radiusTop = expression(node.radiusTop);
-        if (
-          !importedBodyApply<boolean>(
-            importedBodyNumberIsFinite,
-            Number,
-            [height],
-          ) ||
-          !(height > 0)
-        ) {
-          return bodySetFeatureInvalid(
-            nodeId,
-            "height",
-            "height must be finite and positive",
-            height,
-          );
-        }
-        if (
-          !importedBodyApply<boolean>(
-            importedBodyNumberIsFinite,
-            Number,
-            [radiusBottom],
-          ) ||
-          !(radiusBottom > 0)
-        ) {
-          return bodySetFeatureInvalid(
-            nodeId,
-            "radiusBottom",
-            "radiusBottom must be finite and positive",
-            radiusBottom,
-          );
-        }
-        if (
-          !importedBodyApply<boolean>(
-            importedBodyNumberIsFinite,
-            Number,
-            [radiusTop],
-          ) ||
-          radiusTop < 0
-        ) {
-          return bodySetFeatureInvalid(
-            nodeId,
-            "radiusTop",
-            "radiusTop must be finite and non-negative",
-            radiusTop,
-          );
-        }
-        resolvedPrimitives.set(nodeId, {
-          kind: "cylinder",
-          height,
-          radiusBottom,
-          radiusTop,
-          center: node.center,
-          ...(node.segments === undefined
-            ? {}
-            : { segments: node.segments }),
-        });
-      } else {
-        const radius = expression(node.radius);
-        if (
-          !importedBodyApply<boolean>(
-            importedBodyNumberIsFinite,
-            Number,
-            [radius],
-          ) ||
-          !(radius > 0)
-        ) {
-          return bodySetFeatureInvalid(
-            nodeId,
-            "radius",
-            "radius must be finite and positive",
-            radius,
-          );
-        }
-        resolvedPrimitives.set(nodeId, {
-          kind: "sphere",
-          radius,
-          ...(node.segments === undefined
-            ? {}
-            : { segments: node.segments }),
-        });
-      }
-    } catch (error) {
-      const afterExpression = bodySetPostBoundaryFailure(
-        options.signal,
-        nodeId,
-      );
-      if (afterExpression !== undefined) return afterExpression;
-      return failure(
-        diagnostic(
-          "EXPRESSION_INVALID",
-          bodySetThrownCause(
-            error,
-            `Primitive leaf '${nodeId}' expressions could not be evaluated`,
-          ),
-          {
-            severity: "error",
-            node: nodeId,
-            path: `/nodes/${nodeId}`,
-            details: { phase: BODY_SET_EVALUATION_PHASE },
-          },
-        ),
-      );
-    }
-  }
-
-  const kernelAccess = captureBodySetKernelAccess(
+  const solidGraph = await evaluateStagedSolidGraphV7({
     kernel,
-    orderedLeaves,
-    options.signal,
-  );
-  const afterKernelCapture = bodySetPostBoundaryFailure(options.signal);
-  if (afterKernelCapture !== undefined) return afterKernelCapture;
-  if (!kernelAccess.ok) return kernelAccess;
-
-  const resourceIds: ResourceId[] = [];
-  const seenResourceIds = new ImportedBodySet<ResourceId>();
-  for (let index = 0; index < orderedLeaves.length; index += 1) {
-    const node = orderedLeaves[index]![1];
-    if (
-      node.kind !== "importedBody" ||
-      importedBodySetHasValue(seenResourceIds, node.resource)
-    ) {
-      continue;
-    }
-    importedBodySetAddValue(seenResourceIds, node.resource);
-    importedBodyArrayAppend(resourceIds, node.resource);
-  }
-  let resolvedResources: ResolvedResourcesV7 | undefined;
-  if (resourceIds.length > 0) {
-    const resolved = await resolveResourcesV7(
-      document.resources ?? {},
-      resourceIds,
-      {
-        ...(options.resolver === undefined
-          ? {}
-          : { resolver: options.resolver }),
-        limits: options.resourceLimits,
-        ...(options.signal === undefined
-          ? {}
-          : { signal: options.signal }),
-      },
+    document,
+    plan: solidPlan.value,
+    expression,
+    ...(options.resolver === undefined
+      ? {}
+      : { resolver: options.resolver }),
+    resourceLimits: options.resourceLimits,
+    ...(options.signal === undefined
+      ? {}
+      : { signal: options.signal }),
+    diagnostics: BODY_SET_LEAF_DIAGNOSTICS,
+  });
+  const afterSolidGraph = bodySetPostBoundaryFailure(options.signal);
+  if (afterSolidGraph !== undefined) {
+    if (!solidGraph.ok) return afterSolidGraph;
+    solidGraph.value.dispose();
+    return (
+      bodySetPostBoundaryFailure(options.signal) ??
+      afterSolidGraph
     );
-    const afterResources = bodySetPostBoundaryFailure(options.signal);
-    if (afterResources !== undefined) return afterResources;
-    if (!resolved.ok) return resolved;
-    resolvedResources = resolved.value;
   }
-
-  const createdShapes = new ImportedBodySet<KernelShape>();
-  const createdShapeList = importedBodyApply<Record<number, KernelShape>>(
-    importedBodyObjectCreate,
-    Object,
-    [null],
-  );
-  let createdShapeCount = 0;
-  const shapesByNode = new Map<NodeId, KernelShape>();
+  if (!solidGraph.ok) return solidGraph;
+  const kernelAccess = { value: solidGraph.value.access };
+  const createdShapes = solidGraph.value.createdShapes;
+  const shapesByNode = solidGraph.value.shapesByNode;
   const failAfterCleanup = (
     result: CadResult<never>,
   ): CadResult<EvaluatedBodySetDesignV7> => {
-    disposeImportedBodyShapes(
-      kernel,
-      kernelAccess.value.disposeShape,
-      createdShapeList,
-      createdShapeCount,
-    );
+    solidGraph.value.dispose();
     const afterCleanup = bodySetPostBoundaryFailure(options.signal);
     if (afterCleanup !== undefined) return afterCleanup;
     return result;
   };
-
-  for (let index = 0; index < orderedLeaves.length; index += 1) {
-    const [nodeId, node] = orderedLeaves[index]!;
-    if (bodySetEvaluationAborted(options.signal)) {
-      return failAfterCleanup(bodySetEvaluationAbortFailure(nodeId));
-    }
-    let shape: KernelShape;
-    try {
-      const context = importedBodyApply<KernelFeatureContext>(
-        importedBodyObjectFreeze,
-        Object,
-        [
-          {
-            feature: nodeId,
-            ...(options.signal === undefined
-              ? {}
-              : { signal: options.signal }),
-          },
-        ],
-      );
-      if (node.kind === "importedBody") {
-        const bytes = resolvedResources?.read(node.resource);
-        const afterRead = bodySetPostBoundaryFailure(options.signal, nodeId);
-        if (afterRead !== undefined) {
-          return failAfterCleanup(afterRead);
-        }
-        if (bytes === undefined) {
-          return failAfterCleanup(
-            bodySetKernelFailure(
-              kernelAccess.value.id,
-              `Verified resource '${node.resource}' is unavailable for body-set leaf '${nodeId}'`,
-              {
-                node: nodeId,
-                path: `/nodes/${nodeId}/resource`,
-                details: {
-                  protocolViolation: true,
-                  resourceId: node.resource,
-                  format: node.format,
-                },
-              },
-            ),
-          );
-        }
-        shape = importedBodyApply<KernelShape>(
-          kernelAccess.value.importDocumentBody!,
-          kernel,
-          [bytes, importedBodyImportOptions(node), context],
-        );
-      } else {
-        const resolved = resolvedPrimitives.get(nodeId)!;
-        if (resolved.kind === "box") {
-          shape = importedBodyApply<KernelShape>(
-            kernelAccess.value.box!,
-            kernel,
-            [resolved.size, resolved.center, context],
-          );
-        } else if (resolved.kind === "cylinder") {
-          shape = importedBodyApply<KernelShape>(
-            kernelAccess.value.cylinder!,
-            kernel,
-            [
-              resolved.height,
-              resolved.radiusBottom,
-              resolved.radiusTop,
-              resolved.center,
-              resolved.segments,
-              context,
-            ],
-          );
-        } else {
-          shape = importedBodyApply<KernelShape>(
-            kernelAccess.value.sphere!,
-            kernel,
-            [resolved.radius, resolved.segments, context],
-          );
-        }
-      }
-    } catch (error) {
-      const afterFailure = bodySetPostBoundaryFailure(options.signal, nodeId);
-      if (afterFailure !== undefined) {
-        return failAfterCleanup(afterFailure);
-      }
-      return failAfterCleanup(
-        bodySetKernelFailure(
-          kernelAccess.value.id,
-          `Kernel '${kernelAccess.value.id}' failed to construct body-set leaf '${nodeId}'`,
-          {
-            node: nodeId,
-            path: `/nodes/${nodeId}`,
-            details: {
-              nodeKind: node.kind,
-              ...(node.kind === "importedBody"
-                ? {
-                    resourceId: node.resource,
-                    format: node.format,
-                    unitMode: node.units.mode,
-                  }
-                : {}),
-              cause: bodySetThrownCause(
-                error,
-                "Body-set leaf construction failed with an opaque value",
-              ),
-            },
-          },
-        ),
-      );
-    }
-
-    const duplicate = importedBodySetHasValue(createdShapes, shape);
-    if (duplicate) {
-      const afterDuplicate = bodySetPostBoundaryFailure(
-        options.signal,
-        nodeId,
-      );
-      if (afterDuplicate !== undefined) {
-        return failAfterCleanup(afterDuplicate);
-      }
-      return failAfterCleanup(
-        bodySetKernelFailure(
-          kernelAccess.value.id,
-          `Kernel '${kernelAccess.value.id}' reused an owned shape across distinct body-set leaves`,
-          {
-            node: nodeId,
-            path: `/nodes/${nodeId}`,
-            details: {
-              protocolViolation: true,
-              nodeKind: node.kind,
-            },
-          },
-        ),
-      );
-    }
-    importedBodySetAddValue(createdShapes, shape);
-    importedBodyApply<void>(importedBodyObjectDefineProperty, Object, [
-      createdShapeList,
-      createdShapeCount,
-      {
-        configurable: true,
-        enumerable: true,
-        writable: true,
-        value: shape,
-      },
-    ]);
-    createdShapeCount += 1;
-    const afterAcquisition = bodySetPostBoundaryFailure(
-      options.signal,
-      nodeId,
-    );
-    if (afterAcquisition !== undefined) {
-      return failAfterCleanup(afterAcquisition);
-    }
-
-    const validated = validateBodySetAcquiredShape(
-      kernel,
-      kernelAccess.value,
-      shape,
-      nodeId,
-      node.kind,
-      options.signal,
-    );
-    if (!validated.ok) return failAfterCleanup(validated);
-    shapesByNode.set(nodeId, shape);
-  }
-
   const beforeSuccess = bodySetPostBoundaryFailure(options.signal);
   if (beforeSuccess !== undefined) {
     return failAfterCleanup(beforeSuccess);
@@ -6459,7 +6804,7 @@ type SelectedPartGeometryNodeV7 =
   | {
       readonly kind: "solid";
       readonly nodeId: NodeId;
-      readonly node: BodySetLeafNodeV7;
+      readonly node: StagedSolidGraphNodeV7;
     }
   | {
       readonly kind: "bodySet";
@@ -6497,6 +6842,9 @@ const PART_EVALUATION_LIMIT_KEYS = Object.freeze([
   "maxParameterOverrides",
   "maxPartBodies",
   "maxDistinctSolids",
+  "maxSolidGraphNodes",
+  "maxSolidDependencyLinks",
+  "maxTransformOperations",
   "maxResolvedMaterials",
 ] as const satisfies readonly (keyof PartEvaluationLimitsV7)[]);
 
@@ -6622,6 +6970,12 @@ function capturePartEvaluationLimits(
     maxPartBodies: DEFAULT_PART_EVALUATION_LIMITS_V7.maxPartBodies,
     maxDistinctSolids:
       DEFAULT_PART_EVALUATION_LIMITS_V7.maxDistinctSolids,
+    maxSolidGraphNodes:
+      DEFAULT_PART_EVALUATION_LIMITS_V7.maxSolidGraphNodes,
+    maxSolidDependencyLinks:
+      DEFAULT_PART_EVALUATION_LIMITS_V7.maxSolidDependencyLinks,
+    maxTransformOperations:
+      DEFAULT_PART_EVALUATION_LIMITS_V7.maxTransformOperations,
     maxResolvedMaterials:
       DEFAULT_PART_EVALUATION_LIMITS_V7.maxResolvedMaterials,
   };
@@ -6731,25 +7085,6 @@ function capturePartEvaluationOptions(
   );
 }
 
-function partFeatureInvalid(
-  node: NodeId,
-  field: string,
-  message: string,
-  value?: unknown,
-): CadResult<never> {
-  return failure(
-    diagnostic("FEATURE_INVALID", message, {
-      severity: "error",
-      node,
-      path: `/nodes/${node}/${field}`,
-      details: {
-        phase: PART_EVALUATION_PHASE,
-        ...(value === undefined ? {} : { value }),
-      },
-    }),
-  );
-}
-
 function partKernelFailure(
   kernel: string,
   message: string,
@@ -6776,7 +7111,7 @@ function partKernelFailure(
 function partCapabilityFailure(
   kernel: string,
   node: NodeId,
-  kind: "primitive" | "documentBodyImport",
+  kind: "primitive" | "feature" | "documentBodyImport",
   capability: string,
   message: string,
 ): CadResult<never> {
@@ -6807,8 +7142,8 @@ const PART_LEAF_DIAGNOSTICS =
   });
 
 /**
- * Evaluates only direct document-v7 `part` outputs whose geometry directly
- * references a supported solid leaf or a directly supported body set.
+ * Evaluates direct document-v7 `part` outputs whose geometry references a
+ * bounded admitted solid graph or a directly supported body set.
  *
  * This source export deliberately remains absent from `src/index.ts`. The
  * supplied kernel is borrowed. Every failure disposes each distinct acquired
@@ -6885,57 +7220,8 @@ export async function evaluatePartOutputsV7(
   }
 
   const selectedOutputs: SelectedPartOutputV7[] = [];
-  const selectedLeaves = new Map<NodeId, BodySetLeafNodeV7>();
+  const solidRoots: StagedSolidGraphRootV7[] = [];
   let selectedBodyCount = 0;
-  const registerLeaf = (
-    leafId: NodeId,
-    leaf: NodeIRV7 | undefined,
-    path: string,
-    memberId?: EntityId,
-  ): CadResult<never> | undefined => {
-    if (
-      leaf === undefined ||
-      (leaf.kind !== "box" &&
-        leaf.kind !== "cylinder" &&
-        leaf.kind !== "sphere" &&
-        leaf.kind !== "importedBody")
-    ) {
-      return failure(
-        diagnostic(
-          "EVALUATION_UNSUPPORTED",
-          memberId === undefined
-            ? `Part geometry '${leafId}' must directly reference a supported solid leaf`
-            : `Part body '${memberId}' must directly reference a supported solid leaf`,
-          {
-            severity: "error",
-            node: leafId,
-            path,
-            details: {
-              phase: PART_EVALUATION_PHASE,
-              supported: ["box", "cylinder", "sphere", "importedBody"],
-              referencedNode: leafId,
-              nodeKind: leaf?.kind,
-            },
-          },
-        ),
-      );
-    }
-    if (!selectedLeaves.has(leafId)) {
-      selectedLeaves.set(leafId, leaf);
-      if (
-        selectedLeaves.size >
-        options.evaluationLimits.maxDistinctSolids
-      ) {
-        return partLimitFailure(
-          "maxDistinctSolids",
-          options.evaluationLimits.maxDistinctSolids,
-          selectedLeaves.size,
-          path,
-        );
-      }
-    }
-    return undefined;
-  };
 
   for (let outputIndex = 0; outputIndex < requested.length; outputIndex += 1) {
     const name = requested[outputIndex]!;
@@ -7001,7 +7287,8 @@ export async function evaluatePartOutputsV7(
       (geometryNode.kind === "box" ||
         geometryNode.kind === "cylinder" ||
         geometryNode.kind === "sphere" ||
-        geometryNode.kind === "importedBody")
+        geometryNode.kind === "importedBody" ||
+        geometryNode.kind === "transform")
     ) {
       geometry = {
         kind: "solid",
@@ -7020,12 +7307,10 @@ export async function evaluatePartOutputsV7(
           `/nodes/${reference.node}/geometry`,
         );
       }
-      const registered = registerLeaf(
-        outputNode.geometry.node,
-        geometryNode,
-        `/nodes/${reference.node}/geometry`,
-      );
-      if (registered !== undefined) return registered;
+      importedBodyArrayAppend(solidRoots, {
+        node: outputNode.geometry.node,
+        path: `/nodes/${reference.node}/geometry`,
+      });
     } else if (
       outputNode.geometry.kind === "bodySet" &&
       geometryNode !== undefined &&
@@ -7054,26 +7339,18 @@ export async function evaluatePartOutputsV7(
         bodyIndex += 1
       ) {
         const member = geometryNode.bodies[bodyIndex]!;
-        const leaf = importedBodyApply<boolean>(
-          importedBodyObjectHasOwn,
-          Object,
-          [document.nodes, member.solid.node],
-        )
-          ? document.nodes[member.solid.node]
-          : undefined;
-        const registered = registerLeaf(
-          member.solid.node,
-          leaf,
-          `/nodes/${outputNode.geometry.node}/bodies/${bodyIndex}/solid`,
-          member.id,
-        );
-        if (registered !== undefined) return registered;
+        importedBodyArrayAppend(solidRoots, {
+          node: member.solid.node,
+          path:
+            `/nodes/${outputNode.geometry.node}/bodies/` +
+            `${bodyIndex}/solid`,
+        });
       }
     } else {
       return failure(
         diagnostic(
           "EVALUATION_UNSUPPORTED",
-          `Part '${reference.node}' geometry must directly reference a supported solid leaf or bodySet`,
+          `Part '${reference.node}' geometry must reference an admitted solid graph or bodySet`,
           {
             severity: "error",
             node: reference.node,
@@ -7085,6 +7362,7 @@ export async function evaluatePartOutputsV7(
                 "cylinder",
                 "sphere",
                 "importedBody",
+                "transform",
                 "bodySet",
               ],
               geometryKind: outputNode.geometry.kind,
@@ -7102,6 +7380,15 @@ export async function evaluatePartOutputsV7(
       geometry,
     });
   }
+  const solidPlan = planStagedSolidGraphV7(
+    document,
+    solidRoots,
+    options.evaluationLimits,
+    PART_EVALUATION_PHASE,
+  );
+  const afterSolidPlan = partPostBoundaryFailure(options.signal);
+  if (afterSolidPlan !== undefined) return afterSolidPlan;
+  if (!solidPlan.ok) return solidPlan;
 
   let selectedConfigurationId: ConfigurationId | null = null;
   let selectedConfiguration: DesignConfigurationIR | undefined;
@@ -7392,380 +7679,38 @@ export async function evaluatePartOutputsV7(
     );
   }
 
-  const orderedLeaves = [...selectedLeaves.entries()].sort(
-    ([first], [second]) => lexicalCompare(first, second),
-  );
-  const resolvedPrimitives = new Map<NodeId, ResolvedBodySetPrimitiveV7>();
-  for (let index = 0; index < orderedLeaves.length; index += 1) {
-    const [nodeId, node] = orderedLeaves[index]!;
-    if (node.kind === "importedBody") continue;
-    try {
-      if (node.kind === "box") {
-        const size = node.size.map(expression) as unknown as Vec3;
-        for (let axis = 0; axis < size.length; axis += 1) {
-          if (
-            !importedBodyApply<boolean>(
-              importedBodyNumberIsFinite,
-              Number,
-              [size[axis]],
-            ) ||
-            !(size[axis]! > 0)
-          ) {
-            return partFeatureInvalid(
-              nodeId,
-              `size/${axis}`,
-              `size/${axis} must be finite and positive`,
-              size[axis],
-            );
-          }
-        }
-        resolvedPrimitives.set(nodeId, {
-          kind: "box",
-          size,
-          center: node.center,
-        });
-      } else if (node.kind === "cylinder") {
-        const height = expression(node.height);
-        const radiusBottom = expression(node.radiusBottom);
-        const radiusTop = expression(node.radiusTop);
-        if (
-          !importedBodyApply<boolean>(
-            importedBodyNumberIsFinite,
-            Number,
-            [height],
-          ) ||
-          !(height > 0)
-        ) {
-          return partFeatureInvalid(
-            nodeId,
-            "height",
-            "height must be finite and positive",
-            height,
-          );
-        }
-        if (
-          !importedBodyApply<boolean>(
-            importedBodyNumberIsFinite,
-            Number,
-            [radiusBottom],
-          ) ||
-          !(radiusBottom > 0)
-        ) {
-          return partFeatureInvalid(
-            nodeId,
-            "radiusBottom",
-            "radiusBottom must be finite and positive",
-            radiusBottom,
-          );
-        }
-        if (
-          !importedBodyApply<boolean>(
-            importedBodyNumberIsFinite,
-            Number,
-            [radiusTop],
-          ) ||
-          radiusTop < 0
-        ) {
-          return partFeatureInvalid(
-            nodeId,
-            "radiusTop",
-            "radiusTop must be finite and non-negative",
-            radiusTop,
-          );
-        }
-        resolvedPrimitives.set(nodeId, {
-          kind: "cylinder",
-          height,
-          radiusBottom,
-          radiusTop,
-          center: node.center,
-          ...(node.segments === undefined
-            ? {}
-            : { segments: node.segments }),
-        });
-      } else {
-        const radius = expression(node.radius);
-        if (
-          !importedBodyApply<boolean>(
-            importedBodyNumberIsFinite,
-            Number,
-            [radius],
-          ) ||
-          !(radius > 0)
-        ) {
-          return partFeatureInvalid(
-            nodeId,
-            "radius",
-            "radius must be finite and positive",
-            radius,
-          );
-        }
-        resolvedPrimitives.set(nodeId, {
-          kind: "sphere",
-          radius,
-          ...(node.segments === undefined
-            ? {}
-            : { segments: node.segments }),
-        });
-      }
-    } catch (error) {
-      const afterExpression = partPostBoundaryFailure(
-        options.signal,
-        nodeId,
-      );
-      if (afterExpression !== undefined) return afterExpression;
-      return failure(
-        diagnostic(
-          "EXPRESSION_INVALID",
-          bodySetThrownCause(
-            error,
-            `Primitive leaf '${nodeId}' expressions could not be evaluated`,
-          ),
-          {
-            severity: "error",
-            node: nodeId,
-            path: `/nodes/${nodeId}`,
-            details: { phase: PART_EVALUATION_PHASE },
-          },
-        ),
-      );
-    }
-  }
-
-  const kernelAccess = captureBodySetKernelAccess(
+  const solidGraph = await evaluateStagedSolidGraphV7({
     kernel,
-    orderedLeaves,
-    options.signal,
-    PART_LEAF_DIAGNOSTICS,
-  );
-  const afterKernelCapture = partPostBoundaryFailure(options.signal);
-  if (afterKernelCapture !== undefined) return afterKernelCapture;
-  if (!kernelAccess.ok) return kernelAccess;
-
-  const resourceIds: ResourceId[] = [];
-  const seenResourceIds = new ImportedBodySet<ResourceId>();
-  for (let index = 0; index < orderedLeaves.length; index += 1) {
-    const node = orderedLeaves[index]![1];
-    if (
-      node.kind !== "importedBody" ||
-      importedBodySetHasValue(seenResourceIds, node.resource)
-    ) {
-      continue;
-    }
-    importedBodySetAddValue(seenResourceIds, node.resource);
-    importedBodyArrayAppend(resourceIds, node.resource);
+    document,
+    plan: solidPlan.value,
+    expression,
+    ...(options.resolver === undefined
+      ? {}
+      : { resolver: options.resolver }),
+    resourceLimits: options.resourceLimits,
+    ...(options.signal === undefined
+      ? {}
+      : { signal: options.signal }),
+    diagnostics: PART_LEAF_DIAGNOSTICS,
+  });
+  const afterSolidGraph = partPostBoundaryFailure(options.signal);
+  if (afterSolidGraph !== undefined) {
+    if (!solidGraph.ok) return afterSolidGraph;
+    solidGraph.value.dispose();
+    return partPostBoundaryFailure(options.signal) ?? afterSolidGraph;
   }
-  let resolvedResources: ResolvedResourcesV7 | undefined;
-  if (resourceIds.length > 0) {
-    const resolved = await resolveResourcesV7(
-      document.resources ?? {},
-      resourceIds,
-      {
-        ...(options.resolver === undefined
-          ? {}
-          : { resolver: options.resolver }),
-        limits: options.resourceLimits,
-        ...(options.signal === undefined
-          ? {}
-          : { signal: options.signal }),
-      },
-    );
-    const afterResources = partPostBoundaryFailure(options.signal);
-    if (afterResources !== undefined) return afterResources;
-    if (!resolved.ok) return resolved;
-    resolvedResources = resolved.value;
-  }
-
-  const createdShapes = new ImportedBodySet<KernelShape>();
-  const createdShapeList = importedBodyApply<Record<number, KernelShape>>(
-    importedBodyObjectCreate,
-    Object,
-    [null],
-  );
-  let createdShapeCount = 0;
-  const shapesByNode = new Map<NodeId, KernelShape>();
+  if (!solidGraph.ok) return solidGraph;
+  const kernelAccess = { value: solidGraph.value.access };
+  const createdShapes = solidGraph.value.createdShapes;
+  const shapesByNode = solidGraph.value.shapesByNode;
   const failAfterCleanup = (
     result: CadResult<never>,
   ): CadResult<EvaluatedPartDesignV7> => {
-    disposeImportedBodyShapes(
-      kernel,
-      kernelAccess.value.disposeShape,
-      createdShapeList,
-      createdShapeCount,
-    );
+    solidGraph.value.dispose();
     const afterCleanup = partPostBoundaryFailure(options.signal);
     if (afterCleanup !== undefined) return afterCleanup;
     return result;
   };
-
-  for (let index = 0; index < orderedLeaves.length; index += 1) {
-    const [nodeId, node] = orderedLeaves[index]!;
-    if (partEvaluationAborted(options.signal)) {
-      return failAfterCleanup(partEvaluationAbortFailure(nodeId));
-    }
-    let shape: KernelShape;
-    try {
-      const context = importedBodyApply<KernelFeatureContext>(
-        importedBodyObjectFreeze,
-        Object,
-        [
-          {
-            feature: nodeId,
-            ...(options.signal === undefined
-              ? {}
-              : { signal: options.signal }),
-          },
-        ],
-      );
-      if (node.kind === "importedBody") {
-        const bytes = resolvedResources?.read(node.resource);
-        const afterRead = partPostBoundaryFailure(
-          options.signal,
-          nodeId,
-        );
-        if (afterRead !== undefined) {
-          return failAfterCleanup(afterRead);
-        }
-        if (bytes === undefined) {
-          return failAfterCleanup(
-            partKernelFailure(
-              kernelAccess.value.id,
-              `Verified resource '${node.resource}' is unavailable for part leaf '${nodeId}'`,
-              {
-                node: nodeId,
-                path: `/nodes/${nodeId}/resource`,
-                details: {
-                  protocolViolation: true,
-                  resourceId: node.resource,
-                  format: node.format,
-                },
-              },
-            ),
-          );
-        }
-        shape = importedBodyApply<KernelShape>(
-          kernelAccess.value.importDocumentBody!,
-          kernel,
-          [bytes, importedBodyImportOptions(node), context],
-        );
-      } else {
-        const resolved = resolvedPrimitives.get(nodeId)!;
-        if (resolved.kind === "box") {
-          shape = importedBodyApply<KernelShape>(
-            kernelAccess.value.box!,
-            kernel,
-            [resolved.size, resolved.center, context],
-          );
-        } else if (resolved.kind === "cylinder") {
-          shape = importedBodyApply<KernelShape>(
-            kernelAccess.value.cylinder!,
-            kernel,
-            [
-              resolved.height,
-              resolved.radiusBottom,
-              resolved.radiusTop,
-              resolved.center,
-              resolved.segments,
-              context,
-            ],
-          );
-        } else {
-          shape = importedBodyApply<KernelShape>(
-            kernelAccess.value.sphere!,
-            kernel,
-            [resolved.radius, resolved.segments, context],
-          );
-        }
-      }
-    } catch (error) {
-      const afterFailure = partPostBoundaryFailure(
-        options.signal,
-        nodeId,
-      );
-      if (afterFailure !== undefined) {
-        return failAfterCleanup(afterFailure);
-      }
-      return failAfterCleanup(
-        partKernelFailure(
-          kernelAccess.value.id,
-          `Kernel '${kernelAccess.value.id}' failed to construct part leaf '${nodeId}'`,
-          {
-            node: nodeId,
-            path: `/nodes/${nodeId}`,
-            details: {
-              nodeKind: node.kind,
-              ...(node.kind === "importedBody"
-                ? {
-                    resourceId: node.resource,
-                    format: node.format,
-                    unitMode: node.units.mode,
-                  }
-                : {}),
-              cause: bodySetThrownCause(
-                error,
-                "Part leaf construction failed with an opaque value",
-              ),
-            },
-          },
-        ),
-      );
-    }
-
-    if (importedBodySetHasValue(createdShapes, shape)) {
-      const afterDuplicate = partPostBoundaryFailure(
-        options.signal,
-        nodeId,
-      );
-      if (afterDuplicate !== undefined) {
-        return failAfterCleanup(afterDuplicate);
-      }
-      return failAfterCleanup(
-        partKernelFailure(
-          kernelAccess.value.id,
-          `Kernel '${kernelAccess.value.id}' reused an owned shape across distinct part leaves`,
-          {
-            node: nodeId,
-            path: `/nodes/${nodeId}`,
-            details: {
-              protocolViolation: true,
-              nodeKind: node.kind,
-            },
-          },
-        ),
-      );
-    }
-    importedBodySetAddValue(createdShapes, shape);
-    importedBodyApply<void>(importedBodyObjectDefineProperty, Object, [
-      createdShapeList,
-      createdShapeCount,
-      {
-        configurable: true,
-        enumerable: true,
-        writable: true,
-        value: shape,
-      },
-    ]);
-    createdShapeCount += 1;
-    const afterAcquisition = partPostBoundaryFailure(
-      options.signal,
-      nodeId,
-    );
-    if (afterAcquisition !== undefined) {
-      return failAfterCleanup(afterAcquisition);
-    }
-    const validated = validateBodySetAcquiredShape(
-      kernel,
-      kernelAccess.value,
-      shape,
-      nodeId,
-      node.kind,
-      options.signal,
-      PART_LEAF_DIAGNOSTICS,
-    );
-    if (!validated.ok) return failAfterCleanup(validated);
-    shapesByNode.set(nodeId, shape);
-  }
-
   const beforeSuccess = partPostBoundaryFailure(options.signal);
   if (beforeSuccess !== undefined) {
     return failAfterCleanup(beforeSuccess);

@@ -2,6 +2,32 @@
 
 ## [Unreleased]
 
+- Extended the repository-only `stagedBodySetDesignV7(...)` facade with typed
+  angle parameters and owner-bound `StagedSolidRefV7` transform DAGs.
+  `transform(...)` captures one or more ordered translate, rotate, scale, or
+  mirror operations, while `translate(...)`, `rotate(...)`, `scale(...)`, and
+  `mirror(...)` provide typed length/angle/scalar convenience authoring.
+  Primitive and commitment-backed imported leaves can feed transform chains;
+  transformed roots can feed ordered body-set memberships or single-solid
+  parts and therefore flow through nested local assemblies, configurations,
+  BOM, mass, mesh, topology, and per-solid export contracts already admitted
+  by those staged results. Evaluation plans each selected closure iteratively,
+  memoizes shared graph nodes, validates finite operations, nonzero scale
+  components and mirror normals, requires an honestly advertised transform
+  method, rejects returned shape aliases, and releases every created shape
+  transactionally. Stock OCCT retains exact B-Rep behavior; Manifold remains
+  approximate mesh geometry, and evaluation performs no backend fallback.
+  Imported leaves still require caller-resolved commitment verification and
+  the strong exact single-solid document-import capability, with no weak import
+  or mesh conversion. `maxSolidGraphNodes`, `maxSolidDependencyLinks`, and
+  `maxTransformOperations` now independently bound graph nodes, solid edges,
+  and authored operations; local-assembly evaluation charges each globally by
+  `(node, effective configuration)` across the active tree while deduplicating
+  repeated occurrences in one context and pruning suppressed subtrees before
+  counting. Generic/direct transformed-solid outputs, Boolean inputs,
+  transforms over body sets/parts/assemblies, other body-consuming features,
+  CLI/package exports, and public Document v7 promotion remain unsupported; the
+  public v6 API is unchanged.
 - Extended the repository-only `stagedBodySetDesignV7(...)` facade with
   source-only nested local assembly authoring and evaluation. The staged
   `assembly(...)` callback receives a `StagedLocalAssemblyBuilderV7` whose

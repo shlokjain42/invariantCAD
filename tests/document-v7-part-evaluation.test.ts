@@ -40,6 +40,7 @@ import {
   type KernelShape,
   type MeshData,
   type MeshOptions,
+  type ResolvedTransformOperation,
   type ShapeMeasurements,
 } from "../src/kernel.js";
 import {
@@ -66,6 +67,23 @@ const lengthParameter = (id: string): ExpressionIR => ({
   dimension: "length",
   id: id as never,
 });
+
+const scalar = (value: number): ExpressionIR => ({
+  op: "literal",
+  dimension: "scalar",
+  value,
+});
+
+function transform(
+  input: string,
+  operations: Extract<NodeIRV7, { readonly kind: "transform" }>["operations"],
+): NodeIRV7 {
+  return {
+    kind: "transform",
+    input: { node: input as never, kind: "solid" },
+    operations,
+  };
+}
 
 const density = (value: number): ExpressionIR => ({
   op: "literal",
@@ -218,7 +236,7 @@ const strongImportCapabilities = {
 
 interface FakeShape extends KernelShape {
   readonly serial: number;
-  readonly source: KernelPrimitive | "imported";
+  readonly source: KernelPrimitive | "imported" | "transformed";
   readonly feature: string;
 }
 
@@ -236,10 +254,18 @@ interface ImportCall {
   readonly shape: FakeShape;
 }
 
+interface TransformCall {
+  readonly input: FakeShape;
+  readonly operations: readonly ResolvedTransformOperation[];
+  readonly context: KernelFeatureContext | undefined;
+  readonly shape: FakeShape;
+}
+
 interface KernelHarness {
   readonly kernel: GeometryKernel;
   readonly primitiveCalls: PrimitiveCall[];
   readonly importCalls: ImportCall[];
+  readonly transformCalls: TransformCall[];
   readonly disposed: FakeShape[];
   readonly live: ReadonlySet<FakeShape>;
   readonly disposeKernel: ReturnType<typeof vi.fn>;
@@ -260,6 +286,13 @@ interface KernelHarnessOptions {
     shape: FakeShape,
     callIndex: number,
   ) => KernelShape;
+  readonly transformHook?: (
+    input: FakeShape,
+    operations: readonly ResolvedTransformOperation[],
+    context: KernelFeatureContext | undefined,
+    shape: FakeShape,
+    callIndex: number,
+  ) => KernelShape;
   readonly statusHook?: (
     shape: FakeShape,
   ) => ReturnType<GeometryKernel["status"]>;
@@ -267,6 +300,7 @@ interface KernelHarnessOptions {
     shape: FakeShape,
     calls: readonly PrimitiveCall[],
   ) => ShapeMeasurements;
+  readonly disposeHook?: (shape: FakeShape, callIndex: number) => void;
 }
 
 function boxMeasurements(
@@ -328,6 +362,7 @@ function createKernelHarness(
 ): KernelHarness {
   const primitiveCalls: PrimitiveCall[] = [];
   const importCalls: ImportCall[] = [];
+  const transformCalls: TransformCall[] = [];
   const disposed: FakeShape[] = [];
   const live = new Set<FakeShape>();
   const disposeKernel = vi.fn();
@@ -380,7 +415,7 @@ function createKernelHarness(
     representation: options.representation ?? "brep",
     exact: options.exact ?? true,
     primitives: ["box", "cylinder", "sphere"],
-    features: [],
+    features: ["transform"],
     nativeImports: [],
     nativeExports: ["step", "brep", "brep-binary"],
     topology: {
@@ -424,6 +459,26 @@ function createKernelHarness(
           importCalls.length - 1,
         ) ?? shape;
       }),
+    transform: (
+      input: KernelShape,
+      operations: readonly ResolvedTransformOperation[],
+      context?: KernelFeatureContext,
+    ): KernelShape =>
+      acquire("transformed", context, (shape) => {
+        transformCalls.push({
+          input: input as FakeShape,
+          operations,
+          context,
+          shape,
+        });
+        return options.transformHook?.(
+          input as FakeShape,
+          operations,
+          context,
+          shape,
+          transformCalls.length - 1,
+        ) ?? shape;
+      }),
     mesh: (shape: KernelShape): MeshData => {
       const candidate = shape as FakeShape;
       return {
@@ -461,6 +516,7 @@ function createKernelHarness(
         throw new Error(`Shape ${candidate.serial} was disposed more than once`);
       }
       disposed.push(candidate);
+      options.disposeHook?.(candidate, disposed.length - 1);
     },
     dispose: disposeKernel,
   };
@@ -469,6 +525,7 @@ function createKernelHarness(
     kernel,
     primitiveCalls,
     importCalls,
+    transformCalls,
     disposed,
     live,
     disposeKernel,
@@ -623,7 +680,7 @@ describe("staged document-v7 part output evaluation", () => {
     expect(harness.disposeKernel).not.toHaveBeenCalled();
   });
 
-  it("rejects non-part outputs and unsupported part geometry before kernel work", async () => {
+  it("rejects non-part outputs before kernel work", async () => {
     const nonPart = await partDocument({
       nodes: { leaf: box() },
       outputs: { leaf: { node: "leaf", kind: "solid" } },
@@ -635,31 +692,120 @@ describe("staged document-v7 part output evaluation", () => {
     );
     expectFailureCode(nonPartResult, "EVALUATION_UNSUPPORTED");
     expect(nonPartHarness.primitiveCalls).toHaveLength(0);
+  });
 
-    const downstream = await partDocument({
+  it("shares transformed solid graphs across solid and multibody parts", async () => {
+    const document = await partDocument({
+      parameters: {
+        offset: {
+          dimension: "length",
+          default: length(2),
+        },
+      },
+      configurations: {
+        shifted: {
+          parameterOverrides: {
+            offset: length(5),
+          } as never,
+        },
+      },
       nodes: {
         leaf: box(),
-        translated: {
-          kind: "transform",
-          input: { node: "leaf" as never, kind: "solid" },
-          operations: [
-            {
-              kind: "translate",
-              value: [length(1), length(0), length(0)],
-            },
-          ],
-        },
-        unsupported: part("translated", "solid"),
+        translated: transform("leaf", [
+          {
+            kind: "translate",
+            value: [lengthParameter("offset"), length(1), length(0)],
+          },
+        ]),
+        scaled: transform("translated", [
+          {
+            kind: "scale",
+            value: [scalar(2), scalar(3), scalar(4)],
+          },
+        ]),
+        transformedBodies: bodySet([
+          member("translated", "translated"),
+          member("scaled-a", "scaled"),
+          member("scaled-b", "scaled"),
+        ]),
+        solidPart: part("scaled", "solid", {
+          partNumber: "TRANSFORMED-SOLID",
+        }),
+        multibodyPart: part("transformedBodies", "bodySet", {
+          partNumber: "TRANSFORMED-MULTIBODY",
+        }),
       },
-      outputs: { unsupported: { node: "unsupported", kind: "part" } },
+      outputs: {
+        solid: { node: "solidPart", kind: "part" },
+        multibody: { node: "multibodyPart", kind: "part" },
+        alias: { node: "solidPart", kind: "part" },
+      },
     });
-    const downstreamHarness = createKernelHarness();
-    const downstreamResult = await evaluatePartOutputsV7(
-      downstreamHarness.kernel,
-      downstream,
-    );
-    expectFailureCode(downstreamResult, "EVALUATION_UNSUPPORTED");
-    expect(downstreamHarness.primitiveCalls).toHaveLength(0);
+    const harness = createKernelHarness();
+    const result = await evaluatePartOutputsV7(harness.kernel, document, {
+      configuration: "shifted",
+      parameters: { offset: 8 },
+      outputs: ["multibody", "solid", "alias"],
+    });
+    const evaluated = expectPartResult(result);
+    try {
+      expect(evaluated.configurationId).toBe("shifted");
+      expect(evaluated.parameters).toEqual({ offset: 8 });
+      expect(evaluated.outputNames).toEqual(["multibody", "solid", "alias"]);
+      expect(harness.primitiveCalls).toHaveLength(1);
+      expect(harness.transformCalls).toHaveLength(2);
+      expect(harness.transformCalls[0]).toMatchObject({
+        input: { serial: 0, feature: "leaf" },
+        operations: [
+          {
+            kind: "translate",
+            value: [8, 1, 0],
+          },
+        ],
+        context: { feature: "translated" },
+        shape: { serial: 1, feature: "translated" },
+      });
+      expect(harness.transformCalls[1]).toMatchObject({
+        input: { serial: 1, feature: "translated" },
+        operations: [
+          {
+            kind: "scale",
+            value: [2, 3, 4],
+          },
+        ],
+        context: { feature: "scaled" },
+        shape: { serial: 2, feature: "scaled" },
+      });
+
+      const solid = evaluated.output("solid");
+      expect(solid.geometry).toMatchObject({
+        kind: "solid",
+        node: "scaled",
+      });
+      const multibody = evaluated.output("multibody");
+      expect(multibody.geometry).toMatchObject({
+        kind: "bodySet",
+        node: "transformedBodies",
+      });
+      if (multibody.geometry.kind === "bodySet") {
+        expect(multibody.geometry.bodySet.bodyIds).toEqual([
+          "translated",
+          "scaled-a",
+          "scaled-b",
+        ]);
+        expect(
+          multibody.geometry.bodySet.body("scaled-a").solid.measure(),
+        ).toEqual(
+          multibody.geometry.bodySet.body("scaled-b").solid.measure(),
+        );
+      }
+    } finally {
+      evaluated.dispose();
+    }
+    expect(harness.disposed.map(({ serial }) => serial).sort()).toEqual([
+      0, 1, 2,
+    ]);
+    expect(harness.live.size).toBe(0);
   });
 
   it("keeps shared kernel-boundary diagnostics part-specific", async () => {
@@ -1769,6 +1915,85 @@ describe("staged document-v7 part output evaluation", () => {
       "first",
     ]);
     expect(rollbackHarness.live.size).toBe(0);
+  });
+
+  it("rejects transformed-part ownership when cancellation wins the post-await boundary", async () => {
+    const document = await partDocument({
+      nodes: {
+        primitive: box(),
+        transformed: transform("primitive", [
+          {
+            kind: "translate",
+            value: [length(1), length(0), length(0)],
+          },
+        ]),
+        part: part("transformed", "solid"),
+      },
+      outputs: { part: { node: "part", kind: "part" } },
+    });
+    const controller = new AbortController();
+    const harness = createKernelHarness({
+      transformHook: (_input, _operations, _context, shape) => {
+        queueMicrotask(() => controller.abort());
+        return shape;
+      },
+    });
+
+    const result = await evaluatePartOutputsV7(harness.kernel, document, {
+      signal: controller.signal,
+    });
+
+    expectFailureCode(result, "EVALUATION_ABORTED");
+    expect(harness.primitiveCalls).toHaveLength(1);
+    expect(harness.transformCalls).toHaveLength(1);
+    expect(harness.disposed.map(({ serial }) => serial).sort()).toEqual([0, 1]);
+    expect(harness.live.size).toBe(0);
+
+    const originalNumberIsFinite = Number.isFinite;
+    const integrityController = new AbortController();
+    let poisonedCalls = 0;
+    const integrityHarness = createKernelHarness({
+      transformHook: (_input, _operations, _context, shape) => {
+        queueMicrotask(() => integrityController.abort());
+        return shape;
+      },
+      disposeHook: (_shape, callIndex) => {
+        if (callIndex !== 0) return;
+        Number.isFinite = ((value: unknown): boolean => {
+          poisonedCalls += 1;
+          return originalNumberIsFinite(value);
+        }) as typeof Number.isFinite;
+      },
+    });
+    let integrityResult:
+      | Awaited<ReturnType<typeof evaluatePartOutputsV7>>
+      | undefined;
+    try {
+      integrityResult = await evaluatePartOutputsV7(
+        integrityHarness.kernel,
+        document,
+        { signal: integrityController.signal },
+      );
+    } finally {
+      Number.isFinite = originalNumberIsFinite;
+    }
+
+    expect(integrityResult).toBeDefined();
+    expectFailureCode(integrityResult!, "IR_INVALID");
+    if (integrityResult !== undefined && !integrityResult.ok) {
+      expect(integrityResult.diagnostics).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            details: expect.objectContaining({ runtimeIntegrity: false }),
+          }),
+        ]),
+      );
+    }
+    expect(poisonedCalls).toBe(0);
+    expect(integrityHarness.disposed.map(({ serial }) => serial).sort()).toEqual(
+      [0, 1],
+    );
+    expect(integrityHarness.live.size).toBe(0);
   });
 
   it("keeps the public package-root document and evaluated-part contract on v6", () => {

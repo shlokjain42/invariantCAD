@@ -76,9 +76,10 @@ stagedBodySetDesignV7(
 ): StagedBodySetDesignBuilderV7
 ```
 
-This is a deliberately narrow facade for authoring the direct graph, acyclic
-nested local assemblies, and datum nodes admitted by the four staged v7
-geometry evaluators and the datum resolver. Its implementation lives in
+This is a deliberately narrow facade for authoring bounded
+primitive/import/transform solid DAGs, acyclic nested local assemblies, and
+datum nodes admitted by the four staged v7 geometry evaluators and the datum
+resolver. Its implementation lives in
 `src/internal/document-v7-body-set-authoring.ts`; it is not exported from the
 package root or any package subpath. The public `design(...)` builder,
 `DesignDocument` alias, evaluator, and migration target remain on frozen v6.
@@ -91,15 +92,18 @@ complete admitted surface is:
 | Method | Staged result | Boundary |
 | --- | --- | --- |
 | `parameter.length(...)` | `Parameter<"length">` | Length defaults, bounds, labels, and descriptions |
+| `parameter.angle(...)` | `Parameter<"angle">` | Angle defaults, bounds, labels, and descriptions in the canonical radian base unit |
 | `parameter.massDensity(...)` | `Parameter<"massDensity">` | Density in the canonical kg/mm³ base unit |
 | `parameter.scalar(...)` | `Parameter<"scalar">` | Dimensionless defaults, bounds, labels, and descriptions |
 | `material(id, options)` | `MaterialRef` | Document-owned name, density expression, optional description, and detached metadata |
-| `configuration(...)` | Configuration ID | Its callback admits typed length/density/scalar `.parameter(...)` overrides, `.partMaterial(part, material)` substitution, and `.instanceSuppressed(assembly, instanceId, suppressed?)` |
+| `configuration(...)` | Configuration ID | Its callback admits typed length/angle/density/scalar `.parameter(...)` overrides, `.partMaterial(part, material)` substitution, and `.instanceSuppressed(assembly, instanceId, suppressed?)` |
 | `box(...)`, `cylinder(...)`, `sphere(...)` | `StagedBodyLeafRefV7` | Direct primitive leaves with the v6-shaped typed length-expression API |
 | `resource(id, commitment)` | `StagedResourceRefV7` | Explicit SHA-256 digest, byte length, media type, ordered location hints, and detached metadata |
 | `importedBody(id, resource, options)` | `StagedImportedBodyRefV7` | Direct STEP or text/binary BREP leaf with a strong single-solid policy |
-| `bodySet(id, members)` | `StagedBodySetRefV7` | Dense non-empty ordered memberships of direct primitive or imported leaves |
-| `part(id, geometry, options?)` | `PartRef` | Direct owned solid leaf or body-set geometry with part and material intent |
+| `transform(id, solid, operations)` | `StagedSolidRefV7` | One or more ordered translate/rotate/scale/mirror operations over an owned staged solid |
+| `translate(...)`, `rotate(...)`, `scale(...)`, `mirror(...)` | `StagedSolidRefV7` | Typed one-operation conveniences that can be chained into a solid DAG |
+| `bodySet(id, members)` | `StagedBodySetRefV7` | Dense non-empty ordered memberships whose roots are owned primitive/import/transform solid DAGs |
+| `part(id, geometry, options?)` | `PartRef` | One owned staged solid DAG root or one owned body set, with part and material intent |
 | `assembly(id, build)` | `AssemblyRef` | Fixed-placement instances of owned local parts or previously completed local assemblies through `StagedLocalAssemblyBuilderV7` |
 | `datumPoint(...)` | Owned datum handle | Parametric position from three length expressions |
 | `datumAxis(...)` | Owned datum handle | Parametric origin and one scalar direction |
@@ -108,9 +112,15 @@ complete admitted surface is:
 | `output(name, reference)` | Builder | Direct imported-body, body-set, part, or staged local-assembly targets |
 | `build(options?)` | `DesignDocumentV7` | Detached, deeply frozen data accepted by strict v7 parsing and semantic validation |
 
-The recently admitted part and material source signatures are:
+The relevant staged source signatures are:
 
 ```ts
+parameter.angle(
+  id: string,
+  defaultValue: AngleExpression,
+  options?: ParameterOptions<"angle">,
+): Parameter<"angle">
+
 parameter.massDensity(
   id: string,
   defaultValue: MassDensityExpression,
@@ -121,9 +131,39 @@ material(id: string, options: MaterialOptions): MaterialRef
 
 part(
   id: string,
-  geometry: StagedBodyLeafRefV7 | StagedBodySetRefV7,
+  geometry: StagedSolidRefV7 | StagedBodySetRefV7,
   options?: PartOptions,
 ): PartRef
+
+transform(
+  id: string,
+  input: StagedSolidRefV7,
+  operations: readonly TransformOperationIR[],
+): StagedSolidRefV7
+
+translate(
+  id: string,
+  input: StagedSolidRefV7,
+  value: Vec3Expression,
+): StagedSolidRefV7
+
+rotate(
+  id: string,
+  input: StagedSolidRefV7,
+  value: AngleVec3Expression,
+): StagedSolidRefV7
+
+scale(
+  id: string,
+  input: StagedSolidRefV7,
+  value: ScalarVec3Expression,
+): StagedSolidRefV7
+
+mirror(
+  id: string,
+  input: StagedSolidRefV7,
+  normal: ScalarVec3Expression,
+): StagedSolidRefV7
 
 assembly(
   id: string,
@@ -171,10 +211,10 @@ this slice consumes one.
 
 A body-set member keeps its stable ID, authored position, optional name, and
 detached JSON metadata; multiple memberships may deliberately reference the
-same owned leaf. Every listed member is active, and the facade neither selects
-nor infers a primary body. A staged part wraps either one owned box, cylinder,
-sphere, or imported-body leaf, or one owned body set. It cannot wrap another
-part or a downstream solid graph.
+same owned solid DAG root. Every listed member is active, and the facade
+neither selects nor infers a primary body. A staged part wraps either one owned
+primitive, imported-body, or transformed-solid DAG root, or one owned body
+set. It cannot wrap another part, assembly, or body set as a transform input.
 
 `material(...)` authors a document-owned definition with an explicit
 mass-density expression. `part(...)` accepts the existing `PartOptions`
@@ -184,8 +224,49 @@ density, and either a legacy descriptive `material` string or an owned
 material for an owned part. The selected material determines effective
 material identity and supplies density when needed; an explicit part density
 still wins. A legacy label and a material name never perform catalogue lookup.
-Length, density, and scalar parameters may be specialized by a named
+Length, angle, density, and scalar parameters may be specialized by a named
 configuration and then by bounded caller overrides during evaluation.
+
+### Staged solid transform DAGs
+
+`StagedSolidRefV7` is the owner-bound handle shared by direct primitive leaves,
+imported-body leaves, and transform results. `transform(...)` requires at least
+one operation and captures its dense ordered operation list as plain own data.
+`translate(...)`, `rotate(...)`, `scale(...)`, and `mirror(...)` author one
+typed operation each; their vectors use length, angle, scalar, and scalar
+expressions respectively. A transform result can feed another transform, a
+body-set membership, or a part's single-solid geometry.
+
+The staged evaluator plans the selected closure iteratively, deduplicates
+shared nodes, and executes every dependency before its consuming transform.
+`maxDistinctSolids` counts primitive and imported leaves.
+`maxSolidGraphNodes` counts all distinct admitted solid nodes,
+`maxSolidDependencyLinks` counts transform input edges, and
+`maxTransformOperations` counts the ordered operations stored on distinct
+transform nodes. Each defaults to `100,000` in the staged body-set, part, and
+local-assembly evaluators.
+
+Transform expressions must resolve to finite values. Scale components must be
+nonzero, and a mirror normal must be finite and nonzero. The selected kernel
+must advertise and implement `transform`; each transform must return a fresh,
+valid, positive-volume owned shape. Failure is transactional and releases all
+shapes created for the graph.
+
+Stock OCCT evaluates this graph as exact B-Rep geometry and retains its normal
+per-solid topology/native-export capabilities. Manifold evaluates the native
+primitive/transform graph as an approximate mesh. The evaluator never retries
+an exact failure on Manifold or silently converts an exact graph to a mesh
+graph. Any imported leaf, transformed or not, additionally requires the strong
+exact B-Rep single-solid document-import capability, so it cannot fall back to
+Manifold's weak or absent import path.
+
+This is not general shape algebra. A transform input must be an owned
+`StagedSolidRefV7` created by a primitive, imported body, or prior transform;
+the facade does not author Boolean solids, and a body set, part, or assembly
+cannot be transformed. A generic or transformed solid also cannot be
+published directly by `output(...)`: it must be retained by a body set or
+part. The one exception to generic-solid output is the narrower direct
+`StagedImportedBodyRefV7` output already admitted by the import evaluator.
 
 ### Nested local assemblies
 
@@ -229,14 +310,19 @@ Per-occurrence `inherit`, `base`, and named selection can therefore produce
 different geometry, material, or density from a shared part definition.
 Evaluation reuses one part result for equal `(part, effective configuration)`
 states within one call, and direct part evaluation may separately deduplicate
-leaf acquisition within each configuration batch. Authoring does not create a
-persistent or cross-run cache commitment.
+solid-DAG acquisition within each configuration batch. Authoring does not
+create a persistent or cross-run cache commitment.
 
 Local-assembly evaluation separately bounds nesting with `maxAssemblyDepth` and
 the aggregate stored leaf-path length with `maxOccurrencePathSegments`, in
 addition to its instance, occurrence, placement, part, solid, material, and
-resource ceilings. Hand-authored cyclic dependencies fail strict document
-admission, and evaluation also rejects a recursive path rather than looping.
+resource ceilings. Solid-graph nodes, transform input edges, and transform
+operations are counted globally by `(node, effective configuration)` across
+the active product tree. Repeated occurrences in the same context reuse that
+count, different contexts are charged independently, and suppressed subtrees
+are pruned before these counters advance. Hand-authored cyclic dependencies
+fail strict document admission, and evaluation also rejects a recursive path
+rather than looping.
 
 The four datum methods author ordinary Document v7 nodes with stable node IDs.
 A point carries a length-valued position. An axis adds one scalar direction. A
@@ -285,10 +371,11 @@ caller-selected document limits and strict v7 validation before returning the
 detached, recursively frozen document.
 
 This facade does not author generic solid or direct primitive outputs,
-external occurrences, cyclic assembly graphs, datum-backed sketches,
-solid transform nodes, Booleans, body-consuming features, per-body materials,
-or other general dependency graphs. It also does not add datum design outputs,
-CLI support, location I/O, reader inference, healing, a primary-body rule,
+external occurrences, cyclic assembly graphs, datum-backed sketches, Boolean
+nodes, transforms over body sets/parts/assemblies, other body-consuming
+features, per-body materials, or general solid graphs beyond
+primitive/import/transform DAGs. It also does not add datum design outputs, CLI
+support, location I/O, reader inference, healing, a primary-body rule,
 cross-body or assembly topology, aggregate geometric measurement, mates,
 motion, interference/collision, or exact aggregate STEP/BREP export. Part- and
 assembly-level STL/OBJ export is an aggregate tessellation view and is
