@@ -95,7 +95,7 @@ The release gate compiles and executes the source module from
 | Parameters | unknown override, dependency cycle, bounds | Correct IDs/formulas or override values |
 | Kernel | `KERNEL_CAPABILITY_MISSING`, `KERNEL_ERROR` | Choose a compatible backend or inspect native failure details |
 | Topology | missing, ambiguous, fingerprint mismatch, limit exceeded | Refine selector/reference, recapture, or review limits |
-| Export | `EXPORT_UNSUPPORTED` | Use a supported format/kernel |
+| Export | `EXPORT_OPTIONS_INVALID` (unreleased 0.2), `EXPORT_UNSUPPORTED` | Correct option-relative paths or use a supported format/kernel |
 | Physical data | `MASS_DENSITY_MISSING`, `MASS_PROPERTIES_INVALID` | Author valid density or correct geometry |
 | BOM | missing/duplicate part number, missing material | Fix manufacturing metadata; warnings may be non-fatal |
 | Cancellation | aborted operation | Stop the workflow or retry in a new scope |

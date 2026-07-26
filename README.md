@@ -88,10 +88,10 @@ console.log(parametricBoxSummary);
 
 <!-- docs-example:end parametric-box-default -->
 
-The default evaluator uses the bundled Manifold runtime. Pass
-`profile: "mesh-preview"` when that mesh contract must be checked explicitly,
-or `profile: "mechanical-exact"` to load stock OCCT and verify the complete
-exact-mechanical baseline before creation succeeds. Every evaluated design and
+`createEvaluator()` with no arguments selects the bundled Manifold runtime.
+`profile: "mesh-preview"` checks that same mesh contract explicitly. “Stock
+OCCT” names the unmodified exact backend, not the evaluator default; select and
+preflight it with `profile: "mechanical-exact"`. Every evaluated design and
 evaluator owns native resources, so use the `finally` boundaries shown above.
 
 ## Geometry backends
@@ -100,6 +100,29 @@ evaluator owns native resources, so use the `finally` boundaries shown above.
 | --- | --- | --- | --- |
 | Manifold | Watertight triangle mesh | Fast default modeling and STL/OBJ workflows | STL, ASCII STL, OBJ |
 | OpenCascade | Exact B-Rep | Analytic geometry, topology, STEP, and BREP workflows | STL, OBJ, STEP, BREP |
+
+> **Unreleased 0.2:** The strong deterministic STEP contract described below
+> is implemented and release-gated in this source tree, but is not part of the
+> current `0.1.1` npm package.
+
+The bundled zero-override `createOcctKernel()` stock runtime advertises the
+optional versioned deterministic STEP contract
+`KERNEL_STEP_EXPORT_PROTOCOL_VERSION === 1`, separately from the weaker
+`nativeExports` availability list. Its AP214IS single-product bytes are stable
+for the same backend shape representation, export options, metadata, and exact
+runtime artifact. This is not geometric canonicalization, a portable cache
+identity, or canonicalization of imported or third-party STEP files. See
+[Import and export](docs/interchange/import-export.mdx) for metadata defaults,
+Unicode encoding, and the distinction between the returned-output ceiling and
+the synchronous native writer's peak allocation.
+
+Supplying `wasm`, `moduleFactory`, or `attestedRuntime` deliberately removes
+that strong envelope until the exact writer artifact is separately qualified.
+Those runtimes retain their ordinary weak native STEP export.
+
+Automatic defaults map only the document name and output/part identity fields;
+they do not pass through arbitrary document or part metadata, material identity,
+or the active configuration.
 
 Use `createEvaluator({ profile: "mechanical-exact" })` for the supported stock
 OCCT baseline. The

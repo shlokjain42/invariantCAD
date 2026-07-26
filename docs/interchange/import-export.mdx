@@ -58,6 +58,116 @@ Unsupported native formats throw `CadError` with an `EXPORT_UNSUPPORTED`
 diagnostic because `export()` is a direct operation on a live output. Select a
 compatible kernel before evaluation.
 
+### Deterministic single-product STEP
+
+<Note>
+  This strong contract is implemented for the unreleased 0.2 line. The current
+  0.1.1 npm package retains ordinary weak native STEP export.
+</Note>
+
+The bundled zero-override `createOcctKernel()` stock runtime advertises the
+optional
+`KERNEL_STEP_EXPORT_PROTOCOL_VERSION === 1` capability. This versioned
+capability is stronger than `nativeExports` containing `"step"`:
+`nativeExports` says only that the format can be written. Inspect the kernel's
+capability object—not the kernel itself—before relying on the stronger
+contract:
+
+```ts
+const stepExport =
+  inspectKernelStepExportCapabilities(kernel.capabilities);
+```
+
+A `"valid"` result contains the strong immutable snapshot; `"absent"` means
+only weak STEP availability, while `"malformed"` means the advertised envelope
+is invalid. `output.export("step")` without a second argument remains compatible
+with weak native exporters; a supporting kernel uses deterministic defaults.
+Passing any options object, including `{}`, requests the strong contract; an
+absent or malformed `stepExport` envelope throws `CadError` with
+`KERNEL_CAPABILITY_MISSING` instead of silently ignoring the request.
+
+Explicit `wasm`, `moduleFactory`, and `attestedRuntime` initialization remains
+on weak raw STEP export even when the supplied artifact is derived from stock
+OCCT. InvariantCAD omits `stepExport` until that exact writer artifact has a
+separate qualification boundary.
+
+Pass deterministic metadata, cancellation, and a caller-specific output
+ceiling through the STEP-only overload:
+
+```ts
+const step = output.export("step", {
+  metadata: {
+    fileName: "mounting-plate.step",
+    timestamp: "2026-07-26T12:00:00",
+    productId: "PLATE-001",
+    productName: "mounting-plate",
+    productDescription: "Machined mounting plate",
+  },
+  signal,
+  maxOutputBytes: 8 * 1024 * 1024,
+});
+```
+
+Each metadata override is optional; every omitted field receives one of these
+closed automatic defaults. `FILE_NAME` uses the design document name and its
+timestamp is `1970-01-01T00:00:00`. A solid output uses its output alias for both
+product ID and name, with an empty description. A part uses its authored part
+number when present, otherwise its part-node ID, as the product ID; its
+part-node ID is the product name, and its authored part description is the
+product description.
+
+An explicit timestamp must be a real calendar value in
+`YYYY-MM-DDTHH:MM:SS` form. It remains deterministic because it is
+caller-supplied input; changing it intentionally changes the bytes. The four
+identity/description values accept Unicode scalar text. Apostrophes use STEP's
+doubled-apostrophe convention. Literal backslashes and non-ASCII scalars are
+encoded with ISO-10303-21 `\X2\...\X0\` or `\X4\...\X0\` directives as
+required. Control characters and unpaired UTF-16 surrogates are rejected.
+`fileName`, `productId`, and `productName` must be nonempty.
+
+Invalid option structure, metadata text, calendar values, or the advertised
+authored-metadata budget throw `CadError` with
+`EXPORT_OPTIONS_INVALID`. Its `path` is a JSON Pointer relative to the
+`StepExportOptions` input, such as `/metadata/timestamp` or
+`/maxOutputBytes`. An already-aborted valid signal still throws `AbortError`;
+low-level `kernel.exportShape(...)` calls retain their kernel-specific
+validation exceptions.
+
+Those defaults are a field-specific identity mapping, not a general metadata
+pass-through. Root document `metadata`, arbitrary part `metadata`, material
+identity, and the active configuration are omitted. A caller may explicitly
+override a semantically corresponding supported STEP field, but protocol v1
+provides no arbitrary key/value metadata channel. It does not silently fold
+material data into the description.
+
+The stock writer emits one AP214IS product. InvariantCAD then applies a
+purpose-built structural ISO-10303-21 scanner and transformer to the exact
+`FILE_NAME` and `PRODUCT` string fields; it does not use an unbounded regular
+expression rewrite. The default output ceiling is 64 MiB and the combined
+metadata ceiling is 64 KiB measured over the five resolved strings as
+UTF-8. Part 21 escaping can expand that text; the expanded representation
+counts toward the 64 MiB output ceiling. Input traversal, scan work, and entity
+count also have fixed ceilings, and the scan checks cancellation.
+
+The underlying stock native writer is synchronous and necessarily materializes
+its original complete STEP string before InvariantCAD can apply post-write
+limits or observe cancellation again. Metadata shape, content, timestamp, and
+the authored UTF-8 budget are validated and encoded before that writer starts,
+so known-invalid metadata never triggers native serialization. The writer
+cannot be interrupted mid-call. After it returns, cancellation is checked
+before, during, and after bounded scanning and before successful return.
+`maxOutputBytes` limits the transformed bytes returned to the caller; it does
+not cap the native writer's peak allocation or its original string. Isolate
+untrusted or potentially pathological native work in a disposable worker or
+process.
+
+Byte equality is guaranteed only for the same backend shape representation,
+options, resolved metadata, implementation, and exact runtime artifact. It
+does not claim that geometrically equivalent B-Reps serialize identically,
+make bytes portable as a cross-runtime cache identity, or canonicalize
+third-party STEP. Exact aggregate STEP for assemblies and body-set results
+remains unsupported; export retained single solid or part leaves explicitly.
+
 ## Save in Node.js
 
 ```ts
