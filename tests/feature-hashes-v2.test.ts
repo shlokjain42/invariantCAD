@@ -586,6 +586,50 @@ describe("document-v7 feature hashes protocol v2", () => {
     expectTypeOf(first).toEqualTypeOf<DesignFeatureHashReportV2>();
   });
 
+  it("binds Boolean operation, target, and authored tool order", async () => {
+    const booleanVariant = (
+      operation: "union" | "subtract" | "intersect",
+      target: string,
+      tools: readonly string[],
+    ): DesignDocumentV7 => {
+      const changed = clone(comprehensiveDocument()) as unknown as {
+        nodes: Record<string, Record<string, unknown>>;
+      };
+      changed.nodes.boolean = {
+        kind: "boolean",
+        operation,
+        target: { node: target, kind: "solid" },
+        tools: tools.map((node) => ({ node, kind: "solid" })),
+      };
+      return changed as unknown as DesignDocumentV7;
+    };
+    const booleanHash = async (
+      document: DesignDocumentV7,
+    ): Promise<string> => {
+      const report = await reportValue(hashDesignFeaturesV2(document));
+      return report.nodes.find(({ node }) => node === "boolean")!.hash;
+    };
+
+    const baseline = await booleanHash(
+      booleanVariant("union", "box", ["cylinder", "sphere"]),
+    );
+    expect(
+      await booleanHash(
+        booleanVariant("subtract", "box", ["cylinder", "sphere"]),
+      ),
+    ).not.toBe(baseline);
+    expect(
+      await booleanHash(
+        booleanVariant("union", "sphere", ["cylinder", "box"]),
+      ),
+    ).not.toBe(baseline);
+    expect(
+      await booleanHash(
+        booleanVariant("union", "box", ["sphere", "cylinder"]),
+      ),
+    ).not.toBe(baseline);
+  });
+
   it("excludes locations but binds every semantic resource commitment field", async () => {
     const document = comprehensiveDocument();
     const baseline = await reportValue(hashDesignFeaturesV2(document));

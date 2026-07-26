@@ -85,6 +85,22 @@ function transform(
   };
 }
 
+function booleanSolid(
+  operation: "union" | "subtract" | "intersect",
+  target: string,
+  tools: readonly string[],
+): NodeIRV7 {
+  return {
+    kind: "boolean",
+    operation,
+    target: { node: target as never, kind: "solid" },
+    tools: tools.map((node) => ({
+      node: node as never,
+      kind: "solid" as const,
+    })),
+  };
+}
+
 const density = (value: number): ExpressionIR => ({
   op: "literal",
   dimension: "massDensity",
@@ -236,7 +252,11 @@ const strongImportCapabilities = {
 
 interface FakeShape extends KernelShape {
   readonly serial: number;
-  readonly source: KernelPrimitive | "imported" | "transformed";
+  readonly source:
+    | KernelPrimitive
+    | "imported"
+    | "transformed"
+    | "boolean";
   readonly feature: string;
 }
 
@@ -261,11 +281,20 @@ interface TransformCall {
   readonly shape: FakeShape;
 }
 
+interface BooleanCall {
+  readonly operation: "union" | "subtract" | "intersect";
+  readonly target: FakeShape;
+  readonly tools: readonly FakeShape[];
+  readonly context: KernelFeatureContext | undefined;
+  readonly shape: FakeShape;
+}
+
 interface KernelHarness {
   readonly kernel: GeometryKernel;
   readonly primitiveCalls: PrimitiveCall[];
   readonly importCalls: ImportCall[];
   readonly transformCalls: TransformCall[];
+  readonly booleanCalls: BooleanCall[];
   readonly disposed: FakeShape[];
   readonly live: ReadonlySet<FakeShape>;
   readonly disposeKernel: ReturnType<typeof vi.fn>;
@@ -289,6 +318,14 @@ interface KernelHarnessOptions {
   readonly transformHook?: (
     input: FakeShape,
     operations: readonly ResolvedTransformOperation[],
+    context: KernelFeatureContext | undefined,
+    shape: FakeShape,
+    callIndex: number,
+  ) => KernelShape;
+  readonly booleanHook?: (
+    operation: BooleanCall["operation"],
+    target: FakeShape,
+    tools: readonly FakeShape[],
     context: KernelFeatureContext | undefined,
     shape: FakeShape,
     callIndex: number,
@@ -363,6 +400,7 @@ function createKernelHarness(
   const primitiveCalls: PrimitiveCall[] = [];
   const importCalls: ImportCall[] = [];
   const transformCalls: TransformCall[] = [];
+  const booleanCalls: BooleanCall[] = [];
   const disposed: FakeShape[] = [];
   const live = new Set<FakeShape>();
   const disposeKernel = vi.fn();
@@ -415,7 +453,7 @@ function createKernelHarness(
     representation: options.representation ?? "brep",
     exact: options.exact ?? true,
     primitives: ["box", "cylinder", "sphere"],
-    features: ["transform"],
+    features: ["transform", "boolean"],
     nativeImports: [],
     nativeExports: ["step", "brep", "brep-binary"],
     topology: {
@@ -479,6 +517,30 @@ function createKernelHarness(
           transformCalls.length - 1,
         ) ?? shape;
       }),
+    boolean: (
+      operation: BooleanCall["operation"],
+      target: KernelShape,
+      tools: readonly KernelShape[],
+      context?: KernelFeatureContext,
+    ): KernelShape =>
+      acquire("boolean", context, (shape) => {
+        const capturedTools = tools as readonly FakeShape[];
+        booleanCalls.push({
+          operation,
+          target: target as FakeShape,
+          tools: capturedTools,
+          context,
+          shape,
+        });
+        return options.booleanHook?.(
+          operation,
+          target as FakeShape,
+          capturedTools,
+          context,
+          shape,
+          booleanCalls.length - 1,
+        ) ?? shape;
+      }),
     mesh: (shape: KernelShape): MeshData => {
       const candidate = shape as FakeShape;
       return {
@@ -526,6 +588,7 @@ function createKernelHarness(
     primitiveCalls,
     importCalls,
     transformCalls,
+    booleanCalls,
     disposed,
     live,
     disposeKernel,
@@ -808,6 +871,109 @@ describe("staged document-v7 part output evaluation", () => {
     expect(harness.live.size).toBe(0);
   });
 
+  it("shares configured imported-leaf Boolean graphs across solid and multibody parts", async () => {
+    const bytes = encoder.encode("configured-imported-boolean");
+    const document = await partDocument({
+      resources: { imported: bytes },
+      parameters: {
+        toolWidth: {
+          dimension: "length",
+          default: length(2),
+        },
+      },
+      configurations: {
+        wideTool: {
+          parameterOverrides: {
+            toolWidth: length(6),
+          } as never,
+        },
+      },
+      nodes: {
+        imported: importedBody("imported"),
+        tool: box([
+          lengthParameter("toolWidth"),
+          length(3),
+          length(4),
+        ]),
+        cut: booleanSolid("subtract", "imported", ["tool"]),
+        booleanBodies: bodySet([
+          member("cut-a", "cut"),
+          member("source", "imported"),
+          member("cut-b", "cut"),
+        ]),
+        solidPart: part("cut", "solid", {
+          partNumber: "BOOLEAN-SOLID",
+        }),
+        multibodyPart: part("booleanBodies", "bodySet", {
+          partNumber: "BOOLEAN-MULTIBODY",
+        }),
+      },
+      outputs: {
+        solid: { node: "solidPart", kind: "part" },
+        multibody: { node: "multibodyPart", kind: "part" },
+        alias: { node: "solidPart", kind: "part" },
+      },
+    });
+    const requests: ResourceResolverRequestV7[] = [];
+    const harness = createKernelHarness();
+    const result = await evaluatePartOutputsV7(harness.kernel, document, {
+      configuration: "wideTool",
+      parameters: { toolWidth: 8 },
+      outputs: ["multibody", "solid", "alias"],
+      resolver: resolverFor({ imported: bytes }, requests),
+    });
+    const evaluated = expectPartResult(result);
+    try {
+      expect(evaluated.configurationId).toBe("wideTool");
+      expect(evaluated.parameters).toEqual({ toolWidth: 8 });
+      expect(evaluated.outputNames).toEqual([
+        "multibody",
+        "solid",
+        "alias",
+      ]);
+      expect(requests).toHaveLength(1);
+      expect(harness.importCalls).toHaveLength(1);
+      expect(harness.primitiveCalls).toHaveLength(1);
+      expect(harness.primitiveCalls[0]).toMatchObject({
+        kind: "box",
+        arguments: [[8, 3, 4], false],
+        context: { feature: "tool" },
+      });
+      expect(harness.booleanCalls).toHaveLength(1);
+      expect(harness.booleanCalls[0]).toMatchObject({
+        operation: "subtract",
+        target: harness.importCalls[0]!.shape,
+        tools: [harness.primitiveCalls[0]!.shape],
+        context: { feature: "cut" },
+      });
+
+      const solid = evaluated.output("solid");
+      expect(solid.geometry).toMatchObject({ kind: "solid", node: "cut" });
+      const multibody = evaluated.output("multibody");
+      expect(multibody.geometry).toMatchObject({
+        kind: "bodySet",
+        node: "booleanBodies",
+      });
+      if (multibody.geometry.kind === "bodySet") {
+        expect(multibody.geometry.bodySet.bodyIds).toEqual([
+          "cut-a",
+          "source",
+          "cut-b",
+        ]);
+        expect(
+          multibody.geometry.bodySet.body("cut-a").solid.measure(),
+        ).toEqual(
+          multibody.geometry.bodySet.body("cut-b").solid.measure(),
+        );
+      }
+    } finally {
+      evaluated.dispose();
+    }
+    expect(harness.disposed).toHaveLength(3);
+    expect(new Set(harness.disposed).size).toBe(3);
+    expect(harness.live.size).toBe(0);
+  });
+
   it("keeps shared kernel-boundary diagnostics part-specific", async () => {
     const document = await partDocument({
       nodes: {
@@ -886,7 +1052,9 @@ describe("staged document-v7 part output evaluation", () => {
       expect.arrayContaining([
         expect.objectContaining({
           code: "KERNEL_ERROR",
-          message: expect.stringMatching(/malformed status for part leaf 'leaf'/),
+          message: expect.stringMatching(
+            /malformed status for part solid 'leaf'/,
+          ),
           details: expect.objectContaining({
             phase: "documentV7PartEvaluation",
           }),

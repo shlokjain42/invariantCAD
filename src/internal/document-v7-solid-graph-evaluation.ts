@@ -6,6 +6,7 @@ import {
   type CadResult,
 } from "../core/result.js";
 import type {
+  BooleanNodeIR,
   DesignDocumentV7,
   ImportedBodyNodeIRV7,
   NodeIRV7,
@@ -24,12 +25,13 @@ export type StagedSolidGraphNodeV7 =
           | "importedBody";
       }
     >
-  | TransformNodeIR;
+  | TransformNodeIR
+  | BooleanNodeIR;
 
 /** Primitive or imported roots acquired without a solid dependency. @internal */
 export type StagedSolidLeafNodeV7 = Exclude<
   StagedSolidGraphNodeV7,
-  TransformNodeIR
+  TransformNodeIR | BooleanNodeIR
 >;
 
 /** One selected solid and the document path that selected it. @internal */
@@ -42,9 +44,9 @@ export interface StagedSolidGraphRootV7 {
 export interface StagedSolidGraphLimitsV7 {
   /** Primitive and imported-body nodes acquired directly from the kernel. */
   readonly maxDistinctSolids: number;
-  /** Every distinct admitted solid node, including transforms. */
+  /** Every distinct admitted solid node, including transforms and Booleans. */
   readonly maxSolidGraphNodes: number;
-  /** Solid-reference edges traversed across the admitted graph. */
+  /** Every authored solid-reference edge, including repeated Boolean tools. */
   readonly maxSolidDependencyLinks: number;
   /** Authored transform operations across distinct transform nodes. */
   readonly maxTransformOperations: number;
@@ -156,7 +158,7 @@ function unsupportedSolid(
   return failure(
     diagnostic(
       "EVALUATION_UNSUPPORTED",
-      `Solid graph node '${id}' is not an admitted primitive, imported body, or transform`,
+      `Solid graph node '${id}' is not an admitted primitive, imported body, transform, or Boolean`,
       {
         severity: "error",
         node: id,
@@ -169,6 +171,7 @@ function unsupportedSolid(
             "sphere",
             "importedBody",
             "transform",
+            "boolean",
           ],
           nodeKind: node?.kind,
         },
@@ -186,7 +189,8 @@ function isStagedSolidGraphNodeV7(
       node.kind === "cylinder" ||
       node.kind === "sphere" ||
       node.kind === "importedBody" ||
-      node.kind === "transform")
+      node.kind === "transform" ||
+      node.kind === "boolean")
   );
 }
 
@@ -321,9 +325,55 @@ export function planStagedSolidGraphV7(
           };
           continue;
         }
+        if (node.kind === "boolean") {
+          for (
+            let operandIndex = 0;
+            operandIndex <= node.tools.length;
+            operandIndex += 1
+          ) {
+            const nextDependencyLinkCount = boundedActual(
+              dependencyLinkCount,
+              1,
+            );
+            const operandPath =
+              operandIndex === 0
+                ? `/nodes/${frame.id}/target`
+                : `/nodes/${frame.id}/tools/${operandIndex - 1}`;
+            if (
+              nextDependencyLinkCount >
+              limits.maxSolidDependencyLinks
+            ) {
+              return solidGraphLimitFailure(
+                phase,
+                "maxSolidDependencyLinks",
+                limits.maxSolidDependencyLinks,
+                nextDependencyLinkCount,
+                operandPath,
+              );
+            }
+            dependencyLinkCount = nextDependencyLinkCount;
+          }
+          for (
+            let toolIndex = node.tools.length - 1;
+            toolIndex >= 0;
+            toolIndex -= 1
+          ) {
+            stack[stack.length] = {
+              id: node.tools[toolIndex]!.node,
+              path: `/nodes/${frame.id}/tools/${toolIndex}`,
+              expanded: false,
+            };
+          }
+          stack[stack.length] = {
+            id: node.target.node,
+            path: `/nodes/${frame.id}/target`,
+            expanded: false,
+          };
+          continue;
+        }
       }
 
-      if (node.kind !== "transform") {
+      if (node.kind !== "transform" && node.kind !== "boolean") {
         leaves[leaves.length] = [frame.id, node];
         if (leaves.length > limits.maxDistinctSolids) {
           return solidGraphLimitFailure(

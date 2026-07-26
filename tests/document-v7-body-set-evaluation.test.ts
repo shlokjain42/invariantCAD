@@ -78,6 +78,22 @@ function transform(
   };
 }
 
+function booleanSolid(
+  operation: "union" | "subtract" | "intersect",
+  target: string,
+  tools: readonly string[],
+): NodeIRV7 {
+  return {
+    kind: "boolean",
+    operation,
+    target: { node: target as never, kind: "solid" },
+    tools: tools.map((node) => ({
+      node: node as never,
+      kind: "solid" as const,
+    })),
+  };
+}
+
 function box(
   size: readonly [ExpressionIR, ExpressionIR, ExpressionIR] = [
     length(2),
@@ -223,7 +239,11 @@ const strongImportCapabilities = {
 
 interface FakeShape extends KernelShape {
   readonly serial: number;
-  readonly source: KernelPrimitive | "imported" | "transformed";
+  readonly source:
+    | KernelPrimitive
+    | "imported"
+    | "transformed"
+    | "boolean";
 }
 
 interface PrimitiveCall {
@@ -247,11 +267,20 @@ interface TransformCall {
   readonly shape: FakeShape;
 }
 
+interface BooleanCall {
+  readonly operation: "union" | "subtract" | "intersect";
+  readonly target: FakeShape;
+  readonly tools: readonly FakeShape[];
+  readonly context: KernelFeatureContext | undefined;
+  readonly shape: FakeShape;
+}
+
 interface KernelHarness {
   readonly kernel: GeometryKernel;
   readonly primitiveCalls: PrimitiveCall[];
   readonly importCalls: ImportCall[];
   readonly transformCalls: TransformCall[];
+  readonly booleanCalls: BooleanCall[];
   readonly meshCalls: readonly {
     readonly shape: FakeShape;
     readonly options: MeshOptions | undefined;
@@ -275,6 +304,7 @@ interface KernelHarnessOptions {
     | "measure"
     | "mesh"
     | "transform"
+    | "boolean"
     | "disposeShape"
   )[];
   readonly primitiveHook?: (
@@ -296,6 +326,14 @@ interface KernelHarnessOptions {
     shape: FakeShape,
     callIndex: number,
   ) => KernelShape;
+  readonly booleanHook?: (
+    operation: BooleanCall["operation"],
+    target: FakeShape,
+    tools: readonly FakeShape[],
+    context: KernelFeatureContext | undefined,
+    shape: FakeShape,
+    callIndex: number,
+  ) => KernelShape;
   readonly statusHook?: (
     shape: FakeShape,
   ) => ReturnType<GeometryKernel["status"]>;
@@ -313,6 +351,7 @@ function createKernelHarness(
   const primitiveCalls: PrimitiveCall[] = [];
   const importCalls: ImportCall[] = [];
   const transformCalls: TransformCall[] = [];
+  const booleanCalls: BooleanCall[] = [];
   const meshCalls: {
     shape: FakeShape;
     options: MeshOptions | undefined;
@@ -332,7 +371,7 @@ function createKernelHarness(
     representation: "brep",
     exact: true,
     primitives: ["box", "cylinder", "sphere"],
-    features: ["transform"],
+    features: ["transform", "boolean"],
     nativeImports: [],
     nativeExports: ["step", "brep", "brep-binary"],
     topology: {
@@ -441,6 +480,34 @@ function createKernelHarness(
               ) ?? shape;
             }),
         }),
+    ...(omitted.has("boolean")
+      ? {}
+      : {
+          boolean: (
+            operation: BooleanCall["operation"],
+            target: KernelShape,
+            tools: readonly KernelShape[],
+            context?: KernelFeatureContext,
+          ): KernelShape =>
+            acquire("boolean", (shape) => {
+              const capturedTools = tools as readonly FakeShape[];
+              booleanCalls.push({
+                operation,
+                target: target as FakeShape,
+                tools: capturedTools,
+                context,
+                shape,
+              });
+              return options.booleanHook?.(
+                operation,
+                target as FakeShape,
+                capturedTools,
+                context,
+                shape,
+                booleanCalls.length - 1,
+              ) ?? shape;
+            }),
+        }),
     ...(omitted.has("mesh")
       ? {}
       : {
@@ -513,6 +580,7 @@ function createKernelHarness(
     primitiveCalls,
     importCalls,
     transformCalls,
+    booleanCalls,
     meshCalls,
     exportCalls,
     disposed,
@@ -1373,6 +1441,427 @@ describe("staged document-v7 body-set output evaluation", () => {
     }
   });
 
+  it("preserves Boolean operand order across branching, shared, and repeated graphs", async () => {
+    const document = await bodySetDocument({
+      nodes: {
+        base: box(),
+        cutter: sphere(),
+        limiter: cylinder(),
+        combinedUnion: booleanSolid("union", "base", [
+          "cutter",
+          "limiter",
+          "cutter",
+        ]),
+        cutSubtract: booleanSolid("subtract", "combinedUnion", [
+          "limiter",
+          "base",
+        ]),
+        finalIntersect: booleanSolid("intersect", "combinedUnion", [
+          "cutSubtract",
+          "cutter",
+        ]),
+        bodies: bodySet([
+          member("union", "combinedUnion"),
+          member("subtract", "cutSubtract"),
+          member("intersect-a", "finalIntersect"),
+          member("intersect-b", "finalIntersect"),
+        ]),
+      },
+      outputs: {
+        bodies: { node: "bodies", kind: "bodySet" },
+        alias: { node: "bodies", kind: "bodySet" },
+      },
+    });
+    const harness = createKernelHarness();
+    const result = await evaluateBodySetOutputsV7(harness.kernel, document, {
+      outputs: ["alias", "bodies"],
+    });
+    expect(result.ok, JSON.stringify(result.diagnostics)).toBe(true);
+    if (!result.ok) return;
+    try {
+      expect(result.value.outputNames).toEqual(["alias", "bodies"]);
+      expect(result.value.output("bodies").bodyIds).toEqual([
+        "union",
+        "subtract",
+        "intersect-a",
+        "intersect-b",
+      ]);
+      expect(harness.primitiveCalls).toHaveLength(3);
+      expect(harness.booleanCalls.map(({ operation }) => operation)).toEqual([
+        "union",
+        "subtract",
+        "intersect",
+      ]);
+
+      const shapeForNode = (node: string): FakeShape =>
+        harness.primitiveCalls.find(
+          ({ context }) => context?.feature === node,
+        )!.shape;
+      const base = shapeForNode("base");
+      const cutter = shapeForNode("cutter");
+      const limiter = shapeForNode("limiter");
+      const union = harness.booleanCalls[0]!.shape;
+      const subtract = harness.booleanCalls[1]!.shape;
+      expect(harness.booleanCalls[0]).toMatchObject({
+        operation: "union",
+        target: base,
+        tools: [cutter, limiter, cutter],
+        context: { feature: "combinedUnion" },
+      });
+      expect(harness.booleanCalls[1]).toMatchObject({
+        operation: "subtract",
+        target: union,
+        tools: [limiter, base],
+        context: { feature: "cutSubtract" },
+      });
+      expect(harness.booleanCalls[2]).toMatchObject({
+        operation: "intersect",
+        target: union,
+        tools: [subtract, cutter],
+        context: { feature: "finalIntersect" },
+      });
+      expect(harness.booleanCalls[0]!.tools[0]).toBe(
+        harness.booleanCalls[0]!.tools[2],
+      );
+      expect(
+        result.value.output("bodies").body("intersect-a").solid.measure(),
+      ).toEqual(
+        result.value.output("bodies").body("intersect-b").solid.measure(),
+      );
+    } finally {
+      result.value.dispose();
+    }
+    expect(harness.disposed.map(({ serial }) => serial).sort()).toEqual([
+      0, 1, 2, 3, 4, 5,
+    ]);
+    expect(harness.live.size).toBe(0);
+  });
+
+  it("preflights missing, malformed, and non-callable Boolean support", async () => {
+    const document = await bodySetDocument({
+      nodes: {
+        target: box(),
+        tool: sphere(),
+        combined: booleanSolid("union", "target", ["tool"]),
+        bodies: bodySet([member("combined", "combined")]),
+      },
+      outputs: { bodies: { node: "bodies", kind: "bodySet" } },
+    });
+
+    const missingHarness = createKernelHarness();
+    const missing = await evaluateBodySetOutputsV7(
+      {
+        ...missingHarness.kernel,
+        capabilities: {
+          ...missingHarness.kernel.capabilities,
+          features: ["transform"],
+        },
+      },
+      document,
+    );
+    expectFailureCode(missing, "KERNEL_CAPABILITY_MISSING");
+    expect(missingHarness.primitiveCalls).toHaveLength(0);
+    expect(missingHarness.booleanCalls).toHaveLength(0);
+
+    const malformedHarness = createKernelHarness();
+    const malformed = await evaluateBodySetOutputsV7(
+      {
+        ...malformedHarness.kernel,
+        capabilities: {
+          ...malformedHarness.kernel.capabilities,
+          features: [
+            "boolean",
+            17,
+          ] as unknown as KernelCapabilities["features"],
+        },
+      },
+      document,
+    );
+    expectFailureCode(malformed, "KERNEL_ERROR");
+    expect(malformedHarness.primitiveCalls).toHaveLength(0);
+    expect(malformedHarness.booleanCalls).toHaveLength(0);
+
+    for (const mode of ["missing", "non-callable"] as const) {
+      const harness = createKernelHarness({
+        ...(mode === "missing" ? { omitMethods: ["boolean"] } : {}),
+      });
+      const kernel =
+        mode === "missing"
+          ? harness.kernel
+          : ({
+              ...harness.kernel,
+              boolean: 17,
+            } as unknown as GeometryKernel);
+      const result = await evaluateBodySetOutputsV7(kernel, document);
+      expectFailureCode(result, "KERNEL_ERROR");
+      expect(harness.primitiveCalls, mode).toHaveLength(0);
+      expect(harness.booleanCalls, mode).toHaveLength(0);
+      expect(harness.live.size, mode).toBe(0);
+    }
+  });
+
+  it("rejects Boolean target, tool, and prior-result aliases transactionally", async () => {
+    const directDocument = await bodySetDocument({
+      nodes: {
+        target: box(),
+        tool: sphere(),
+        combined: booleanSolid("union", "target", ["tool"]),
+        bodies: bodySet([member("combined", "combined")]),
+      },
+      outputs: { bodies: { node: "bodies", kind: "bodySet" } },
+    });
+    for (const alias of ["target", "tool"] as const) {
+      const harness = createKernelHarness({
+        booleanHook: (_operation, target, tools) =>
+          alias === "target" ? target : tools[0]!,
+      });
+      const result = await evaluateBodySetOutputsV7(
+        harness.kernel,
+        directDocument,
+      );
+      expectFailureCode(result, "KERNEL_ERROR");
+      expect(harness.primitiveCalls, alias).toHaveLength(2);
+      expect(harness.booleanCalls, alias).toHaveLength(1);
+      expect(harness.disposed, alias).toHaveLength(2);
+      expect(harness.live.size, alias).toBe(0);
+    }
+
+    const priorDocument = await bodySetDocument({
+      nodes: {
+        target: box(),
+        firstTool: sphere(),
+        secondTool: cylinder(),
+        first: booleanSolid("union", "target", ["firstTool"]),
+        second: booleanSolid("subtract", "first", ["secondTool"]),
+        bodies: bodySet([member("second", "second")]),
+      },
+      outputs: { bodies: { node: "bodies", kind: "bodySet" } },
+    });
+    let priorResult: FakeShape | undefined;
+    const priorHarness = createKernelHarness({
+      booleanHook: (
+        _operation,
+        _target,
+        _tools,
+        _context,
+        shape,
+        callIndex,
+      ) => {
+        if (callIndex === 0) {
+          priorResult = shape;
+          return shape;
+        }
+        return priorResult!;
+      },
+    });
+    const prior = await evaluateBodySetOutputsV7(
+      priorHarness.kernel,
+      priorDocument,
+    );
+    expectFailureCode(prior, "KERNEL_ERROR");
+    expect(priorHarness.primitiveCalls).toHaveLength(3);
+    expect(priorHarness.booleanCalls).toHaveLength(2);
+    expect(priorHarness.disposed).toHaveLength(4);
+    expect(new Set(priorHarness.disposed).size).toBe(4);
+    expect(priorHarness.live.size).toBe(0);
+  });
+
+  it("reports valid zero-volume Boolean output as a structured empty result", async () => {
+    const document = await bodySetDocument({
+      nodes: {
+        target: box(),
+        tool: sphere(),
+        combined: booleanSolid("intersect", "target", ["tool"]),
+        bodies: bodySet([member("combined", "combined")]),
+      },
+      outputs: { bodies: { node: "bodies", kind: "bodySet" } },
+    });
+    const harness = createKernelHarness({
+      measureHook: (shape) =>
+        shape.source === "boolean"
+          ? {
+              ...defaultMeasurement,
+              volume: 0,
+              surfaceArea: 0,
+              centerOfMass: null,
+              inertiaTensor: [
+                [0, 0, 0],
+                [0, 0, 0],
+                [0, 0, 0],
+              ],
+            }
+          : defaultMeasurement,
+    });
+    const result = await evaluateBodySetOutputsV7(harness.kernel, document);
+    expectFailureCode(result, "EMPTY_RESULT");
+    if (!result.ok) {
+      expect(result.diagnostics).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            code: "EMPTY_RESULT",
+            node: "combined",
+            path: "/nodes/combined",
+          }),
+        ]),
+      );
+    }
+    expect(harness.primitiveCalls).toHaveLength(2);
+    expect(harness.booleanCalls).toHaveLength(1);
+    expect(harness.disposed).toHaveLength(3);
+    expect(new Set(harness.disposed).size).toBe(3);
+    expect(harness.live.size).toBe(0);
+
+    const nullHarness = createKernelHarness({
+      statusHook: (shape) =>
+        shape.source === "boolean"
+          ? { ok: false, code: "NULL_SHAPE" }
+          : { ok: true, code: "VALID" },
+    });
+    const nullResult = await evaluateBodySetOutputsV7(
+      nullHarness.kernel,
+      document,
+    );
+    expectFailureCode(nullResult, "EMPTY_RESULT");
+    if (!nullResult.ok) {
+      expect(nullResult.diagnostics).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            code: "EMPTY_RESULT",
+            node: "combined",
+            details: expect.objectContaining({
+              status: "NULL_SHAPE",
+            }),
+          }),
+        ]),
+      );
+    }
+    expect(nullHarness.disposed).toHaveLength(3);
+    expect(new Set(nullHarness.disposed).size).toBe(3);
+    expect(nullHarness.live.size).toBe(0);
+  });
+
+  it("contains ordinary and opaque Boolean kernel failures without leaks", async () => {
+    const document = await bodySetDocument({
+      nodes: {
+        target: box(),
+        tool: sphere(),
+        combined: booleanSolid("subtract", "target", ["tool"]),
+        bodies: bodySet([member("combined", "combined")]),
+      },
+      outputs: { bodies: { node: "bodies", kind: "bodySet" } },
+    });
+    const revoked = Proxy.revocable({}, {});
+    revoked.revoke();
+    for (const testCase of [
+      {
+        name: "ordinary",
+        thrown: new Error("Boolean kernel failed"),
+      },
+      {
+        name: "opaque",
+        thrown: revoked.proxy,
+      },
+    ] as const) {
+      const harness = createKernelHarness({
+        booleanHook: () => {
+          throw testCase.thrown;
+        },
+      });
+      const result = await evaluateBodySetOutputsV7(
+        harness.kernel,
+        document,
+      );
+      expectFailureCode(result, "KERNEL_ERROR");
+      expect(harness.primitiveCalls, testCase.name).toHaveLength(2);
+      expect(harness.booleanCalls, testCase.name).toHaveLength(1);
+      expect(harness.disposed, testCase.name).toHaveLength(2);
+      expect(harness.live.size, testCase.name).toBe(0);
+    }
+  });
+
+  it("cleans up Boolean graphs when queued abort or runtime mutation wins", async () => {
+    const document = await bodySetDocument({
+      nodes: {
+        target: box(),
+        tool: sphere(),
+        combined: booleanSolid("union", "target", ["tool"]),
+        bodies: bodySet([member("combined", "combined")]),
+      },
+      outputs: { bodies: { node: "bodies", kind: "bodySet" } },
+    });
+
+    const abortController = new AbortController();
+    const abortHarness = createKernelHarness({
+      booleanHook: (
+        _operation,
+        _target,
+        _tools,
+        _context,
+        shape,
+      ) => {
+        queueMicrotask(() => abortController.abort());
+        return shape;
+      },
+    });
+    const aborted = await evaluateBodySetOutputsV7(
+      abortHarness.kernel,
+      document,
+      { signal: abortController.signal },
+    );
+    expectFailureCode(aborted, "EVALUATION_ABORTED");
+    expect(abortHarness.booleanCalls).toHaveLength(1);
+    expect(abortHarness.disposed).toHaveLength(3);
+    expect(new Set(abortHarness.disposed).size).toBe(3);
+    expect(abortHarness.live.size).toBe(0);
+
+    const originalNumberIsFinite = Number.isFinite;
+    let poisonedCalls = 0;
+    const mutationHarness = createKernelHarness({
+      booleanHook: (
+        _operation,
+        _target,
+        _tools,
+        _context,
+        shape,
+      ) => {
+        queueMicrotask(() => {
+          Number.isFinite = ((value: unknown): boolean => {
+            poisonedCalls += 1;
+            return originalNumberIsFinite(value);
+          }) as typeof Number.isFinite;
+        });
+        return shape;
+      },
+    });
+    let mutated:
+      | Awaited<ReturnType<typeof evaluateBodySetOutputsV7>>
+      | undefined;
+    try {
+      mutated = await evaluateBodySetOutputsV7(
+        mutationHarness.kernel,
+        document,
+      );
+    } finally {
+      Number.isFinite = originalNumberIsFinite;
+    }
+    expect(mutated).toBeDefined();
+    expectFailureCode(mutated!, "IR_INVALID");
+    if (mutated !== undefined && !mutated.ok) {
+      expect(mutated.diagnostics).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            details: expect.objectContaining({ runtimeIntegrity: false }),
+          }),
+        ]),
+      );
+    }
+    expect(poisonedCalls).toBe(0);
+    expect(mutationHarness.booleanCalls).toHaveLength(1);
+    expect(mutationHarness.disposed).toHaveLength(3);
+    expect(new Set(mutationHarness.disposed).size).toBe(3);
+    expect(mutationHarness.live.size).toBe(0);
+  });
+
   it("bounds selected outputs, memberships, distinct solids, documents, and resources", async () => {
     const bytes = encoder.encode("bounded-body-set");
     const document = await bodySetDocument({
@@ -1532,6 +2021,84 @@ describe("staged document-v7 body-set output evaluation", () => {
       }
       expect(harness.primitiveCalls).toHaveLength(0);
       expect(harness.transformCalls).toHaveLength(0);
+      expect(harness.live.size).toBe(0);
+    }
+  });
+
+  it("counts every authored Boolean operand at exact graph and link ceilings", async () => {
+    const document = await bodySetDocument({
+      nodes: {
+        firstLeaf: box(),
+        secondLeaf: sphere(),
+        thirdLeaf: cylinder(),
+        first: booleanSolid("union", "firstLeaf", [
+          "secondLeaf",
+          "thirdLeaf",
+          "secondLeaf",
+        ]),
+        second: booleanSolid("subtract", "first", ["thirdLeaf"]),
+        bodies: bodySet([
+          member("first", "first"),
+          member("second", "second"),
+        ]),
+      },
+      outputs: { bodies: { node: "bodies", kind: "bodySet" } },
+    });
+
+    const exactHarness = createKernelHarness();
+    const exact = await evaluateBodySetOutputsV7(
+      exactHarness.kernel,
+      document,
+      {
+        evaluationLimits: {
+          maxDistinctSolids: 3,
+          maxSolidGraphNodes: 5,
+          maxSolidDependencyLinks: 6,
+        },
+      },
+    );
+    expect(exact.ok, JSON.stringify(exact.diagnostics)).toBe(true);
+    if (exact.ok) exact.value.dispose();
+    expect(exactHarness.primitiveCalls).toHaveLength(3);
+    expect(exactHarness.booleanCalls).toHaveLength(2);
+    expect(exactHarness.live.size).toBe(0);
+
+    for (const testCase of [
+      {
+        resource: "maxSolidGraphNodes",
+        evaluationLimits: { maxSolidGraphNodes: 4 },
+        limit: 4,
+        actual: 5,
+      },
+      {
+        resource: "maxSolidDependencyLinks",
+        evaluationLimits: { maxSolidDependencyLinks: 5 },
+        limit: 5,
+        actual: 6,
+      },
+    ] as const) {
+      const harness = createKernelHarness();
+      const result = await evaluateBodySetOutputsV7(
+        harness.kernel,
+        document,
+        { evaluationLimits: testCase.evaluationLimits },
+      );
+      expectFailureCode(result, "RESOURCE_LIMIT_EXCEEDED");
+      if (!result.ok) {
+        expect(result.diagnostics).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              details: expect.objectContaining({
+                resource: testCase.resource,
+                limit: testCase.limit,
+                actual: testCase.actual,
+              }),
+            }),
+          ]),
+        );
+      }
+      expect(harness.primitiveCalls).toHaveLength(0);
+      expect(harness.booleanCalls).toHaveLength(0);
       expect(harness.live.size).toBe(0);
     }
   });

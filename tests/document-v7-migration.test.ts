@@ -216,6 +216,26 @@ function legacyPreservationDocument(): DesignDocument {
   return cad.build();
 }
 
+function legacyBooleanDocument(): DesignDocument {
+  const cad = design("v7-migration-boolean-order");
+  const target = cad.box("target", {
+    size: [mm(20), mm(12), mm(4)],
+  });
+  const firstTool = cad.box("firstTool", {
+    size: [mm(2), mm(3), mm(4)],
+  });
+  const secondTool = cad.box("secondTool", {
+    size: [mm(3), mm(2), mm(4)],
+  });
+  const result = cad.subtract("result", target, [
+    secondTool,
+    firstTool,
+    secondTool,
+  ]);
+  cad.output("result", result);
+  return cad.build();
+}
+
 interface MutableRecord {
   [key: string]: unknown;
 }
@@ -780,6 +800,42 @@ describe("staged document-v7 migration boundary", () => {
         parsed.topologyReferences,
       );
       expect(stringifyDocument(parsed)).toBe(before);
+    }
+  });
+
+  it("preserves Boolean operation and authored operand order from every frozen legacy grammar", () => {
+    for (const [schema, version, parser] of legacyVersions) {
+      const source = parser.parse({
+        ...legacyBooleanDocument(),
+        schema,
+        version,
+      }) as DesignDocument;
+      const sourceBoolean = (
+        source.nodes as unknown as Readonly<Record<string, unknown>>
+      ).result;
+      expect(sourceBoolean).toMatchObject({
+        kind: "boolean",
+        operation: "subtract",
+        target: { node: "target", kind: "solid" },
+        tools: [
+          { node: "secondTool", kind: "solid" },
+          { node: "firstTool", kind: "solid" },
+          { node: "secondTool", kind: "solid" },
+        ],
+      });
+      const before = stringifyDocument(source);
+
+      const migrated = migrateDocumentToV7(source);
+      expect(migrated.ok, `document v${version}`).toBe(true);
+      if (!migrated.ok) continue;
+      expect(
+        (
+          migrated.value.nodes as unknown as Readonly<
+            Record<string, unknown>
+          >
+        ).result,
+      ).toEqual(sourceBoolean);
+      expect(stringifyDocument(source)).toBe(before);
     }
   });
 
