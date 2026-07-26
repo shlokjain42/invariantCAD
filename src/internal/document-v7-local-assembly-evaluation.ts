@@ -2394,12 +2394,13 @@ function cleanupChildren(
 }
 
 /**
- * Evaluates selected direct Document v7 assembly outputs containing only flat,
- * active, local part occurrences.
+ * Evaluates selected direct Document v7 assembly outputs by flattening bounded,
+ * acyclic local assembly trees into active local-part leaves.
  *
  * Part evaluation is batched once per effective configuration. Suppressed
- * unsupported occurrences are inert; active nested or external components are
- * rejected before resource resolution or kernel work.
+ * unsupported occurrences are inert; active external components and recursive
+ * hand-authored local graphs are rejected before resource resolution or kernel
+ * work.
  *
  * @internal
  */
