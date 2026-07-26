@@ -76,17 +76,17 @@ stagedBodySetDesignV7(
 ): StagedBodySetDesignBuilderV7
 ```
 
-This is a deliberately narrow facade for authoring the direct graph and datum
-nodes already admitted by the three staged v7 geometry evaluators and the datum
-resolver. Its implementation lives in
+This is a deliberately narrow facade for authoring the direct graph, flat local
+assemblies, and datum nodes admitted by the four staged v7 geometry evaluators
+and the datum resolver. Its implementation lives in
 `src/internal/document-v7-body-set-authoring.ts`; it is not exported from the
 package root or any package subpath. The public `design(...)` builder,
 `DesignDocument` alias, evaluator, and migration target remain on frozen v6.
 
 The facade privately composes the v6 builder for admitted parameters and
 native primitives, then adds staged configuration, material, resource,
-imported-body, body-set, part, and datum records. Its complete admitted surface
-is:
+imported-body, body-set, part, flat local assembly, and datum records. Its
+complete admitted surface is:
 
 | Method | Staged result | Boundary |
 | --- | --- | --- |
@@ -94,17 +94,18 @@ is:
 | `parameter.massDensity(...)` | `Parameter<"massDensity">` | Density in the canonical kg/mm³ base unit |
 | `parameter.scalar(...)` | `Parameter<"scalar">` | Dimensionless defaults, bounds, labels, and descriptions |
 | `material(id, options)` | `MaterialRef` | Document-owned name, density expression, optional description, and detached metadata |
-| `configuration(...)` | Configuration ID | Its callback admits typed length/density/scalar `.parameter(...)` overrides and `.partMaterial(part, material)` substitution |
+| `configuration(...)` | Configuration ID | Its callback admits typed length/density/scalar `.parameter(...)` overrides, `.partMaterial(part, material)` substitution, and `.instanceSuppressed(assembly, instanceId, suppressed?)` |
 | `box(...)`, `cylinder(...)`, `sphere(...)` | `StagedBodyLeafRefV7` | Direct primitive leaves with the v6-shaped typed length-expression API |
 | `resource(id, commitment)` | `StagedResourceRefV7` | Explicit SHA-256 digest, byte length, media type, ordered location hints, and detached metadata |
 | `importedBody(id, resource, options)` | `StagedImportedBodyRefV7` | Direct STEP or text/binary BREP leaf with a strong single-solid policy |
 | `bodySet(id, members)` | `StagedBodySetRefV7` | Dense non-empty ordered memberships of direct primitive or imported leaves |
 | `part(id, geometry, options?)` | `PartRef` | Direct owned solid leaf or body-set geometry with part and material intent |
+| `assembly(id, build)` | `AssemblyRef` | Flat fixed-placement instances of owned local parts through `StagedLocalAssemblyBuilderV7` |
 | `datumPoint(...)` | Owned datum handle | Parametric position from three length expressions |
 | `datumAxis(...)` | Owned datum handle | Parametric origin and one scalar direction |
 | `datumPlane(...)` | Owned datum handle | Parametric origin, scalar positive-X direction, and scalar normal |
 | `coordinateSystem(...)` | Owned datum handle | Parametric origin plus scalar positive-X and positive-Y directions |
-| `output(name, reference)` | Builder | Direct imported-body, body-set, or part targets |
+| `output(name, reference)` | Builder | Direct imported-body, body-set, part, or staged local-assembly targets |
 | `build(options?)` | `DesignDocumentV7` | Detached, deeply frozen data accepted by strict v7 parsing and semantic validation |
 
 The recently admitted part and material source signatures are:
@@ -124,20 +125,47 @@ part(
   options?: PartOptions,
 ): PartRef
 
+assembly(
+  id: string,
+  build: (assembly: StagedLocalAssemblyBuilderV7) => void,
+): AssemblyRef
+
+assembly.instance(
+  id: string,
+  component: PartRef,
+  options?: StagedLocalAssemblyInstanceOptionsV7,
+): this
+
+interface StagedLocalAssemblyInstanceOptionsV7 {
+  readonly placement?: readonly TransformOperationIR[];
+  readonly suppressed?: boolean;
+  readonly configuration?: OccurrenceConfigurationIRV7;
+}
+
 configuration.partMaterial(part: PartRef, material: MaterialRef): this
+
+configuration.instanceSuppressed(
+  assembly: AssemblyRef,
+  instanceId: string,
+  suppressed?: boolean,
+): this
 
 output(
   name: string,
-  reference: StagedImportedBodyRefV7 | StagedBodySetRefV7 | PartRef,
+  reference:
+    | StagedImportedBodyRefV7
+    | StagedBodySetRefV7
+    | PartRef
+    | AssemblyRef,
 ): this
 ```
 
 Every staged reference is owned by the builder that created it. Resource IDs,
 parameter IDs, material IDs, configuration IDs, node IDs, output names, and
 body-member IDs must be valid and unique in their applicable namespace. The
-facade rejects foreign or forged geometry, material, part, resource, and output
-handles. It constructs canonical references from captured identity rather than
-dispatching through mutable handle methods. Datum authoring returns
+facade rejects foreign or forged geometry, material, part, assembly, resource,
+and output handles. It constructs canonical references from captured identity
+rather than dispatching through mutable handle methods. Datum authoring returns
 owner-bound, frozen handles reserved for later feature consumers; no method in
 this slice consumes one.
 
@@ -158,6 +186,41 @@ material identity and supplies density when needed; an explicit part density
 still wins. A legacy label and a material name never perform catalogue lookup.
 Length, density, and scalar parameters may be specialized by a named
 configuration and then by bounded caller overrides during evaluation.
+
+### Flat local assemblies
+
+The staged `assembly(id, build)` method passes one
+`StagedLocalAssemblyBuilderV7` to its callback. Each `instance(...)` in this
+slice references an owned local part directly. Its stable ID is the complete
+one-segment occurrence path for that flat assembly, its placement is an ordered
+list of translate, rotate, scale, or mirror operations, and its configuration
+selector is exactly one of:
+
+- `inherit`, which evaluates the part in the configuration selected for the
+  root assembly;
+- `base`, which evaluates the part in the base document context; or
+- `named`, which evaluates the part in the referenced document-owned named
+  configuration.
+
+Omitted instance options mean an empty placement, `suppressed: false`, and
+`{ mode: "inherit" }`.
+
+The root configuration also controls definition-scoped instance suppression
+through `configuration.instanceSuppressed(...)`. Passing `false` explicitly
+unsuppresses an instance authored with `suppressed: true`; omission retains the
+authored value. Suppression is resolved before component support is checked, so
+an effectively suppressed nested or external component present in hand-authored
+v7 data is inert. An active nested local assembly or external component remains
+unsupported and is rejected before resource resolution or kernel work.
+
+Occurrence IDs are unique only within their containing assembly. Repeating one
+part in several instances is expected and does not copy its document
+definition. Per-occurrence `inherit`, `base`, and named selection can still
+produce different effective geometry, material, or density from that shared
+definition. Evaluation reuses one part result for equal `(part, effective
+configuration)` states within one call, and direct part evaluation may
+separately deduplicate leaf acquisition within each configuration batch.
+Authoring does not create a persistent or cross-run cache commitment.
 
 The four datum methods author ordinary Document v7 nodes with stable node IDs.
 A point carries a length-valued position. An axis adds one scalar direction. A
@@ -188,29 +251,34 @@ strictly parses the completed document. A failed strict result is raised as a
 the current default ceilings of `10,000` definitions, `100,000` aggregate
 location hints, and `16 MiB` of aggregate UTF-8 location text. One `bodySet(...)`
 call is additionally rejected before copying if it exceeds the default
-`1,000,000` structural-value ceiling. Final build limits can be stricter; they
-do not raise these immediate safeguards.
+`1,000,000` structural-value ceiling, and one instance placement cannot contain
+more operations than that ceiling. The completed assembly instance list is
+charged to `maxStructuralValues` during build. Final build limits can be
+stricter; they do not raise these immediate safeguards.
 
 Authoring methods fail immediately when a handle comes from another builder, a
 namespace is duplicated, a required collection is sparse or empty, member IDs
 repeat, a commitment is malformed, a configuration references foreign
 definitions, an immediate authoring ceiling is exceeded, or a parameter,
-configuration, material, part, resource, import, unit-policy, datum, or
-body-member option record contains an accessor or unknown field. Those inputs
-must be plain own-data records; accessors are not invoked and unsupported
+configuration, material, part, assembly instance, placement, resource, import,
+unit-policy, datum, or body-member option record contains an accessor or
+unknown field. Those inputs must be plain own-data records; required arrays
+must be dense own-data arrays. Accessors are not invoked and unsupported
 semantics are rejected rather than silently discarded. Build then applies
 caller-selected document limits and strict v7 validation before returning the
 detached, recursively frozen document.
 
 This facade does not author generic solid or direct primitive outputs,
-assemblies, external occurrences, datum-backed sketches, transforms, Booleans,
-body-consuming features, per-body materials, or other general dependency
-graphs. It also does not add datum design outputs, CLI support, location I/O,
-reader inference, healing, a primary-body rule, cross-body topology, aggregate
-geometric measurement, or exact aggregate STEP/BREP export. Part-level STL/OBJ
-export is an aggregate tessellation view and is explicitly approximate/lossy;
-exact native export and topology remain per-solid or per-body capabilities.
-Those omissions are product boundaries, not implicit fallbacks.
+nested local assemblies, external occurrences, datum-backed sketches,
+transforms, Booleans, body-consuming features, per-body materials, or other
+general dependency graphs. It also does not add datum design outputs, CLI
+support, location I/O, reader inference, healing, a primary-body rule,
+cross-body or assembly topology, aggregate geometric measurement, mates,
+interference, or exact aggregate STEP/BREP export. Part- and assembly-level
+STL/OBJ export is an aggregate tessellation view and is explicitly
+approximate/lossy; exact native export and topology remain per-solid or
+per-body capabilities. Those omissions are product boundaries, not implicit
+fallbacks.
 
 ## ID rules
 

@@ -28,6 +28,7 @@ import {
   NodeV7Schema,
   TopologyReferenceEntryV7Schema,
 } from "../src/schema.js";
+import { documentV7RuntimeIntrinsicsAreIntact } from "../src/internal/document-v7-runtime-integrity.js";
 import {
   cloneDocumentV7,
   parseDocument,
@@ -1207,6 +1208,66 @@ describe("staged document-v7 serialization and validation", () => {
       Reflect.deleteProperty(Object.prototype, inheritedKey);
     }
     expect(inheritedResults).toEqual([false, false, false]);
+  });
+
+  it("tracks the DataView binding and complete prototype state", () => {
+    const source = stagedV7Document();
+    const realm = globalThis;
+    const bindingDescriptor = Object.getOwnPropertyDescriptor(
+      realm,
+      "DataView",
+    );
+    const methodDescriptor = Object.getOwnPropertyDescriptor(
+      DataView.prototype,
+      "getUint8",
+    );
+    expect(bindingDescriptor).toBeDefined();
+    expect(methodDescriptor).toBeDefined();
+    if (
+      bindingDescriptor === undefined ||
+      methodDescriptor === undefined
+    ) {
+      return;
+    }
+    expect(documentV7RuntimeIntrinsicsAreIntact()).toBe(true);
+
+    let bindingIntegrity: boolean | undefined;
+    let bindingBoundarySuccess: boolean | undefined;
+    try {
+      Object.defineProperty(realm, "DataView", {
+        ...bindingDescriptor,
+        value: class PoisonedDataView {},
+      });
+      bindingIntegrity = documentV7RuntimeIntrinsicsAreIntact();
+      bindingBoundarySuccess =
+        DesignDocumentV7Schema.safeParse(source).success;
+    } finally {
+      Object.defineProperty(realm, "DataView", bindingDescriptor);
+    }
+    expect(bindingIntegrity).toBe(false);
+    expect(bindingBoundarySuccess).toBe(false);
+    expect(documentV7RuntimeIntrinsicsAreIntact()).toBe(true);
+
+    let prototypeIntegrity: boolean | undefined;
+    let prototypeBoundarySuccess: boolean | undefined;
+    try {
+      Object.defineProperty(DataView.prototype, "getUint8", {
+        ...methodDescriptor,
+        value: (): number => 0,
+      });
+      prototypeIntegrity = documentV7RuntimeIntrinsicsAreIntact();
+      prototypeBoundarySuccess =
+        DesignDocumentV7Schema.safeParse(source).success;
+    } finally {
+      Object.defineProperty(
+        DataView.prototype,
+        "getUint8",
+        methodDescriptor,
+      );
+    }
+    expect(prototypeIntegrity).toBe(false);
+    expect(prototypeBoundarySuccess).toBe(false);
+    expect(documentV7RuntimeIntrinsicsAreIntact()).toBe(true);
   });
 
   it("contains opaque failures before direct-schema diagnostic iteration", () => {

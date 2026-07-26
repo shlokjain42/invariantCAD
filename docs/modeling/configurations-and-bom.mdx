@@ -194,6 +194,52 @@ capabilities. Aggregate geometric measurement, cross-body topology, exact
 aggregate STEP/BREP, assemblies, occurrence rollups, interference handling,
 per-body materials, and general part graphs are outside this staged slice.
 
+## Repository-only Document v7 flat local assemblies
+
+The staged facade can now wrap those admitted parts in a flat local assembly
+through `assembly(...)` and its `StagedLocalAssemblyBuilderV7` callback, publish
+that assembly as an output, and evaluate it with the source-only
+`evaluateLocalAssemblyOutputsV7(...)` operation. A staged configuration can
+call `instanceSuppressed(assembly, instanceId, suppressed?)`. The selected root
+configuration overrides the instance's authored suppression; passing `false`
+therefore reactivates an instance authored as suppressed.
+
+This is deliberately different from widening the public v6 semantics described
+above. Each staged v7 instance also carries one child configuration selector:
+
+| Selector | Effective part context |
+| --- | --- |
+| `inherit` | The configuration selected for the root assembly |
+| `base` | The base document, regardless of the root selection |
+| `named` | The referenced document-owned named configuration |
+
+Caller parameter overrides then specialize every active part context for that
+one evaluation. The evaluator reuses one evaluated part result for equal
+`(part, effective configuration)` states within the call, but keeps every
+stable one-segment occurrence ID and quantity. Direct part evaluation may also
+acquire a leaf node once per configuration batch when multiple admitted parts
+reference it. It does not infer geometric equivalence between contexts and
+establishes no cross-run cache.
+
+The contextual BOM keeps unlike `(part, effective configuration)` states in
+separate deterministic rows. Each row records its stable occurrence IDs,
+effective material and density provenance, definition mass, placed total mass,
+and quantity. Occurrences sharing one context aggregate quantity normally.
+Missing density leaves the affected row and overall total incomplete, with
+diagnostics instead of an invented zero. Physical mass applies each context's
+density to every single- or multibody part membership, then composes the
+occurrence's affine placement before combining mass, center of mass, and
+inertia. Aliases and overlaps still count per authored membership and
+occurrence; this is not interference subtraction or a Boolean union.
+
+Effectively suppressed hand-authored nested or external components are inert.
+An active nested local assembly or external component is rejected before
+resolver or kernel work. The staged slice does not provide recursive product
+structure, external-document evaluation, per-body materials, mates, motion,
+interference, assembly topology, aggregate geometric measurement, or exact
+assembly STEP/BREP export. Its aggregate mesh, STL, and OBJ are
+approximate/lossy tessellation views.
+
 ## Runtime parameter overrides
 
 Explicit `EvaluationOptions.parameters` can further specialize the selected

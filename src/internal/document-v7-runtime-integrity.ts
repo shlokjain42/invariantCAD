@@ -6,7 +6,9 @@
 
 const IntrinsicArray = Array;
 const IntrinsicArrayBuffer = ArrayBuffer;
+const IntrinsicDataView = DataView;
 const IntrinsicError = Error;
+const IntrinsicFloat32Array = Float32Array;
 const IntrinsicFunction = Function;
 const IntrinsicGlobalThis = globalThis;
 const IntrinsicJSON = JSON;
@@ -25,6 +27,7 @@ const IntrinsicSyntaxError = SyntaxError;
 const IntrinsicTextEncoder = TextEncoder;
 const IntrinsicTypeError = TypeError;
 const IntrinsicUint8Array = Uint8Array;
+const IntrinsicUint32Array = Uint32Array;
 const IntrinsicWeakMap = WeakMap;
 const IntrinsicWeakSet = WeakSet;
 
@@ -280,7 +283,9 @@ const completeOwners = new IntrinsicArray<object>();
 for (const owner of [
   IntrinsicArray.prototype,
   IntrinsicArrayBuffer.prototype,
+  IntrinsicDataView.prototype,
   IntrinsicError.prototype,
+  IntrinsicFloat32Array.prototype,
   IntrinsicFunction.prototype,
   IntrinsicMap.prototype,
   IntrinsicObject.prototype,
@@ -293,6 +298,7 @@ for (const owner of [
   IntrinsicTextEncoder.prototype,
   IntrinsicTypeError.prototype,
   IntrinsicUint8Array.prototype,
+  IntrinsicUint32Array.prototype,
   IntrinsicWeakMap.prototype,
   IntrinsicWeakSet.prototype,
   arrayIteratorPrototype,
@@ -332,6 +338,7 @@ const SELECTED_PROPERTIES = [
     IntrinsicArray,
     ["prototype", "isArray", "from", IntrinsicSymbol.species],
   ],
+  [IntrinsicDataView, ["prototype"]],
   [
     IntrinsicObject,
     [
@@ -397,6 +404,7 @@ const SELECTED_PROPERTIES = [
   [IntrinsicTypeError, ["prototype"]],
   [IntrinsicSyntaxError, ["prototype"]],
   [IntrinsicFunction, ["prototype"]],
+  [IntrinsicFloat32Array, ["prototype"]],
   [IntrinsicMap, ["prototype"]],
   [IntrinsicSet, ["prototype"]],
   [IntrinsicWeakMap, ["prototype"]],
@@ -405,6 +413,7 @@ const SELECTED_PROPERTIES = [
   [IntrinsicString, ["prototype"]],
   [IntrinsicTextEncoder, ["prototype"]],
   [IntrinsicUint8Array, ["prototype"]],
+  [IntrinsicUint32Array, ["prototype"]],
 ] as const satisfies readonly (
   readonly [object, readonly PropertyKey[]]
 )[];
@@ -431,7 +440,9 @@ for (let ownerIndex = 0; ownerIndex < SELECTED_PROPERTIES.length; ownerIndex += 
 const GLOBAL_BINDING_NAMES = [
   "Array",
   "ArrayBuffer",
+  "DataView",
   "Error",
+  "Float32Array",
   "Function",
   "globalThis",
   "JSON",
@@ -449,6 +460,8 @@ const GLOBAL_BINDING_NAMES = [
   "SyntaxError",
   "TextEncoder",
   "TypeError",
+  "Uint8Array",
+  "Uint32Array",
   "WeakMap",
   "WeakSet",
 ] as const;
