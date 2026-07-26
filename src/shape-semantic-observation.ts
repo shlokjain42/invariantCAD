@@ -9,9 +9,11 @@ import {
   type Diagnostic,
 } from "./core/result.js";
 import {
+  inspectKernelMeasurementCapabilities,
   type GeometryKernel,
   type KernelExchangeFormat,
   type KernelFeature,
+  type KernelGenusMeasurementCapability,
   type KernelShape,
   type MeshOptions,
 } from "./kernel.js";
@@ -29,6 +31,7 @@ import type {
 } from "./protocol/topology.js";
 
 export const KERNEL_SHAPE_SEMANTIC_OBSERVATION_PROTOCOL_VERSION = 1 as const;
+export const KERNEL_SHAPE_SEMANTIC_OBSERVATION_PROTOCOL_VERSION_V2 = 2 as const;
 
 export interface KernelShapeSemanticObservationLimits {
   readonly maxOperations: number;
@@ -154,6 +157,15 @@ export interface KernelShapeSemanticMeasurementsV1 {
   };
   readonly genus: KernelShapeSemanticEncodedFloat64;
   readonly tolerance: KernelShapeSemanticEncodedFloat64;
+}
+
+export interface KernelShapeSemanticMeasurementsV2
+  extends Omit<KernelShapeSemanticMeasurementsV1, "genus"> {
+  /**
+   * `null` means that the kernel cannot report genus exactly. It is distinct
+   * from the exact genus value zero.
+   */
+  readonly genus: KernelShapeSemanticEncodedFloat64 | null;
 }
 
 export interface KernelShapeSemanticMeshOptionsV1 {
@@ -290,7 +302,47 @@ export interface KernelShapeSemanticObservationV1
   };
 }
 
+export interface KernelShapeSemanticSnapshotV2
+  extends Omit<KernelShapeSemanticSnapshotV1, "measurements"> {
+  readonly measurements: KernelShapeSemanticMeasurementsV2;
+}
+
+export interface KernelShapeSemanticNativeExchangeV2 {
+  readonly format: KernelExchangeFormat;
+  /** Semantics after export and import; native bytes are deliberately omitted. */
+  readonly imported: KernelShapeSemanticSnapshotV2;
+}
+
+export interface KernelShapeSemanticProbeObservationV2 {
+  readonly id: string;
+  readonly feature: KernelFeature;
+  readonly shapes: readonly KernelShapeSemanticSnapshotV2[];
+}
+
+export interface KernelShapeSemanticObservationV2
+  extends KernelShapeSemanticSnapshotV2 {
+  readonly kind: "kernel-shape-semantic-observation";
+  readonly protocolVersion: typeof KERNEL_SHAPE_SEMANTIC_OBSERVATION_PROTOCOL_VERSION_V2;
+  readonly planId: string;
+  readonly numericEncoding: "ieee754-be-hex-normalized-zero";
+  readonly meshEncoding: "oriented-triangle-multiset-f32";
+  readonly topologyEncoding: "bounded-canonical-incidence-graph";
+  readonly nativeExchanges: readonly KernelShapeSemanticNativeExchangeV2[];
+  readonly probes: readonly KernelShapeSemanticProbeObservationV2[];
+  readonly coverage: KernelShapeSemanticObservationV1["coverage"];
+}
+
 export type KernelShapeSemanticObservation = KernelShapeSemanticObservationV1;
+
+type KernelShapeSemanticObservationProtocolVersion =
+  | typeof KERNEL_SHAPE_SEMANTIC_OBSERVATION_PROTOCOL_VERSION
+  | typeof KERNEL_SHAPE_SEMANTIC_OBSERVATION_PROTOCOL_VERSION_V2;
+type KernelShapeSemanticSnapshotInternal =
+  | KernelShapeSemanticSnapshotV1
+  | KernelShapeSemanticSnapshotV2;
+type KernelShapeSemanticObservationInternal =
+  | KernelShapeSemanticObservationV1
+  | KernelShapeSemanticObservationV2;
 
 interface CapturedMeshRequest {
   readonly id: string;
@@ -343,6 +395,7 @@ interface KernelObservationAccess {
   readonly features: readonly string[];
   readonly nativeImports: readonly string[];
   readonly nativeExports: readonly string[];
+  readonly genusCapability: KernelGenusMeasurementCapability | "absent";
   readonly topologyAdvertised: boolean;
   readonly mesh: GeometryKernel["mesh"];
   readonly measure: GeometryKernel["measure"];
@@ -417,7 +470,8 @@ const EVENT_TARGET_REMOVE_EVENT_LISTENER =
     ? undefined
     : EventTarget.prototype.removeEventListener;
 const INTRINSIC_PROMISE_THEN = Promise.prototype.then;
-const capturedObservations = new WeakSet<object>();
+const capturedObservationsV1 = new WeakSet<object>();
+const capturedObservationsV2 = new WeakSet<object>();
 const observationFailures = new WeakSet<object>();
 
 class ObservationFailure extends Error {
@@ -492,6 +546,23 @@ function kernelFailure(message: string): ObservationFailure {
       severity: "error",
       details: { protocolViolation: true },
     }),
+  );
+}
+
+function missingExactGenusFailure(): ObservationFailure {
+  return new ObservationFailure(
+    diagnostic(
+      "KERNEL_CAPABILITY_MISSING",
+      "Kernel shape semantic observation protocol v1 requires an exact genus measurement",
+      {
+        severity: "error",
+        details: {
+          capability: "shape-measurements.genus",
+          protocolVersion:
+            KERNEL_SHAPE_SEMANTIC_OBSERVATION_PROTOCOL_VERSION,
+        },
+      },
+    ),
   );
 }
 
@@ -1759,7 +1830,8 @@ function observeMeasurements(
   access: KernelObservationAccess,
   shape: KernelShape,
   resources: ObservationResources,
-): KernelShapeSemanticMeasurementsV1 {
+  protocolVersion: KernelShapeSemanticObservationProtocolVersion,
+): KernelShapeSemanticMeasurementsV1 | KernelShapeSemanticMeasurementsV2 {
   operation(resources);
   const raw = Reflect.apply(access.measure, access.kernel, [shape]);
   throwIfAborted(resources);
@@ -1800,14 +1872,30 @@ function observeMeasurements(
     typeof surfaceArea !== "number" ||
     !Number.isFinite(surfaceArea) ||
     surfaceArea < 0 ||
-    typeof genus !== "number" ||
-    !Number.isSafeInteger(genus) ||
-    genus < 0 ||
+    (genus !== null &&
+      (typeof genus !== "number" ||
+        !Number.isSafeInteger(genus) ||
+        genus < 0)) ||
     typeof tolerance !== "number" ||
     !Number.isFinite(tolerance) ||
     tolerance < 0
   ) {
     throw kernelFailure("Geometry kernel returned invalid shape measurement scalars");
+  }
+  if (
+    (access.genusCapability === "exact-per-connected-component" &&
+      genus === null) ||
+    (access.genusCapability === "unsupported" && genus !== null)
+  ) {
+    throw kernelFailure(
+      "Geometry kernel genus measurement contradicts its advertised capability",
+    );
+  }
+  if (
+    genus === null &&
+    protocolVersion === KERNEL_SHAPE_SEMANTIC_OBSERVATION_PROTOCOL_VERSION
+  ) {
+    throw missingExactGenusFailure();
   }
   const capturedMinimum = captureVec3(minimum, "shape bounding box");
   const capturedMaximum = captureVec3(maximum, "shape bounding box");
@@ -1833,9 +1921,9 @@ function observeMeasurements(
       min: capturedMinimum.encoded,
       max: capturedMaximum.encoded,
     }),
-    genus: f64(genus, "shape genus"),
+    genus: genus === null ? null : f64(genus, "shape genus"),
     tolerance: f64(tolerance, "shape tolerance"),
-  });
+  }) as KernelShapeSemanticMeasurementsV1 | KernelShapeSemanticMeasurementsV2;
 }
 
 function observeSnapshot(
@@ -1843,9 +1931,10 @@ function observeSnapshot(
   shape: KernelShape,
   plan: CapturedPlan,
   resources: ObservationResources,
+  protocolVersion: KernelShapeSemanticObservationProtocolVersion,
   maximumBytes = resources.limits.maxObservationBytes,
 ): {
-  readonly value: KernelShapeSemanticSnapshotV1;
+  readonly value: KernelShapeSemanticSnapshotInternal;
   readonly byteLength: number;
   readonly key: string;
 } {
@@ -1873,7 +1962,12 @@ function observeSnapshot(
   if (!status.ok) {
     throw kernelFailure(`Geometry kernel reported non-live shape status '${status.code}'`);
   }
-  const measurements = observeMeasurements(access, shape, resources);
+  const measurements = observeMeasurements(
+    access,
+    shape,
+    resources,
+    protocolVersion,
+  );
   const meshes = plan.meshes.map((request) =>
     observeMesh(access, shape, request, resources, budget),
   );
@@ -1890,7 +1984,7 @@ function observeSnapshot(
     measurements,
     meshes,
     topology,
-  }) as KernelShapeSemanticSnapshotV1;
+  }) as KernelShapeSemanticSnapshotInternal;
   const canonical = boundedCanonicalKey(snapshot, maximumBytes, resources);
   return Object.freeze({
     value: snapshot,
@@ -1940,6 +2034,13 @@ function captureKernelAccess(
     const rawNativeImports = capabilities.nativeImports;
     const rawNativeExports = capabilities.nativeExports;
     const rawTopology = capabilities.topology;
+    const measurementCapabilities =
+      inspectKernelMeasurementCapabilities(capabilities);
+    if (measurementCapabilities.status === "malformed") {
+      throw kernelFailure(
+        "Geometry kernel returned invalid measurement capabilities",
+      );
+    }
     const mesh = kernel.mesh;
     const measure = kernel.measure;
     const status = kernel.status;
@@ -1979,6 +2080,10 @@ function captureKernelAccess(
         resources,
         EXCHANGE_FORMATS,
       ),
+      genusCapability:
+        measurementCapabilities.status === "valid"
+          ? measurementCapabilities.capabilities.genus
+          : "absent",
       topologyAdvertised: rawTopology !== undefined,
       mesh,
       measure,
@@ -2132,16 +2237,13 @@ function awaitAbortableProbe(
   });
 }
 
-/**
- * Produces a bounded, detached, deeply frozen semantic observation. Numeric
- * equality is bit-exact; protocol v1 never tolerance-rounds values.
- */
-export async function observeKernelShapeSemantics(
+async function observeKernelShapeSemanticsProtocol(
   kernel: GeometryKernel,
   shape: KernelShape,
   plan: KernelShapeSemanticObservationPlan,
-  options: ObserveKernelShapeSemanticsOptions = {},
-): Promise<CadResult<KernelShapeSemanticObservation>> {
+  options: ObserveKernelShapeSemanticsOptions,
+  protocolVersion: KernelShapeSemanticObservationProtocolVersion,
+): Promise<CadResult<KernelShapeSemanticObservationInternal>> {
   let rawLimits: unknown;
   let rawSignal: unknown;
   try {
@@ -2223,7 +2325,7 @@ export async function observeKernelShapeSemantics(
   const tracked: TrackedDerivedShape[] = [];
   const adopted = new Set<KernelShape>();
   const cleanupDiagnostics: Diagnostic[] = [];
-  let outcome: CadResult<KernelShapeSemanticObservation> | undefined;
+  let outcome: CadResult<KernelShapeSemanticObservationInternal> | undefined;
   const adopt = (derived: KernelShape): TrackedDerivedShape => {
     if (
       typeof derived !== "object" ||
@@ -2306,11 +2408,15 @@ export async function observeKernelShapeSemantics(
       shape,
       capturedPlan,
       resources,
+      protocolVersion,
     );
     const baseline = capturedBaseline.value;
     const baselineKey = capturedBaseline.key;
     let retainedSnapshotBytes = capturedBaseline.byteLength;
-    const nativeExchanges: KernelShapeSemanticNativeExchangeV1[] = [];
+    const nativeExchanges: {
+      readonly format: KernelExchangeFormat;
+      readonly imported: KernelShapeSemanticSnapshotInternal;
+    }[] = [];
     for (const format of capturedPlan.nativeExchanges) {
       if (
         !nativeImports.has(format) ||
@@ -2378,6 +2484,7 @@ export async function observeKernelShapeSemantics(
         imported.shape,
         capturedPlan,
         resources,
+        protocolVersion,
         resources.limits.maxObservationBytes - retainedSnapshotBytes,
       );
       retainedSnapshotBytes += importedSnapshot.byteLength;
@@ -2386,13 +2493,23 @@ export async function observeKernelShapeSemantics(
       );
       disposeTracked(imported);
       if (
-        observeSnapshot(access, shape, capturedPlan, resources).key !==
+        observeSnapshot(
+          access,
+          shape,
+          capturedPlan,
+          resources,
+          protocolVersion,
+        ).key !==
         baselineKey
       ) {
         throw kernelFailure("Native exchange changed the borrowed source shape");
       }
     }
-    const probes: KernelShapeSemanticProbeObservationV1[] = [];
+    const probes: {
+      readonly id: string;
+      readonly feature: KernelFeature;
+      readonly shapes: readonly KernelShapeSemanticSnapshotInternal[];
+    }[] = [];
     for (const probe of capturedPlan.probes) {
       operation(resources);
       const pendingResult = probe.run(kernel, shape, {
@@ -2544,7 +2661,7 @@ export async function observeKernelShapeSemantics(
       if (adoptionError !== undefined) throw adoptionError;
       enforceDerivedShapeLimit();
       const capturedSnapshots: {
-        readonly value: KernelShapeSemanticSnapshotV1;
+        readonly value: KernelShapeSemanticSnapshotInternal;
         readonly key: string;
       }[] = [];
       for (const item of owned) {
@@ -2553,6 +2670,7 @@ export async function observeKernelShapeSemantics(
           item.shape,
           capturedPlan,
           resources,
+          protocolVersion,
           resources.limits.maxObservationBytes - retainedSnapshotBytes,
         );
         retainedSnapshotBytes += capturedSnapshot.byteLength;
@@ -2576,7 +2694,13 @@ export async function observeKernelShapeSemantics(
         disposeTracked(owned[index]!);
       }
       if (
-        observeSnapshot(access, shape, capturedPlan, resources).key !==
+        observeSnapshot(
+          access,
+          shape,
+          capturedPlan,
+          resources,
+          protocolVersion,
+        ).key !==
         baselineKey
       ) {
         throw kernelFailure(`Semantic probe '${probe.id}' changed the borrowed source shape`);
@@ -2584,7 +2708,7 @@ export async function observeKernelShapeSemantics(
     }
     const observation = deepFreeze({
       kind: "kernel-shape-semantic-observation" as const,
-      protocolVersion: KERNEL_SHAPE_SEMANTIC_OBSERVATION_PROTOCOL_VERSION,
+      protocolVersion,
       planId: capturedPlan.id,
       numericEncoding: "ieee754-be-hex-normalized-zero" as const,
       meshEncoding: "oriented-triangle-multiset-f32" as const,
@@ -2599,7 +2723,7 @@ export async function observeKernelShapeSemantics(
         probedFeatures: capturedPlan.probes.map((probe) => probe.feature).sort(lexicalCompare),
         notApplicableFeatures: capturedPlan.notApplicableFeatures,
       },
-    }) as KernelShapeSemanticObservation;
+    }) as KernelShapeSemanticObservationInternal;
     const canonicalByteLength = canonicalProtocolByteLengthWithin(
       observation,
       resources.limits.maxObservationBytes,
@@ -2627,7 +2751,11 @@ export async function observeKernelShapeSemantics(
         resources.limits.maxObservationBytes,
       );
     }
-    capturedObservations.add(observation);
+    (
+      protocolVersion === KERNEL_SHAPE_SEMANTIC_OBSERVATION_PROTOCOL_VERSION
+        ? capturedObservationsV1
+        : capturedObservationsV2
+    ).add(observation);
     outcome = success(observation);
   } catch (error) {
     outcome =
@@ -2676,10 +2804,50 @@ export async function observeKernelShapeSemantics(
   );
 }
 
-/** Encodes an observation produced by this runtime as canonical JSON UTF-8. */
-export function encodeKernelShapeSemanticObservation(
-  observation: KernelShapeSemanticObservation,
-  options: { readonly maxBytes?: number } = {},
+/**
+ * Produces a bounded, detached, deeply frozen protocol-v1 semantic
+ * observation. Numeric equality is bit-exact; protocol v1 never
+ * tolerance-rounds values and requires an exact genus measurement.
+ */
+export function observeKernelShapeSemantics(
+  kernel: GeometryKernel,
+  shape: KernelShape,
+  plan: KernelShapeSemanticObservationPlan,
+  options: ObserveKernelShapeSemanticsOptions = {},
+): Promise<CadResult<KernelShapeSemanticObservation>> {
+  return observeKernelShapeSemanticsProtocol(
+    kernel,
+    shape,
+    plan,
+    options,
+    KERNEL_SHAPE_SEMANTIC_OBSERVATION_PROTOCOL_VERSION,
+  ) as Promise<CadResult<KernelShapeSemanticObservation>>;
+}
+
+/**
+ * Produces a bounded, detached, deeply frozen protocol-v2 semantic
+ * observation. V2 preserves an unsupported genus as `null`; it never
+ * conflates missing support with exact genus zero.
+ */
+export function observeKernelShapeSemanticsV2(
+  kernel: GeometryKernel,
+  shape: KernelShape,
+  plan: KernelShapeSemanticObservationPlan,
+  options: ObserveKernelShapeSemanticsOptions = {},
+): Promise<CadResult<KernelShapeSemanticObservationV2>> {
+  return observeKernelShapeSemanticsProtocol(
+    kernel,
+    shape,
+    plan,
+    options,
+    KERNEL_SHAPE_SEMANTIC_OBSERVATION_PROTOCOL_VERSION_V2,
+  ) as Promise<CadResult<KernelShapeSemanticObservationV2>>;
+}
+
+function encodeCapturedKernelShapeSemanticObservation(
+  observation: KernelShapeSemanticObservationInternal,
+  options: { readonly maxBytes?: number },
+  capturedObservations: WeakSet<object>,
 ): CadResult<Uint8Array> {
   try {
     if (!isRecord(options) || Object.keys(options).some((key) => key !== "maxBytes")) {
@@ -2734,4 +2902,28 @@ export function encodeKernelShapeSemanticObservation(
       safeErrorMessage(error, "Kernel shape semantic observation could not be encoded"),
     );
   }
+}
+
+/** Encodes a protocol-v1 observation produced by this runtime as canonical JSON UTF-8. */
+export function encodeKernelShapeSemanticObservation(
+  observation: KernelShapeSemanticObservation,
+  options: { readonly maxBytes?: number } = {},
+): CadResult<Uint8Array> {
+  return encodeCapturedKernelShapeSemanticObservation(
+    observation,
+    options,
+    capturedObservationsV1,
+  );
+}
+
+/** Encodes a protocol-v2 observation produced by this runtime as canonical JSON UTF-8. */
+export function encodeKernelShapeSemanticObservationV2(
+  observation: KernelShapeSemanticObservationV2,
+  options: { readonly maxBytes?: number } = {},
+): CadResult<Uint8Array> {
+  return encodeCapturedKernelShapeSemanticObservation(
+    observation,
+    options,
+    capturedObservationsV2,
+  );
 }

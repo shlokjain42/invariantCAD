@@ -16,7 +16,7 @@ exports. Versioned historical names are intentionally included.
 
 ## `invariantcad`
 
-**687 named exports** from `src/index.ts`.
+**697 named exports** from `src/index.ts`.
 
 | Name | Kind | Declared/re-exported from |
 | --- | --- | --- |
@@ -273,8 +273,10 @@ exports. Versioned historical names are intentionally included.
 | `inspectEvaluatorProfile` | value | `./evaluator.js` |
 | `inspectKernelCompositeSweepCapabilities` | value | `./kernel.js` |
 | `inspectKernelDocumentBodyImportCapabilities` | value | `./kernel.js` |
+| `inspectKernelMeasurementCapabilities` | value | `./kernel.js` |
 | `inspectKernelShapeArtifactSupport` | value | `./artifact-cache.js` |
 | `KERNEL_DOCUMENT_BODY_IMPORT_PROTOCOL_VERSION` | value | `./kernel.js` |
+| `KERNEL_MEASUREMENT_PROTOCOL_VERSION` | value | `./kernel.js` |
 | `KERNEL_SHAPE_ARTIFACT_MAX_COMPATIBILITY_FINGERPRINT_BYTES` | value | `./kernel.js` |
 | `KERNEL_SHAPE_ARTIFACT_PROTOCOL_VERSION` | value | `./kernel.js` |
 | `KernelCapabilities` | type | `./kernel.js` |
@@ -304,6 +306,14 @@ exports. Versioned historical names are intentionally included.
 | `KernelFaceDescriptor` | type | `./protocol/topology.js` |
 | `KernelFeature` | type | `./kernel.js` |
 | `KernelFeatureContext` | type | `./kernel.js` |
+| `KernelGenusMeasurementCapability` | type | `./kernel.js` |
+| `KernelMeasurement` | type | `./kernel.js` |
+| `KernelMeasurementCapabilities` | type | `./kernel.js` |
+| `KernelMeasurementCapabilitiesAbsent` | type | `./kernel.js` |
+| `KernelMeasurementCapabilitiesInspection` | type | `./kernel.js` |
+| `KernelMeasurementCapabilitiesMalformed` | type | `./kernel.js` |
+| `KernelMeasurementCapabilitiesMalformedReason` | type | `./kernel.js` |
+| `KernelMeasurementCapabilitiesValid` | type | `./kernel.js` |
 | `KernelPrimitive` | type | `./kernel.js` |
 | `KernelRepresentation` | type | `./kernel.js` |
 | `KernelShape` | type | `./kernel.js` |
@@ -710,37 +720,51 @@ exports. Versioned historical names are intentionally included.
 
 ## `invariantcad/conformance`
 
-**56 named exports** from `src/conformance.ts`.
+**76 named exports** from `src/conformance.ts`.
 
 | Name | Kind | Declared/re-exported from |
 | --- | --- | --- |
 | `auditKernelShapeArtifactCodec` | function | `local` |
 | `AuditKernelShapeArtifactCodecOptions` | interface | `local` |
+| `AuditKernelShapeArtifactCodecOptionsV2` | interface | `local` |
+| `auditKernelShapeArtifactCodecV2` | function | `local` |
 | `DEFAULT_KERNEL_SHAPE_ARTIFACT_CODEC_AUDIT_LIMITS` | value | `local` |
 | `DEFAULT_KERNEL_SHAPE_SEMANTIC_OBSERVATION_LIMITS` | value | `./shape-semantic-observation.js` |
 | `encodeKernelShapeSemanticObservation` | value | `./shape-semantic-observation.js` |
+| `encodeKernelShapeSemanticObservationV2` | value | `./shape-semantic-observation.js` |
 | `hashKernelShapeArtifactFixtureWitness` | function | `local` |
 | `hashKernelShapeArtifactSemanticWitness` | function | `local` |
 | `hashKernelShapeSemanticObservation` | function | `local` |
+| `hashKernelShapeSemanticObservationV2` | function | `local` |
 | `KERNEL_SHAPE_ARTIFACT_CODEC_AUDIT_PROTOCOL_VERSION` | value | `local` |
+| `KERNEL_SHAPE_ARTIFACT_CODEC_AUDIT_PROTOCOL_VERSION_V2` | value | `local` |
 | `KERNEL_SHAPE_ARTIFACT_FIXTURE_WITNESS_PREFIX` | value | `local` |
 | `KERNEL_SHAPE_ARTIFACT_SEMANTIC_WITNESS_PREFIX` | value | `local` |
+| `KERNEL_SHAPE_ARTIFACT_SEMANTIC_WITNESS_PREFIX_V2` | value | `local` |
 | `KERNEL_SHAPE_SEMANTIC_OBSERVATION_PROTOCOL_VERSION` | value | `./shape-semantic-observation.js` |
+| `KERNEL_SHAPE_SEMANTIC_OBSERVATION_PROTOCOL_VERSION_V2` | value | `./shape-semantic-observation.js` |
 | `KernelShapeArtifactAuditArtifactEvidence` | interface | `local` |
 | `KernelShapeArtifactCodecAuditCase` | type | `local` |
+| `KernelShapeArtifactCodecAuditCaseV2` | type | `local` |
 | `KernelShapeArtifactCodecAuditCheck` | type | `local` |
 | `KernelShapeArtifactCodecAuditEvidence` | interface | `local` |
+| `KernelShapeArtifactCodecAuditEvidenceV2` | interface | `local` |
 | `KernelShapeArtifactCodecAuditLimits` | interface | `local` |
 | `KernelShapeArtifactCodecAuditTarget` | type | `local` |
 | `KernelShapeArtifactCodecCandidate` | interface | `local` |
 | `KernelShapeArtifactCodecCaseEvidence` | interface | `local` |
+| `KernelShapeArtifactCodecCaseEvidenceV2` | interface | `local` |
 | `KernelShapeArtifactExpectedIdentity` | interface | `local` |
 | `KernelShapeArtifactFixtureWitness` | type | `local` |
 | `KernelShapeArtifactGoldenDecodeCase` | interface | `local` |
+| `KernelShapeArtifactGoldenDecodeCaseV2` | interface | `local` |
 | `KernelShapeArtifactSelfRoundTripCase` | interface | `local` |
+| `KernelShapeArtifactSelfRoundTripCaseV2` | interface | `local` |
 | `KernelShapeArtifactSemanticWitness` | type | `local` |
+| `KernelShapeArtifactSemanticWitnessV2` | type | `local` |
 | `KernelShapeArtifactWitness` | type | `local` |
 | `KernelShapeArtifactWitnessContext` | interface | `local` |
+| `KernelShapeArtifactWitnessV2` | type | `local` |
 | `KernelShapeSemanticCurveV1` | type | `./shape-semantic-observation.js` |
 | `KernelShapeSemanticEdgeV1` | type | `./shape-semantic-observation.js` |
 | `KernelShapeSemanticEncodedFloat32` | type | `./shape-semantic-observation.js` |
@@ -750,26 +774,32 @@ exports. Versioned historical names are intentionally included.
 | `KernelShapeSemanticFaceV1` | type | `./shape-semantic-observation.js` |
 | `KernelShapeSemanticLineageV1` | type | `./shape-semantic-observation.js` |
 | `KernelShapeSemanticMeasurementsV1` | type | `./shape-semantic-observation.js` |
+| `KernelShapeSemanticMeasurementsV2` | type | `./shape-semantic-observation.js` |
 | `KernelShapeSemanticMeshOptionsV1` | type | `./shape-semantic-observation.js` |
 | `KernelShapeSemanticMeshRequest` | type | `./shape-semantic-observation.js` |
 | `KernelShapeSemanticMeshV1` | type | `./shape-semantic-observation.js` |
 | `KernelShapeSemanticNativeExchangeV1` | type | `./shape-semantic-observation.js` |
+| `KernelShapeSemanticNativeExchangeV2` | type | `./shape-semantic-observation.js` |
 | `KernelShapeSemanticNotApplicableFeature` | type | `./shape-semantic-observation.js` |
 | `KernelShapeSemanticObservation` | type | `./shape-semantic-observation.js` |
 | `KernelShapeSemanticObservationLimits` | type | `./shape-semantic-observation.js` |
 | `KernelShapeSemanticObservationPlan` | type | `./shape-semantic-observation.js` |
 | `KernelShapeSemanticObservationV1` | type | `./shape-semantic-observation.js` |
+| `KernelShapeSemanticObservationV2` | type | `./shape-semantic-observation.js` |
 | `KernelShapeSemanticOrientedTriangleV1` | type | `./shape-semantic-observation.js` |
 | `KernelShapeSemanticProbe` | type | `./shape-semantic-observation.js` |
 | `KernelShapeSemanticProbeContext` | type | `./shape-semantic-observation.js` |
 | `KernelShapeSemanticProbeObservationV1` | type | `./shape-semantic-observation.js` |
+| `KernelShapeSemanticProbeObservationV2` | type | `./shape-semantic-observation.js` |
 | `KernelShapeSemanticSnapshotV1` | type | `./shape-semantic-observation.js` |
+| `KernelShapeSemanticSnapshotV2` | type | `./shape-semantic-observation.js` |
 | `KernelShapeSemanticStatusV1` | type | `./shape-semantic-observation.js` |
 | `KernelShapeSemanticSurfaceV1` | type | `./shape-semantic-observation.js` |
 | `KernelShapeSemanticTopologyV1` | type | `./shape-semantic-observation.js` |
 | `KernelShapeSemanticVertexV1` | type | `./shape-semantic-observation.js` |
 | `observeKernelShapeSemantics` | value | `./shape-semantic-observation.js` |
 | `ObserveKernelShapeSemanticsOptions` | type | `./shape-semantic-observation.js` |
+| `observeKernelShapeSemanticsV2` | value | `./shape-semantic-observation.js` |
 
 ## `invariantcad/kernels/occt`
 

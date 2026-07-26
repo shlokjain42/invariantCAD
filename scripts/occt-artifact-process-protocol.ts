@@ -1,9 +1,9 @@
 import { isAbsolute } from "node:path";
 
 export const OCCT_ARTIFACT_PROCESS_PROTOCOL_VERSION = 3 as const;
-export const OCCT_ARTIFACT_PROCESS_EVIDENCE_VERSION = 1 as const;
-export const OCCT_EVALUATOR_PROCESS_EVIDENCE_VERSION = 1 as const;
-export const OCCT_EVALUATOR_CACHE_PROCESS_EVIDENCE_VERSION = 1 as const;
+export const OCCT_ARTIFACT_PROCESS_EVIDENCE_VERSION = 2 as const;
+export const OCCT_EVALUATOR_PROCESS_EVIDENCE_VERSION = 2 as const;
+export const OCCT_EVALUATOR_CACHE_PROCESS_EVIDENCE_VERSION = 2 as const;
 export const OCCT_ARTIFACT_PROCESS_MAX_ARTIFACT_BYTES =
   64 * 1024 * 1024;
 export const OCCT_ARTIFACT_PROCESS_MAX_CACHE_RECORD_HEADER_BYTES =
@@ -183,7 +183,8 @@ export interface OcctEvaluatorProcessMeasurementEvidence {
     readonly min: readonly [number, number, number];
     readonly max: readonly [number, number, number];
   };
-  readonly genus: number;
+  /** Stock and owned OCCT do not currently expose an exact genus primitive. */
+  readonly genus: null;
   readonly tolerance: number;
 }
 
@@ -316,7 +317,7 @@ export type OcctArtifactProcessResult =
 const requestIdPattern = /^[0-9a-f]{32}$/u;
 const sha256Pattern = /^[0-9a-f]{64}$/u;
 const semanticWitnessPattern =
-  /^invariantcad:kernel-shape-semantic:v1:sha256:[0-9a-f]{64}$/u;
+  /^invariantcad:kernel-shape-semantic:v2:sha256:[0-9a-f]{64}$/u;
 const artifactCacheKeyPattern =
   /^invariantcad:kernel-shape:v1:sha256:[0-9a-f]{64}$/u;
 const textEncoder = new TextEncoder();
@@ -849,7 +850,7 @@ function parseMeasurementEvidence(
     value.volume < 0 ||
     !finiteNumber(value.surfaceArea) ||
     value.surfaceArea < 0 ||
-    !nonNegativeSafeInteger(value.genus) ||
+    value.genus !== null ||
     !finiteNumber(value.tolerance) ||
     value.tolerance < 0 ||
     !Array.isArray(value.inertiaTensor) ||

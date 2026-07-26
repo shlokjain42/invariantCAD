@@ -1089,7 +1089,7 @@ async function assertDocumentBoolean(evaluator: Evaluator): Promise<void> {
         min: [0, 0, 0],
         max: [0, 0, 0],
       });
-      assert.equal(measurement.genus, 0);
+      assert.equal(measurement.genus, null);
     },
     { allowEmpty: true },
   );

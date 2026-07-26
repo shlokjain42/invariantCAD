@@ -44,8 +44,9 @@ The 0.1.0 package contains general protocol foundations:
 - Bounded cancellable stores, aggregate sessions, and a copying in-memory
   reference store.
 - A framework-neutral `invariantcad/conformance` audit boundary.
-- Semantic-observation protocol v1, which creates a bounded canonical
-  evaluator-semantic projection for a declared probe plan.
+- Frozen semantic-observation protocol v1 plus explicit nullable-genus
+  protocol v2, each with its own capture brand, witness domain, and codec-audit
+  admission.
 
 These APIs can audit a candidate or represent a record. They do not confer
 certification, advertise a backend codec, or make the evaluator consume a
@@ -243,13 +244,13 @@ The current pinned asymmetric-box v3 fixture is `13,735` bytes. Its tagged
 fixture witness is:
 
 ```text
-invariantcad:kernel-shape-artifact-fixture:v1:sha256:8ecfa6ac89142f794c2d55a78e7121ce0805b8abcb5aa64230e7722d99c8c2be
+invariantcad:kernel-shape-artifact-fixture:v1:sha256:4279e9f76ab1e41dae47b28aea9c426ffa8b5f329ab624f137c65f6881e23918
 ```
 
 Its semantic witness is:
 
 ```text
-invariantcad:kernel-shape-semantic:v1:sha256:40ae684e4a2fad512f54e1f1be4443acf7faf2f34fc6b281c7b816d8d3366cb2
+invariantcad:kernel-shape-semantic:v2:sha256:b99dd9c39b950700dd22c8be6255db6e816e1a51668f415bf84b80c4c200d588
 ```
 
 A dedicated duplicate-occurrence regression replaces one occurrence with two

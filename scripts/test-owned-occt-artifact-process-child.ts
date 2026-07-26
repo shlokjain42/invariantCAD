@@ -17,7 +17,7 @@ import {
   type ArtifactCacheStoreContext,
   type ArtifactCacheStoreValue,
 } from "../src/artifact-cache.js";
-import { hashKernelShapeSemanticObservation } from "../src/conformance.js";
+import { hashKernelShapeSemanticObservationV2 } from "../src/conformance.js";
 import { design, tf } from "../src/design.js";
 import {
   createEvaluator,
@@ -50,7 +50,7 @@ import {
   type SketchSolverBackend,
 } from "../src/solver.js";
 import {
-  observeKernelShapeSemantics,
+  observeKernelShapeSemanticsV2,
   type KernelShapeSemanticObservationPlan,
 } from "../src/shape-semantic-observation.js";
 import {
@@ -58,7 +58,10 @@ import {
   OCCT_ARTIFACT_PROCESS_MAX_RESULT_BYTES,
   OCCT_ARTIFACT_PROCESS_CACHE_RECORD_PREFIX_BYTES,
   OCCT_ARTIFACT_PROCESS_MAX_CACHE_RECORD_HEADER_BYTES,
+  OCCT_ARTIFACT_PROCESS_EVIDENCE_VERSION,
   OCCT_ARTIFACT_PROCESS_PROTOCOL_VERSION,
+  OCCT_EVALUATOR_CACHE_PROCESS_EVIDENCE_VERSION,
+  OCCT_EVALUATOR_PROCESS_EVIDENCE_VERSION,
   encodeOcctArtifactProcessStartEvent,
   encodeOcctEvaluatorKernelOperationStartEvent,
   encodeOcctEvaluatorNonYieldingStallStartEvent,
@@ -645,14 +648,14 @@ async function semanticWitness(
       })),
   );
   const plan: KernelShapeSemanticObservationPlan = Object.freeze({
-    id: "occt-artifact-process-gate-v1",
+    id: "occt-artifact-process-gate-v2",
     meshes: Object.freeze([{ id: "default" }]),
     topology: "required",
     nativeExchanges: Object.freeze([]),
     probes: Object.freeze([]),
     notApplicableFeatures,
   });
-  const observation = await observeKernelShapeSemantics(
+  const observation = await observeKernelShapeSemanticsV2(
     kernel,
     shape,
     plan,
@@ -665,7 +668,7 @@ async function semanticWitness(
       )}`,
     );
   }
-  const witness = await hashKernelShapeSemanticObservation(
+  const witness = await hashKernelShapeSemanticObservationV2(
     observation.value,
     { maxBytes: maximumObservationBytes },
   );
@@ -935,6 +938,11 @@ function isolatedEvaluatorCacheKernel(
 function copyMeasurements(
   measurements: ReturnType<EvaluatedSolid["measure"]>,
 ): OcctEvaluatorProcessMeasurementEvidence {
+  if (measurements.genus !== null) {
+    throw new TypeError(
+      "OCCT evaluator process unexpectedly reported an exact genus",
+    );
+  }
   const vec = (
     value: readonly [number, number, number],
   ): readonly [number, number, number] =>
@@ -955,7 +963,7 @@ function copyMeasurements(
       min: vec(measurements.boundingBox.min),
       max: vec(measurements.boundingBox.max),
     }),
-    genus: measurements.genus,
+    genus: null,
     tolerance: measurements.tolerance,
   });
 }
@@ -1015,7 +1023,7 @@ async function evaluateFixture(
   }
   const evidence = Object.freeze({
     kind: "invariantcad-private-occt-evaluator-process-evidence" as const,
-    evidenceVersion: 1 as const,
+    evidenceVersion: OCCT_EVALUATOR_PROCESS_EVIDENCE_VERSION,
     operation: "evaluate" as const,
     executionBoundary: "one-shot-node-child-process" as const,
     evaluatorPath: "Evaluator.evaluate" as const,
@@ -1228,7 +1236,7 @@ async function evaluateCacheFixture(
   const evidence = Object.freeze({
     kind:
       "invariantcad-private-occt-evaluator-cache-process-evidence" as const,
-    evidenceVersion: 1 as const,
+    evidenceVersion: OCCT_EVALUATOR_CACHE_PROCESS_EVIDENCE_VERSION,
     operation: request.operation,
     executionBoundary: "one-shot-node-child-process" as const,
     evaluatorPath: "Evaluator.evaluate" as const,
@@ -1405,7 +1413,7 @@ async function execute(
       const witness = await semanticWitness(kernel, shape);
       pending = Object.freeze({
         kind: "invariantcad-private-occt-artifact-process-evidence",
-        evidenceVersion: 1,
+        evidenceVersion: OCCT_ARTIFACT_PROCESS_EVIDENCE_VERSION,
         operation: request.operation,
         executionBoundary: "one-shot-node-child-process",
         advertisement: "unadvertised",

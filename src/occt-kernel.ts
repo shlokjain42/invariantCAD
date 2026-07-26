@@ -9,6 +9,7 @@ import type { Vec2, Vec3 } from "./core/math.js";
 import { canonicalStringifyProtocol } from "./core/json.js";
 import {
   KERNEL_DOCUMENT_BODY_IMPORT_PROTOCOL_VERSION,
+  KERNEL_MEASUREMENT_PROTOCOL_VERSION,
   type GeometryKernel,
   type KernelCapabilities,
   type KernelDocumentBodyImportOptions,
@@ -1060,6 +1061,10 @@ class OcctKernel implements GeometryKernel {
     ],
     nativeImports: ["step", "brep", "brep-binary"],
     nativeExports: ["step", "brep", "brep-binary"],
+    measurements: {
+      protocolVersion: KERNEL_MEASUREMENT_PROTOCOL_VERSION,
+      genus: "unsupported",
+    },
     documentBodyImport: {
       protocolVersion: KERNEL_DOCUMENT_BODY_IMPORT_PROTOCOL_VERSION,
       formats: [
@@ -5902,7 +5907,7 @@ class OcctKernel implements GeometryKernel {
         centerOfMass: null,
         inertiaTensor: zeroMassProperties().inertiaTensor,
         boundingBox: { min: [0, 0, 0], max: [0, 0, 0] },
-        genus: 0,
+        genus: null,
         tolerance: this.modelingTolerance,
       };
     }
@@ -5962,7 +5967,6 @@ class OcctKernel implements GeometryKernel {
       owned.volumeOverride === undefined
         ? nativeMassProperties
         : rescaleMassProperties(nativeMassProperties, owned.volumeOverride);
-    const eulerCharacteristic = vertices - edges + faces;
     return {
       volume: massProperties.volume,
       surfaceArea: this.raw.getSurfaceArea(handle),
@@ -5972,7 +5976,7 @@ class OcctKernel implements GeometryKernel {
         min: [bounds.xmin, bounds.ymin, bounds.zmin],
         max: [bounds.xmax, bounds.ymax, bounds.zmax],
       },
-      genus: Math.max(0, Math.round((2 - eulerCharacteristic) / 2)),
+      genus: null,
       tolerance: this.modelingTolerance,
     };
   }

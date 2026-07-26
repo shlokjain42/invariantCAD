@@ -196,6 +196,9 @@ export const INVARIANTCAD_OCCT_FACADE_0_9_0_RELEASE_MANIFEST_SHA256 = "997355292
 const KERNEL_DOCUMENT_BODY_IMPORT_PROTOCOL_VERSION: 1;
 
 // @public (undocumented)
+const KERNEL_MEASUREMENT_PROTOCOL_VERSION: 1;
+
+// @public (undocumented)
 const KERNEL_SHAPE_ARTIFACT_PROTOCOL_VERSION: 1;
 
 // @public (undocumented)
@@ -219,6 +222,8 @@ interface KernelCapabilities {
     //
     // (undocumented)
     readonly features: readonly KernelFeature[];
+    // Warning: (ae-forgotten-export) The symbol "KernelMeasurementCapabilities" needs to be exported by the entry point occt-kernel.d.ts
+    readonly measurements?: KernelMeasurementCapabilities;
     // (undocumented)
     readonly nativeExports: readonly KernelExchangeFormat[];
     // (undocumented)
@@ -377,6 +382,21 @@ interface KernelFeatureContext {
     readonly signal?: AbortSignal;
     // (undocumented)
     readonly tolerance?: number;
+}
+
+// @public (undocumented)
+type KernelGenusMeasurementCapability = "exact-per-connected-component" | "unsupported";
+
+// @public
+interface KernelMeasurementCapabilities {
+    // Warning: (ae-forgotten-export) The symbol "KernelGenusMeasurementCapability" needs to be exported by the entry point occt-kernel.d.ts
+    //
+    // (undocumented)
+    readonly genus: KernelGenusMeasurementCapability;
+    // Warning: (ae-forgotten-export) The symbol "KERNEL_MEASUREMENT_PROTOCOL_VERSION" needs to be exported by the entry point occt-kernel.d.ts
+    //
+    // (undocumented)
+    readonly protocolVersion: typeof KERNEL_MEASUREMENT_PROTOCOL_VERSION;
 }
 
 // @public (undocumented)
@@ -996,8 +1016,7 @@ type ResolvedTransformOperation = {
 interface ShapeMeasurements extends VolumetricMassProperties {
     // Warning: (ae-forgotten-export) The symbol "BoundingBox" needs to be exported by the entry point occt-kernel.d.ts
     readonly boundingBox: BoundingBox;
-    // (undocumented)
-    readonly genus: number;
+    readonly genus: number | null;
     readonly surfaceArea: number;
     readonly tolerance: number;
 }
@@ -1068,7 +1087,7 @@ interface VolumetricMassProperties {
 
 // Warnings were encountered during analysis:
 //
-// src/kernel.ts:106:7 - (ae-forgotten-export) The symbol "KernelDocumentBodyLengthUnit" needs to be exported by the entry point occt-kernel.d.ts
+// src/kernel.ts:152:7 - (ae-forgotten-export) The symbol "KernelDocumentBodyLengthUnit" needs to be exported by the entry point occt-kernel.d.ts
 
 // (No @packageDocumentation comment for this package)
 

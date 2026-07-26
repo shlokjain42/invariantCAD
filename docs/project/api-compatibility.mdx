@@ -51,6 +51,25 @@ surface. Removing or renaming a symbol, narrowing an accepted input, widening a
 result in a way callers must handle, or changing an ownership contract requires
 an explicit compatibility decision.
 
+### Nullable genus migration
+
+The current unreleased API widens `ShapeMeasurements.genus` from `number` to
+`number | null`. Existing code that performs arithmetic must narrow first:
+
+```ts
+const measurements = output.measure();
+if (measurements.genus === null) {
+  // This backend/result cannot establish genus exactly.
+} else {
+  console.log(measurements.genus + 1);
+}
+```
+
+Do not replace `null` with zero: zero is an exact genus claim. Custom kernels
+may omit the new optional measurement-capability envelope for structural
+compatibility, but integrations should inspect it before advertising genus
+support.
+
 The generated [export index](/reference/export-index) answers “what names are
 available?” The API reports answer “what are their exact TypeScript
 signatures?” Both gates are required because they detect different drift.

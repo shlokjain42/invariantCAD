@@ -28,8 +28,10 @@ invariantcad inspect model.json \
 
 Prints JSON measurements for every selected output, including geometric
 properties, triangle count, principal inertia, radii of gyration, and physical
-properties where the output supplies density. Add `--output name` to inspect
-only one output.
+properties where the output supplies density. `genus` is a nonnegative exact
+integer when the selected kernel/result supports it and JSON `null` otherwise;
+the CLI never substitutes zero for unsupported topology. Add `--output name`
+to inspect only one output.
 
 ## Bill of materials
 

@@ -2403,6 +2403,9 @@ export function inspectKernelCompositeSweepCapabilities(capabilities: KernelCapa
 // @public
 export function inspectKernelDocumentBodyImportCapabilities(capabilities: KernelCapabilities): KernelDocumentBodyImportCapabilitiesInspection;
 
+// @public
+export function inspectKernelMeasurementCapabilities(capabilities: KernelCapabilities): KernelMeasurementCapabilitiesInspection;
+
 // @public (undocumented)
 export function inspectKernelShapeArtifactSupport(kernel: GeometryKernel): KernelShapeArtifactSupportInspection;
 
@@ -2421,6 +2424,9 @@ type JsonValue = JsonPrimitive | readonly JsonValue[] | {
 
 // @public (undocumented)
 export const KERNEL_DOCUMENT_BODY_IMPORT_PROTOCOL_VERSION: 1;
+
+// @public (undocumented)
+export const KERNEL_MEASUREMENT_PROTOCOL_VERSION: 1;
 
 // @public (undocumented)
 export const KERNEL_SHAPE_ARTIFACT_MAX_COMPATIBILITY_FINGERPRINT_BYTES: 2048;
@@ -2442,6 +2448,7 @@ export interface KernelCapabilities {
     readonly exactIndexedTopologyEvolution?: KernelExactIndexedTopologyEvolutionCapabilities;
     // (undocumented)
     readonly features: readonly KernelFeature[];
+    readonly measurements?: KernelMeasurementCapabilities;
     // (undocumented)
     readonly nativeExports: readonly KernelExchangeFormat[];
     // (undocumented)
@@ -2458,7 +2465,7 @@ export interface KernelCapabilities {
 }
 
 // @public (undocumented)
-export type KernelCapabilityKind = "primitive" | "feature" | "compositeSweepRefinement" | "exactIndexedTopologyEvolution" | "nativeImport" | "nativeExport";
+export type KernelCapabilityKind = "primitive" | "feature" | "measurement" | "compositeSweepRefinement" | "exactIndexedTopologyEvolution" | "nativeImport" | "nativeExport";
 
 // @public
 export interface KernelCompositeSweepCapabilities {
@@ -2639,6 +2646,51 @@ export interface KernelFeatureContext {
 }
 
 // @public (undocumented)
+export type KernelGenusMeasurementCapability = "exact-per-connected-component" | "unsupported";
+
+// @public (undocumented)
+export type KernelMeasurement = "genus";
+
+// @public
+export interface KernelMeasurementCapabilities {
+    // (undocumented)
+    readonly genus: KernelGenusMeasurementCapability;
+    // (undocumented)
+    readonly protocolVersion: typeof KERNEL_MEASUREMENT_PROTOCOL_VERSION;
+}
+
+// @public (undocumented)
+export interface KernelMeasurementCapabilitiesAbsent {
+    // (undocumented)
+    readonly status: "absent";
+}
+
+// @public (undocumented)
+export type KernelMeasurementCapabilitiesInspection = KernelMeasurementCapabilitiesAbsent | KernelMeasurementCapabilitiesValid | KernelMeasurementCapabilitiesMalformed;
+
+// @public (undocumented)
+export interface KernelMeasurementCapabilitiesMalformed {
+    // (undocumented)
+    readonly details: Readonly<Record<string, unknown>>;
+    // (undocumented)
+    readonly message: string;
+    // (undocumented)
+    readonly reason: KernelMeasurementCapabilitiesMalformedReason;
+    // (undocumented)
+    readonly status: "malformed";
+}
+
+// @public (undocumented)
+export type KernelMeasurementCapabilitiesMalformedReason = "uninspectable-metadata" | "not-object" | "unsupported-protocol-version" | "invalid-genus";
+
+// @public (undocumented)
+export interface KernelMeasurementCapabilitiesValid {
+    readonly capabilities: KernelMeasurementCapabilities;
+    // (undocumented)
+    readonly status: "valid";
+}
+
+// @public (undocumented)
 export type KernelPrimitive = "box" | "cylinder" | "sphere";
 
 // @public (undocumented)
@@ -2704,6 +2756,9 @@ export function kernelSupports(capabilities: KernelCapabilities, kind: "primitiv
 
 // @public (undocumented)
 export function kernelSupports(capabilities: KernelCapabilities, kind: "feature", capability: KernelFeature): boolean;
+
+// @public (undocumented)
+export function kernelSupports(capabilities: KernelCapabilities, kind: "measurement", capability: KernelMeasurement): boolean;
 
 // @public (undocumented)
 export function kernelSupports(capabilities: KernelCapabilities, kind: "compositeSweepRefinement", capability: KernelCompositeSweepRefinement): boolean;
@@ -4827,8 +4882,7 @@ export type ShapeExportFormat = MeshExportFormat | KernelExchangeFormat;
 // @public (undocumented)
 export interface ShapeMeasurements extends VolumetricMassProperties {
     readonly boundingBox: BoundingBox;
-    // (undocumented)
-    readonly genus: number;
+    readonly genus: number | null;
     readonly surfaceArea: number;
     readonly tolerance: number;
 }

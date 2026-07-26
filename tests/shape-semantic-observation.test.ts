@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+  KERNEL_SHAPE_ARTIFACT_FIXTURE_WITNESS_PREFIX,
   KERNEL_SHAPE_ARTIFACT_SEMANTIC_WITNESS_PREFIX,
+  KERNEL_SHAPE_ARTIFACT_SEMANTIC_WITNESS_PREFIX_V2,
+  auditKernelShapeArtifactCodec,
+  auditKernelShapeArtifactCodecV2,
   hashKernelShapeSemanticObservation,
+  hashKernelShapeSemanticObservationV2,
+  type AuditKernelShapeArtifactCodecOptions,
+  type AuditKernelShapeArtifactCodecOptionsV2,
 } from "../src/conformance.js";
 import type { CadResult, DiagnosticCode } from "../src/core/result.js";
 import { success } from "../src/core/result.js";
@@ -9,6 +16,7 @@ import type {
   GeometryKernel,
   KernelCapabilities,
   KernelFeature,
+  KernelGenusMeasurementCapability,
   KernelShape,
   MeshData,
   ShapeMeasurements,
@@ -23,10 +31,14 @@ import type {
 } from "../src/protocol/topology.js";
 import {
   KERNEL_SHAPE_SEMANTIC_OBSERVATION_PROTOCOL_VERSION,
+  KERNEL_SHAPE_SEMANTIC_OBSERVATION_PROTOCOL_VERSION_V2,
   encodeKernelShapeSemanticObservation,
+  encodeKernelShapeSemanticObservationV2,
   observeKernelShapeSemantics,
+  observeKernelShapeSemanticsV2,
   type KernelShapeSemanticObservation,
   type KernelShapeSemanticObservationPlan,
+  type KernelShapeSemanticObservationV2,
 } from "../src/shape-semantic-observation.js";
 
 const KERNEL_ID = "invariantcad.test.semantic-observation";
@@ -44,6 +56,7 @@ interface SyntheticRuntimeOptions {
   readonly status?: (shape: SyntheticShape) => unknown;
   readonly topology?: (shape: SyntheticShape) => unknown;
   readonly features?: readonly KernelFeature[];
+  readonly measurementCapability?: KernelGenusMeasurementCapability;
   readonly nativeRoundTrip?: boolean;
 }
 
@@ -54,6 +67,10 @@ const BASE_POSITIONS = new Float32Array([
   0, 1, 0,
 ]);
 const BASE_INDICES = new Uint32Array([0, 1, 2, 0, 2, 3]);
+const V1_GOLDEN_CANONICAL =
+  '{"coverage":{"meshes":["default"],"nativeExchanges":[],"notApplicableFeatures":[],"probedFeatures":[],"topology":"omitted"},"kernel":"invariantcad.test.semantic-observation","kind":"kernel-shape-semantic-observation","measurements":{"boundingBox":{"max":["f64:3ff0000000000000","f64:3ff0000000000000","f64:3ff0000000000000"],"min":["f64:0000000000000000","f64:0000000000000000","f64:0000000000000000"]},"centerOfMass":["f64:3fe0000000000000","f64:3fe0000000000000","f64:3fe0000000000000"],"genus":"f64:0000000000000000","inertiaTensor":[["f64:3ff0000000000000","f64:0000000000000000","f64:0000000000000000"],["f64:0000000000000000","f64:4000000000000000","f64:0000000000000000"],["f64:0000000000000000","f64:0000000000000000","f64:4008000000000000"]],"surfaceArea":"f64:4000000000000000","tolerance":"f64:3e7ad7f29abcaf48","volume":"f64:3ff0000000000000"},"meshEncoding":"oriented-triangle-multiset-f32","meshes":[{"id":"default","options":{},"triangles":[[["f32:00000000","f32:00000000","f32:00000000"],["f32:3f800000","f32:00000000","f32:00000000"],["f32:3f800000","f32:3f800000","f32:00000000"]],[["f32:00000000","f32:00000000","f32:00000000"],["f32:3f800000","f32:3f800000","f32:00000000"],["f32:00000000","f32:3f800000","f32:00000000"]]]}],"nativeExchanges":[],"numericEncoding":"ieee754-be-hex-normalized-zero","planId":"semantic-observation-test-v1","probes":[],"protocolVersion":1,"status":{"code":"VALID","ok":true},"topology":{"support":"omitted"},"topologyEncoding":"bounded-canonical-incidence-graph"}';
+const V1_GOLDEN_HASH =
+  "invariantcad:kernel-shape-semantic:v1:sha256:036528eab082f36d85ec538a42b5703db0a4e4d8ae5f118dc81ab4f83faffaaa";
 
 function baseMesh(): MeshData {
   return {
@@ -96,6 +113,14 @@ class SyntheticRuntime {
       features,
       nativeImports: options.nativeRoundTrip ? ["brep-binary"] : [],
       nativeExports: options.nativeRoundTrip ? ["brep-binary"] : [],
+      ...(options.measurementCapability === undefined
+        ? {}
+        : {
+            measurements: {
+              protocolVersion: 1,
+              genus: options.measurementCapability,
+            },
+          }),
       ...(options.topology === undefined
         ? {}
         : {
@@ -236,6 +261,28 @@ function encoded(observation: KernelShapeSemanticObservation): Uint8Array {
   return result.value;
 }
 
+async function observedV2(
+  runtime: SyntheticRuntime,
+  shape: SyntheticShape,
+  observationPlan: KernelShapeSemanticObservationPlan = plan(),
+): Promise<KernelShapeSemanticObservationV2> {
+  const result = await observeKernelShapeSemanticsV2(
+    runtime.kernel,
+    shape,
+    observationPlan,
+  );
+  expect(result.ok, JSON.stringify(result.diagnostics)).toBe(true);
+  if (!result.ok) throw new Error("Expected a protocol-v2 semantic observation");
+  return result.value;
+}
+
+function encodedV2(observation: KernelShapeSemanticObservationV2): Uint8Array {
+  const result = encodeKernelShapeSemanticObservationV2(observation);
+  expect(result.ok, JSON.stringify(result.diagnostics)).toBe(true);
+  if (!result.ok) throw new Error("Expected encoded protocol-v2 observation");
+  return result.value;
+}
+
 function expectDeeplyFrozen(value: unknown, seen = new Set<object>()): void {
   if (typeof value !== "object" || value === null || seen.has(value)) return;
   seen.add(value);
@@ -372,6 +419,261 @@ function symmetricTopology(
 }
 
 describe("canonical kernel-shape semantic observation", () => {
+  it("keeps protocol v1 exact-only and never synthesizes missing genus as zero", async () => {
+    const runtime = new SyntheticRuntime({
+      measurementCapability: "unsupported",
+      measurements: () => ({ ...measurements(), genus: null }),
+    });
+    const result = await observeKernelShapeSemantics(
+      runtime.kernel,
+      runtime.shape(),
+      plan(),
+    );
+    expectFailure(result, "KERNEL_CAPABILITY_MISSING");
+    if (!result.ok) {
+      expect(result.diagnostics[0]?.message).toContain(
+        "requires an exact genus measurement",
+      );
+    }
+  });
+
+  it("encodes and hashes exact zero distinctly from unsupported genus in protocol v2", async () => {
+    const exactRuntime = new SyntheticRuntime();
+    const missingRuntime = new SyntheticRuntime({
+      measurements: () => ({ ...measurements(), genus: null }),
+    });
+    const exact = await observedV2(
+      exactRuntime,
+      exactRuntime.shape(),
+      plan(),
+    );
+    const missing = await observedV2(
+      missingRuntime,
+      missingRuntime.shape(),
+      plan(),
+    );
+
+    expect(exact.protocolVersion).toBe(
+      KERNEL_SHAPE_SEMANTIC_OBSERVATION_PROTOCOL_VERSION_V2,
+    );
+    expect(exact.measurements.genus).toBe("f64:0000000000000000");
+    expect(missing.measurements.genus).toBeNull();
+    const exactBytes = encodedV2(exact);
+    const missingBytes = encodedV2(missing);
+    expect(exactBytes).not.toEqual(missingBytes);
+    expect(JSON.parse(new TextDecoder().decode(missingBytes))).toEqual(missing);
+
+    const exactHash = await hashKernelShapeSemanticObservationV2(exact);
+    const missingHash = await hashKernelShapeSemanticObservationV2(missing);
+    expect(exactHash.ok).toBe(true);
+    expect(missingHash.ok).toBe(true);
+    if (exactHash.ok && missingHash.ok) {
+      expect(exactHash.value).not.toBe(missingHash.value);
+      expect(exactHash.value).toMatch(
+        new RegExp(
+          `^${KERNEL_SHAPE_ARTIFACT_SEMANTIC_WITNESS_PREFIX_V2}[0-9a-f]{64}$`,
+        ),
+      );
+    }
+
+    const v1Runtime = new SyntheticRuntime();
+    const v1 = await observed(
+      v1Runtime,
+      v1Runtime.shape(),
+      plan(),
+    );
+    expectFailure(
+      encodeKernelShapeSemanticObservation(
+        exact as unknown as KernelShapeSemanticObservation,
+      ),
+      "ARTIFACT_CACHE_ENTRY_INVALID",
+    );
+    expectFailure(
+      encodeKernelShapeSemanticObservationV2(
+        v1 as unknown as KernelShapeSemanticObservationV2,
+      ),
+      "ARTIFACT_CACHE_ENTRY_INVALID",
+    );
+    expectFailure(
+      encodeKernelShapeSemanticObservationV2(
+        { ...missing } as KernelShapeSemanticObservationV2,
+      ),
+      "ARTIFACT_CACHE_ENTRY_INVALID",
+    );
+    expectFailure(
+      encodeKernelShapeSemanticObservationV2(missing, {
+        maxBytes: missingBytes.byteLength - 1,
+      }),
+      "ARTIFACT_CACHE_LIMIT_EXCEEDED",
+    );
+  });
+
+  it("rejects genus results that contradict advertised measurement support", async () => {
+    const exactReturningNull = new SyntheticRuntime({
+      measurementCapability: "exact-per-connected-component",
+      measurements: () => ({ ...measurements(), genus: null }),
+    });
+    expectFailure(
+      await observeKernelShapeSemanticsV2(
+        exactReturningNull.kernel,
+        exactReturningNull.shape(),
+        plan(),
+      ),
+      "KERNEL_ERROR",
+    );
+
+    const unsupportedReturningNumber = new SyntheticRuntime({
+      measurementCapability: "unsupported",
+    });
+    expectFailure(
+      await observeKernelShapeSemanticsV2(
+        unsupportedReturningNumber.kernel,
+        unsupportedReturningNumber.shape(),
+        plan(),
+      ),
+      "KERNEL_ERROR",
+    );
+
+    const unsupportedReturningNull = new SyntheticRuntime({
+      measurementCapability: "unsupported",
+      measurements: () => ({ ...measurements(), genus: null }),
+    });
+    const accepted = await observeKernelShapeSemanticsV2(
+      unsupportedReturningNull.kernel,
+      unsupportedReturningNull.shape(),
+      plan(),
+    );
+    expect(accepted.ok, JSON.stringify(accepted.diagnostics)).toBe(true);
+  });
+
+  it("preserves nullable genus through protocol-v2 native and probe snapshots", async () => {
+    const runtime = new SyntheticRuntime({
+      features: ["transform"],
+      nativeRoundTrip: true,
+      measurements: () => ({ ...measurements(), genus: null }),
+    });
+    const source = runtime.shape(17);
+    const observation = await observedV2(
+      runtime,
+      source,
+      plan({
+        nativeExchanges: ["brep-binary"],
+        probes: [
+          {
+            id: "nullable-derived-shape",
+            feature: "transform",
+            run: () => success([runtime.shape(18)]),
+          },
+        ],
+      }),
+    );
+
+    expect(observation.measurements.genus).toBeNull();
+    expect(
+      observation.nativeExchanges[0]?.imported.measurements.genus,
+    ).toBeNull();
+    expect(
+      observation.probes[0]?.shapes[0]?.measurements.genus,
+    ).toBeNull();
+    expect(source.live).toBe(true);
+    expect(runtime.disposedShapes).toHaveLength(2);
+  });
+
+  it("applies the existing hostile-input and byte ceilings to protocol v2", async () => {
+    const runtime = new SyntheticRuntime({
+      measurements: () => ({ ...measurements(), genus: null }),
+    });
+    const source = runtime.shape();
+    const { proxy, revoke } = Proxy.revocable(plan(), {});
+    revoke();
+    const hostile = await observeKernelShapeSemanticsV2(
+      runtime.kernel,
+      source,
+      proxy,
+    );
+    expectFailure(hostile, "ARTIFACT_CACHE_ENTRY_INVALID");
+    expect(runtime.calls).toBe(0);
+
+    const bounded = await observeKernelShapeSemanticsV2(
+      runtime.kernel,
+      source,
+      plan(),
+      { limits: { maxObservationBytes: 1 } },
+    );
+    expectFailure(bounded, "ARTIFACT_CACHE_LIMIT_EXCEEDED");
+  });
+
+  it("keeps codec-audit witness admission explicitly versioned", async () => {
+    const v1Witness =
+      `${KERNEL_SHAPE_ARTIFACT_SEMANTIC_WITNESS_PREFIX}${"0".repeat(64)}`;
+    const v2Witness =
+      `${KERNEL_SHAPE_ARTIFACT_SEMANTIC_WITNESS_PREFIX_V2}${"0".repeat(64)}`;
+    const fixtureWitness =
+      `${KERNEL_SHAPE_ARTIFACT_FIXTURE_WITNESS_PREFIX}${"0".repeat(64)}`;
+    let creates = 0;
+    const optionsWith = (expectedWitness: string) => ({
+      target: {
+        mode: "candidate",
+        create: () => {
+          creates += 1;
+          throw new Error("capture passed");
+        },
+      },
+      expectedIdentity: {
+        kernelId: KERNEL_ID,
+        artifact: {
+          protocolVersion: 1,
+          format: "test",
+          formatVersion: 1,
+          compatibilityFingerprint: "test",
+        },
+      },
+      cases: [
+        {
+          id: "self",
+          feature: "box",
+          scope: "current-runtime-self-round-trip",
+          expectedWitness,
+          witness: () => success(expectedWitness),
+          createSource: () => {
+            throw new Error("not reached");
+          },
+        },
+        {
+          id: "golden",
+          feature: "box",
+          scope: "golden-decode",
+          expectedWitness,
+          witness: () => success(expectedWitness),
+          artifact: new Uint8Array([1]),
+          expectedArtifactWitness: fixtureWitness,
+        },
+      ],
+    });
+
+    expectFailure(
+      await auditKernelShapeArtifactCodecV2(
+        optionsWith(v1Witness) as unknown as AuditKernelShapeArtifactCodecOptionsV2,
+      ),
+      "ARTIFACT_CACHE_ENTRY_INVALID",
+    );
+    expectFailure(
+      await auditKernelShapeArtifactCodec(
+        optionsWith(v2Witness) as unknown as AuditKernelShapeArtifactCodecOptions,
+      ),
+      "ARTIFACT_CACHE_ENTRY_INVALID",
+    );
+    expect(creates).toBe(0);
+
+    expectFailure(
+      await auditKernelShapeArtifactCodecV2(
+        optionsWith(v2Witness) as unknown as AuditKernelShapeArtifactCodecOptionsV2,
+      ),
+      "KERNEL_ERROR",
+    );
+    expect(creates).toBe(1);
+  });
+
   it("encodes every numeric bit, while normalizing negative zero", async () => {
     const baseline = new SyntheticRuntime();
     const drifted = new SyntheticRuntime({
@@ -1292,6 +1594,7 @@ describe("canonical kernel-shape semantic observation", () => {
     const first = encoded(observation);
     const second = encoded(observation);
     expect(second).toEqual(first);
+    expect(first).toEqual(new TextEncoder().encode(V1_GOLDEN_CANONICAL));
     expect(JSON.parse(new TextDecoder().decode(first))).toEqual(observation);
 
     const exactRuntime = new SyntheticRuntime({
@@ -1334,6 +1637,7 @@ describe("canonical kernel-shape semantic observation", () => {
     expect(firstHash.ok).toBe(true);
     expect(secondHash).toEqual(firstHash);
     if (firstHash.ok) {
+      expect(firstHash.value).toBe(V1_GOLDEN_HASH);
       expect(firstHash.value).toMatch(
         new RegExp(`^${KERNEL_SHAPE_ARTIFACT_SEMANTIC_WITNESS_PREFIX}[0-9a-f]{64}$`),
       );

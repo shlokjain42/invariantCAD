@@ -24,6 +24,15 @@ export interface AuditKernelShapeArtifactCodecOptions {
 }
 
 // @public (undocumented)
+export interface AuditKernelShapeArtifactCodecOptionsV2 extends Omit<AuditKernelShapeArtifactCodecOptions, "cases"> {
+    // (undocumented)
+    readonly cases: readonly KernelShapeArtifactCodecAuditCaseV2[];
+}
+
+// @public
+export function auditKernelShapeArtifactCodecV2(options: AuditKernelShapeArtifactCodecOptionsV2): Promise<CadResult<KernelShapeArtifactCodecAuditEvidenceV2>>;
+
+// @public (undocumented)
 type Awaitable<T> = T | PromiseLike<T>;
 
 // @public (undocumented)
@@ -112,6 +121,11 @@ type DiagnosticSeverity = "info" | "warning" | "error";
 
 // @public
 export function encodeKernelShapeSemanticObservation(observation: KernelShapeSemanticObservation, options?: {
+    readonly maxBytes?: number;
+}): CadResult<Uint8Array>;
+
+// @public
+export function encodeKernelShapeSemanticObservationV2(observation: KernelShapeSemanticObservationV2, options?: {
     readonly maxBytes?: number;
 }): CadResult<Uint8Array>;
 
@@ -262,13 +276,25 @@ export function hashKernelShapeSemanticObservation(observation: KernelShapeSeman
 }): Promise<CadResult<KernelShapeArtifactSemanticWitness>>;
 
 // @public
+export function hashKernelShapeSemanticObservationV2(observation: KernelShapeSemanticObservationV2, options?: {
+    readonly maxBytes?: number;
+    readonly signal?: AbortSignal;
+}): Promise<CadResult<KernelShapeArtifactSemanticWitnessV2>>;
+
+// @public
 type InertiaTensor = readonly [Vec3, Vec3, Vec3];
 
 // @public (undocumented)
 const KERNEL_DOCUMENT_BODY_IMPORT_PROTOCOL_VERSION: 1;
 
 // @public (undocumented)
+const KERNEL_MEASUREMENT_PROTOCOL_VERSION: 1;
+
+// @public (undocumented)
 export const KERNEL_SHAPE_ARTIFACT_CODEC_AUDIT_PROTOCOL_VERSION: 1;
+
+// @public (undocumented)
+export const KERNEL_SHAPE_ARTIFACT_CODEC_AUDIT_PROTOCOL_VERSION_V2: 2;
 
 // @public (undocumented)
 export const KERNEL_SHAPE_ARTIFACT_FIXTURE_WITNESS_PREFIX: "invariantcad:kernel-shape-artifact-fixture:v1:sha256:";
@@ -280,7 +306,13 @@ const KERNEL_SHAPE_ARTIFACT_PROTOCOL_VERSION: 1;
 export const KERNEL_SHAPE_ARTIFACT_SEMANTIC_WITNESS_PREFIX: "invariantcad:kernel-shape-semantic:v1:sha256:";
 
 // @public (undocumented)
+export const KERNEL_SHAPE_ARTIFACT_SEMANTIC_WITNESS_PREFIX_V2: "invariantcad:kernel-shape-semantic:v2:sha256:";
+
+// @public (undocumented)
 export const KERNEL_SHAPE_SEMANTIC_OBSERVATION_PROTOCOL_VERSION: 1;
+
+// @public (undocumented)
+export const KERNEL_SHAPE_SEMANTIC_OBSERVATION_PROTOCOL_VERSION_V2: 2;
 
 // @public (undocumented)
 const KERNEL_TOPOLOGY_KEY: unique symbol;
@@ -303,6 +335,8 @@ interface KernelCapabilities {
     //
     // (undocumented)
     readonly features: readonly KernelFeature[];
+    // Warning: (ae-forgotten-export) The symbol "KernelMeasurementCapabilities" needs to be exported by the entry point conformance.d.ts
+    readonly measurements?: KernelMeasurementCapabilities;
     // (undocumented)
     readonly nativeExports: readonly KernelExchangeFormat[];
     // (undocumented)
@@ -464,6 +498,21 @@ interface KernelFeatureContext {
 }
 
 // @public (undocumented)
+type KernelGenusMeasurementCapability = "exact-per-connected-component" | "unsupported";
+
+// @public
+interface KernelMeasurementCapabilities {
+    // Warning: (ae-forgotten-export) The symbol "KernelGenusMeasurementCapability" needs to be exported by the entry point conformance.d.ts
+    //
+    // (undocumented)
+    readonly genus: KernelGenusMeasurementCapability;
+    // Warning: (ae-forgotten-export) The symbol "KERNEL_MEASUREMENT_PROTOCOL_VERSION" needs to be exported by the entry point conformance.d.ts
+    //
+    // (undocumented)
+    readonly protocolVersion: typeof KERNEL_MEASUREMENT_PROTOCOL_VERSION;
+}
+
+// @public (undocumented)
 type KernelPrimitive = "box" | "cylinder" | "sphere";
 
 // @public (undocumented)
@@ -511,6 +560,18 @@ interface KernelShapeArtifactCodecAuditCaseBase {
 }
 
 // @public (undocumented)
+interface KernelShapeArtifactCodecAuditCaseBaseV2 {
+    // (undocumented)
+    readonly expectedWitness: KernelShapeArtifactSemanticWitnessV2;
+    readonly feature: string;
+    readonly id: string;
+    readonly witness: KernelShapeArtifactWitnessV2;
+}
+
+// @public (undocumented)
+export type KernelShapeArtifactCodecAuditCaseV2 = KernelShapeArtifactSelfRoundTripCaseV2 | KernelShapeArtifactGoldenDecodeCaseV2;
+
+// @public (undocumented)
 export type KernelShapeArtifactCodecAuditCheck = "pre-witness-source-cross-instance-decode" | "source-witness-before-encode" | "fresh-caller-owned-encode-bytes" | "encoded-byte-isolation-probed" | "encode-byte-ceiling-enforced" | "pre-aborted-encode-and-source-survival" | "same-and-cross-instance-independent-decodes" | "decode-input-borrowing-probed" | "pre-aborted-decode-and-shape-survival" | "decode-limits-and-malformed-input-rejection" | "independent-disposal-orders" | "semantic-idempotence-and-second-generation-ownership" | "golden-artifact-witness" | "cross-instance-golden-decode" | "golden-decode-input-borrowing-probed" | "pre-aborted-golden-decode" | "independent-golden-disposal";
 
 // @public (undocumented)
@@ -540,6 +601,14 @@ export interface KernelShapeArtifactCodecAuditEvidence {
         readonly operations: number;
         readonly artifactBytes: number;
     };
+}
+
+// @public (undocumented)
+export interface KernelShapeArtifactCodecAuditEvidenceV2 extends Omit<KernelShapeArtifactCodecAuditEvidence, "auditProtocolVersion" | "cases"> {
+    // (undocumented)
+    readonly auditProtocolVersion: typeof KERNEL_SHAPE_ARTIFACT_CODEC_AUDIT_PROTOCOL_VERSION_V2;
+    // (undocumented)
+    readonly cases: readonly KernelShapeArtifactCodecCaseEvidenceV2[];
 }
 
 // @public (undocumented)
@@ -597,6 +666,14 @@ export interface KernelShapeArtifactCodecCaseEvidence {
 }
 
 // @public (undocumented)
+export interface KernelShapeArtifactCodecCaseEvidenceV2 extends Omit<KernelShapeArtifactCodecCaseEvidence, "expectedWitness" | "observedWitness"> {
+    // (undocumented)
+    readonly expectedWitness: KernelShapeArtifactSemanticWitnessV2;
+    // (undocumented)
+    readonly observedWitness: KernelShapeArtifactSemanticWitnessV2;
+}
+
+// @public (undocumented)
 interface KernelShapeArtifactContext {
     // (undocumented)
     readonly feature: string;
@@ -628,6 +705,17 @@ export interface KernelShapeArtifactGoldenDecodeCase extends KernelShapeArtifact
     readonly scope: "golden-decode";
 }
 
+// Warning: (ae-forgotten-export) The symbol "KernelShapeArtifactCodecAuditCaseBaseV2" needs to be exported by the entry point conformance.d.ts
+//
+// @public (undocumented)
+export interface KernelShapeArtifactGoldenDecodeCaseV2 extends KernelShapeArtifactCodecAuditCaseBaseV2 {
+    readonly artifact: Uint8Array;
+    // (undocumented)
+    readonly expectedArtifactWitness: KernelShapeArtifactFixtureWitness;
+    // (undocumented)
+    readonly scope: "golden-decode";
+}
+
 // @public (undocumented)
 export interface KernelShapeArtifactSelfRoundTripCase extends KernelShapeArtifactCodecAuditCaseBase {
     // (undocumented)
@@ -639,7 +727,18 @@ export interface KernelShapeArtifactSelfRoundTripCase extends KernelShapeArtifac
 }
 
 // @public (undocumented)
+export interface KernelShapeArtifactSelfRoundTripCaseV2 extends KernelShapeArtifactCodecAuditCaseBaseV2 {
+    // (undocumented)
+    readonly createSource: KernelShapeArtifactSelfRoundTripCase["createSource"];
+    // (undocumented)
+    readonly scope: "current-runtime-self-round-trip";
+}
+
+// @public (undocumented)
 export type KernelShapeArtifactSemanticWitness = `${typeof KERNEL_SHAPE_ARTIFACT_SEMANTIC_WITNESS_PREFIX}${string}`;
+
+// @public (undocumented)
+export type KernelShapeArtifactSemanticWitnessV2 = `${typeof KERNEL_SHAPE_ARTIFACT_SEMANTIC_WITNESS_PREFIX_V2}${string}`;
 
 // @public (undocumented)
 export type KernelShapeArtifactWitness = (kernel: GeometryKernel, shape: KernelShape, context: KernelShapeArtifactWitnessContext) => Awaitable<CadResult<KernelShapeArtifactSemanticWitness>>;
@@ -651,6 +750,9 @@ export interface KernelShapeArtifactWitnessContext {
     // (undocumented)
     readonly signal?: AbortSignal;
 }
+
+// @public (undocumented)
+export type KernelShapeArtifactWitnessV2 = (kernel: GeometryKernel, shape: KernelShape, context: KernelShapeArtifactWitnessContext) => Awaitable<CadResult<KernelShapeArtifactSemanticWitnessV2>>;
 
 // @public (undocumented)
 export interface KernelShapeSemanticCurveV1 {
@@ -768,6 +870,11 @@ export interface KernelShapeSemanticMeasurementsV1 {
 }
 
 // @public (undocumented)
+export interface KernelShapeSemanticMeasurementsV2 extends Omit<KernelShapeSemanticMeasurementsV1, "genus"> {
+    readonly genus: KernelShapeSemanticEncodedFloat64 | null;
+}
+
+// @public (undocumented)
 export interface KernelShapeSemanticMeshOptionsV1 {
     // (undocumented)
     readonly angularDeflection?: KernelShapeSemanticEncodedFloat64;
@@ -798,6 +905,13 @@ export interface KernelShapeSemanticNativeExchangeV1 {
     // (undocumented)
     readonly format: KernelExchangeFormat;
     readonly imported: KernelShapeSemanticSnapshotV1;
+}
+
+// @public (undocumented)
+export interface KernelShapeSemanticNativeExchangeV2 {
+    // (undocumented)
+    readonly format: KernelExchangeFormat;
+    readonly imported: KernelShapeSemanticSnapshotV2;
 }
 
 // @public (undocumented)
@@ -886,6 +1000,28 @@ export interface KernelShapeSemanticObservationV1 extends KernelShapeSemanticSna
 }
 
 // @public (undocumented)
+export interface KernelShapeSemanticObservationV2 extends KernelShapeSemanticSnapshotV2 {
+    // (undocumented)
+    readonly coverage: KernelShapeSemanticObservationV1["coverage"];
+    // (undocumented)
+    readonly kind: "kernel-shape-semantic-observation";
+    // (undocumented)
+    readonly meshEncoding: "oriented-triangle-multiset-f32";
+    // (undocumented)
+    readonly nativeExchanges: readonly KernelShapeSemanticNativeExchangeV2[];
+    // (undocumented)
+    readonly numericEncoding: "ieee754-be-hex-normalized-zero";
+    // (undocumented)
+    readonly planId: string;
+    // (undocumented)
+    readonly probes: readonly KernelShapeSemanticProbeObservationV2[];
+    // (undocumented)
+    readonly protocolVersion: typeof KERNEL_SHAPE_SEMANTIC_OBSERVATION_PROTOCOL_VERSION_V2;
+    // (undocumented)
+    readonly topologyEncoding: "bounded-canonical-incidence-graph";
+}
+
+// @public (undocumented)
 export type KernelShapeSemanticOrientedTriangleV1 = readonly [
 KernelShapeSemanticEncodedMeshVec3,
 KernelShapeSemanticEncodedMeshVec3,
@@ -920,6 +1056,16 @@ export interface KernelShapeSemanticProbeObservationV1 {
 }
 
 // @public (undocumented)
+export interface KernelShapeSemanticProbeObservationV2 {
+    // (undocumented)
+    readonly feature: KernelFeature;
+    // (undocumented)
+    readonly id: string;
+    // (undocumented)
+    readonly shapes: readonly KernelShapeSemanticSnapshotV2[];
+}
+
+// @public (undocumented)
 export interface KernelShapeSemanticSnapshotV1 {
     // (undocumented)
     readonly kernel: string;
@@ -931,6 +1077,12 @@ export interface KernelShapeSemanticSnapshotV1 {
     readonly status: KernelShapeSemanticStatusV1;
     // (undocumented)
     readonly topology: KernelShapeSemanticTopologyV1;
+}
+
+// @public (undocumented)
+export interface KernelShapeSemanticSnapshotV2 extends Omit<KernelShapeSemanticSnapshotV1, "measurements"> {
+    // (undocumented)
+    readonly measurements: KernelShapeSemanticMeasurementsV2;
 }
 
 // @public (undocumented)
@@ -1176,6 +1328,9 @@ export interface ObserveKernelShapeSemanticsOptions {
     readonly signal?: AbortSignal;
 }
 
+// @public
+export function observeKernelShapeSemanticsV2(kernel: GeometryKernel, shape: KernelShape, plan: KernelShapeSemanticObservationPlan, options?: ObserveKernelShapeSemanticsOptions): Promise<CadResult<KernelShapeSemanticObservationV2>>;
+
 // @public (undocumented)
 const OFFSET_DIRECTIONS: readonly ["inward", "outward"];
 
@@ -1414,8 +1569,7 @@ type ResolvedTransformOperation = {
 interface ShapeMeasurements extends VolumetricMassProperties {
     // Warning: (ae-forgotten-export) The symbol "BoundingBox" needs to be exported by the entry point conformance.d.ts
     readonly boundingBox: BoundingBox;
-    // (undocumented)
-    readonly genus: number;
+    readonly genus: number | null;
     readonly surfaceArea: number;
     readonly tolerance: number;
 }
@@ -1486,9 +1640,9 @@ interface VolumetricMassProperties {
 
 // Warnings were encountered during analysis:
 //
-// src/conformance.ts:113:9 - (ae-forgotten-export) The symbol "GeometryKernel" needs to be exported by the entry point conformance.d.ts
+// src/conformance.ts:128:9 - (ae-forgotten-export) The symbol "GeometryKernel" needs to be exported by the entry point conformance.d.ts
 // src/core/result.ts:73:7 - (ae-forgotten-export) The symbol "Diagnostic" needs to be exported by the entry point conformance.d.ts
-// src/kernel.ts:106:7 - (ae-forgotten-export) The symbol "KernelDocumentBodyLengthUnit" needs to be exported by the entry point conformance.d.ts
+// src/kernel.ts:152:7 - (ae-forgotten-export) The symbol "KernelDocumentBodyLengthUnit" needs to be exported by the entry point conformance.d.ts
 
 // (No @packageDocumentation comment for this package)
 

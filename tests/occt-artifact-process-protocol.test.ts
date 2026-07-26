@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  OCCT_ARTIFACT_PROCESS_EVIDENCE_VERSION,
   OCCT_ARTIFACT_PROCESS_PROTOCOL_VERSION,
+  OCCT_EVALUATOR_CACHE_PROCESS_EVIDENCE_VERSION,
+  OCCT_EVALUATOR_PROCESS_EVIDENCE_VERSION,
   encodeOcctEvaluatorKernelOperationStartEvent,
   encodeOcctEvaluatorNonYieldingStallStartEvent,
   parseOcctArtifactProcessResult,
@@ -45,7 +48,7 @@ function validArtifactResult(): Record<string, unknown> {
     ok: true,
     evidence: {
       kind: "invariantcad-private-occt-artifact-process-evidence",
-      evidenceVersion: 1,
+      evidenceVersion: OCCT_ARTIFACT_PROCESS_EVIDENCE_VERSION,
       operation: "produce",
       executionBoundary: "one-shot-node-child-process",
       advertisement: "unadvertised",
@@ -64,7 +67,7 @@ function validArtifactResult(): Record<string, unknown> {
         sha256: "f".repeat(64),
       },
       semanticWitness:
-        `invariantcad:kernel-shape-semantic:v1:sha256:${"1".repeat(64)}`,
+        `invariantcad:kernel-shape-semantic:v2:sha256:${"1".repeat(64)}`,
       cleanupCompletedBeforeResponse: true,
     },
   };
@@ -78,7 +81,7 @@ function validEvaluatorResult(): Record<string, unknown> {
     ok: true,
     evidence: {
       kind: "invariantcad-private-occt-evaluator-process-evidence",
-      evidenceVersion: 1,
+      evidenceVersion: OCCT_EVALUATOR_PROCESS_EVIDENCE_VERSION,
       operation: "evaluate",
       executionBoundary: "one-shot-node-child-process",
       evaluatorPath: "Evaluator.evaluate",
@@ -102,7 +105,7 @@ function validEvaluatorResult(): Record<string, unknown> {
             min: [0, 0, 0],
             max: [15, 25, 30],
           },
-          genus: 0,
+          genus: null,
           tolerance: 1e-7,
         },
         topology: {
@@ -160,7 +163,7 @@ function validEvaluatorCacheResult(
     ok: true,
     evidence: {
       kind: "invariantcad-private-occt-evaluator-cache-process-evidence",
-      evidenceVersion: 1,
+      evidenceVersion: OCCT_EVALUATOR_CACHE_PROCESS_EVIDENCE_VERSION,
       operation,
       executionBoundary: "one-shot-node-child-process",
       evaluatorPath: "Evaluator.evaluate",
@@ -187,7 +190,7 @@ function validEvaluatorCacheResult(
             min: [0, 0, 0],
             max: [2, 3, 5],
           },
-          genus: 0,
+          genus: null,
           tolerance: 1e-7,
         },
         topology: {
@@ -249,6 +252,17 @@ describe("OCCT artifact-process attestation evidence", () => {
       "OCCT artifact process runtime evidence is malformed",
     );
   });
+
+  it("rejects a frozen protocol-v1 semantic witness in current evidence", () => {
+    const result = validArtifactResult();
+    const evidence = result.evidence as Record<string, unknown>;
+    evidence.semanticWitness =
+      `invariantcad:kernel-shape-semantic:v1:sha256:${"1".repeat(64)}`;
+
+    expect(() => parseOcctArtifactProcessResult(result)).toThrow(
+      "OCCT artifact process evidence is malformed",
+    );
+  });
 });
 
 describe("OCCT evaluator-process evidence", () => {
@@ -301,6 +315,11 @@ describe("OCCT evaluator-process evidence", () => {
       const output = evidence.output as Record<string, unknown>;
       const topology = output.topology as Record<string, unknown>;
       topology.faces = -1;
+    }],
+    ["numeric genus claim", (evidence: Record<string, unknown>) => {
+      const output = evidence.output as Record<string, unknown>;
+      const measurements = output.measurements as Record<string, unknown>;
+      measurements.genus = 0;
     }],
     ["unexpected compatibility claim", (evidence: Record<string, unknown>) => {
       evidence.certifiesOperationalCancellation = true;

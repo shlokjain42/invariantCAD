@@ -2,20 +2,219 @@ import { describe, expect, it } from "vitest";
 import {
   COMPOSITE_SWEEP_REFINEMENT_PROTOCOL_VERSION,
   KERNEL_DOCUMENT_BODY_IMPORT_PROTOCOL_VERSION,
+  KERNEL_MEASUREMENT_PROTOCOL_VERSION,
   createEvaluator,
   createManifoldKernel,
   design,
   inspectKernelCompositeSweepCapabilities,
   inspectKernelDocumentBodyImportCapabilities,
+  inspectKernelMeasurementCapabilities,
   kernelSupports,
   kernelSupportsDocumentBodyImport,
   mm,
   type GeometryKernel,
   type KernelCapabilities,
   type KernelCompositeSweepRefinement,
+  type KernelGenusMeasurementCapability,
 } from "../src/index.js";
 
 describe("kernel capability negotiation", () => {
+  it("negotiates exact genus measurements with an isolated hostile-safe snapshot", () => {
+    const base: KernelCapabilities = {
+      protocolVersion: 1,
+      representation: "mesh",
+      exact: false,
+      primitives: [],
+      features: [],
+      nativeImports: [],
+      nativeExports: [],
+    };
+    expect(inspectKernelMeasurementCapabilities(base)).toEqual({
+      status: "absent",
+    });
+    expect(
+      inspectKernelMeasurementCapabilities({
+        ...base,
+        measurements: undefined,
+      } as unknown as KernelCapabilities),
+    ).toEqual({ status: "absent" });
+    expect(kernelSupports(base, "measurement", "genus")).toBe(false);
+
+    const metadata: {
+      protocolVersion: typeof KERNEL_MEASUREMENT_PROTOCOL_VERSION;
+      genus: KernelGenusMeasurementCapability;
+    } = {
+      protocolVersion: KERNEL_MEASUREMENT_PROTOCOL_VERSION,
+      genus: "exact-per-connected-component",
+    };
+    const valid = inspectKernelMeasurementCapabilities({
+      ...base,
+      measurements: metadata,
+    });
+    expect(valid).toEqual({
+      status: "valid",
+      capabilities: {
+        protocolVersion: KERNEL_MEASUREMENT_PROTOCOL_VERSION,
+        genus: "exact-per-connected-component",
+      },
+    });
+    expect(valid.status === "valid" && Object.isFrozen(valid.capabilities)).toBe(
+      true,
+    );
+    metadata.genus = "unsupported";
+    expect(valid.status === "valid" ? valid.capabilities.genus : undefined).toBe(
+      "exact-per-connected-component",
+    );
+    expect(
+      kernelSupports(
+        {
+          ...base,
+          measurements:
+            valid.status === "valid" ? valid.capabilities : metadata,
+        },
+        "measurement",
+        "genus",
+      ),
+    ).toBe(true);
+    expect(
+      kernelSupports(
+        {
+          ...base,
+          measurements: {
+            protocolVersion: KERNEL_MEASUREMENT_PROTOCOL_VERSION,
+            genus: "unsupported",
+          },
+        },
+        "measurement",
+        "genus",
+      ),
+    ).toBe(false);
+
+    for (const [envelope, reason] of [
+      [null, "not-object"],
+      [
+        {
+          protocolVersion: KERNEL_MEASUREMENT_PROTOCOL_VERSION + 1,
+          genus: "exact-per-connected-component",
+        },
+        "unsupported-protocol-version",
+      ],
+      [
+        {
+          protocolVersion: KERNEL_MEASUREMENT_PROTOCOL_VERSION,
+          genus: "approximate",
+        },
+        "invalid-genus",
+      ],
+    ] as const) {
+      const capabilities = {
+        ...base,
+        measurements: envelope,
+      } as unknown as KernelCapabilities;
+      expect(inspectKernelMeasurementCapabilities(capabilities)).toEqual(
+        expect.objectContaining({ status: "malformed", reason }),
+      );
+      expect(kernelSupports(capabilities, "measurement", "genus")).toBe(false);
+    }
+
+    let getterInvoked = false;
+    const accessorEnvelope = {
+      protocolVersion: KERNEL_MEASUREMENT_PROTOCOL_VERSION,
+    };
+    Object.defineProperty(accessorEnvelope, "genus", {
+      enumerable: true,
+      get() {
+        getterInvoked = true;
+        throw new Error("must not run");
+      },
+    });
+    expect(
+      inspectKernelMeasurementCapabilities({
+        ...base,
+        measurements: accessorEnvelope as never,
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        status: "malformed",
+        reason: "uninspectable-metadata",
+      }),
+    );
+    expect(getterInvoked).toBe(false);
+
+    const outerAccessor = { ...base } as KernelCapabilities;
+    Object.defineProperty(outerAccessor, "measurements", {
+      get() {
+        getterInvoked = true;
+        throw new Error("must not run");
+      },
+    });
+    expect(inspectKernelMeasurementCapabilities(outerAccessor)).toEqual(
+      expect.objectContaining({
+        status: "malformed",
+        reason: "uninspectable-metadata",
+      }),
+    );
+    expect(getterInvoked).toBe(false);
+
+    const hostileEnvelope = new Proxy(
+      {},
+      {
+        getOwnPropertyDescriptor() {
+          throw Object.create(null);
+        },
+      },
+    );
+    expect(
+      inspectKernelMeasurementCapabilities({
+        ...base,
+        measurements: hostileEnvelope as never,
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        status: "malformed",
+        reason: "uninspectable-metadata",
+      }),
+    );
+
+    const revoked = Proxy.revocable({}, {});
+    const revokedCapabilities = {
+      ...base,
+      measurements: revoked.proxy,
+    } as unknown as KernelCapabilities;
+    revoked.revoke();
+    expect(() =>
+      inspectKernelMeasurementCapabilities(revokedCapabilities),
+    ).not.toThrow();
+    expect(inspectKernelMeasurementCapabilities(revokedCapabilities)).toEqual(
+      expect.objectContaining({
+        status: "malformed",
+        reason: "uninspectable-metadata",
+      }),
+    );
+
+    const revokedField = Proxy.revocable({}, {});
+    const revokedFieldCapabilities = {
+      ...base,
+      measurements: {
+        protocolVersion: KERNEL_MEASUREMENT_PROTOCOL_VERSION,
+        genus: revokedField.proxy,
+      },
+    } as unknown as KernelCapabilities;
+    revokedField.revoke();
+    expect(() =>
+      inspectKernelMeasurementCapabilities(revokedFieldCapabilities),
+    ).not.toThrow();
+    expect(
+      inspectKernelMeasurementCapabilities(revokedFieldCapabilities),
+    ).toEqual(
+      expect.objectContaining({
+        status: "malformed",
+        reason: "invalid-genus",
+        details: { genus: "object" },
+      }),
+    );
+  });
+
   it("distinguishes absent, valid, and malformed composite refinement metadata", () => {
     const base: KernelCapabilities = {
       protocolVersion: 1,

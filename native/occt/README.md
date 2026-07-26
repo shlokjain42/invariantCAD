@@ -602,9 +602,11 @@ native-structure declaration.
 
 The reviewed deterministic stock-runtime v3 asymmetric-box fixture is `13,735`
 bytes with fixture witness
-`invariantcad:kernel-shape-artifact-fixture:v1:sha256:8ecfa6ac89142f794c2d55a78e7121ce0805b8abcb5aa64230e7722d99c8c2be`.
-Its semantic witness remains
-`invariantcad:kernel-shape-semantic:v1:sha256:40ae684e4a2fad512f54e1f1be4443acf7faf2f34fc6b281c7b816d8d3366cb2`.
+`invariantcad:kernel-shape-artifact-fixture:v1:sha256:4279e9f76ab1e41dae47b28aea9c426ffa8b5f329ab624f137c65f6881e23918`.
+Its current semantic witness is
+`invariantcad:kernel-shape-semantic:v2:sha256:b99dd9c39b950700dd22c8be6255db6e816e1a51668f415bf84b80c4c200d588`.
+Semantic v2 records unsupported OCCT genus as `null`; the artifact bytes and
+fixture witness are unchanged by that observation-protocol migration.
 The v1 and v2 fixtures are retained only to prove fail-closed rejection before
 native restore. Verify the current fixture without writing with
 `pnpm artifact:fixture:occt -- --check --version v3`.

@@ -57,6 +57,15 @@ geometry features are supported:
 - canonical documents, migration, validation, and hashing
 - design-impact and effective-feature hash reports
 
+| Measurement | Manifold | Stock OCCT | Owned facade | Assembly aggregate |
+| --- | --- | --- | --- | --- |
+| Volume, area, bounds, center, inertia | Yes | Yes | Yes | Yes |
+| Genus | Exact per connected mesh component | Unsupported (`null`) | Unsupported (`null`) | Unsupported (`null`) |
+
+A numeric genus is exact for the backend representation. Unsupported results
+are explicit `null`; no backend or assembly path guesses, clamps, or silently
+converts the value.
+
 ## Exchange
 
 | Format | Manifold | OCCT |

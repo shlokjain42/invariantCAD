@@ -347,7 +347,7 @@ assert.deepEqual(evaluationA.evidence.output.measurements.boundingBox, {
   min: [0, 0, 0],
   max: [15, 25, 30],
 });
-assert.equal(evaluationA.evidence.output.measurements.genus, 0);
+assert.equal(evaluationA.evidence.output.measurements.genus, null);
 assert.equal(evaluationA.evidence.output.measurements.tolerance, 1e-7);
 assert.deepEqual(evaluationA.evidence.output.topology, {
   history: "complete",

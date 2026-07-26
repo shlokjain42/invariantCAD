@@ -52,7 +52,7 @@ describe("OCCT exact-kernel integration", () => {
         surfaceArea: 0,
         centerOfMass: null,
         boundingBox: { min: [0, 0, 0], max: [0, 0, 0] },
-        genus: 0,
+        genus: null,
       });
       expect(kernel.topology!(empty)).toMatchObject({
         faces: [],
@@ -142,7 +142,9 @@ describe("OCCT exact-kernel integration", () => {
         expect(bytes.byteLength).toBeGreaterThan(0);
         const imported = kernel.importShape!(bytes, format);
         expect(kernel.status(imported).ok).toBe(true);
-        expect(kernel.measure(imported).volume).toBeCloseTo(expectedVolume, 8);
+        const measurements = kernel.measure(imported);
+        expect(measurements.volume).toBeCloseTo(expectedVolume, 8);
+        expect(measurements.genus).toBeNull();
         kernel.disposeShape(imported);
       }
       kernel.disposeShape(original);

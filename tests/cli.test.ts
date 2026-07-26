@@ -898,6 +898,46 @@ describe("CLI", () => {
     }
   }, 15_000);
 
+  it("serializes unsupported OCCT genus as JSON null", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "invariantcad-cli-"));
+    try {
+      const cad = design("cli-occt-genus");
+      cad.output(
+        "solid",
+        cad.box("solid", { size: vec3(mm(2), mm(3), mm(4)) }),
+      );
+      const documentPath = join(directory, "model.json");
+      await writeFile(documentPath, stringifyDocument(cad.build()));
+
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          "tsx",
+          "src/cli.ts",
+          "inspect",
+          documentPath,
+          "--kernel",
+          "occt",
+        ],
+        { cwd: projectRoot, encoding: "utf8" },
+      );
+
+      expect(result.status).toBe(0);
+      expect(result.stderr).toBe("");
+      const report = JSON.parse(result.stdout) as {
+        readonly solid: {
+          readonly volume: number;
+          readonly genus: number | null;
+        };
+      };
+      expect(report.solid.volume).toBeCloseTo(24, 10);
+      expect(report.solid.genus).toBeNull();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, 15_000);
+
   it("reports physical analysis or a structured missing-density result for parts", async () => {
     const directory = await mkdtemp(join(tmpdir(), "invariantcad-cli-"));
     try {
