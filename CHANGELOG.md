@@ -2,6 +2,33 @@
 
 ## [Unreleased]
 
+- Extended the repository-only `stagedBodySetDesignV7(...)` facade with
+  owner-bound `union(...)`, `subtract(...)`, and `intersect(...)` solid
+  authoring. Primitive, commitment-backed imported, transformed, and prior
+  Boolean solids can now form deterministic branching DAGs whose roots feed
+  later Booleans, transforms, ordered body-set memberships, single-solid
+  parts, and configured nested local assemblies. Evaluation preserves the
+  authored target-first/tool-order contract, plans children before consumers,
+  memoizes shared nodes per effective configuration, and charges every target
+  and tool edge—including repeated references—to
+  `maxSolidDependencyLinks`. `maxSolidGraphNodes` counts Boolean nodes as well
+  as leaves and transforms. The selected kernel must honestly advertise the
+  `boolean` feature and implement its Boolean method before resource resolution
+  or shape acquisition. Kernel-returned shape aliases and malformed optional
+  exact-evolution metadata fail closed. Null or exactly zero-volume
+  subtraction/intersection results use the structured `EMPTY_RESULT`
+  diagnostic; impossible empty unions and malformed measurements remain kernel
+  protocol failures. Every unsuccessful graph is released transactionally.
+  Stock OCCT retains exact B-Rep geometry with its partial Boolean-history
+  contract, an owned facade receives complete indexed evolution only when it
+  proves the existing feature-scoped protocol, and Manifold remains approximate
+  mesh geometry. There is no backend fallback.
+  Real Manifold configured-product evidence covers contextual reuse, BOM,
+  mass, suppression, limits, and cleanup; real stock OCCT evidence composes a
+  verified STEP import with subtraction, transform, topology inspection, and
+  STEP export. Generic solid outputs, Boolean inputs from body sets, parts, or
+  assemblies, other body-consuming features, CLI/package exports, and public
+  Document v7 promotion remain unsupported; the public v6 API is unchanged.
 - Extended the repository-only `stagedBodySetDesignV7(...)` facade with typed
   angle parameters and owner-bound `StagedSolidRefV7` transform DAGs.
   `transform(...)` captures one or more ordered translate, rotate, scale, or
@@ -24,10 +51,10 @@
   and authored operations; local-assembly evaluation charges each globally by
   `(node, effective configuration)` across the active tree while deduplicating
   repeated occurrences in one context and pruning suppressed subtrees before
-  counting. Generic/direct transformed-solid outputs, Boolean inputs,
-  transforms over body sets/parts/assemblies, other body-consuming features,
-  CLI/package exports, and public Document v7 promotion remain unsupported; the
-  public v6 API is unchanged.
+  counting. Generic/direct transformed-solid outputs, transforms over body
+  sets/parts/assemblies, other body-consuming features, CLI/package exports,
+  and public Document v7 promotion remain unsupported; the public v6 API is
+  unchanged.
 - Extended the repository-only `stagedBodySetDesignV7(...)` facade with
   source-only nested local assembly authoring and evaluation. The staged
   `assembly(...)` callback receives a `StagedLocalAssemblyBuilderV7` whose

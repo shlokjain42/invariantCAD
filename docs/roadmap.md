@@ -112,33 +112,35 @@ protocol v2 are also staged internally. A source-only
 admitted by the staged evaluators and datum resolver: typed length, angle,
 mass-density, and scalar parameters; named parameter, part-material, and
 assembly-instance-suppression configurations; document-owned materials; boxes,
-cylinders, spheres; primitive/import/transform solid DAGs with ordered
-translate, rotate, scale, and mirror operations; content-addressed resource
-commitments; imported-body leaves; body sets; parts over one solid DAG root or
-body set; acyclic nested fixed-placement assemblies of local parts and
-already-completed local assemblies with per-occurrence configuration
-selectors; datum points, axes, planes, and coordinate systems; and direct
-imported-body/body-set/part/local-assembly outputs. Generic primitive or
-transformed-solid outputs remain unsupported. Datums remain addressable nodes
-rather than design outputs. The facade produces detached, deeply frozen,
-strictly valid v7 documents while enforcing namespaces, typed builder
-ownership, exact plain own-data options, dense collections, unique memberships
-and occurrence IDs, commitments, material/configuration references, and
-authoring limits. Resource locations remain inert resolver hints, and the
-imported node's explicit format—not `mediaType`—selects STEP or BREP
-interpretation. The caller computes each digest and byte-length commitment; the
-facade performs no resource-byte I/O or hashing.
+cylinders, spheres; primitive/import/Boolean/transform solid DAGs with ordered
+union, subtraction, intersection, translate, rotate, scale, and mirror
+operations; content-addressed resource commitments; imported-body leaves; body
+sets; parts over one solid DAG root or body set; acyclic nested fixed-placement
+assemblies of local parts and already-completed local assemblies with
+per-occurrence configuration selectors; datum points, axes, planes, and
+coordinate systems; and direct imported-body/body-set/part/local-assembly
+outputs. Generic primitive, Boolean, or transformed-solid outputs remain
+unsupported. Datums remain addressable nodes rather than design outputs. The
+facade produces detached, deeply frozen, strictly valid v7 documents while
+enforcing namespaces, typed builder ownership, exact plain own-data options,
+dense collections, unique memberships and occurrence IDs, commitments,
+material/configuration references, and authoring limits. Resource locations
+remain inert resolver hints, and the imported node's explicit format—not
+`mediaType`—selects STEP or BREP interpretation. The caller computes each
+digest and byte-length commitment; the facade performs no resource-byte I/O or
+hashing.
 
 One source-only executable slice evaluates outputs that directly reference an
 imported-body node by verifying caller-resolved bytes and invoking the kernel's
 strong exact single-solid import contract. A second evaluates outputs that
 directly reference a body set whose members are roots of bounded
-primitive/import/transform solid DAGs. It preserves authored member identity,
-order, names, and metadata, treats every listed member as active with no
-inferred primary, and reports whether the result is exact or approximate.
-Stock OCCT retains exact B-Rep transforms; Manifold provides approximate mesh
-transforms, with no automatic fallback between them. Imported members retain
-the verified-resource and strong exact single-solid B-Rep requirement. A third
+primitive/import/Boolean/transform solid DAGs. It preserves authored member
+identity, order, names, and metadata, treats every listed member as active with
+no inferred primary, and reports whether the result is exact or approximate.
+Stock OCCT retains exact B-Rep geometry and partial Boolean history; Manifold
+provides approximate mesh geometry with no topology snapshots, and there is no
+automatic fallback between them. Imported descendants retain the
+verified-resource and strong exact single-solid B-Rep requirement. A third
 evaluates outputs that directly reference a part whose geometry is one
 supported solid DAG root or one admitted body set. It preserves detached part
 metadata and effective material/density provenance through an explicit
@@ -161,10 +163,11 @@ Aggregate mesh/STL/OBJ remains approximate/lossy, while physical mass composes
 each occurrence's effective density and placement. Suppressed assembly edges
 prune their full subtree; active external components fail before resource
 resolution or kernel work. Nesting and retained identity are bounded by
-`maxAssemblyDepth` and `maxOccurrencePathSegments`. Solid nodes, transform
-dependency links, and authored transform operations are independently bounded
-by `maxSolidGraphNodes`, `maxSolidDependencyLinks`, and
-`maxTransformOperations`; assembly evaluation charges them globally by
+`maxAssemblyDepth` and `maxOccurrencePathSegments`. Solid nodes, Boolean and
+transform dependency links, and authored transform operations are
+independently bounded by `maxSolidGraphNodes`, `maxSolidDependencyLinks`, and
+`maxTransformOperations`; every Boolean target/tool edge is charged, including
+repeated references, and assembly evaluation charges graph work globally by
 `(node, effective configuration)` across the active tree.
 
 A separate source-only operation, `evaluateDatumNodesV7(...)`, resolves
@@ -186,18 +189,19 @@ uniform density and additive independent-body physical-mass semantics, with
 aliases and overlaps counted per authored membership, plus a one-row BOM.
 Those numeric properties inherit backend measurement quality. Bare body sets
 still have no aggregate mass; exact aggregate STEP/BREP, aggregate geometric
-measurement or topology, Boolean composition, external occurrence evaluation,
-healing, and location I/O remain unsupported. Local-assembly exact aggregate
+measurement or topology, external occurrence evaluation, healing, and location
+I/O remain unsupported. Local-assembly exact aggregate
 export, aggregate geometric measurement or topology, cyclic graphs, mates,
 motion, and interference/collision are also unsupported. `mediaType` remains
 committed provenance pending a versioned format-to-media-type policy. The
 facade still excludes external occurrences, datum-backed sketches, transforms
-over body sets/parts/assemblies, other body-consuming operations, per-body
-materials, and general solid graphs beyond primitive/import/transform DAGs,
-including generic solid and direct primitive outputs. These are
-correctness-tested design inputs for Milestone 1, not public authoring or
-evaluation capabilities. No root export, package subpath, or CLI surface was
-added; the public document alias and migration target remain v6.
+or Booleans over body sets/parts/assemblies, other body-consuming operations,
+per-body materials, and general solid graphs beyond
+primitive/import/Boolean/transform DAGs, including generic solid and direct
+primitive outputs. These are correctness-tested design inputs for Milestone 1,
+not public authoring or evaluation capabilities. No root export, package
+subpath, or CLI surface was added; the public document alias and migration
+target remain v6.
 
 The staged v7 text parser rejects duplicate decoded JSON object members,
 including escape-equivalent names, and applies structural and nesting ceilings
@@ -322,13 +326,17 @@ serialized, migrated, evaluated, inspected, and exported without escaping the
 document model. Their identities and resource inputs are reproducible.
 
 The repository-only facade and staged evaluators now exercise that workflow for
-direct imported bodies, bounded primitive/import/transform body sets, and
-directly authored typed parts and material intent over those geometries,
-including acyclic nested local fixed-placement assemblies and real Manifold and
-stock-OCCT acceptance paths. The milestone remains in progress because this
-evidence is source-only and does not yet cover public v7 promotion, external
-product documents/components, datum-backed modeling, Boolean/body-consuming
-composition, or the wider shape algebra.
+direct imported bodies, bounded primitive/import/Boolean/transform body sets,
+and directly authored typed parts and material intent over those geometries,
+including acyclic nested local fixed-placement assemblies. Real Manifold
+acceptance evidence covers configuration-sensitive Boolean products, BOM,
+mass, suppression, limits, and cleanup. Real stock-OCCT evidence resolves a
+committed STEP body, subtracts a native tool, transforms the result, inspects
+partial topology, exports STEP, and restores the native ownership baseline.
+The milestone remains in progress because this evidence is source-only and
+does not yet cover public v7 promotion, external product
+documents/components, datum-backed modeling, other body-consuming operations,
+or the wider shape algebra.
 
 ## Milestone 2 — everyday part modeling
 

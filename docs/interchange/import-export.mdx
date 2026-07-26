@@ -100,7 +100,7 @@ try {
 }
 ```
 
-## Staged Document v7 import, transform, product, and assembly status
+## Staged Document v7 import, Boolean/transform, product, and assembly status
 
 The current public authoring grammar does not yet expose an imported-body
 or body-set feature node. The repository now contains
@@ -118,15 +118,15 @@ The staged facade authors:
 - direct boxes, cylinders, and spheres by privately composing the existing v6
   builder;
 - owner-bound solid DAGs whose leaves are those primitives or imported bodies
-  and whose internal nodes are ordered transforms, with typed
-  `translate(...)`, `rotate(...)`, `scale(...)`, and `mirror(...)`
-  conveniences;
+  and whose internal nodes are ordered `union(...)`, `subtract(...)`,
+  `intersect(...)`, or transform operations, with typed `translate(...)`,
+  `rotate(...)`, `scale(...)`, and `mirror(...)` conveniences;
 - document-owned commitments with an explicit SHA-256 digest, byte length,
   media type, ordered location hints, and detached metadata;
 - owner-bound imported-body leaves for STEP with file units or text/binary BREP
   with an explicit `mm`, `cm`, `m`, or `in` length unit;
 - owner-bound body sets whose dense, non-empty ordered memberships reference
-  facade-created primitive/import/transform DAG roots;
+  facade-created primitive/import/Boolean/transform DAG roots;
 - owner-bound parts whose geometry is one staged solid DAG root or one admitted
   body set; and
 - acyclic nested fixed-placement assemblies whose instances reference owned
@@ -162,9 +162,9 @@ The repository has four source-only staged geometry-evaluator slices:
 - A direct body-set output preserves authored member order, stable member IDs,
   optional names, and detached metadata. Every listed member is active and no
   member is treated as a primary body. Its solid reference may point to a box,
-  cylinder, sphere, imported-body leaf, or a bounded transform DAG rooted in
-  those leaves. Shared graph nodes are evaluated once without collapsing
-  authored memberships.
+  cylinder, sphere, imported-body leaf, or a bounded Boolean/transform DAG
+  rooted in those leaves. Shared graph nodes are evaluated once without
+  collapsing authored memberships.
 - A direct part output preserves part metadata and effective material/density
   provenance while retaining an explicit single-solid or body-set geometry
   branch. Its geometry must be one supported solid DAG root or one body set
@@ -181,41 +181,59 @@ The repository has four source-only staged geometry-evaluator slices:
   multibody geometry as the direct part slice, including verified imported
   leaves.
 
-Native primitive/transform body sets can run on either exact or approximate
-kernels, and the result records the kernel representation as `mesh`, `brep`,
-or `sdf` together with its exactness claim. Stock OCCT constructs exact B-Rep
-transforms; Manifold constructs approximate mesh transforms. Evaluation never
-falls back from one to the other. An imported member, including an imported
-leaf below transforms, is different: the complete body set must use an exact
-`brep` kernel with strong single-solid document-body import support. Imported
-bytes cross the same verified-resource boundary as a direct imported-body
-output. There is no weak `importShape(...)` fallback and no automatic
-conversion to a mesh representation.
+Native primitive/Boolean/transform body sets can run on either exact or
+approximate kernels, and the result records the kernel representation as
+`mesh`, `brep`, or `sdf` together with its exactness claim. Stock OCCT
+constructs exact B-Rep geometry with partial Boolean history; a matched owned
+facade supplies complete bounded evolution for the current Boolean only when it
+proves the existing feature-scoped protocol. That promise cannot upgrade
+partial history already carried by an operand, and the result's `exact` flag
+describes geometry rather than complete history. Manifold constructs
+approximate mesh geometry with no topology snapshots. Evaluation never falls
+back from one backend to the other. An imported member, including an imported
+leaf below Booleans or transforms, is different: the complete body set must use
+an exact `brep` kernel with strong single-solid document-body import support.
+Imported bytes cross the same verified-resource boundary as a direct
+imported-body output. There is no weak `importShape(...)` fallback and no
+automatic conversion to a mesh representation.
+
+Executable stock-OCCT evidence resolves a commitment-verified STEP box,
+subtracts a native tool, transforms the result, inspects partial topology,
+exports STEP, and restores the native ownership baseline. Separate real
+Manifold evidence evaluates configuration-sensitive native Boolean graphs
+through nested products, BOM, mass, suppression, limits, and complete cleanup.
 
 The staged body-set result owns its distinct kernel shapes until disposal.
 Each member can produce a detached mesh and measurements. Topology and native
 single-body STEP/BREP export remain gated by the kernel's separate
 capabilities. A shared leaf can be evaluated once without collapsing its
-distinct authored memberships; shared transform nodes are memoized the same
-way. Aggregate tessellation preserves the authored member sequence, while
-aggregate STL and OBJ export are mesh-derived and therefore explicitly
+distinct authored memberships; shared Boolean and transform nodes are memoized
+the same way. Aggregate tessellation preserves the authored member sequence,
+while aggregate STL and OBJ export are mesh-derived and therefore explicitly
 approximate/lossy even when the source bodies are exact. No exact aggregate
 STEP or BREP export is available: the evaluator does not fuse the bodies,
-invent a compound, or otherwise reinterpret the authored set. Failure releases
-every distinct acquired shape exactly once. Success keeps those shapes live
+invent a compound, or otherwise reinterpret the authored set. The selected
+kernel must advertise and implement `boolean` before resolver or shape work,
+and malformed optional exact-evolution metadata fails closed. A null or exactly
+zero-volume subtraction/intersection returns error-level `EMPTY_RESULT`; an
+impossible empty union or invalid measurement is a kernel protocol failure.
+There is no staged `allowEmpty` option. Failure releases every distinct
+acquired or intermediate shape exactly once. Success keeps those shapes live
 until the staged design is disposed; subsequent facade and per-body solid
 operations then fail deterministically. The supplied kernel is borrowed and is
 never disposed by this operation.
 
 The staged operation bounds selected outputs, caller parameter overrides,
 authored memberships, distinct primitive/import leaves, all solid-graph nodes,
-transform input edges, authored transform operations, documents, and resolved
-resources. The solid-DAG ceilings are `maxSolidGraphNodes`,
-`maxSolidDependencyLinks`, and `maxTransformOperations`, each defaulting to
-`100,000`; `maxDistinctSolids` separately counts leaves. Those admission limits
-do not bound mesh buffers created by later facade calls; applications handling
-hostile or very large tessellations still need a disposable worker or process
-and an application-owned output ceiling.
+all Boolean target/tool and transform input edges, authored transform
+operations, documents, and resolved resources. Repeated Boolean tool
+references count as repeated edges. The solid-DAG ceilings are
+`maxSolidGraphNodes`, `maxSolidDependencyLinks`, and
+`maxTransformOperations`, each defaulting to `100,000`; `maxDistinctSolids`
+separately counts leaves. Those admission limits do not bound mesh buffers
+created by later facade calls; applications handling hostile or very large
+tessellations still need a disposable worker or process and an
+application-owned output ceiling.
 
 For a direct part, a named configuration can replace the authored `materialId`.
 An explicit part density still overrides the effective material density, and a
@@ -251,14 +269,15 @@ inertia.
 A suppressed assembly edge prunes its entire subtree before descendant
 admission or work accounting. Traversal is bounded by `maxAssemblyDepth`,
 `maxOccurrencePathSegments`, scanned-instance, active-occurrence, placement,
-and downstream part/resource ceilings. Solid-graph nodes, transform input
-edges, and transform operations are counted globally by `(node, effective
-configuration)` across active occurrences: repeated occurrences in one context
-share the charge, while different contexts are independent. An active external
-component is rejected before resolver or kernel work. The facade cannot
-construct a cycle because it accepts only already-completed same-builder
-assembly handles; strict document admission and evaluation reject hand-authored
-recursive graphs.
+and downstream part/resource ceilings. Solid-graph nodes, all Boolean
+target/tool and transform input edges, and transform operations are counted
+globally by `(node, effective configuration)` across active occurrences:
+repeated occurrences in one context share the charge, while different contexts
+are independent. Repeated Boolean references still charge every authored edge.
+An active external component is rejected before resolver or kernel work. The
+facade cannot construct a cycle because it accepts only already-completed
+same-builder assembly handles; strict document admission and evaluation reject
+hand-authored recursive graphs.
 
 The authoring facade, all four staged geometry-evaluator slices, and the
 kernel-independent datum resolver remain repository-only: none is exported by
@@ -266,20 +285,20 @@ the package root, available from a package subpath, or integrated with the
 public builder or CLI. The facade can author datum points, axes, planes, and
 coordinate systems, but they are resolved by selected node ID rather than
 published as design outputs or consumed by sketches or shape algebra. It still
-does not author external occurrences, cyclic local-assembly graphs, Boolean
-solids, transforms whose input is a body set, part, or assembly, other
+does not author external occurrences, cyclic local-assembly graphs, Boolean or
+transform inputs that are body sets, parts, or assemblies, other
 body-consuming operations, per-body materials, or general solid graphs beyond
-primitive/import/transform DAGs. The facade cannot publish a direct primitive,
-generic, or transformed-solid output either; transformed geometry must be
-retained by a body set or part. The narrower imported-body handle remains the
-only directly publishable solid-like staged reference. The operations perform
-no location I/O and admit no healing beyond `none`. A resource's `mediaType` is
-committed provenance passed to the resolver; it is not used to choose the
-reader or accepted as a substitute for the imported-body node's explicit
-`format`. Assembly mates, motion, interference/collision, assembly-wide
-topology or geometric measurement, and exact aggregate STEP/BREP remain
-unsupported. A versioned format-to-media-type policy is still required before
-public v7 promotion.
+primitive/import/Boolean/transform DAGs. The facade cannot publish a direct
+primitive, generic Boolean, or transformed-solid output either; generic solid
+geometry must be retained by a body set or part. The narrower imported-body
+handle remains the only directly publishable solid-like staged reference. The
+operations perform no location I/O and admit no healing beyond `none`. A
+resource's `mediaType` is committed provenance passed to the resolver; it is
+not used to choose the reader or accepted as a substitute for the imported-body
+node's explicit `format`. Assembly mates, motion, interference/collision,
+assembly-wide topology or geometric measurement, and exact aggregate STEP/BREP
+remain unsupported. A versioned format-to-media-type policy is still required
+before public v7 promotion.
 
 There are deliberately two kernel boundaries:
 
