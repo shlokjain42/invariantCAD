@@ -106,6 +106,10 @@ import {
   transformMassProperties,
 } from "./internal/mesh-mass-properties.js";
 import {
+  validateResolvedProfileRegion,
+} from "./internal/resolved-profile-region.js";
+import { resolvedProfileRegionDiagnostic } from "./internal/resolved-profile-region-diagnostic.js";
+import {
   combinePhysicalMassProperties,
   physicalMassProperties as scalePhysicalMassProperties,
   type PhysicalMassProperties,
@@ -114,10 +118,7 @@ import {
   createReferenceSketchSolver,
   type SketchSolverBackend,
 } from "./solver.js";
-import {
-  resolvedLoopIsClosed,
-  type ResolvedProfile,
-} from "./protocol/profile.js";
+import type { ResolvedProfile } from "./protocol/profile.js";
 import { validateDocument } from "./validation.js";
 import {
   resolveTopologySelection,
@@ -12867,20 +12868,22 @@ export class Evaluator {
             if (hasErrors(solved.diagnostics)) {
               throw new EvaluationFailure(solved.diagnostics[0]!);
             }
-            const profileLoops = [
-              solved.profile.outer,
-              ...solved.profile.holes,
-            ];
-            if (
-              profileLoops.some(
-                (loop) => !resolvedLoopIsClosed(loop, node.tolerance),
-              )
-            ) {
+            const regionIssue = validateResolvedProfileRegion(
+              solved.profile,
+              node.tolerance,
+              {
+                ...(options.signal === undefined
+                  ? {}
+                  : { signal: options.signal }),
+              },
+            );
+            if (regionIssue !== undefined) {
               throw new EvaluationFailure(
-                diagnostic(
-                  "SKETCH_NO_CLOSED_REGION",
-                  "Sketch did not produce a closed region",
-                  { severity: "error", node: id, path: `/nodes/${id}/profile` },
+                resolvedProfileRegionDiagnostic(
+                  id,
+                  node,
+                  node.tolerance,
+                  regionIssue,
                 ),
               );
             }
