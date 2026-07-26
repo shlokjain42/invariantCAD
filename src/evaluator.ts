@@ -176,6 +176,17 @@ import {
   type DesignDocumentLimits,
 } from "./document-limits.js";
 import {
+  type EvaluateImportedBodyOptions,
+  type EvaluatedImportedBody,
+  type ImportedBodyDocument,
+} from "./imported-body.js";
+import {
+  capturedImportedBodyDocument,
+  captureEvaluateImportedBodyOptions,
+  publicImportedBodyResult,
+  retainEvaluatedImportedBody,
+} from "./internal/imported-body-runtime.js";
+import {
   DOCUMENT_V7_RUNTIME_INTEGRITY_MESSAGE,
   documentV7RuntimeIntrinsicsAreIntact,
   throwDocumentV7RuntimeIntegrityError,
@@ -12613,6 +12624,7 @@ export class Evaluator {
   readonly sketchSolver: SketchSolverBackend;
   #disposed = false;
   #artifactCacheEvaluationActive = false;
+  #activeImportedBodyEvaluations = 0;
 
   constructor(kernel: GeometryKernel, sketchSolver: SketchSolverBackend) {
     this.kernel = kernel;
@@ -12639,6 +12651,89 @@ export class Evaluator {
       return await this.#evaluateOnce(document, options, artifactCache);
     } finally {
       this.#artifactCacheEvaluationActive = false;
+    }
+  }
+
+  /**
+   * Evaluates one verified public imported-body document.
+   *
+   * This borrows the evaluator and kernel. The successful result owns only its
+   * imported native shape and must be disposed independently.
+   */
+  async evaluateImportedBody(
+    document: ImportedBodyDocument,
+    options: EvaluateImportedBodyOptions = {},
+  ): Promise<CadResult<EvaluatedImportedBody>> {
+    if (this.#disposed) throw new Error("This evaluator has been disposed");
+    const state = capturedImportedBodyDocument(document);
+    if (state === undefined) {
+      return failure(
+        diagnostic(
+          "IR_INVALID",
+          "Expected an ImportedBodyDocument created or parsed by InvariantCAD",
+          {
+            severity: "error",
+            path: "/",
+            details: { phase: "importedBodyEvaluation" },
+          },
+        ),
+      );
+    }
+    const capturedOptions =
+      captureEvaluateImportedBodyOptions(options);
+    if (!capturedOptions.ok) return capturedOptions;
+    if (this.#disposed) throw new Error("This evaluator has been disposed");
+    this.#activeImportedBodyEvaluations += 1;
+    try {
+      const evaluated = publicImportedBodyResult(
+        await evaluateImportedBodyOutputsV7(
+          this.kernel,
+          state.document,
+          {
+            outputs: [state.output],
+            ...capturedOptions.value,
+          },
+        ),
+      );
+      if (!evaluated.ok) return evaluated;
+      try {
+        const solid = evaluated.value.output(
+          state.output,
+        ) as EvaluatedSolid;
+        return success(
+          retainEvaluatedImportedBody(
+            document,
+            evaluated.value,
+            solid,
+          ),
+          evaluated.diagnostics,
+        );
+      } catch (error) {
+        try {
+          evaluated.value.dispose();
+        } catch {
+          // Preserve the primary wrapping failure after transactional cleanup.
+        }
+        return failure(
+          diagnostic(
+            "KERNEL_ERROR",
+            safeErrorMessage(
+              error,
+              "Imported-body result could not be retained safely",
+            ),
+            {
+              severity: "error",
+              path: `/outputs/${state.output}`,
+              details: {
+                phase: "importedBodyEvaluation",
+                kernel: this.kernel.id,
+              },
+            },
+          ),
+        );
+      }
+    } finally {
+      this.#activeImportedBodyEvaluations -= 1;
     }
   }
 
@@ -14673,6 +14768,11 @@ export class Evaluator {
     if (this.#artifactCacheEvaluationActive) {
       throw new Error(
         "Cannot dispose an evaluator during a private artifact-cache evaluation",
+      );
+    }
+    if (this.#activeImportedBodyEvaluations > 0) {
+      throw new Error(
+        "Cannot dispose an evaluator during an imported-body evaluation",
       );
     }
     this.sketchSolver.dispose();

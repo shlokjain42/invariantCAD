@@ -332,6 +332,28 @@ export {
   type TextShapeExportFormat,
   inspectEvaluatorProfile,
 } from "./evaluator.js";
+export {
+  DEFAULT_IMPORTED_BODY_RESOURCE_LIMITS,
+  IMPORTED_BODY_MEDIA_TYPES,
+  IMPORTED_BODY_WORKFLOW_PROTOCOL_VERSION,
+  createImportedBodyDocument,
+  parseImportedBodyDocument,
+  stringifyImportedBodyDocument,
+  type EvaluateImportedBodyOptions,
+  type EvaluatedImportedBody,
+  type ImportedBodyDefinition,
+  type ImportedBodyDocument,
+  type ImportedBodyFormat,
+  type ImportedBodyLengthUnit,
+  type ImportedBodyMediaType,
+  type ImportedBodyProvenance,
+  type ImportedBodyResolver,
+  type ImportedBodyResolverRequest,
+  type ImportedBodyResourceCommitment,
+  type ImportedBodyResourceDigest,
+  type ImportedBodyResourceLimits,
+  type StringifyImportedBodyDocumentOptions,
+} from "./imported-body.js";
 export type {
   ConfigurationId,
   EntityId,
