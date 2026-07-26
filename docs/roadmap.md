@@ -173,6 +173,28 @@ base or a named parent ID to the same child ID; `base` and `named` select the
 child directly. Root caller parameter overrides never enter an external
 document.
 
+The repository-staged `evaluateProductDocument(...)` boundary now coordinates
+that fixed-assembly traversal with direct solid, body-set, and part outputs in
+one ordered mixed result. Requested aliases and output order remain visible,
+while equal definitions share native geometry. The operation captures the root
+document once, prepares one native batch per document and effective
+configuration, performs one aggregate kernel preflight, resolves geometry
+through one document-scoped resource session, and transfers every completed
+batch into one cross-batch ownership transaction and top-level result owner.
+It does not create synthetic nodes or call four independent evaluators.
+Suppressed structure and unrelated material/resource commitments remain inert;
+failure, cancellation, and late result-construction errors release all acquired
+geometry best-effort.
+
+The mixed container adds only validated aggregate mesh and mesh-format export.
+Exact leaves continue to provide backend-reported measurements plus
+capability-gated topology and native STEP/BREP export, but the combined product
+mesh, binary/ASCII STL, and OBJ remain approximate/lossy. There is no
+mixed-product B-Rep compound, exact aggregate exchange, aggregate
+measurement/topology, mass/BOM operation, mate solver, motion, contact,
+interference, or collision. Assembly outputs inside the mix retain their
+existing assembly-scoped BOM and physical-mass behavior.
+
 One local part result is reused per effective `(part, configuration)` state,
 and one direct external part result is reused per
 `(resource, output, child configuration)` state. External assembly leaves reuse
@@ -225,10 +247,13 @@ component libraries, datum-backed sketches, transforms or Booleans over body
 sets/parts/assemblies, other body-consuming operations, per-body materials,
 and general solid graphs beyond
 primitive/import/Boolean/transform DAGs, including generic solid and direct
-primitive outputs. These are correctness-tested source inputs staged for 0.2,
-not public 0.1.1 authoring or evaluation capabilities. No root export, package
-subpath, or CLI surface was added; the public document alias and migration
-target remain v6.
+primitive outputs through the staged authoring facade. The internal mixed
+evaluator can select an already-admitted direct solid output, but that does not
+add a public or facade-authored output kind. These are correctness-tested source
+inputs staged for 0.2, not public 0.1.1 authoring or evaluation capabilities.
+`evaluateProductDocument(...)` has no package-root, package-subpath, or CLI
+export in `invariantcad@0.1.1`; the public document alias and migration target
+remain v6.
 
 The staged v7 text parser rejects duplicate decoded JSON object members,
 including escape-equivalent names, and applies structural and nesting ceilings

@@ -83,7 +83,10 @@ fixed-placement products containing local parts, completed local assemblies,
 direct external parts, or one fixed external-subassembly boundary; and datum
 points, axes, planes, and coordinate systems. Outputs may directly reference an
 imported body, body set, part, or staged product assembly; generic primitive,
-Boolean, or transformed-solid outputs remain unsupported.
+Boolean, or transformed-solid outputs remain unsupported through this authoring
+facade. The lower-level mixed product evaluator described below can select a
+strictly admitted direct solid output; that does not add a corresponding
+builder method or public output kind.
 Datums are selected separately by node ID and are never design outputs. The
 built `DesignDocumentV7` is detached, deeply frozen, and accepted by strict v7
 parsing and semantic validation; `build({ limits })` can apply partial
@@ -91,6 +94,69 @@ parsing and semantic validation; `build({ limits })` can apply partial
 an invalid document. This is repository-only work staged for 0.2. The facade is
 not a root or package-subpath export and does not change the public 0.1.1 v6
 builder or evaluator types.
+
+### Mixed product-document outputs
+
+The internal `evaluateProductDocument(kernel, document, options)` boundary
+evaluates one ordered selection that may mix supported direct solid, body-set,
+part, and fixed-assembly outputs from an admitted Document v7. It returns an
+owned `EvaluatedProductDocumentV7`, whose `outputs` array and `outputNames`
+preserve the requested order and aliases. `output(name)` supports an optional
+kind check, while `solid(name)`, `bodySet(name)`, `part(name)`, and
+`assembly(name)` provide kind-specific access. Aliases receive correctly named
+facades while retaining the same native definition geometry.
+
+This is one coordinated product operation, not a loop over unrelated
+evaluators. It captures the root document and options once, classifies selected
+roots and active root-local assembly structure before the first resolver
+request, and admits any required external document bytes before child geometry
+planning. It then:
+
+1. prepares one native-geometry batch for each document and effective
+   configuration used by the selected roots or active assembly leaves;
+2. captures the aggregate kernel capability boundary once before resolving any
+   geometry resource;
+3. resolves root and external geometry resources through one document-scoped
+   session; and
+4. executes every batch under one cross-batch shape-ownership transaction and
+   one top-level owner.
+
+This ordering keeps suppressed occurrences, unselected outputs, unrelated
+materials, and their geometry resources inert. Repeated aliases and occurrence
+leaves can share retained geometry without synthetic nodes, duplicate native
+construction, or ambiguous cleanup. A failure or cancellation releases every
+completed batch best-effort, and disposing a successful result invalidates its
+direct and assembly-borrowed leaf views together. Kernel capability and
+resource diagnostics remain structured: aggregate kernel failures retain the
+responsible document scope, selection path, and batch provenance, while
+resolver failures retain document scope and unambiguous external-component
+provenance.
+
+Exactness belongs to each retained leaf, not to the mixed container. An exact
+solid or body continues to expose backend-reported measurements plus
+capability-gated topology and native STEP/BREP export.
+The `exact` flag describes the retained geometry representation; it does not
+independently certify every numeric or topological report.
+`EvaluatedProductDocumentV7.mesh()` validates and copies every selected leaf
+mesh before combining it. Top-level
+`export("stl" | "stl-ascii" | "obj")` is therefore a tessellated,
+approximate/lossy aggregate even when all leaves are exact. The mixed result
+does not synthesize a B-Rep compound and does not expose aggregate STEP/BREP,
+measurement, topology, mass properties, or BOM. A selected assembly still
+retains its existing assembly-scoped BOM and physical-mass operations.
+
+The admitted solid leaf set remains the staged primitive, imported-body,
+Boolean, and transform graph. This boundary does not add sketches or other
+feature families, body-set/part/assembly inputs to Boolean or transform
+operations, mates, joints, solving, motion, contact, interference, collision,
+recursive external-product graphs, or active second-level external-document
+boundaries. It also does not enable a cross-run evaluator cache.
+
+`evaluateProductDocument`, `EvaluatedProductDocumentV7`, and their supporting
+types are repository-staged implementation for 0.2. They are not exported by
+the public `invariantcad@0.1.1` package root or a package subpath, are not
+available through the CLI, and do not promote Document v7, change the public
+v6 `DesignDocument`/`EvaluatedOutput` aliases, or add a migration target.
 
 ### Datum-node resolution
 
