@@ -2,6 +2,34 @@
 
 ## [Unreleased]
 
+- Added the repository-staged `evaluateProductDocument(...)` boundary for one
+  ordered selection containing any supported mix of direct solid, body-set,
+  part, and fixed-assembly Document v7 outputs. The owned
+  `EvaluatedProductDocumentV7` result preserves requested output order and
+  aliases, exposes kind-checked lookup plus direct `solid(...)`,
+  `bodySet(...)`, `part(...)`, and `assembly(...)` access, and invalidates every
+  borrowed leaf view atomically on disposal.
+  One call captures the root document and options once, expands active local
+  and admitted external assembly structure before geometry work, prepares one
+  authentic native-geometry batch per document/effective-configuration
+  context, performs one aggregate kernel preflight before geometry-resource
+  resolution, and shares one document-scoped resolver session and
+  cross-batch shape-ownership transaction. Repeated aliases and assembly
+  leaves reuse their retained definition geometry without synthesizing nodes
+  or duplicating native construction. Suppressed structure and unselected
+  materials/resources remain inert.
+  Exact B-Rep leaves retain backend-reported per-solid or per-body
+  measurements plus capability-gated topology and native STEP/BREP export. The
+  mixed result's aggregate `mesh()` and STL/OBJ exports validate and copy every
+  backend mesh but remain explicitly approximate/lossy; the boundary does not
+  synthesize an exact compound or provide aggregate STEP/BREP, measurement,
+  topology, mass, BOM, mates, motion, contact, interference, or collision.
+  Active
+  second-level external-document boundaries and unsupported solid/assembly
+  feature families still fail closed.
+  This entry point and its result types are repository-only staging for 0.2.
+  They are absent from the public `invariantcad@0.1.1` package root and
+  subpaths, public v6 document/evaluator aliases, migration targets, and CLI.
 - Made CLI argument handling fail closed. `validate`, `inspect`, `bom`, and
   `export` now reject unknown or command-inapplicable options, extra positional
   arguments, missing or empty values, duplicate single-value options, and
