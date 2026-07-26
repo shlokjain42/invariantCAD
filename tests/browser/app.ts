@@ -2,9 +2,13 @@
 
 import {
   createEvaluator,
+  createImportedBodyDocument,
   design,
   EvaluatedSolid,
+  IMPORTED_BODY_MEDIA_TYPES,
   mm,
+  parseImportedBodyDocument,
+  stringifyImportedBodyDocument,
   vec3,
 } from "invariantcad";
 import { createOcctKernel } from "invariantcad/kernels/occt";
@@ -41,6 +45,19 @@ export interface BrowserSmokeResult {
     readonly stepDeterministic: boolean;
     readonly stepMetadataDeterministic: boolean;
     readonly crossRealmWasmUrlCaptured: boolean;
+  };
+  readonly importedBody: {
+    readonly protocolVersion: number;
+    readonly serializedBytes: number;
+    readonly resolverCalls: number;
+    readonly volume: number;
+    readonly faces: number;
+    readonly edges: number;
+    readonly vertices: number;
+    readonly stepBytes: number;
+    readonly stepDeterministic: boolean;
+    readonly disposedResultRejected: boolean;
+    readonly evaluatorRemainedLive: boolean;
   };
   readonly artifactWorker: {
     readonly fixture: {
@@ -1060,6 +1077,155 @@ async function verifyCrossRealmWasmUrlCapture(): Promise<boolean> {
   }
 }
 
+async function runImportedBodyGate(
+  evaluator: Awaited<ReturnType<typeof createEvaluator>>,
+  sourceDocument: ReturnType<typeof browserSmokeDocument>,
+  step: Uint8Array,
+): Promise<BrowserSmokeResult["importedBody"]> {
+  const importedDocumentResult = createImportedBodyDocument(
+    "Browser imported exact body",
+    {
+      id: "browserImportedBody",
+      resource: {
+        id: "browserStep",
+        digest: `sha256:${await sha256Hex(step)}`,
+        byteLength: step.byteLength,
+        mediaType: IMPORTED_BODY_MEDIA_TYPES.step,
+        locations: ["memory:browser-smoke.step"],
+      },
+      format: "step",
+      units: { mode: "from-file" },
+    },
+  );
+  if (!importedDocumentResult.ok) {
+    throw new Error(
+      diagnosticMessage(importedDocumentResult.diagnostics),
+    );
+  }
+  const serializedImportedDocument =
+    stringifyImportedBodyDocument(importedDocumentResult.value);
+  const parsedImportedDocument = parseImportedBodyDocument(
+    serializedImportedDocument,
+  );
+  if (!parsedImportedDocument.ok) {
+    throw new Error(
+      diagnosticMessage(parsedImportedDocument.diagnostics),
+    );
+  }
+
+  let resolverCalls = 0;
+  const importedResult = await evaluator.evaluateImportedBody(
+    parsedImportedDocument.value,
+    {
+      resolver: (request) => {
+        resolverCalls += 1;
+        if (
+          request.id !== "browserStep" ||
+          request.byteLength !== step.byteLength ||
+          request.mediaType !== IMPORTED_BODY_MEDIA_TYPES.step ||
+          request.locations?.join(",") !==
+            "memory:browser-smoke.step" ||
+          !Object.isFrozen(request)
+        ) {
+          throw new Error(
+            "Browser imported-body resolver received the wrong commitment",
+          );
+        }
+        return step;
+      },
+    },
+  );
+  if (!importedResult.ok) {
+    throw new Error(diagnosticMessage(importedResult.diagnostics));
+  }
+  const imported = importedResult.value;
+  try {
+    const importedMeasurement = imported.measure();
+    const importedTopology = imported.topology();
+    if (!importedTopology.ok) {
+      throw new Error(
+        diagnosticMessage(importedTopology.diagnostics),
+      );
+    }
+    const importedStepFirst = imported.export("step");
+    const importedStepSecond = imported.export("step");
+    const importedStepDeterministic = sameBytes(
+      importedStepFirst,
+      importedStepSecond,
+    );
+    if (
+      resolverCalls !== 1 ||
+      Math.abs(importedMeasurement.volume - 24) > 1e-8 ||
+      importedTopology.value.faces.length !== 6 ||
+      importedTopology.value.edges.length !== 12 ||
+      importedTopology.value.vertices.length !== 8 ||
+      importedStepFirst.byteLength < 100 ||
+      !importedStepDeterministic
+    ) {
+      throw new Error(
+        "Browser imported-body evaluation returned unexpected exact evidence",
+      );
+    }
+
+    imported.dispose();
+    imported.dispose();
+    let disposedResultRejected = false;
+    try {
+      imported.measure();
+    } catch {
+      disposedResultRejected = true;
+    }
+    if (!disposedResultRejected) {
+      throw new Error(
+        "Disposed browser imported-body result remained usable",
+      );
+    }
+
+    const liveEvaluatorResult = await evaluator.evaluate(
+      sourceDocument,
+    );
+    if (!liveEvaluatorResult.ok) {
+      throw new Error(
+        diagnosticMessage(liveEvaluatorResult.diagnostics),
+      );
+    }
+    let evaluatorRemainedLive = false;
+    try {
+      evaluatorRemainedLive =
+        Math.abs(
+          liveEvaluatorResult.value.output("box").measure().volume -
+            24,
+        ) <= 1e-8;
+    } finally {
+      liveEvaluatorResult.value.dispose();
+    }
+    if (!evaluatorRemainedLive) {
+      throw new Error(
+        "Imported-body cleanup made the browser evaluator unusable",
+      );
+    }
+
+    return {
+      protocolVersion:
+        parsedImportedDocument.value.protocolVersion,
+      serializedBytes: new TextEncoder().encode(
+        serializedImportedDocument,
+      ).byteLength,
+      resolverCalls,
+      volume: importedMeasurement.volume,
+      faces: importedTopology.value.faces.length,
+      edges: importedTopology.value.edges.length,
+      vertices: importedTopology.value.vertices.length,
+      stepBytes: importedStepFirst.byteLength,
+      stepDeterministic: importedStepDeterministic,
+      disposedResultRejected,
+      evaluatorRemainedLive,
+    };
+  } finally {
+    imported.dispose();
+  }
+}
+
 async function runBrowserSmoke(): Promise<BrowserSmokeResult> {
   const document = browserSmokeDocument();
   const manifoldEvaluator = await createEvaluator();
@@ -1094,6 +1260,7 @@ async function runBrowserSmoke(): Promise<BrowserSmokeResult> {
   const occtKernel = await createOcctKernel();
   const occtEvaluator = await createEvaluator({ kernel: occtKernel });
   let occt: BrowserSmokeResult["occt"];
+  let importedBody: BrowserSmokeResult["importedBody"];
   try {
     const result = await occtEvaluator.evaluate(document);
     if (!result.ok) {
@@ -1140,6 +1307,11 @@ async function runBrowserSmoke(): Promise<BrowserSmokeResult> {
         stepMetadataDeterministic,
         crossRealmWasmUrlCaptured,
       };
+      importedBody = await runImportedBodyGate(
+        occtEvaluator,
+        document,
+        step,
+      );
     } finally {
       result.value.dispose();
     }
@@ -1149,7 +1321,13 @@ async function runBrowserSmoke(): Promise<BrowserSmokeResult> {
 
   const artifactWorker = await runArtifactWorkerGate();
   const runtimeAttestation = await runBrowserRuntimeAttestationGate();
-  return { manifold, occt, artifactWorker, runtimeAttestation };
+  return {
+    manifold,
+    occt,
+    importedBody,
+    artifactWorker,
+    runtimeAttestation,
+  };
 }
 
 const resultElement = document.querySelector("#result");
