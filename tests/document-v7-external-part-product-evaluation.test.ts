@@ -1230,7 +1230,7 @@ describe("staged Document v7 external-part product evaluation", () => {
     harness.disposeBase();
   });
 
-  it("rejects external assemblies and external-document count overflow before I/O or kernel work", async () => {
+  it("rejects mismatched external assembly declarations after document admission and count overflow before I/O", async () => {
     const fixture = await twoPrimitiveExternalProduct();
     const assemblyDocument = structuredClone(fixture.document);
     const productAssembly = assemblyDocument.nodes[
@@ -1270,7 +1270,10 @@ describe("staged Document v7 external-part product evaluation", () => {
         },
       });
     }
-    expect(assemblyResolver.requests).toEqual([]);
+    expect(assemblyResolver.requests.map(requestKey)).toEqual([
+      rootScopeKey("aDocument" as ResourceId),
+      rootScopeKey("zDocument" as ResourceId),
+    ]);
     expect(assemblyHarness.boxCalls).not.toHaveBeenCalled();
     assemblyHarness.disposeBase();
 
