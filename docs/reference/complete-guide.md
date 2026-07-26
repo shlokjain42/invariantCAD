@@ -620,6 +620,7 @@ The solver API is replaceable. The built-in solver is intentionally a v0.1 refer
 - Exact face/edge/vertex topology enumeration, geometry/adjacency descriptors, selected-edge fillets/chamfers, face-selected shells, whole-solid offsets, owned-facade atomic draft, and owned-facade exact multi-input Boolean, edge-treatment, and solid-offset evolution through OpenCascade WebAssembly
 - Protocol-v2 detached face/edge/vertex capture and fail-closed resolution, exact protocol-v1 face/edge compatibility, and Document-v2–v6 persistent selector atoms with exact target and profile binding
 - Native STEP, text BREP, and binary BREP import/export in the exact-kernel protocol
+- Unreleased opaque one-body documents that commit caller-resolved STEP or text/binary BREP bytes by SHA-256 and length, apply a closed format/media/unit policy, and require exact single-solid import without weak or mesh fallback
 - Volume, surface area, axis-aligned bounds, capability-correct nullable genus, kernel tolerance, center of mass, centroidal inertia, principal axes/moments, arbitrary-axis inertia, radii of gyration, and density-aware physical mass properties
 - Typed-array mesh extraction
 - Binary STL, ASCII STL, and OBJ export
@@ -649,6 +650,7 @@ The solver API is replaceable. The built-in solver is intentionally a v0.1 refer
 | Cross-run kernel-shape cache | Strict public foundation plus a repository-private trusted-store direct-box evaluator slice; no shipped backend advertises a codec and no public evaluator option enables reuse | Public diagnostic-preserving evaluator integration and backend-owned complete codecs |
 | Exact B-Rep primitives and core features | OCCT backend | Yes |
 | STEP and BREP import/export | OCCT backend | Yes |
+| Verified public one-body import | Unreleased opaque document/resolver facade over strong stock-OCCT import; no healing, multibody, assembly, location I/O, or broad Document v7 promotion | Broader repair and product import only behind explicit contracts |
 | IGES import/export | No | Exact backend |
 | Fillet | OCCT backend with semantic edge selectors | Yes |
 | Chamfer | OCCT equal-distance mode with semantic edge selectors | Yes |

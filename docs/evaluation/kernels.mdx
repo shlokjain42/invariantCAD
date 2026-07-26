@@ -122,6 +122,15 @@ uses fatal UTF-8 for text BREP, and releases provisional native handles on
 failure or cancellation. It does not claim healing, assembly import, stable
 feature lineage, or containment of an untrusted native parser.
 
+The unreleased public `ImportedBodyDocument` workflow composes this kernel
+contract with a caller-supplied SHA-256/byte-length commitment and resolver.
+It accepts only STEP + `model/step` + file units, text BREP + `text/plain` +
+declared units, or binary BREP + `application/octet-stream` + declared units.
+Its explicit format chooses the reader; the media type is provenance rather
+than inference. The high-level workflow fails before native parsing when
+resolution or commitment verification fails and never falls back to
+`importShape(...)` or Manifold. See [Import and export](/interchange/import-export#verified-single-body-import).
+
 ## Do not equate these guarantees
 
 - A B-Rep kernel is not automatically exact for every authored feature.

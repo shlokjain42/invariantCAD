@@ -78,8 +78,9 @@ converts the value.
 | Binary BREP | No | Yes |
 
 <Note>
-  The strong deterministic STEP paragraph below describes the unreleased 0.2
-  line. The exchange table above remains the published 0.1.1 boundary.
+  The strong deterministic STEP paragraph and verified-import table below
+  describe the unreleased 0.2 line. The exchange table above remains the
+  published 0.1.1 boundary.
 </Note>
 
 The bundled zero-override stock OCCT runtime additionally advertises
@@ -90,6 +91,22 @@ and attested runtimes retain weak raw STEP and omit this envelope until
 separately qualified. This is narrower than geometric canonicalization and
 does not make STEP a portable artifact or cache format. Exact aggregate
 body-set and assembly STEP remains unsupported.
+
+The unreleased public imported-body workflow admits exactly one committed
+solid through stock OCCT's strong document-body import capability:
+
+| Imported format | Required media type | Unit policy | Manifold | Stock OCCT |
+| --- | --- | --- | --- | --- |
+| STEP | `model/step` | File units | No | Yes |
+| Text BREP | `text/plain` | Declared `mm`, `cm`, `m`, or `in` | No | Yes |
+| Binary BREP | `application/octet-stream` | Declared `mm`, `cm`, `m`, or `in` | No | Yes |
+
+This is a separate opaque one-body document and
+`Evaluator.evaluateImportedBody(...)` method. It verifies a caller-supplied
+SHA-256 and byte-length commitment before parsing, fixes healing to `none`, and
+does not publish the broader Document v7 product model. Multibody import,
+assembly import, repair/healing, automatic file/URL I/O, and approximate
+fallback remain unsupported.
 
 ## Runtime coverage
 

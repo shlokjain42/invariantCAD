@@ -108,6 +108,17 @@ The repository does not silently download or distribute that bundle.
   weak native STEP until separately qualified. This does not claim geometric
   canonicalization, imported-file canonicalization, exact aggregate STEP,
   bounded native peak allocation, or a portable artifact/cache format.
+- A public opaque single-imported-body workflow now captures a caller-supplied
+  SHA-256 and byte-length commitment, canonically persists only the strict
+  one-resource/one-imported-body/one-output subset, resolves bytes through a
+  caller callback, verifies the commitment, and requires the strong exact
+  single-solid B-Rep importer. Protocol v1 fixes STEP to `model/step` with file
+  units and text/binary BREP to standard generic media types with explicit
+  declared units; healing remains `none`. The result owns one imported native
+  shape while borrowing its evaluator and exposes measurement, topology,
+  tessellation, and capability-gated single-solid export. This narrow public
+  facade does not promote the general Document v7 alias, ordinary builder,
+  product evaluator, body sets, external components, or assemblies.
 
 ### Repository-only research and staged work
 
@@ -253,8 +264,9 @@ measurement or topology, healing, and location I/O remain unsupported. Product
 exact aggregate export, aggregate geometric measurement or topology, active
 second-level external references, recursive external-document graphs, cyclic
 local graphs, mates, motion, and interference/collision are also unsupported.
-`mediaType` remains committed provenance pending a versioned
-format-to-media-type policy. The facade still excludes multi-level external
+`mediaType` remains committed provenance. The public one-body workflow has a
+closed protocol-v1 format/media/unit policy, while the broader facade remains
+repository-only and still excludes multi-level external
 component libraries, datum-backed sketches, transforms or Booleans over body
 sets/parts/assemblies, other body-consuming operations, per-body materials,
 and general solid graphs beyond
