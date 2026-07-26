@@ -4,7 +4,7 @@ import type {
   ResourceId,
 } from "../src/core/ids.js";
 import { CadError } from "../src/core/result.js";
-import { design, tf } from "../src/design.js";
+import { design, plane, tf } from "../src/design.js";
 import {
   kgPerCubicMillimeter,
   mm,
@@ -509,6 +509,33 @@ async function primitiveExternalDocument(
   return commitDocumentV7(cad.build());
 }
 
+function singleExternalPartProduct(
+  name: string,
+  resourceId: string,
+  committed: {
+    readonly bytes: Uint8Array;
+    readonly digest: ResourceDigestIR;
+  },
+  occurrenceId: string,
+  configuration: AssemblyInstanceIRV7["configuration"],
+): DesignDocumentV7 {
+  const cad = stagedBodySetDesignV7(name);
+  const documentResource = cad.resource(resourceId, {
+    digest: committed.digest,
+    byteLength: committed.bytes.byteLength,
+    mediaType: DOCUMENT_MEDIA_TYPE,
+  });
+  const external = cad.externalPart(
+    documentResource,
+    "mainPart",
+  );
+  const assembly = cad.assembly("product-assembly", (instances) => {
+    instances.instance(occurrenceId, external, { configuration });
+  });
+  cad.output("product", assembly);
+  return cad.build();
+}
+
 async function twoPrimitiveExternalProduct(): Promise<{
   readonly document: DesignDocumentV7;
   readonly aDocument: CommittedDocumentV7;
@@ -920,6 +947,152 @@ describe("staged Document v7 external-part product evaluation", () => {
     expect(harness.liveShapes.size).toBe(0);
     expect(harness.disposedShapes).toEqual([]);
     expect(harness.disposeKernel).not.toHaveBeenCalled();
+  });
+
+  it("reports a missing child configuration after admission with parent occurrence provenance", async () => {
+    const child = await primitiveExternalDocument(
+      "missing-child-configuration",
+      "CONFIG-001",
+    );
+    const document = singleExternalPartProduct(
+      "missing-child-configuration-product",
+      "configuredDocument",
+      child,
+      "configured",
+      occurrenceConfiguration("named", "missing"),
+    );
+    const resolver = resolverHarness(
+      new Map([
+        [
+          rootScopeKey("configuredDocument" as ResourceId),
+          child.bytes,
+        ],
+      ]),
+    );
+    const harness = await trackedManifold();
+    try {
+      const result = await evaluateProductAssemblyOutputsV7(
+        harness.kernel,
+        document,
+        {
+          outputs: ["product"],
+          resolver: resolver.resolver,
+        },
+      );
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.diagnostics[0]).toMatchObject({
+          code: "CONFIGURATION_MISSING",
+          node: "product-assembly",
+          path: "/nodes/product-assembly/instances/0/component",
+          details: {
+            resource: "configuredDocument",
+            digest: child.digest,
+            byteLength: child.bytes.byteLength,
+            output: "mainPart",
+            outputKind: "part",
+            sourceVersion: 7,
+            childPath: "/configurations/missing",
+            occurrencePath: ["configured"],
+            available: [],
+          },
+        });
+      } else {
+        result.value.dispose();
+      }
+      expect(resolver.requests.map(requestKey)).toEqual([
+        rootScopeKey("configuredDocument" as ResourceId),
+      ]);
+      expect(harness.boxCalls).not.toHaveBeenCalled();
+      expect(harness.disposedShapes).toEqual([]);
+      expect(harness.liveShapes.size).toBe(0);
+      expect(harness.disposeKernel).not.toHaveBeenCalled();
+    } finally {
+      harness.disposeBase();
+    }
+  });
+
+  it("reports an unsupported migrated v6 part family without geometry or scoped resource leakage", async () => {
+    const legacy = design("unsupported-v6-external-part");
+    const profile = legacy.sketch(
+      "legacy-profile",
+      plane.xy(),
+      (sketch) =>
+        sketch.profile(
+          sketch.rectangle("outline", {
+            width: mm(10),
+            height: mm(5),
+          }),
+        ),
+    );
+    const extrusion = legacy.extrude(
+      "legacy-extrusion",
+      profile,
+      { distance: mm(2) },
+    );
+    const part = legacy.part("legacy-part", extrusion, {
+      partNumber: "LEGACY-EXTRUDE-001",
+    });
+    legacy.output("mainPart", part);
+    const child = await commitLegacyDocument(legacy.build());
+    const document = singleExternalPartProduct(
+      "unsupported-v6-product",
+      "legacyDocument",
+      child,
+      "unsupported",
+      occurrenceConfiguration("base"),
+    );
+    const resolver = resolverHarness(
+      new Map([
+        [
+          rootScopeKey("legacyDocument" as ResourceId),
+          child.bytes,
+        ],
+      ]),
+    );
+    const harness = await trackedManifold();
+    try {
+      const result = await evaluateProductAssemblyOutputsV7(
+        harness.kernel,
+        document,
+        {
+          outputs: ["product"],
+          resolver: resolver.resolver,
+        },
+      );
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.diagnostics[0]).toMatchObject({
+          code: "EVALUATION_UNSUPPORTED",
+          node: "product-assembly",
+          path: "/nodes/product-assembly/instances/0/component",
+          details: {
+            resource: "legacyDocument",
+            digest: child.digest,
+            byteLength: child.bytes.byteLength,
+            output: "mainPart",
+            outputKind: "part",
+            sourceVersion: 6,
+            childNode: "legacy-part",
+            childPath: "/nodes/legacy-part/geometry",
+            occurrencePath: ["unsupported"],
+            referencedNode: "legacy-extrusion",
+            nodeKind: "extrude",
+          },
+        });
+      } else {
+        result.value.dispose();
+      }
+      expect(resolver.requests.map(requestKey)).toEqual([
+        rootScopeKey("legacyDocument" as ResourceId),
+      ]);
+      expect(harness.boxCalls).not.toHaveBeenCalled();
+      expect(harness.disposedShapes).toEqual([]);
+      expect(harness.liveShapes.size).toBe(0);
+      expect(harness.disposeKernel).not.toHaveBeenCalled();
+    } finally {
+      harness.disposeBase();
+    }
   });
 
   it("wraps legacy child failures with product occurrence provenance", async () => {

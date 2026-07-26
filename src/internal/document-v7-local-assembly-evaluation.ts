@@ -1693,7 +1693,13 @@ function externalComponentDiagnostics(
       details: {
         ...item.details,
         phase: LOCAL_ASSEMBLY_EVALUATION_PHASE,
-        resource: occurrence.resource,
+        ...(item.details?.resource === undefined
+          ? { resource: occurrence.resource }
+          : {}),
+        componentResource: occurrence.resource,
+        ...(item.details?.output === undefined
+          ? {}
+          : { childOutput: item.details.output }),
         output: occurrence.output,
         outputKind: occurrence.outputKind,
         ...(external === undefined
@@ -1727,6 +1733,53 @@ function externalComponentFailure<T>(
   };
 }
 
+function externalOutputContainsNode(
+  batch: ExternalPartEvaluationBatchV7,
+  output: string,
+  candidate: string,
+): boolean {
+  const reference = localAssemblyHasOwn(
+    batch.external.document.outputs,
+    output,
+  )
+    ? batch.external.document.outputs[output]
+    : undefined;
+  if (reference === undefined) return false;
+  const pending = new LocalAssemblyArray<NodeId>();
+  pending[pending.length] = reference.node;
+  const seen = new LocalAssemblySet<NodeId>();
+  while (pending.length > 0) {
+    const nodeId = pending[pending.length - 1]!;
+    pending.length -= 1;
+    if (localAssemblySetContains(seen, nodeId)) continue;
+    localAssemblySetInsert(seen, nodeId);
+    if (nodeId === candidate) return true;
+    const node = localAssemblyHasOwn(
+      batch.external.document.nodes,
+      nodeId,
+    )
+      ? batch.external.document.nodes[nodeId]
+      : undefined;
+    if (node === undefined) continue;
+    if (node.kind === "part" && "geometry" in node) {
+      pending[pending.length] = node.geometry.node;
+    } else if (node.kind === "bodySet") {
+      for (let index = 0; index < node.bodies.length; index += 1) {
+        pending[pending.length] =
+          node.bodies[index]!.solid.node;
+      }
+    } else if (node.kind === "transform") {
+      pending[pending.length] = node.input.node;
+    } else if (node.kind === "boolean") {
+      pending[pending.length] = node.target.node;
+      for (let index = 0; index < node.tools.length; index += 1) {
+        pending[pending.length] = node.tools[index]!.node;
+      }
+    }
+  }
+  return false;
+}
+
 function externalBatchDiagnostics(
   diagnostics: readonly Diagnostic[],
   batch: ExternalPartEvaluationBatchV7,
@@ -1743,6 +1796,22 @@ function externalBatchDiagnostics(
   ) {
     const item = diagnostics[diagnosticIndex]!;
     let occurrence = batch.firstOccurrence;
+    let matched = false;
+    const diagnosticOutput = item.details?.output;
+    if (
+      typeof diagnosticOutput === "string" &&
+      localAssemblyMapContains(
+        batch.firstOccurrencesByOutput,
+        diagnosticOutput,
+      )
+    ) {
+      occurrence =
+        localAssemblyMapValue(
+          batch.firstOccurrencesByOutput,
+          diagnosticOutput,
+        ) ?? occurrence;
+      matched = true;
+    }
     if (item.path !== undefined) {
       for (
         let outputIndex = 0;
@@ -1760,6 +1829,30 @@ function externalBatchDiagnostics(
               item.path,
               [0, prefix.length + 1],
             ) === `${prefix}/`)
+        ) {
+          occurrence =
+            localAssemblyMapValue(
+              batch.firstOccurrencesByOutput,
+              output,
+            ) ?? occurrence;
+          matched = true;
+          break;
+        }
+      }
+    }
+    if (!matched && item.node !== undefined) {
+      for (
+        let outputIndex = 0;
+        outputIndex < outputs.length;
+        outputIndex += 1
+      ) {
+        const output = outputs[outputIndex]!;
+        if (
+          externalOutputContainsNode(
+            batch,
+            output,
+            item.node,
+          )
         ) {
           occurrence =
             localAssemblyMapValue(
@@ -1805,9 +1898,15 @@ function productOccurrenceDiagnostics(
       details: {
         ...item.details,
         phase: LOCAL_ASSEMBLY_EVALUATION_PHASE,
-        resource: component.resource,
+        ...(item.details?.resource === undefined
+          ? { resource: component.resource }
+          : {}),
+        componentResource: component.resource,
         digest: component.digest,
         byteLength: component.byteLength,
+        ...(item.details?.output === undefined
+          ? {}
+          : { childOutput: item.details.output }),
         output: component.output,
         outputKind: component.outputKind,
         sourceVersion: component.sourceVersion,
@@ -3423,14 +3522,12 @@ export async function evaluateLocalAssemblyOutputsV7(
               diagnosticResource as ResourceId,
             )
           : undefined;
-      return externalComponentFailure(
-        resolvedDocuments.diagnostics,
-        occurrence ??
-          localAssemblyMapValue(
-            firstExternalOccurrences,
-            externalResourceIds[0]!,
-          )!,
-      );
+      return occurrence === undefined
+        ? resolvedDocuments
+        : externalComponentFailure(
+            resolvedDocuments.diagnostics,
+            occurrence,
+          );
     }
     documentResources = resolvedDocuments.value;
     for (
