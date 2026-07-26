@@ -29,16 +29,24 @@ import {
   type DesignDocumentLimits,
 } from "../document-limits.js";
 import {
+  admitCapturedProductDocumentBytesV7,
+  captureProductDocumentV7,
   createExternalAssemblyPartViewV7,
   createPreparedPartShapeOwnershipTransactionV7,
-  executePreparedPartOutputsV7,
-  preparePartOutputsV7,
-  preflightPreparedPartOutputsV7,
-  EvaluatedPartDesignV7,
+  executePreparedProductGeometryOutputsV7,
+  prepareProductGeometryOutputsV7,
+  preflightPreparedProductGeometryOutputsV7,
+  EvaluatedBodySetV7,
+  EvaluatedSolid,
+  EvaluatedProductGeometryDesignV7,
   EvaluatedPartV7,
   type MassDensitySource,
-  type PreparedPartKernelAccessV7,
-  type PreparedPartOutputsV7,
+  type CapturedProductDocumentV7,
+  type EvaluatedProductGeometryOutputV7,
+  type PreparedProductGeometryKernelAccessV7,
+  type PreparedProductGeometryOutputsV7,
+  type ProductGeometryBatchProvenanceV7,
+  type ProductGeometrySelectionV7,
 } from "../evaluator.js";
 import { exportMesh, type MeshExportFormat } from "../exporters.js";
 import { evaluateExpression, type ExpressionIR } from "../expressions.js";
@@ -46,6 +54,7 @@ import type {
   AssemblyNodeIRV7,
   DesignConfigurationIR,
   DesignDocumentV7,
+  NodeIRV7,
   PartNodeIRV7,
   ResourceDigestIR,
   TransformOperationIR,
@@ -68,8 +77,6 @@ import {
   type ResourceResolverV7,
 } from "../resource-resolution.js";
 import {
-  admitDocumentBytesToV7,
-  parseDocumentValueV7,
   type AdmittedDocumentSourceVersion,
 } from "../serialization.js";
 import { transformMassProperties } from "./mesh-mass-properties.js";
@@ -87,6 +94,8 @@ import { resolveEvaluationParameters } from "./evaluation-parameters.js";
 
 const LOCAL_ASSEMBLY_EVALUATION_PHASE =
   "documentV7LocalAssemblyEvaluation";
+const PRODUCT_DOCUMENT_EVALUATION_PHASE =
+  "documentV7ProductEvaluation";
 
 const LocalAssemblyArray = Array;
 const LocalAssemblyArrayBuffer = ArrayBuffer;
@@ -127,6 +136,7 @@ const localAssemblyReflectApply = Reflect.apply;
 const localAssemblyReflectOwnKeys = Reflect.ownKeys;
 const localAssemblyStringCharAt = String.prototype.charAt;
 const localAssemblyStringSlice = String.prototype.slice;
+const localAssemblyStringReplaceAll = String.prototype.replaceAll;
 const localAssemblyStringTrim = String.prototype.trim;
 const localAssemblyMathAbs = Math.abs;
 const localAssemblyMathHypot = Math.hypot;
@@ -152,10 +162,10 @@ const localAssemblyAbortSignalAbortedGetter =
         AbortSignal.prototype,
         "aborted",
       )?.get;
-const localAssemblyPartDesignOutput =
-  EvaluatedPartDesignV7.prototype.output;
-const localAssemblyPartDesignDispose =
-  EvaluatedPartDesignV7.prototype.dispose;
+const localAssemblyProductGeometryDesignOutput =
+  EvaluatedProductGeometryDesignV7.prototype.output;
+const localAssemblyProductGeometryDesignDispose =
+  EvaluatedProductGeometryDesignV7.prototype.dispose;
 const localAssemblyResourceSessionResolve =
   DocumentV7ResourceResolutionSession.prototype.resolve;
 const localAssemblyResourceSessionDispose =
@@ -379,11 +389,60 @@ function trimmed(value: string): string {
   );
 }
 
+function productDiagnosticMessage(message: string): string {
+  const evaluation = localAssemblyApply<string>(
+    localAssemblyStringReplaceAll,
+    message,
+    ["Local assembly evaluation", "Product evaluation"],
+  );
+  const lowerEvaluation = localAssemblyApply<string>(
+    localAssemblyStringReplaceAll,
+    evaluation,
+    ["local assembly evaluation", "product evaluation"],
+  );
+  return localAssemblyApply<string>(
+    localAssemblyStringReplaceAll,
+    lowerEvaluation,
+    ["Local assembly parameters", "Product parameters"],
+  );
+}
+
+function productBoundaryDiagnostics(
+  diagnostics: readonly Diagnostic[],
+): readonly Diagnostic[] {
+  const mapped = new LocalAssemblyArray<Diagnostic>(
+    diagnostics.length,
+  );
+  for (let index = 0; index < diagnostics.length; index += 1) {
+    const item = diagnostics[index]!;
+    mapped[index] = deepFreeze({
+      ...item,
+      message: productDiagnosticMessage(item.message),
+      ...(item.details?.phase !== LOCAL_ASSEMBLY_EVALUATION_PHASE
+        ? {}
+        : {
+            details: {
+              ...item.details,
+              phase: PRODUCT_DOCUMENT_EVALUATION_PHASE,
+            },
+          }),
+    });
+  }
+  return localAssemblyFreeze(mapped);
+}
+
 function contextKey(
   node: NodeId,
   configurationId: ConfigurationId | null,
 ): string {
   return `${configurationId ?? ""}\u0000${node}`;
+}
+
+function nativeProductOutputKey(
+  name: string,
+  configurationId: ConfigurationId | null,
+): string {
+  return `native-output\u0000${configurationId ?? ""}\u0000${name}`;
 }
 
 function externalContextKey(
@@ -606,6 +665,19 @@ interface SelectedAssembly {
   readonly occurrences: readonly SelectedOccurrence[];
 }
 
+type SelectedProductOutput =
+  | {
+      readonly name: string;
+      readonly node: NodeId;
+      readonly kind: "solid" | "bodySet" | "part";
+    }
+  | {
+      readonly name: string;
+      readonly node: NodeId;
+      readonly kind: "assembly";
+      readonly selectedAssemblyIndex: number;
+    };
+
 interface ResolvedSelectedAssembly {
   readonly name: string;
   readonly node: NodeId;
@@ -618,6 +690,7 @@ interface ResolvedExternalDocumentV7 {
   readonly digest: ResourceDigestIR;
   readonly byteLength: number;
   readonly sourceVersion: AdmittedDocumentSourceVersion;
+  readonly captured: CapturedProductDocumentV7;
   readonly document: DesignDocumentV7;
 }
 
@@ -651,7 +724,7 @@ type PendingProductPartBatchV7 =
       readonly scope: DocumentV7ResourceScope;
       readonly configurationId: ConfigurationId | null;
       readonly outputs: readonly string[];
-      readonly prepared: PreparedPartOutputsV7;
+      readonly prepared: PreparedProductGeometryOutputsV7;
     }
   | {
       readonly source: "external";
@@ -659,7 +732,7 @@ type PendingProductPartBatchV7 =
       readonly scope: DocumentV7ResourceScope;
       readonly configurationId: ConfigurationId | null;
       readonly outputs: readonly string[];
-      readonly prepared: PreparedPartOutputsV7;
+      readonly prepared: PreparedProductGeometryOutputsV7;
       readonly external: ResolvedExternalDocumentV7;
       readonly firstOccurrence: SelectedExternalOccurrence;
       readonly batch: ExternalPartEvaluationBatchV7;
@@ -667,7 +740,7 @@ type PendingProductPartBatchV7 =
 
 type PreparedProductPartBatchV7 =
   PendingProductPartBatchV7 & {
-    readonly retained: PreparedPartKernelAccessV7;
+    readonly retained: PreparedProductGeometryKernelAccessV7;
   };
 
 function productComponentContextKey(
@@ -1433,6 +1506,20 @@ function configuredSuppression(
   return localAssemblyHasOwn(instances, instance)
     ? instances[instance]
     : undefined;
+}
+
+function productDirectSolidNode(
+  node: NodeIRV7 | undefined,
+): boolean {
+  return (
+    node !== undefined &&
+    (node.kind === "box" ||
+      node.kind === "cylinder" ||
+      node.kind === "sphere" ||
+      node.kind === "importedBody" ||
+      node.kind === "boolean" ||
+      node.kind === "transform")
+  );
 }
 
 function occurrenceConfigurationId(
@@ -2377,10 +2464,10 @@ function productOccurrenceDiagnostics(
 }
 
 class LocalAssemblyOwner {
-  readonly #children: readonly EvaluatedPartDesignV7[];
+  readonly #children: readonly EvaluatedProductGeometryDesignV7[];
   #disposed = false;
 
-  constructor(children: readonly EvaluatedPartDesignV7[]) {
+  constructor(children: readonly EvaluatedProductGeometryDesignV7[]) {
     this.#children = localAssemblyFreeze([...children]);
   }
 
@@ -2400,7 +2487,7 @@ class LocalAssemblyOwner {
     for (let index = 0; index < this.#children.length; index += 1) {
       try {
         localAssemblyApply<void>(
-          localAssemblyPartDesignDispose,
+          localAssemblyProductGeometryDesignDispose,
           this.#children[index]!,
           [],
         );
@@ -2419,6 +2506,21 @@ function runtimeCadError(): CadError {
   const result = runtimeIntegrityFailure();
   const item = result.diagnostics[0]!;
   return new CadError(item.message, result.diagnostics);
+}
+
+function productRuntimeCadError(): CadError {
+  const item = diagnostic(
+    "IR_INVALID",
+    DOCUMENT_V7_RUNTIME_INTEGRITY_MESSAGE,
+    {
+      severity: "error",
+      details: {
+        phase: PRODUCT_DOCUMENT_EVALUATION_PHASE,
+        runtimeIntegrity: false,
+      },
+    },
+  );
+  return new CadError(item.message, [item]);
 }
 
 type CapturedMeshData =
@@ -3267,6 +3369,295 @@ export class EvaluatedLocalAssemblyDesignV7 {
   }
 }
 
+/** One ordered root selected by the staged mixed product evaluator. @internal */
+export type EvaluatedProductDocumentOutputV7 =
+  | {
+      readonly name: string;
+      readonly node: NodeId;
+      readonly kind: "solid";
+      readonly solid: EvaluatedSolid;
+    }
+  | {
+      readonly name: string;
+      readonly node: NodeId;
+      readonly kind: "bodySet";
+      readonly bodySet: EvaluatedBodySetV7;
+    }
+  | {
+      readonly name: string;
+      readonly node: NodeId;
+      readonly kind: "part";
+      readonly part: EvaluatedPartV7;
+    }
+  | {
+      readonly name: string;
+      readonly node: NodeId;
+      readonly kind: "assembly";
+      readonly assembly: EvaluatedLocalAssemblyV7;
+    };
+
+function productMeshCadError(
+  output: EvaluatedProductDocumentOutputV7 | undefined,
+  message: string,
+  reason: string,
+  cause?: string,
+): CadError {
+  const item = diagnostic("KERNEL_ERROR", message, {
+    severity: "error",
+    ...(output === undefined
+      ? {}
+      : {
+          node: output.node,
+          path: `/outputs/${jsonPointerSegment(output.name)}`,
+        }),
+    details: {
+      phase: PRODUCT_DOCUMENT_EVALUATION_PHASE,
+      reason,
+      protocolViolation: true,
+      ...(output === undefined
+        ? {}
+        : {
+            output: output.name,
+            outputKind: output.kind,
+          }),
+      ...(cause === undefined ? {} : { cause }),
+    },
+  });
+  return new CadError(item.message, [item]);
+}
+
+/**
+ * Atomic owned result for one ordered mixture of native definitions and fixed
+ * product assemblies. Aggregate geometry is mesh-only and therefore
+ * approximate/lossy even when every selected leaf is exact.
+ *
+ * @internal
+ */
+export class EvaluatedProductDocumentV7 {
+  readonly configurationId: ConfigurationId | null;
+  readonly parameters: Readonly<Record<string, number>>;
+  readonly diagnostics: readonly Diagnostic[];
+  readonly outputNames: readonly string[];
+  readonly outputs: readonly EvaluatedProductDocumentOutputV7[];
+  readonly #owner: LocalAssemblyOwner;
+  readonly #outputsByName: ReadonlyMap<
+    string,
+    EvaluatedProductDocumentOutputV7
+  >;
+
+  constructor(
+    owner: LocalAssemblyOwner,
+    outputs: readonly EvaluatedProductDocumentOutputV7[],
+    configurationId: ConfigurationId | null,
+    parameters: Readonly<Record<string, number>>,
+    diagnostics: readonly Diagnostic[],
+  ) {
+    this.#owner = owner;
+    this.outputs = localAssemblyFreeze([...outputs]);
+    const outputsByName =
+      new LocalAssemblyMap<
+        string,
+        EvaluatedProductDocumentOutputV7
+      >();
+    const names = new LocalAssemblyArray<string>(
+      this.outputs.length,
+    );
+    for (let index = 0; index < this.outputs.length; index += 1) {
+      const output = this.outputs[index]!;
+      localAssemblyMapInsert(outputsByName, output.name, output);
+      names[index] = output.name;
+    }
+    this.#outputsByName = outputsByName;
+    this.outputNames = localAssemblyFreeze(names);
+    this.configurationId = configurationId;
+    this.parameters = parameters;
+    this.diagnostics = diagnostics;
+    installEvaluatedProductDocumentV7Methods(this);
+    localAssemblyFreeze(this);
+  }
+
+  output(name: string): EvaluatedProductDocumentOutputV7;
+  output<K extends EvaluatedProductDocumentOutputV7["kind"]>(
+    name: string,
+    kind: K,
+  ): Extract<EvaluatedProductDocumentOutputV7, { readonly kind: K }>;
+  output(
+    name: string,
+    kind?: EvaluatedProductDocumentOutputV7["kind"],
+  ): EvaluatedProductDocumentOutputV7 {
+    this.#owner.assertLive();
+    if (typeof name !== "string") {
+      throw new TypeError(
+        "Evaluated product output name must be a string",
+      );
+    }
+    if (
+      kind !== undefined &&
+      kind !== "solid" &&
+      kind !== "bodySet" &&
+      kind !== "part" &&
+      kind !== "assembly"
+    ) {
+      throw new TypeError(
+        "Evaluated product output kind must be solid, bodySet, part, or assembly",
+      );
+    }
+    const output = localAssemblyMapValue(this.#outputsByName, name);
+    if (output === undefined) {
+      throw new RangeError(
+        `Unknown evaluated product output '${name}'`,
+      );
+    }
+    if (kind !== undefined && output.kind !== kind) {
+      throw new TypeError(
+        `Evaluated product output '${name}' is ${output.kind}, not ${kind}`,
+      );
+    }
+    return output;
+  }
+
+  solid(name: string): EvaluatedSolid {
+    return this.output(name, "solid").solid;
+  }
+
+  bodySet(name: string): EvaluatedBodySetV7 {
+    return this.output(name, "bodySet").bodySet;
+  }
+
+  part(name: string): EvaluatedPartV7 {
+    return this.output(name, "part").part;
+  }
+
+  assembly(name: string): EvaluatedLocalAssemblyV7 {
+    return this.output(name, "assembly").assembly;
+  }
+
+  mesh(options?: MeshOptions): MeshData {
+    if (!documentV7RuntimeIntrinsicsAreIntact()) {
+      throw productRuntimeCadError();
+    }
+    this.#owner.assertLive();
+    const meshes = new LocalAssemblyArray<MeshData>(
+      this.outputs.length,
+    );
+    for (let index = 0; index < this.outputs.length; index += 1) {
+      const output = this.outputs[index]!;
+      let returned: unknown;
+      try {
+        returned =
+          output.kind === "solid"
+            ? output.solid.mesh(options)
+            : output.kind === "bodySet"
+              ? output.bodySet.mesh(options)
+              : output.kind === "part"
+                ? output.part.mesh(options)
+                : output.assembly.mesh(options);
+      } catch (error) {
+        if (!documentV7RuntimeIntrinsicsAreIntact()) {
+          throw productRuntimeCadError();
+        }
+        throw productMeshCadError(
+          output,
+          `Mesh callback failed for product output '${output.name}'`,
+          "mesh-callback-threw",
+          safeErrorMessage(
+            error,
+            "Product mesh callback failed with an opaque value",
+          ),
+        );
+      }
+      if (!documentV7RuntimeIntrinsicsAreIntact()) {
+        throw productRuntimeCadError();
+      }
+      const captured = captureMeshData(returned);
+      if (!documentV7RuntimeIntrinsicsAreIntact()) {
+        throw productRuntimeCadError();
+      }
+      if (!captured.ok) {
+        throw productMeshCadError(
+          output,
+          `Kernel returned malformed mesh data for product output '${output.name}'`,
+          captured.reason,
+        );
+      }
+      meshes[index] = captured.value;
+    }
+    let merged: MeshData;
+    try {
+      merged = mergeMeshes(meshes);
+    } catch (error) {
+      if (!documentV7RuntimeIntrinsicsAreIntact()) {
+        throw productRuntimeCadError();
+      }
+      throw productMeshCadError(
+        undefined,
+        "Product aggregate mesh could not be represented",
+        "mesh-merge-failed",
+        safeErrorMessage(
+          error,
+          "Product mesh aggregation failed with an opaque value",
+        ),
+      );
+    }
+    if (!documentV7RuntimeIntrinsicsAreIntact()) {
+      throw productRuntimeCadError();
+    }
+    const capturedMerged = captureMeshData(merged);
+    if (!documentV7RuntimeIntrinsicsAreIntact()) {
+      throw productRuntimeCadError();
+    }
+    if (!capturedMerged.ok) {
+      throw productMeshCadError(
+        undefined,
+        "Product aggregate mesh is invalid",
+        `aggregate-${capturedMerged.reason}`,
+      );
+    }
+    return capturedMerged.value;
+  }
+
+  export(format: "stl"): Uint8Array;
+  export(format: "stl-ascii" | "obj"): string;
+  export(format: MeshExportFormat): Uint8Array | string;
+  export(format: MeshExportFormat): Uint8Array | string {
+    if (!documentV7RuntimeIntrinsicsAreIntact()) {
+      throw productRuntimeCadError();
+    }
+    this.#owner.assertLive();
+    if (
+      format !== "stl" &&
+      format !== "stl-ascii" &&
+      format !== "obj"
+    ) {
+      const renderedFormat =
+        typeof format === "string" ? format : "unsupported value";
+      const item = diagnostic(
+        "EXPORT_UNSUPPORTED",
+        `Product document cannot be exported as ${renderedFormat}`,
+        {
+          severity: "error",
+          details: {
+            phase: PRODUCT_DOCUMENT_EVALUATION_PHASE,
+            format: renderedFormat,
+            supported: ["stl", "stl-ascii", "obj"],
+            aggregateExactExchange: false,
+          },
+        },
+      );
+      throw new CadError(item.message, [item]);
+    }
+    const exported = exportMesh(this.mesh(), format, "product");
+    if (!documentV7RuntimeIntrinsicsAreIntact()) {
+      throw productRuntimeCadError();
+    }
+    return exported;
+  }
+
+  dispose(): void {
+    this.#owner.dispose();
+  }
+}
+
 const evaluatedLocalAssemblyV7Mesh =
   EvaluatedLocalAssemblyV7.prototype.mesh;
 const evaluatedLocalAssemblyV7Export =
@@ -3279,6 +3670,22 @@ const evaluatedLocalAssemblyDesignV7Output =
   EvaluatedLocalAssemblyDesignV7.prototype.output;
 const evaluatedLocalAssemblyDesignV7Dispose =
   EvaluatedLocalAssemblyDesignV7.prototype.dispose;
+const evaluatedProductDocumentV7Output =
+  EvaluatedProductDocumentV7.prototype.output;
+const evaluatedProductDocumentV7Solid =
+  EvaluatedProductDocumentV7.prototype.solid;
+const evaluatedProductDocumentV7BodySet =
+  EvaluatedProductDocumentV7.prototype.bodySet;
+const evaluatedProductDocumentV7Part =
+  EvaluatedProductDocumentV7.prototype.part;
+const evaluatedProductDocumentV7Assembly =
+  EvaluatedProductDocumentV7.prototype.assembly;
+const evaluatedProductDocumentV7Mesh =
+  EvaluatedProductDocumentV7.prototype.mesh;
+const evaluatedProductDocumentV7Export =
+  EvaluatedProductDocumentV7.prototype.export;
+const evaluatedProductDocumentV7Dispose =
+  EvaluatedProductDocumentV7.prototype.dispose;
 
 function installEvaluatedLocalAssemblyV7Methods(
   value: EvaluatedLocalAssemblyV7,
@@ -3320,13 +3727,58 @@ function installEvaluatedLocalAssemblyDesignV7Methods(
   );
 }
 
+function installEvaluatedProductDocumentV7Methods(
+  value: EvaluatedProductDocumentV7,
+): void {
+  installLocalAssemblyInstanceMethod(
+    value,
+    "output",
+    evaluatedProductDocumentV7Output,
+  );
+  installLocalAssemblyInstanceMethod(
+    value,
+    "solid",
+    evaluatedProductDocumentV7Solid,
+  );
+  installLocalAssemblyInstanceMethod(
+    value,
+    "bodySet",
+    evaluatedProductDocumentV7BodySet,
+  );
+  installLocalAssemblyInstanceMethod(
+    value,
+    "part",
+    evaluatedProductDocumentV7Part,
+  );
+  installLocalAssemblyInstanceMethod(
+    value,
+    "assembly",
+    evaluatedProductDocumentV7Assembly,
+  );
+  installLocalAssemblyInstanceMethod(
+    value,
+    "mesh",
+    evaluatedProductDocumentV7Mesh,
+  );
+  installLocalAssemblyInstanceMethod(
+    value,
+    "export",
+    evaluatedProductDocumentV7Export,
+  );
+  installLocalAssemblyInstanceMethod(
+    value,
+    "dispose",
+    evaluatedProductDocumentV7Dispose,
+  );
+}
+
 function cleanupChildren(
-  children: readonly EvaluatedPartDesignV7[],
+  children: readonly EvaluatedProductGeometryDesignV7[],
 ): void {
   for (let index = 0; index < children.length; index += 1) {
     try {
       localAssemblyApply<void>(
-        localAssemblyPartDesignDispose,
+        localAssemblyProductGeometryDesignDispose,
         children[index]!,
         [],
       );
@@ -3349,11 +3801,16 @@ function cleanupChildren(
  *
  * @internal
  */
-export async function evaluateLocalAssemblyOutputsV7(
+async function evaluateProductDocumentCoreV7(
   kernel: GeometryKernel,
   inputDocument: DesignDocumentV7,
   inputOptions: EvaluateLocalAssemblyOutputsV7Options = {},
-): Promise<CadResult<EvaluatedLocalAssemblyDesignV7>> {
+  mode: "assembly" | "product" = "assembly",
+): Promise<
+  CadResult<
+    EvaluatedLocalAssemblyDesignV7 | EvaluatedProductDocumentV7
+  >
+> {
   if (!documentV7RuntimeIntrinsicsAreIntact()) {
     return runtimeIntegrityFailure();
   }
@@ -3363,16 +3820,15 @@ export async function evaluateLocalAssemblyOutputsV7(
   const afterOptions = postBoundaryFailure(options.signal);
   if (afterOptions !== undefined) return afterOptions;
 
-  const parsed = parseDocumentValueV7(
+  const capturedDocument = captureProductDocumentV7(
     inputDocument,
-    options.documentLimits === undefined
-      ? {}
-      : { limits: options.documentLimits },
+    options.documentLimits,
+    options.signal,
   );
   const afterDocument = postBoundaryFailure(options.signal);
   if (afterDocument !== undefined) return afterDocument;
-  if (!parsed.ok) return parsed;
-  const document = parsed.value;
+  if (!capturedDocument.ok) return capturedDocument;
+  const document = capturedDocument.value.document;
 
   let rootConfigurationId: ConfigurationId | null = null;
   let rootConfiguration: DesignConfigurationIR | undefined;
@@ -3432,7 +3888,7 @@ export async function evaluateLocalAssemblyOutputsV7(
   if (afterParameters !== undefined) return afterParameters;
   if (!rootParameters.ok) return rootParameters;
   const diagnostics: Diagnostic[] = [
-    ...parsed.diagnostics,
+    ...capturedDocument.value.diagnostics,
     ...rootParameters.diagnostics,
   ];
   const assemblyContexts = new LocalAssemblyMap<
@@ -3560,9 +4016,13 @@ export async function evaluateLocalAssemblyOutputsV7(
     );
   }
 
-  const selected = new LocalAssemblyArray<SelectedAssembly>(
-    requested.length,
-  );
+  const selected = new LocalAssemblyArray<SelectedAssembly>();
+  const selectedOrder =
+    new LocalAssemblyArray<SelectedProductOutput>(
+      requested.length,
+    );
+  const directSelections =
+    new LocalAssemblyMap<NodeId, "solid" | "bodySet" | "part">();
   const partsByContext = new LocalAssemblyMap<
     ConfigurationId | null,
     Set<NodeId>
@@ -3600,6 +4060,99 @@ export async function evaluateLocalAssemblyOutputsV7(
       node === undefined ||
       node.kind !== "assembly"
     ) {
+      if (mode === "product") {
+        const directKind =
+          reference.kind === "solid" &&
+          productDirectSolidNode(node)
+            ? "solid"
+            : reference.kind === "bodySet" &&
+                node?.kind === "bodySet"
+              ? "bodySet"
+              : reference.kind === "part" &&
+                  node?.kind === "part" &&
+                  "geometry" in node
+                ? "part"
+                : undefined;
+        if (directKind === undefined) {
+          return unsupported(
+            `Product evaluation does not support output '${name}'`,
+            reference.node,
+            outputPath,
+            {
+              supported: [
+                "direct-solid-output",
+                "direct-body-set-output",
+                "direct-part-output",
+                "direct-fixed-assembly-output",
+              ],
+              outputKind: reference.kind,
+              nodeKind: node?.kind,
+            },
+          );
+        }
+        const existing = localAssemblyMapValue(
+          directSelections,
+          reference.node,
+        );
+        if (existing !== undefined && existing !== directKind) {
+          return unsupported(
+            `Product output '${name}' conflicts with an earlier definition kind`,
+            reference.node,
+            outputPath,
+            {
+              outputKind: directKind,
+              earlierKind: existing,
+            },
+          );
+        }
+        if (existing === undefined) {
+          localAssemblyMapInsert(
+            directSelections,
+            reference.node,
+            directKind,
+          );
+        }
+        selectedOrder[outputIndex] = localAssemblyFreeze({
+          name,
+          node: reference.node,
+          kind: directKind,
+        });
+        if (directKind === "part") {
+          const partState =
+            `local\u0000${contextKey(
+              reference.node,
+              rootConfigurationId,
+            )}`;
+          if (!localAssemblySetContains(contextualParts, partState)) {
+            localAssemblySetInsert(contextualParts, partState);
+            if (
+              contextualParts.size >
+              options.evaluationLimits.maxContextualParts
+            ) {
+              return limitFailure(
+                "maxContextualParts",
+                options.evaluationLimits.maxContextualParts,
+                contextualParts.size,
+                outputPath,
+              );
+            }
+            let contextParts = localAssemblyMapValue(
+              partsByContext,
+              rootConfigurationId,
+            );
+            if (contextParts === undefined) {
+              contextParts = new LocalAssemblySet<NodeId>();
+              localAssemblyMapInsert(
+                partsByContext,
+                rootConfigurationId,
+                contextParts,
+              );
+            }
+            localAssemblySetInsert(contextParts, reference.node);
+          }
+        }
+        continue;
+      }
       return unsupported(
         `Local assembly evaluation requires output '${name}' to directly reference an assembly node`,
         reference.node,
@@ -3611,6 +4164,13 @@ export async function evaluateLocalAssemblyOutputsV7(
         },
       );
     }
+    const selectedAssemblyIndex = selected.length;
+    selectedOrder[outputIndex] = localAssemblyFreeze({
+      name,
+      node: reference.node,
+      kind: "assembly",
+      selectedAssemblyIndex,
+    });
     if (options.evaluationLimits.maxAssemblyDepth < 1) {
       return limitFailure(
         "maxAssemblyDepth",
@@ -3993,7 +4553,7 @@ export async function evaluateLocalAssemblyOutputsV7(
         transform: composedPlacement.value,
       };
     }
-    selected[outputIndex] = {
+    selected[selected.length] = {
       name,
       node: reference.node,
       occurrences: localAssemblyFreeze(occurrences),
@@ -4144,11 +4704,10 @@ export async function evaluateLocalAssemblyOutputsV7(
         occurrence,
       );
     }
-    const admitted = admitDocumentBytesToV7(
+    const admitted = admitCapturedProductDocumentBytesV7(
       bytes,
-      options.documentLimits === undefined
-        ? {}
-        : { limits: options.documentLimits },
+      options.documentLimits,
+      options.signal,
     );
     const afterAdmission = postBoundaryFailure(
       options.signal,
@@ -4171,7 +4730,8 @@ export async function evaluateLocalAssemblyOutputsV7(
       digest: definition.digest,
       byteLength: definition.byteLength,
       sourceVersion: admitted.value.sourceVersion,
-      document: admitted.value.document,
+      captured: admitted.value.captured,
+      document: admitted.value.captured.document,
     });
     const admittedDiagnostics = externalComponentDiagnostics(
       admitted.diagnostics,
@@ -5121,6 +5681,16 @@ export async function evaluateLocalAssemblyOutputsV7(
     };
   }
 
+  if (
+    directSelections.size > 0 &&
+    !localAssemblyMapContains(partsByContext, rootConfigurationId)
+  ) {
+    localAssemblyMapInsert(
+      partsByContext,
+      rootConfigurationId,
+      new LocalAssemblySet<NodeId>(),
+    );
+  }
   const contextIds = [...partsByContext.keys()];
   localAssemblyApply<void>(localAssemblyArraySort, contextIds, [
     (
@@ -5137,9 +5707,15 @@ export async function evaluateLocalAssemblyOutputsV7(
   ]);
   const pendingBatches =
     new LocalAssemblyArray<PendingProductPartBatchV7>();
+  const combinedSelectionLimit =
+    options.evaluationLimits.maxContextualParts >
+    Number.MAX_SAFE_INTEGER -
+      options.evaluationLimits.maxSelectedOutputs
+      ? Number.MAX_SAFE_INTEGER
+      : options.evaluationLimits.maxContextualParts +
+        options.evaluationLimits.maxSelectedOutputs;
   const partEvaluationLimits = {
-    maxSelectedOutputs:
-      options.evaluationLimits.maxContextualParts,
+    maxSelectedOutputs: combinedSelectionLimit,
     maxParameterOverrides:
       options.evaluationLimits.maxParameterOverrides,
     maxPartBodies: options.evaluationLimits.maxPartBodies,
@@ -5154,6 +5730,12 @@ export async function evaluateLocalAssemblyOutputsV7(
     maxResolvedMaterials:
       options.evaluationLimits.maxResolvedMaterials,
   };
+  const geometryResourceLimits = localAssemblyFreeze({
+    ...DEFAULT_RESOURCE_RESOLUTION_LIMITS_V7,
+    ...options.resourceLimits,
+  });
+  const partSelectionNames =
+    new LocalAssemblyMap<string, string>();
   for (
     let contextIndex = 0;
     contextIndex < contextIds.length;
@@ -5163,39 +5745,125 @@ export async function evaluateLocalAssemblyOutputsV7(
     const partIds = [
       ...localAssemblyMapValue(partsByContext, configurationId)!,
     ];
-    localAssemblyApply<void>(localAssemblyArraySort, partIds, [
+    const selectionsByName =
+      new LocalAssemblyMap<string, ProductGeometrySelectionV7>();
+    for (let index = 0; index < partIds.length; index += 1) {
+      const partId = partIds[index]!;
+      let selectionName: string = partId;
+      for (
+        let outputIndex = 0;
+        outputIndex < selectedOrder.length;
+        outputIndex += 1
+      ) {
+        const selectedOutput = selectedOrder[outputIndex]!;
+        if (
+          selectedOutput.kind !== "assembly" &&
+          selectedOutput.name === partId &&
+          selectedOutput.node !== partId
+        ) {
+          selectionName = `\u0000part\u0000${partId}`;
+          break;
+        }
+      }
+      localAssemblyMapInsert(
+        partSelectionNames,
+        contextKey(partId, configurationId),
+        selectionName,
+      );
+      localAssemblyMapInsert(
+        selectionsByName,
+        selectionName,
+        localAssemblyFreeze({
+          name: selectionName,
+          node: partId,
+          kind: "part" as const,
+          path: `/nodes/${jsonPointerSegment(partId)}/geometry`,
+        }),
+      );
+    }
+    if (configurationId === rootConfigurationId) {
+      for (
+        let outputIndex = 0;
+        outputIndex < selectedOrder.length;
+        outputIndex += 1
+      ) {
+        const selectedOutput = selectedOrder[outputIndex]!;
+        if (selectedOutput.kind === "assembly") continue;
+        const existing = localAssemblyMapValue(
+          selectionsByName,
+          selectedOutput.name,
+        );
+        if (
+          existing !== undefined &&
+          (existing.node !== selectedOutput.node ||
+            existing.kind !== selectedOutput.kind)
+        ) {
+          return failure(
+            diagnostic(
+              "IR_INVALID",
+              `Product planner selection '${selectedOutput.name}' is ambiguous`,
+              {
+                severity: "error",
+                node: selectedOutput.node,
+                path: `/outputs/${jsonPointerSegment(
+                  selectedOutput.name,
+                )}`,
+                details: {
+                  phase: LOCAL_ASSEMBLY_EVALUATION_PHASE,
+                  protocolViolation: true,
+                },
+              },
+            ),
+          );
+        }
+        if (existing === undefined) {
+          localAssemblyMapInsert(
+            selectionsByName,
+            selectedOutput.name,
+            localAssemblyFreeze({
+              name: selectedOutput.name,
+              node: selectedOutput.node,
+              kind: selectedOutput.kind,
+              path: `/outputs/${jsonPointerSegment(
+                selectedOutput.name,
+              )}`,
+            }),
+          );
+        }
+      }
+    }
+    const selectionNames = [...selectionsByName.keys()];
+    localAssemblyApply<void>(localAssemblyArraySort, selectionNames, [
       lexicalCompare,
     ]);
-    const syntheticOutputs =
-      localAssemblyNullRecord<DesignDocumentV7["outputs"][string]>();
-    for (let index = 0; index < partIds.length; index += 1) {
-      const id = partIds[index]!;
-      defineRecordValue(syntheticOutputs, id, {
-        node: id,
-        kind: "part",
-      });
+    const selections =
+      new LocalAssemblyArray<ProductGeometrySelectionV7>(
+        selectionNames.length,
+      );
+    for (let index = 0; index < selectionNames.length; index += 1) {
+      selections[index] = localAssemblyMapValue(
+        selectionsByName,
+        selectionNames[index]!,
+      )!;
     }
-    const syntheticDocument = {
-      ...document,
-      outputs: syntheticOutputs,
-    } as DesignDocumentV7;
-    const prepared = preparePartOutputsV7(syntheticDocument, {
-      ...(configurationId === null
-        ? {}
-        : { configuration: configurationId }),
-      parameters: options.parameters,
-      outputs: partIds,
-      evaluationLimits: partEvaluationLimits,
-      ...(options.resourceLimits === undefined
-        ? {}
-        : { resourceLimits: options.resourceLimits }),
-      ...(options.documentLimits === undefined
-        ? {}
-        : { documentLimits: options.documentLimits }),
-      ...(options.signal === undefined
-        ? {}
-        : { signal: options.signal }),
-    });
+    localAssemblyFreeze(selections);
+    const prepared = prepareProductGeometryOutputsV7(
+      capturedDocument.value,
+      selections,
+      {
+        ...(configurationId === null
+          ? {}
+          : { configuration: configurationId }),
+        parameters: options.parameters,
+        evaluationLimits: partEvaluationLimits,
+        resourceLimits: geometryResourceLimits,
+        materialScope:
+          mode === "assembly" ? "document" : "selected",
+        ...(options.signal === undefined
+          ? {}
+          : { signal: options.signal }),
+      },
+    );
     const afterPrepare = postBoundaryFailure(options.signal);
     if (afterPrepare !== undefined) return afterPrepare;
     if (!prepared.ok) return prepared;
@@ -5204,7 +5872,7 @@ export async function evaluateLocalAssemblyOutputsV7(
       key: `local\u0000${configurationId ?? ""}`,
       scope: rootScope,
       configurationId,
-      outputs: localAssemblyFreeze(partIds),
+      outputs: localAssemblyFreeze(selectionNames),
       prepared: prepared.value,
     };
   }
@@ -5228,46 +5896,45 @@ export async function evaluateLocalAssemblyOutputsV7(
     localAssemblyApply<void>(localAssemblyArraySort, outputs, [
       lexicalCompare,
     ]);
-    let evaluationDocument = batch.external.document;
-    if (batch.outputKind === "assembly") {
-      const syntheticOutputs =
-        localAssemblyNullRecord<
-          DesignDocumentV7["outputs"][string]
-        >();
-      for (
-        let outputIndex = 0;
-        outputIndex < outputs.length;
-        outputIndex += 1
-      ) {
-        const output = outputs[outputIndex]!;
-        const partNode = localAssemblyMapValue(
+    const selections =
+      new LocalAssemblyArray<ProductGeometrySelectionV7>(
+        outputs.length,
+      );
+    for (
+      let outputIndex = 0;
+      outputIndex < outputs.length;
+      outputIndex += 1
+    ) {
+      const output = outputs[outputIndex]!;
+      selections[outputIndex] = localAssemblyFreeze({
+        name: output,
+        node: localAssemblyMapValue(
           batch.partNodesByOutput,
           output,
-        )!;
-        defineRecordValue(syntheticOutputs, output, {
-          node: partNode,
-          kind: "part",
-        });
-      }
-      evaluationDocument = {
-        ...batch.external.document,
-        outputs: syntheticOutputs,
-      } as DesignDocumentV7;
+        )!,
+        kind: "part",
+        path:
+          `/nodes/${jsonPointerSegment(
+            localAssemblyMapValue(
+              batch.partNodesByOutput,
+              output,
+            )!,
+          )}/geometry`,
+      });
     }
-    const prepared = preparePartOutputsV7(
-      evaluationDocument,
+    localAssemblyFreeze(selections);
+    const prepared = prepareProductGeometryOutputsV7(
+      batch.external.captured,
+      selections,
       {
         ...(batch.configurationId === null
           ? {}
           : { configuration: batch.configurationId }),
-        outputs,
+        parameters: emptyChildOverrides,
         evaluationLimits: partEvaluationLimits,
-        ...(options.resourceLimits === undefined
-          ? {}
-          : { resourceLimits: options.resourceLimits }),
-        ...(options.documentLimits === undefined
-          ? {}
-          : { documentLimits: options.documentLimits }),
+        resourceLimits: geometryResourceLimits,
+        materialScope:
+          mode === "assembly" ? "document" : "selected",
         ...(options.signal === undefined
           ? {}
           : { signal: options.signal }),
@@ -5400,32 +6067,68 @@ export async function evaluateLocalAssemblyOutputsV7(
 
   const preparedBatches =
     new LocalAssemblyArray<PreparedProductPartBatchV7>();
+  const preparedValues =
+    new LocalAssemblyArray<PreparedProductGeometryOutputsV7>(
+      pendingBatches.length,
+    );
+  const batchProvenance =
+    new LocalAssemblyArray<ProductGeometryBatchProvenanceV7>(
+      pendingBatches.length,
+    );
   for (
     let batchIndex = 0;
     batchIndex < pendingBatches.length;
     batchIndex += 1
   ) {
     const batch = pendingBatches[batchIndex]!;
-    const retained = preflightPreparedPartOutputsV7(
-      kernel,
-      batch.prepared,
-    );
-    const afterPreflight = postBoundaryFailure(options.signal);
-    if (afterPreflight !== undefined) return afterPreflight;
-    if (!retained.ok) {
-      return batch.source === "external"
-        ? {
-            ok: false,
-            diagnostics: externalBatchDiagnostics(
-              retained.diagnostics,
-              batch.batch,
-            ),
-          }
-        : retained;
-    }
+    preparedValues[batchIndex] = batch.prepared;
+    batchProvenance[batchIndex] = localAssemblyFreeze({
+      documentScope: batch.scope,
+      selectionPath:
+        batch.source === "local"
+          ? batch.outputs.length === 0
+            ? "/nodes"
+            : `/nodes/${jsonPointerSegment(batch.outputs[0]!)}`
+          : `/outputs/${jsonPointerSegment(
+              batch.firstOccurrence.output,
+            )}`,
+    });
+  }
+  localAssemblyFreeze(preparedValues);
+  localAssemblyFreeze(batchProvenance);
+  const retained = preflightPreparedProductGeometryOutputsV7(
+    kernel,
+    preparedValues,
+    batchProvenance,
+  );
+  const afterPreflight = postBoundaryFailure(options.signal);
+  if (afterPreflight !== undefined) return afterPreflight;
+  if (!retained.ok) {
+    const failedIndex =
+      retained.diagnostics[0]?.details?.productBatchIndex;
+    const failedBatch =
+      typeof failedIndex === "number"
+        ? pendingBatches[failedIndex]
+        : undefined;
+    return failedBatch?.source === "external"
+      ? {
+          ok: false,
+          diagnostics: externalBatchDiagnostics(
+            retained.diagnostics,
+            failedBatch.batch,
+          ),
+        }
+      : retained;
+  }
+  for (
+    let batchIndex = 0;
+    batchIndex < pendingBatches.length;
+    batchIndex += 1
+  ) {
+    const batch = pendingBatches[batchIndex]!;
     preparedBatches[preparedBatches.length] = {
       ...batch,
-      retained: retained.value,
+      retained: retained.value[batchIndex]!,
     };
   }
 
@@ -5562,8 +6265,15 @@ export async function evaluateLocalAssemblyOutputsV7(
     createPreparedPartShapeOwnershipTransactionV7(kernel);
   if (!shapeOwnership.ok) return shapeOwnership;
 
-  const children: EvaluatedPartDesignV7[] = [];
+  const children: EvaluatedProductGeometryDesignV7[] = [];
   const partResults = new LocalAssemblyMap<string, EvaluatedPartV7>();
+  const nativeResults =
+    new LocalAssemblyMap<
+      string,
+      EvaluatedProductGeometryOutputV7
+    >();
+  let productOwner: LocalAssemblyOwner | undefined;
+  try {
   for (
     let batchIndex = 0;
     batchIndex < preparedBatches.length;
@@ -5600,9 +6310,9 @@ export async function evaluateLocalAssemblyOutputsV7(
           )
         : missing;
     }
-    let result: CadResult<EvaluatedPartDesignV7>;
+    let result: CadResult<EvaluatedProductGeometryDesignV7>;
     try {
-      result = await executePreparedPartOutputsV7(
+      result = await executePreparedProductGeometryOutputsV7(
         kernel,
         batch.prepared,
         batch.retained,
@@ -5649,7 +6359,7 @@ export async function evaluateLocalAssemblyOutputsV7(
       if (result.ok) {
         try {
           localAssemblyApply<void>(
-            localAssemblyPartDesignDispose,
+            localAssemblyProductGeometryDesignDispose,
             result.value,
             [],
           );
@@ -5674,7 +6384,11 @@ export async function evaluateLocalAssemblyOutputsV7(
     }
     children[children.length] = result.value;
     const resultDiagnostics =
-      batch.source === "external"
+      mode === "product" &&
+      batch.source === "local" &&
+      batch.configurationId === rootConfigurationId
+        ? localAssemblyFreeze([] as Diagnostic[])
+        : batch.source === "external"
         ? externalBatchDiagnostics(
             result.diagnostics,
             batch.batch,
@@ -5694,15 +6408,58 @@ export async function evaluateLocalAssemblyOutputsV7(
       outputIndex += 1
     ) {
       const output = batch.outputs[outputIndex]!;
-      const part = localAssemblyApply<EvaluatedPartV7>(
-        localAssemblyPartDesignOutput,
+      const geometryOutput =
+        localAssemblyApply<EvaluatedProductGeometryOutputV7>(
+        localAssemblyProductGeometryDesignOutput,
         result.value,
         [output],
       );
       if (batch.source === "local") {
+        localAssemblyMapInsert(
+          nativeResults,
+          nativeProductOutputKey(
+            output,
+            batch.configurationId,
+          ),
+          geometryOutput,
+        );
+      }
+      if (geometryOutput.kind !== "part") {
+        if (batch.source === "local") continue;
+        cleanupChildren(children);
+        return failure(
+          diagnostic(
+            "KERNEL_ERROR",
+            "External prepared part selection returned a non-part view",
+            {
+              severity: "error",
+              node: geometryOutput.node,
+              details: {
+                phase: LOCAL_ASSEMBLY_EVALUATION_PHASE,
+                protocolViolation: true,
+                output,
+                outputKind: geometryOutput.kind,
+              },
+            },
+          ),
+        );
+      }
+      const part = geometryOutput.part;
+      if (batch.source === "local") {
+        if (
+          localAssemblyMapValue(
+            partSelectionNames,
+            contextKey(
+              geometryOutput.node,
+              batch.configurationId,
+            ),
+          ) !== output
+        ) {
+          continue;
+        }
         const component = deepFreeze({
           source: "local" as const,
-          partNode: output as NodeId,
+          partNode: geometryOutput.node,
         });
         localAssemblyMapInsert(
           partResults,
@@ -5803,6 +6560,7 @@ export async function evaluateLocalAssemblyOutputsV7(
   }
 
   const owner = new LocalAssemblyOwner(children);
+  productOwner = owner;
   const outputs = new LocalAssemblyMap<string, EvaluatedLocalAssemblyV7>();
   for (
     let outputIndex = 0;
@@ -5895,14 +6653,138 @@ export async function evaluateLocalAssemblyOutputsV7(
   for (const [id, value] of rootParameters.value.values) {
     defineRecordValue(publicParameters, id, value);
   }
-  const frozenDiagnostics = deepFreeze(diagnostics);
-  const evaluated = new EvaluatedLocalAssemblyDesignV7(
-    owner,
-    outputs,
-    rootConfigurationId,
-    deepFreeze(publicParameters),
-    frozenDiagnostics,
-  );
+  const frozenParameters = deepFreeze(publicParameters);
+  const frozenDiagnostics =
+    mode === "product"
+      ? productBoundaryDiagnostics(diagnostics)
+      : deepFreeze(diagnostics);
+  let evaluated:
+    | EvaluatedLocalAssemblyDesignV7
+    | EvaluatedProductDocumentV7;
+  if (mode === "assembly") {
+    evaluated = new EvaluatedLocalAssemblyDesignV7(
+      owner,
+      outputs,
+      rootConfigurationId,
+      frozenParameters,
+      frozenDiagnostics,
+    );
+  } else {
+    const productOutputs =
+      new LocalAssemblyArray<EvaluatedProductDocumentOutputV7>(
+        selectedOrder.length,
+      );
+    for (
+      let outputIndex = 0;
+      outputIndex < selectedOrder.length;
+      outputIndex += 1
+    ) {
+      const selectedOutput = selectedOrder[outputIndex]!;
+      if (selectedOutput.kind === "assembly") {
+        const assembly = localAssemblyMapValue(
+          outputs,
+          selectedOutput.name,
+        );
+        if (assembly === undefined) {
+          try {
+            owner.dispose();
+          } catch {
+            // Preserve the missing-result invariant diagnostic.
+          }
+          return failure(
+            diagnostic(
+              "KERNEL_ERROR",
+              `Product assembly output '${selectedOutput.name}' was unavailable`,
+              {
+                severity: "error",
+                node: selectedOutput.node,
+                path: `/outputs/${jsonPointerSegment(
+                  selectedOutput.name,
+                )}`,
+                details: {
+                  phase: LOCAL_ASSEMBLY_EVALUATION_PHASE,
+                  protocolViolation: true,
+                },
+              },
+            ),
+          );
+        }
+        productOutputs[outputIndex] = localAssemblyFreeze({
+          name: selectedOutput.name,
+          node: selectedOutput.node,
+          kind: "assembly" as const,
+          assembly,
+        });
+        continue;
+      }
+      const native = localAssemblyMapValue(
+        nativeResults,
+        nativeProductOutputKey(
+          selectedOutput.name,
+          rootConfigurationId,
+        ),
+      );
+      if (
+        native === undefined ||
+        native.kind !== selectedOutput.kind ||
+        native.node !== selectedOutput.node
+      ) {
+        try {
+          owner.dispose();
+        } catch {
+          // Preserve the missing-result invariant diagnostic.
+        }
+        return failure(
+          diagnostic(
+            "KERNEL_ERROR",
+            `Product ${selectedOutput.kind} output '${selectedOutput.name}' was unavailable`,
+            {
+              severity: "error",
+              node: selectedOutput.node,
+              path: `/outputs/${jsonPointerSegment(
+                selectedOutput.name,
+              )}`,
+              details: {
+                phase: LOCAL_ASSEMBLY_EVALUATION_PHASE,
+                protocolViolation: true,
+                outputKind: selectedOutput.kind,
+                evaluatedKind: native?.kind,
+              },
+            },
+          ),
+        );
+      }
+      productOutputs[outputIndex] =
+        native.kind === "solid"
+          ? localAssemblyFreeze({
+              name: selectedOutput.name,
+              node: selectedOutput.node,
+              kind: "solid" as const,
+              solid: native.solid,
+            })
+          : native.kind === "bodySet"
+            ? localAssemblyFreeze({
+                name: selectedOutput.name,
+                node: selectedOutput.node,
+                kind: "bodySet" as const,
+                bodySet: native.bodySet,
+              })
+            : localAssemblyFreeze({
+                name: selectedOutput.name,
+                node: selectedOutput.node,
+                kind: "part" as const,
+                part: native.part,
+              });
+    }
+    localAssemblyFreeze(productOutputs);
+    evaluated = new EvaluatedProductDocumentV7(
+      owner,
+      productOutputs,
+      rootConfigurationId,
+      frozenParameters,
+      frozenDiagnostics,
+    );
+  }
   const finalBoundary = postBoundaryFailure(options.signal);
   if (finalBoundary !== undefined) {
     try {
@@ -5913,6 +6795,43 @@ export async function evaluateLocalAssemblyOutputsV7(
     return postBoundaryFailure(options.signal) ?? finalBoundary;
   }
   return success(evaluated, frozenDiagnostics);
+  } catch (error) {
+    try {
+      if (productOwner === undefined) {
+        cleanupChildren(children);
+      } else {
+        productOwner.dispose();
+      }
+    } catch {
+      // Preserve the structured late-construction failure.
+    }
+    const boundary = postBoundaryFailure(options.signal);
+    return (
+      boundary ??
+      failure(
+        diagnostic(
+          "KERNEL_ERROR",
+          mode === "product"
+            ? "Product result construction failed after geometry acquisition"
+            : "Local assembly result construction failed after geometry acquisition",
+          {
+            severity: "error",
+            details: {
+              phase:
+                mode === "product"
+                  ? PRODUCT_DOCUMENT_EVALUATION_PHASE
+                  : LOCAL_ASSEMBLY_EVALUATION_PHASE,
+              lateResultConstruction: true,
+              cause: safeErrorMessage(
+                error,
+                "Product result construction failed with an opaque value",
+              ),
+            },
+          },
+        ),
+      )
+    );
+  }
   } finally {
     localAssemblyApply<void>(
       localAssemblyResourceSessionDispose,
@@ -5920,6 +6839,41 @@ export async function evaluateLocalAssemblyOutputsV7(
       [],
     );
   }
+}
+
+/** Historical assembly-only entry retained without widening its result union. @internal */
+export async function evaluateLocalAssemblyOutputsV7(
+  kernel: GeometryKernel,
+  inputDocument: DesignDocumentV7,
+  inputOptions: EvaluateLocalAssemblyOutputsV7Options = {},
+): Promise<CadResult<EvaluatedLocalAssemblyDesignV7>> {
+  return evaluateProductDocumentCoreV7(
+    kernel,
+    inputDocument,
+    inputOptions,
+    "assembly",
+  ) as Promise<CadResult<EvaluatedLocalAssemblyDesignV7>>;
+}
+
+/** Shared planner entry for the repository-staged mixed product boundary. @internal */
+export async function evaluateProductDocumentOutputsV7(
+  kernel: GeometryKernel,
+  inputDocument: DesignDocumentV7,
+  inputOptions: EvaluateLocalAssemblyOutputsV7Options = {},
+): Promise<CadResult<EvaluatedProductDocumentV7>> {
+  const result = await evaluateProductDocumentCoreV7(
+    kernel,
+    inputDocument,
+    inputOptions,
+    "product",
+  );
+  if (!result.ok) {
+    return {
+      ok: false,
+      diagnostics: productBoundaryDiagnostics(result.diagnostics),
+    };
+  }
+  return result as CadResult<EvaluatedProductDocumentV7>;
 }
 
 /**

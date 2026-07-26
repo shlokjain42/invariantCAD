@@ -2423,18 +2423,21 @@ describe("staged Document v7 local assembly evaluation", () => {
 
   it("contains a rejected child batch and rolls back completed configuration owners", async () => {
     const harness = await instrumentedManifold();
-    const executePreparedPartOutputsV7 =
-      evaluatorModule.executePreparedPartOutputsV7;
+    const executePreparedProductGeometryOutputsV7 =
+      evaluatorModule.executePreparedProductGeometryOutputsV7;
     let calls = 0;
     const child = vi
-      .spyOn(evaluatorModule, "executePreparedPartOutputsV7")
+      .spyOn(
+        evaluatorModule,
+        "executePreparedProductGeometryOutputsV7",
+      )
       .mockImplementation(async (...arguments_) => {
         const index = calls;
         calls += 1;
         if (index === 1) {
           throw Symbol("opaque-child-rejection");
         }
-        return executePreparedPartOutputsV7(...arguments_);
+        return executePreparedProductGeometryOutputsV7(...arguments_);
       });
     try {
       const result = await evaluateLocalAssemblyOutputsV7(

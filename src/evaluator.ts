@@ -151,8 +151,10 @@ import {
   type EvaluatorArtifactCacheCandidateBinding,
 } from "./internal/evaluator-artifact-cache-candidate.js";
 import {
+  admitDocumentBytesToV7,
   parseDocumentValue,
   parseDocumentValueV7,
+  type AdmittedDocumentSourceVersion,
 } from "./serialization.js";
 import {
   DEFAULT_RESOURCE_RESOLUTION_LIMITS_V7,
@@ -160,6 +162,7 @@ import {
   type ResourceResolutionLimitsV7,
   type ResourceResolverV7,
   type ResolvedResourcesV7,
+  type DocumentV7ResourceScope,
 } from "./resource-resolution.js";
 import {
   DEFAULT_DESIGN_DOCUMENT_LIMITS,
@@ -980,6 +983,15 @@ interface StagedV7SolidKernelAccess {
   readonly exportShape?: NonNullable<GeometryKernel["exportShape"]>;
 }
 
+interface StagedBodySetEvaluatedSolidV7State {
+  readonly owner: EvaluationOwner;
+  readonly shape: KernelShape;
+  readonly access: StagedV7SolidKernelAccess;
+}
+
+const stagedBodySetEvaluatedSolidV7States =
+  new WeakMap<object, StagedBodySetEvaluatedSolidV7State>();
+
 /**
  * Retains the staged body-set kernel observation boundary without changing
  * the ordinary EvaluatedSolid path used by frozen document versions.
@@ -995,6 +1007,18 @@ class StagedBodySetEvaluatedSolidV7 extends EvaluatedSolid {
   ) {
     super(name, owner, shape);
     this.#access = access;
+    evaluationOwnerReflectApply(
+      evaluationOwnerDisposerSet,
+      stagedBodySetEvaluatedSolidV7States,
+      [
+        this,
+        evaluationOwnerReflectApply(
+          evaluationOwnerObjectFreeze,
+          Object,
+          [{ owner, shape, access }],
+        ),
+      ],
+    );
     installStagedBodySetEvaluatedSolidV7Methods(this);
     evaluationOwnerReflectApply(
       evaluationOwnerObjectFreeze,
@@ -1084,12 +1108,17 @@ class StagedBodySetEvaluatedSolidV7 extends EvaluatedSolid {
       }
     }
     if (!supported || this.#access.exportShape === undefined) {
+      const renderedFormat =
+        typeof format === "string" ? format : "unsupported value";
       const value = diagnostic(
         "EXPORT_UNSUPPORTED",
-        `Kernel '${this.#access.id}' cannot export ${format}`,
+        `Kernel '${this.#access.id}' cannot export ${renderedFormat}`,
         {
           severity: "error",
-          details: { kernel: this.#access.id, format },
+          details: {
+            kernel: this.#access.id,
+            format: renderedFormat,
+          },
         },
       );
       throw new CadError(value.message, [value]);
@@ -1751,6 +1780,25 @@ type EvaluatedPartDiagnosticIdentityV7 =
       readonly childPartNode: NodeId;
     };
 
+type EvaluatedBodySetDiagnosticIdentityV7 =
+  | EvaluatedPartDiagnosticIdentityV7
+  | {
+      readonly kind: "part";
+      readonly output: string;
+      readonly partNode: NodeId;
+    };
+
+function evaluatedPartBodySetDiagnosticIdentityV7(
+  output: string,
+  partNode: NodeId,
+): EvaluatedBodySetDiagnosticIdentityV7 {
+  return importedBodyApply<EvaluatedBodySetDiagnosticIdentityV7>(
+    importedBodyObjectFreeze,
+    Object,
+    [{ kind: "part", output, partNode }],
+  );
+}
+
 interface EvaluatedBodySetV7Backing {
   readonly owner: EvaluationOwner;
   readonly bodies: readonly EvaluatedBodyV7[];
@@ -1783,6 +1831,323 @@ function retainEvaluatedBodySetV7Backing(
   );
 }
 
+type CapturedEvaluatedBodySetMeshV7 =
+  | { readonly ok: true; readonly value: MeshData }
+  | { readonly ok: false; readonly reason: string };
+
+function evaluatedBodySetV7DiagnosticPath(
+  identity: EvaluatedBodySetDiagnosticIdentityV7,
+): string {
+  return identity.kind === "output"
+    ? `/outputs/${importedBodyJsonPointerSegment(identity.output)}`
+    : `/nodes/${importedBodyJsonPointerSegment(
+        identity.kind === "part"
+          ? identity.partNode
+          : identity.childPartNode,
+      )}/geometry`;
+}
+
+function evaluatedBodySetV7DiagnosticDetails(
+  identity: EvaluatedBodySetDiagnosticIdentityV7,
+): Readonly<Record<string, unknown>> {
+  return identity.kind === "output"
+    ? {
+        phase: BODY_SET_EVALUATION_PHASE,
+        output: identity.output,
+        outputKind: "bodySet",
+      }
+    : identity.kind === "part"
+      ? {
+          phase: PART_EVALUATION_PHASE,
+          output: identity.output,
+          outputKind: "part",
+          partNode: identity.partNode,
+        }
+      : {
+          phase: PART_EVALUATION_PHASE,
+          output: identity.output,
+          outputKind: identity.outputKind,
+          childPartNode: identity.childPartNode,
+        };
+}
+
+function evaluatedBodySetV7RuntimeCadError(
+  identity: EvaluatedBodySetDiagnosticIdentityV7,
+): CadError {
+  const item = diagnostic(
+    "IR_INVALID",
+    DOCUMENT_V7_RUNTIME_INTEGRITY_MESSAGE,
+    {
+      severity: "error",
+      path: evaluatedBodySetV7DiagnosticPath(identity),
+      details: {
+        ...evaluatedBodySetV7DiagnosticDetails(identity),
+        runtimeIntegrity: false,
+      },
+    },
+  );
+  return new CadError(item.message, [item]);
+}
+
+function evaluatedBodySetV7MeshCadError(
+  identity: EvaluatedBodySetDiagnosticIdentityV7,
+  name: string,
+  message: string,
+  reason: string,
+  body?: EvaluatedBodyV7,
+  cause?: string,
+): CadError {
+  const item = diagnostic("KERNEL_ERROR", message, {
+    severity: "error",
+    ...(body === undefined ? {} : { node: body.node }),
+    path: evaluatedBodySetV7DiagnosticPath(identity),
+    details: {
+      ...evaluatedBodySetV7DiagnosticDetails(identity),
+      bodySet: name,
+      reason,
+      protocolViolation: true,
+      ...(body === undefined
+        ? {}
+        : { bodyId: body.id, bodyNode: body.node }),
+      ...(cause === undefined ? {} : { cause }),
+    },
+  });
+  return new CadError(item.message, [item]);
+}
+
+function evaluatedBodySetV7IntrinsicTypedArrayLength(
+  value: unknown,
+  expectedPrototype: object,
+): number | undefined {
+  try {
+    if (
+      typeof value !== "object" ||
+      value === null ||
+      importedBodyTypedArrayLengthGetter === undefined ||
+      importedBodyTypedArrayBufferGetter === undefined ||
+      importedBodyArrayBufferByteLengthGetter === undefined ||
+      importedBodyApply<object | null>(
+        importedBodyObjectGetPrototypeOf,
+        Object,
+        [value],
+      ) !== expectedPrototype
+    ) {
+      return undefined;
+    }
+    const length = importedBodyApply<unknown>(
+      importedBodyTypedArrayLengthGetter,
+      value,
+      [],
+    );
+    if (
+      typeof length !== "number" ||
+      !importedBodyApply<boolean>(
+        importedBodyNumberIsSafeInteger,
+        Number,
+        [length],
+      ) ||
+      length < 0
+    ) {
+      return undefined;
+    }
+    const buffer = importedBodyApply<unknown>(
+      importedBodyTypedArrayBufferGetter,
+      value,
+      [],
+    );
+    if (
+      typeof buffer !== "object" ||
+      buffer === null ||
+      importedBodyApply<object | null>(
+        importedBodyObjectGetPrototypeOf,
+        Object,
+        [buffer],
+      ) !== importedBodyArrayBufferPrototype
+    ) {
+      return undefined;
+    }
+    const byteLength = importedBodyApply<unknown>(
+      importedBodyArrayBufferByteLengthGetter,
+      buffer,
+      [],
+    );
+    if (
+      typeof byteLength !== "number" ||
+      !importedBodyApply<boolean>(
+        importedBodyNumberIsSafeInteger,
+        Number,
+        [byteLength],
+      ) ||
+      byteLength < 0
+    ) {
+      return undefined;
+    }
+    new ImportedBodyUint8Array(buffer as ArrayBuffer, 0, 0);
+    return length;
+  } catch {
+    return undefined;
+  }
+}
+
+function captureEvaluatedBodySetMeshV7(
+  value: unknown,
+): CapturedEvaluatedBodySetMeshV7 {
+  try {
+    const record = importedBodyOwnDataRecord(value, "/mesh");
+    if (!record.ok) {
+      return { ok: false, reason: "unsafe-mesh-record" };
+    }
+    const keys = importedBodyObjectKeyList(record.value);
+    if (
+      keys.length !== 2 ||
+      !importedBodyApply<boolean>(
+        importedBodyObjectHasOwn,
+        Object,
+        [record.value, "positions"],
+      ) ||
+      !importedBodyApply<boolean>(
+        importedBodyObjectHasOwn,
+        Object,
+        [record.value, "indices"],
+      )
+    ) {
+      return { ok: false, reason: "invalid-mesh-record-keys" };
+    }
+    const sourcePositions = record.value.positions;
+    const sourceIndices = record.value.indices;
+    const positionLength =
+      evaluatedBodySetV7IntrinsicTypedArrayLength(
+        sourcePositions,
+        importedBodyFloat32ArrayPrototype,
+      );
+    const indexLength =
+      evaluatedBodySetV7IntrinsicTypedArrayLength(
+        sourceIndices,
+        importedBodyUint32ArrayPrototype,
+      );
+    if (positionLength === undefined) {
+      return {
+        ok: false,
+        reason: "positions-not-intrinsic-float32-array",
+      };
+    }
+    if (indexLength === undefined) {
+      return {
+        ok: false,
+        reason: "indices-not-intrinsic-uint32-array",
+      };
+    }
+    if (positionLength % 3 !== 0) {
+      return { ok: false, reason: "incomplete-xyz-positions" };
+    }
+    if (indexLength % 3 !== 0) {
+      return { ok: false, reason: "incomplete-triangle-indices" };
+    }
+    const positions = new ImportedBodyFloat32Array(positionLength);
+    for (let index = 0; index < positionLength; index += 1) {
+      const coordinate = (sourcePositions as Float32Array)[index]!;
+      if (
+        !importedBodyApply<boolean>(
+          importedBodyNumberIsFinite,
+          Number,
+          [coordinate],
+        )
+      ) {
+        return { ok: false, reason: "non-finite-position" };
+      }
+      positions[index] = coordinate;
+    }
+    const vertexCount = positionLength / 3;
+    const indices = new ImportedBodyUint32Array(indexLength);
+    for (let index = 0; index < indexLength; index += 1) {
+      const vertex = (sourceIndices as Uint32Array)[index]!;
+      if (vertex >= vertexCount) {
+        return {
+          ok: false,
+          reason: "mesh-index-out-of-bounds",
+        };
+      }
+      indices[index] = vertex;
+    }
+    return {
+      ok: true,
+      value: importedBodyApply<MeshData>(
+        importedBodyObjectFreeze,
+        Object,
+        [{ positions, indices }],
+      ),
+    };
+  } catch {
+    return { ok: false, reason: "unsafe-mesh-capture" };
+  }
+}
+
+function mergeCapturedEvaluatedBodySetMeshesV7(
+  meshes: readonly MeshData[],
+): MeshData {
+  let positionLength = 0;
+  let indexLength = 0;
+  for (let meshIndex = 0; meshIndex < meshes.length; meshIndex += 1) {
+    const mesh = meshes[meshIndex]!;
+    const meshPositionLength =
+      evaluatedBodySetV7IntrinsicTypedArrayLength(
+        mesh.positions,
+        importedBodyFloat32ArrayPrototype,
+      );
+    const meshIndexLength =
+      evaluatedBodySetV7IntrinsicTypedArrayLength(
+        mesh.indices,
+        importedBodyUint32ArrayPrototype,
+      );
+    if (
+      meshPositionLength === undefined ||
+      meshIndexLength === undefined ||
+      positionLength >
+        9_007_199_254_740_991 - meshPositionLength ||
+      indexLength > 9_007_199_254_740_991 - meshIndexLength
+    ) {
+      throw new RangeError(
+        "Body-set aggregate mesh lengths are not representable",
+      );
+    }
+    positionLength += meshPositionLength;
+    indexLength += meshIndexLength;
+  }
+  const positions = new ImportedBodyFloat32Array(positionLength);
+  const indices = new ImportedBodyUint32Array(indexLength);
+  let positionOffset = 0;
+  let indexOffset = 0;
+  let vertexOffset = 0;
+  for (let meshIndex = 0; meshIndex < meshes.length; meshIndex += 1) {
+    const mesh = meshes[meshIndex]!;
+    const meshPositionLength =
+      evaluatedBodySetV7IntrinsicTypedArrayLength(
+        mesh.positions,
+        importedBodyFloat32ArrayPrototype,
+      )!;
+    const meshIndexLength =
+      evaluatedBodySetV7IntrinsicTypedArrayLength(
+        mesh.indices,
+        importedBodyUint32ArrayPrototype,
+      )!;
+    for (let index = 0; index < meshPositionLength; index += 1) {
+      positions[positionOffset + index] = mesh.positions[index]!;
+    }
+    for (let index = 0; index < meshIndexLength; index += 1) {
+      indices[indexOffset + index] =
+        mesh.indices[index]! + vertexOffset;
+    }
+    positionOffset += meshPositionLength;
+    indexOffset += meshIndexLength;
+    vertexOffset += meshPositionLength / 3;
+  }
+  return importedBodyApply<MeshData>(
+    importedBodyObjectFreeze,
+    Object,
+    [{ positions, indices }],
+  );
+}
+
 /**
  * Owned staged multibody output. Protocol v1 has no hidden primary or inactive
  * body: every descriptor in `bodies` is an active authored member.
@@ -1800,7 +2165,7 @@ export class EvaluatedBodySetV7 {
   readonly exact: boolean;
   readonly #owner: EvaluationOwner;
   readonly #bodiesById: ReadonlyMap<EntityId, EvaluatedBodyV7>;
-  readonly #diagnosticIdentity: EvaluatedPartDiagnosticIdentityV7;
+  readonly #diagnosticIdentity: EvaluatedBodySetDiagnosticIdentityV7;
 
   constructor(
     name: string,
@@ -1808,7 +2173,7 @@ export class EvaluatedBodySetV7 {
     bodies: readonly EvaluatedBodyV7[],
     representation: KernelRepresentation,
     exact: boolean,
-    diagnosticIdentity?: EvaluatedPartDiagnosticIdentityV7,
+    diagnosticIdentity?: EvaluatedBodySetDiagnosticIdentityV7,
   ) {
     this.name = name;
     const retained = evaluatedBodySetV7Backing(bodies);
@@ -1853,7 +2218,7 @@ export class EvaluatedBodySetV7 {
     this.exact = backing.exact;
     this.#diagnosticIdentity =
       diagnosticIdentity ??
-      importedBodyApply<EvaluatedPartDiagnosticIdentityV7>(
+      importedBodyApply<EvaluatedBodySetDiagnosticIdentityV7>(
         importedBodyObjectFreeze,
         Object,
         [{ kind: "output", output: name }],
@@ -1864,7 +2229,15 @@ export class EvaluatedBodySetV7 {
 
   body(id: string): EvaluatedBodyV7 {
     this.#owner.assertLive();
-    const body = this.#bodiesById.get(id as EntityId);
+    if (typeof id !== "string") {
+      throw new TypeError(
+        "Evaluated body-set body id must be a string",
+      );
+    }
+    const body = importedBodyMapGetValue(
+      this.#bodiesById,
+      id as EntityId,
+    );
     if (body === undefined) {
       throw new RangeError(
         `Unknown body '${id}' in evaluated body set '${this.name}'`,
@@ -1874,45 +2247,162 @@ export class EvaluatedBodySetV7 {
   }
 
   mesh(options?: MeshOptions): MeshData {
+    const runtimeIntegrityWasIntact =
+      documentV7RuntimeIntrinsicsAreIntact();
     this.#owner.assertLive();
     const meshes: MeshData[] = [];
     for (let index = 0; index < this.bodies.length; index += 1) {
-      meshes.push(this.bodies[index]!.solid.mesh(options));
+      const body = this.bodies[index]!;
+      let returned: unknown;
+      try {
+        returned = body.solid.mesh(options);
+      } catch (error) {
+        if (
+          runtimeIntegrityWasIntact &&
+          !documentV7RuntimeIntrinsicsAreIntact()
+        ) {
+          throw evaluatedBodySetV7RuntimeCadError(
+            this.#diagnosticIdentity,
+          );
+        }
+        throw evaluatedBodySetV7MeshCadError(
+          this.#diagnosticIdentity,
+          this.name,
+          `Mesh callback failed for body '${body.id}' in body set '${this.name}'`,
+          "mesh-callback-threw",
+          body,
+          safeErrorMessage(
+            error,
+            "Body-set mesh callback failed with an opaque value",
+          ),
+        );
+      }
+      if (
+        runtimeIntegrityWasIntact &&
+        !documentV7RuntimeIntrinsicsAreIntact()
+      ) {
+        throw evaluatedBodySetV7RuntimeCadError(
+          this.#diagnosticIdentity,
+        );
+      }
+      const captured = captureEvaluatedBodySetMeshV7(returned);
+      if (
+        runtimeIntegrityWasIntact &&
+        !documentV7RuntimeIntrinsicsAreIntact()
+      ) {
+        throw evaluatedBodySetV7RuntimeCadError(
+          this.#diagnosticIdentity,
+        );
+      }
+      if (!captured.ok) {
+        throw evaluatedBodySetV7MeshCadError(
+          this.#diagnosticIdentity,
+          this.name,
+          `Kernel returned malformed mesh data for body '${body.id}' in body set '${this.name}'`,
+          captured.reason,
+          body,
+        );
+      }
+      importedBodyArrayAppend(meshes, captured.value);
     }
-    return mergeMeshes(meshes);
+    let merged: unknown;
+    try {
+      merged = runtimeIntegrityWasIntact
+        ? mergeMeshes(meshes)
+        : mergeCapturedEvaluatedBodySetMeshesV7(meshes);
+    } catch (error) {
+      if (
+        runtimeIntegrityWasIntact &&
+        !documentV7RuntimeIntrinsicsAreIntact()
+      ) {
+        throw evaluatedBodySetV7RuntimeCadError(
+          this.#diagnosticIdentity,
+        );
+      }
+      throw evaluatedBodySetV7MeshCadError(
+        this.#diagnosticIdentity,
+        this.name,
+        `Aggregate mesh for body set '${this.name}' could not be represented`,
+        "mesh-merge-failed",
+        undefined,
+        safeErrorMessage(
+          error,
+          "Body-set mesh aggregation failed with an opaque value",
+        ),
+      );
+    }
+    if (
+      runtimeIntegrityWasIntact &&
+      !documentV7RuntimeIntrinsicsAreIntact()
+    ) {
+      throw evaluatedBodySetV7RuntimeCadError(
+        this.#diagnosticIdentity,
+      );
+    }
+    const capturedMerged =
+      captureEvaluatedBodySetMeshV7(merged);
+    if (
+      runtimeIntegrityWasIntact &&
+      !documentV7RuntimeIntrinsicsAreIntact()
+    ) {
+      throw evaluatedBodySetV7RuntimeCadError(
+        this.#diagnosticIdentity,
+      );
+    }
+    if (!capturedMerged.ok) {
+      throw evaluatedBodySetV7MeshCadError(
+        this.#diagnosticIdentity,
+        this.name,
+        `Aggregate mesh for body set '${this.name}' is invalid`,
+        `aggregate-${capturedMerged.reason}`,
+      );
+    }
+    return capturedMerged.value;
   }
 
   export(format: "stl"): Uint8Array;
   export(format: TextShapeExportFormat): string;
   export(format: MeshExportFormat): Uint8Array | string;
   export(format: MeshExportFormat): Uint8Array | string {
+    if (!documentV7RuntimeIntrinsicsAreIntact()) {
+      throw evaluatedBodySetV7RuntimeCadError(
+        this.#diagnosticIdentity,
+      );
+    }
     this.#owner.assertLive();
     if (
       format !== "stl" &&
       format !== "stl-ascii" &&
       format !== "obj"
     ) {
+      const renderedFormat =
+        typeof format === "string" ? format : "unsupported value";
       const value = diagnostic(
         "EXPORT_UNSUPPORTED",
-        `Aggregate exact export for body set '${this.name}' is unsupported for ${String(format)}`,
+        `Aggregate exact export for body set '${this.name}' is unsupported for ${renderedFormat}`,
         {
           severity: "error",
-          details:
-            this.#diagnosticIdentity.kind === "output"
-              ? { output: this.name, format }
-              : {
-                  output: this.#diagnosticIdentity.output,
-                  outputKind:
-                    this.#diagnosticIdentity.outputKind,
-                  childPartNode:
-                    this.#diagnosticIdentity.childPartNode,
-                  format,
-                },
+          path: evaluatedBodySetV7DiagnosticPath(
+            this.#diagnosticIdentity,
+          ),
+          details: {
+            ...evaluatedBodySetV7DiagnosticDetails(
+              this.#diagnosticIdentity,
+            ),
+            format: renderedFormat,
+            aggregateExactExchange: false,
+          },
         },
       );
       throw new CadError(value.message, [value]);
     }
-    return exportMesh(this.mesh(), format, this.name);
+    const exported = exportMesh(this.mesh(), format, this.name);
+    if (!documentV7RuntimeIntrinsicsAreIntact()) {
+      throw evaluatedBodySetV7RuntimeCadError(
+        this.#diagnosticIdentity,
+      );
+    }
+    return exported;
   }
 }
 
@@ -2378,24 +2868,26 @@ export class EvaluatedPartV7 {
       format !== "stl-ascii" &&
       format !== "obj"
     ) {
+      const renderedFormat =
+        typeof format === "string" ? format : "unsupported value";
       const value = diagnostic(
         "EXPORT_UNSUPPORTED",
         this.#diagnosticIdentity.kind === "output"
-          ? `Aggregate part export for '${this.#name}' is unsupported for ${String(format)}`
-          : `Aggregate part export for child part '${this.#diagnosticIdentity.childPartNode}' is unsupported for ${String(format)}`,
+          ? `Aggregate part export for '${this.#name}' is unsupported for ${renderedFormat}`
+          : `Aggregate part export for child part '${this.#diagnosticIdentity.childPartNode}' is unsupported for ${renderedFormat}`,
         {
           severity: "error",
           node: this.#value.node,
           details:
             this.#diagnosticIdentity.kind === "output"
-              ? { output: this.#name, format }
+              ? { output: this.#name, format: renderedFormat }
               : {
                   output: this.#diagnosticIdentity.output,
                   outputKind:
                     this.#diagnosticIdentity.outputKind,
                   childPartNode:
                     this.#diagnosticIdentity.childPartNode,
-                  format,
+                  format: renderedFormat,
                 },
         },
       );
@@ -2745,6 +3237,94 @@ export function createExternalAssemblyPartViewV7(
   return boundary ?? success(view);
 }
 
+function createStagedBodySetEvaluatedSolidV7Alias(
+  solid: EvaluatedSolid,
+  name: string,
+): StagedBodySetEvaluatedSolidV7 {
+  const state = evaluationOwnerReflectApply(
+    evaluationOwnerDisposerGet,
+    stagedBodySetEvaluatedSolidV7States,
+    [solid],
+  ) as StagedBodySetEvaluatedSolidV7State | undefined;
+  if (state === undefined) {
+    throw new TypeError(
+      "Product solid alias is not owned by this evaluator",
+    );
+  }
+  state.owner.assertLive();
+  return new StagedBodySetEvaluatedSolidV7(
+    name,
+    state.owner,
+    state.shape,
+    state.access,
+  );
+}
+
+function createProductPartAliasViewV7(
+  part: EvaluatedPartV7,
+  name: string,
+): EvaluatedPartV7 {
+  const state = evaluatedPartV7ViewState(part);
+  if (state === undefined) {
+    throw new TypeError(
+      "Product part alias is not owned by this evaluator",
+    );
+  }
+  let value = state.value;
+  if (value.geometry.kind === "solid") {
+    const geometry =
+      importedBodyApply<EvaluatedPartGeometryV7>(
+        importedBodyObjectFreeze,
+        Object,
+        [
+          {
+            kind: "solid",
+            node: value.geometry.node,
+            solid: createStagedBodySetEvaluatedSolidV7Alias(
+              value.geometry.solid,
+              name,
+            ),
+          },
+        ],
+      );
+    value = importedBodyApply<EvaluatedPartValueV7>(
+      importedBodyObjectFreeze,
+      Object,
+      [{ ...value, geometry }],
+    );
+  } else {
+    const source = value.geometry.bodySet;
+    const geometry =
+      importedBodyApply<EvaluatedPartGeometryV7>(
+        importedBodyObjectFreeze,
+        Object,
+        [
+          {
+            kind: "bodySet",
+            node: value.geometry.node,
+            bodySet: new EvaluatedBodySetV7(
+              name,
+              state.owner,
+              source.bodies,
+              source.representation,
+              source.exact,
+              evaluatedPartBodySetDiagnosticIdentityV7(
+                name,
+                value.node,
+              ),
+            ),
+          },
+        ],
+      );
+    value = importedBodyApply<EvaluatedPartValueV7>(
+      importedBodyObjectFreeze,
+      Object,
+      [{ ...value, geometry }],
+    );
+  }
+  return new EvaluatedPartV7(name, state.owner, value);
+}
+
 /**
  * Source-only result container for direct staged document-v7 part outputs.
  *
@@ -2788,6 +3368,65 @@ export class EvaluatedPartDesignV7 {
   }
 }
 
+/**
+ * One owned native-geometry batch produced by the staged product planner.
+ *
+ * The ordered aliases live in the higher-level product result. This container
+ * is keyed by planner-owned names and exists so assemblies and direct outputs
+ * can borrow the same authentic geometry views without duplicating native
+ * handles.
+ *
+ * @internal
+ */
+export class EvaluatedProductGeometryDesignV7 {
+  readonly configurationId: string | null;
+  readonly parameters: Readonly<Record<string, number>>;
+  readonly diagnostics: readonly Diagnostic[];
+  readonly outputNames: readonly string[];
+  readonly #outputs: ReadonlyMap<
+    string,
+    EvaluatedProductGeometryOutputV7
+  >;
+  readonly #owner: EvaluationOwner;
+
+  constructor(
+    owner: EvaluationOwner,
+    outputs: ReadonlyMap<string, EvaluatedProductGeometryOutputV7>,
+    configurationId: string | null,
+    parameters: Readonly<Record<string, number>>,
+    diagnostics: readonly Diagnostic[],
+  ) {
+    this.#owner = owner;
+    this.#outputs = outputs;
+    this.outputNames = Object.freeze([...outputs.keys()]);
+    this.configurationId = configurationId;
+    this.parameters = parameters;
+    this.diagnostics = diagnostics;
+    installEvaluatedProductGeometryDesignV7Methods(this);
+    importedBodyApply<void>(importedBodyObjectFreeze, Object, [this]);
+  }
+
+  output(name: string): EvaluatedProductGeometryOutputV7 {
+    this.#owner.assertLive();
+    if (typeof name !== "string") {
+      throw new TypeError(
+        "Evaluated product geometry output name must be a string",
+      );
+    }
+    const output = importedBodyMapGetValue(this.#outputs, name);
+    if (output === undefined) {
+      throw new RangeError(
+        `Unknown evaluated product geometry output '${name}'`,
+      );
+    }
+    return output;
+  }
+
+  dispose(): void {
+    this.#owner.dispose();
+  }
+}
+
 const stagedBodySetEvaluatedSolidV7Mesh =
   StagedBodySetEvaluatedSolidV7.prototype.mesh;
 const stagedBodySetEvaluatedSolidV7Measure =
@@ -2816,6 +3455,10 @@ const evaluatedPartDesignV7Output =
   EvaluatedPartDesignV7.prototype.output;
 const evaluatedPartDesignV7Dispose =
   EvaluatedPartDesignV7.prototype.dispose;
+const evaluatedProductGeometryDesignV7Output =
+  EvaluatedProductGeometryDesignV7.prototype.output;
+const evaluatedProductGeometryDesignV7Dispose =
+  EvaluatedProductGeometryDesignV7.prototype.dispose;
 
 function installStagedBodySetEvaluatedSolidV7Methods(
   value: StagedBodySetEvaluatedSolidV7,
@@ -2917,6 +3560,21 @@ function installEvaluatedPartDesignV7Methods(
   );
 }
 
+function installEvaluatedProductGeometryDesignV7Methods(
+  value: EvaluatedProductGeometryDesignV7,
+): void {
+  installEvaluationInstanceMethod(
+    value,
+    "output",
+    evaluatedProductGeometryDesignV7Output,
+  );
+  installEvaluationInstanceMethod(
+    value,
+    "dispose",
+    evaluatedProductGeometryDesignV7Dispose,
+  );
+}
+
 /**
  * Source-only options for the staged direct imported-body evaluator.
  *
@@ -3002,6 +3660,9 @@ export const DEFAULT_BODY_SET_EVALUATION_LIMITS_V7:
 declare const preparedPartOutputsV7Brand: unique symbol;
 declare const preparedPartKernelAccessV7Brand: unique symbol;
 declare const preparedPartShapeOwnershipTransactionV7Brand: unique symbol;
+declare const preparedProductGeometryOutputsV7Brand: unique symbol;
+declare const capturedProductDocumentV7Brand: unique symbol;
+declare const preparedProductGeometryKernelAccessV7Brand: unique symbol;
 
 /** Aggregate work admitted by one prepared staged part evaluation. @internal */
 export interface PreparedPartEvaluationMetricsV7 {
@@ -3047,6 +3708,117 @@ export interface PreparedPartKernelAccessV7 {
  */
 export interface PreparedPartShapeOwnershipTransactionV7 {
   readonly [preparedPartShapeOwnershipTransactionV7Brand]: true;
+}
+
+/**
+ * One trusted native definition selected by the staged product planner.
+ *
+ * This is a repository-only hand-off between the product planner and the
+ * shared solid-graph evaluator. It is deliberately not re-exported from the
+ * package root.
+ *
+ * @internal
+ */
+export type ProductGeometrySelectionV7 =
+  | {
+      readonly name: string;
+      readonly node: NodeId;
+      readonly kind: "solid";
+      readonly path: string;
+    }
+  | {
+      readonly name: string;
+      readonly node: NodeId;
+      readonly kind: "bodySet";
+      readonly path: string;
+    }
+  | {
+      readonly name: string;
+      readonly node: NodeId;
+      readonly kind: "part";
+      readonly path: string;
+    };
+
+/** @internal */
+export type EvaluatedProductGeometryOutputV7 =
+  | {
+      readonly name: string;
+      readonly node: NodeId;
+      readonly kind: "solid";
+      readonly solid: EvaluatedSolid;
+    }
+  | {
+      readonly name: string;
+      readonly node: NodeId;
+      readonly kind: "bodySet";
+      readonly bodySet: EvaluatedBodySetV7;
+    }
+  | {
+      readonly name: string;
+      readonly node: NodeId;
+      readonly kind: "part";
+      readonly part: EvaluatedPartV7;
+    };
+
+/**
+ * Opaque prepared native product batch. The batch may contain any mixture of
+ * direct solids, body sets, and parts from one effective configuration.
+ *
+ * @internal
+ */
+export interface PreparedProductGeometryOutputsV7 {
+  readonly resourceIds: readonly ResourceId[];
+  readonly metrics: PreparedPartEvaluationMetricsV7;
+  readonly [preparedProductGeometryOutputsV7Brand]: true;
+}
+
+/** Owner-checked aggregate-retained kernel access for one native product batch. @internal */
+export interface PreparedProductGeometryKernelAccessV7 {
+  readonly kernelId: string;
+  readonly [preparedProductGeometryKernelAccessV7Brand]: true;
+}
+
+/** Deterministic document boundary attached to aggregate preflight failures. @internal */
+export interface ProductGeometryBatchProvenanceV7 {
+  readonly documentScope: DocumentV7ResourceScope;
+  readonly selectionPath: string;
+}
+
+/**
+ * One parsed, detached staged document retained across product planning
+ * contexts. The token prevents internal geometry batches from reparsing or
+ * re-observing the caller's document.
+ *
+ * @internal
+ */
+export interface CapturedProductDocumentV7 {
+  readonly document: DesignDocumentV7;
+  readonly diagnostics: readonly Diagnostic[];
+  readonly [capturedProductDocumentV7Brand]: true;
+}
+
+/** Parser-backed capture plus the admitted source version for child documents. @internal */
+export interface AdmittedCapturedProductDocumentV7 {
+  readonly captured: CapturedProductDocumentV7;
+  readonly sourceVersion: AdmittedDocumentSourceVersion;
+}
+
+/**
+ * Internal options for a trusted product-planner geometry batch.
+ *
+ * Selection is supplied separately so the caller can retain output aliases
+ * without fabricating document nodes or mutating the caller's output table.
+ *
+ * @internal
+ */
+export interface PrepareProductGeometryOutputsV7Options {
+  readonly configuration?: string;
+  readonly parameters: Readonly<Record<string, number>>;
+  readonly evaluationLimits: PartEvaluationLimitsV7;
+  readonly resourceLimits: ResourceResolutionLimitsV7;
+  /** Legacy assembly evaluation validates every document material. */
+  readonly materialScope?: "selected" | "document";
+  readonly signal?: AbortSignal;
 }
 
 export interface EvaluatePartOutputsV7Options {
@@ -3158,6 +3930,29 @@ const importedBodyMapSet = Map.prototype.set;
 const ImportedBodySet = Set;
 const importedBodySetAdd = Set.prototype.add;
 const importedBodySetHas = Set.prototype.has;
+const ImportedBodyFloat32Array = Float32Array;
+const ImportedBodyUint8Array = Uint8Array;
+const ImportedBodyUint32Array = Uint32Array;
+const importedBodyFloat32ArrayPrototype = Float32Array.prototype;
+const importedBodyUint32ArrayPrototype = Uint32Array.prototype;
+const importedBodyArrayBufferPrototype = ArrayBuffer.prototype;
+const importedBodyTypedArrayPrototype =
+  Object.getPrototypeOf(Uint8Array.prototype);
+const importedBodyTypedArrayLengthGetter =
+  Object.getOwnPropertyDescriptor(
+    importedBodyTypedArrayPrototype,
+    "length",
+  )?.get;
+const importedBodyTypedArrayBufferGetter =
+  Object.getOwnPropertyDescriptor(
+    importedBodyTypedArrayPrototype,
+    "buffer",
+  )?.get;
+const importedBodyArrayBufferByteLengthGetter =
+  Object.getOwnPropertyDescriptor(
+    ArrayBuffer.prototype,
+    "byteLength",
+  )?.get;
 const importedBodyAbortSignalAbortedGetter =
   typeof AbortSignal === "undefined"
     ? undefined
@@ -3210,7 +4005,7 @@ function importedBodySetHasValue<T>(
 }
 
 function importedBodyMapGetValue<K, V>(
-  map: Map<K, V>,
+  map: ReadonlyMap<K, V>,
   key: K,
 ): V | undefined {
   return importedBodyApply<V | undefined>(importedBodyMapGet, map, [key]);
@@ -7863,6 +8658,39 @@ interface PreparedPartShapeOwnershipTransactionV7State {
   active: boolean;
 }
 
+type SelectedProductGeometryOutputV7 =
+  | {
+      readonly name: string;
+      readonly nodeId: NodeId;
+      readonly kind: "solid";
+      readonly node: StagedSolidGraphNodeV7;
+    }
+  | {
+      readonly name: string;
+      readonly nodeId: NodeId;
+      readonly kind: "bodySet";
+      readonly node: BodySetNodeIRV7;
+    }
+  | (SelectedPartOutputV7 & { readonly kind: "part" });
+
+interface PreparedProductGeometryOutputsV7State {
+  readonly options: PrepareProductGeometryOutputsV7Options;
+  readonly document: DesignDocumentV7;
+  readonly selectedOutputs: readonly SelectedProductGeometryOutputV7[];
+  readonly selectedConfigurationId: ConfigurationId | null;
+  readonly publicParameters: Readonly<Record<string, number>>;
+  readonly diagnostics: readonly Diagnostic[];
+  readonly resolvedParts: ReadonlyMap<NodeId, ResolvedPartDefinitionV7>;
+  readonly expression: (value: ExpressionIR) => number;
+  readonly solidGraph: PreparedStagedSolidGraphV7;
+}
+
+interface PreparedProductGeometryKernelAccessV7State {
+  readonly prepared: PreparedProductGeometryOutputsV7;
+  readonly kernel: GeometryKernel;
+  readonly access: BodySetKernelAccess;
+}
+
 const preparedPartOutputsV7States =
   new WeakMap<object, PreparedPartOutputsV7State>();
 const preparedPartKernelAccessV7States =
@@ -7872,6 +8700,12 @@ const preparedPartShapeOwnershipTransactionV7States =
     object,
     PreparedPartShapeOwnershipTransactionV7State
   >();
+const preparedProductGeometryOutputsV7States =
+  new WeakMap<object, PreparedProductGeometryOutputsV7State>();
+const preparedProductGeometryKernelAccessV7States =
+  new WeakMap<object, PreparedProductGeometryKernelAccessV7State>();
+const capturedProductDocumentV7States =
+  new WeakMap<object, CapturedProductDocumentV7>();
 const preparedPartWeakMapGet = WeakMap.prototype.get;
 const preparedPartWeakMapSet = WeakMap.prototype.set;
 
@@ -7904,6 +8738,40 @@ function preparedPartShapeOwnershipTransactionState(
     preparedPartWeakMapGet,
     preparedPartShapeOwnershipTransactionV7States,
     [transaction],
+  );
+}
+
+function preparedProductGeometryState(
+  prepared: PreparedProductGeometryOutputsV7,
+): PreparedProductGeometryOutputsV7State | undefined {
+  return importedBodyApply<
+    PreparedProductGeometryOutputsV7State | undefined
+  >(
+    preparedPartWeakMapGet,
+    preparedProductGeometryOutputsV7States,
+    [prepared],
+  );
+}
+
+function preparedProductGeometryKernelState(
+  access: PreparedProductGeometryKernelAccessV7,
+): PreparedProductGeometryKernelAccessV7State | undefined {
+  return importedBodyApply<
+    PreparedProductGeometryKernelAccessV7State | undefined
+  >(
+    preparedPartWeakMapGet,
+    preparedProductGeometryKernelAccessV7States,
+    [access],
+  );
+}
+
+function capturedProductDocumentState(
+  captured: CapturedProductDocumentV7,
+): CapturedProductDocumentV7 | undefined {
+  return importedBodyApply<CapturedProductDocumentV7 | undefined>(
+    preparedPartWeakMapGet,
+    capturedProductDocumentV7States,
+    [captured],
   );
 }
 
@@ -8012,6 +8880,86 @@ function createPreparedPartKernelAccessV7(
   importedBodyApply<void>(
     preparedPartWeakMapSet,
     preparedPartKernelAccessV7States,
+    [result, { prepared, kernel, access }],
+  );
+  return result;
+}
+
+function createPreparedProductGeometryOutputsV7(
+  resourceIds: readonly ResourceId[],
+  metrics: PreparedPartEvaluationMetricsV7,
+  state: PreparedProductGeometryOutputsV7State,
+): PreparedProductGeometryOutputsV7 {
+  const prepared = importedBodyApply<Record<string, unknown>>(
+    importedBodyObjectCreate,
+    Object,
+    [null],
+  );
+  importedBodyApply<void>(importedBodyObjectDefineProperty, Object, [
+    prepared,
+    "resourceIds",
+    {
+      configurable: false,
+      enumerable: true,
+      writable: false,
+      value: resourceIds,
+    },
+  ]);
+  importedBodyApply<void>(importedBodyObjectDefineProperty, Object, [
+    prepared,
+    "metrics",
+    {
+      configurable: false,
+      enumerable: true,
+      writable: false,
+      value: metrics,
+    },
+  ]);
+  importedBodyApply<void>(
+    importedBodyObjectFreeze,
+    Object,
+    [prepared],
+  );
+  const result =
+    prepared as unknown as PreparedProductGeometryOutputsV7;
+  importedBodyApply<void>(
+    preparedPartWeakMapSet,
+    preparedProductGeometryOutputsV7States,
+    [result, state],
+  );
+  return result;
+}
+
+function createPreparedProductGeometryKernelAccessV7(
+  prepared: PreparedProductGeometryOutputsV7,
+  kernel: GeometryKernel,
+  access: BodySetKernelAccess,
+): PreparedProductGeometryKernelAccessV7 {
+  const retained = importedBodyApply<Record<string, unknown>>(
+    importedBodyObjectCreate,
+    Object,
+    [null],
+  );
+  importedBodyApply<void>(importedBodyObjectDefineProperty, Object, [
+    retained,
+    "kernelId",
+    {
+      configurable: false,
+      enumerable: true,
+      writable: false,
+      value: access.id,
+    },
+  ]);
+  importedBodyApply<void>(
+    importedBodyObjectFreeze,
+    Object,
+    [retained],
+  );
+  const result =
+    retained as unknown as PreparedProductGeometryKernelAccessV7;
+  importedBodyApply<void>(
+    preparedPartWeakMapSet,
+    preparedProductGeometryKernelAccessV7States,
     [result, { prepared, kernel, access }],
   );
   return result;
@@ -8353,18 +9301,13 @@ export function preparePartOutputsV7(
   if (partEvaluationAborted(options.signal)) {
     return partEvaluationAbortFailure();
   }
-
-  const parsed = parseDocumentValueV7(
+  const capturedDocument = captureProductDocumentV7(
     inputDocument,
-    options.documentLimits === undefined
-      ? {}
-      : { limits: options.documentLimits },
+    options.documentLimits,
+    options.signal,
   );
-  const afterDocument = partPostBoundaryFailure(options.signal);
-  if (afterDocument !== undefined) return afterDocument;
-  if (!parsed.ok) return parsed;
-  const document = parsed.value;
-
+  if (!capturedDocument.ok) return capturedDocument;
+  const document = capturedDocument.value.document;
   const requested: string[] = [];
   if (options.outputs === undefined) {
     const outputNames = importedBodyObjectKeyList(document.outputs);
@@ -8387,14 +9330,6 @@ export function preparePartOutputsV7(
       importedBodyArrayAppend(requested, options.outputs[index]!);
     }
   }
-  if (requested.length > options.evaluationLimits.maxSelectedOutputs) {
-    return partLimitFailure(
-      "maxSelectedOutputs",
-      options.evaluationLimits.maxSelectedOutputs,
-      requested.length,
-      "/outputs",
-    );
-  }
   if (requested.length === 0) {
     return failure(
       diagnostic("OUTPUT_MISSING", "The document has no selected outputs", {
@@ -8404,14 +9339,11 @@ export function preparePartOutputsV7(
       }),
     );
   }
-
-  const selectedOutputs: SelectedPartOutputV7[] = [];
-  const solidRoots: StagedSolidGraphRootV7[] = [];
-  let selectedBodyCount = 0;
-
-  for (let outputIndex = 0; outputIndex < requested.length; outputIndex += 1) {
-    const name = requested[outputIndex]!;
-    const outputPath = `/outputs/${importedBodyJsonPointerSegment(name)}`;
+  const selections: ProductGeometrySelectionV7[] = [];
+  for (let index = 0; index < requested.length; index += 1) {
+    const name = requested[index]!;
+    const outputPath =
+      `/outputs/${importedBodyJsonPointerSegment(name)}`;
     const reference = importedBodyApply<boolean>(
       importedBodyObjectHasOwn,
       Object,
@@ -8428,7 +9360,7 @@ export function preparePartOutputsV7(
         }),
       );
     }
-    const outputNode = importedBodyApply<boolean>(
+    const node = importedBodyApply<boolean>(
       importedBodyObjectHasOwn,
       Object,
       [document.nodes, reference.node],
@@ -8437,9 +9369,9 @@ export function preparePartOutputsV7(
       : undefined;
     if (
       reference.kind !== "part" ||
-      outputNode === undefined ||
-      outputNode.kind !== "part" ||
-      !("geometry" in outputNode)
+      node === undefined ||
+      node.kind !== "part" ||
+      !("geometry" in node)
     ) {
       return failure(
         diagnostic(
@@ -8453,121 +9385,501 @@ export function preparePartOutputsV7(
               phase: PART_EVALUATION_PHASE,
               supported: "direct-part-output",
               outputKind: reference.kind,
-              nodeKind: outputNode?.kind,
+              nodeKind: node?.kind,
             },
           },
         ),
       );
     }
-    const geometryNode = importedBodyApply<boolean>(
-      importedBodyObjectHasOwn,
-      Object,
-      [document.nodes, outputNode.geometry.node],
-    )
-      ? document.nodes[outputNode.geometry.node]
-      : undefined;
-    let geometry: SelectedPartGeometryNodeV7;
-    if (
-      outputNode.geometry.kind === "solid" &&
-      geometryNode !== undefined &&
-      (geometryNode.kind === "box" ||
-        geometryNode.kind === "cylinder" ||
-        geometryNode.kind === "sphere" ||
-        geometryNode.kind === "importedBody" ||
-        geometryNode.kind === "boolean" ||
-        geometryNode.kind === "transform")
-    ) {
-      geometry = {
-        kind: "solid",
-        nodeId: outputNode.geometry.node,
-        node: geometryNode,
-      };
-      selectedBodyCount += 1;
-      if (
-        selectedBodyCount >
-        options.evaluationLimits.maxPartBodies
-      ) {
-        return partLimitFailure(
-          "maxPartBodies",
-          options.evaluationLimits.maxPartBodies,
-          selectedBodyCount,
-          `/nodes/${reference.node}/geometry`,
-        );
-      }
-      importedBodyArrayAppend(solidRoots, {
-        node: outputNode.geometry.node,
-        path: `/nodes/${reference.node}/geometry`,
-      });
-    } else if (
-      outputNode.geometry.kind === "bodySet" &&
-      geometryNode !== undefined &&
-      geometryNode.kind === "bodySet"
-    ) {
-      geometry = {
-        kind: "bodySet",
-        nodeId: outputNode.geometry.node,
-        node: geometryNode,
-      };
-      selectedBodyCount += geometryNode.bodies.length;
-      if (
-        selectedBodyCount >
-        options.evaluationLimits.maxPartBodies
-      ) {
-        return partLimitFailure(
-          "maxPartBodies",
-          options.evaluationLimits.maxPartBodies,
-          selectedBodyCount,
-          `/nodes/${outputNode.geometry.node}/bodies`,
-        );
-      }
-      for (
-        let bodyIndex = 0;
-        bodyIndex < geometryNode.bodies.length;
-        bodyIndex += 1
-      ) {
-        const member = geometryNode.bodies[bodyIndex]!;
-        importedBodyArrayAppend(solidRoots, {
-          node: member.solid.node,
-          path:
-            `/nodes/${outputNode.geometry.node}/bodies/` +
-            `${bodyIndex}/solid`,
-        });
-      }
-    } else {
-      return failure(
-        diagnostic(
-          "EVALUATION_UNSUPPORTED",
-          `Part '${reference.node}' geometry must reference an admitted solid graph or bodySet`,
-          {
-            severity: "error",
-            node: reference.node,
-            path: `/nodes/${reference.node}/geometry`,
-            details: {
-              phase: PART_EVALUATION_PHASE,
-              supported: [
-                "box",
-                "cylinder",
-                "sphere",
-                "importedBody",
-                "boolean",
-                "transform",
-                "bodySet",
-              ],
-              geometryKind: outputNode.geometry.kind,
-              referencedNode: outputNode.geometry.node,
-              nodeKind: geometryNode?.kind,
-            },
-          },
-        ),
-      );
-    }
-    importedBodyArrayAppend(selectedOutputs, {
+    importedBodyArrayAppend(selections, {
       name,
-      nodeId: reference.node,
-      node: outputNode,
-      geometry,
+      node: reference.node,
+      kind: "part",
+      path: outputPath,
     });
   }
+  importedBodyApply<void>(
+    importedBodyObjectFreeze,
+    Object,
+    [selections],
+  );
+  return prepareProductGeometryOutputsV7Core(
+    capturedDocument.value,
+    selections,
+    options,
+    {
+      includeCapturedDiagnostics: true,
+      resolveAllMaterials: true,
+      resultKind: "part",
+      partOptions: options,
+    },
+  ) as CadResult<PreparedPartOutputsV7>;
+}
+function productGeometrySolidNodeV7(
+  value: NodeIRV7 | undefined,
+): value is StagedSolidGraphNodeV7 {
+  return (
+    value !== undefined &&
+    (value.kind === "box" ||
+      value.kind === "cylinder" ||
+      value.kind === "sphere" ||
+      value.kind === "importedBody" ||
+      value.kind === "boolean" ||
+      value.kind === "transform")
+  );
+}
+
+function appendProductGeometryBodySetRootsV7(
+  roots: StagedSolidGraphRootV7[],
+  node: BodySetNodeIRV7,
+  nodeId: NodeId,
+): void {
+  for (let bodyIndex = 0; bodyIndex < node.bodies.length; bodyIndex += 1) {
+    importedBodyArrayAppend(roots, {
+      node: node.bodies[bodyIndex]!.solid.node,
+      path: `/nodes/${nodeId}/bodies/${bodyIndex}/solid`,
+    });
+  }
+}
+
+function advanceProductGeometryBodyCountV7(
+  current: number,
+  additional: number,
+  maximum: number,
+  path: string,
+): CadResult<number> {
+  const actual = current + additional;
+  if (actual > maximum) {
+    return partLimitFailure(
+      "maxPartBodies",
+      maximum,
+      actual,
+      path,
+    );
+  }
+  return success(actual);
+}
+
+function retainCapturedProductDocumentV7(
+  document: DesignDocumentV7,
+  diagnostics: readonly Diagnostic[],
+): CapturedProductDocumentV7 {
+  const token = importedBodyApply<Record<string, unknown>>(
+    importedBodyObjectCreate,
+    Object,
+    [null],
+  );
+  importedBodyApply<void>(importedBodyObjectDefineProperty, Object, [
+    token,
+    "document",
+    {
+      configurable: false,
+      enumerable: true,
+      writable: false,
+      value: document,
+    },
+  ]);
+  importedBodyApply<void>(importedBodyObjectDefineProperty, Object, [
+    token,
+    "diagnostics",
+    {
+      configurable: false,
+      enumerable: true,
+      writable: false,
+      value: diagnostics,
+    },
+  ]);
+  importedBodyApply<void>(
+    importedBodyObjectFreeze,
+    Object,
+    [token],
+  );
+  const captured = token as unknown as CapturedProductDocumentV7;
+  importedBodyApply<void>(
+    preparedPartWeakMapSet,
+    capturedProductDocumentV7States,
+    [captured, captured],
+  );
+  return captured;
+}
+
+/**
+ * Captures and validates one root staged product document exactly once.
+ *
+ * @internal
+ */
+export function captureProductDocumentV7(
+  inputDocument: DesignDocumentV7,
+  documentLimits?: Partial<DesignDocumentLimits>,
+  signal?: AbortSignal,
+): CadResult<CapturedProductDocumentV7> {
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return partRuntimeIntegrityFailure();
+  }
+  const parsed = parseDocumentValueV7(
+    inputDocument,
+    documentLimits === undefined ? {} : { limits: documentLimits },
+  );
+  const boundary = partPostBoundaryFailure(signal);
+  if (boundary !== undefined) return boundary;
+  if (!parsed.ok) return parsed;
+  const captured = retainCapturedProductDocumentV7(
+    parsed.value,
+    parsed.diagnostics,
+  );
+  const finalBoundary = partPostBoundaryFailure(signal);
+  return finalBoundary ?? success(captured, parsed.diagnostics);
+}
+
+/**
+ * Admits one external document byte source and retains its parsed staged value
+ * without a second parse.
+ *
+ * @internal
+ */
+export function admitCapturedProductDocumentBytesV7(
+  bytes: Uint8Array,
+  documentLimits?: Partial<DesignDocumentLimits>,
+  signal?: AbortSignal,
+): CadResult<AdmittedCapturedProductDocumentV7> {
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return partRuntimeIntegrityFailure();
+  }
+  const admitted = admitDocumentBytesToV7(
+    bytes,
+    documentLimits === undefined ? {} : { limits: documentLimits },
+  );
+  const boundary = partPostBoundaryFailure(signal);
+  if (boundary !== undefined) return boundary;
+  if (!admitted.ok) return admitted;
+  const captured = retainCapturedProductDocumentV7(
+    admitted.value.document,
+    admitted.diagnostics,
+  );
+  const result = importedBodyApply<AdmittedCapturedProductDocumentV7>(
+    importedBodyObjectFreeze,
+    Object,
+    [
+      {
+        captured,
+        sourceVersion: admitted.value.sourceVersion,
+      },
+    ],
+  );
+  const finalBoundary = partPostBoundaryFailure(signal);
+  return finalBoundary ?? success(result, admitted.diagnostics);
+}
+
+/**
+ * Prepares one trusted staged-product native-geometry batch.
+ *
+ * The product planner supplies detached selections after it has classified the
+ * caller's ordered output list. No document nodes or outputs are synthesized.
+ * All selected roots enter one solid graph, so definitions shared by a direct
+ * output and a part occurrence are acquired exactly once in this effective
+ * configuration context.
+ *
+ * @internal
+ */
+function prepareProductGeometryOutputsV7Core(
+  capturedDocument: CapturedProductDocumentV7,
+  selections: readonly ProductGeometrySelectionV7[],
+  options: PrepareProductGeometryOutputsV7Options,
+  behavior:
+    | {
+        readonly includeCapturedDiagnostics: true;
+        readonly resolveAllMaterials: true;
+        readonly resultKind: "part";
+        readonly partOptions: CapturedPartOutputsV7Options;
+      }
+    | {
+        readonly includeCapturedDiagnostics: false;
+        readonly resolveAllMaterials: boolean;
+        readonly resultKind: "product";
+      },
+): CadResult<
+  PreparedPartOutputsV7 | PreparedProductGeometryOutputsV7
+> {
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return partRuntimeIntegrityFailure();
+  }
+  const capturedState = capturedProductDocumentState(capturedDocument);
+  if (capturedState === undefined) {
+    return failure(
+      diagnostic(
+        "IR_INVALID",
+        "Product geometry document is not owned by this evaluator",
+        {
+          severity: "error",
+          details: {
+            phase: PART_EVALUATION_PHASE,
+            capturedDocumentOwner: false,
+          },
+        },
+      ),
+    );
+  }
+  const afterOptions = partPostBoundaryFailure(options.signal);
+  if (afterOptions !== undefined) return afterOptions;
+  const document = capturedState.document;
+  if (
+    selections.length >
+    options.evaluationLimits.maxSelectedOutputs
+  ) {
+    return partLimitFailure(
+      "maxSelectedOutputs",
+      options.evaluationLimits.maxSelectedOutputs,
+      selections.length,
+      "/outputs",
+    );
+  }
+  if (selections.length === 0) {
+    return failure(
+      diagnostic(
+        "OUTPUT_MISSING",
+        "The product geometry batch has no selected definitions",
+        {
+          severity: "error",
+          path: "/outputs",
+          details: { phase: PART_EVALUATION_PHASE },
+        },
+      ),
+    );
+  }
+
+  const selectedOutputs: SelectedProductGeometryOutputV7[] = [];
+  const solidRoots: StagedSolidGraphRootV7[] = [];
+  const selectedNames = new ImportedBodySet<string>();
+  let selectedBodyCount = 0;
+  for (
+    let selectionIndex = 0;
+    selectionIndex < selections.length;
+    selectionIndex += 1
+  ) {
+    const selection = selections[selectionIndex]!;
+    const selectionPath =
+      typeof selection.path === "string"
+        ? selection.path
+        : `/outputs/${selectionIndex}`;
+    if (
+      typeof selection.name !== "string" ||
+      typeof selection.node !== "string" ||
+      (selection.kind !== "solid" &&
+        selection.kind !== "bodySet" &&
+        selection.kind !== "part")
+    ) {
+      return failure(
+        diagnostic(
+          "IR_INVALID",
+          `Product geometry selection ${selectionIndex} is invalid`,
+          {
+            severity: "error",
+            path: selectionPath,
+            details: { phase: PART_EVALUATION_PHASE },
+          },
+        ),
+      );
+    }
+    if (importedBodySetHasValue(selectedNames, selection.name)) {
+      return failure(
+        diagnostic(
+          "IR_INVALID",
+          `Duplicate product geometry selection '${selection.name}'`,
+          {
+            severity: "error",
+            path: selectionPath,
+            details: { phase: PART_EVALUATION_PHASE },
+          },
+        ),
+      );
+    }
+    importedBodySetAddValue(selectedNames, selection.name);
+    const node = importedBodyApply<boolean>(
+      importedBodyObjectHasOwn,
+      Object,
+      [document.nodes, selection.node],
+    )
+      ? document.nodes[selection.node]
+      : undefined;
+    if (selection.kind === "solid") {
+      if (!productGeometrySolidNodeV7(node)) {
+        return failure(
+          diagnostic(
+            "EVALUATION_UNSUPPORTED",
+            `Product solid selection '${selection.name}' must reference an admitted solid graph`,
+            {
+              severity: "error",
+              node: selection.node,
+              path: selectionPath,
+              details: {
+                phase: PART_EVALUATION_PHASE,
+                outputKind: selection.kind,
+                nodeKind: node?.kind,
+              },
+            },
+          ),
+        );
+      }
+      const nextBodyCount = advanceProductGeometryBodyCountV7(
+        selectedBodyCount,
+        1,
+        options.evaluationLimits.maxPartBodies,
+        selectionPath,
+      );
+      if (!nextBodyCount.ok) return nextBodyCount;
+      selectedBodyCount = nextBodyCount.value;
+      importedBodyArrayAppend(solidRoots, {
+        node: selection.node,
+        path: selectionPath,
+      });
+      importedBodyArrayAppend(selectedOutputs, {
+        name: selection.name,
+        nodeId: selection.node,
+        kind: "solid",
+        node,
+      });
+    } else if (selection.kind === "bodySet") {
+      if (node === undefined || node.kind !== "bodySet") {
+        return failure(
+          diagnostic(
+            "EVALUATION_UNSUPPORTED",
+            `Product body-set selection '${selection.name}' must reference a bodySet node`,
+            {
+              severity: "error",
+              node: selection.node,
+              path: selectionPath,
+              details: {
+                phase: PART_EVALUATION_PHASE,
+                outputKind: selection.kind,
+                nodeKind: node?.kind,
+              },
+            },
+          ),
+        );
+      }
+      const nextBodyCount = advanceProductGeometryBodyCountV7(
+        selectedBodyCount,
+        node.bodies.length,
+        options.evaluationLimits.maxPartBodies,
+        selectionPath,
+      );
+      if (!nextBodyCount.ok) return nextBodyCount;
+      selectedBodyCount = nextBodyCount.value;
+      appendProductGeometryBodySetRootsV7(
+        solidRoots,
+        node,
+        selection.node,
+      );
+      importedBodyArrayAppend(selectedOutputs, {
+        name: selection.name,
+        nodeId: selection.node,
+        kind: "bodySet",
+        node,
+      });
+    } else {
+      if (
+        node === undefined ||
+        node.kind !== "part" ||
+        !("geometry" in node)
+      ) {
+        return failure(
+          diagnostic(
+            "EVALUATION_UNSUPPORTED",
+            `Product part selection '${selection.name}' must reference a staged part node`,
+            {
+              severity: "error",
+              node: selection.node,
+              path: selectionPath,
+              details: {
+                phase: PART_EVALUATION_PHASE,
+                outputKind: selection.kind,
+                nodeKind: node?.kind,
+              },
+            },
+          ),
+        );
+      }
+      const geometryNode = importedBodyApply<boolean>(
+        importedBodyObjectHasOwn,
+        Object,
+        [document.nodes, node.geometry.node],
+      )
+        ? document.nodes[node.geometry.node]
+        : undefined;
+      let geometry: SelectedPartGeometryNodeV7;
+      if (
+        node.geometry.kind === "solid" &&
+        productGeometrySolidNodeV7(geometryNode)
+      ) {
+        geometry = {
+          kind: "solid",
+          nodeId: node.geometry.node,
+          node: geometryNode,
+        };
+        const nextBodyCount = advanceProductGeometryBodyCountV7(
+          selectedBodyCount,
+          1,
+          options.evaluationLimits.maxPartBodies,
+          selectionPath,
+        );
+        if (!nextBodyCount.ok) return nextBodyCount;
+        selectedBodyCount = nextBodyCount.value;
+        importedBodyArrayAppend(solidRoots, {
+          node: node.geometry.node,
+          path: `/nodes/${selection.node}/geometry`,
+        });
+      } else if (
+        node.geometry.kind === "bodySet" &&
+        geometryNode !== undefined &&
+        geometryNode.kind === "bodySet"
+      ) {
+        geometry = {
+          kind: "bodySet",
+          nodeId: node.geometry.node,
+          node: geometryNode,
+        };
+        const nextBodyCount = advanceProductGeometryBodyCountV7(
+          selectedBodyCount,
+          geometryNode.bodies.length,
+          options.evaluationLimits.maxPartBodies,
+          selectionPath,
+        );
+        if (!nextBodyCount.ok) return nextBodyCount;
+        selectedBodyCount = nextBodyCount.value;
+        appendProductGeometryBodySetRootsV7(
+          solidRoots,
+          geometryNode,
+          node.geometry.node,
+        );
+      } else {
+        return failure(
+          diagnostic(
+            "EVALUATION_UNSUPPORTED",
+            `Part '${selection.node}' geometry must reference an admitted solid graph or bodySet`,
+            {
+              severity: "error",
+              node: selection.node,
+              path: `/nodes/${selection.node}/geometry`,
+              details: {
+                phase: PART_EVALUATION_PHASE,
+                geometryKind: node.geometry.kind,
+                referencedNode: node.geometry.node,
+                nodeKind: geometryNode?.kind,
+              },
+            },
+          ),
+        );
+      }
+      importedBodyArrayAppend(selectedOutputs, {
+        name: selection.name,
+        nodeId: selection.node,
+        kind: "part",
+        node,
+        geometry,
+      });
+    }
+  }
+
   const solidPlan = planStagedSolidGraphV7(
     document,
     solidRoots,
@@ -8628,7 +9940,7 @@ export function preparePartOutputsV7(
         "EXPRESSION_INVALID",
         bodySetThrownCause(
           error,
-          "Part parameters could not be resolved safely",
+          "Product geometry parameters could not be resolved safely",
         ),
         {
           severity: "error",
@@ -8643,8 +9955,17 @@ export function preparePartOutputsV7(
   if (!parameterResult.ok) return parameterResult;
   const parameterValues = parameterResult.value.values;
   const diagnostics: Diagnostic[] = [];
-  for (let index = 0; index < parsed.diagnostics.length; index += 1) {
-    importedBodyArrayAppend(diagnostics, parsed.diagnostics[index]!);
+  if (behavior.includeCapturedDiagnostics) {
+    for (
+      let index = 0;
+      index < capturedState.diagnostics.length;
+      index += 1
+    ) {
+      importedBodyArrayAppend(
+        diagnostics,
+        capturedState.diagnostics[index]!,
+      );
+    }
   }
   for (
     let index = 0;
@@ -8656,7 +9977,6 @@ export function preparePartOutputsV7(
       parameterResult.diagnostics[index]!,
     );
   }
-
   const expression = (value: ExpressionIR): number =>
     evaluateExpression(value, {
       resolveParameter: (id) => {
@@ -8668,9 +9988,35 @@ export function preparePartOutputsV7(
       },
     });
 
-  const materialIds = importedBodyArraySortLexically(
-    importedBodyObjectKeyList(document.materials ?? {}),
-  );
+  let materialIds: string[];
+  if (behavior.resolveAllMaterials) {
+    materialIds = importedBodyArraySortLexically(
+      importedBodyObjectKeyList(document.materials ?? {}),
+    );
+  } else {
+    const selectedMaterialIds = new ImportedBodySet<MaterialId>();
+    const materialOverrides =
+      selectedConfiguration?.partMaterialOverrides;
+    for (let index = 0; index < selectedOutputs.length; index += 1) {
+      const selected = selectedOutputs[index]!;
+      if (selected.kind !== "part") continue;
+      const materialId =
+        materialOverrides !== undefined &&
+        importedBodyApply<boolean>(
+          importedBodyObjectHasOwn,
+          Object,
+          [materialOverrides, selected.nodeId],
+        )
+          ? materialOverrides[selected.nodeId]
+          : selected.node.materialId;
+      if (materialId !== undefined) {
+        importedBodySetAddValue(selectedMaterialIds, materialId);
+      }
+    }
+    materialIds = importedBodyArraySortLexically([
+      ...selectedMaterialIds,
+    ]);
+  }
   if (
     materialIds.length >
     options.evaluationLimits.maxResolvedMaterials
@@ -8685,9 +10031,8 @@ export function preparePartOutputsV7(
   const resolvedMaterials = new Map<MaterialId, EvaluatedMaterial>();
   for (let index = 0; index < materialIds.length; index += 1) {
     const id = materialIds[index] as MaterialId;
-    if (partEvaluationAborted(options.signal)) {
-      return partEvaluationAbortFailure();
-    }
+    const boundary = partPostBoundaryFailure(options.signal);
+    if (boundary !== undefined) return boundary;
     const definition = document.materials![id]!;
     let massDensity: number;
     try {
@@ -8768,10 +10113,17 @@ export function preparePartOutputsV7(
   const resolvedParts = new Map<NodeId, ResolvedPartDefinitionV7>();
   for (let index = 0; index < selectedOutputs.length; index += 1) {
     const selected = selectedOutputs[index]!;
-    if (resolvedParts.has(selected.nodeId)) continue;
-    if (partEvaluationAborted(options.signal)) {
-      return partEvaluationAbortFailure(selected.nodeId);
+    if (
+      selected.kind !== "part" ||
+      resolvedParts.has(selected.nodeId)
+    ) {
+      continue;
     }
+    const boundary = partPostBoundaryFailure(
+      options.signal,
+      selected.nodeId,
+    );
+    if (boundary !== undefined) return boundary;
     const materialOverrides =
       selectedConfiguration?.partMaterialOverrides;
     const materialId =
@@ -8873,8 +10225,12 @@ export function preparePartOutputsV7(
     options.signal,
     PART_SOLID_DIAGNOSTICS,
   );
-  const afterSolidPreparation = partPostBoundaryFailure(options.signal);
-  if (afterSolidPreparation !== undefined) return afterSolidPreparation;
+  const afterSolidPreparation = partPostBoundaryFailure(
+    options.signal,
+  );
+  if (afterSolidPreparation !== undefined) {
+    return afterSolidPreparation;
+  }
   if (!preparedSolidGraph.ok) return preparedSolidGraph;
 
   const publicParameters = importedBodyApply<Record<string, number>>(
@@ -8883,67 +10239,420 @@ export function preparePartOutputsV7(
     [null],
   );
   for (const [id, value] of parameterValues) {
-    importedBodyApply<void>(importedBodyObjectDefineProperty, Object, [
-      publicParameters,
-      id,
-      {
-        configurable: false,
-        enumerable: true,
-        writable: false,
-        value,
-      },
-    ]);
+    importedBodyApply<void>(
+      importedBodyObjectDefineProperty,
+      Object,
+      [
+        publicParameters,
+        id,
+        {
+          configurable: false,
+          enumerable: true,
+          writable: false,
+          value,
+        },
+      ],
+    );
   }
-  importedBodyApply<void>(importedBodyObjectFreeze, Object, [
-    publicParameters,
-  ]);
-  importedBodyApply<void>(importedBodyObjectFreeze, Object, [
-    selectedOutputs,
-  ]);
-  const frozenDiagnostics = importedBodyApply<readonly Diagnostic[]>(
+  importedBodyApply<void>(
     importedBodyObjectFreeze,
     Object,
-    [diagnostics],
+    [publicParameters],
   );
-  const metrics = importedBodyApply<PreparedPartEvaluationMetricsV7>(
+  importedBodyApply<void>(
     importedBodyObjectFreeze,
     Object,
-    [
-      {
-        selectedOutputs: selectedOutputs.length,
-        partBodies: selectedBodyCount,
-        distinctSolids: solidPlan.value.leafNodes.length,
-        solidGraphNodes: solidPlan.value.graphNodeCount,
-        solidDependencyLinks: solidPlan.value.dependencyLinkCount,
-        transformOperations: solidPlan.value.transformOperationCount,
-        resolvedMaterials: materialIds.length,
-      },
-    ],
+    [selectedOutputs],
   );
-  const prepared = createPreparedPartOutputsV7(
-    preparedSolidGraph.value.resourceIds,
-    metrics,
-    importedBodyApply<PreparedPartOutputsV7State>(
+  const frozenDiagnostics =
+    importedBodyApply<readonly Diagnostic[]>(
+      importedBodyObjectFreeze,
+      Object,
+      [diagnostics],
+    );
+  const metrics =
+    importedBodyApply<PreparedPartEvaluationMetricsV7>(
       importedBodyObjectFreeze,
       Object,
       [
         {
-          options,
-          document,
-          selectedOutputs,
-          selectedConfigurationId,
-          publicParameters,
-          diagnostics: frozenDiagnostics,
-          resolvedParts,
-          expression,
-          solidGraph: preparedSolidGraph.value,
+          selectedOutputs: selectedOutputs.length,
+          partBodies: selectedBodyCount,
+          distinctSolids: solidPlan.value.leafNodes.length,
+          solidGraphNodes: solidPlan.value.graphNodeCount,
+          solidDependencyLinks:
+            solidPlan.value.dependencyLinkCount,
+          transformOperations:
+            solidPlan.value.transformOperationCount,
+          resolvedMaterials: materialIds.length,
         },
       ],
-    ),
+    );
+  let prepared:
+    | PreparedPartOutputsV7
+    | PreparedProductGeometryOutputsV7;
+  if (behavior.resultKind === "part") {
+    const partOutputs = new Array<SelectedPartOutputV7>(
+      selectedOutputs.length,
+    );
+    for (let index = 0; index < selectedOutputs.length; index += 1) {
+      const selected = selectedOutputs[index]!;
+      if (selected.kind !== "part") {
+        return failure(
+          diagnostic(
+            "IR_INVALID",
+            "Legacy part preparation admitted a non-part selection",
+            {
+              severity: "error",
+              node: selected.nodeId,
+              details: {
+                phase: PART_EVALUATION_PHASE,
+                protocolViolation: true,
+                outputKind: selected.kind,
+              },
+            },
+          ),
+        );
+      }
+      partOutputs[index] = selected;
+    }
+    importedBodyApply<void>(
+      importedBodyObjectFreeze,
+      Object,
+      [partOutputs],
+    );
+    prepared = createPreparedPartOutputsV7(
+      preparedSolidGraph.value.resourceIds,
+      metrics,
+      importedBodyApply<PreparedPartOutputsV7State>(
+        importedBodyObjectFreeze,
+        Object,
+        [
+          {
+            options: behavior.partOptions,
+            document,
+            selectedOutputs: partOutputs,
+            selectedConfigurationId,
+            publicParameters,
+            diagnostics: frozenDiagnostics,
+            resolvedParts,
+            expression,
+            solidGraph: preparedSolidGraph.value,
+          },
+        ],
+      ),
+    );
+  } else {
+    prepared = createPreparedProductGeometryOutputsV7(
+      preparedSolidGraph.value.resourceIds,
+      metrics,
+      importedBodyApply<PreparedProductGeometryOutputsV7State>(
+        importedBodyObjectFreeze,
+        Object,
+        [
+          {
+            options,
+            document,
+            selectedOutputs,
+            selectedConfigurationId,
+            publicParameters,
+            diagnostics: frozenDiagnostics,
+            resolvedParts,
+            expression,
+            solidGraph: preparedSolidGraph.value,
+          },
+        ],
+      ),
+    );
+  }
+  const beforeSuccess = partPostBoundaryFailure(options.signal);
+  return beforeSuccess ?? success(prepared, frozenDiagnostics);
+}
+
+/**
+ * Prepares a planner-owned native product batch without reparsing its captured
+ * document or repeating root parse diagnostics.
+ *
+ * @internal
+ */
+export function prepareProductGeometryOutputsV7(
+  capturedDocument: CapturedProductDocumentV7,
+  selections: readonly ProductGeometrySelectionV7[],
+  options: PrepareProductGeometryOutputsV7Options,
+): CadResult<PreparedProductGeometryOutputsV7> {
+  return prepareProductGeometryOutputsV7Core(
+    capturedDocument,
+    selections,
+    options,
+    {
+      includeCapturedDiagnostics: false,
+      resolveAllMaterials: options.materialScope === "document",
+      resultKind: "product",
+    },
+  ) as CadResult<PreparedProductGeometryOutputsV7>;
+}
+
+function productGeometryDiagnosticMatchesPlanNodeV7(
+  item: Diagnostic,
+  candidate: StagedSolidGraphPlanV7["orderedNodes"][number],
+): boolean {
+  const [nodeId, node] = candidate;
+  if (item.node !== nodeId) return false;
+  const kind = item.details?.kind;
+  if (typeof kind !== "string") return true;
+  const capability = item.details?.capability;
+  if (kind === "documentBodyImport") {
+    return (
+      node.kind === "importedBody" &&
+      (typeof capability !== "string" ||
+        capability === `${node.format}:${node.units.mode}`)
+    );
+  }
+  if (kind === "primitive") {
+    return (
+      (node.kind === "box" ||
+        node.kind === "cylinder" ||
+        node.kind === "sphere") &&
+      (typeof capability !== "string" || capability === node.kind)
+    );
+  }
+  if (kind === "feature") {
+    return (
+      (node.kind === "boolean" || node.kind === "transform") &&
+      (typeof capability !== "string" || capability === node.kind)
+    );
+  }
+  if (kind === "exactIndexedTopologyEvolution") {
+    return (
+      node.kind === "boolean" &&
+      (typeof capability !== "string" || capability === "boolean")
+    );
+  }
+  return true;
+}
+
+/**
+ * Captures one aggregate geometry-kernel contract for every prepared native
+ * product batch before geometry-resource resolution begins. External document
+ * bytes may already have been resolved and admitted so their child plans are
+ * available to this aggregate preflight.
+ *
+ * The returned access tokens are batch-owned, but all retain the same captured
+ * method set. No later batch re-observes mutable kernel properties.
+ *
+ * @internal
+ */
+export function preflightPreparedProductGeometryOutputsV7(
+  kernel: GeometryKernel,
+  preparedBatches: readonly PreparedProductGeometryOutputsV7[],
+  batchProvenance?: readonly ProductGeometryBatchProvenanceV7[],
+): CadResult<readonly PreparedProductGeometryKernelAccessV7[]> {
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return partRuntimeIntegrityFailure();
+  }
+  const states =
+    new Array<PreparedProductGeometryOutputsV7State>(
+      preparedBatches.length,
+    );
+  if (
+    batchProvenance !== undefined &&
+    batchProvenance.length !== preparedBatches.length
+  ) {
+    return failure(
+      diagnostic(
+        "IR_INVALID",
+        "Product geometry batch provenance must match the prepared batch count",
+        {
+          severity: "error",
+          details: {
+            phase: PART_EVALUATION_PHASE,
+            preparedBatches: preparedBatches.length,
+            provenanceEntries: batchProvenance.length,
+          },
+        },
+      ),
+    );
+  }
+  const orderedNodes: StagedSolidGraphPlanV7["orderedNodes"][number][] =
+    [];
+  const leafNodes: StagedSolidGraphPlanV7["leafNodes"][number][] = [];
+  for (let index = 0; index < preparedBatches.length; index += 1) {
+    const prepared = preparedBatches[index]!;
+    const state = preparedProductGeometryState(prepared);
+    if (state === undefined) {
+      return failure(
+        diagnostic(
+          "IR_INVALID",
+          "Prepared product geometry is not owned by this evaluator",
+          {
+            severity: "error",
+            details: {
+              phase: PART_EVALUATION_PHASE,
+              preparedOwner: false,
+              batchIndex: index,
+            },
+          },
+        ),
+      );
+    }
+    const boundary = partPostBoundaryFailure(state.options.signal);
+    if (boundary !== undefined) return boundary;
+    states[index] = state;
+    const plan = state.solidGraph.plan;
+    for (
+      let nodeIndex = 0;
+      nodeIndex < plan.orderedNodes.length;
+      nodeIndex += 1
+    ) {
+      importedBodyArrayAppend(
+        orderedNodes,
+        plan.orderedNodes[nodeIndex]!,
+      );
+    }
+    for (
+      let leafIndex = 0;
+      leafIndex < plan.leafNodes.length;
+      leafIndex += 1
+    ) {
+      importedBodyArrayAppend(
+        leafNodes,
+        plan.leafNodes[leafIndex]!,
+      );
+    }
+  }
+  if (preparedBatches.length === 0) {
+    return success(
+      importedBodyApply<
+        readonly PreparedProductGeometryKernelAccessV7[]
+      >(
+        importedBodyObjectFreeze,
+        Object,
+        [[]],
+      ),
+    );
+  }
+  importedBodyApply<void>(
+    importedBodyObjectFreeze,
+    Object,
+    [orderedNodes],
   );
-  const beforePreparedSuccess = partPostBoundaryFailure(options.signal);
-  if (beforePreparedSuccess !== undefined) return beforePreparedSuccess;
-  return success(prepared, frozenDiagnostics);
+  importedBodyApply<void>(
+    importedBodyObjectFreeze,
+    Object,
+    [leafNodes],
+  );
+  const aggregatePlan =
+    importedBodyApply<StagedSolidGraphPlanV7>(
+      importedBodyObjectFreeze,
+      Object,
+      [
+        {
+          orderedNodes,
+          leafNodes,
+          graphNodeCount: orderedNodes.length,
+          dependencyLinkCount: 0,
+          transformOperationCount: 0,
+        },
+      ],
+    );
+  const captured = captureBodySetKernelAccess(
+    kernel,
+    aggregatePlan,
+    states[0]!.options.signal,
+    PART_SOLID_DIAGNOSTICS,
+  );
+  for (let index = 0; index < states.length; index += 1) {
+    const boundary = partPostBoundaryFailure(
+      states[index]!.options.signal,
+    );
+    if (boundary !== undefined) return boundary;
+  }
+  if (!captured.ok) {
+    const annotated = new Array<Diagnostic>(
+      captured.diagnostics.length,
+    );
+    for (
+      let diagnosticIndex = 0;
+      diagnosticIndex < captured.diagnostics.length;
+      diagnosticIndex += 1
+    ) {
+      const item = captured.diagnostics[diagnosticIndex]!;
+      let batchIndex = 0;
+      if (item.node !== undefined) {
+        let matched = false;
+        for (
+          let candidateIndex = 0;
+          candidateIndex < states.length && !matched;
+          candidateIndex += 1
+        ) {
+          const nodes =
+            states[candidateIndex]!.solidGraph.plan.orderedNodes;
+          for (
+            let nodeIndex = 0;
+            nodeIndex < nodes.length;
+            nodeIndex += 1
+          ) {
+            const candidate = nodes[nodeIndex]!;
+            if (
+              productGeometryDiagnosticMatchesPlanNodeV7(
+                item,
+                candidate,
+              )
+            ) {
+              batchIndex = candidateIndex;
+              matched = true;
+              break;
+            }
+          }
+        }
+      }
+      const provenance = batchProvenance?.[batchIndex];
+      annotated[diagnosticIndex] =
+        importedBodyApply<Diagnostic>(
+          importedBodyObjectFreeze,
+          Object,
+          [
+            {
+              ...item,
+              details: {
+                ...item.details,
+                productBatchIndex: batchIndex,
+                ...(provenance === undefined
+                  ? {}
+                  : {
+                      documentScope: provenance.documentScope,
+                      selectionPath: provenance.selectionPath,
+                    }),
+              },
+            },
+          ],
+        );
+    }
+    importedBodyApply<void>(
+      importedBodyObjectFreeze,
+      Object,
+      [annotated],
+    );
+    return { ok: false, diagnostics: annotated };
+  }
+  const retained =
+    new Array<PreparedProductGeometryKernelAccessV7>(
+    preparedBatches.length,
+  );
+  for (let index = 0; index < preparedBatches.length; index += 1) {
+    retained[index] =
+      createPreparedProductGeometryKernelAccessV7(
+        preparedBatches[index]!,
+        kernel,
+        captured.value,
+      );
+  }
+  importedBodyApply<void>(
+    importedBodyObjectFreeze,
+    Object,
+    [retained],
+  );
+  return success(retained);
 }
 
 /**
@@ -9232,6 +10941,10 @@ async function executePreparedPartOutputsV7InTransaction(
               bodies,
               kernelAccess.value.representation,
               kernelAccess.value.exact,
+              evaluatedPartBodySetDiagnosticIdentityV7(
+                selected.name,
+                selected.nodeId,
+              ),
             ),
           },
         ],
@@ -9293,6 +11006,513 @@ async function executePreparedPartOutputsV7InTransaction(
     }
   }
   return success(evaluated, diagnostics);
+}
+
+/**
+ * Executes one prepared native product batch with aggregate-retained kernel
+ * access and one caller-owned cross-batch shape transaction.
+ *
+ * @internal
+ */
+export async function executePreparedProductGeometryOutputsV7(
+  kernel: GeometryKernel,
+  prepared: PreparedProductGeometryOutputsV7,
+  retainedAccess: PreparedProductGeometryKernelAccessV7,
+  resolvedResources?: ResolvedResourcesV7,
+  shapeOwnershipTransaction?: PreparedPartShapeOwnershipTransactionV7,
+): Promise<CadResult<EvaluatedProductGeometryDesignV7>> {
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return partRuntimeIntegrityFailure();
+  }
+  const state = preparedProductGeometryState(prepared);
+  const retained =
+    preparedProductGeometryKernelState(retainedAccess);
+  const transactionState =
+    shapeOwnershipTransaction === undefined
+      ? undefined
+      : preparedPartShapeOwnershipTransactionState(
+          shapeOwnershipTransaction,
+        );
+  if (
+    state === undefined ||
+    retained === undefined ||
+    retained.prepared !== prepared ||
+    retained.kernel !== kernel ||
+    (shapeOwnershipTransaction !== undefined &&
+      (transactionState === undefined ||
+        transactionState.kernel !== kernel))
+  ) {
+    return failure(
+      diagnostic(
+        "IR_INVALID",
+        "Prepared product geometry access does not belong to this evaluation",
+        {
+          severity: "error",
+          details: {
+            phase: PART_EVALUATION_PHASE,
+            preparedOwner: state !== undefined,
+            accessOwner: retained !== undefined,
+            preparedMatches: retained?.prepared === prepared,
+            kernelMatches: retained?.kernel === kernel,
+            shapeOwnershipTransactionOwner:
+              shapeOwnershipTransaction === undefined ||
+              transactionState !== undefined,
+            shapeOwnershipTransactionKernelMatches:
+              shapeOwnershipTransaction === undefined ||
+              transactionState?.kernel === kernel,
+          },
+        },
+      ),
+    );
+  }
+  if (transactionState?.active === true) {
+    return failure(
+      diagnostic(
+        "IR_INVALID",
+        "Concurrent prepared product geometry transaction calls are unsupported",
+        {
+          severity: "error",
+          details: {
+            phase: PART_EVALUATION_PHASE,
+            shapeOwnershipTransactionActive: true,
+          },
+        },
+      ),
+    );
+  }
+  if (transactionState !== undefined) {
+    transactionState.active = true;
+  }
+  try {
+    const {
+      options,
+      document,
+      selectedOutputs,
+      selectedConfigurationId,
+      publicParameters,
+      diagnostics,
+      resolvedParts,
+      expression,
+    } = state;
+    const solidGraph = await evaluateStagedSolidGraphV7({
+      kernel,
+      document,
+      plan: state.solidGraph.plan,
+      expression,
+      resourceLimits: options.resourceLimits,
+      ...(options.signal === undefined
+        ? {}
+        : { signal: options.signal }),
+      diagnostics: PART_SOLID_DIAGNOSTICS,
+      prepared: state.solidGraph,
+      access: retained.access,
+      ...(resolvedResources === undefined
+        ? {}
+        : { resolvedResources }),
+      resourcesArePreResolved: true,
+      ...(transactionState === undefined
+        ? {}
+        : {
+            previouslyOwnedShapes:
+              transactionState.ownedShapes,
+          }),
+    });
+    const afterSolidGraph = partPostBoundaryFailure(options.signal);
+    if (afterSolidGraph !== undefined) {
+      if (solidGraph.ok) solidGraph.value.dispose();
+      return afterSolidGraph;
+    }
+    if (!solidGraph.ok) return solidGraph;
+    const kernelAccess = solidGraph.value.access;
+    const failAfterCleanup = (
+      result: CadResult<never>,
+    ): CadResult<EvaluatedProductGeometryDesignV7> => {
+      solidGraph.value.dispose();
+      return partPostBoundaryFailure(options.signal) ?? result;
+    };
+    const beforeViews = partPostBoundaryFailure(options.signal);
+    if (beforeViews !== undefined) {
+      return failAfterCleanup(beforeViews);
+    }
+    let productOwner: EvaluationOwner | undefined;
+    try {
+      const owner = new EvaluationOwner(
+        kernel,
+        solidGraph.value.createdShapes,
+        selectedConfigurationId,
+      );
+      productOwner = owner;
+      captureEvaluationOwnerDisposer(
+        owner,
+        solidGraph.value.createdShapes,
+        (shape) =>
+          importedBodyApply<void>(
+            kernelAccess.disposeShape,
+            kernel,
+            [shape],
+          ),
+      );
+    const outputs =
+      new ImportedBodyMap<
+        string,
+        EvaluatedProductGeometryOutputV7
+      >();
+    const canonical =
+      new ImportedBodyMap<
+        string,
+        EvaluatedProductGeometryOutputV7
+      >();
+    for (
+      let outputIndex = 0;
+      outputIndex < selectedOutputs.length;
+      outputIndex += 1
+    ) {
+      const selected = selectedOutputs[outputIndex]!;
+      const definitionKey = `${selected.kind}\u0000${selected.nodeId}`;
+      const retainedOutput = importedBodyMapGetValue(
+        canonical,
+        definitionKey,
+      );
+      let output: EvaluatedProductGeometryOutputV7;
+      if (retainedOutput !== undefined) {
+        output =
+          retainedOutput.kind === "solid"
+            ? importedBodyApply<EvaluatedProductGeometryOutputV7>(
+                importedBodyObjectFreeze,
+                Object,
+                [
+                  {
+                    name: selected.name,
+                    node: selected.nodeId,
+                    kind: "solid",
+                    solid: new StagedBodySetEvaluatedSolidV7(
+                      selected.name,
+                      owner,
+                      importedBodyMapGetValue(
+                        solidGraph.value.shapesByNode,
+                        selected.nodeId,
+                      )!,
+                      kernelAccess,
+                    ),
+                  },
+                ],
+              )
+            : retainedOutput.kind === "bodySet"
+              ? importedBodyApply<EvaluatedProductGeometryOutputV7>(
+                  importedBodyObjectFreeze,
+                  Object,
+                  [
+                    {
+                      name: selected.name,
+                      node: selected.nodeId,
+                      kind: "bodySet",
+                      bodySet: new EvaluatedBodySetV7(
+                        selected.name,
+                        owner,
+                        retainedOutput.bodySet.bodies,
+                        retainedOutput.bodySet.representation,
+                        retainedOutput.bodySet.exact,
+                      ),
+                    },
+                  ],
+                )
+              : importedBodyApply<EvaluatedProductGeometryOutputV7>(
+                  importedBodyObjectFreeze,
+                  Object,
+                  [
+                    {
+                      name: selected.name,
+                      node: selected.nodeId,
+                      kind: "part",
+                      part: createProductPartAliasViewV7(
+                        retainedOutput.part,
+                        selected.name,
+                      ),
+                    },
+                  ],
+                );
+      } else if (selected.kind === "solid") {
+        output = importedBodyApply<EvaluatedProductGeometryOutputV7>(
+          importedBodyObjectFreeze,
+          Object,
+          [
+            {
+              name: selected.name,
+              node: selected.nodeId,
+              kind: "solid",
+              solid: new StagedBodySetEvaluatedSolidV7(
+                selected.name,
+                owner,
+                importedBodyMapGetValue(
+                  solidGraph.value.shapesByNode,
+                  selected.nodeId,
+                )!,
+                kernelAccess,
+              ),
+            },
+          ],
+        );
+      } else if (selected.kind === "bodySet") {
+        const bodies: EvaluatedBodyV7[] = [];
+        for (
+          let bodyIndex = 0;
+          bodyIndex < selected.node.bodies.length;
+          bodyIndex += 1
+        ) {
+          const member = selected.node.bodies[bodyIndex]!;
+          importedBodyArrayAppend(
+            bodies,
+            importedBodyApply<EvaluatedBodyV7>(
+              importedBodyObjectFreeze,
+              Object,
+              [
+                {
+                  id: member.id,
+                  node: member.solid.node,
+                  ...(member.name === undefined
+                    ? {}
+                    : { name: member.name }),
+                  ...(member.metadata === undefined
+                    ? {}
+                    : { metadata: member.metadata }),
+                  solid: new StagedBodySetEvaluatedSolidV7(
+                    member.name ?? member.id,
+                    owner,
+                    importedBodyMapGetValue(
+                      solidGraph.value.shapesByNode,
+                      member.solid.node,
+                    )!,
+                    kernelAccess,
+                  ),
+                },
+              ],
+            ),
+          );
+        }
+        output = importedBodyApply<EvaluatedProductGeometryOutputV7>(
+          importedBodyObjectFreeze,
+          Object,
+          [
+            {
+              name: selected.name,
+              node: selected.nodeId,
+              kind: "bodySet",
+              bodySet: new EvaluatedBodySetV7(
+                selected.name,
+                owner,
+                bodies,
+                kernelAccess.representation,
+                kernelAccess.exact,
+              ),
+            },
+          ],
+        );
+      } else {
+        let geometry: EvaluatedPartGeometryV7;
+        if (selected.geometry.kind === "solid") {
+          geometry = importedBodyApply<EvaluatedPartGeometryV7>(
+            importedBodyObjectFreeze,
+            Object,
+            [
+              {
+                kind: "solid",
+                node: selected.geometry.nodeId,
+                solid: new StagedBodySetEvaluatedSolidV7(
+                  selected.name,
+                  owner,
+                  importedBodyMapGetValue(
+                    solidGraph.value.shapesByNode,
+                    selected.geometry.nodeId,
+                  )!,
+                  kernelAccess,
+                ),
+              },
+            ],
+          );
+        } else {
+          const bodies: EvaluatedBodyV7[] = [];
+          for (
+            let bodyIndex = 0;
+            bodyIndex < selected.geometry.node.bodies.length;
+            bodyIndex += 1
+          ) {
+            const member =
+              selected.geometry.node.bodies[bodyIndex]!;
+            importedBodyArrayAppend(
+              bodies,
+              importedBodyApply<EvaluatedBodyV7>(
+                importedBodyObjectFreeze,
+                Object,
+                [
+                  {
+                    id: member.id,
+                    node: member.solid.node,
+                    ...(member.name === undefined
+                      ? {}
+                      : { name: member.name }),
+                    ...(member.metadata === undefined
+                      ? {}
+                      : { metadata: member.metadata }),
+                    solid: new StagedBodySetEvaluatedSolidV7(
+                      member.name ?? member.id,
+                      owner,
+                      importedBodyMapGetValue(
+                        solidGraph.value.shapesByNode,
+                        member.solid.node,
+                      )!,
+                      kernelAccess,
+                    ),
+                  },
+                ],
+              ),
+            );
+          }
+          geometry = importedBodyApply<EvaluatedPartGeometryV7>(
+            importedBodyObjectFreeze,
+            Object,
+            [
+              {
+                kind: "bodySet",
+                node: selected.geometry.nodeId,
+                bodySet: new EvaluatedBodySetV7(
+                  selected.name,
+                  owner,
+                  bodies,
+                  kernelAccess.representation,
+                  kernelAccess.exact,
+                  evaluatedPartBodySetDiagnosticIdentityV7(
+                    selected.name,
+                    selected.nodeId,
+                  ),
+                ),
+              },
+            ],
+          );
+        }
+        const resolved = importedBodyMapGetValue(
+          resolvedParts,
+          selected.nodeId,
+        )!;
+        const partValue = importedBodyApply<EvaluatedPartValueV7>(
+          importedBodyObjectFreeze,
+          Object,
+          [
+            {
+              node: selected.nodeId,
+              kernelId: kernelAccess.id,
+              definition: selected.node,
+              geometry,
+              representation: kernelAccess.representation,
+              exact: kernelAccess.exact,
+              ...(resolved.materialId === undefined
+                ? {}
+                : { materialId: resolved.materialId }),
+              ...(resolved.materialDefinition === undefined
+                ? {}
+                : {
+                    materialDefinition:
+                      resolved.materialDefinition,
+                  }),
+              ...(resolved.massDensity === undefined
+                ? {}
+                : { massDensity: resolved.massDensity }),
+              ...(resolved.massDensitySource === undefined
+                ? {}
+                : {
+                    massDensitySource:
+                      resolved.massDensitySource,
+                  }),
+            },
+          ],
+        );
+        output = importedBodyApply<EvaluatedProductGeometryOutputV7>(
+          importedBodyObjectFreeze,
+          Object,
+          [
+            {
+              name: selected.name,
+              node: selected.nodeId,
+              kind: "part",
+              part: new EvaluatedPartV7(
+                selected.name,
+                owner,
+                partValue,
+              ),
+            },
+          ],
+        );
+      }
+      if (retainedOutput === undefined) {
+        importedBodyMapSetValue(canonical, definitionKey, output);
+      }
+      importedBodyMapSetValue(outputs, selected.name, output);
+    }
+    const evaluated = new EvaluatedProductGeometryDesignV7(
+      owner,
+      outputs,
+      selectedConfigurationId,
+      publicParameters,
+      diagnostics,
+    );
+    const finalBoundary = partPostBoundaryFailure(options.signal);
+    if (finalBoundary !== undefined) {
+      try {
+        owner.dispose();
+      } catch {
+        // The structured boundary failure remains authoritative.
+      }
+      return partPostBoundaryFailure(options.signal) ?? finalBoundary;
+    }
+    if (transactionState !== undefined) {
+      for (
+        let index = 0;
+        index < solidGraph.value.createdShapeCount;
+        index += 1
+      ) {
+        importedBodySetAddValue(
+          transactionState.ownedShapes,
+          solidGraph.value.createdShapeList[index]!,
+        );
+      }
+    }
+      return success(evaluated, diagnostics);
+    } catch (error) {
+      try {
+        if (productOwner === undefined) {
+          solidGraph.value.dispose();
+        } else {
+          productOwner.dispose();
+        }
+      } catch {
+        // Preserve the structured late-construction failure.
+      }
+      const boundary = partPostBoundaryFailure(options.signal);
+      return (
+        boundary ??
+        failure(
+          diagnostic(
+            "KERNEL_ERROR",
+            "Product geometry result construction failed after shape acquisition",
+            {
+              severity: "error",
+              details: {
+                phase: PART_EVALUATION_PHASE,
+                lateResultConstruction: true,
+                cause: safeErrorMessage(
+                  error,
+                  "Product geometry result construction failed with an opaque value",
+                ),
+              },
+            },
+          ),
+        )
+      );
+    }
+  } finally {
+    if (transactionState !== undefined) {
+      transactionState.active = false;
+    }
+  }
 }
 
 /**
