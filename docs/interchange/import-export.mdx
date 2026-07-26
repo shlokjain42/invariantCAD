@@ -193,6 +193,232 @@ return new Response(bytes, {
 Dispose the evaluated design after the response body has copied or taken
 ownership of the returned detached bytes.
 
+## Verified single-body import
+
+<Note>
+  This public workflow is implemented for the unreleased 0.2 line. It is not
+  present in the current `invariantcad@0.1.1` npm package.
+</Note>
+
+The public imported-body boundary deliberately covers one exact solid, not the
+broader staged product-document model:
+
+```ts
+const created = createImportedBodyDocument("verified-housing", {
+  id: "housing",
+  resource: {
+    id: "housingStep",
+    digest,
+    byteLength: stepBytes.byteLength,
+    mediaType: "model/step",
+    locations: ["memory:housing.step"],
+  },
+  format: "step",
+  units: { mode: "from-file" },
+});
+```
+
+`createImportedBodyDocument(...)` captures and validates the commitment but
+does not read, fetch, or hash the bytes. The caller computes the SHA-256 digest
+and exact byte length. `locations` are ordered hints passed to the resolver;
+InvariantCAD never interprets them as files, URLs, or package paths.
+
+The protocol-v1 media and unit policy is closed:
+
+| Explicit format | Required media type | Units |
+| --- | --- | --- |
+| `step` | `model/step` | `{ mode: "from-file" }` |
+| `brep` | `text/plain` | `{ mode: "declared", length: "mm" \| "cm" \| "m" \| "in" }` |
+| `brep-binary` | `application/octet-stream` | `{ mode: "declared", length: "mm" \| "cm" \| "m" \| "in" }` |
+
+The explicit `format` selects the native reader. `mediaType` is committed
+provenance and resolver context; it is never sniffed or used to infer the
+format. Healing is fixed to `{ mode: "none" }`, and the strong kernel contract
+must produce exactly one valid positive-volume solid. Multiple solids, shells,
+loose topology, approximate conversion, and weak-import fallback are rejected.
+
+Persist only the opaque document facade:
+
+```ts
+const json = stringifyImportedBodyDocument(document);
+const parsed = parseImportedBodyDocument(json, {
+  limits: { maxDocumentBytes: 8 * 1024 * 1024 },
+});
+```
+
+Parsing uses the bounded, duplicate-member-rejecting document boundary and
+then admits only one resource, one imported-body node, and one direct solid
+output. It does not publish or accept the broader product Document v7 grammar.
+
+Evaluation requires an exact B-Rep evaluator with the strong document-body
+import capability and a caller-supplied resolver:
+
+```ts
+const result = await evaluator.evaluateImportedBody(document, {
+  resolver: async (request) => {
+    // Resolve by your own policy, then return bytes. InvariantCAD verifies
+    // request.digest and request.byteLength before native parsing.
+    return loadCommittedBytes(request);
+  },
+  resourceLimits: { maxResourceBytes: 32 * 1024 * 1024 },
+  signal,
+});
+```
+
+The resolver receives a frozen request containing the authored ID, digest,
+length, media type, location hints, and optional signal. Resolution,
+byte-length admission, and SHA-256 verification finish before
+`importDocumentBody(...)` runs. A successful `EvaluatedImportedBody` exposes
+exact B-Rep measurement, topology, tessellation, and capability-gated
+single-solid STEP/BREP export. Dispose that result independently; it owns the
+imported native shape but borrows the evaluator and kernel.
+
+This executable module creates an exact OCCT box, exports STEP entirely in
+memory, commits and canonically persists the one-body document, resolves the
+same bytes, imports them through the strong boundary, inspects measurement and
+topology, and re-exports deterministic STEP:
+
+{/* docs-example:start imported-body-round-trip */}
+
+```ts
+import {
+  EvaluatedSolid,
+  createEvaluator,
+  createImportedBodyDocument,
+  design,
+  mm,
+  parseImportedBodyDocument,
+  stringifyImportedBodyDocument,
+  vec3,
+  type CadResult,
+  type ImportedBodyResourceDigest,
+} from "invariantcad";
+
+function valueOrThrow<T>(result: CadResult<T>): T {
+  if (!result.ok) {
+    throw new Error(
+      result.diagnostics.map((item) => item.message).join("\n"),
+    );
+  }
+  return result.value;
+}
+
+async function sha256(
+  bytes: Uint8Array,
+): Promise<ImportedBodyResourceDigest> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    Uint8Array.from(bytes),
+  );
+  const hexadecimal = Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+  return `sha256:${hexadecimal}`;
+}
+
+const source = design("import-source");
+const box = source.box("box", {
+  size: vec3(mm(2), mm(3), mm(4)),
+});
+source.output("box", box);
+
+async function runImportedBodyRoundTrip() {
+  const evaluator = await createEvaluator({ profile: "mechanical-exact" });
+  try {
+    const sourceResult = valueOrThrow(
+      await evaluator.evaluate(source.build()),
+    );
+    let sourceStep: Uint8Array;
+    try {
+      const output = sourceResult.output("box");
+      if (!(output instanceof EvaluatedSolid)) {
+        throw new Error("Expected the source output to be a solid");
+      }
+      sourceStep = output.export("step", {});
+    } finally {
+      sourceResult.dispose();
+    }
+
+    const digest = await sha256(sourceStep);
+    const document = valueOrThrow(
+      createImportedBodyDocument("verified-step-box", {
+        id: "importedBox",
+        resource: {
+          id: "boxStep",
+          digest,
+          byteLength: sourceStep.byteLength,
+          mediaType: "model/step",
+          locations: ["memory:box.step"],
+        },
+        format: "step",
+        units: { mode: "from-file" },
+      }),
+    );
+    const canonicalJson = stringifyImportedBodyDocument(document);
+    const reparsed = valueOrThrow(
+      parseImportedBodyDocument(canonicalJson),
+    );
+
+    let resolverCalls = 0;
+    const imported = valueOrThrow(
+      await evaluator.evaluateImportedBody(reparsed, {
+        resolver: (request) => {
+          resolverCalls += 1;
+          if (
+            request.id !== "boxStep" ||
+            request.digest !== digest ||
+            request.byteLength !== sourceStep.byteLength ||
+            request.mediaType !== "model/step"
+          ) {
+            throw new Error("Unexpected imported-body resource request");
+          }
+          return sourceStep;
+        },
+      }),
+    );
+    try {
+      const measurements = imported.measure();
+      const topology = valueOrThrow(imported.topology());
+      const firstExport = imported.export("step", {});
+      const secondExport = imported.export("step", {});
+
+      return {
+        canonicalRoundTrip:
+          stringifyImportedBodyDocument(reparsed) === canonicalJson,
+        resolverCalls,
+        exact: imported.exact,
+        representation: imported.representation,
+        volume: measurements.volume,
+        surfaceArea: measurements.surfaceArea,
+        faces: topology.faces.length,
+        exportedStepBytes: firstExport.byteLength,
+        deterministicExport:
+          firstExport.byteLength === secondExport.byteLength &&
+          firstExport.every((byte, index) => byte === secondExport[index]),
+      };
+    } finally {
+      imported.dispose();
+    }
+  } finally {
+    evaluator.dispose();
+  }
+}
+
+export const importedBodySummary = await runImportedBodyRoundTrip();
+console.log(importedBodySummary);
+```
+
+{/* docs-example:end imported-body-round-trip */}
+
+The release gate compiles and executes
+`examples/docs/imported-body-round-trip.ts`.
+
+This slice does not provide imported-body healing or repair, multiple-body
+selection, body sets, external components, assemblies, automatic location I/O,
+media-type inference, a public general Document v7 alias, or integration with
+the ordinary v6 design builder and `evaluate(...)`. Those remain separate
+product milestones.
+
 ## Browser download
 
 ```ts
@@ -210,16 +436,17 @@ try {
 }
 ```
 
-## Staged Document v7 import, Boolean/transform, product, and assembly status
+## Repository-only product-document staging
 
-The current public authoring grammar does not yet expose an imported-body
-or body-set feature node. The repository now contains
+The ordinary v6 design builder still does not expose an imported-body or
+body-set feature node. The narrow public workflow above is separate from the
+repository-only broader product grammar. The repository contains
 `stagedBodySetDesignV7(...)`, a source-only authoring facade for the exact graph
 admitted by the staged evaluators. This is executable Document v7 evidence, not
-an end-user package workflow: the package-root document alias, builder,
-evaluator, and migration target remain on the frozen v6 model, and no package
-subpath exposes the facade. These changes are source-only work staged for 0.2,
-not capabilities in the public 0.1.1 package.
+an end-user product-document workflow: the package-root `DesignDocument`
+alias, ordinary builder/evaluator, and migration target remain on the frozen v6
+model, and no package subpath exposes the facade. The public one-body facade
+does not make these broader types callable.
 
 The staged facade authors:
 
@@ -483,8 +710,9 @@ resource's `mediaType` is committed provenance passed to the resolver; it is
 not used to choose the reader or accepted as a substitute for the imported-body
 node's explicit `format`. Assembly mates, motion, interference/collision,
 assembly-wide topology or geometric measurement, and exact aggregate STEP/BREP
-remain unsupported. A versioned format-to-media-type policy is still required
-before public promotion.
+remain unsupported. The narrow public one-body facade applies the closed
+protocol-v1 format/media/unit table documented above; that policy does not
+promote this broader product grammar.
 
 There are deliberately two kernel boundaries:
 

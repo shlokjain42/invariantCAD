@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+- Added a public, opaque `ImportedBodyDocument` workflow for one exact
+  commitment-backed solid without promoting the broader staged product
+  document grammar. `createImportedBodyDocument(...)` captures a caller-owned
+  SHA-256 digest, exact byte length, fixed format/media-type pairing, unit
+  policy, and optional resolver hints without performing I/O.
+  `stringifyImportedBodyDocument(...)` and
+  `parseImportedBodyDocument(...)` persist and reopen only the strict
+  one-resource/one-imported-body/one-output subset.
+  `Evaluator.evaluateImportedBody(...)` resolves bytes through a caller
+  callback, verifies the commitment and configured resource ceiling, and then
+  requires the strong exact B-Rep single-solid import capability; it never
+  falls back to weak native import or a mesh conversion. Protocol v1 admits
+  STEP as `model/step` with file units, text BREP as `text/plain` with declared
+  units, and binary BREP as `application/octet-stream` with declared units.
+  Healing remains fixed to `none`. The owned result exposes measurement,
+  topology, tessellation, and capability-gated single-solid export while
+  borrowing its evaluator and kernel. A canonical executable documentation
+  module proves an in-memory exact STEP export, content commitment,
+  serialization/parsing, resolver admission, import, inspection, deterministic
+  re-export, and cleanup. This slice does not expose body sets, external
+  components, assemblies, repair/healing, automatic location I/O, or a public
+  general Document v7 alias.
 - Made the bundled zero-override stock-OCCT single-product STEP export
   byte-deterministic under the
   versioned `KERNEL_STEP_EXPORT_PROTOCOL_VERSION` v1 contract. Evaluated solids

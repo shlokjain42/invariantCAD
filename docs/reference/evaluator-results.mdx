@@ -68,6 +68,46 @@ Exact native STEP/BREP assembly structure is not a public product-data model.
 Assembly export remains mesh-only; exact STEP/BREP must be requested
 from an explicitly retained single solid or part leaf.
 
+## EvaluatedImportedBody
+
+<Note>
+  This public result is implemented for the unreleased 0.2 line and is not in
+  the current `invariantcad@0.1.1` npm package.
+</Note>
+
+```ts
+evaluator.evaluateImportedBody(
+  document: ImportedBodyDocument,
+  options?: EvaluateImportedBodyOptions,
+): Promise<CadResult<EvaluatedImportedBody>>
+```
+
+This separate method accepts only the opaque document returned by
+`createImportedBodyDocument(...)` or `parseImportedBodyDocument(...)`. It does
+not widen the ordinary v6 `DesignDocument`, `Evaluator.evaluate(...)`, or
+`EvaluatedOutput` aliases.
+
+| Member | Type | Meaning |
+| --- | --- | --- |
+| `name` | `string` | Stable imported-body/output ID |
+| `exact` | `true` | The admitted result uses the exact kernel path |
+| `representation` | `"brep"` | No approximate mesh fallback is available |
+| `provenance` | `ImportedBodyProvenance` | Frozen resource, format, units, `healing: none`, and `expected: single-solid` commitment |
+| `mesh(options?)` | `MeshData` | Fresh tessellation of the retained exact shape |
+| `measure()` | `ShapeMeasurements` | Backend-reported geometric measurements |
+| `topology()` | `CadResult<KernelTopologySnapshot>` | Capability-gated imported topology; no invented feature roles |
+| `export(format, options?)` | `Uint8Array \| string` | Same capability-gated single-solid export boundary as an evaluated solid |
+| `dispose()` | `void` | Releases this result's imported shape; does not dispose the evaluator or kernel |
+
+Evaluation accepts a caller resolver, `resourceLimits.maxResourceBytes`,
+document limits, and an abort signal. It verifies the authored byte length and
+SHA-256 digest before native parsing, requires the strong document-body import
+capability for the exact format/unit pair, and returns structured diagnostics
+for missing resolution, integrity mismatch, limits, cancellation, or kernel
+failure. Read the
+[verified single-body workflow](/interchange/import-export#verified-single-body-import)
+for the closed format/media/unit policy and executable round trip.
+
 ## Repository-only staged geometry, products, and datums
 
 The repository-only `stagedBodySetDesignV7(...)` facade can now author the
@@ -197,13 +237,13 @@ algebra, evaluate assemblies or external occurrences, add datum design
 outputs, or promote Document v7. Those remain unsupported rather than being
 inferred from the existence of resolved frames.
 
-An output authored from a `StagedImportedBodyRefV7` can be selected by the
-source-only `evaluateImportedBodyOutputsV7(...)` operation. That operation
-returns the ordinary `EvaluatedDesign`/`EvaluatedSolid` result shape, but only
-for outputs that directly reference an imported-body node. It requires
-caller-resolved, commitment-verified bytes and the strong exact B-Rep
-single-solid import contract; it never calls the weak native importer or
-converts the result to a mesh backend.
+The public `Evaluator.evaluateImportedBody(...)` facade described above reuses
+the strong internal direct-output evaluator without exposing its
+`DesignDocumentV7` input or source-only names. Repository code may also select
+an output authored from a `StagedImportedBodyRefV7` through the broader
+source-only `evaluateImportedBodyOutputsV7(...)` operation. That lower-level
+operation returns an ordinary `EvaluatedDesign`/`EvaluatedSolid` shape for
+direct imported-body outputs, but it remains inaccessible from the package.
 
 The source tree contains a staged
 `evaluateBodySetOutputsV7(kernel, document, options)` operation for selected

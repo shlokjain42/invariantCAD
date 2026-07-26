@@ -94,6 +94,8 @@ The release gate compiles and executes the source module from
 | Document | `IR_INVALID`, migration/validation errors | Reject or migrate the input before evaluation |
 | Parameters | unknown override, dependency cycle, bounds | Correct IDs/formulas or override values |
 | Kernel | `KERNEL_CAPABILITY_MISSING`, `KERNEL_ERROR` | Choose a compatible backend or inspect native failure details |
+| Imported source | `IMPORT_SOURCE_INVALID` | Correct the one-body definition, format/media pairing, units, or unsafe source descriptor |
+| Resource resolution | `RESOURCE_RESOLVER_MISSING`, `RESOURCE_RESOLUTION_FAILED`, `RESOURCE_INTEGRITY_MISMATCH`, `RESOURCE_LIMIT_EXCEEDED` | Supply committed bytes, correct the resolver/digest/length, or review the byte ceiling |
 | Topology | missing, ambiguous, fingerprint mismatch, limit exceeded | Refine selector/reference, recapture, or review limits |
 | Export | `EXPORT_OPTIONS_INVALID` (unreleased 0.2), `EXPORT_UNSUPPORTED` | Correct option-relative paths or use a supported format/kernel |
 | Physical data | `MASS_DENSITY_MISSING`, `MASS_PROPERTIES_INVALID` | Author valid density or correct geometry |
@@ -114,6 +116,13 @@ These are programmer mistakes and throw immediately:
 
 Catch them at application input boundaries if users directly drive a builder.
 Do not catch and ignore them inside a model definition.
+
+For the unreleased public imported-body workflow, invalid caller definitions
+and unsafe source descriptors return `IMPORT_SOURCE_INVALID`; invalid
+evaluation options return `IR_INVALID`. Resource failures identify the
+resolution, commitment, or resource-limit phase without exposing bytes. The
+resolver is not invoked when the selected kernel lacks the strong exact
+single-solid capability or the operation is already aborted.
 
 ## Document preflight limits
 

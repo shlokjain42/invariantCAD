@@ -16,7 +16,7 @@ exports. Versioned historical names are intentionally included.
 
 ## `invariantcad`
 
-**711 named exports** from `src/index.ts`.
+**731 named exports** from `src/index.ts`.
 
 | Name | Kind | Declared/re-exported from |
 | --- | --- | --- |
@@ -108,6 +108,7 @@ exports. Versioned historical names are intentionally included.
 | `createArtifactCacheSession` | value | `./artifact-cache.js` |
 | `createEvaluator` | value | `./evaluator.js` |
 | `CreateEvaluatorOptions` | type | `./evaluator.js` |
+| `createImportedBodyDocument` | value | `./imported-body.js` |
 | `createKernelShapeArtifactCacheKey` | value | `./artifact-cache.js` |
 | `createManifoldKernel` | value | `./manifold-kernel.js` |
 | `createReferenceSketchSolver` | value | `./solver.js` |
@@ -118,6 +119,7 @@ exports. Versioned historical names are intentionally included.
 | `DEFAULT_ARTIFACT_CACHE_LIMITS` | value | `./artifact-cache.js` |
 | `DEFAULT_DESIGN_DOCUMENT_LIMITS` | value | `./document-limits.js` |
 | `DEFAULT_FEATURE_HASH_LIMITS` | value | `./feature-hashes.js` |
+| `DEFAULT_IMPORTED_BODY_RESOURCE_LIMITS` | value | `./imported-body.js` |
 | `DEFAULT_KERNEL_STEP_EXPORT_TIMESTAMP` | value | `./kernel.js` |
 | `DEFAULT_TOPOLOGY_SIGNATURE_LIMITS` | value | `./topology-signatures.js` |
 | `deg` | value | `./expressions.js` |
@@ -205,12 +207,14 @@ exports. Versioned historical names are intentionally included.
 | `EntityId` | type | `./core/ids.js` |
 | `EvaluatedAssembly` | value | `./evaluator.js` |
 | `EvaluatedDesign` | value | `./evaluator.js` |
+| `EvaluatedImportedBody` | type | `./imported-body.js` |
 | `EvaluatedMaterial` | type | `./evaluator.js` |
 | `EvaluatedOccurrence` | type | `./evaluator.js` |
 | `EvaluatedOutput` | type | `./evaluator.js` |
 | `EvaluatedPart` | value | `./evaluator.js` |
 | `EvaluatedSolid` | value | `./evaluator.js` |
 | `evaluateExpression` | value | `./expressions.js` |
+| `EvaluateImportedBodyOptions` | type | `./imported-body.js` |
 | `EvaluationOptions` | type | `./evaluator.js` |
 | `Evaluator` | value | `./evaluator.js` |
 | `EVALUATOR_PROFILES` | value | `./evaluator.js` |
@@ -266,6 +270,19 @@ exports. Versioned historical names are intentionally included.
 | `hashDesignFeatures` | value | `./feature-hashes.js` |
 | `HashDesignFeaturesOptions` | type | `./feature-hashes.js` |
 | `hashDocument` | value | `./serialization.js` |
+| `IMPORTED_BODY_MEDIA_TYPES` | value | `./imported-body.js` |
+| `IMPORTED_BODY_WORKFLOW_PROTOCOL_VERSION` | value | `./imported-body.js` |
+| `ImportedBodyDefinition` | type | `./imported-body.js` |
+| `ImportedBodyDocument` | type | `./imported-body.js` |
+| `ImportedBodyFormat` | type | `./imported-body.js` |
+| `ImportedBodyLengthUnit` | type | `./imported-body.js` |
+| `ImportedBodyMediaType` | type | `./imported-body.js` |
+| `ImportedBodyProvenance` | type | `./imported-body.js` |
+| `ImportedBodyResolver` | type | `./imported-body.js` |
+| `ImportedBodyResolverRequest` | type | `./imported-body.js` |
+| `ImportedBodyResourceCommitment` | type | `./imported-body.js` |
+| `ImportedBodyResourceDigest` | type | `./imported-body.js` |
+| `ImportedBodyResourceLimits` | type | `./imported-body.js` |
 | `inch` | value | `./expressions.js` |
 | `InertiaAxis` | type | `./mass-properties.js` |
 | `InertiaPropertySource` | type | `./mass-properties.js` |
@@ -428,6 +445,7 @@ exports. Versioned historical names are intentionally included.
 | `parseDocument` | value | `./serialization.js` |
 | `ParseDocumentOptions` | type | `./serialization.js` |
 | `parseDocumentValue` | value | `./serialization.js` |
+| `parseImportedBodyDocument` | value | `./imported-body.js` |
 | `PartNodeIR` | type | `./ir.js` |
 | `PartOptions` | type | `./design.js` |
 | `PartRef` | value | `./design.js` |
@@ -580,6 +598,8 @@ exports. Versioned historical names are intentionally included.
 | `StepExportMetadata` | type | `./evaluator.js` |
 | `StepExportOptions` | type | `./evaluator.js` |
 | `stringifyDocument` | value | `./serialization.js` |
+| `stringifyImportedBodyDocument` | value | `./imported-body.js` |
+| `StringifyImportedBodyDocumentOptions` | type | `./imported-body.js` |
 | `StringifyOptions` | type | `./serialization.js` |
 | `success` | value | `./core/result.js` |
 | `SWEEP_FRAMES` | value | `./protocol/sweep.js` |

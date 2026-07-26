@@ -757,6 +757,9 @@ export interface CreateEvaluatorOptions {
 }
 
 // @public
+export function createImportedBodyDocument(name: string, definition: ImportedBodyDefinition): CadResult<ImportedBodyDocument>;
+
+// @public
 export function createKernelShapeArtifactCacheKey(feature: ArtifactCacheFeature, kernel: GeometryKernel, sketchSolver: SketchSolverBackend): Promise<CadResult<KernelShapeArtifactCacheKey>>;
 
 // @public (undocumented)
@@ -956,6 +959,9 @@ export const DEFAULT_DESIGN_DOCUMENT_LIMITS: DesignDocumentLimits;
 
 // @public (undocumented)
 export const DEFAULT_FEATURE_HASH_LIMITS: FeatureHashLimits;
+
+// @public
+export const DEFAULT_IMPORTED_BODY_RESOURCE_LIMITS: ImportedBodyResourceLimits;
 
 // @public
 export const DEFAULT_KERNEL_STEP_EXPORT_TIMESTAMP: "1970-01-01T00:00:00";
@@ -1617,7 +1623,7 @@ export interface Diagnostic {
 export function diagnostic(code: DiagnosticCode, message: string, options?: Omit<Diagnostic, "code" | "message">): Diagnostic;
 
 // @public (undocumented)
-export type DiagnosticCode = "IR_INVALID" | "REFERENCE_MISSING" | "REFERENCE_KIND_MISMATCH" | "DUPLICATE_ID" | "GRAPH_CYCLE" | "EXPRESSION_INVALID" | "EXPRESSION_DIMENSION_MISMATCH" | "PARAMETER_MISSING" | "PARAMETER_OUT_OF_RANGE" | "PARAMETER_CYCLE" | "MASS_DENSITY_INVALID" | "MASS_DENSITY_MISSING" | "MASS_PROPERTIES_INVALID" | "BOM_PART_NUMBER_MISSING" | "BOM_PART_NUMBER_DUPLICATE" | "BOM_MATERIAL_MISSING" | "BOM_OUTPUT_UNSUPPORTED" | "CONFIGURATION_MISSING" | "SKETCH_SOLVE_FAILED" | "SKETCH_UNDER_CONSTRAINED" | "SKETCH_OVER_CONSTRAINED" | "SKETCH_NO_CLOSED_REGION" | "FEATURE_INVALID" | "BOOLEAN_FAILED" | "EMPTY_RESULT" | "KERNEL_ERROR" | "KERNEL_CAPABILITY_MISSING" | "TOPOLOGY_SELECTOR_INVALID" | "TOPOLOGY_SELECTION_MISSING" | "TOPOLOGY_SELECTION_AMBIGUOUS" | "TOPOLOGY_HISTORY_UNAVAILABLE" | "TOPOLOGY_SIGNATURE_INVALID" | "TOPOLOGY_SIGNATURE_LIMIT_EXCEEDED" | "TOPOLOGY_FINGERPRINT_MISMATCH" | "TOPOLOGY_MATCH_MISSING" | "TOPOLOGY_MATCH_AMBIGUOUS" | "OUTPUT_MISSING" | "EVALUATION_UNSUPPORTED" | "EVALUATION_ABORTED" | "RESOURCE_RESOLVER_MISSING" | "RESOURCE_RESOLUTION_FAILED" | "RESOURCE_INTEGRITY_MISMATCH" | "RESOURCE_LIMIT_EXCEEDED" | "ARTIFACT_CACHE_OPERATION_FAILED" | "ARTIFACT_CACHE_ENTRY_INVALID" | "ARTIFACT_CACHE_LIMIT_EXCEEDED" | "EXPORT_OPTIONS_INVALID" | "EXPORT_UNSUPPORTED";
+export type DiagnosticCode = "IR_INVALID" | "REFERENCE_MISSING" | "REFERENCE_KIND_MISMATCH" | "DUPLICATE_ID" | "GRAPH_CYCLE" | "EXPRESSION_INVALID" | "EXPRESSION_DIMENSION_MISMATCH" | "PARAMETER_MISSING" | "PARAMETER_OUT_OF_RANGE" | "PARAMETER_CYCLE" | "MASS_DENSITY_INVALID" | "MASS_DENSITY_MISSING" | "MASS_PROPERTIES_INVALID" | "BOM_PART_NUMBER_MISSING" | "BOM_PART_NUMBER_DUPLICATE" | "BOM_MATERIAL_MISSING" | "BOM_OUTPUT_UNSUPPORTED" | "CONFIGURATION_MISSING" | "SKETCH_SOLVE_FAILED" | "SKETCH_UNDER_CONSTRAINED" | "SKETCH_OVER_CONSTRAINED" | "SKETCH_NO_CLOSED_REGION" | "FEATURE_INVALID" | "BOOLEAN_FAILED" | "EMPTY_RESULT" | "KERNEL_ERROR" | "KERNEL_CAPABILITY_MISSING" | "TOPOLOGY_SELECTOR_INVALID" | "TOPOLOGY_SELECTION_MISSING" | "TOPOLOGY_SELECTION_AMBIGUOUS" | "TOPOLOGY_HISTORY_UNAVAILABLE" | "TOPOLOGY_SIGNATURE_INVALID" | "TOPOLOGY_SIGNATURE_LIMIT_EXCEEDED" | "TOPOLOGY_FINGERPRINT_MISMATCH" | "TOPOLOGY_MATCH_MISSING" | "TOPOLOGY_MATCH_AMBIGUOUS" | "OUTPUT_MISSING" | "EVALUATION_UNSUPPORTED" | "EVALUATION_ABORTED" | "IMPORT_SOURCE_INVALID" | "RESOURCE_RESOLVER_MISSING" | "RESOURCE_RESOLUTION_FAILED" | "RESOURCE_INTEGRITY_MISMATCH" | "RESOURCE_LIMIT_EXCEEDED" | "ARTIFACT_CACHE_OPERATION_FAILED" | "ARTIFACT_CACHE_ENTRY_INVALID" | "ARTIFACT_CACHE_LIMIT_EXCEEDED" | "EXPORT_OPTIONS_INVALID" | "EXPORT_UNSUPPORTED";
 
 // @public (undocumented)
 interface DiagnosticLocation {
@@ -1847,6 +1853,22 @@ export class EvaluatedDesign {
     readonly parameters: Readonly<Record<string, number>>;
 }
 
+// @public
+export interface EvaluatedImportedBody {
+    dispose(): void;
+    readonly exact: true;
+    export(format: "step", options?: StepExportOptions): Uint8Array;
+    export(format: BinaryShapeExportFormat): Uint8Array;
+    export(format: TextShapeExportFormat): string;
+    export(format: ShapeExportFormat): Uint8Array | string;
+    measure(): ShapeMeasurements;
+    mesh(options?: MeshOptions): MeshData;
+    readonly name: string;
+    readonly provenance: ImportedBodyProvenance;
+    readonly representation: "brep";
+    topology(): CadResult<KernelTopologySnapshot>;
+}
+
 // @public (undocumented)
 export interface EvaluatedMaterial {
     // (undocumented)
@@ -1938,6 +1960,14 @@ export class EvaluatedSolid {
 // @public (undocumented)
 export function evaluateExpression(expression: ExpressionIR, context: ExpressionContext): number;
 
+// @public
+export interface EvaluateImportedBodyOptions {
+    readonly documentLimits?: Partial<DesignDocumentLimits>;
+    readonly resolver?: ImportedBodyResolver;
+    readonly resourceLimits?: Partial<ImportedBodyResourceLimits>;
+    readonly signal?: AbortSignal;
+}
+
 // @public (undocumented)
 export interface EvaluationOptions {
     // (undocumented)
@@ -1979,6 +2009,7 @@ export class Evaluator {
     dispose(): void;
     // (undocumented)
     evaluate(document: DesignDocument, options?: EvaluationOptions): Promise<CadResult<EvaluatedDesign>>;
+    evaluateImportedBody(document: ImportedBodyDocument, options?: EvaluateImportedBodyOptions): Promise<CadResult<EvaluatedImportedBody>>;
     // (undocumented)
     readonly kernel: GeometryKernel;
     // (undocumented)
@@ -2376,6 +2407,111 @@ export interface HashDesignFeaturesOptions {
 export function hashDocument(document: DesignDocument, options?: {
     readonly includeMetadata?: boolean;
 }): Promise<string>;
+
+// @public
+export const IMPORTED_BODY_MEDIA_TYPES: Readonly<{
+    readonly step: "model/step";
+    readonly brep: "text/plain";
+    readonly "brep-binary": "application/octet-stream";
+}>;
+
+// @public
+export const IMPORTED_BODY_WORKFLOW_PROTOCOL_VERSION: 1;
+
+// @public
+export type ImportedBodyDefinition = {
+    readonly id: string;
+    readonly resource: ImportedBodyResourceCommitment & {
+        readonly mediaType: "model/step";
+    };
+    readonly format: "step";
+    readonly units: {
+        readonly mode: "from-file";
+    };
+} | {
+    readonly id: string;
+    readonly resource: ImportedBodyResourceCommitment & {
+        readonly mediaType: "text/plain";
+    };
+    readonly format: "brep";
+    readonly units: {
+        readonly mode: "declared";
+        readonly length: ImportedBodyLengthUnit;
+    };
+} | {
+    readonly id: string;
+    readonly resource: ImportedBodyResourceCommitment & {
+        readonly mediaType: "application/octet-stream";
+    };
+    readonly format: "brep-binary";
+    readonly units: {
+        readonly mode: "declared";
+        readonly length: ImportedBodyLengthUnit;
+    };
+};
+
+// @public
+export interface ImportedBodyDocument {
+    readonly name: string;
+    readonly protocolVersion: typeof IMPORTED_BODY_WORKFLOW_PROTOCOL_VERSION;
+    readonly provenance: ImportedBodyProvenance;
+}
+
+// @public
+export type ImportedBodyFormat = "step" | "brep" | "brep-binary";
+
+// @public
+export type ImportedBodyLengthUnit = "mm" | "cm" | "m" | "in";
+
+// @public
+export type ImportedBodyMediaType = (typeof IMPORTED_BODY_MEDIA_TYPES)[keyof typeof IMPORTED_BODY_MEDIA_TYPES];
+
+// @public
+export interface ImportedBodyProvenance {
+    readonly expected: "single-solid";
+    readonly format: ImportedBodyFormat;
+    readonly healing: {
+        readonly mode: "none";
+    };
+    readonly id: string;
+    readonly resource: ImportedBodyResourceCommitment;
+    readonly units: {
+        readonly mode: "from-file";
+    } | {
+        readonly mode: "declared";
+        readonly length: ImportedBodyLengthUnit;
+    };
+}
+
+// @public
+export type ImportedBodyResolver = (request: ImportedBodyResolverRequest) => ArrayBuffer | Uint8Array | PromiseLike<ArrayBuffer | Uint8Array>;
+
+// @public
+export interface ImportedBodyResolverRequest {
+    readonly byteLength: number;
+    readonly digest: ImportedBodyResourceDigest;
+    readonly id: string;
+    readonly locations?: readonly string[];
+    readonly mediaType: ImportedBodyMediaType;
+    readonly signal?: AbortSignal;
+}
+
+// @public
+export interface ImportedBodyResourceCommitment {
+    readonly byteLength: number;
+    readonly digest: ImportedBodyResourceDigest;
+    readonly id: string;
+    readonly locations?: readonly string[];
+    readonly mediaType: ImportedBodyMediaType;
+}
+
+// @public
+export type ImportedBodyResourceDigest = `sha256:${string}`;
+
+// @public
+export interface ImportedBodyResourceLimits {
+    readonly maxResourceBytes: number;
+}
 
 // @public (undocumented)
 export function inch(value: number): LengthExpression;
@@ -3975,6 +4111,9 @@ export interface ParseDocumentOptions {
 // @public (undocumented)
 export function parseDocumentValue(value: unknown, options?: ParseDocumentOptions): CadResult<DesignDocument>;
 
+// @public
+export function parseImportedBodyDocument(text: string, options?: ParseDocumentOptions): CadResult<ImportedBodyDocument>;
+
 // @public (undocumented)
 interface PartCommonOptions {
     // (undocumented)
@@ -5262,6 +5401,14 @@ export interface StepExportOptions {
 
 // @public (undocumented)
 export function stringifyDocument(document: DesignDocument, options?: StringifyOptions): string;
+
+// @public
+export function stringifyImportedBodyDocument(document: ImportedBodyDocument, options?: StringifyImportedBodyDocumentOptions): string;
+
+// @public
+export interface StringifyImportedBodyDocumentOptions extends ParseDocumentOptions {
+    readonly pretty?: boolean;
+}
 
 // @public (undocumented)
 export interface StringifyOptions {

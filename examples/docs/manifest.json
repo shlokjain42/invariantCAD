@@ -72,6 +72,22 @@
       ]
     },
     {
+      "id": "imported-body-round-trip",
+      "source": "imported-body-round-trip.ts",
+      "workflows": [
+        "content-committed imported body",
+        "caller-supplied resource resolution",
+        "canonical imported-body persistence",
+        "exact STEP round trip"
+      ],
+      "targets": [
+        {
+          "path": "docs/interchange/import-export.mdx",
+          "style": "mdx"
+        }
+      ]
+    },
+    {
       "id": "persistent-topology-capture-resolve-explain",
       "source": "persistent-topology.ts",
       "workflows": [
