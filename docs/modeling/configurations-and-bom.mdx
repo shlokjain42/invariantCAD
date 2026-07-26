@@ -219,89 +219,107 @@ transform operations with `maxDistinctSolids`, `maxSolidGraphNodes`,
 exact-evolution capability envelope fails before resolver or kernel work; it is
 not silently treated as partial history.
 
-## Repository-only staged 0.2 product assemblies
+## Repository-only staged product assemblies
 
 The staged facade can wrap admitted local parts and already-completed local
-assemblies in an acyclic fixed-placement graph through `assembly(...)`. It can
-also bind one named part output from a committed InvariantCAD document resource
-with `externalPart(resource, output)` and place that external part beside local
-components. The source-only `evaluateProductAssemblyOutputsV7(...)` operation
-evaluates the resulting product. A staged configuration can call
+assemblies in an acyclic fixed-placement graph through `assembly(...)`.
+`externalPart(resource, output)` binds one named part output from a committed
+InvariantCAD document, while `externalAssembly(resource, output)` binds one
+named assembly output for fixed-subassembly placement. The source-only
+`evaluateProductAssemblyOutputsV7(...)` operation evaluates the resulting
+product.
+
+A staged configuration can call
 `instanceSuppressed(assembly, instanceId, suppressed?)`; the configuration
 active for each containing assembly overrides that definition's authored
-suppression, and `false` reactivates an instance authored as suppressed.
-
-This entire section describes repository-only work staged for 0.2. It is not
+suppression, and `false` reactivates an instance authored as suppressed. This
+entire section describes repository-only work staged for 0.2. It is not
 available from the public 0.1.1 package root, a package subpath, the public
-builder/evaluator, or the CLI, and the public document alias and migration target
-remain v6.
+builder/evaluator, or the CLI, and the public document alias and migration
+target remain v6.
 
-Each staged v7 instance carries one child configuration selector. Local and
+Each staged instance carries one child configuration selector. Local and
 external components interpret the same selector at different document
 boundaries:
 
-| Selector | Local child | External part child |
+| Selector | Local child | External document child |
 | --- | --- | --- |
 | `inherit` | Uses the configuration active for the containing assembly | Maps parent base to child base, or a parent named configuration to the same ID in the child document |
 | `base` | Uses the root document's base context | Uses the child document's base context |
 | `named` | Uses the referenced root-document configuration | Uses the explicitly referenced child-document configuration |
 
-The chosen external child context controls that part's geometry, material,
-density, and product intent. Root caller parameter overrides specialize
-selected contexts in the root document only. They never cross the external
-document boundary, so a same-named child parameter keeps the value defined by
-the child's base or named configuration. A selected child configuration that
-does not exist returns `CONFIGURATION_MISSING` with parent occurrence and child
-configuration-path provenance after document admission and before geometry
-work; evaluation does not fall back to base.
+For a direct external part, the chosen child context controls that part's
+geometry, material, density, and product intent. For a fixed external
+subassembly, it establishes the selected child assembly context; configuration
+selectors on child-local descendants are then interpreted inside the child
+document. Child configuration suppression and placement expressions apply to
+their own assembly definitions.
 
-Active part leaves retain full root-to-leaf occurrence paths. Placement
-operations execute in authored order on each edge and compose parent first into
-a root-relative transform. Local parts reuse one evaluated result for equal
-`(part, effective configuration)` states. External parts reuse one result for
-equal `(resource, output, effective child configuration)` states. Neither rule
-collapses occurrences or quantities, and neither is a cross-run cache or a
-geometric-equivalence claim. Different child output names remain distinct
-component identities even when both outputs alias the same child part.
+Root caller parameter overrides specialize selected contexts in the root
+document only. They never cross the external document boundary, so a same-named
+child parameter keeps the value defined by the child's base or named
+configuration. A selected child configuration that does not exist returns
+`CONFIGURATION_MISSING` with parent occurrence and child configuration-path
+provenance after document admission and before geometry work; evaluation does
+not fall back to base.
+
+Active part leaves retain full root-to-leaf occurrence paths, including all
+segments inside a selected external subassembly. Placement operations execute
+in authored order on each edge and compose parent first into a root-relative
+transform. Local parts reuse one evaluated result for equal
+`(part, effective configuration)` states. Direct external parts reuse one result
+for equal `(resource, output, effective child configuration)` states. Leaves
+reached through an external subassembly reuse geometry by
+`(resource, child part node, effective child configuration)`. Neither rule
+collapses occurrences or quantities, and neither is a cross-run cache or
+geometric-equivalence claim. Different child output names retain distinct
+component, diagnostic, and BOM identity even when both select the same part or
+assembly and share evaluated geometry.
 
 The contextual BOM keeps unlike component/configuration states in separate,
 deterministically ordered rows. A local component records its part node. An
 external component additionally records the committed document resource,
-digest, byte length, requested output, admitted source version, and child part
-node. Repeated occurrences of the same external output and child configuration
-aggregate quantity normally; distinct output aliases retain separate BOM rows.
-Every row records stable occurrence paths, effective material and density
-provenance, definition mass, placed total mass, and quantity. Missing density
-leaves the affected row and overall total incomplete, with diagnostics instead
-of an invented zero.
+digest, byte length, requested output and output kind, admitted source version,
+and child part node. One external assembly may therefore contribute several BOM
+rows, one for each distinct child part/configuration state. Repeated occurrences
+of the same external output and child context aggregate quantity normally;
+distinct output aliases retain separate BOM rows. Every row records stable
+occurrence paths, effective material and density provenance, definition mass,
+placed total mass, and quantity. Missing density leaves the affected row and
+overall total incomplete, with diagnostics instead of an invented zero.
 
 Physical mass applies each context's density to every single- or multibody part
 membership, then uses the root-relative affine placement before combining mass,
-center of mass, and inertia. Aliases and overlaps still count per authored
-membership and occurrence; this is not interference subtraction or a Boolean
-union.
+center of mass, and inertia. The numeric result inherits backend measurement
+quality rather than gaining an independent exactness guarantee. Aliases and
+overlaps still count per authored membership and occurrence; this is not
+interference subtraction or a Boolean union.
 
-Suppression is decided before component admission, so a suppressed edge prunes
-its entire subtree without resolving an external document. Traversal is bounded
+Suppression is decided before descendant admission, so a suppressed edge prunes
+its entire subtree without resolving its external document. Traversal is bounded
 by `maxAssemblyDepth`, `maxOccurrencePathSegments`, scanned-instance,
-active-occurrence, placement, `maxExternalDocuments`, and downstream
-part/resource ceilings. Solid nodes, Boolean target/tool and transform input
-edges, and authored transform operations remain bounded across the active
-product. Repeated occurrences in one effective context share that work,
-different contexts are charged independently, and suppressed subtrees
+active-occurrence, placement, contextual-part, `maxExternalDocuments`, and
+downstream document/part/resource ceilings. Solid nodes, Boolean target/tool and
+transform input edges, and authored transform operations remain bounded across
+the active product. Repeated occurrences in one effective context share that
+work, different contexts are charged independently, and suppressed subtrees
 contribute nothing.
 
-Only external outputs admitted by the existing staged part evaluator are
-supported: one part over a supported solid DAG or body set. External assembly
-outputs and other child part feature families remain unsupported. For example,
-a migrated v6 part backed by an extrusion fails with
-`EVALUATION_UNSUPPORTED` before child geometry or scoped resource work rather
-than silently widening the staged evaluator. Recursive external product
-expansion, cross-document parameter overrides, per-body materials, mates,
-joints, DOF, motion, contact, interference/collision, product topology,
-aggregate geometric measurement, and exact aggregate STEP/BREP export also
-remain unsupported. Product mesh, binary/ASCII STL, and OBJ are
-approximate/lossy aggregate tessellation views.
+A direct external output must be a part admitted by the staged part evaluator.
+An external-assembly handle must select a direct assembly output; that child may
+contain bounded acyclic local parts and nested local assemblies whose leaves are
+admitted by the same part evaluator. For example, a migrated v6 part backed by
+an extrusion still fails with `EVALUATION_UNSUPPORTED` before child geometry or
+scoped resource work rather than silently widening the supported feature set.
+
+Each active occurrence path may cross at most one external-document boundary. A
+suppressed nested external component is inert, while an active one is rejected
+before nested resolution or child geometry/kernel work. Recursive external
+products, cross-document parameter overrides, per-body materials, mates, joints,
+DOF, motion, contact, interference/collision, product topology, aggregate
+geometric measurement, and exact aggregate STEP/BREP export remain unsupported.
+Product mesh, binary/ASCII STL, and OBJ are approximate/lossy aggregate
+tessellation views.
 
 ## Runtime parameter overrides
 

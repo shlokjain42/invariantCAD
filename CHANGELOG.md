@@ -2,18 +2,25 @@
 
 ## [Unreleased]
 
-- Added source-only staged 0.2 product evaluation for external part
-  occurrences. The repository-only `stagedBodySetDesignV7(...)` facade can bind
-  a committed InvariantCAD document resource and one named part output through
-  `externalPart(...)`, then mix that handle with local parts and local
-  subassemblies in a fixed-placement product. The internal
-  `evaluateProductAssemblyOutputsV7(...)` boundary admits and evaluates those
-  child part outputs with base, same-ID inherited, or explicitly named child
-  configurations. Caller parameter overrides remain in the root document and
-  never leak into a child document. Equal external
-  `(resource, output, configuration)` contexts reuse one evaluated part inside
-  the call, while distinct output aliases retain distinct component identity,
-  occurrence paths, and BOM rows.
+- Added source-only staged 0.2 product evaluation for external part and fixed
+  subassembly occurrences. The repository-only
+  `stagedBodySetDesignV7(...)` facade can bind a committed InvariantCAD
+  document resource and one named part output through `externalPart(...)` or
+  one named assembly output through `externalAssembly(...)`, then mix those
+  handles with local parts and local subassemblies in a fixed-placement
+  product. The internal `evaluateProductAssemblyOutputsV7(...)` boundary
+  admits direct child part outputs or expands one external assembly boundary
+  through its bounded acyclic child-local assembly graph. Each active
+  occurrence path may cross at most one external-document boundary; an active
+  second boundary fails before nested resolution or child geometry work, while
+  a suppressed nested external component is inert. Child parts use base,
+  same-ID inherited, or explicitly named child configurations. Caller
+  parameter overrides remain in the root document and never leak into a child
+  document. Equal direct-part `(resource, output, configuration)` contexts
+  reuse one evaluated part inside the call. Assembly leaves reuse geometry by
+  `(resource, child part node, configuration)`, while distinct assembly output
+  aliases retain distinct component identity, occurrence paths, diagnostics,
+  and BOM rows.
   Resolver requests made by this staged operation carry a frozen
   `documentScope`: root-document commitments use `{ source: "root" }`, while
   resources declared by an admitted child use
@@ -22,8 +29,9 @@
   JSON is resolved and admitted before scoped child geometry; resource-count
   and byte ceilings remain cumulative across both phases, and repeated
   `(documentScope, resourceId)` work is reused. External component results
-  retain the committed resource, digest, byte length, output, admitted source
-  version, and child part node. Occurrence-specific diagnostics always add
+  retain the committed resource, digest, byte length, selected part-or-assembly
+  output, admitted source version, and child part node. Occurrence-specific
+  diagnostics always add
   `componentResource`, the selected external `output`/`outputKind`, and the
   full product occurrence path; after child admission they also carry the
   document digest, byte length, and source version. A child-owned `resource`
@@ -35,12 +43,14 @@
   Successful products own their retained child shapes until disposal; failure
   releases every acquired or intermediate shape exactly once and never takes
   ownership of the supplied kernel.
-  Exact child solids keep capability-gated per-solid STEP/BREP export, but
-  product-level mesh, binary/ASCII STL, and OBJ are approximate/lossy aggregate
-  views and exact aggregate export is rejected. External assembly outputs,
-  recursive external products, and feature families outside the existing
-  staged part evaluator remain unsupported. This is repository-only work
-  staged for 0.2, not an API in the public 0.1.1 package: no package-root,
+  Exact child solids keep capability-gated per-solid or per-body STEP/BREP
+  export, but product-level mesh, binary/ASCII STL, and OBJ are
+  approximate/lossy aggregate views and exact aggregate export is rejected.
+  Active second-level external references, recursive external-document graphs,
+  assembly-wide topology or geometric measurement, mates, motion,
+  interference/collision, and feature families outside the existing staged
+  part evaluator remain unsupported. This is repository-only work staged for
+  0.2, not an API in the public 0.1.1 package: no package-root,
   package-subpath, CLI, document alias, or migration target was added.
 - Extended the repository-only `stagedBodySetDesignV7(...)` facade with
   owner-bound `union(...)`, `subtract(...)`, and `intersect(...)` solid
@@ -124,8 +134,9 @@
   Assembly-specific work ceilings now include active nesting depth and
   aggregate stored occurrence-path segments. This initial local-only slice
   treated suppressed external components as inert and rejected active ones
-  before resolver or kernel work; the staged 0.2 external-part product entry
-  above now supersedes that restriction for admitted child part outputs.
+  before resolver or kernel work; the staged 0.2 external-component product
+  entry above now supersedes that restriction for admitted child part outputs
+  and one fixed external subassembly boundary.
   Hand-authored cyclic graphs, mates, interference, exact aggregate STEP/BREP,
   cross-run cache, CLI surface, and public Document v7 promotion remain
   unsupported; the public v6 API is unchanged.

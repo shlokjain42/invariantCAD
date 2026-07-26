@@ -67,11 +67,11 @@ Provides:
 Exact native STEP/BREP assembly structure is not a separate 0.1 product-data
 model; an aggregate export follows the current evaluated geometry behavior.
 
-## Repository-only staged Document v7 geometry, local assemblies, and datums
+## Repository-only staged geometry, products, and datums
 
 The repository-only `stagedBodySetDesignV7(...)` facade can now author the
 bounded primitive/import/Boolean/transform solid DAG admitted by the staged
-import, body-set, part, and nested local-assembly evaluators, plus the nodes
+import, body-set, part, and product-assembly evaluators, plus the nodes
 admitted by the datum resolver, without hand-writing v7 IR. It admits typed
 length, angle, mass-density, and scalar parameters; named parameter,
 part-material, and assembly-instance-suppression configurations;
@@ -79,16 +79,18 @@ document-owned materials; boxes, cylinders, spheres; ordered
 union/subtract/intersect nodes; ordered solid transforms and typed
 translate/rotate/scale/mirror conveniences; content commitments; imported
 bodies; body sets; parts over one staged solid DAG root or body set; acyclic
-local assemblies containing owned parts or previously completed local
-assemblies; and datum points, axes, planes, and coordinate systems. Outputs may
-directly reference an imported body, body set, part, or staged local assembly;
-generic primitive, Boolean, or transformed-solid outputs remain unsupported.
+fixed-placement products containing local parts, completed local assemblies,
+direct external parts, or one fixed external-subassembly boundary; and datum
+points, axes, planes, and coordinate systems. Outputs may directly reference an
+imported body, body set, part, or staged product assembly; generic primitive,
+Boolean, or transformed-solid outputs remain unsupported.
 Datums are selected separately by node ID and are never design outputs. The
 built `DesignDocumentV7` is detached, deeply frozen, and accepted by strict v7
 parsing and semantic validation; `build({ limits })` can apply partial
 `DesignDocumentLimits` overrides and raises a `CadError` rather than returning
-an invalid document. The facade is not a root or package-subpath export and
-does not change the public v6 builder or evaluator types.
+an invalid document. This is repository-only work staged for 0.2. The facade is
+not a root or package-subpath export and does not change the public 0.1.1 v6
+builder or evaluator types.
 
 ### Datum-node resolution
 
@@ -291,133 +293,124 @@ facade calls. Tessellation and mesh export remain backend work controlled by
 `MeshOptions`; hostile or very large geometry still belongs in a disposable
 worker or process with an application-owned output ceiling.
 
-### Nested local assembly outputs
+### Fixed-placement product outputs
 
 The source-only
-`evaluateLocalAssemblyOutputsV7(kernel, document, options)` operation selects
-outputs that directly reference a Document v7 assembly. Its result contract is
-`EvaluatedLocalAssemblyDesignV7`, `EvaluatedLocalAssemblyV7`, and frozen
-`EvaluatedLocalOccurrenceV7` descriptors. The staged authoring facade
-constructs this boundary through `assembly(...)`, a
-`StagedLocalAssemblyBuilderV7` callback, configuration
+`evaluateProductAssemblyOutputsV7(kernel, document, options)` operation selects
+outputs that directly reference an assembly. It is the product-oriented alias
+of the historical `evaluateLocalAssemblyOutputsV7(...)` source name. The
+corresponding product result aliases are `EvaluatedProductAssemblyDesignV7`,
+`EvaluatedProductAssemblyV7`, and `EvaluatedProductOccurrenceV7`; the staged
+local result names remain available during this repository-only transition.
+The authoring facade constructs this boundary through `assembly(...)`,
+`externalPart(...)`, `externalAssembly(...)`, configuration
 `.instanceSuppressed(...)`, and direct assembly `output(...)`.
 
-The evaluator iteratively expands active local assembly instances and emits
-active local-part leaves in authored depth-first order. Each result occurrence
-keeps its final authored instance ID, full root-to-leaf path, local part node,
-effective configuration identity, effective material and density provenance,
-and composed root-relative affine placement.
+The evaluator first expands the active root-local graph. A direct external-part
+handle contributes one selected child part. A fixed external subassembly admits
+its committed child document, requires the selected output to directly
+reference an assembly, and expands its child-local parts and nested local
+assemblies. Each active occurrence path may cross at most one
+external-document boundary.
+
+Every emitted occurrence keeps its final authored instance ID, full
+root-to-leaf path, part node, effective configuration, material and density
+provenance, and composed root-relative affine placement. An external occurrence
+also retains its committed component-document identity, and its full path spans
+the document boundary. A child part must still use the geometry admitted by the
+direct staged part evaluator: one supported
+primitive/import/Boolean/transform solid DAG root or one supported body set.
 
 The root option establishes the selected output assembly's initial context.
 Within every containing assembly, that active context resolves its
-definition-scoped suppression overrides and placement expressions. Each active
-instance then selects the context for its referenced part or child assembly:
+definition-scoped suppression overrides and placement expressions. A local
+edge's `inherit`, `base`, or `named` selector uses the applicable root-document
+context. For an external edge, `inherit` maps root base to child base or a root
+named ID to the same child ID; `base` and `named` select directly inside the
+child. Descendant selectors, suppression, and placement expressions are then
+interpreted in that child document. Caller parameter overrides specialize root
+contexts only and never cross the external boundary.
 
-- `inherit` uses the containing assembly's active configuration;
-- `base` uses the base document context; and
-- `named` uses the referenced document-owned named configuration.
-
-Caller parameter overrides specialize every selected context. Placement
-operations execute in authored order on each edge; the evaluator then composes
-the containing transform with the local transform parent first. The occurrence
-ID, full path, effective configuration ID, and resulting root-relative
-transform are detached, frozen snapshots. The embedded `part` is different: it
-is an owner-bound `EvaluatedPartV7` shared for the applicable
-part/configuration context, and its operations fail after the containing
-evaluated design is disposed.
+Placement operations execute in authored order on each edge and compose parent
+first. Occurrence IDs, full paths, configurations, component provenance, and
+root-relative transforms are detached, frozen snapshots. Embedded
+`EvaluatedPartV7` values remain owner-bound and their operations fail after the
+containing evaluated design is disposed.
 
 An explicit `false` suppression override can activate an instance authored as
-suppressed. Suppression is resolved before component admission. Consequently,
-a suppressed assembly edge prunes its entire subtree, including external or
-otherwise unsupported descendants, without charging descendant traversal work.
-An active external component produces a structured unsupported diagnostic
-before resource resolution or kernel work. The evaluator performs no
-external-document read. Facade-authored nesting is acyclic because only
-already-completed same-builder assembly handles can be instanced. Strict
-document admission rejects hand-authored dependency cycles, and traversal also
-fails closed if a recursive local-assembly path reaches it.
+suppressed. Suppression is resolved before descendant admission, so a
+suppressed edge prunes its entire subtree without charging descendant traversal
+or resource work. A suppressed nested external component is inert. An active
+external descendant inside an admitted child would cross a second document
+boundary and returns a structured unsupported diagnostic before nested
+resolution or child geometry/kernel work. Facade-authored local nesting remains
+acyclic, strict admission rejects hand-authored dependency cycles, and traversal
+fails closed if a recursive local path reaches it.
 
-Repeated instances do not duplicate their document part definition or collapse
-their occurrence identities. One evaluated part result is reused for a
-`(part node, effective configuration)` state within one evaluation call.
-Direct part evaluation may also acquire a shared solid DAG once inside each
-configuration batch when multiple admitted parts reference it. Different
-effective configurations remain different evaluation states even when their
-current numeric values happen to match. This is neither a cross-run cache nor a
-persistent geometry-equivalence claim. A local part may retain the same
-supported Boolean/transformed single-solid or multibody geometry as a direct
-staged part, including commitment-verified imported leaves.
+Repeated instances do not collapse occurrence identity or quantity. Local parts
+reuse equal `(part node, effective configuration)` states, and direct external
+parts reuse equal `(resource, output, child configuration)` states. Leaves
+reached through a fixed subassembly share geometry by
+`(resource, child part node, child configuration)`. Distinct external output
+aliases retain separate component, diagnostic, and BOM identity even when they
+share evaluated geometry. These are evaluation-call reuse rules, not a
+cross-run cache or persistent geometric-equivalence claim.
 
-`EvaluatedLocalAssemblyDesignV7` exposes the selected root
-`configurationId`, resolved caller-visible parameters, structured diagnostics,
-deterministic output names, output lookup, and disposal.
-`EvaluatedLocalAssemblyV7` exposes its ordered active occurrences, aggregate
-mesh, STL/OBJ export, contextual bill of materials, and placed physical mass
-properties. Aggregate mesh, binary/ASCII STL, and OBJ are tessellation views
-and therefore approximate/lossy even when every retained source body came from
-an exact kernel. The operation does not invent a B-Rep compound, fuse
-overlapping bodies, subtract interference, or provide exact assembly STEP/BREP
-export.
+The evaluated product exposes ordered active occurrences, aggregate mesh,
+STL/OBJ export, contextual bill of materials, and placed physical mass
+properties. Exact child solids retain capability-gated per-solid or per-body
+topology and native export. Product mesh, binary/ASCII STL, and OBJ are
+tessellation views and therefore approximate/lossy even when every retained
+body came from an exact kernel. The operation does not invent a B-Rep compound,
+fuse overlaps, subtract interference, or provide exact aggregate STEP/BREP.
 
-The BOM keeps unlike `(part, effective configuration)` contexts in separate
-rows, preserves their stable occurrence IDs, and reports quantity, effective
-material, density source, definition mass, and placed total mass. Repeated
-occurrences in one context still contribute their full quantities. Missing
-density remains incomplete mass with diagnostics rather than an invented zero.
-Physical mass applies each part context's density to every authored body
-membership, transforms each active occurrence by its affine placement, and
-combines mass, center of mass, and inertia. Shared body aliases and spatial
-overlaps count once per authored membership and occurrence; no Boolean or
-interference semantics are implied.
+The BOM keeps unlike component/configuration states in separate rows and
+reports stable occurrence paths, quantity, effective material, density source,
+definition mass, placed total mass, external output kind, and committed child
+identity where applicable. One external assembly can contribute several child
+part rows. Missing density remains incomplete mass with diagnostics rather than
+an invented zero. Physical mass applies each part context's density to every
+authored body membership, transforms each occurrence by its placement, and
+combines mass, center of mass, and inertia. Its numeric quality follows backend
+measurements; aliases and spatial overlaps count per membership and occurrence,
+with no Boolean or interference semantics.
 
-Assembly evaluation separately bounds selected outputs, caller parameter
-overrides, assembly nesting depth, authored instances scanned, active
-occurrences, aggregate stored leaf-path segments, placement operations,
-effective part contexts, part-body memberships, distinct acquired leaves,
-solid-graph nodes, Boolean/transform dependency links, transform operations,
-and resolved materials. `maxSolidGraphNodes`, `maxSolidDependencyLinks`, and
-`maxTransformOperations` are counted globally by `(node, effective
-configuration)` across the complete active assembly tree. Repeated occurrences
-in one context share those charges, different contexts are charged separately,
-and suppressed subtrees are pruned before the counters advance. Boolean target
-and tool edges, including repeated references, and transform input edges all
-contribute to the dependency count. The explicit
-nesting ceilings are `maxAssemblyDepth` (default `64`, where the selected root
-definition is depth one) and `maxOccurrencePathSegments` (default `1,000,000`,
-the sum of full path lengths retained for emitted part leaves).
-`maxScannedInstances` charges every definition slot each time its containing
-assembly definition is expanded; `maxActiveOccurrences` charges every
-unsuppressed component edge, including intermediate assembly edges rather than
-only returned part leaves. It also applies caller-selected document and
-resource-resolution limits and checks cancellation throughout option capture,
-document admission, planning, resource resolution, kernel acquisition, and the
-final success boundary. These limits do not bound mesh buffers created by later
-result methods; hostile or very large tessellation still belongs in a
-disposable worker or process with an application-owned output ceiling.
+Product evaluation independently bounds selected outputs, root caller
+overrides, external documents, assembly depth, scanned instances, active
+occurrences, aggregate leaf-path segments, placement operations, contextual
+parts, part-body memberships, acquired leaves, solid-graph nodes, dependency
+links, transform operations, resolved materials, documents, and resources.
+`maxAssemblyDepth` defaults to `64`, with the selected root at depth one, and
+`maxOccurrencePathSegments` defaults to `1,000,000`.
+`maxScannedInstances` charges every expanded definition slot, while
+`maxActiveOccurrences` charges every unsuppressed component edge, including
+intermediate assembly edges. Repeated occurrences in one effective context
+share applicable graph work, different contexts are charged separately, and
+suppressed subtrees are pruned before descendant counters advance.
+
+The operation checks cancellation throughout option capture, document
+admission, child expansion, planning, resource resolution, kernel acquisition,
+and the final success boundary. These ceilings do not bound mesh buffers
+created by later result methods; hostile or very large tessellation still
+belongs in a disposable worker or process with an application-owned output
+ceiling.
 
 Evaluation is transactional: failure releases every distinct acquired shape
-exactly once. A successful `EvaluatedBodySetDesignV7`,
-`EvaluatedPartDesignV7`, or `EvaluatedLocalAssemblyDesignV7` owns each distinct
-shape until `dispose()`. After disposal, design output lookup, part operations,
-body lookup, assembly operations, whole-set mesh/export, and per-body solid
-operations fail deterministically. Detached mesh, export, measurement, BOM,
-and metadata values already returned to the caller remain detached. An
-occurrence's frozen ID, path, configuration, and transform snapshots also
-remain usable, but its embedded `part` remains owner-bound and part operations
-fail after design disposal. The caller-supplied kernel is borrowed and is
-never disposed by the staged design.
+exactly once, including shapes acquired by earlier child contexts. A successful
+evaluated design owns each distinct shape until `dispose()`. After disposal,
+design output lookup, part/body/product operations, mesh/export, and per-body
+solid operations fail deterministically. Detached mesh, export, measurement,
+BOM, metadata, and occurrence snapshots already returned remain detached. The
+caller-supplied kernel is borrowed and is never disposed by the staged design.
 
-The staged geometry slices still exclude external component evaluation,
-cyclic local-assembly graphs, datum-backed sketches, healing, location I/O,
-Boolean or transform inputs that are body sets/parts/assemblies, other
-body-consuming operations, and general solid graphs beyond
-primitive/import/Boolean/transform DAGs. Generic primitive, Boolean, or
-transformed-solid outputs remain unsupported; a solid result must be retained
-by a body set or part. The slices add no mates, joints,
-degrees-of-freedom solving, motion, contact, interference, collision,
-assembly-wide topology, aggregate geometric `measure()`, exact aggregate
-STEP/BREP, or cross-run cache. The separate datum resolver and local-assembly
-evaluator do not widen the package-root `EvaluatedOutput` union, public
+Active second-level external document references, recursive external product
+graphs, unsupported child feature families, datum-backed sketches, healing,
+location I/O, Boolean or transform inputs that are body sets/parts/assemblies,
+other body-consuming operations, and generic solid outputs remain unsupported.
+The slice adds no mates, joints, degrees-of-freedom solving, motion, contact,
+interference, collision, assembly-wide topology, aggregate geometric
+`measure()`, exact aggregate STEP/BREP, or cross-run cache. This work is staged
+for 0.2 and does not widen the public 0.1.1 package-root `EvaluatedOutput` union,
 document alias, builder, evaluator, CLI, or migration target; those remain on
 the frozen v6 surface.
 
