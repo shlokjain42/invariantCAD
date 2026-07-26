@@ -957,6 +957,9 @@ export const DEFAULT_DESIGN_DOCUMENT_LIMITS: DesignDocumentLimits;
 // @public (undocumented)
 export const DEFAULT_FEATURE_HASH_LIMITS: FeatureHashLimits;
 
+// @public
+export const DEFAULT_KERNEL_STEP_EXPORT_TIMESTAMP: "1970-01-01T00:00:00";
+
 // @public (undocumented)
 export const DEFAULT_TOPOLOGY_SIGNATURE_LIMITS: TopologySignatureLimits;
 
@@ -1614,7 +1617,7 @@ export interface Diagnostic {
 export function diagnostic(code: DiagnosticCode, message: string, options?: Omit<Diagnostic, "code" | "message">): Diagnostic;
 
 // @public (undocumented)
-export type DiagnosticCode = "IR_INVALID" | "REFERENCE_MISSING" | "REFERENCE_KIND_MISMATCH" | "DUPLICATE_ID" | "GRAPH_CYCLE" | "EXPRESSION_INVALID" | "EXPRESSION_DIMENSION_MISMATCH" | "PARAMETER_MISSING" | "PARAMETER_OUT_OF_RANGE" | "PARAMETER_CYCLE" | "MASS_DENSITY_INVALID" | "MASS_DENSITY_MISSING" | "MASS_PROPERTIES_INVALID" | "BOM_PART_NUMBER_MISSING" | "BOM_PART_NUMBER_DUPLICATE" | "BOM_MATERIAL_MISSING" | "BOM_OUTPUT_UNSUPPORTED" | "CONFIGURATION_MISSING" | "SKETCH_SOLVE_FAILED" | "SKETCH_UNDER_CONSTRAINED" | "SKETCH_OVER_CONSTRAINED" | "SKETCH_NO_CLOSED_REGION" | "FEATURE_INVALID" | "BOOLEAN_FAILED" | "EMPTY_RESULT" | "KERNEL_ERROR" | "KERNEL_CAPABILITY_MISSING" | "TOPOLOGY_SELECTOR_INVALID" | "TOPOLOGY_SELECTION_MISSING" | "TOPOLOGY_SELECTION_AMBIGUOUS" | "TOPOLOGY_HISTORY_UNAVAILABLE" | "TOPOLOGY_SIGNATURE_INVALID" | "TOPOLOGY_SIGNATURE_LIMIT_EXCEEDED" | "TOPOLOGY_FINGERPRINT_MISMATCH" | "TOPOLOGY_MATCH_MISSING" | "TOPOLOGY_MATCH_AMBIGUOUS" | "OUTPUT_MISSING" | "EVALUATION_UNSUPPORTED" | "EVALUATION_ABORTED" | "RESOURCE_RESOLVER_MISSING" | "RESOURCE_RESOLUTION_FAILED" | "RESOURCE_INTEGRITY_MISMATCH" | "RESOURCE_LIMIT_EXCEEDED" | "ARTIFACT_CACHE_OPERATION_FAILED" | "ARTIFACT_CACHE_ENTRY_INVALID" | "ARTIFACT_CACHE_LIMIT_EXCEEDED" | "EXPORT_UNSUPPORTED";
+export type DiagnosticCode = "IR_INVALID" | "REFERENCE_MISSING" | "REFERENCE_KIND_MISMATCH" | "DUPLICATE_ID" | "GRAPH_CYCLE" | "EXPRESSION_INVALID" | "EXPRESSION_DIMENSION_MISMATCH" | "PARAMETER_MISSING" | "PARAMETER_OUT_OF_RANGE" | "PARAMETER_CYCLE" | "MASS_DENSITY_INVALID" | "MASS_DENSITY_MISSING" | "MASS_PROPERTIES_INVALID" | "BOM_PART_NUMBER_MISSING" | "BOM_PART_NUMBER_DUPLICATE" | "BOM_MATERIAL_MISSING" | "BOM_OUTPUT_UNSUPPORTED" | "CONFIGURATION_MISSING" | "SKETCH_SOLVE_FAILED" | "SKETCH_UNDER_CONSTRAINED" | "SKETCH_OVER_CONSTRAINED" | "SKETCH_NO_CLOSED_REGION" | "FEATURE_INVALID" | "BOOLEAN_FAILED" | "EMPTY_RESULT" | "KERNEL_ERROR" | "KERNEL_CAPABILITY_MISSING" | "TOPOLOGY_SELECTOR_INVALID" | "TOPOLOGY_SELECTION_MISSING" | "TOPOLOGY_SELECTION_AMBIGUOUS" | "TOPOLOGY_HISTORY_UNAVAILABLE" | "TOPOLOGY_SIGNATURE_INVALID" | "TOPOLOGY_SIGNATURE_LIMIT_EXCEEDED" | "TOPOLOGY_FINGERPRINT_MISMATCH" | "TOPOLOGY_MATCH_MISSING" | "TOPOLOGY_MATCH_AMBIGUOUS" | "OUTPUT_MISSING" | "EVALUATION_UNSUPPORTED" | "EVALUATION_ABORTED" | "RESOURCE_RESOLVER_MISSING" | "RESOURCE_RESOLUTION_FAILED" | "RESOURCE_INTEGRITY_MISMATCH" | "RESOURCE_LIMIT_EXCEEDED" | "ARTIFACT_CACHE_OPERATION_FAILED" | "ARTIFACT_CACHE_ENTRY_INVALID" | "ARTIFACT_CACHE_LIMIT_EXCEEDED" | "EXPORT_OPTIONS_INVALID" | "EXPORT_UNSUPPORTED";
 
 // @public (undocumented)
 interface DiagnosticLocation {
@@ -1912,6 +1915,7 @@ export class EvaluatedPart extends EvaluatedSolid {
 // @public (undocumented)
 export class EvaluatedSolid {
     constructor(name: string, owner: EvaluationOwner, shape: KernelShape);
+    export(format: "step", options?: StepExportOptions): Uint8Array;
     // (undocumented)
     export(format: BinaryShapeExportFormat): Uint8Array;
     // (undocumented)
@@ -2299,8 +2303,7 @@ export interface GeometryKernel {
     draft?(shape: KernelShape,
     faces: readonly KernelTopologyKey[], options: ResolvedDraftOptions, context?: KernelFeatureContext): KernelShape;
     encodeShapeArtifact?(shape: KernelShape, context: KernelShapeArtifactContext): Awaitable<Uint8Array>;
-    // (undocumented)
-    exportShape?(shape: KernelShape, format: KernelExchangeFormat, context?: KernelFeatureContext): Uint8Array;
+    exportShape?(shape: KernelShape, format: KernelExchangeFormat, context?: KernelShapeExportContext): Uint8Array;
     // (undocumented)
     extrude?(profile: ResolvedProfile, options: {
         readonly distance: number;
@@ -2409,6 +2412,9 @@ export function inspectKernelMeasurementCapabilities(capabilities: KernelCapabil
 // @public (undocumented)
 export function inspectKernelShapeArtifactSupport(kernel: GeometryKernel): KernelShapeArtifactSupportInspection;
 
+// @public
+export function inspectKernelStepExportCapabilities(capabilities: KernelCapabilities): KernelStepExportCapabilitiesInspection;
+
 // @public (undocumented)
 type JoinType = 'Square'|'Round'|'Miter';
 
@@ -2433,6 +2439,9 @@ export const KERNEL_SHAPE_ARTIFACT_MAX_COMPATIBILITY_FINGERPRINT_BYTES: 2048;
 
 // @public (undocumented)
 export const KERNEL_SHAPE_ARTIFACT_PROTOCOL_VERSION: 1;
+
+// @public
+export const KERNEL_STEP_EXPORT_PROTOCOL_VERSION: 1;
 
 // @public (undocumented)
 const KERNEL_TOPOLOGY_KEY: unique symbol;
@@ -2460,6 +2469,7 @@ export interface KernelCapabilities {
     // (undocumented)
     readonly representation: KernelRepresentation;
     readonly shapeArtifacts?: KernelShapeArtifactCapabilities;
+    readonly stepExport?: KernelStepExportCapabilities;
     // (undocumented)
     readonly topology?: KernelTopologyCapabilities;
 }
@@ -2741,6 +2751,11 @@ export type KernelShapeArtifactSupportInspection = {
     readonly capabilities: KernelShapeArtifactCapabilities;
 };
 
+// @public
+export interface KernelShapeExportContext extends KernelFeatureContext {
+    readonly stepExport?: KernelStepExportOptions;
+}
+
 // @public (undocumented)
 export interface KernelShapeStatus {
     // (undocumented)
@@ -2749,6 +2764,56 @@ export interface KernelShapeStatus {
     readonly message?: string;
     // (undocumented)
     readonly ok: boolean;
+}
+
+// @public
+export interface KernelStepExportCapabilities {
+    readonly byteDeterminism: "same-shape-representation-and-metadata";
+    readonly maxMetadataBytes: number;
+    readonly maxOutputBytes: number;
+    readonly protocolVersion: typeof KERNEL_STEP_EXPORT_PROTOCOL_VERSION;
+    readonly schema: "AP214IS";
+}
+
+// @public
+export interface KernelStepExportCapabilitiesAbsent {
+    readonly status: "absent";
+}
+
+// @public
+export type KernelStepExportCapabilitiesInspection = KernelStepExportCapabilitiesAbsent | KernelStepExportCapabilitiesValid | KernelStepExportCapabilitiesMalformed;
+
+// @public
+export interface KernelStepExportCapabilitiesMalformed {
+    readonly details: Readonly<Record<string, unknown>>;
+    readonly message: string;
+    readonly reason: KernelStepExportCapabilitiesMalformedReason;
+    readonly status: "malformed";
+}
+
+// @public
+export type KernelStepExportCapabilitiesMalformedReason = "uninspectable-metadata" | "not-object" | "unsupported-protocol-version" | "invalid-schema" | "invalid-byte-determinism" | "invalid-max-output-bytes" | "invalid-max-metadata-bytes";
+
+// @public
+export interface KernelStepExportCapabilitiesValid {
+    readonly capabilities: KernelStepExportCapabilities;
+    readonly status: "valid";
+}
+
+// @public
+export interface KernelStepExportMetadata {
+    readonly fileName: string;
+    readonly productDescription: string;
+    readonly productId: string;
+    readonly productName: string;
+    readonly timestamp: string;
+}
+
+// @public
+export interface KernelStepExportOptions {
+    readonly maxOutputBytes?: number;
+    readonly metadata: KernelStepExportMetadata;
+    readonly protocolVersion: typeof KERNEL_STEP_EXPORT_PROTOCOL_VERSION;
 }
 
 // @public (undocumented)
@@ -5177,6 +5242,22 @@ export interface SphereNodeIR {
     readonly radius: ExpressionIR;
     // (undocumented)
     readonly segments?: number;
+}
+
+// @public
+export interface StepExportMetadata {
+    readonly fileName?: string;
+    readonly productDescription?: string;
+    readonly productId?: string;
+    readonly productName?: string;
+    readonly timestamp?: string;
+}
+
+// @public
+export interface StepExportOptions {
+    readonly maxOutputBytes?: number;
+    readonly metadata?: StepExportMetadata;
+    readonly signal?: AbortSignal;
 }
 
 // @public (undocumented)

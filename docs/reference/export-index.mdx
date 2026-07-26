@@ -16,7 +16,7 @@ exports. Versioned historical names are intentionally included.
 
 ## `invariantcad`
 
-**697 named exports** from `src/index.ts`.
+**711 named exports** from `src/index.ts`.
 
 | Name | Kind | Declared/re-exported from |
 | --- | --- | --- |
@@ -118,6 +118,7 @@ exports. Versioned historical names are intentionally included.
 | `DEFAULT_ARTIFACT_CACHE_LIMITS` | value | `./artifact-cache.js` |
 | `DEFAULT_DESIGN_DOCUMENT_LIMITS` | value | `./document-limits.js` |
 | `DEFAULT_FEATURE_HASH_LIMITS` | value | `./feature-hashes.js` |
+| `DEFAULT_KERNEL_STEP_EXPORT_TIMESTAMP` | value | `./kernel.js` |
 | `DEFAULT_TOPOLOGY_SIGNATURE_LIMITS` | value | `./topology-signatures.js` |
 | `deg` | value | `./expressions.js` |
 | `deleteArtifactCacheRecord` | value | `./artifact-cache.js` |
@@ -275,10 +276,12 @@ exports. Versioned historical names are intentionally included.
 | `inspectKernelDocumentBodyImportCapabilities` | value | `./kernel.js` |
 | `inspectKernelMeasurementCapabilities` | value | `./kernel.js` |
 | `inspectKernelShapeArtifactSupport` | value | `./artifact-cache.js` |
+| `inspectKernelStepExportCapabilities` | value | `./kernel.js` |
 | `KERNEL_DOCUMENT_BODY_IMPORT_PROTOCOL_VERSION` | value | `./kernel.js` |
 | `KERNEL_MEASUREMENT_PROTOCOL_VERSION` | value | `./kernel.js` |
 | `KERNEL_SHAPE_ARTIFACT_MAX_COMPATIBILITY_FINGERPRINT_BYTES` | value | `./kernel.js` |
 | `KERNEL_SHAPE_ARTIFACT_PROTOCOL_VERSION` | value | `./kernel.js` |
+| `KERNEL_STEP_EXPORT_PROTOCOL_VERSION` | value | `./kernel.js` |
 | `KernelCapabilities` | type | `./kernel.js` |
 | `KernelCapabilityKind` | type | `./kernel.js` |
 | `KernelCompositeSweepCapabilities` | type | `./kernel.js` |
@@ -321,7 +324,16 @@ exports. Versioned historical names are intentionally included.
 | `KernelShapeArtifactCapabilities` | type | `./kernel.js` |
 | `KernelShapeArtifactContext` | type | `./kernel.js` |
 | `KernelShapeArtifactSupportInspection` | type | `./artifact-cache.js` |
+| `KernelShapeExportContext` | type | `./kernel.js` |
 | `KernelShapeStatus` | type | `./kernel.js` |
+| `KernelStepExportCapabilities` | type | `./kernel.js` |
+| `KernelStepExportCapabilitiesAbsent` | type | `./kernel.js` |
+| `KernelStepExportCapabilitiesInspection` | type | `./kernel.js` |
+| `KernelStepExportCapabilitiesMalformed` | type | `./kernel.js` |
+| `KernelStepExportCapabilitiesMalformedReason` | type | `./kernel.js` |
+| `KernelStepExportCapabilitiesValid` | type | `./kernel.js` |
+| `KernelStepExportMetadata` | type | `./kernel.js` |
+| `KernelStepExportOptions` | type | `./kernel.js` |
 | `kernelSupports` | value | `./kernel.js` |
 | `kernelSupportsDocumentBodyImport` | value | `./kernel.js` |
 | `kernelSupportsTopology` | value | `./kernel.js` |
@@ -565,6 +577,8 @@ exports. Versioned historical names are intentionally included.
 | `SolidRef` | value | `./design.js` |
 | `SolvedSketch` | type | `./solver.js` |
 | `SphereNodeIR` | type | `./ir.js` |
+| `StepExportMetadata` | type | `./evaluator.js` |
+| `StepExportOptions` | type | `./evaluator.js` |
 | `stringifyDocument` | value | `./serialization.js` |
 | `StringifyOptions` | type | `./serialization.js` |
 | `success` | value | `./core/result.js` |

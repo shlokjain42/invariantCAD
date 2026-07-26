@@ -20,6 +20,42 @@ import type {
   KernelTopologySnapshot,
 } from "./protocol/topology.js";
 
+const KernelIntrinsicArray = Array;
+const KernelIntrinsicNumber = Number;
+const KernelIntrinsicObject = Object;
+const kernelIntrinsicArrayIsArray = KernelIntrinsicArray.isArray;
+const kernelIntrinsicNumberIsSafeInteger =
+  KernelIntrinsicNumber.isSafeInteger;
+const kernelIntrinsicObjectFreeze = KernelIntrinsicObject.freeze;
+const kernelIntrinsicObjectGetOwnPropertyDescriptor =
+  KernelIntrinsicObject.getOwnPropertyDescriptor;
+const kernelIntrinsicObjectHasOwn = KernelIntrinsicObject.hasOwn;
+const kernelIntrinsicReflectApply = Reflect.apply;
+
+function kernelArrayIsArray(value: unknown): value is readonly unknown[] {
+  return kernelIntrinsicReflectApply(
+    kernelIntrinsicArrayIsArray,
+    KernelIntrinsicArray,
+    [value],
+  ) as boolean;
+}
+
+function kernelNumberIsSafeInteger(value: unknown): value is number {
+  return kernelIntrinsicReflectApply(
+    kernelIntrinsicNumberIsSafeInteger,
+    KernelIntrinsicNumber,
+    [value],
+  ) as boolean;
+}
+
+function kernelObjectFreeze<T extends object>(value: T): Readonly<T> {
+  return kernelIntrinsicReflectApply(
+    kernelIntrinsicObjectFreeze,
+    KernelIntrinsicObject,
+    [value],
+  ) as Readonly<T>;
+}
+
 export type KernelRepresentation = "mesh" | "brep" | "sdf";
 export type KernelPrimitive = "box" | "cylinder" | "sphere";
 export type KernelFeature =
@@ -57,6 +93,11 @@ export const EXACT_INDEXED_TOPOLOGY_EVOLUTION_PROTOCOL_VERSION = 1 as const;
 export const KERNEL_SHAPE_ARTIFACT_PROTOCOL_VERSION = 1 as const;
 export const KERNEL_DOCUMENT_BODY_IMPORT_PROTOCOL_VERSION = 1 as const;
 export const KERNEL_MEASUREMENT_PROTOCOL_VERSION = 1 as const;
+/** Protocol version for the strong deterministic STEP-export envelope. */
+export const KERNEL_STEP_EXPORT_PROTOCOL_VERSION = 1 as const;
+/** Default timezone-free STEP timestamp used when callers omit one. */
+export const DEFAULT_KERNEL_STEP_EXPORT_TIMESTAMP =
+  "1970-01-01T00:00:00" as const;
 export const KERNEL_SHAPE_ARTIFACT_MAX_COMPATIBILITY_FINGERPRINT_BYTES =
   2_048 as const;
 
@@ -112,6 +153,115 @@ export interface KernelMeasurementCapabilities {
   readonly protocolVersion: typeof KERNEL_MEASUREMENT_PROTOCOL_VERSION;
   readonly genus: KernelGenusMeasurementCapability;
 }
+
+/**
+ * Strong deterministic guarantees for single-shape STEP export.
+ *
+ * This is intentionally narrower than `nativeExports: ["step"]`. Byte
+ * determinism is scoped to the same backend shape representation, resolved
+ * export metadata, implementation, and exact runtime artifact. It does not
+ * canonicalize geometrically equivalent B-Reps or third-party STEP files.
+ * The envelope does not replace the separate native-export declaration or the
+ * kernel's `exact`/`representation` fields.
+ */
+export interface KernelStepExportCapabilities {
+  /** Version of this capability envelope. */
+  readonly protocolVersion: typeof KERNEL_STEP_EXPORT_PROTOCOL_VERSION;
+  /** Exact STEP application protocol emitted by the strong contract. */
+  readonly schema: "AP214IS";
+  /** Scope within which repeated exports must be byte-identical. */
+  readonly byteDeterminism: "same-shape-representation-and-metadata";
+  /** Maximum byte length of the returned, fully encoded STEP payload. */
+  readonly maxOutputBytes: number;
+  /**
+   * Maximum cumulative UTF-8 byte length of the five authored metadata strings
+   * before Part 21 escaping. Encoding expansion is charged separately to
+   * `maxOutputBytes`.
+   */
+  readonly maxMetadataBytes: number;
+}
+
+/**
+ * Metadata representable by the deterministic AP214 single-product writer.
+ *
+ * Protocol v1 admits Unicode scalar values other than controls in the four
+ * identity/description fields. Apostrophes use STEP's doubled-apostrophe
+ * convention; reverse solidus and non-ASCII scalars use Part 21 X2/X4
+ * directives. C0/C1 controls and unpaired UTF-16 surrogates are rejected.
+ * `fileName`, `productId`, and `productName` must be nonempty;
+ * `productDescription` may be empty. `timestamp` is a real
+ * proleptic-Gregorian calendar value formatted exactly as
+ * `YYYY-MM-DDTHH:MM:SS`, with years 0001 through 9999. Material properties are
+ * not representable by this contract and must not be folded into
+ * `productDescription`.
+ */
+export interface KernelStepExportMetadata {
+  /** STEP `FILE_NAME` identity; it need not be a filesystem path. */
+  readonly fileName: string;
+  /** Calendar timestamp formatted exactly as `YYYY-MM-DDTHH:MM:SS`. */
+  readonly timestamp: string;
+  /** First direct string in the single `PRODUCT` record. */
+  readonly productId: string;
+  /** Second direct string in the single `PRODUCT` record. */
+  readonly productName: string;
+  /** Third direct string in the single `PRODUCT` record. */
+  readonly productDescription: string;
+}
+
+/** Low-level request attached to a kernel shape-export context. */
+export interface KernelStepExportOptions {
+  /** Version of this request envelope. */
+  readonly protocolVersion: typeof KERNEL_STEP_EXPORT_PROTOCOL_VERSION;
+  /** Fully resolved metadata; kernels must not invent additional fields. */
+  readonly metadata: KernelStepExportMetadata;
+  /**
+   * Optional ceiling for the returned STEP bytes; kernels may enforce a lower
+   * advertised limit. This does not promise a bound on native peak allocation.
+   */
+  readonly maxOutputBytes?: number;
+}
+
+/** Stable reasons returned for malformed STEP capability metadata. */
+export type KernelStepExportCapabilitiesMalformedReason =
+  | "uninspectable-metadata"
+  | "not-object"
+  | "unsupported-protocol-version"
+  | "invalid-schema"
+  | "invalid-byte-determinism"
+  | "invalid-max-output-bytes"
+  | "invalid-max-metadata-bytes";
+
+/** Inspection result when a kernel advertises no strong STEP envelope. */
+export interface KernelStepExportCapabilitiesAbsent {
+  /** Discriminant for absent support. */
+  readonly status: "absent";
+}
+
+/** Inspection result containing a validated immutable capability snapshot. */
+export interface KernelStepExportCapabilitiesValid {
+  /** Discriminant for valid support. */
+  readonly status: "valid";
+  /** A validated snapshot, isolated from later mutation of kernel metadata. */
+  readonly capabilities: KernelStepExportCapabilities;
+}
+
+/** Inspection result for a present but invalid capability envelope. */
+export interface KernelStepExportCapabilitiesMalformed {
+  /** Discriminant for malformed support metadata. */
+  readonly status: "malformed";
+  /** Stable machine-readable failure reason. */
+  readonly reason: KernelStepExportCapabilitiesMalformedReason;
+  /** Human-readable failure summary. */
+  readonly message: string;
+  /** Accessor-free bounded evidence describing the invalid field. */
+  readonly details: Readonly<Record<string, unknown>>;
+}
+
+/** Result of inspecting a kernel's optional strong STEP capability. */
+export type KernelStepExportCapabilitiesInspection =
+  | KernelStepExportCapabilitiesAbsent
+  | KernelStepExportCapabilitiesValid
+  | KernelStepExportCapabilitiesMalformed;
 
 export type KernelMeasurementCapabilitiesMalformedReason =
   | "uninspectable-metadata"
@@ -266,11 +416,13 @@ export interface KernelCapabilities {
   readonly documentBodyImport?: KernelDocumentBodyImportCapabilities;
   /** Optional versioned measurement-semantics contract. */
   readonly measurements?: KernelMeasurementCapabilities;
+  /** Optional strong deterministic single-shape STEP export contract. */
+  readonly stepExport?: KernelStepExportCapabilities;
 }
 
 function metadataType(value: unknown): string {
   if (value === null) return "null";
-  if (Array.isArray(value)) return "array";
+  if (kernelArrayIsArray(value)) return "array";
   return typeof value;
 }
 
@@ -301,9 +453,19 @@ function inspectOwnDataProperty(
   property: PropertyKey,
 ): OwnDataPropertyInspection {
   try {
-    const descriptor = Object.getOwnPropertyDescriptor(value, property);
+    const descriptor = kernelIntrinsicReflectApply(
+      kernelIntrinsicObjectGetOwnPropertyDescriptor,
+      KernelIntrinsicObject,
+      [value, property],
+    ) as PropertyDescriptor | undefined;
     if (descriptor === undefined) return { status: "absent" };
-    if (!("value" in descriptor)) {
+    if (
+      !kernelIntrinsicReflectApply(
+        kernelIntrinsicObjectHasOwn,
+        KernelIntrinsicObject,
+        [descriptor, "value"],
+      )
+    ) {
       return { status: "uninspectable" };
     }
     return { status: "value", value: descriptor.value };
@@ -352,7 +514,7 @@ export function inspectKernelMeasurementCapabilities(
 
   const raw = envelope.value;
   try {
-    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    if (typeof raw !== "object" || raw === null || kernelArrayIsArray(raw)) {
       return malformedMeasurementCapabilities(
         "not-object",
         "Kernel measurement capability metadata must be an object",
@@ -412,6 +574,153 @@ export function inspectKernelMeasurementCapabilities(
     capabilities: Object.freeze({
       protocolVersion: KERNEL_MEASUREMENT_PROTOCOL_VERSION,
       genus,
+    }),
+  };
+}
+
+function malformedStepExportCapabilities(
+  reason: KernelStepExportCapabilitiesMalformedReason,
+  message: string,
+  details: Readonly<Record<string, unknown>>,
+): KernelStepExportCapabilitiesMalformed {
+  return { status: "malformed", reason, message, details };
+}
+
+/**
+ * Validates and snapshots the optional deterministic STEP-export envelope.
+ *
+ * The inspector never invokes accessors and fails closed for proxy traps,
+ * revoked proxies, malformed fields, and unsupported protocol versions.
+ */
+export function inspectKernelStepExportCapabilities(
+  capabilities: KernelCapabilities,
+): KernelStepExportCapabilitiesInspection {
+  if (typeof capabilities !== "object" || capabilities === null) {
+    return malformedStepExportCapabilities(
+      "uninspectable-metadata",
+      "Kernel STEP-export capability metadata could not be inspected",
+      { property: "stepExport" },
+    );
+  }
+  const envelope = inspectOwnDataProperty(capabilities, "stepExport");
+  if (envelope.status === "absent") return { status: "absent" };
+  if (envelope.status === "uninspectable") {
+    return malformedStepExportCapabilities(
+      "uninspectable-metadata",
+      "Kernel STEP-export capability metadata could not be inspected",
+      { property: "stepExport" },
+    );
+  }
+  if (envelope.value === undefined) return { status: "absent" };
+
+  const raw = envelope.value;
+  try {
+    if (typeof raw !== "object" || raw === null || kernelArrayIsArray(raw)) {
+      return malformedStepExportCapabilities(
+        "not-object",
+        "Kernel STEP-export capability metadata must be an object",
+        { actualType: metadataType(raw) },
+      );
+    }
+  } catch {
+    return malformedStepExportCapabilities(
+      "uninspectable-metadata",
+      "Kernel STEP-export capability metadata could not be inspected",
+      { property: "stepExport" },
+    );
+  }
+
+  const properties = {
+    protocolVersion: inspectOwnDataProperty(raw, "protocolVersion"),
+    schema: inspectOwnDataProperty(raw, "schema"),
+    byteDeterminism: inspectOwnDataProperty(raw, "byteDeterminism"),
+    maxOutputBytes: inspectOwnDataProperty(raw, "maxOutputBytes"),
+    maxMetadataBytes: inspectOwnDataProperty(raw, "maxMetadataBytes"),
+  };
+  const propertyNames = [
+    "protocolVersion",
+    "schema",
+    "byteDeterminism",
+    "maxOutputBytes",
+    "maxMetadataBytes",
+  ] as const;
+  for (let index = 0; index < propertyNames.length; index += 1) {
+    const property = propertyNames[index]!;
+    const inspection = properties[property];
+    if (inspection.status === "uninspectable") {
+      return malformedStepExportCapabilities(
+        "uninspectable-metadata",
+        "Kernel STEP-export capability metadata must use readable data properties",
+        { property },
+      );
+    }
+  }
+  const value = (
+    property: keyof typeof properties,
+  ): unknown => {
+    const inspected = properties[property];
+    return inspected.status === "value" ? inspected.value : undefined;
+  };
+
+  const protocolVersion = value("protocolVersion");
+  if (protocolVersion !== KERNEL_STEP_EXPORT_PROTOCOL_VERSION) {
+    return malformedStepExportCapabilities(
+      "unsupported-protocol-version",
+      "Kernel STEP-export capability metadata uses an unsupported protocol version",
+      {
+        expectedProtocolVersion: KERNEL_STEP_EXPORT_PROTOCOL_VERSION,
+        actualProtocolVersion: metadataDiagnosticValue(protocolVersion),
+      },
+    );
+  }
+  const schema = value("schema");
+  if (schema !== "AP214IS") {
+    return malformedStepExportCapabilities(
+      "invalid-schema",
+      "Kernel STEP-export capability metadata must declare AP214IS",
+      { schema: metadataDiagnosticValue(schema) },
+    );
+  }
+  const byteDeterminism = value("byteDeterminism");
+  if (byteDeterminism !== "same-shape-representation-and-metadata") {
+    return malformedStepExportCapabilities(
+      "invalid-byte-determinism",
+      "Kernel STEP-export byte-determinism scope is invalid",
+      { byteDeterminism: metadataDiagnosticValue(byteDeterminism) },
+    );
+  }
+  const maxOutputBytes = value("maxOutputBytes");
+  if (
+    typeof maxOutputBytes !== "number" ||
+    !kernelNumberIsSafeInteger(maxOutputBytes) ||
+    maxOutputBytes <= 0
+  ) {
+    return malformedStepExportCapabilities(
+      "invalid-max-output-bytes",
+      "Kernel STEP-export maxOutputBytes must be a positive safe integer",
+      { maxOutputBytes: metadataDiagnosticValue(maxOutputBytes) },
+    );
+  }
+  const maxMetadataBytes = value("maxMetadataBytes");
+  if (
+    typeof maxMetadataBytes !== "number" ||
+    !kernelNumberIsSafeInteger(maxMetadataBytes) ||
+    maxMetadataBytes <= 0
+  ) {
+    return malformedStepExportCapabilities(
+      "invalid-max-metadata-bytes",
+      "Kernel STEP-export maxMetadataBytes must be a positive safe integer",
+      { maxMetadataBytes: metadataDiagnosticValue(maxMetadataBytes) },
+    );
+  }
+  return {
+    status: "valid",
+    capabilities: kernelObjectFreeze({
+      protocolVersion: KERNEL_STEP_EXPORT_PROTOCOL_VERSION,
+      schema: "AP214IS",
+      byteDeterminism: "same-shape-representation-and-metadata",
+      maxOutputBytes,
+      maxMetadataBytes,
     }),
   };
 }
@@ -868,6 +1177,17 @@ export interface KernelFeatureContext {
   readonly tolerance?: number;
 }
 
+/** Context supplied to one native kernel shape-export operation. */
+export interface KernelShapeExportContext extends KernelFeatureContext {
+  /**
+   * Strong metadata/options request for deterministic single-shape STEP.
+   *
+   * Kernels that do not advertise a valid `stepExport` capability may ignore
+   * this field and retain only the weaker native-exchange contract.
+   */
+  readonly stepExport?: KernelStepExportOptions;
+}
+
 export interface GeometryKernel {
   readonly id: string;
   readonly capabilities: KernelCapabilities;
@@ -995,10 +1315,16 @@ export interface GeometryKernel {
     options: KernelDocumentBodyImportOptions,
     context?: KernelFeatureContext,
   ): KernelShape;
+  /**
+   * Exports one borrowed shape in a native interchange format.
+   *
+   * `context.stepExport` requests the strong deterministic STEP contract;
+   * omitting it retains the backend's weaker native-exchange behavior.
+   */
   exportShape?(
     shape: KernelShape,
     format: KernelExchangeFormat,
-    context?: KernelFeatureContext,
+    context?: KernelShapeExportContext,
   ): Uint8Array;
   /**
    * Encodes without transferring ownership of `shape`. The payload must

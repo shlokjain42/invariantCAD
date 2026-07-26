@@ -110,8 +110,8 @@ interface GeometryKernel {
     // Warning: (ae-forgotten-export) The symbol "KernelShapeArtifactContext" needs to be exported by the entry point occt-kernel.d.ts
     // Warning: (ae-forgotten-export) The symbol "Awaitable" needs to be exported by the entry point occt-kernel.d.ts
     encodeShapeArtifact?(shape: KernelShape, context: KernelShapeArtifactContext): Awaitable<Uint8Array>;
-    // (undocumented)
-    exportShape?(shape: KernelShape, format: KernelExchangeFormat, context?: KernelFeatureContext): Uint8Array;
+    // Warning: (ae-forgotten-export) The symbol "KernelShapeExportContext" needs to be exported by the entry point occt-kernel.d.ts
+    exportShape?(shape: KernelShape, format: KernelExchangeFormat, context?: KernelShapeExportContext): Uint8Array;
     // Warning: (ae-forgotten-export) The symbol "ResolvedProfile" needs to be exported by the entry point occt-kernel.d.ts
     //
     // (undocumented)
@@ -201,6 +201,9 @@ const KERNEL_MEASUREMENT_PROTOCOL_VERSION: 1;
 // @public (undocumented)
 const KERNEL_SHAPE_ARTIFACT_PROTOCOL_VERSION: 1;
 
+// @public
+const KERNEL_STEP_EXPORT_PROTOCOL_VERSION: 1;
+
 // @public (undocumented)
 const KERNEL_TOPOLOGY_KEY: unique symbol;
 
@@ -242,6 +245,8 @@ interface KernelCapabilities {
     readonly representation: KernelRepresentation;
     // Warning: (ae-forgotten-export) The symbol "KernelShapeArtifactCapabilities" needs to be exported by the entry point occt-kernel.d.ts
     readonly shapeArtifacts?: KernelShapeArtifactCapabilities;
+    // Warning: (ae-forgotten-export) The symbol "KernelStepExportCapabilities" needs to be exported by the entry point occt-kernel.d.ts
+    readonly stepExport?: KernelStepExportCapabilities;
     // Warning: (ae-forgotten-export) The symbol "KernelTopologyCapabilities" needs to be exported by the entry point occt-kernel.d.ts
     //
     // (undocumented)
@@ -432,6 +437,12 @@ interface KernelShapeArtifactContext {
     readonly signal?: AbortSignal;
 }
 
+// @public
+interface KernelShapeExportContext extends KernelFeatureContext {
+    // Warning: (ae-forgotten-export) The symbol "KernelStepExportOptions" needs to be exported by the entry point occt-kernel.d.ts
+    readonly stepExport?: KernelStepExportOptions;
+}
+
 // @public (undocumented)
 interface KernelShapeStatus {
     // (undocumented)
@@ -440,6 +451,33 @@ interface KernelShapeStatus {
     readonly message?: string;
     // (undocumented)
     readonly ok: boolean;
+}
+
+// @public
+interface KernelStepExportCapabilities {
+    readonly byteDeterminism: "same-shape-representation-and-metadata";
+    readonly maxMetadataBytes: number;
+    readonly maxOutputBytes: number;
+    // Warning: (ae-forgotten-export) The symbol "KERNEL_STEP_EXPORT_PROTOCOL_VERSION" needs to be exported by the entry point occt-kernel.d.ts
+    readonly protocolVersion: typeof KERNEL_STEP_EXPORT_PROTOCOL_VERSION;
+    readonly schema: "AP214IS";
+}
+
+// @public
+interface KernelStepExportMetadata {
+    readonly fileName: string;
+    readonly productDescription: string;
+    readonly productId: string;
+    readonly productName: string;
+    readonly timestamp: string;
+}
+
+// @public
+interface KernelStepExportOptions {
+    readonly maxOutputBytes?: number;
+    // Warning: (ae-forgotten-export) The symbol "KernelStepExportMetadata" needs to be exported by the entry point occt-kernel.d.ts
+    readonly metadata: KernelStepExportMetadata;
+    readonly protocolVersion: typeof KERNEL_STEP_EXPORT_PROTOCOL_VERSION;
 }
 
 // @public (undocumented)
@@ -1087,7 +1125,7 @@ interface VolumetricMassProperties {
 
 // Warnings were encountered during analysis:
 //
-// src/kernel.ts:152:7 - (ae-forgotten-export) The symbol "KernelDocumentBodyLengthUnit" needs to be exported by the entry point occt-kernel.d.ts
+// src/kernel.ts:302:7 - (ae-forgotten-export) The symbol "KernelDocumentBodyLengthUnit" needs to be exported by the entry point occt-kernel.d.ts
 
 // (No @packageDocumentation comment for this package)
 

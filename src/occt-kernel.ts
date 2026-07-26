@@ -10,12 +10,14 @@ import { canonicalStringifyProtocol } from "./core/json.js";
 import {
   KERNEL_DOCUMENT_BODY_IMPORT_PROTOCOL_VERSION,
   KERNEL_MEASUREMENT_PROTOCOL_VERSION,
+  KERNEL_STEP_EXPORT_PROTOCOL_VERSION,
   type GeometryKernel,
   type KernelCapabilities,
   type KernelDocumentBodyImportOptions,
   type KernelExchangeFormat,
   type KernelFeatureContext,
   type KernelShape,
+  type KernelShapeExportContext,
   type KernelShapeStatus,
   type MeshData,
   type MeshOptions,
@@ -162,6 +164,12 @@ import {
   type OcctShapeArtifactNativePath,
 } from "./internal/occt-artifact-identity-v1.js";
 import {
+  DEFAULT_OCCT_STEP_METADATA_LIMITS,
+  OCCT_STEP_METADATA_TIMESTAMP,
+  rewriteOcctStepMetadataFromSource,
+  type OcctStepMetadata,
+} from "./internal/occt-step-metadata.js";
+import {
   assertAttestedFacadeMarker,
   captureAttestedOcctRuntime,
   type AttestedOcctRuntime,
@@ -186,6 +194,28 @@ const MAX_ARTIFACT_NATIVE_TOPOLOGY_ITEMS = 400_000;
 const MAX_ARTIFACT_NATIVE_IDENTITY_TRAVERSAL_OCCURRENCES =
   OCCT_ARTIFACT_NATIVE_IDENTITY_V1_MAX_OCCURRENCES;
 const MAX_ARTIFACT_NATIVE_IDENTITY_COMPARISONS = 1_000_000;
+const OcctKernelBoundaryDOMException = DOMException;
+const OcctKernelBoundaryError = Error;
+const OcctKernelBoundaryRangeError = RangeError;
+const OcctKernelBoundaryTypeError = TypeError;
+const occtKernelReflectApply = Reflect.apply;
+const occtKernelArrayIsArray = Array.isArray;
+const occtKernelMathMin = Math.min;
+const occtKernelNumberIsSafeInteger = Number.isSafeInteger;
+const occtKernelObjectGetOwnPropertyDescriptor =
+  Object.getOwnPropertyDescriptor;
+const occtKernelObjectHasOwn = Object.hasOwn;
+const occtKernelSetHas = Set.prototype.has;
+const occtKernelAbortSignalAbortedGetter =
+  typeof AbortSignal === "undefined"
+    ? undefined
+    : (
+        occtKernelReflectApply(
+          occtKernelObjectGetOwnPropertyDescriptor,
+          Object,
+          [AbortSignal.prototype, "aborted"],
+        ) as PropertyDescriptor | undefined
+      )?.get;
 let nextTopologyNamespace = 1;
 
 function checkArtifactCandidateSignal(signal: AbortSignal | undefined): void {
@@ -512,8 +542,18 @@ function semanticLineage(
 }
 
 const IntrinsicArrayBuffer = ArrayBuffer;
+const IntrinsicTextEncoder = TextEncoder;
 const IntrinsicUint8Array = Uint8Array;
 const IntrinsicTextDecoder = TextDecoder;
+const textEncoderEncode = TextEncoder.prototype.encode;
+
+function encodeUtf8(value: string): Uint8Array {
+  return occtKernelReflectApply(
+    textEncoderEncode,
+    new IntrinsicTextEncoder(),
+    [value],
+  ) as Uint8Array;
+}
 
 function arrayBufferCopy(value: Uint8Array): ArrayBuffer {
   if (typedArrayByteLengthGetter === undefined) {
@@ -861,10 +901,252 @@ function arcPoint(curve: ResolvedArcCurve, angle: number): Vec2 {
   ];
 }
 
-function checkContext(context?: KernelFeatureContext): void {
-  if (context?.signal?.aborted) {
-    throw new DOMException("CAD kernel operation was aborted", "AbortError");
+function occtKernelRecord(value: unknown, label: string): object {
+  if (typeof value !== "object" || value === null) {
+    throw new OcctKernelBoundaryTypeError(`${label} must be an object`);
   }
+  let array: boolean;
+  try {
+    array = occtKernelReflectApply(
+      occtKernelArrayIsArray,
+      Array,
+      [value],
+    ) as boolean;
+  } catch {
+    throw new OcctKernelBoundaryTypeError(
+      `${label} could not be inspected safely`,
+    );
+  }
+  if (array) {
+    throw new OcctKernelBoundaryTypeError(`${label} must be an object`);
+  }
+  return value;
+}
+
+function occtKernelOwnDataValue(
+  value: object,
+  property: PropertyKey,
+  label: string,
+): unknown {
+  let descriptor: PropertyDescriptor | undefined;
+  try {
+    descriptor = occtKernelReflectApply(
+      occtKernelObjectGetOwnPropertyDescriptor,
+      Object,
+      [value, property],
+    ) as PropertyDescriptor | undefined;
+  } catch {
+    throw new OcctKernelBoundaryTypeError(
+      `${label} could not be inspected safely`,
+    );
+  }
+  if (descriptor === undefined) return undefined;
+  if (
+    !(occtKernelReflectApply(
+      occtKernelObjectHasOwn,
+      Object,
+      [descriptor, "value"],
+    ) as boolean)
+  ) {
+    throw new OcctKernelBoundaryTypeError(
+      `${label} must be an own data property`,
+    );
+  }
+  return descriptor.value;
+}
+
+function checkOcctSignal(signal: unknown): void {
+  if (signal === undefined) return;
+  if (occtKernelAbortSignalAbortedGetter === undefined) {
+    throw new OcctKernelBoundaryTypeError(
+      "AbortSignal is unsupported in this runtime",
+    );
+  }
+  let aborted: unknown;
+  try {
+    aborted = occtKernelReflectApply(
+      occtKernelAbortSignalAbortedGetter,
+      signal,
+      [],
+    );
+  } catch {
+    throw new OcctKernelBoundaryTypeError(
+      "CAD kernel signal must be an AbortSignal",
+    );
+  }
+  if (aborted === true) {
+    throw new OcctKernelBoundaryDOMException(
+      "CAD kernel operation was aborted",
+      "AbortError",
+    );
+  }
+  if (aborted !== false) {
+    throw new OcctKernelBoundaryTypeError(
+      "CAD kernel signal must be an AbortSignal",
+    );
+  }
+}
+
+function checkContext(context?: KernelFeatureContext): void {
+  if (context === undefined) return;
+  const captured = occtKernelRecord(context, "CAD kernel context");
+  checkOcctSignal(
+    occtKernelOwnDataValue(
+      captured,
+      "signal",
+      "CAD kernel context.signal",
+    ),
+  );
+}
+
+interface CapturedOcctShapeExportContext {
+  readonly feature: unknown;
+  readonly signal: AbortSignal | undefined;
+  readonly stepExport: unknown;
+}
+
+function captureOcctShapeExportContext(
+  context: KernelShapeExportContext | undefined,
+): CapturedOcctShapeExportContext {
+  if (context === undefined) {
+    return {
+      feature: undefined,
+      signal: undefined,
+      stepExport: undefined,
+    };
+  }
+  const captured = occtKernelRecord(
+    context,
+    "OCCT shape export context",
+  );
+  const feature = occtKernelOwnDataValue(
+    captured,
+    "feature",
+    "OCCT shape export context.feature",
+  );
+  const rawSignal = occtKernelOwnDataValue(
+    captured,
+    "signal",
+    "OCCT shape export context.signal",
+  );
+  const stepExport = occtKernelOwnDataValue(
+    captured,
+    "stepExport",
+    "OCCT shape export context.stepExport",
+  );
+  checkOcctSignal(rawSignal);
+  return {
+    feature,
+    signal:
+      rawSignal === undefined
+        ? undefined
+        : rawSignal as AbortSignal,
+    stepExport,
+  };
+}
+
+function deterministicStepExportMetadata(
+  context: CapturedOcctShapeExportContext,
+): {
+  readonly metadata: OcctStepMetadata;
+  readonly maxOutputBytes: number;
+} {
+  if (context.stepExport === undefined) {
+    const feature =
+      typeof context.feature === "string" && context.feature.length > 0
+        ? context.feature
+        : "InvariantCAD Shape";
+    return {
+      metadata: {
+        fileName: feature,
+        timestamp: OCCT_STEP_METADATA_TIMESTAMP,
+        productId: feature,
+        productName: feature,
+        productDescription: "",
+      },
+      maxOutputBytes:
+        DEFAULT_OCCT_STEP_METADATA_LIMITS.maxOutputUtf8Bytes,
+    };
+  }
+  const request = occtKernelRecord(
+    context.stepExport,
+    "OCCT STEP export request",
+  );
+  const protocolVersion = occtKernelOwnDataValue(
+    request,
+    "protocolVersion",
+    "OCCT STEP export request.protocolVersion",
+  );
+  const requestedMaximum = occtKernelOwnDataValue(
+    request,
+    "maxOutputBytes",
+    "OCCT STEP export request.maxOutputBytes",
+  );
+  const rawMetadata = occtKernelOwnDataValue(
+    request,
+    "metadata",
+    "OCCT STEP export request.metadata",
+  );
+  if (protocolVersion !== KERNEL_STEP_EXPORT_PROTOCOL_VERSION) {
+    throw new OcctKernelBoundaryTypeError(
+      "OCCT STEP export options use an unsupported protocol version",
+    );
+  }
+  if (
+    requestedMaximum !== undefined &&
+    (typeof requestedMaximum !== "number" ||
+      !occtKernelNumberIsSafeInteger(requestedMaximum) ||
+      requestedMaximum <= 0)
+  ) {
+    throw new OcctKernelBoundaryRangeError(
+      "OCCT STEP export maxOutputBytes must be a positive safe integer",
+    );
+  }
+  const metadata = occtKernelRecord(
+    rawMetadata,
+    "OCCT STEP export metadata",
+  );
+  const capturedMetadata = {
+    fileName: occtKernelOwnDataValue(
+      metadata,
+      "fileName",
+      "OCCT STEP export metadata.fileName",
+    ),
+    timestamp: occtKernelOwnDataValue(
+      metadata,
+      "timestamp",
+      "OCCT STEP export metadata.timestamp",
+    ),
+    productId: occtKernelOwnDataValue(
+      metadata,
+      "productId",
+      "OCCT STEP export metadata.productId",
+    ),
+    productName: occtKernelOwnDataValue(
+      metadata,
+      "productName",
+      "OCCT STEP export metadata.productName",
+    ),
+    productDescription: occtKernelOwnDataValue(
+      metadata,
+      "productDescription",
+      "OCCT STEP export metadata.productDescription",
+    ),
+  } as unknown as OcctStepMetadata;
+  return {
+    metadata: capturedMetadata,
+    maxOutputBytes:
+      requestedMaximum === undefined
+        ? DEFAULT_OCCT_STEP_METADATA_LIMITS.maxOutputUtf8Bytes
+        : occtKernelReflectApply(
+            occtKernelMathMin,
+            Math,
+            [
+              requestedMaximum,
+              DEFAULT_OCCT_STEP_METADATA_LIMITS.maxOutputUtf8Bytes,
+            ],
+          ) as number,
+  };
 }
 
 function assertDraftVector(
@@ -1089,6 +1371,7 @@ class OcctKernel implements GeometryKernel {
   private readonly maxExactBooleanHistoryRecords: number;
   private readonly maxExactEdgeTreatmentHistoryRecords: number;
   private readonly maxExactSolidOffsetHistoryRecords: number;
+  private readonly deterministicStepExport: boolean;
   private readonly artifactCandidateCompatibilityFingerprint:
     | string
     | undefined;
@@ -1121,6 +1404,10 @@ class OcctKernel implements GeometryKernel {
     this.maxExactEdgeTreatmentHistoryRecords =
       maxExactEdgeTreatmentHistoryRecords;
     this.maxExactSolidOffsetHistoryRecords = maxExactSolidOffsetHistoryRecords;
+    this.deterministicStepExport =
+      options.moduleFactory === undefined &&
+      options.wasm === undefined &&
+      options.attestedRuntime === undefined;
     const topologySignatureRuntime =
       facade?.version ??
       (options.moduleFactory === undefined && options.wasm === undefined
@@ -1152,6 +1439,21 @@ class OcctKernel implements GeometryKernel {
           ].join(";");
     this.capabilities = {
       ...OcctKernel.BASE_CAPABILITIES,
+      ...(this.deterministicStepExport
+        ? {
+            stepExport: {
+              protocolVersion:
+                KERNEL_STEP_EXPORT_PROTOCOL_VERSION,
+              schema: "AP214IS" as const,
+              byteDeterminism:
+                "same-shape-representation-and-metadata" as const,
+              maxOutputBytes:
+                DEFAULT_OCCT_STEP_METADATA_LIMITS.maxOutputUtf8Bytes,
+              maxMetadataBytes:
+                DEFAULT_OCCT_STEP_METADATA_LIMITS.maxMetadataUtf8Bytes,
+            },
+          }
+        : {}),
       topology: {
         ...OcctKernel.BASE_CAPABILITIES.topology!,
         ...(topologySignatureFingerprint === undefined
@@ -1252,19 +1554,26 @@ class OcctKernel implements GeometryKernel {
   }
 
   private assertKernelLive(): void {
-    if (this.disposed) throw new Error("This OCCT kernel has been disposed");
+    if (this.disposed) {
+      throw new OcctKernelBoundaryError(
+        "This OCCT kernel has been disposed",
+      );
+    }
   }
 
   private shape(shape: KernelShape): OcctShape {
     this.assertKernelLive();
-    if (
-      !(shape instanceof OcctShape) ||
-      !this.liveShapes.has(shape) ||
-      shape.disposed
-    ) {
-      throw new TypeError("Expected a live OCCT kernel shape");
+    const live = occtKernelReflectApply(
+      occtKernelSetHas,
+      this.liveShapes,
+      [shape],
+    ) as boolean;
+    if (!live) {
+      throw new OcctKernelBoundaryTypeError(
+        "Expected a live OCCT kernel shape",
+      );
     }
-    return shape;
+    return shape as OcctShape;
   }
 
   private captureShapeArtifactCandidate(
@@ -4503,15 +4812,83 @@ class OcctKernel implements GeometryKernel {
   exportShape(
     shape: KernelShape,
     format: KernelExchangeFormat,
-    context?: KernelFeatureContext,
+    context?: KernelShapeExportContext,
   ): Uint8Array {
-    checkContext(context);
+    const capturedContext = captureOcctShapeExportContext(context);
+    if (format !== "step" && capturedContext.stepExport !== undefined) {
+      throw new OcctKernelBoundaryTypeError(
+        "OCCT deterministic STEP export options require the 'step' format",
+      );
+    }
+    let deterministicRequest:
+      | {
+          readonly metadata: OcctStepMetadata;
+          readonly maxOutputBytes: number;
+        }
+      | undefined;
+    if (format === "step") {
+      if (!this.deterministicStepExport) {
+        if (capturedContext.stepExport !== undefined) {
+          throw new OcctKernelBoundaryTypeError(
+            "This OCCT runtime is not qualified for deterministic STEP export",
+          );
+        }
+      } else {
+        deterministicRequest =
+          deterministicStepExportMetadata(capturedContext);
+      }
+    }
     const handle = this.shape(shape)[OCCT_SHAPE];
     switch (format) {
-      case "step":
-        return new TextEncoder().encode(this.raw.exportStep(handle));
+      case "step": {
+        if (!this.deterministicStepExport) {
+          checkOcctSignal(capturedContext.signal);
+          const source = this.raw.exportStep(handle);
+          checkOcctSignal(capturedContext.signal);
+          return encodeUtf8(source);
+        }
+        const request = deterministicRequest!;
+        const rewritten = rewriteOcctStepMetadataFromSource(() => {
+          const currentHandle = this.shape(shape)[OCCT_SHAPE];
+          if (currentHandle !== handle) {
+            throw new OcctKernelBoundaryTypeError(
+              "OCCT STEP export shape ownership changed during capture",
+            );
+          }
+          const source = this.raw.exportStep(currentHandle);
+          checkOcctSignal(capturedContext.signal);
+          return source;
+        }, {
+          metadata: request.metadata,
+          ...(capturedContext.signal === undefined
+            ? {}
+            : { signal: capturedContext.signal }),
+          limits: {
+            ...DEFAULT_OCCT_STEP_METADATA_LIMITS,
+            maxOutputUtf8Bytes: request.maxOutputBytes,
+          },
+        });
+        checkOcctSignal(capturedContext.signal);
+        const encoded = encodeUtf8(rewritten);
+        if (typedArrayByteLengthGetter === undefined) {
+          throw new OcctKernelBoundaryTypeError(
+            "Uint8Array byte-length intrinsic is unavailable",
+          );
+        }
+        const encodedByteLength = occtKernelReflectApply(
+          typedArrayByteLengthGetter,
+          encoded,
+          [],
+        ) as number;
+        if (encodedByteLength > request.maxOutputBytes) {
+          throw new OcctKernelBoundaryRangeError(
+            `OCCT STEP metadata output exceeds maxOutputBytes ${request.maxOutputBytes}`,
+          );
+        }
+        return encoded;
+      }
       case "brep":
-        return new TextEncoder().encode(this.raw.toBREP(handle));
+        return encodeUtf8(this.raw.toBREP(handle));
       case "brep-binary":
         return this.raw.toBREPBinary(handle).slice();
     }

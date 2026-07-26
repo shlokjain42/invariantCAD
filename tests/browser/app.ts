@@ -38,6 +38,8 @@ export interface BrowserSmokeResult {
     readonly edges: number;
     readonly vertices: number;
     readonly stepBytes: number;
+    readonly stepDeterministic: boolean;
+    readonly stepMetadataDeterministic: boolean;
     readonly crossRealmWasmUrlCaptured: boolean;
   };
   readonly artifactWorker: {
@@ -1042,7 +1044,8 @@ async function verifyCrossRealmWasmUrlCapture(): Promise<boolean> {
     try {
       if (
         foreignWasmUrl.href === originalHref ||
-        kernel.capabilities.topology?.signatures !== undefined
+        kernel.capabilities.topology?.signatures !== undefined ||
+        kernel.capabilities.stepExport !== undefined
       ) {
         throw new Error(
           "An explicit cross-realm runtime source was not captured as custom",
@@ -1106,8 +1109,26 @@ async function runBrowserSmoke(): Promise<BrowserSmokeResult> {
         throw new Error(diagnosticMessage(topology.diagnostics));
       }
       const step = output.export("step");
-      if (!(step instanceof Uint8Array)) {
+      const repeatedStep = output.export("step");
+      if (
+        !(step instanceof Uint8Array) ||
+        !(repeatedStep instanceof Uint8Array)
+      ) {
         throw new TypeError("STEP export did not return bytes");
+      }
+      const stepDeterministic =
+        step.byteLength === repeatedStep.byteLength &&
+        step.every((value, index) => value === repeatedStep[index]);
+      const stepText = new TextDecoder().decode(step);
+      const stepMetadataDeterministic =
+        /FILE_NAME\('browser-smoke'\s*,\s*'1970-01-01T00:00:00'/u.test(
+          stepText,
+        ) &&
+        /PRODUCT\('box'\s*,\s*'box'\s*,\s*''\s*,/u.test(stepText);
+      if (!stepDeterministic || !stepMetadataDeterministic) {
+        throw new Error(
+          "Browser STEP export was not byte- and metadata-deterministic",
+        );
       }
       occt = {
         volume: output.measure().volume,
@@ -1115,6 +1136,8 @@ async function runBrowserSmoke(): Promise<BrowserSmokeResult> {
         edges: topology.value.edges.length,
         vertices: topology.value.vertices.length,
         stepBytes: step.byteLength,
+        stepDeterministic,
+        stepMetadataDeterministic,
         crossRealmWasmUrlCaptured,
       };
     } finally {
