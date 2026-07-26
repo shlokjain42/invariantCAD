@@ -22,12 +22,14 @@ Success prints the document version and name.
 invariantcad inspect model.json \
   --configuration manufacturing \
   --kernel occt \
-  --parameters parameters.json
+  --parameter width=120 \
+  --parameter draftAngle=0.03490658503988659
 ```
 
 Prints JSON measurements for every selected output, including geometric
 properties, triangle count, principal inertia, radii of gyration, and physical
-properties where the output supplies density.
+properties where the output supplies density. Add `--output name` to inspect
+only one output.
 
 ## Bill of materials
 
@@ -63,7 +65,7 @@ recognized; other destinations default to binary STL. Exact formats default
 the kernel to OCCT, while mesh formats default to Manifold unless `--kernel` is
 explicit.
 
-## Parameter file
+## Parameter overrides
 
 `--parameters` points to a JSON object of finite base-unit values:
 
@@ -74,7 +76,38 @@ explicit.
 }
 ```
 
-Lengths are millimetres and angles are radians.
+For one-off automation, repeat `--parameter name=value` instead:
+
+```bash
+invariantcad inspect model.json \
+  --parameter width=120 \
+  --parameter=draftAngle=0.03490658503988659
+```
+
+Inline values use finite JSON-number syntax. The name is the exact stored
+parameter key, including keys preserved by directly evaluable frozen legacy
+documents that the current builder would not author. The assignment is split
+at its final `=`, so a stored key containing `=` remains addressable. If that
+key begins with `-`, use the attached form, such as
+`--parameter=-legacy-key=5`, so it is not parsed as another option. Lengths are
+millimetres, angles are radians, mass density is `kg/mm³`, and scalars are
+unitless.
+
+Choose either `--parameters` or one or more `--parameter` options. Supplying
+both is a usage error instead of creating an implicit file-versus-command-line
+precedence rule. Runtime overrides take precedence over the selected named
+configuration and the document defaults.
+
+## Strict argument handling
+
+Options are command-specific. Unknown or inapplicable options, extra positional
+arguments, missing values, malformed inline parameters, and duplicate
+single-value options fail before document reading, kernel initialization,
+evaluation, or export. These failures write the reason and usage text to stderr
+and return exit code 2; the CLI never silently ignores a misspelled option.
+Command-scoped help validates any supplied option values without requiring or
+reading a document. For evaluation commands, a parameter file is read and
+validated before the selected geometry kernel is initialized.
 
 ## Exit codes
 
