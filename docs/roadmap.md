@@ -108,35 +108,39 @@ not in the product roadmap.
 Document v7 resource resolution, datums, richer shape algebra, body-set and
 multibody results, imported-body nodes, external occurrences, and feature-hash
 protocol v2 are also staged internally. A source-only
-`stagedBodySetDesignV7(...)` facade now authors the complete direct graph
-admitted by the staged evaluators and datum resolver: typed length,
+`stagedBodySetDesignV7(...)` facade now authors the bounded product graph
+admitted by the staged evaluators and datum resolver: typed length, angle,
 mass-density, and scalar parameters; named parameter, part-material, and
 assembly-instance-suppression configurations; document-owned materials; boxes,
-cylinders, spheres; content-addressed resource commitments; imported-body
-leaves; body sets; parts over one direct leaf or body set; acyclic nested
-fixed-placement assemblies of local parts and already-completed local
-assemblies with per-occurrence configuration selectors; datum points, axes,
-planes, and coordinate systems; and direct
-imported-body/body-set/part/local-assembly outputs. Datums remain addressable
-nodes rather than design outputs. The facade produces detached, deeply frozen,
+cylinders, spheres; primitive/import/transform solid DAGs with ordered
+translate, rotate, scale, and mirror operations; content-addressed resource
+commitments; imported-body leaves; body sets; parts over one solid DAG root or
+body set; acyclic nested fixed-placement assemblies of local parts and
+already-completed local assemblies with per-occurrence configuration
+selectors; datum points, axes, planes, and coordinate systems; and direct
+imported-body/body-set/part/local-assembly outputs. Generic primitive or
+transformed-solid outputs remain unsupported. Datums remain addressable nodes
+rather than design outputs. The facade produces detached, deeply frozen,
 strictly valid v7 documents while enforcing namespaces, typed builder
-ownership, exact plain own-data options, dense collections, unique
-memberships and occurrence IDs, commitments, material/configuration
-references, and authoring limits. Resource locations remain inert resolver
-hints, and the imported node's explicit format—not `mediaType`—selects STEP or
-BREP interpretation. The caller computes each digest and byte-length
-commitment; the facade performs no resource-byte I/O or hashing.
+ownership, exact plain own-data options, dense collections, unique memberships
+and occurrence IDs, commitments, material/configuration references, and
+authoring limits. Resource locations remain inert resolver hints, and the
+imported node's explicit format—not `mediaType`—selects STEP or BREP
+interpretation. The caller computes each digest and byte-length commitment; the
+facade performs no resource-byte I/O or hashing.
 
 One source-only executable slice evaluates outputs that directly reference an
 imported-body node by verifying caller-resolved bytes and invoking the kernel's
 strong exact single-solid import contract. A second evaluates outputs that
-directly reference a body set whose members are direct box, cylinder, sphere,
-or imported-body leaves. It preserves authored member identity, order, names,
-and metadata, treats every listed member as active with no inferred primary,
-and reports whether a native-only result is exact or approximate. Imported
-members retain the verified-resource and strong exact B-Rep requirement. A
-third evaluates outputs that directly reference a part whose geometry is one
-supported solid leaf or one admitted body set. It preserves detached part
+directly reference a body set whose members are roots of bounded
+primitive/import/transform solid DAGs. It preserves authored member identity,
+order, names, and metadata, treats every listed member as active with no
+inferred primary, and reports whether the result is exact or approximate.
+Stock OCCT retains exact B-Rep transforms; Manifold provides approximate mesh
+transforms, with no automatic fallback between them. Imported members retain
+the verified-resource and strong exact single-solid B-Rep requirement. A third
+evaluates outputs that directly reference a part whose geometry is one
+supported solid DAG root or one admitted body set. It preserves detached part
 metadata and effective material/density provenance through an explicit
 single-solid/body-set result union. The staged facade now constructs that exact
 part boundary, including typed material definitions, part metadata, explicit
@@ -150,15 +154,18 @@ assembly's effective configuration controls its definition-scoped suppression
 and placement expressions; each edge then selects an inherited, base, or named
 child context, and caller parameter overrides apply in every context.
 Placements compose parent first into root-relative transforms. One part result
-is reused per effective `(part, configuration)` state, and leaf acquisition is
-deduplicated by node within each configuration batch, without collapsing
-occurrences, multibody memberships, or contextual BOM rows. Aggregate
-mesh/STL/OBJ remains approximate/lossy, while physical mass composes each
-occurrence's effective density and placement. Suppressed assembly edges prune
-their full subtree; active external components fail before resource resolution
-or kernel work. Nesting and retained identity are bounded by
-`maxAssemblyDepth` and `maxOccurrencePathSegments` alongside the existing work
-ceilings.
+is reused per effective `(part, configuration)` state, and solid-DAG
+acquisition is deduplicated by node within each configuration batch, without
+collapsing occurrences, multibody memberships, or contextual BOM rows.
+Aggregate mesh/STL/OBJ remains approximate/lossy, while physical mass composes
+each occurrence's effective density and placement. Suppressed assembly edges
+prune their full subtree; active external components fail before resource
+resolution or kernel work. Nesting and retained identity are bounded by
+`maxAssemblyDepth` and `maxOccurrencePathSegments`. Solid nodes, transform
+dependency links, and authored transform operations are independently bounded
+by `maxSolidGraphNodes`, `maxSolidDependencyLinks`, and
+`maxTransformOperations`; assembly evaluation charges them globally by
+`(node, effective configuration)` across the active tree.
 
 A separate source-only operation, `evaluateDatumNodesV7(...)`, resolves
 selected datum node IDs without a geometry kernel. Parameter values follow
@@ -179,18 +186,18 @@ uniform density and additive independent-body physical-mass semantics, with
 aliases and overlaps counted per authored membership, plus a one-row BOM.
 Those numeric properties inherit backend measurement quality. Bare body sets
 still have no aggregate mass; exact aggregate STEP/BREP, aggregate geometric
-measurement or topology, downstream feature composition, external occurrence
-evaluation, healing, and location I/O remain unsupported. Local-assembly exact
-aggregate export, aggregate geometric measurement or topology, cyclic graphs,
-mates, motion, and interference/collision are also unsupported. `mediaType`
-remains committed provenance pending a versioned format-to-media-type policy.
-The facade still excludes external occurrences, datum-backed sketches,
-solid transform nodes, Booleans, body-consuming operations, per-body materials,
-and general feature graphs, including generic solid and direct primitive
-outputs. These are correctness-tested design inputs for Milestone 1, not
-public authoring or evaluation capabilities. No root export, package subpath,
-or CLI surface was added; the public document alias and migration target remain
-v6.
+measurement or topology, Boolean composition, external occurrence evaluation,
+healing, and location I/O remain unsupported. Local-assembly exact aggregate
+export, aggregate geometric measurement or topology, cyclic graphs, mates,
+motion, and interference/collision are also unsupported. `mediaType` remains
+committed provenance pending a versioned format-to-media-type policy. The
+facade still excludes external occurrences, datum-backed sketches, transforms
+over body sets/parts/assemblies, other body-consuming operations, per-body
+materials, and general solid graphs beyond primitive/import/transform DAGs,
+including generic solid and direct primitive outputs. These are
+correctness-tested design inputs for Milestone 1, not public authoring or
+evaluation capabilities. No root export, package subpath, or CLI surface was
+added; the public document alias and migration target remain v6.
 
 The staged v7 text parser rejects duplicate decoded JSON object members,
 including escape-equivalent names, and applies structural and nesting ceilings
@@ -275,7 +282,7 @@ The public API tiers, reference corpus, benchmark format, and Document v7 design
 are reviewed and executable in CI. New feature work is evaluated against those
 artifacts.
 
-## Milestone 1 — Document v7 modeling foundation
+## Milestone 1 — composable product documents
 
 **Status: In progress**
 
@@ -315,13 +322,13 @@ serialized, migrated, evaluated, inspected, and exported without escaping the
 document model. Their identities and resource inputs are reproducible.
 
 The repository-only facade and staged evaluators now exercise that workflow for
-direct imported bodies, direct primitive/imported body sets, and directly
-authored typed parts and material intent over those geometries, including
-acyclic nested local fixed-placement assemblies and real Manifold and
+direct imported bodies, bounded primitive/import/transform body sets, and
+directly authored typed parts and material intent over those geometries,
+including acyclic nested local fixed-placement assemblies and real Manifold and
 stock-OCCT acceptance paths. The milestone remains in progress because this
 evidence is source-only and does not yet cover public v7 promotion, external
-product documents/components, datum-backed modeling, or general feature
-graphs.
+product documents/components, datum-backed modeling, Boolean/body-consuming
+composition, or the wider shape algebra.
 
 ## Milestone 2 — everyday part modeling
 
