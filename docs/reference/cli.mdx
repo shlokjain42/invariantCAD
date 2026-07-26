@@ -87,8 +87,10 @@ invariantcad inspect model.json \
 Inline values use finite JSON-number syntax. The name is the exact stored
 parameter key, including keys preserved by directly evaluable frozen legacy
 documents that the current builder would not author. The assignment is split
-at its final `=`, so a stored key containing `=` remains addressable. Lengths
-are millimetres, angles are radians, mass density is `kg/mm³`, and scalars are
+at its final `=`, so a stored key containing `=` remains addressable. If that
+key begins with `-`, use the attached form, such as
+`--parameter=-legacy-key=5`, so it is not parsed as another option. Lengths are
+millimetres, angles are radians, mass density is `kg/mm³`, and scalars are
 unitless.
 
 Choose either `--parameters` or one or more `--parameter` options. Supplying

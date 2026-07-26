@@ -352,6 +352,7 @@ describe("CLI", () => {
       const current = stringifyDocument(cad.build());
       const legacyEqualsPath = join(directory, "legacy-equals.json");
       const legacyEmptyPath = join(directory, "legacy-empty.json");
+      const legacyDashPath = join(directory, "legacy-dash.json");
       await writeFile(
         legacyEqualsPath,
         current.replaceAll('"width"', '"legacy=width"'),
@@ -359,6 +360,10 @@ describe("CLI", () => {
       await writeFile(
         legacyEmptyPath,
         current.replaceAll('"width"', '""'),
+      );
+      await writeFile(
+        legacyDashPath,
+        current.replaceAll('"width"', '"-legacy"'),
       );
 
       const equalsResult = invokeCli([
@@ -385,6 +390,18 @@ describe("CLI", () => {
         (JSON.parse(emptyResult.stdout) as { solid: { volume: number } }).solid
           .volume,
       ).toBeCloseTo(84, 10);
+
+      const dashResult = invokeCli([
+        "inspect",
+        legacyDashPath,
+        "--parameter=-legacy=9",
+      ]);
+      expect(dashResult.status).toBe(0);
+      expect(dashResult.stderr).toBe("");
+      expect(
+        (JSON.parse(dashResult.stdout) as { solid: { volume: number } }).solid
+          .volume,
+      ).toBeCloseTo(108, 10);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
