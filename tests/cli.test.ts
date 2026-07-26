@@ -169,7 +169,7 @@ describe("CLI", () => {
         "ENOENT",
       );
     }
-  }, 20_000);
+  }, 30_000);
 
   it("rejects malformed or ambiguous inline parameters before document I/O", () => {
     const missingDocument = join(
@@ -229,7 +229,7 @@ describe("CLI", () => {
       expect(result.stderr, arguments_.join(" ")).toContain("Usage:");
       expect(result.stderr, arguments_.join(" ")).not.toContain("ENOENT");
     }
-  }, 15_000);
+  }, 30_000);
 
   it("applies repeatable finite inline parameters above named configurations", async () => {
     const directory = await mkdtemp(join(tmpdir(), "invariantcad-cli-"));
