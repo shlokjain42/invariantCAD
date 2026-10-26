@@ -117,25 +117,42 @@ const manifoldAbortSignalAbortedGetter =
     ? undefined
     : Object.getOwnPropertyDescriptor(AbortSignal.prototype, "aborted")?.get;
 
-/** Reads `context.signal` as an own data property without invoking accessors. */
+/**
+ * Reads `context.signal` as an own data property without invoking accessors.
+ * An inherited signal fails closed rather than being silently ignored.
+ */
 function manifoldContextSignal(
   context: KernelFeatureContext | undefined,
 ): unknown {
   if (context === undefined) return undefined;
-  if (typeof context !== "object" || context === null) {
+  const uninspectable = (): TypeError =>
+    new TypeError("CAD kernel context could not be inspected safely");
+  let array: boolean;
+  try {
+    array = Array.isArray(context);
+  } catch {
+    throw uninspectable();
+  }
+  if (typeof context !== "object" || context === null || array) {
     throw new TypeError("CAD kernel context must be an object");
   }
   let descriptor: PropertyDescriptor | undefined;
+  let inherited: boolean;
   try {
     descriptor = Object.getOwnPropertyDescriptor(context, "signal");
+    inherited = descriptor === undefined && Reflect.has(context, "signal");
   } catch {
-    throw new TypeError("CAD kernel context could not be inspected safely");
+    throw uninspectable();
   }
-  if (descriptor === undefined) return undefined;
-  if (!Object.hasOwn(descriptor, "value")) {
-    throw new TypeError("CAD kernel context.signal must be an own data property");
+  if (
+    inherited ||
+    (descriptor !== undefined && !Object.hasOwn(descriptor, "value"))
+  ) {
+    throw new TypeError(
+      "CAD kernel context.signal must be an own data property",
+    );
   }
-  return descriptor.value;
+  return descriptor?.value;
 }
 
 function checkManifoldSignal(signal: unknown): void {
@@ -168,7 +185,6 @@ function connectedMeshBodyClassification(
   manifold: ManifoldSolid,
   signal: unknown,
 ): KernelBodyResultClassification {
-  checkManifoldSignal(signal);
   // decompose() is one synchronous WASM call and cannot observe cancellation.
   const components = manifold.decompose();
   let bodies = 0;
@@ -396,6 +412,7 @@ export class ManifoldKernel implements GeometryKernel {
     context?: KernelFeatureContext,
   ): KernelBodyResultClassification {
     const signal = manifoldContextSignal(context);
+    checkManifoldSignal(signal);
     return connectedMeshBodyClassification(
       asManifoldShape(shape)[MANIFOLD_SHAPE],
       signal,

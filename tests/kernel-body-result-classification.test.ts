@@ -94,6 +94,60 @@ function expectBooleanClassifications(
   }
 }
 
+function contextBoundaryCases(): readonly (readonly [string, unknown])[] {
+  class InheritedSignal {
+    readonly #signal = AbortSignal.abort();
+    get signal(): AbortSignal {
+      inheritedReads += 1;
+      return this.#signal;
+    }
+  }
+  const prototypeField = Object.create({ signal: AbortSignal.abort() }) as object;
+  const revoked = Proxy.revocable({}, {});
+  revoked.revoke();
+  return [
+    ["inherited getter", new InheritedSignal()],
+    ["inherited field", prototypeField],
+    ["array", Object.assign([], { signal: AbortSignal.abort() })],
+    ["revoked proxy", revoked.proxy],
+  ];
+}
+
+let inheritedReads = 0;
+
+/** Context validation and cancellation precede shape validation on every kernel. */
+function expectConsistentContextBoundary(
+  kernel: GeometryKernel,
+  shape: KernelShape,
+): void {
+  inheritedReads = 0;
+  for (const [label, context] of contextBoundaryCases()) {
+    expect(
+      () =>
+        kernel.classifyBodyResult!(
+          shape,
+          context as Parameters<
+            NonNullable<GeometryKernel["classifyBodyResult"]>
+          >[1],
+        ),
+      label,
+    ).toThrow(TypeError);
+  }
+  expect(inheritedReads).toBe(0);
+  expect(() =>
+    kernel.classifyBodyResult!(
+      { kernel: kernel.id },
+      { signal: AbortSignal.abort() },
+    ),
+  ).toThrow(expect.objectContaining({ name: "AbortError" }));
+  expect(() => kernel.classifyBodyResult!({ kernel: kernel.id })).toThrow(
+    TypeError,
+  );
+  expect(
+    kernel.classifyBodyResult!(shape, { signal: new AbortController().signal }),
+  ).toBe("single-body");
+}
+
 describe("kernel body-result classification capability", () => {
   it("inspects absent and valid protocol-v1 metadata into an isolated snapshot", () => {
     expect(
@@ -357,6 +411,17 @@ describe("Manifold body-result classification", () => {
       expect(during.deletions).toEqual([1, 1, 1]);
     } finally {
       during.kernel.dispose();
+    }
+  });
+
+  it("fails closed on inherited, array, and revoked contexts before shape checks", async () => {
+    const kernel = await createManifoldKernel();
+    const shape = kernel.box!([1, 1, 1], false);
+    try {
+      expectConsistentContextBoundary(kernel, shape);
+    } finally {
+      kernel.disposeShape(shape);
+      kernel.dispose();
     }
   });
 
@@ -645,6 +710,15 @@ describe("stock OCCT body-result classification", () => {
       native.release(box);
     }
   }, 30_000);
+
+  it("fails closed on inherited, array, and revoked contexts before shape checks", () => {
+    const shape = kernel.box!([1, 1, 1], false);
+    try {
+      expectConsistentContextBoundary(kernel, shape);
+    } finally {
+      kernel.disposeShape(shape);
+    }
+  });
 
   it("rejects pre-aborted, hostile, and foreign inputs before traversal", () => {
     const shape = kernel.box!([1, 1, 1], false);

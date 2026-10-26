@@ -212,6 +212,7 @@ const occtKernelNumberIsSafeInteger = Number.isSafeInteger;
 const occtKernelObjectGetOwnPropertyDescriptor =
   Object.getOwnPropertyDescriptor;
 const occtKernelObjectHasOwn = Object.hasOwn;
+const occtKernelReflectHas = Reflect.has;
 const occtKernelSetHas = Set.prototype.has;
 const occtKernelAbortSignalAbortedGetter =
   typeof AbortSignal === "undefined"
@@ -6377,14 +6378,37 @@ class OcctKernel implements GeometryKernel {
     shape: KernelShape,
     context?: KernelFeatureContext,
   ): KernelBodyResultClassification {
-    const signal =
-      context === undefined
-        ? undefined
-        : occtKernelOwnDataValue(
-            occtKernelRecord(context, "CAD kernel context"),
+    let signal: unknown;
+    if (context !== undefined) {
+      const record = occtKernelRecord(context, "CAD kernel context");
+      signal = occtKernelOwnDataValue(
+        record,
+        "signal",
+        "CAD kernel context.signal",
+      );
+      // An inherited signal would otherwise be silently ignored.
+      let inherited: boolean;
+      try {
+        inherited =
+          !(occtKernelReflectApply(occtKernelObjectHasOwn, Object, [
+            record,
             "signal",
-            "CAD kernel context.signal",
-          );
+          ]) as boolean) &&
+          (occtKernelReflectApply(occtKernelReflectHas, Reflect, [
+            record,
+            "signal",
+          ]) as boolean);
+      } catch {
+        throw new OcctKernelBoundaryTypeError(
+          "CAD kernel context could not be inspected safely",
+        );
+      }
+      if (inherited) {
+        throw new OcctKernelBoundaryTypeError(
+          "CAD kernel context.signal must be an own data property",
+        );
+      }
+    }
     checkOcctSignal(signal);
     let current = this.shape(shape)[OCCT_SHAPE];
     let ownsCurrent = false;
