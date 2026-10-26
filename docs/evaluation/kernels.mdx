@@ -161,21 +161,34 @@ The result describes the kernel's declared representation, so it inherits that
 representation's exactness:
 
 - Manifold classifies connected components of its approximate mesh. Each
-  positive-volume component is a body. Manifold separates a hollow solid's
-  cavity boundary into a negative-volume component, so that boundary bounds a
-  void rather than adding a body. A zero-volume component is non-body topology.
-  Its native decomposition is one synchronous WASM call: cancellation is
-  checked before and after it, not during it. Every temporary component is
-  deleted on success, failure, and cancellation.
+  component with strictly positive native volume is a body. Manifold separates
+  a hollow solid's cavity boundary into a negative-volume component, so that
+  boundary bounds a void rather than adding a body. A zero-volume component is
+  non-body topology. Its native decomposition is one synchronous WASM call:
+  cancellation is checked before and after it, not during it. Every temporary
+  component is deleted on success, failure, and cancellation.
 - OCCT classifies exact B-Rep contents. It traverses compound and compsolid
   occurrences, counts each solid occurrence as one body without reinterpreting
   that solid's shells, and treats any other occurrence as loose topology.
   Repeated occurrences of the same solid count separately. Cancellation is
-  checked at every traversal step. Visited plus queued occurrences are bounded
-  at 1,000,000: the pinned runtime has no non-allocating child count, so one
-  native call materializes a wrapper's direct children, which are charged to
-  the bound immediately and released when it rejects them. Every traversal
-  handle is released on success, failure, and cancellation.
+  checked before each traversal step and after traversal. Visited plus queued
+  occurrences, including the root and every compound or compsolid wrapper,
+  are bounded at 1,000,000: the pinned runtime has no non-allocating child
+  count, so one native call materializes a wrapper's direct children, which
+  are charged to the bound immediately and released when it rejects them.
+  Every traversal handle is released on success, failure, and cancellation.
+
+Both classifiers are synchronous. They observe a signal that is already aborted
+when the call starts or that code running during the call aborts; an `abort()`
+scheduled from elsewhere on the same thread cannot run until the call returns.
+`context` must be a plain object, and `context.signal`, when present, must be
+an own data property; an inherited or accessor-backed signal fails with
+`TypeError` instead of being ignored. Context and cancellation are checked
+before the shape is validated.
+
+Classification is structural. It does not validate the bodies it counts:
+check `status(...)` separately, as the staged evaluator does before
+classifying.
 
 The two classifications are not a cross-backend equivalence claim. For
 example, Manifold reports two boxes that touch only along an edge as two

@@ -10,7 +10,9 @@
   `non-body-topology`; a wrapper around exactly one body counts as one body.
   `inspectKernelBodyResultClassificationCapabilities(...)` snapshots the
   envelope without invoking accessors and reports malformed metadata
-  separately from absent support. Manifold classifies positive-volume connected
+  separately from absent support. Both shipped classifiers are synchronous and
+  reject a context whose `signal` is inherited or accessor-backed before
+  validating the shape. Manifold classifies positive-volume connected
   components of its approximate mesh, treating the negative-volume components
   it separates for cavity boundaries as voids, checks cancellation before and
   after its uninterruptible synchronous decomposition, and deletes every

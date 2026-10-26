@@ -245,6 +245,8 @@ source-only `evaluateImportedBodyOutputsV7(...)` operation. That lower-level
 operation returns an ordinary `EvaluatedDesign`/`EvaluatedSolid` shape for
 direct imported-body outputs, but it remains inaccessible from the package.
 
+### Direct body-set outputs
+
 The source tree contains a staged
 `evaluateBodySetOutputsV7(kernel, document, options)` operation for selected
 Document v7 outputs that directly reference `bodySet` nodes. It is not exported
