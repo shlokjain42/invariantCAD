@@ -37,6 +37,26 @@
   invented body-set members, retried on another backend, or converted to mesh;
   explicit body sets remain the authored multibody boundary. Frozen v1–v6
   documents and evaluation are unchanged, and Document v7 remains unpublished.
+- Raised the runtime `zod` floor to `^4.6.6` for GHSA-mrhx-c7xc-m3w5 (memory
+  exhaustion while validating oversized constrained collections). Zod 4.6
+  reports an own `__proto__` key on a strict object as unrecognized, where
+  Zod 4.4 skipped it, so frozen v1-v6 documents containing that key began to
+  fail under the previous `^4.4.3` range. Every public frozen v1-v6 schema and
+  parse path now strips own enumerable `__proto__` keys from plain records and
+  arrays before validation, preserving the admitted legacy meaning on every
+  supported Zod release without changing the exported schema objects. The pass
+  copies only when such a key exists, preserves prototypes, descriptors,
+  sharing, and cycles, and never invokes accessors. Document v7 keeps Zod's
+  strict rejection. Also settled Zod's lazily installed defaults before the v7
+  runtime-integrity snapshot.
+- Resolved published advisories in build, test, and documentation tooling
+  through patched `vite`, `vitest`, and `@vitest/coverage-v8` releases and
+  version-pinned overrides for transitive dependencies. The release audit now
+  allows exactly one documented exception: GHSA-mrhx-c7xc-m3w5 in the `zod` 3
+  versions that every published `mint` release pins, admitted only while each
+  finding is a development dependency reached exclusively through `mint`. The
+  audit fails on any other advisory or path and fails when the exception no
+  longer matches.
 - Added a public, opaque `ImportedBodyDocument` workflow for one exact
   commitment-backed solid without promoting the broader staged product
   document grammar. `createImportedBodyDocument(...)` captures a caller-owned

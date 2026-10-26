@@ -86,8 +86,14 @@ geometry core is vendored as versioned, SHA-256-pinned upstream artifacts,
 avoiding its unrelated image/glTF dependency graph. `occt-wasm` is pinned
 exactly because its JavaScript and WASM form a matched runtime.
 
-Dependency alerts are not dismissed merely to make a badge green. Any future
+Dependency alerts are not dismissed merely to make a badge green. An
 exception requires documented reachability, fail-closed CI, and a removal plan.
+The only current exception covers GHSA-mrhx-c7xc-m3w5 in the `zod` 3 versions
+that every published `mint` documentation-tooling release pins; no patched
+`zod` 3 exists. The audit admits it only while every finding is a development
+dependency reached exclusively through `mint`, fails on any other advisory or
+path, and fails once the exception no longer matches. InvariantCAD's runtime
+dependency is `zod` `^4.6.6`.
 
 ## Security is not geometry certification
 
