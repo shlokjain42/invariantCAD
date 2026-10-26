@@ -130,9 +130,18 @@ describe("legacy own __proto__ key compatibility", () => {
     const cad = design("legacy-proto-text");
     cad.output("box", cad.box("box", { size: vec3(mm(1), mm(2), mm(3)) }));
     const canonical = stringifyDocument(cad.build());
-    const hostile = canonical
-      .replace("{", '{"__proto__":{"polluted":true},')
-      .replace('"units":{', '"units":{"__proto__":{"polluted":true},');
+    const ownProtoMember = '"__proto__":{"polluted":true}';
+    const withLeadingMember = (objectText: string): string =>
+      `{${ownProtoMember},${objectText.slice(1)}`;
+    const fields = Object.entries(
+      JSON.parse(canonical) as Record<string, unknown>,
+    ).map(([key, value]) => {
+      const valueText = JSON.stringify(value);
+      return `${JSON.stringify(key)}:${
+        key === "units" ? withLeadingMember(valueText) : valueText
+      }`;
+    });
+    const hostile = withLeadingMember(`{${fields.join(",")}}`);
     const parsed = parseDocument(hostile);
     expect(parsed.ok, JSON.stringify(parsed.diagnostics)).toBe(true);
     if (parsed.ok) {
