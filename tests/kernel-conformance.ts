@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   COMPOSITE_SWEEP_REFINEMENT_PROTOCOL_VERSION,
+  inspectKernelBodyResultClassificationCapabilities,
   inspectKernelDocumentBodyImportCapabilities,
   inspectKernelMeasurementCapabilities,
   inspectKernelShapeArtifactSupport,
@@ -280,6 +281,15 @@ export function geometryKernelConformance(
       expect(
         inspectKernelMeasurementCapabilities(kernel.capabilities).status,
       ).toBe("valid");
+      const bodyResultClassification =
+        inspectKernelBodyResultClassificationCapabilities(kernel.capabilities);
+      expect(bodyResultClassification.status).not.toBe("malformed");
+      if (kernelSupports(kernel.capabilities, "feature", "boolean")) {
+        expect(bodyResultClassification.status).toBe("valid");
+      }
+      if (bodyResultClassification.status === "valid") {
+        expect(kernel.classifyBodyResult).toBeTypeOf("function");
+      }
       if (documentBodyImport.status === "valid") {
         expect(kernel.importDocumentBody).toBeTypeOf("function");
         const formats = documentBodyImport.capabilities.formats;
@@ -815,6 +825,54 @@ export function geometryKernelConformance(
       expectMeasurement(expectLiveShape(union), "volume", 12, relativeTolerance);
       expectMeasurement(expectLiveShape(intersection), "volume", 4, relativeTolerance);
       expectMeasurement(expectLiveShape(subtraction), "volume", 4, relativeTolerance);
+    });
+
+    it("classifies one-body, multibody, and cavity Boolean results when declared", () => {
+      if (
+        inspectKernelBodyResultClassificationCapabilities(kernel.capabilities)
+          .status !== "valid" ||
+        !kernelSupports(kernel.capabilities, "primitive", "box") ||
+        !kernelSupports(kernel.capabilities, "feature", "transform") ||
+        !kernelSupports(kernel.capabilities, "feature", "boolean")
+      ) {
+        return;
+      }
+      const shapes: KernelShape[] = [];
+      const own = (shape: KernelShape): KernelShape => {
+        shapes.push(shape);
+        return shape;
+      };
+      const moved = (shape: KernelShape, x: number): KernelShape =>
+        own(kernel.transform!(shape, [{ kind: "translate", value: [x, 0, 0] }]));
+      try {
+        const box = own(kernel.box!([2, 2, 2], false));
+        const overlapping = moved(box, 1);
+        const far = moved(box, 10);
+        const slab = own(
+          kernel.transform!(own(kernel.box!([0.5, 4, 4], false)), [
+            { kind: "translate", value: [0.75, -1, -1] },
+          ]),
+        );
+        const outer = own(kernel.box!([20, 20, 20], true));
+        const inner = own(kernel.box!([10, 10, 10], true));
+        const cases = [
+          [box, "single-body"],
+          [own(kernel.boolean!("union", box, [overlapping])), "single-body"],
+          [own(kernel.boolean!("union", box, [far])), "multiple-bodies"],
+          [own(kernel.boolean!("subtract", box, [slab])), "multiple-bodies"],
+          [own(kernel.boolean!("subtract", outer, [inner])), "single-body"],
+        ] as const;
+        for (const [shape, expected] of cases) {
+          expect(kernel.classifyBodyResult!(shape, { feature: "conformance" }))
+            .toBe(expected);
+          expect(kernel.classifyBodyResult!(shape)).toBe(expected);
+        }
+        for (const shape of shapes) expectLiveShape(shape);
+      } finally {
+        for (let index = shapes.length - 1; index >= 0; index -= 1) {
+          kernel.disposeShape(shapes[index]!);
+        }
+      }
     });
 
     it("extracts a valid standalone triangle mesh", () => {

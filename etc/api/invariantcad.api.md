@@ -2321,6 +2321,7 @@ export interface GeometryKernel {
     }, context?: KernelFeatureContext): KernelShape;
     // (undocumented)
     circularArcSweep?(profile: ResolvedProfile, path: ResolvedCircularArcPath, options: ResolvedSweepOptions, context?: KernelFeatureContext): KernelShape;
+    classifyBodyResult?(shape: KernelShape, context?: KernelFeatureContext): KernelBodyResultClassification;
     // (undocumented)
     compositeSweep?(profile: ResolvedProfile, path: ResolvedCompositePath, options: ResolvedSweepOptions, context?: KernelFeatureContext): KernelShape;
     // (undocumented)
@@ -2537,6 +2538,9 @@ export function inertiaTensorAboutPoint(properties: InertiaPropertySource, point
 export function inspectEvaluatorProfile(kernel: GeometryKernel, profile: EvaluatorProfile): EvaluatorProfileInspection;
 
 // @public
+export function inspectKernelBodyResultClassificationCapabilities(capabilities: KernelCapabilities): KernelBodyResultClassificationCapabilitiesInspection;
+
+// @public
 export function inspectKernelCompositeSweepCapabilities(capabilities: KernelCapabilities): KernelCompositeSweepCapabilitiesInspection;
 
 // @public
@@ -2564,6 +2568,9 @@ type JsonValue = JsonPrimitive | readonly JsonValue[] | {
     readonly [key: string]: JsonValue;
 };
 
+// @public
+export const KERNEL_BODY_RESULT_CLASSIFICATION_PROTOCOL_VERSION: 1;
+
 // @public (undocumented)
 export const KERNEL_DOCUMENT_BODY_IMPORT_PROTOCOL_VERSION: 1;
 
@@ -2582,8 +2589,49 @@ export const KERNEL_STEP_EXPORT_PROTOCOL_VERSION: 1;
 // @public (undocumented)
 const KERNEL_TOPOLOGY_KEY: unique symbol;
 
+// @public
+export type KernelBodyResultClassification = "single-body" | "multiple-bodies" | "non-body-topology";
+
+// @public
+export interface KernelBodyResultClassificationCapabilities {
+    // (undocumented)
+    readonly protocolVersion: typeof KERNEL_BODY_RESULT_CLASSIFICATION_PROTOCOL_VERSION;
+}
+
+// @public
+export interface KernelBodyResultClassificationCapabilitiesAbsent {
+    // (undocumented)
+    readonly status: "absent";
+}
+
+// @public
+export type KernelBodyResultClassificationCapabilitiesInspection = KernelBodyResultClassificationCapabilitiesAbsent | KernelBodyResultClassificationCapabilitiesValid | KernelBodyResultClassificationCapabilitiesMalformed;
+
+// @public
+export interface KernelBodyResultClassificationCapabilitiesMalformed {
+    // (undocumented)
+    readonly details: Readonly<Record<string, unknown>>;
+    // (undocumented)
+    readonly message: string;
+    // (undocumented)
+    readonly reason: KernelBodyResultClassificationCapabilitiesMalformedReason;
+    // (undocumented)
+    readonly status: "malformed";
+}
+
+// @public
+export type KernelBodyResultClassificationCapabilitiesMalformedReason = "uninspectable-metadata" | "not-object" | "unsupported-protocol-version";
+
+// @public
+export interface KernelBodyResultClassificationCapabilitiesValid {
+    readonly capabilities: KernelBodyResultClassificationCapabilities;
+    // (undocumented)
+    readonly status: "valid";
+}
+
 // @public (undocumented)
 export interface KernelCapabilities {
+    readonly bodyResultClassification?: KernelBodyResultClassificationCapabilities;
     // (undocumented)
     readonly compositeSweep?: KernelCompositeSweepCapabilities;
     readonly documentBodyImport?: KernelDocumentBodyImportCapabilities;
@@ -3477,6 +3525,7 @@ export class ManifoldKernel implements GeometryKernel {
     box(size: Vec3, center: boolean): KernelShape;
     // (undocumented)
     readonly capabilities: KernelCapabilities;
+    classifyBodyResult(shape: KernelShape, context?: KernelFeatureContext): KernelBodyResultClassification;
     // (undocumented)
     cylinder(height: number, radiusBottom: number, radiusTop: number, center: boolean, segments?: number): KernelShape;
     // (undocumented)

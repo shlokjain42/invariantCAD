@@ -162,6 +162,8 @@ interface GeometryKernel {
     //
     // (undocumented)
     circularArcSweep?(profile: ResolvedProfile, path: ResolvedCircularArcPath, options: ResolvedSweepOptions, context?: KernelFeatureContext): KernelShape;
+    // Warning: (ae-forgotten-export) The symbol "KernelBodyResultClassification" needs to be exported by the entry point conformance.d.ts
+    classifyBodyResult?(shape: KernelShape, context?: KernelFeatureContext): KernelBodyResultClassification;
     // Warning: (ae-forgotten-export) The symbol "ResolvedCompositePath" needs to be exported by the entry point conformance.d.ts
     //
     // (undocumented)
@@ -284,6 +286,9 @@ export function hashKernelShapeSemanticObservationV2(observation: KernelShapeSem
 // @public
 type InertiaTensor = readonly [Vec3, Vec3, Vec3];
 
+// @public
+const KERNEL_BODY_RESULT_CLASSIFICATION_PROTOCOL_VERSION: 1;
+
 // @public (undocumented)
 const KERNEL_DOCUMENT_BODY_IMPORT_PROTOCOL_VERSION: 1;
 
@@ -320,8 +325,21 @@ const KERNEL_STEP_EXPORT_PROTOCOL_VERSION: 1;
 // @public (undocumented)
 const KERNEL_TOPOLOGY_KEY: unique symbol;
 
+// @public
+type KernelBodyResultClassification = "single-body" | "multiple-bodies" | "non-body-topology";
+
+// @public
+interface KernelBodyResultClassificationCapabilities {
+    // Warning: (ae-forgotten-export) The symbol "KERNEL_BODY_RESULT_CLASSIFICATION_PROTOCOL_VERSION" needs to be exported by the entry point conformance.d.ts
+    //
+    // (undocumented)
+    readonly protocolVersion: typeof KERNEL_BODY_RESULT_CLASSIFICATION_PROTOCOL_VERSION;
+}
+
 // @public (undocumented)
 interface KernelCapabilities {
+    // Warning: (ae-forgotten-export) The symbol "KernelBodyResultClassificationCapabilities" needs to be exported by the entry point conformance.d.ts
+    readonly bodyResultClassification?: KernelBodyResultClassificationCapabilities;
     // Warning: (ae-forgotten-export) The symbol "KernelCompositeSweepCapabilities" needs to be exported by the entry point conformance.d.ts
     //
     // (undocumented)
@@ -1680,7 +1698,7 @@ interface VolumetricMassProperties {
 //
 // src/conformance.ts:128:9 - (ae-forgotten-export) The symbol "GeometryKernel" needs to be exported by the entry point conformance.d.ts
 // src/core/result.ts:75:7 - (ae-forgotten-export) The symbol "Diagnostic" needs to be exported by the entry point conformance.d.ts
-// src/kernel.ts:302:7 - (ae-forgotten-export) The symbol "KernelDocumentBodyLengthUnit" needs to be exported by the entry point conformance.d.ts
+// src/kernel.ts:363:7 - (ae-forgotten-export) The symbol "KernelDocumentBodyLengthUnit" needs to be exported by the entry point conformance.d.ts
 
 // (No @packageDocumentation comment for this package)
 

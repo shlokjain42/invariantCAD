@@ -91,6 +91,8 @@ interface GeometryKernel {
     //
     // (undocumented)
     circularArcSweep?(profile: ResolvedProfile, path: ResolvedCircularArcPath, options: ResolvedSweepOptions, context?: KernelFeatureContext): KernelShape;
+    // Warning: (ae-forgotten-export) The symbol "KernelBodyResultClassification" needs to be exported by the entry point occt-kernel.d.ts
+    classifyBodyResult?(shape: KernelShape, context?: KernelFeatureContext): KernelBodyResultClassification;
     // Warning: (ae-forgotten-export) The symbol "ResolvedCompositePath" needs to be exported by the entry point occt-kernel.d.ts
     //
     // (undocumented)
@@ -192,6 +194,9 @@ type InertiaTensor = readonly [Vec3, Vec3, Vec3];
 // @public (undocumented)
 export const INVARIANTCAD_OCCT_FACADE_0_9_0_RELEASE_MANIFEST_SHA256 = "9973552922d4dd67aa9c79e3a9cdfcbfe0140c52d4cc3d7b567935d7dfa4f708";
 
+// @public
+const KERNEL_BODY_RESULT_CLASSIFICATION_PROTOCOL_VERSION: 1;
+
 // @public (undocumented)
 const KERNEL_DOCUMENT_BODY_IMPORT_PROTOCOL_VERSION: 1;
 
@@ -207,8 +212,21 @@ const KERNEL_STEP_EXPORT_PROTOCOL_VERSION: 1;
 // @public (undocumented)
 const KERNEL_TOPOLOGY_KEY: unique symbol;
 
+// @public
+type KernelBodyResultClassification = "single-body" | "multiple-bodies" | "non-body-topology";
+
+// @public
+interface KernelBodyResultClassificationCapabilities {
+    // Warning: (ae-forgotten-export) The symbol "KERNEL_BODY_RESULT_CLASSIFICATION_PROTOCOL_VERSION" needs to be exported by the entry point occt-kernel.d.ts
+    //
+    // (undocumented)
+    readonly protocolVersion: typeof KERNEL_BODY_RESULT_CLASSIFICATION_PROTOCOL_VERSION;
+}
+
 // @public (undocumented)
 interface KernelCapabilities {
+    // Warning: (ae-forgotten-export) The symbol "KernelBodyResultClassificationCapabilities" needs to be exported by the entry point occt-kernel.d.ts
+    readonly bodyResultClassification?: KernelBodyResultClassificationCapabilities;
     // Warning: (ae-forgotten-export) The symbol "KernelCompositeSweepCapabilities" needs to be exported by the entry point occt-kernel.d.ts
     //
     // (undocumented)
@@ -1125,7 +1143,7 @@ interface VolumetricMassProperties {
 
 // Warnings were encountered during analysis:
 //
-// src/kernel.ts:302:7 - (ae-forgotten-export) The symbol "KernelDocumentBodyLengthUnit" needs to be exported by the entry point occt-kernel.d.ts
+// src/kernel.ts:363:7 - (ae-forgotten-export) The symbol "KernelDocumentBodyLengthUnit" needs to be exported by the entry point occt-kernel.d.ts
 
 // (No @packageDocumentation comment for this package)
 

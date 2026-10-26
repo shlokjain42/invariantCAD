@@ -3,13 +3,18 @@
 import {
   createEvaluator,
   createImportedBodyDocument,
+  createManifoldKernel,
   design,
   EvaluatedSolid,
   IMPORTED_BODY_MEDIA_TYPES,
+  inspectKernelBodyResultClassificationCapabilities,
   mm,
   parseImportedBodyDocument,
   stringifyImportedBodyDocument,
   vec3,
+  type GeometryKernel,
+  type KernelBodyResultClassification,
+  type KernelShape,
 } from "invariantcad";
 import { createOcctKernel } from "invariantcad/kernels/occt";
 import {
@@ -30,7 +35,24 @@ import type {
   EvaluatorWorkerEvidence,
 } from "./artifact.worker.js";
 
+export interface BrowserBodyClassificationEvidence {
+  readonly protocolVersion: number | null;
+  readonly representation: string;
+  readonly exact: boolean;
+  readonly overlappingUnion: KernelBodyResultClassification;
+  readonly disjointUnion: KernelBodyResultClassification;
+  readonly splitSubtraction: KernelBodyResultClassification;
+  readonly cavitySubtraction: KernelBodyResultClassification;
+  readonly emptyIntersection: KernelBodyResultClassification;
+  readonly inputsRemainedLive: boolean;
+  readonly liveShapesRestored: boolean;
+}
+
 export interface BrowserSmokeResult {
+  readonly bodyClassification: {
+    readonly manifold: BrowserBodyClassificationEvidence;
+    readonly occt: BrowserBodyClassificationEvidence;
+  };
   readonly manifold: {
     readonly volume: number;
     readonly triangles: number;
@@ -1077,6 +1099,70 @@ async function verifyCrossRealmWasmUrlCapture(): Promise<boolean> {
   }
 }
 
+function runBodyClassificationGate(
+  kernel: GeometryKernel,
+): BrowserBodyClassificationEvidence {
+  const inspection = inspectKernelBodyResultClassificationCapabilities(
+    kernel.capabilities,
+  );
+  const liveShapes = (
+    kernel as GeometryKernel & { readonly liveShapes: ReadonlySet<unknown> }
+  ).liveShapes;
+  const liveBefore = liveShapes.size;
+  const shapes: KernelShape[] = [];
+  const own = (shape: KernelShape): KernelShape => {
+    shapes.push(shape);
+    return shape;
+  };
+  const moved = (shape: KernelShape, value: [number, number, number]) =>
+    own(kernel.transform!(shape, [{ kind: "translate", value }]));
+  let evidence: Omit<BrowserBodyClassificationEvidence, "liveShapesRestored">;
+  try {
+    const classify = (shape: KernelShape, feature: string) =>
+      kernel.classifyBodyResult!(shape, { feature });
+    const box = own(kernel.box!([2, 2, 2], false));
+    const far = moved(box, [10, 0, 0]);
+    const outer = own(kernel.box!([20, 20, 20], true));
+    const inner = own(kernel.box!([10, 10, 10], true));
+    const slab = moved(own(kernel.box!([0.5, 4, 4], false)), [0.75, -1, -1]);
+    const inputs = [...shapes];
+    evidence = {
+      protocolVersion:
+        inspection.status === "valid"
+          ? inspection.capabilities.protocolVersion
+          : null,
+      representation: kernel.capabilities.representation,
+      exact: kernel.capabilities.exact,
+      overlappingUnion: classify(
+        own(kernel.boolean!("union", box, [moved(box, [1, 0, 0])])),
+        "overlapping-union",
+      ),
+      disjointUnion: classify(
+        own(kernel.boolean!("union", box, [far])),
+        "disjoint-union",
+      ),
+      splitSubtraction: classify(
+        own(kernel.boolean!("subtract", box, [slab])),
+        "split-subtraction",
+      ),
+      cavitySubtraction: classify(
+        own(kernel.boolean!("subtract", outer, [inner])),
+        "cavity-subtraction",
+      ),
+      emptyIntersection: classify(
+        own(kernel.boolean!("intersect", box, [far])),
+        "empty-intersection",
+      ),
+      inputsRemainedLive: inputs.every((shape) => kernel.status(shape).ok),
+    };
+  } finally {
+    for (let index = shapes.length - 1; index >= 0; index -= 1) {
+      kernel.disposeShape(shapes[index]!);
+    }
+  }
+  return { ...evidence, liveShapesRestored: liveShapes.size === liveBefore };
+}
+
 async function runImportedBodyGate(
   evaluator: Awaited<ReturnType<typeof createEvaluator>>,
   sourceDocument: ReturnType<typeof browserSmokeDocument>,
@@ -1228,6 +1314,18 @@ async function runImportedBodyGate(
 
 async function runBrowserSmoke(): Promise<BrowserSmokeResult> {
   const document = browserSmokeDocument();
+  const classificationManifold = await createManifoldKernel();
+  const classificationOcct = await createOcctKernel();
+  let bodyClassification: BrowserSmokeResult["bodyClassification"];
+  try {
+    bodyClassification = {
+      manifold: runBodyClassificationGate(classificationManifold),
+      occt: runBodyClassificationGate(classificationOcct),
+    };
+  } finally {
+    classificationOcct.dispose();
+    classificationManifold.dispose();
+  }
   const manifoldEvaluator = await createEvaluator();
 
   let manifold: BrowserSmokeResult["manifold"];
@@ -1322,6 +1420,7 @@ async function runBrowserSmoke(): Promise<BrowserSmokeResult> {
   const artifactWorker = await runArtifactWorkerGate();
   const runtimeAttestation = await runBrowserRuntimeAttestationGate();
   return {
+    bodyClassification,
     manifold,
     occt,
     importedBody,

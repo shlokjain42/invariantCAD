@@ -5,9 +5,12 @@ import initializeManifold, {
 } from "./vendor/manifold-3d/manifold.js";
 import type { Mat4, Vec3 } from "./core/math.js";
 import {
+  KERNEL_BODY_RESULT_CLASSIFICATION_PROTOCOL_VERSION,
   KERNEL_MEASUREMENT_PROTOCOL_VERSION,
   type GeometryKernel,
+  type KernelBodyResultClassification,
   type KernelCapabilities,
+  type KernelFeatureContext,
   type KernelShape,
   type MeshData,
   type ResolvedTransformOperation,
@@ -109,6 +112,100 @@ function exactPerConnectedComponentGenus(
   return genus;
 }
 
+const manifoldAbortSignalAbortedGetter =
+  typeof AbortSignal === "undefined"
+    ? undefined
+    : Object.getOwnPropertyDescriptor(AbortSignal.prototype, "aborted")?.get;
+
+/** Reads `context.signal` as an own data property without invoking accessors. */
+function manifoldContextSignal(
+  context: KernelFeatureContext | undefined,
+): unknown {
+  if (context === undefined) return undefined;
+  if (typeof context !== "object" || context === null) {
+    throw new TypeError("CAD kernel context must be an object");
+  }
+  let descriptor: PropertyDescriptor | undefined;
+  try {
+    descriptor = Object.getOwnPropertyDescriptor(context, "signal");
+  } catch {
+    throw new TypeError("CAD kernel context could not be inspected safely");
+  }
+  if (descriptor === undefined) return undefined;
+  if (!Object.hasOwn(descriptor, "value")) {
+    throw new TypeError("CAD kernel context.signal must be an own data property");
+  }
+  return descriptor.value;
+}
+
+function checkManifoldSignal(signal: unknown): void {
+  if (signal === undefined) return;
+  let aborted: unknown;
+  try {
+    aborted =
+      manifoldAbortSignalAbortedGetter === undefined
+        ? undefined
+        : Reflect.apply(manifoldAbortSignalAbortedGetter, signal, []);
+  } catch {
+    throw new TypeError("CAD kernel signal must be an AbortSignal");
+  }
+  if (aborted === true) {
+    throw new DOMException("CAD kernel operation was aborted", "AbortError");
+  }
+  if (aborted !== false) {
+    throw new TypeError("CAD kernel signal must be an AbortSignal");
+  }
+}
+
+/**
+ * Counts positive-volume connected components of the retained mesh as bodies.
+ *
+ * Manifold decomposes a hollow solid's inner cavity boundary into its own
+ * negative-volume component, so those components bound voids rather than
+ * forming bodies. Any zero-volume component is not a body.
+ */
+function connectedMeshBodyClassification(
+  manifold: ManifoldSolid,
+  signal: unknown,
+): KernelBodyResultClassification {
+  checkManifoldSignal(signal);
+  // decompose() is one synchronous WASM call and cannot observe cancellation.
+  const components = manifold.decompose();
+  let bodies = 0;
+  let degenerate = false;
+  let failed = false;
+  let failure: unknown;
+  try {
+    for (const component of components) {
+      const volume = component.volume();
+      if (!Number.isFinite(volume)) {
+        throw new RangeError(
+          "Manifold returned an invalid connected-component volume",
+        );
+      }
+      if (volume > 0) bodies += 1;
+      else if (volume === 0) degenerate = true;
+    }
+    checkManifoldSignal(signal);
+  } catch (error) {
+    failed = true;
+    failure = error;
+  }
+  for (const component of components) {
+    try {
+      component.delete();
+    } catch (error) {
+      if (!failed) {
+        failed = true;
+        failure = error;
+      }
+    }
+  }
+  if (failed) throw failure;
+  if (degenerate || bodies === 0) return "non-body-topology";
+  return bodies === 1 ? "single-body" : "multiple-bodies";
+}
+
 function matrixFromColumns(a: Vec3, b: Vec3, c: Vec3, origin: Vec3): Mat4 {
   return [
     a[0], a[1], a[2], 0,
@@ -150,6 +247,9 @@ export class ManifoldKernel implements GeometryKernel {
     measurements: {
       protocolVersion: KERNEL_MEASUREMENT_PROTOCOL_VERSION,
       genus: "exact-per-connected-component",
+    },
+    bodyResultClassification: {
+      protocolVersion: KERNEL_BODY_RESULT_CLASSIFICATION_PROTOCOL_VERSION,
     },
   };
   private readonly module: ManifoldToplevel;
@@ -283,6 +383,23 @@ export class ManifoldKernel implements GeometryKernel {
       ownsCurrent = true;
     }
     return this.own(current);
+  }
+
+  /**
+   * Classifies connected components of this kernel's approximate mesh.
+   *
+   * Cancellation is checked before and after the synchronous native
+   * decomposition, not inside it.
+   */
+  classifyBodyResult(
+    shape: KernelShape,
+    context?: KernelFeatureContext,
+  ): KernelBodyResultClassification {
+    const signal = manifoldContextSignal(context);
+    return connectedMeshBodyClassification(
+      asManifoldShape(shape)[MANIFOLD_SHAPE],
+      signal,
+    );
   }
 
   mesh(shape: KernelShape): MeshData {
