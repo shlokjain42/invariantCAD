@@ -2,6 +2,41 @@
 
 ## [Unreleased]
 
+- Added the optional versioned body-result classification kernel protocol.
+  `KERNEL_BODY_RESULT_CLASSIFICATION_PROTOCOL_VERSION` v1,
+  `KernelCapabilities.bodyResultClassification`, and
+  `GeometryKernel.classifyBodyResult(shape, context?)` classify one borrowed
+  shape's retained representation as `single-body`, `multiple-bodies`, or
+  `non-body-topology`; a wrapper around exactly one body counts as one body.
+  `inspectKernelBodyResultClassificationCapabilities(...)` snapshots the
+  envelope without invoking accessors and reports malformed metadata
+  separately from absent support. Both shipped classifiers are synchronous and
+  reject a context whose `signal` is inherited or accessor-backed before
+  validating the shape. Manifold classifies positive-volume connected
+  components of its approximate mesh, treating the negative-volume components
+  it separates for cavity boundaries as voids, checks cancellation before and
+  after its uninterruptible synchronous decomposition, and deletes every
+  temporary component. OCCT traverses exact compound/compsolid contents,
+  counts each solid occurrence as one body, rejects loose topology, checks
+  cancellation at each step, bounds visited plus queued occurrences at
+  1,000,000, and releases every traversal handle on success, failure, and
+  cancellation.
+- Enforced product shape semantics in the repository-staged Document v7
+  evaluators. Named product outputs are now closed to `solid`, `bodySet`,
+  `part`, and `assembly`, derived from one frozen vocabulary for TypeScript,
+  schema, and semantic validation; curve, wire, face, shell, compound, and
+  unknown output kinds fail as `IR_INVALID`. A staged graph containing a
+  Boolean now preflights the classifier before resource or geometry work, and
+  every Boolean result that passes the existing status and `EMPTY_RESULT`
+  checks must classify as one body before it feeds another node, body-set
+  member, part, or output. Multiple-body and non-body results return
+  `EVALUATION_UNSUPPORTED` with the feature path, kernel, representation,
+  exactness, and stable classification reason; malformed or opaque classifier
+  behavior is a `KERNEL_ERROR` protocol violation. Failures release every
+  acquired shape exactly once. Disconnected Booleans are never split into
+  invented body-set members, retried on another backend, or converted to mesh;
+  explicit body sets remain the authored multibody boundary. Frozen v1–v6
+  documents and evaluation are unchanged, and Document v7 remains unpublished.
 - Raised the runtime `zod` floor to `^4.6.6` for GHSA-mrhx-c7xc-m3w5 (memory
   exhaustion while validating oversized constrained collections). Zod 4.6
   reports an own `__proto__` key on a strict object as unrecognized, where

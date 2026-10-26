@@ -37,9 +37,11 @@ import {
   type ResourceDigestIR,
 } from "../src/ir.js";
 import {
+  KERNEL_BODY_RESULT_CLASSIFICATION_PROTOCOL_VERSION,
   KERNEL_DOCUMENT_BODY_IMPORT_PROTOCOL_VERSION,
   KERNEL_STEP_EXPORT_PROTOCOL_VERSION,
   type GeometryKernel,
+  type KernelBodyResultClassification,
   type KernelCapabilities,
   type KernelDocumentBodyImportOptions,
   type KernelFeatureContext,
@@ -306,12 +308,18 @@ interface BooleanCall {
   readonly shape: FakeShape;
 }
 
+interface ClassifyCall {
+  readonly shape: FakeShape;
+  readonly context: KernelFeatureContext | undefined;
+}
+
 interface KernelHarness {
   readonly kernel: GeometryKernel;
   readonly primitiveCalls: PrimitiveCall[];
   readonly importCalls: ImportCall[];
   readonly transformCalls: TransformCall[];
   readonly booleanCalls: BooleanCall[];
+  readonly classifyCalls: ClassifyCall[];
   readonly disposed: FakeShape[];
   readonly live: ReadonlySet<FakeShape>;
   readonly disposeKernel: ReturnType<typeof vi.fn>;
@@ -348,6 +356,11 @@ interface KernelHarnessOptions {
     shape: FakeShape,
     callIndex: number,
   ) => KernelShape;
+  readonly classifyHook?: (
+    shape: FakeShape,
+    context: KernelFeatureContext | undefined,
+    callIndex: number,
+  ) => unknown;
   readonly statusHook?: (
     shape: FakeShape,
   ) => ReturnType<GeometryKernel["status"]>;
@@ -424,6 +437,7 @@ function createKernelHarness(
   const importCalls: ImportCall[] = [];
   const transformCalls: TransformCall[] = [];
   const booleanCalls: BooleanCall[] = [];
+  const classifyCalls: ClassifyCall[] = [];
   const disposed: FakeShape[] = [];
   const live = new Set<FakeShape>();
   const disposeKernel = vi.fn();
@@ -488,6 +502,9 @@ function createKernelHarness(
       adjacency: true,
     },
     documentBodyImport: strongImportCapabilities,
+    bodyResultClassification: {
+      protocolVersion: KERNEL_BODY_RESULT_CLASSIFICATION_PROTOCOL_VERSION,
+    },
     ...(options.stepExport === undefined
       ? {}
       : { stepExport: options.stepExport }),
@@ -567,6 +584,19 @@ function createKernelHarness(
           booleanCalls.length - 1,
         ) ?? shape;
       }),
+    classifyBodyResult: (
+      shape: KernelShape,
+      context?: KernelFeatureContext,
+    ): KernelBodyResultClassification => {
+      classifyCalls.push({ shape: shape as FakeShape, context });
+      return (options.classifyHook === undefined
+        ? "single-body"
+        : options.classifyHook(
+            shape as FakeShape,
+            context,
+            classifyCalls.length - 1,
+          )) as KernelBodyResultClassification;
+    },
     mesh: (shape: KernelShape): MeshData => {
       const candidate = shape as FakeShape;
       return {
@@ -620,6 +650,7 @@ function createKernelHarness(
     importCalls,
     transformCalls,
     booleanCalls,
+    classifyCalls,
     disposed,
     live,
     disposeKernel,
@@ -778,11 +809,20 @@ describe("staged document-v7 part output evaluation", () => {
     const harness = createKernelHarness();
     const events: string[] = [];
     const reads = new Map<PropertyKey, number>();
+    const descriptorReads = new Map<PropertyKey, number>();
     const kernel = new Proxy(harness.kernel, {
       get(target, property, receiver) {
         reads.set(property, (reads.get(property) ?? 0) + 1);
         events.push(`get:${String(property)}`);
         return Reflect.get(target, property, receiver);
+      },
+      getOwnPropertyDescriptor(target, property) {
+        descriptorReads.set(
+          property,
+          (descriptorReads.get(property) ?? 0) + 1,
+        );
+        events.push(`descriptor:${String(property)}`);
+        return Reflect.getOwnPropertyDescriptor(target, property);
       },
     });
     const resolver = vi.fn((request: ResourceResolverRequestV7) => {
@@ -811,20 +851,34 @@ describe("staged document-v7 part output evaluation", () => {
     for (let index = 0; index < requiredReads.length; index += 1) {
       expect(reads.get(requiredReads[index]!)).toBe(1);
     }
+    // The Boolean classifier is captured once from its data descriptor,
+    // never through [[Get]], before resource I/O.
+    expect(reads.has("classifyBodyResult")).toBe(false);
+    expect(descriptorReads.get("classifyBodyResult")).toBe(1);
     const resolverIndex = events.indexOf("resolve:imported");
     expect(resolverIndex).toBeGreaterThan(-1);
+    expect(events.indexOf("descriptor:classifyBodyResult")).toBeLessThan(
+      resolverIndex,
+    );
     expect(
       events.slice(resolverIndex + 1).some((event) =>
-        event.startsWith("get:"),
+        event.startsWith("get:") || event.startsWith("descriptor:"),
       ),
     ).toBe(false);
+    expect(harness.classifyCalls).toHaveLength(1);
+    expect(harness.classifyCalls[0]).toMatchObject({
+      shape: harness.booleanCalls[0]!.shape,
+      context: { feature: "cut" },
+    });
     const readsAfterEvaluation = new Map(reads);
+    const descriptorReadsAfterEvaluation = new Map(descriptorReads);
     const output = evaluated.output("part");
     if (output.geometry.kind === "solid") {
       output.geometry.solid.measure();
     }
     evaluated.dispose();
     expect(reads).toEqual(readsAfterEvaluation);
+    expect(descriptorReads).toEqual(descriptorReadsAfterEvaluation);
     expect(harness.live.size).toBe(0);
   });
 

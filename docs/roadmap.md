@@ -132,9 +132,17 @@ formats, threat boundary, evidence, non-claims, and promotion gates live in the
 [shape artifact and cache engineering note](/engineering/shape-artifact-cache-research),
 not in the product roadmap.
 
-Document v7 resource resolution, datums, richer shape algebra, body-set and
-multibody results, imported-body nodes, external component occurrences, and
-feature-hash protocol v2 are also staged internally. A source-only
+Document v7 resource resolution, datums, body-set and multibody results,
+imported-body nodes, external component occurrences, and feature-hash protocol
+v2 are also staged internally. Staged product outputs are closed to `solid`,
+`bodySet`, `part`, and `assembly`: curve, wire, face, shell, and compound
+outputs are rejected until real nodes, evaluators, ownership, and conformance
+evidence exist. Every staged Boolean result must be classified by its kernel's
+versioned body-result capability as exactly one body. Manifold classifies
+connected components of its approximate mesh and OCCT classifies exact B-Rep
+contents; multiple-body or loose-topology results return structured
+`EVALUATION_UNSUPPORTED` diagnostics instead of becoming invented body-set
+members, and explicit body sets remain the authored multibody boundary. A source-only
 `stagedBodySetDesignV7(...)` facade now authors the bounded product graph
 admitted by the staged evaluators and datum resolver: typed length, angle,
 mass-density, and scalar parameters; named parameter, part-material, and
@@ -372,7 +380,11 @@ later CAD domain.
 ### Document and geometry outcomes
 
 - Datum points, axes, planes, and coordinate systems.
-- First-class curves, wires, faces, shells, solids, compounds, and body sets.
+- Solids and explicitly authored body sets as the executable product shape
+  outputs, with every Boolean result proven to be exactly one body. Curves,
+  wires, faces, and shells become output kinds only with real nodes,
+  evaluators, ownership, and conformance evidence; backend compounds remain
+  representation details rather than a serialized output kind.
 - Multibody parts with explicit active bodies and result-body semantics.
 - Content-addressed external resources with digest, media type, units, import
   policy, healing policy, and optional location hint.

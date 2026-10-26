@@ -50,6 +50,20 @@ legacy bytes admitted on every supported Zod release, including Zod 4.6, which
 would otherwise report the key as unrecognized on strict objects. Staged
 Document v7 does not strip it.
 
+## Staged Document v7 product outputs
+
+Document v7 remains repository-staged: the public alias, builder, and migration
+target stay on v6. Its strict grammar admits exactly four named product output
+kinds, `solid`, `bodySet`, `part`, and `assembly`. One frozen vocabulary derives
+the TypeScript union, the strict schema, and semantic validation. Curves, wires,
+faces, shells, backend compounds, and unknown kinds fail as `IR_INVALID` at
+`/outputs/<name>/kind`; they are not reserved placeholders and return only with
+real nodes, evaluators, ownership rules, and conformance evidence.
+
+A `solid` output is exactly one body. A `bodySet` is the only multibody output:
+an ordered authored collection with stable member IDs that is never fused or
+turned into a kernel compound. Frozen v1–v6 output grammars are unchanged.
+
 ## Independent version axes
 
 Do not infer one version from another:
@@ -60,6 +74,7 @@ Do not infer one version from another:
 - topology signature protocol version
 - topology descriptor fingerprint version
 - exact indexed-evolution protocol version
+- body-result classification protocol version
 - artifact-cache and semantic-observation versions
 - owned OCCT facade ABI
 

@@ -1151,6 +1151,111 @@ describe("staged document-v7 mixed product evaluation", () => {
     }
   }, 30_000);
 
+  it("rejects multibody Boolean parts on real kernels while authored body sets succeed", async () => {
+    const cad = stagedBodySetDesignV7("product-single-body-booleans");
+    const base = cad.box("base", { size: [mm(2), mm(2), mm(2)] });
+    const overlapping = cad.translate("overlapping", base, [
+      mm(1),
+      mm(0),
+      mm(0),
+    ]);
+    const far = cad.translate("far", base, [mm(10), mm(0), mm(0)]);
+    const joined = cad.union("joined", base, [overlapping]);
+    const disjoint = cad.union("disjoint", base, [far]);
+    const joinedPart = cad.part("joinedPart", joined, {
+      partNumber: "JOINED",
+    });
+    const disjointPart = cad.part("disjointPart", disjoint, {
+      partNumber: "DISJOINT",
+    });
+    const authoredPart = cad.part(
+      "authoredPart",
+      cad.bodySet("authoredBodies", [
+        { id: "left", solid: base },
+        { id: "right", solid: far },
+      ]),
+      { partNumber: "AUTHORED" },
+    );
+    const product = cad.assembly("product", (instances) => {
+      instances.instance("disjoint-occurrence", disjointPart);
+    });
+    cad.output("joinedPart", joinedPart);
+    cad.output("disjointPart", disjointPart);
+    cad.output("authoredPart", authoredPart);
+    cad.output("product", product);
+    const document = cad.build();
+
+    for (const [createKernel, representation, exact] of [
+      [createManifoldKernel, "mesh", false],
+      [createOcctKernel, "brep", true],
+    ] as const) {
+      const kernel = await createKernel();
+      const liveShapes = (
+        kernel as GeometryKernel & {
+          readonly liveShapes: ReadonlySet<unknown>;
+        }
+      ).liveShapes;
+      const liveBefore = liveShapes.size;
+      try {
+        const admitted = await evaluateProductDocument(kernel, document, {
+          outputs: ["joinedPart", "authoredPart"],
+        });
+        expect(admitted.ok, JSON.stringify(admitted.diagnostics)).toBe(true);
+        if (admitted.ok) {
+          try {
+            const joinedResult = admitted.value.part("joinedPart");
+            const authoredResult = admitted.value.part("authoredPart");
+            expect(joinedResult).toMatchObject({ representation, exact });
+            expect(joinedResult.geometry.kind).toBe("solid");
+            if (joinedResult.geometry.kind === "solid") {
+              expect(
+                joinedResult.geometry.solid.measure().volume,
+              ).toBeCloseTo(12, 6);
+            }
+            expect(authoredResult.geometry.kind).toBe("bodySet");
+            if (authoredResult.geometry.kind === "bodySet") {
+              expect(authoredResult.geometry.bodySet.bodyIds).toEqual([
+                "left",
+                "right",
+              ]);
+            }
+          } finally {
+            admitted.value.dispose();
+          }
+        }
+        expect(liveShapes.size, representation).toBe(liveBefore);
+
+        for (const output of ["disjointPart", "product"]) {
+          const rejected = await evaluateProductDocument(kernel, document, {
+            outputs: [output],
+          });
+          expect(rejected.ok, `${representation}:${output}`).toBe(false);
+          if (!rejected.ok) {
+            expect(rejected.diagnostics).toEqual([
+              expect.objectContaining({
+                code: "EVALUATION_UNSUPPORTED",
+                node: "disjoint",
+                path: "/nodes/disjoint",
+                details: expect.objectContaining({
+                  kernel: kernel.id,
+                  representation,
+                  exact,
+                  operation: "union",
+                  reason: "multiple-bodies",
+                }),
+              }),
+            ]);
+          }
+          expect(liveShapes.size, `${representation}:${output}`).toBe(
+            liveBefore,
+          );
+        }
+      } finally {
+        kernel.dispose();
+      }
+    }
+  }, 60_000);
+
   it("resolves and imports one shared resource once for every mixed view", async () => {
     const bytes = encoder.encode("shared imported body");
     const document = await importedMixedDocument(bytes);
@@ -1284,20 +1389,46 @@ describe("staged document-v7 mixed product evaluation", () => {
     expect(harness.importCalls).toHaveLength(0);
     expect(resolver).not.toHaveBeenCalled();
 
-    const unsupported = structuredClone(mixedProductDocument()) as {
+    const mismatched = structuredClone(mixedProductDocument()) as {
       outputs: Record<string, { node: NodeId; kind: string }>;
     };
-    unsupported.outputs.direct = {
+    mismatched.outputs.direct = {
       node: "shared" as NodeId,
-      kind: "face",
+      kind: "part",
     };
     const wrongKind = await evaluateProductDocument(
       harness.kernel,
-      unsupported as unknown as DesignDocumentV7,
+      mismatched as unknown as DesignDocumentV7,
       { outputs: ["direct"] },
     );
     expectFailureCode(wrongKind, "REFERENCE_KIND_MISMATCH");
     expect(harness.primitiveCalls).toHaveLength(0);
+
+    const unavailable = structuredClone(mixedProductDocument()) as {
+      outputs: Record<string, { node: NodeId; kind: string }>;
+    };
+    unavailable.outputs.direct = {
+      node: "shared" as NodeId,
+      kind: "face",
+    };
+    const closedGrammar = await evaluateProductDocument(
+      harness.kernel,
+      unavailable as unknown as DesignDocumentV7,
+      { outputs: ["direct"], resolver },
+    );
+    expectFailureCode(closedGrammar, "IR_INVALID");
+    if (!closedGrammar.ok) {
+      expect(closedGrammar.diagnostics).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            code: "IR_INVALID",
+            path: "/outputs/direct/kind",
+          }),
+        ]),
+      );
+    }
+    expect(harness.primitiveCalls).toHaveLength(0);
+    expect(resolver).not.toHaveBeenCalled();
   });
 
   it("rejects raw exotic boundaries and reports parse defects only once", async () => {

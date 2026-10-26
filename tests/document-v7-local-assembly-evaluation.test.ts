@@ -327,6 +327,7 @@ interface InstrumentedKernel {
   readonly kernel: GeometryKernel;
   readonly boxCalls: ReturnType<typeof vi.fn>;
   readonly booleanCalls: ReturnType<typeof vi.fn>;
+  readonly classifyCalls: ReturnType<typeof vi.fn>;
   readonly transformCalls: ReturnType<typeof vi.fn>;
   readonly disposedShapes: KernelShape[];
   readonly disposeKernel: ReturnType<typeof vi.fn>;
@@ -372,6 +373,13 @@ async function instrumentedManifold(
       >
     ) => base.boolean!(...arguments_),
   );
+  const classifyCalls = vi.fn(
+    (
+      ...arguments_: Parameters<
+        NonNullable<GeometryKernel["classifyBodyResult"]>
+      >
+    ) => base.classifyBodyResult!(...arguments_),
+  );
   const disposedShapes: KernelShape[] = [];
   const disposeKernel = vi.fn();
   const kernel: GeometryKernel = {
@@ -379,6 +387,7 @@ async function instrumentedManifold(
     capabilities: base.capabilities,
     box: (...arguments_) => boxCalls(...arguments_),
     boolean: (...arguments_) => booleanCalls(...arguments_),
+    classifyBodyResult: (...arguments_) => classifyCalls(...arguments_),
     transform: (...arguments_) => transformCalls(...arguments_),
     mesh(shape, options) {
       const valid = base.mesh(shape, options);
@@ -398,6 +407,7 @@ async function instrumentedManifold(
     kernel,
     boxCalls,
     booleanCalls,
+    classifyCalls,
     transformCalls,
     disposedShapes,
     disposeKernel,
@@ -1102,9 +1112,19 @@ describe("staged Document v7 local assembly evaluation", () => {
       expect(harness.boxCalls).toHaveBeenCalledTimes(6);
       expect(harness.transformCalls).toHaveBeenCalledTimes(4);
       expect(harness.booleanCalls).toHaveBeenCalledTimes(2);
+      expect(harness.classifyCalls).toHaveBeenCalledTimes(2);
       for (let contextIndex = 0; contextIndex < 2; contextIndex += 1) {
         const boxOffset = contextIndex * 3;
         const transformOffset = contextIndex * 2;
+        const classifyCall =
+          harness.classifyCalls.mock.calls[contextIndex]!;
+        expect(classifyCall[0]).toBe(
+          harness.booleanCalls.mock.results[contextIndex]!.value,
+        );
+        expect(classifyCall[1]).toMatchObject({ feature: "combined" });
+        expect(
+          harness.classifyCalls.mock.results[contextIndex]!.value,
+        ).toBe("single-body");
         const booleanCall =
           harness.booleanCalls.mock.calls[contextIndex]!;
         expect(booleanCall[0]).toBe("union");
@@ -1269,6 +1289,7 @@ describe("staged Document v7 local assembly evaluation", () => {
     expect(harness.boxCalls).not.toHaveBeenCalled();
     expect(harness.transformCalls).not.toHaveBeenCalled();
     expect(harness.booleanCalls).not.toHaveBeenCalled();
+    expect(harness.classifyCalls).not.toHaveBeenCalled();
 
     const exact = await evaluateLocalAssemblyOutputsV7(
       harness.kernel,
@@ -1289,6 +1310,7 @@ describe("staged Document v7 local assembly evaluation", () => {
     expect(harness.boxCalls).toHaveBeenCalledTimes(6);
     expect(harness.transformCalls).toHaveBeenCalledTimes(4);
     expect(harness.booleanCalls).toHaveBeenCalledTimes(2);
+    expect(harness.classifyCalls).toHaveBeenCalledTimes(2);
     expect(harness.disposedShapes).toHaveLength(12);
     harness.disposeBase();
   });

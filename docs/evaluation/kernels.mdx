@@ -19,6 +19,7 @@ and deployment needs.
 | STEP/BREP | No | Yes | Yes |
 | Exact topology snapshot | No | Yes | Yes |
 | Genus | Exact per connected mesh component | Unsupported (`null`) | Unsupported (`null`) |
+| Body-result classification (unreleased 0.2) | Positive-volume connected components of the approximate mesh | Exact compound/compsolid solid occurrences | Same exact traversal as stock OCCT |
 | Draft | No | No | Yes, bounded ABI contract |
 | Complete exact feature evolution | No | Partial | Selected Boolean/treatment/offset feature slices |
 | Browser release test | Chromium | Chromium | Repository/local conformance only |
@@ -87,6 +88,8 @@ feature, it checks:
 - topology evidence surfaces and signature fingerprint
 - exact indexed topology evolution when a stronger contract is required
 - versioned measurement semantics such as exact or unsupported genus
+- body-result classification protocol and a callable classifier whenever a
+  staged product solid graph contains a Boolean
 - deterministic single-shape STEP metadata, bounds, and byte scope
 
 Malformed metadata fails separately from absent support. A kernel cannot obtain
@@ -131,6 +134,73 @@ than inference. The high-level workflow fails before native parsing when
 resolution or commitment verification fails and never falls back to
 `importShape(...)` or Manifold. See [Import and export](/interchange/import-export#verified-single-body-import).
 
+## Body-result classification
+
+<Note>
+  Body-result classification is implemented for the unreleased 0.2 line, not
+  the current 0.1.1 npm package.
+</Note>
+
+Protocol v1 is an optional kernel capability. A kernel that advertises
+`bodyResultClassification: { protocolVersion: 1 }` implements
+`classifyBodyResult(shape, context?)`. The call borrows one shape and returns
+exactly one classification of its retained representation:
+
+| Classification | Meaning |
+| --- | --- |
+| `single-body` | Exactly one body and no other topology; a wrapper around that one body is a representation detail |
+| `multiple-bodies` | Two or more bodies and no other topology |
+| `non-body-topology` | Anything else, including an empty representation or a loose shell, face, wire, edge, or vertex |
+
+Use `inspectKernelBodyResultClassificationCapabilities(...)` for discovery. It
+reads only own data properties, never invokes accessors, returns an immutable
+snapshot, and reports `uninspectable-metadata`, `not-object`, or
+`unsupported-protocol-version` separately from absent support.
+
+The result describes the kernel's declared representation, so it inherits that
+representation's exactness:
+
+- Manifold classifies connected components of its approximate mesh. Each
+  component with strictly positive native volume is a body. Manifold separates
+  a hollow solid's cavity boundary into a negative-volume component, so that
+  boundary bounds a void rather than adding a body. A zero-volume component is
+  non-body topology. Its native decomposition is one synchronous WASM call:
+  cancellation is checked before and after it, not during it. Every temporary
+  component is deleted on success, failure, and cancellation.
+- OCCT classifies exact B-Rep contents. It traverses compound and compsolid
+  occurrences, counts each solid occurrence as one body without reinterpreting
+  that solid's shells, and treats any other occurrence as loose topology.
+  Repeated occurrences of the same solid count separately. Cancellation is
+  checked before each traversal step and after traversal. Visited plus queued
+  occurrences, including the root and every compound or compsolid wrapper,
+  are bounded at 1,000,000: the pinned runtime has no non-allocating child
+  count, so one native call materializes a wrapper's direct children, which
+  are charged to the bound immediately and released when it rejects them.
+  Every traversal handle is released on success, failure, and cancellation.
+
+Both classifiers are synchronous. They observe a signal that is already aborted
+when the call starts or that code running during the call aborts; an `abort()`
+scheduled from elsewhere on the same thread cannot run until the call returns.
+`context` must be a plain object, and `context.signal`, when present, must be
+an own data property; an inherited or accessor-backed signal fails with
+`TypeError` instead of being ignored. Context and cancellation are checked
+before the shape is validated.
+
+Classification is structural. It does not validate the bodies it counts:
+check `status(...)` separately, as the staged evaluator does before
+classifying.
+
+The two classifications are not a cross-backend equivalence claim. For
+example, Manifold reports two boxes that touch only along an edge as two
+components of its mesh; near-contact geometry can classify differently on
+another backend.
+
+The staged Document v7 evaluator uses this contract to require that every
+Boolean result is exactly one body. It never splits a disconnected Boolean
+into invented body-set members, retries another backend, or converts exact
+geometry to mesh. Authors who need separate bodies list them explicitly in a
+`bodySet`.
+
 ## Do not equate these guarantees
 
 - A B-Rep kernel is not automatically exact for every authored feature.
@@ -140,6 +210,8 @@ resolution or commitment verification fails and never falls back to
 - Weak native import does not imply the strong document-body import contract.
 - A topology snapshot does not imply persistent signature support.
 - Successful tessellation does not make mesh coordinates analytically exact.
+- A `single-body` classification is only as exact as the kernel representation
+  it classifies.
 
 Use the [support matrix](/reference/support-matrix) for the feature-level
 boundary and the [architecture](/architecture) for protocol rationale.

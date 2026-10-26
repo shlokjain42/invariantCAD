@@ -8,10 +8,12 @@ import type {
 import type { Vec2, Vec3 } from "./core/math.js";
 import { canonicalStringifyProtocol } from "./core/json.js";
 import {
+  KERNEL_BODY_RESULT_CLASSIFICATION_PROTOCOL_VERSION,
   KERNEL_DOCUMENT_BODY_IMPORT_PROTOCOL_VERSION,
   KERNEL_MEASUREMENT_PROTOCOL_VERSION,
   KERNEL_STEP_EXPORT_PROTOCOL_VERSION,
   type GeometryKernel,
+  type KernelBodyResultClassification,
   type KernelCapabilities,
   type KernelDocumentBodyImportOptions,
   type KernelExchangeFormat,
@@ -194,6 +196,11 @@ const MAX_ARTIFACT_NATIVE_TOPOLOGY_ITEMS = 400_000;
 const MAX_ARTIFACT_NATIVE_IDENTITY_TRAVERSAL_OCCURRENCES =
   OCCT_ARTIFACT_NATIVE_IDENTITY_V1_MAX_OCCURRENCES;
 const MAX_ARTIFACT_NATIVE_IDENTITY_COMPARISONS = 1_000_000;
+/**
+ * Bounds visited plus queued wrapper occurrences, including repeated
+ * occurrences of shared children.
+ */
+const MAX_BODY_CLASSIFICATION_OCCURRENCES = 1_000_000;
 const OcctKernelBoundaryDOMException = DOMException;
 const OcctKernelBoundaryError = Error;
 const OcctKernelBoundaryRangeError = RangeError;
@@ -205,6 +212,7 @@ const occtKernelNumberIsSafeInteger = Number.isSafeInteger;
 const occtKernelObjectGetOwnPropertyDescriptor =
   Object.getOwnPropertyDescriptor;
 const occtKernelObjectHasOwn = Object.hasOwn;
+const occtKernelReflectHas = Reflect.has;
 const occtKernelSetHas = Set.prototype.has;
 const occtKernelAbortSignalAbortedGetter =
   typeof AbortSignal === "undefined"
@@ -1346,6 +1354,9 @@ class OcctKernel implements GeometryKernel {
     measurements: {
       protocolVersion: KERNEL_MEASUREMENT_PROTOCOL_VERSION,
       genus: "unsupported",
+    },
+    bodyResultClassification: {
+      protocolVersion: KERNEL_BODY_RESULT_CLASSIFICATION_PROTOCOL_VERSION,
     },
     documentBodyImport: {
       protocolVersion: KERNEL_DOCUMENT_BODY_IMPORT_PROTOCOL_VERSION,
@@ -6356,6 +6367,114 @@ class OcctKernel implements GeometryKernel {
       genus: null,
       tolerance: this.modelingTolerance,
     };
+  }
+
+  /**
+   * Classifies exact B-Rep contents by traversing compound and compsolid
+   * occurrences. Each solid occurrence is one body and is not decomposed
+   * further; any other occurrence outside a solid is loose topology.
+   */
+  classifyBodyResult(
+    shape: KernelShape,
+    context?: KernelFeatureContext,
+  ): KernelBodyResultClassification {
+    let signal: unknown;
+    if (context !== undefined) {
+      const record = occtKernelRecord(context, "CAD kernel context");
+      signal = occtKernelOwnDataValue(
+        record,
+        "signal",
+        "CAD kernel context.signal",
+      );
+      // An inherited signal would otherwise be silently ignored.
+      let inherited: boolean;
+      try {
+        inherited =
+          !(occtKernelReflectApply(occtKernelObjectHasOwn, Object, [
+            record,
+            "signal",
+          ]) as boolean) &&
+          (occtKernelReflectApply(occtKernelReflectHas, Reflect, [
+            record,
+            "signal",
+          ]) as boolean);
+      } catch {
+        throw new OcctKernelBoundaryTypeError(
+          "CAD kernel context could not be inspected safely",
+        );
+      }
+      if (inherited) {
+        throw new OcctKernelBoundaryTypeError(
+          "CAD kernel context.signal must be an own data property",
+        );
+      }
+    }
+    checkOcctSignal(signal);
+    let current = this.shape(shape)[OCCT_SHAPE];
+    let ownsCurrent = false;
+    const pending: ShapeHandle[] = [];
+    let occurrences = 0;
+    let bodies = 0;
+    let looseTopology = false;
+    let failed = false;
+    let failure: unknown;
+    try {
+      while (true) {
+        checkOcctSignal(signal);
+        occurrences += 1;
+        const type = this.raw.getShapeType(current);
+        if (type === "solid") {
+          bodies += 1;
+        } else if (type === "compound" || type === "compsolid") {
+          // occt-wasm exposes no non-allocating direct-child count, so one
+          // native call materializes this wrapper's children. Queue them
+          // before charging the budget so rejection releases every handle.
+          const children = this.raw.iterShapes(current);
+          for (let index = 0; index < children.length; index += 1) {
+            pending.push(children[index]!);
+          }
+          if (
+            occurrences + pending.length >
+            MAX_BODY_CLASSIFICATION_OCCURRENCES
+          ) {
+            throw new OcctKernelBoundaryRangeError(
+              "OCCT body classification exceeded its occurrence limit",
+            );
+          }
+        } else {
+          looseTopology = true;
+          break;
+        }
+        if (ownsCurrent) {
+          ownsCurrent = false;
+          this.raw.release(current);
+        }
+        const next = pending.pop();
+        if (next === undefined) break;
+        current = next;
+        ownsCurrent = true;
+      }
+    } catch (error) {
+      failed = true;
+      failure = error;
+    }
+    // Release every traversal handle; a release failure never replaces an
+    // earlier traversal failure.
+    const remaining = ownsCurrent ? [current, ...pending] : pending;
+    for (let index = remaining.length - 1; index >= 0; index -= 1) {
+      try {
+        this.raw.release(remaining[index]!);
+      } catch (error) {
+        if (!failed) {
+          failed = true;
+          failure = error;
+        }
+      }
+    }
+    if (failed) throw failure;
+    checkOcctSignal(signal);
+    if (looseTopology || bodies === 0) return "non-body-topology";
+    return bodies === 1 ? "single-body" : "multiple-bodies";
   }
 
   status(shape: KernelShape): KernelShapeStatus {

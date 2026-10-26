@@ -66,6 +66,23 @@ A numeric genus is exact for the backend representation. Unsupported results
 are explicit `null`; no backend or assembly path guesses, clamps, or silently
 converts the value.
 
+<Note>
+  Body-result classification is implemented for the unreleased 0.2 line, not
+  the published 0.1.1 package.
+</Note>
+
+| Body-result classification | Manifold | Stock OCCT | Owned facade |
+| --- | --- | --- | --- |
+| Basis | Positive-volume connected components of the approximate mesh | Exact compound/compsolid solid occurrences | Same exact traversal as stock OCCT |
+| Overlapping union, cavity subtraction | `single-body` | `single-body` | Not separately release-gated |
+| Disjoint union, split subtraction | `multiple-bodies` | `multiple-bodies` | Not separately release-gated |
+| Empty result | `non-body-topology` | `non-body-topology` | Not separately release-gated |
+| Solid beside a loose face, or face only | Not representable | `non-body-topology` | Not separately release-gated |
+
+The repository-staged Document v7 evaluator admits a Boolean result only when
+its kernel classifies it as `single-body`; explicit body sets remain the only
+multibody product boundary.
+
 ## Exchange
 
 | Format | Manifold | OCCT |

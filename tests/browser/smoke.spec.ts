@@ -9,6 +9,24 @@ test("loads both WASM kernels and confines artifact/evaluator native work to dis
     () => window.invariantCadBrowserSmoke,
   ) as BrowserSmokeResult;
 
+  for (const [kernel, representation, exact] of [
+    ["manifold", "mesh", false],
+    ["occt", "brep", true],
+  ] as const) {
+    expect(result.bodyClassification[kernel]).toEqual({
+      protocolVersion: 1,
+      representation,
+      exact,
+      overlappingUnion: "single-body",
+      disjointUnion: "multiple-bodies",
+      splitSubtraction: "multiple-bodies",
+      cavitySubtraction: "single-body",
+      emptyIntersection: "non-body-topology",
+      inputsRemainedLive: true,
+      liveShapesRestored: true,
+    });
+  }
+
   expect(result.manifold.volume).toBeCloseTo(24, 10);
   expect(result.manifold.triangles).toBe(12);
   expect(result.manifold.stlBytes).toBe(684);

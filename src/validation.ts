@@ -17,6 +17,7 @@ import {
 import type { Dimension, ExpressionIR } from "./expressions.js";
 import { pluralTopologyKind } from "./internal/topology-language.js";
 import {
+  DESIGN_OUTPUT_KINDS_V7,
   DOCUMENT_SCHEMA_V1,
   DOCUMENT_SCHEMA_V2,
   DOCUMENT_SCHEMA_V3,
@@ -2133,16 +2134,7 @@ function validateDocumentInternal<T extends ValidatableDocument>(
   }
   const expectedOutputKinds: readonly OutputKindV7[] =
     document.version === DOCUMENT_VERSION_V7
-      ? [
-          "curve",
-          "wire",
-          "face",
-          "shell",
-          "solid",
-          "bodySet",
-          "part",
-          "assembly",
-        ]
+      ? DESIGN_OUTPUT_KINDS_V7
       : ["solid", "part", "assembly"];
   for (const [name, output] of Object.entries(document.outputs)) {
     validateRef(

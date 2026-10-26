@@ -11,6 +11,7 @@ import {
   documentV7RuntimeIntrinsicsAreIntact,
 } from "./internal/document-v7-runtime-integrity.js";
 import {
+  DESIGN_OUTPUT_KINDS_V7,
   DOCUMENT_SCHEMA_V1,
   DOCUMENT_SCHEMA_V2,
   DOCUMENT_SCHEMA_V3,
@@ -938,16 +939,7 @@ const DesignOutputRefSchema = z.object({
 const DesignOutputRefV7Schema = z
   .object({
     node: IdSchema,
-    kind: z.enum([
-      "curve",
-      "wire",
-      "face",
-      "shell",
-      "solid",
-      "bodySet",
-      "part",
-      "assembly",
-    ]),
+    kind: z.enum(DESIGN_OUTPUT_KINDS_V7),
   })
   .strict();
 

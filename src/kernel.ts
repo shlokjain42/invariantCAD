@@ -93,6 +93,8 @@ export const EXACT_INDEXED_TOPOLOGY_EVOLUTION_PROTOCOL_VERSION = 1 as const;
 export const KERNEL_SHAPE_ARTIFACT_PROTOCOL_VERSION = 1 as const;
 export const KERNEL_DOCUMENT_BODY_IMPORT_PROTOCOL_VERSION = 1 as const;
 export const KERNEL_MEASUREMENT_PROTOCOL_VERSION = 1 as const;
+/** Protocol version for body-level classification of kernel shape results. */
+export const KERNEL_BODY_RESULT_CLASSIFICATION_PROTOCOL_VERSION = 1 as const;
 /** Protocol version for the strong deterministic STEP-export envelope. */
 export const KERNEL_STEP_EXPORT_PROTOCOL_VERSION = 1 as const;
 /** Default timezone-free STEP timestamp used when callers omit one. */
@@ -152,6 +154,33 @@ export type KernelGenusMeasurementCapability =
 export interface KernelMeasurementCapabilities {
   readonly protocolVersion: typeof KERNEL_MEASUREMENT_PROTOCOL_VERSION;
   readonly genus: KernelGenusMeasurementCapability;
+}
+
+/**
+ * Body-level structure of one shape's retained kernel representation.
+ *
+ * - `single-body`: exactly one body and no other topology. A backend wrapper
+ *   around that one body, such as a one-solid B-Rep compound, is a
+ *   representation detail.
+ * - `multiple-bodies`: two or more bodies and no other topology.
+ * - `non-body-topology`: anything else, including an empty representation or
+ *   loose shells, faces, wires, edges, or vertices beside or instead of bodies.
+ */
+export type KernelBodyResultClassification =
+  | "single-body"
+  | "multiple-bodies"
+  | "non-body-topology";
+
+/**
+ * Versioned support for `GeometryKernel.classifyBodyResult(...)`.
+ *
+ * The classification describes the kernel's retained representation as
+ * declared by `representation` and `exact`: exact B-Rep contents for an exact
+ * B-Rep kernel, or connected components of the approximate mesh for a mesh
+ * kernel. It is not a claim of cross-backend geometric equivalence.
+ */
+export interface KernelBodyResultClassificationCapabilities {
+  readonly protocolVersion: typeof KERNEL_BODY_RESULT_CLASSIFICATION_PROTOCOL_VERSION;
 }
 
 /**
@@ -291,6 +320,38 @@ export type KernelMeasurementCapabilitiesInspection =
   | KernelMeasurementCapabilitiesValid
   | KernelMeasurementCapabilitiesMalformed;
 
+/** Stable reasons returned for malformed body-result classification metadata. */
+export type KernelBodyResultClassificationCapabilitiesMalformedReason =
+  | "uninspectable-metadata"
+  | "not-object"
+  | "unsupported-protocol-version";
+
+/** Inspection result when a kernel advertises no body-result classifier. */
+export interface KernelBodyResultClassificationCapabilitiesAbsent {
+  readonly status: "absent";
+}
+
+/** Inspection result containing a validated immutable capability snapshot. */
+export interface KernelBodyResultClassificationCapabilitiesValid {
+  readonly status: "valid";
+  /** A validated snapshot, isolated from later mutation of kernel metadata. */
+  readonly capabilities: KernelBodyResultClassificationCapabilities;
+}
+
+/** Inspection result for a present but invalid capability envelope. */
+export interface KernelBodyResultClassificationCapabilitiesMalformed {
+  readonly status: "malformed";
+  readonly reason: KernelBodyResultClassificationCapabilitiesMalformedReason;
+  readonly message: string;
+  readonly details: Readonly<Record<string, unknown>>;
+}
+
+/** Result of inspecting a kernel's optional body-result classifier. */
+export type KernelBodyResultClassificationCapabilitiesInspection =
+  | KernelBodyResultClassificationCapabilitiesAbsent
+  | KernelBodyResultClassificationCapabilitiesValid
+  | KernelBodyResultClassificationCapabilitiesMalformed;
+
 export type KernelDocumentBodyImportUnits =
   | {
       /** Read units from a format that carries authoritative unit metadata. */
@@ -416,6 +477,8 @@ export interface KernelCapabilities {
   readonly documentBodyImport?: KernelDocumentBodyImportCapabilities;
   /** Optional versioned measurement-semantics contract. */
   readonly measurements?: KernelMeasurementCapabilities;
+  /** Optional versioned body-level result classification contract. */
+  readonly bodyResultClassification?: KernelBodyResultClassificationCapabilities;
   /** Optional strong deterministic single-shape STEP export contract. */
   readonly stepExport?: KernelStepExportCapabilities;
 }
@@ -574,6 +637,82 @@ export function inspectKernelMeasurementCapabilities(
     capabilities: Object.freeze({
       protocolVersion: KERNEL_MEASUREMENT_PROTOCOL_VERSION,
       genus,
+    }),
+  };
+}
+
+function malformedBodyResultClassificationCapabilities(
+  reason: KernelBodyResultClassificationCapabilitiesMalformedReason,
+  message: string,
+  details: Readonly<Record<string, unknown>>,
+): KernelBodyResultClassificationCapabilitiesMalformed {
+  return { status: "malformed", reason, message, details };
+}
+
+/**
+ * Validates and snapshots the optional body-result classification envelope.
+ *
+ * The inspector never invokes accessors and fails closed for proxy traps,
+ * revoked proxies, malformed fields, and unsupported protocol versions.
+ */
+export function inspectKernelBodyResultClassificationCapabilities(
+  capabilities: KernelCapabilities,
+): KernelBodyResultClassificationCapabilitiesInspection {
+  const uninspectable = (
+    property: string,
+  ): KernelBodyResultClassificationCapabilitiesMalformed =>
+    malformedBodyResultClassificationCapabilities(
+      "uninspectable-metadata",
+      "Kernel body-result classification capability metadata could not be inspected",
+      { property },
+    );
+  if (typeof capabilities !== "object" || capabilities === null) {
+    return uninspectable("bodyResultClassification");
+  }
+  const envelope = inspectOwnDataProperty(
+    capabilities,
+    "bodyResultClassification",
+  );
+  if (envelope.status === "absent") return { status: "absent" };
+  if (envelope.status === "uninspectable") {
+    return uninspectable("bodyResultClassification");
+  }
+  if (envelope.value === undefined) return { status: "absent" };
+
+  const raw = envelope.value;
+  try {
+    if (typeof raw !== "object" || raw === null || kernelArrayIsArray(raw)) {
+      return malformedBodyResultClassificationCapabilities(
+        "not-object",
+        "Kernel body-result classification capability metadata must be an object",
+        { actualType: metadataType(raw) },
+      );
+    }
+  } catch {
+    return uninspectable("bodyResultClassification");
+  }
+
+  const protocol = inspectOwnDataProperty(raw, "protocolVersion");
+  if (protocol.status === "uninspectable") {
+    return uninspectable("protocolVersion");
+  }
+  const protocolVersion =
+    protocol.status === "value" ? protocol.value : undefined;
+  if (protocolVersion !== KERNEL_BODY_RESULT_CLASSIFICATION_PROTOCOL_VERSION) {
+    return malformedBodyResultClassificationCapabilities(
+      "unsupported-protocol-version",
+      "Kernel body-result classification capability metadata uses an unsupported protocol version",
+      {
+        expectedProtocolVersion:
+          KERNEL_BODY_RESULT_CLASSIFICATION_PROTOCOL_VERSION,
+        actualProtocolVersion: metadataDiagnosticValue(protocolVersion),
+      },
+    );
+  }
+  return {
+    status: "valid",
+    capabilities: kernelObjectFreeze({
+      protocolVersion: KERNEL_BODY_RESULT_CLASSIFICATION_PROTOCOL_VERSION,
     }),
   };
 }
@@ -1298,6 +1437,18 @@ export interface GeometryKernel {
     context?: KernelFeatureContext,
   ): KernelShape;
   topology?(shape: KernelShape): KernelTopologySnapshot;
+  /**
+   * Classifies the bodies in one borrowed shape's retained representation.
+   *
+   * Requires a valid `bodyResultClassification` envelope. The call must not
+   * consume, mutate, or retain `shape`, must release every temporary native
+   * object on success, failure, and cancellation, and returns exactly one
+   * classification string.
+   */
+  classifyBodyResult?(
+    shape: KernelShape,
+    context?: KernelFeatureContext,
+  ): KernelBodyResultClassification;
   importShape?(
     data: string | ArrayBuffer | Uint8Array,
     format: KernelExchangeFormat,
