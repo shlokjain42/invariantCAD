@@ -110,6 +110,29 @@ describe("legacy own __proto__ key compatibility", () => {
     expect(getterCalls).toBe(0);
   });
 
+  it("never traverses or copies values held by stripped keys", () => {
+    let traversals = 0;
+    const discarded = new Proxy(
+      { nested: { deep: true } },
+      {
+        ownKeys(target) {
+          traversals += 1;
+          return Reflect.ownKeys(target);
+        },
+      },
+    );
+    const stripped = stripLegacyOwnProtoKeys(
+      withOwnProto({ op: "all" }, discarded),
+    );
+    expect(stripped).toEqual({ op: "all" });
+    expect(traversals).toBe(0);
+    const parsed = TopologyQueryV1Schema.safeParse(
+      withOwnProto({ op: "all" }, discarded),
+    );
+    expect(parsed.success).toBe(true);
+    expect(traversals).toBe(0);
+  });
+
   it("keeps frozen topology roots and legacy text admitting own __proto__ keys", () => {
     for (const schema of [
       TopologyQueryV1Schema,

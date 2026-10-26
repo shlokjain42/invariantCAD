@@ -65,10 +65,6 @@ function isPlainContainer(value: object): boolean {
   return prototype === null || prototype === legacyProtoObjectPrototype;
 }
 
-function hasStrippedProtoKey(value: object): boolean {
-  return ownDescriptor(value, LEGACY_PROTO_KEY)?.enumerable === true;
-}
-
 /**
  * Returns `input` unchanged unless a plain record or array reachable through
  * own data properties owns an enumerable `__proto__` key. Otherwise it returns
@@ -92,14 +88,19 @@ export function stripLegacyOwnProtoKeys(input: unknown): unknown {
     }
     apply(legacyProtoSetAdd, visited, [value]);
     containers.push(value);
-    if (hasStrippedProtoKey(value)) found = true;
     const keys = apply<(string | symbol)[]>(
       legacyProtoReflectOwnKeys,
       LegacyProtoReflect,
       [value],
     );
     for (let index = 0; index < keys.length; index += 1) {
-      const descriptor = ownDescriptor(value, keys[index]!);
+      const key = keys[index]!;
+      const descriptor = ownDescriptor(value, key);
+      // A stripped key's value can never reach the validated result.
+      if (key === LEGACY_PROTO_KEY && descriptor?.enumerable === true) {
+        found = true;
+        continue;
+      }
       const child: unknown = descriptor?.value;
       if (typeof child === "object" && child !== null) pending.push(child);
     }
