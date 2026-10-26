@@ -4,6 +4,7 @@ import {
   DEFAULT_DESIGN_DOCUMENT_LIMITS,
   preflightDesignDocumentValue,
 } from "./document-limits.js";
+import { stripLegacyOwnProtoKeys } from "./internal/legacy-proto-key-compat.js";
 import {
   captureDocumentV7RuntimeOwnerIntegrityChecker,
   DOCUMENT_V7_RUNTIME_INTEGRITY_MESSAGE,
@@ -2908,3 +2909,85 @@ export const DesignDocumentSchema: z.ZodType<DesignDocument> = z.union([
   DesignDocumentV5Schema,
   DesignDocumentV6Schema,
 ]) as z.ZodType<DesignDocument>;
+
+
+/**
+ * Zod 4.4 skipped own `__proto__` keys on every object, including strict
+ * ones; Zod 4.6 reports them as unrecognized on strict objects. Each public
+ * frozen v1-v6 root strips them before its own parse so admitted legacy
+ * documents keep their published meaning on every supported Zod release,
+ * while the exported schema objects keep their identity, class, and shape.
+ * Nested frozen roots inside one parse are already stripped. Document v7
+ * shares none of these instances and keeps Zod's strict rejection.
+ */
+let legacyProtoParseDepth = 0;
+
+function preserveLegacyOwnProtoStripping(schema: z.ZodType): void {
+  // Every parse family and parent schema enters a child through `_zod.run`.
+  const internals = schema._zod as unknown as {
+    run: (
+      payload: { value: unknown },
+      context: unknown,
+    ) => unknown;
+  };
+  const run = internals.run;
+  if (typeof run !== "function") {
+    throw new TypeError("Frozen document schemas require Zod run internals");
+  }
+  internals.run = (payload, context) => {
+    if (legacyProtoParseDepth > 0) return run(payload, context);
+    payload.value = stripLegacyOwnProtoKeys(payload.value);
+    legacyProtoParseDepth += 1;
+    try {
+      return run(payload, context);
+    } finally {
+      legacyProtoParseDepth -= 1;
+    }
+  };
+}
+
+for (const schema of new Set<z.ZodType>([
+  DesignDocumentSchema,
+  DesignDocumentV1Schema,
+  DesignDocumentV2Schema,
+  DesignDocumentV3Schema,
+  DesignDocumentV4Schema,
+  DesignDocumentV5Schema,
+  DesignDocumentV6Schema,
+  ExpressionSchema,
+  NodeSchema,
+  NodeV1Schema,
+  NodeV2Schema,
+  NodeV3Schema,
+  NodeV4Schema,
+  NodeV5Schema,
+  NodeV6Schema,
+  PersistentTopologyReferenceSchema,
+  PersistentTopologyReferenceV2Schema,
+  PersistentTopologyReferenceV3Schema,
+  PersistentTopologyReferenceV4Schema,
+  PersistentTopologyReferenceV5Schema,
+  PersistentTopologyReferenceV6Schema,
+  TopologyReferenceEntrySchema,
+  TopologyReferenceEntryV2Schema,
+  TopologyReferenceEntryV3Schema,
+  TopologyReferenceEntryV4Schema,
+  TopologyReferenceEntryV5Schema,
+  TopologyReferenceEntryV6Schema,
+  TopologyQuerySchema,
+  TopologyQueryV1Schema,
+  TopologyQueryV2Schema,
+  TopologyQueryV3Schema,
+  TopologyQueryV4Schema,
+  TopologyQueryV5Schema,
+  TopologyQueryV6Schema,
+  TopologySelectionSchema,
+  TopologySelectionV1Schema,
+  TopologySelectionV2Schema,
+  TopologySelectionV3Schema,
+  TopologySelectionV4Schema,
+  TopologySelectionV5Schema,
+  TopologySelectionV6Schema,
+])) {
+  preserveLegacyOwnProtoStripping(schema);
+}
