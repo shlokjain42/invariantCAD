@@ -572,6 +572,9 @@ const V7_ZOD_PARSE_CONTEXT = Object.freeze({
 // Zod's documented process-global configuration is part of this boundary.
 // Other exported Zod internals are not trusted inputs; safe methods contain
 // their unexpected throws without claiming to freeze or own the dependency.
+// Zod 4.5+ installs its default locale and container memoizer lazily on the
+// first schema and container constructions; settle both before snapshotting.
+z.object({}).safeParse(undefined);
 const v7ZodConfigIsIntact =
   captureDocumentV7RuntimeOwnerIntegrityChecker(z.config());
 
