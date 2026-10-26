@@ -600,6 +600,12 @@ kernel must advertise and implement `boolean` before resolver or shape work,
 and malformed optional exact-evolution metadata fails closed. A null or exactly
 zero-volume subtraction/intersection returns error-level `EMPTY_RESULT`; an
 impossible empty union or invalid measurement is a kernel protocol failure.
+Every remaining Boolean result must be classified by the kernel as exactly one
+body. A disjoint union or a subtraction that splits its target returns
+`EVALUATION_UNSUPPORTED` with `details.reason` set to `multiple-bodies`;
+loose or empty non-body topology uses `non-body-topology`. The evaluator does
+not split such a result into invented members or exchange it as a multibody
+file; author each body as an explicit body-set member instead.
 There is no staged `allowEmpty` option. Failure releases every distinct
 acquired or intermediate shape exactly once. Success keeps those shapes live
 until the staged design is disposed; subsequent facade and per-body solid

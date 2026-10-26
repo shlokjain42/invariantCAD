@@ -300,9 +300,26 @@ protocol failure, not a partial-history downgrade. Each graph node must return
 a fresh valid owned shape. A subtraction or intersection null shape or exactly
 zero volume becomes structured `EMPTY_RESULT`; an impossible empty union and
 negative, non-finite, or malformed volume remain kernel protocol failures.
-Staged evaluation has no `allowEmpty` option. Capability mismatch, malformed
-output, shape aliasing, cancellation, emptiness, or any later failure releases
-every acquired shape exactly once.
+Staged evaluation has no `allowEmpty` option.
+
+Every Boolean result must also be exactly one body. When the graph contains a
+Boolean, the kernel must advertise body-result classification protocol v1 and
+expose `classifyBodyResult(...)` as a callable own or inherited data property
+before any resource or shape work. After the status and emptiness checks above, each
+Boolean result is classified before it can feed another node or a membership.
+A result classified as `multiple-bodies` or `non-body-topology` fails with
+`EVALUATION_UNSUPPORTED`, the Boolean node and path, and a stable
+`details.reason` equal to that classification. Missing support is
+`KERNEL_CAPABILITY_MISSING`; malformed metadata, an accessor-backed or
+non-callable method, a thrown classifier, or any other return value is a
+`KERNEL_ERROR` protocol violation. The evaluator never splits a disconnected
+Boolean into members: author separate bodies explicitly in the body set.
+Manifold classifies its approximate mesh components and OCCT its exact B-Rep
+contents, as described in [Choosing a geometry kernel](/evaluation/kernels#body-result-classification).
+
+Capability mismatch, malformed output, shape aliasing, cancellation, emptiness,
+unsupported Boolean body structure, or any later failure releases every
+acquired shape exactly once.
 
 `EvaluatedBodySetDesignV7` exposes the selected `configurationId`, resolved
 `parameters`, structured `diagnostics`, deterministic `outputNames`,
