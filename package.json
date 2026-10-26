@@ -84,7 +84,7 @@
     "docs:links": "cd docs && pnpm exec mint broken-links --check-anchors --check-redirects",
     "docs:release-check": "pnpm docs:validate && pnpm docs:links",
     "coverage": "vitest run --coverage",
-    "audit:release": "node scripts/check-production-audit.mjs",
+    "audit:release": "tsx scripts/check-production-audit.ts",
     "lint:package": "pnpm build && node scripts/check-package-bin.mjs && publint && node scripts/check-package-types.mjs",
     "test:package": "pnpm pack --pack-destination .artifacts && node scripts/package-smoke.mjs",
     "example:bracket": "tsx examples/bracket.ts",
@@ -119,22 +119,22 @@
   ],
   "dependencies": {
     "occt-wasm": "3.8.0",
-    "zod": "^4.4.3"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@arethetypeswrong/core": "0.18.5",
     "@microsoft/api-extractor": "7.58.12",
     "@playwright/test": "^1.61.1",
     "@types/node": "^26.1.1",
-    "@vitest/coverage-v8": "^4.1.10",
+    "@vitest/coverage-v8": "^4.1.12",
     "mint": "4.2.742",
     "oxlint": "1.75.0",
     "publint": "^0.3.22",
     "tsup": "^8.5.1",
     "tsx": "^4.23.1",
     "typescript": "^7.0.2",
-    "vite": "^8.1.5",
-    "vitest": "^4.1.10"
+    "vite": "^8.3.5",
+    "vitest": "^4.1.12"
   },
   "packageManager": "pnpm@11.17.0"
 }
