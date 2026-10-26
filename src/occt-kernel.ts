@@ -196,7 +196,10 @@ const MAX_ARTIFACT_NATIVE_TOPOLOGY_ITEMS = 400_000;
 const MAX_ARTIFACT_NATIVE_IDENTITY_TRAVERSAL_OCCURRENCES =
   OCCT_ARTIFACT_NATIVE_IDENTITY_V1_MAX_OCCURRENCES;
 const MAX_ARTIFACT_NATIVE_IDENTITY_COMPARISONS = 1_000_000;
-/** Bounds wrapper traversal, including repeated occurrences of shared children. */
+/**
+ * Bounds visited plus queued wrapper occurrences, including repeated
+ * occurrences of shared children.
+ */
 const MAX_BODY_CLASSIFICATION_OCCURRENCES = 1_000_000;
 const OcctKernelBoundaryDOMException = DOMException;
 const OcctKernelBoundaryError = Error;
@@ -6395,18 +6398,24 @@ class OcctKernel implements GeometryKernel {
       while (true) {
         checkOcctSignal(signal);
         occurrences += 1;
-        if (occurrences > MAX_BODY_CLASSIFICATION_OCCURRENCES) {
-          throw new OcctKernelBoundaryRangeError(
-            "OCCT body classification exceeded its occurrence limit",
-          );
-        }
         const type = this.raw.getShapeType(current);
         if (type === "solid") {
           bodies += 1;
         } else if (type === "compound" || type === "compsolid") {
+          // occt-wasm exposes no non-allocating direct-child count, so one
+          // native call materializes this wrapper's children. Queue them
+          // before charging the budget so rejection releases every handle.
           const children = this.raw.iterShapes(current);
           for (let index = 0; index < children.length; index += 1) {
             pending.push(children[index]!);
+          }
+          if (
+            occurrences + pending.length >
+            MAX_BODY_CLASSIFICATION_OCCURRENCES
+          ) {
+            throw new OcctKernelBoundaryRangeError(
+              "OCCT body classification exceeded its occurrence limit",
+            );
           }
         } else {
           looseTopology = true;

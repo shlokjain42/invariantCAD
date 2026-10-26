@@ -16,8 +16,9 @@
   after its uninterruptible synchronous decomposition, and deletes every
   temporary component. OCCT traverses exact compound/compsolid contents,
   counts each solid occurrence as one body, rejects loose topology, checks
-  cancellation at each step, bounds traversal at 1,000,000 occurrences, and
-  releases every traversal handle on success, failure, and cancellation.
+  cancellation at each step, bounds visited plus queued occurrences at
+  1,000,000, and releases every traversal handle on success, failure, and
+  cancellation.
 - Enforced product shape semantics in the repository-staged Document v7
   evaluators. Named product outputs are now closed to `solid`, `bodySet`,
   `part`, and `assembly`, derived from one frozen vocabulary for TypeScript,

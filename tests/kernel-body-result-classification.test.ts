@@ -605,6 +605,47 @@ describe("stock OCCT body-result classification", () => {
     }
   });
 
+  it("charges queued wrapper children against the occurrence limit", () => {
+    const native = raw();
+    const owned = kernel as unknown as {
+      own(handle: ShapeHandle): KernelShape;
+    };
+    const box = native.makeBox(1, 1, 1);
+    try {
+      // The root plus 1,000,000 queued children is exactly one occurrence
+      // over the limit; the admitted case keeps full traversal affordable.
+      for (const [children, admitted] of [
+        [10_000, true],
+        [1_000_000, false],
+      ] as const) {
+        const wide = owned.own(
+          native.makeCompound(new Array<ShapeHandle>(children).fill(box)),
+        );
+        try {
+          const nativeBefore = native.shapeCount;
+          if (admitted) {
+            expect(kernel.classifyBodyResult!(wide)).toBe("multiple-bodies");
+          } else {
+            expect(() => kernel.classifyBodyResult!(wide)).toThrow(
+              "OCCT body classification exceeded its occurrence limit",
+            );
+          }
+          expect(native.shapeCount).toBe(nativeBefore);
+        } finally {
+          kernel.disposeShape(wide);
+        }
+      }
+      const probe = kernel.box!([1, 1, 1], false);
+      try {
+        expect(kernel.classifyBodyResult!(probe)).toBe("single-body");
+      } finally {
+        kernel.disposeShape(probe);
+      }
+    } finally {
+      native.release(box);
+    }
+  }, 30_000);
+
   it("rejects pre-aborted, hostile, and foreign inputs before traversal", () => {
     const shape = kernel.box!([1, 1, 1], false);
     const native = raw();

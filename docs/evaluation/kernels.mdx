@@ -171,9 +171,11 @@ representation's exactness:
   occurrences, counts each solid occurrence as one body without reinterpreting
   that solid's shells, and treats any other occurrence as loose topology.
   Repeated occurrences of the same solid count separately. Cancellation is
-  checked at every traversal step, traversal stops with an error after
-  1,000,000 occurrences, and every traversal handle is released on success,
-  failure, and cancellation.
+  checked at every traversal step. Visited plus queued occurrences are bounded
+  at 1,000,000: the pinned runtime has no non-allocating child count, so one
+  native call materializes a wrapper's direct children, which are charged to
+  the bound immediately and released when it rejects them. Every traversal
+  handle is released on success, failure, and cancellation.
 
 The two classifications are not a cross-backend equivalence claim. For
 example, Manifold reports two boxes that touch only along an edge as two
