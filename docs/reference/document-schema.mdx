@@ -44,6 +44,12 @@ wire representation, and schema URI. New parser code may validate an older
 version more defensively, but it must not reinterpret valid frozen bytes as a
 newer grammar.
 
+Frozen v1–v6 schemas and parse paths strip an own `__proto__` key from plain
+records and arrays before validation, as they always have. That keeps the same
+legacy bytes admitted on every supported Zod release, including Zod 4.6, which
+would otherwise report the key as unrecognized on strict objects. Staged
+Document v7 does not strip it.
+
 ## Independent version axes
 
 Do not infer one version from another:
