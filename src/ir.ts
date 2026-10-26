@@ -212,14 +212,23 @@ export type NodeKind = NodeKindV6;
 export type OutputKind = "profile" | "path" | "solid" | "part" | "assembly";
 export type DesignOutputKind = Exclude<OutputKind, "profile" | "path">;
 
-/** Explicit topological shape algebra reserved by the v7 foundation. */
-export type ShapeOutputKindV7 =
-  | "curve"
-  | "wire"
-  | "face"
-  | "shell"
-  | "solid"
-  | "bodySet";
+/**
+ * The only named product outputs admitted by document v7. TypeScript, schema,
+ * and semantic validation derive their allow-lists from this constant.
+ * Curves, wires, faces, shells, and backend compounds are not product outputs.
+ */
+export const DESIGN_OUTPUT_KINDS_V7 = Object.freeze([
+  "solid",
+  "bodySet",
+  "part",
+  "assembly",
+] as const);
+export type DesignOutputKindV7 = (typeof DESIGN_OUTPUT_KINDS_V7)[number];
+/** One body, or an explicitly authored ordered set of bodies. */
+export type ShapeOutputKindV7 = Exclude<
+  DesignOutputKindV7,
+  "part" | "assembly"
+>;
 export type DatumOutputKindV7 =
   | "datumPoint"
   | "datumAxis"
@@ -228,11 +237,8 @@ export type DatumOutputKindV7 =
 export type OutputKindV7 =
   | "profile"
   | "path"
-  | ShapeOutputKindV7
-  | DatumOutputKindV7
-  | "part"
-  | "assembly";
-export type DesignOutputKindV7 = ShapeOutputKindV7 | "part" | "assembly";
+  | DesignOutputKindV7
+  | DatumOutputKindV7;
 
 export interface RefIR<K extends OutputKind = OutputKind> {
   readonly node: NodeId;

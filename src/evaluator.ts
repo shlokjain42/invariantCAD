@@ -48,6 +48,7 @@ import {
   type AssemblyInstanceIR,
   type BodySetMemberIRV7,
   type BodySetNodeIRV7,
+  type BooleanNodeIR,
   type DesignConfigurationIR,
   type DesignDocument,
   type DesignDocumentV7,
@@ -66,7 +67,9 @@ import {
   DEFAULT_KERNEL_STEP_EXPORT_TIMESTAMP,
   EXACT_INDEXED_TOPOLOGY_EVOLUTION_PROTOCOL_VERSION,
   GEOMETRY_KERNEL_PROTOCOL_VERSION,
+  KERNEL_BODY_RESULT_CLASSIFICATION_PROTOCOL_VERSION,
   KERNEL_STEP_EXPORT_PROTOCOL_VERSION,
+  inspectKernelBodyResultClassificationCapabilities,
   inspectKernelCompositeSweepCapabilities,
   inspectKernelDocumentBodyImportCapabilities,
   inspectKernelStepExportCapabilities,
@@ -6417,6 +6420,10 @@ interface BodySetKernelAccess extends StagedV7SolidKernelAccess {
     GeometryKernel["importDocumentBody"]
   >;
   readonly boolean?: NonNullable<GeometryKernel["boolean"]>;
+  /** Captured with the Boolean method; required whenever a Boolean is planned. */
+  readonly classifyBodyResult?: NonNullable<
+    GeometryKernel["classifyBodyResult"]
+  >;
   readonly transform?: NonNullable<GeometryKernel["transform"]>;
   readonly status: GeometryKernel["status"];
   readonly disposeShape: GeometryKernel["disposeShape"];
@@ -7370,7 +7377,11 @@ function bodySetKernelFailure(
 function bodySetCapabilityFailure(
   kernel: string,
   node: NodeId,
-  kind: "primitive" | "feature" | "documentBodyImport",
+  kind:
+    | "primitive"
+    | "feature"
+    | "documentBodyImport"
+    | "bodyResultClassification",
   capability: string,
   message: string,
 ): CadResult<never> {
@@ -7541,6 +7552,127 @@ function validateStagedBooleanExactEvolutionCapabilities(
   return success(undefined);
 }
 
+function validateStagedBodyResultClassificationCapabilities(
+  property: ImportedBodyOwnDataValue,
+  kernelId: string,
+  nodeId: NodeId,
+  signal: AbortSignal | undefined,
+  diagnostics: StagedV7SolidDiagnosticContext,
+): CadResult<undefined> {
+  const malformed = (
+    reason: string,
+    details: Readonly<Record<string, unknown>> = {},
+  ): CadResult<never> =>
+    diagnostics.kernelFailure(
+      kernelId,
+      `Kernel '${kernelId}' declares malformed body-result classification metadata`,
+      {
+        node: nodeId,
+        path: `/nodes/${nodeId}`,
+        details: {
+          protocolViolation: true,
+          kind: "bodyResultClassification",
+          reason,
+          ...details,
+        },
+      },
+    );
+  if (property.kind === "invalid") {
+    return malformed("uninspectable-metadata");
+  }
+  const envelope = importedBodyApply<Record<string, unknown>>(
+    importedBodyObjectCreate,
+    Object,
+    [null],
+  );
+  if (property.kind === "data") {
+    envelope.bodyResultClassification = property.value;
+  }
+  const inspection = inspectKernelBodyResultClassificationCapabilities(
+    envelope as unknown as GeometryKernel["capabilities"],
+  );
+  const afterInspection = diagnostics.postBoundaryFailure(signal, nodeId);
+  if (afterInspection !== undefined) return afterInspection;
+  if (inspection.status === "malformed") {
+    return malformed(inspection.reason, inspection.details);
+  }
+  if (inspection.status === "absent") {
+    return diagnostics.capabilityFailure(
+      kernelId,
+      nodeId,
+      "bodyResultClassification",
+      `protocolVersion:${KERNEL_BODY_RESULT_CLASSIFICATION_PROTOCOL_VERSION}`,
+      `Kernel '${kernelId}' does not classify Boolean body results`,
+    );
+  }
+  return success(undefined);
+}
+
+const STAGED_KERNEL_METHOD_MAX_PROTOTYPE_DEPTH = 32;
+
+type StagedKernelMethodLookup =
+  | { readonly kind: "function"; readonly value: CallableFunction }
+  | {
+      readonly kind:
+        | "missing"
+        | "accessor"
+        | "not-callable"
+        | "uninspectable";
+    };
+
+/**
+ * Captures one own or inherited kernel method from a data property without
+ * invoking accessors or proxy `get` traps.
+ */
+function stagedKernelMethod(
+  kernel: unknown,
+  key: string,
+): StagedKernelMethodLookup {
+  try {
+    let current = kernel;
+    for (
+      let depth = 0;
+      depth < STAGED_KERNEL_METHOD_MAX_PROTOTYPE_DEPTH;
+      depth += 1
+    ) {
+      if (
+        current === null ||
+        (typeof current !== "object" && typeof current !== "function")
+      ) {
+        return { kind: "missing" };
+      }
+      const descriptor = importedBodyApply<PropertyDescriptor | undefined>(
+        importedBodyObjectGetOwnPropertyDescriptor,
+        Object,
+        [current, key],
+      );
+      if (descriptor !== undefined) {
+        if (
+          !importedBodyApply<boolean>(
+            importedBodyObjectHasOwn,
+            Object,
+            [descriptor, "value"],
+          )
+        ) {
+          return { kind: "accessor" };
+        }
+        const value: unknown = descriptor.value;
+        return typeof value === "function"
+          ? { kind: "function", value: value as CallableFunction }
+          : { kind: "not-callable" };
+      }
+      current = importedBodyApply<unknown>(
+        importedBodyObjectGetPrototypeOf,
+        Object,
+        [current],
+      );
+    }
+    return { kind: "uninspectable" };
+  } catch {
+    return { kind: "uninspectable" };
+  }
+}
+
 function captureBodySetKernelAccess(
   kernel: GeometryKernel,
   plan: StagedSolidGraphPlanV7,
@@ -7647,6 +7779,15 @@ function captureBodySetKernelAccess(
           );
     const afterExactEvolution = postBoundaryFailure(signal);
     if (afterExactEvolution !== undefined) return afterExactEvolution;
+    const classificationProperty: ImportedBodyOwnDataValue =
+      firstBooleanNode === undefined
+        ? { kind: "missing" }
+        : importedBodyOwnDataValue(
+            rawCapabilities,
+            "bodyResultClassification",
+          );
+    const afterClassification = postBoundaryFailure(signal);
+    if (afterClassification !== undefined) return afterClassification;
     if (
       protocolProperty.kind !== "data" ||
       representationProperty.kind !== "data" ||
@@ -7846,6 +7987,15 @@ function captureBodySetKernelAccess(
           diagnostics,
         );
       if (!exactEvolution.ok) return exactEvolution;
+      const classification =
+        validateStagedBodyResultClassificationCapabilities(
+          classificationProperty,
+          id,
+          firstBooleanNode,
+          signal,
+          diagnostics,
+        );
+      if (!classification.ok) return classification;
     }
 
     const nativeExportsSnapshot = preflightDesignDocumentValue(
@@ -8231,6 +8381,35 @@ function captureBodySetKernelAccess(
       }
       boolean = method;
     }
+    let classifyBodyResult: BodySetKernelAccess["classifyBodyResult"];
+    if (firstBooleanNode !== undefined) {
+      const method = stagedKernelMethod(kernel, "classifyBodyResult");
+      const afterMethod = postBoundaryFailure(
+        signal,
+        firstBooleanNode,
+      );
+      if (afterMethod !== undefined) return afterMethod;
+      if (method.kind !== "function") {
+        return kernelFailure(
+          id,
+          method.kind === "accessor"
+            ? `Kernel '${id}' exposes body-result classification through an accessor`
+            : `Kernel '${id}' advertises body-result classification without implementing it`,
+          {
+            node: firstBooleanNode,
+            path: `/nodes/${firstBooleanNode}`,
+            details: {
+              protocolViolation: true,
+              kind: "bodyResultClassification",
+              method: method.kind,
+            },
+          },
+        );
+      }
+      classifyBodyResult = method.value as NonNullable<
+        BodySetKernelAccess["classifyBodyResult"]
+      >;
+    }
     let transform: BodySetKernelAccess["transform"];
     if (firstTransformNode !== undefined) {
       const method = kernel.transform;
@@ -8310,6 +8489,9 @@ function captureBodySetKernelAccess(
               ? {}
               : { importDocumentBody }),
             ...(boolean === undefined ? {} : { boolean }),
+            ...(classifyBodyResult === undefined
+              ? {}
+              : { classifyBodyResult }),
             ...(transform === undefined ? {} : { transform }),
             status,
             measure,
@@ -8332,6 +8514,123 @@ function captureBodySetKernelAccess(
       { details: { protocolViolation: true } },
     );
   }
+}
+
+/**
+ * Admits a valid positive Boolean result only when the kernel classifies its
+ * retained representation as exactly one body. Callers check status and
+ * emptiness first so `EMPTY_RESULT` keeps precedence.
+ */
+function classifyStagedBooleanResultV7(
+  kernel: GeometryKernel,
+  access: BodySetKernelAccess,
+  shape: KernelShape,
+  nodeId: NodeId,
+  node: BooleanNodeIR,
+  signal: AbortSignal | undefined,
+  diagnostics: StagedV7SolidDiagnosticContext,
+): CadResult<undefined> {
+  const { postBoundaryFailure, kernelFailure } = diagnostics;
+  const classifier = access.classifyBodyResult;
+  if (classifier === undefined) {
+    return kernelFailure(
+      access.id,
+      `Kernel '${access.id}' has no captured body-result classifier for Boolean '${nodeId}'`,
+      {
+        node: nodeId,
+        path: `/nodes/${nodeId}`,
+        details: {
+          protocolViolation: true,
+          kind: "bodyResultClassification",
+        },
+      },
+    );
+  }
+  let classification: unknown;
+  try {
+    const context = importedBodyApply<KernelFeatureContext>(
+      importedBodyObjectFreeze,
+      Object,
+      [
+        {
+          feature: nodeId,
+          ...(signal === undefined ? {} : { signal }),
+        },
+      ],
+    );
+    classification = importedBodyApply<unknown>(classifier, kernel, [
+      shape,
+      context,
+    ]);
+  } catch (error) {
+    const afterFailure = postBoundaryFailure(signal, nodeId);
+    if (afterFailure !== undefined) return afterFailure;
+    return kernelFailure(
+      access.id,
+      `Kernel '${access.id}' could not classify Boolean result '${nodeId}'`,
+      {
+        node: nodeId,
+        path: `/nodes/${nodeId}`,
+        details: {
+          protocolViolation: true,
+          kind: "bodyResultClassification",
+          operation: node.operation,
+          cause: bodySetThrownCause(
+            error,
+            "Body-result classification failed with an opaque value",
+          ),
+        },
+      },
+    );
+  }
+  const afterClassification = postBoundaryFailure(signal, nodeId);
+  if (afterClassification !== undefined) return afterClassification;
+  if (classification === "single-body") return success(undefined);
+  if (
+    classification === "multiple-bodies" ||
+    classification === "non-body-topology"
+  ) {
+    return failure(
+      diagnostic(
+        "EVALUATION_UNSUPPORTED",
+        classification === "multiple-bodies"
+          ? `Boolean feature '${nodeId}' produced multiple bodies; author separate body-set members to keep separate bodies`
+          : `Boolean feature '${nodeId}' produced topology that is not exactly one body`,
+        {
+          severity: "error",
+          node: nodeId,
+          path: `/nodes/${nodeId}`,
+          details: {
+            phase: diagnostics.phase,
+            kernel: access.id,
+            representation: access.representation,
+            exact: access.exact,
+            operation: node.operation,
+            reason: classification,
+          },
+        },
+      ),
+    );
+  }
+  return kernelFailure(
+    access.id,
+    `Kernel '${access.id}' returned a malformed body-result classification for Boolean '${nodeId}'`,
+    {
+      node: nodeId,
+      path: `/nodes/${nodeId}`,
+      details: {
+        protocolViolation: true,
+        kind: "bodyResultClassification",
+        operation: node.operation,
+        classification:
+          typeof classification === "string" && classification.length <= 64
+            ? classification
+            : classification === null
+              ? "null"
+              : typeof classification,
+      },
+    },
+  );
 }
 
 function validateStagedSolidGraphShape(
@@ -8484,6 +8783,17 @@ function validateStagedSolidGraphShape(
                 : volume.kind,
           },
         },
+      );
+    }
+    if (node.kind === "boolean") {
+      return classifyStagedBooleanResultV7(
+        kernel,
+        access,
+        shape,
+        nodeId,
+        node,
+        signal,
+        diagnostics,
       );
     }
     return success(undefined);
@@ -10288,7 +10598,11 @@ function partKernelFailure(
 function partCapabilityFailure(
   kernel: string,
   node: NodeId,
-  kind: "primitive" | "feature" | "documentBodyImport",
+  kind:
+    | "primitive"
+    | "feature"
+    | "documentBodyImport"
+    | "bodyResultClassification",
   capability: string,
   message: string,
 ): CadResult<never> {

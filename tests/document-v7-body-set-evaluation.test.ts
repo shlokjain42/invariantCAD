@@ -23,8 +23,10 @@ import {
   type ResourceDigestIR,
 } from "../src/ir.js";
 import {
+  KERNEL_BODY_RESULT_CLASSIFICATION_PROTOCOL_VERSION,
   KERNEL_DOCUMENT_BODY_IMPORT_PROTOCOL_VERSION,
   type GeometryKernel,
+  type KernelBodyResultClassification,
   type KernelCapabilities,
   type KernelDocumentBodyImportOptions,
   type KernelFeature,
@@ -277,12 +279,18 @@ interface BooleanCall {
   readonly shape: FakeShape;
 }
 
+interface ClassifyCall {
+  readonly shape: FakeShape;
+  readonly context: KernelFeatureContext | undefined;
+}
+
 interface KernelHarness {
   readonly kernel: GeometryKernel;
   readonly primitiveCalls: PrimitiveCall[];
   readonly importCalls: ImportCall[];
   readonly transformCalls: TransformCall[];
   readonly booleanCalls: BooleanCall[];
+  readonly classifyCalls: ClassifyCall[];
   readonly meshCalls: readonly {
     readonly shape: FakeShape;
     readonly options: MeshOptions | undefined;
@@ -307,6 +315,7 @@ interface KernelHarnessOptions {
     | "mesh"
     | "transform"
     | "boolean"
+    | "classifyBodyResult"
     | "disposeShape"
   )[];
   readonly primitiveHook?: (
@@ -336,6 +345,11 @@ interface KernelHarnessOptions {
     shape: FakeShape,
     callIndex: number,
   ) => KernelShape;
+  readonly classifyHook?: (
+    shape: FakeShape,
+    context: KernelFeatureContext | undefined,
+    callIndex: number,
+  ) => unknown;
   readonly statusHook?: (
     shape: FakeShape,
   ) => ReturnType<GeometryKernel["status"]>;
@@ -354,6 +368,7 @@ function createKernelHarness(
   const importCalls: ImportCall[] = [];
   const transformCalls: TransformCall[] = [];
   const booleanCalls: BooleanCall[] = [];
+  const classifyCalls: ClassifyCall[] = [];
   const meshCalls: {
     shape: FakeShape;
     options: MeshOptions | undefined;
@@ -385,6 +400,9 @@ function createKernelHarness(
       adjacency: true,
     },
     documentBodyImport: strongImportCapabilities,
+    bodyResultClassification: {
+      protocolVersion: KERNEL_BODY_RESULT_CLASSIFICATION_PROTOCOL_VERSION,
+    },
   };
 
   const acquire = (
@@ -510,6 +528,23 @@ function createKernelHarness(
               ) ?? shape;
             }),
         }),
+    ...(omitted.has("classifyBodyResult")
+      ? {}
+      : {
+          classifyBodyResult: (
+            shape: KernelShape,
+            context?: KernelFeatureContext,
+          ): KernelBodyResultClassification => {
+            classifyCalls.push({ shape: shape as FakeShape, context });
+            return (options.classifyHook === undefined
+              ? "single-body"
+              : options.classifyHook(
+                  shape as FakeShape,
+                  context,
+                  classifyCalls.length - 1,
+                )) as KernelBodyResultClassification;
+          },
+        }),
     ...(omitted.has("mesh")
       ? {}
       : {
@@ -583,6 +618,7 @@ function createKernelHarness(
     importCalls,
     transformCalls,
     booleanCalls,
+    classifyCalls,
     meshCalls,
     exportCalls,
     disposed,
@@ -4187,4 +4223,710 @@ describe("native staged document-v7 body-set evaluation", () => {
       kernel.dispose();
     }
   }, 30_000);
+});
+
+describe("staged document-v7 Boolean single-body enforcement", () => {
+  async function importedBooleanDocument(): Promise<{
+    readonly document: DesignDocumentV7;
+    readonly resources: Readonly<Record<string, Uint8Array>>;
+  }> {
+    const resources = {
+      imported: encoder.encode("boolean-classification-preflight"),
+    };
+    const document = await bodySetDocument({
+      resources,
+      nodes: {
+        target: box(),
+        tool: importedBody("imported"),
+        combined: booleanSolid("union", "target", ["tool"]),
+        bodies: bodySet([member("combined", "combined")]),
+      },
+      outputs: { bodies: { node: "bodies", kind: "bodySet" } },
+    });
+    return { document, resources };
+  }
+
+  function expectNoWork(harness: KernelHarness, label: string): void {
+    expect(harness.primitiveCalls, label).toHaveLength(0);
+    expect(harness.importCalls, label).toHaveLength(0);
+    expect(harness.booleanCalls, label).toHaveLength(0);
+    expect(harness.classifyCalls, label).toHaveLength(0);
+    expect(harness.live.size, label).toBe(0);
+  }
+
+  it("preflights body-result classification before resolution or construction", async () => {
+    const { document, resources } = await importedBooleanDocument();
+    const withCapabilities = (
+      harness: KernelHarness,
+      capabilities: Record<string, unknown>,
+    ): GeometryKernel =>
+      ({
+        ...harness.kernel,
+        capabilities: capabilities as unknown as KernelCapabilities,
+      }) as GeometryKernel;
+
+    const absentHarness = createKernelHarness();
+    const {
+      bodyResultClassification: _omitted,
+      ...absentCapabilities
+    } = absentHarness.kernel.capabilities;
+    const absentResolver = vi.fn(resolverFor(resources, []));
+    const absent = await evaluateBodySetOutputsV7(
+      withCapabilities(absentHarness, absentCapabilities),
+      document,
+      { resolver: absentResolver },
+    );
+    expect(absent.ok).toBe(false);
+    if (!absent.ok) {
+      expect(absent.diagnostics).toEqual([
+        expect.objectContaining({
+          code: "KERNEL_CAPABILITY_MISSING",
+          node: "combined",
+          path: "/nodes/combined",
+          details: expect.objectContaining({
+            kind: "bodyResultClassification",
+            capability: "protocolVersion:1",
+          }),
+        }),
+      ]);
+    }
+    expect(absentResolver).not.toHaveBeenCalled();
+    expectNoWork(absentHarness, "absent");
+
+    let envelopeReads = 0;
+    const accessorCapabilities: Record<string, unknown> = {
+      ...absentCapabilities,
+    };
+    Object.defineProperty(accessorCapabilities, "bodyResultClassification", {
+      enumerable: true,
+      get() {
+        envelopeReads += 1;
+        return { protocolVersion: 1 };
+      },
+    });
+    const accessorEnvelope = {};
+    Object.defineProperty(accessorEnvelope, "protocolVersion", {
+      enumerable: true,
+      get() {
+        envelopeReads += 1;
+        return 1;
+      },
+    });
+    const revoked = Proxy.revocable({ protocolVersion: 1 }, {});
+    revoked.revoke();
+    for (const [label, capabilities, reason] of [
+      [
+        "unsupported version",
+        {
+          ...absentCapabilities,
+          bodyResultClassification: { protocolVersion: 2 },
+        },
+        "unsupported-protocol-version",
+      ],
+      [
+        "not object",
+        { ...absentCapabilities, bodyResultClassification: "v1" },
+        "not-object",
+      ],
+      ["accessor envelope", accessorCapabilities, "uninspectable-metadata"],
+      [
+        "accessor field",
+        {
+          ...absentCapabilities,
+          bodyResultClassification: accessorEnvelope,
+        },
+        "uninspectable-metadata",
+      ],
+      [
+        "revoked envelope",
+        {
+          ...absentCapabilities,
+          bodyResultClassification: revoked.proxy,
+        },
+        "uninspectable-metadata",
+      ],
+    ] as const) {
+      const harness = createKernelHarness();
+      const resolver = vi.fn(resolverFor(resources, []));
+      const result = await evaluateBodySetOutputsV7(
+        withCapabilities(harness, capabilities),
+        document,
+        { resolver },
+      );
+      expect(result.ok, label).toBe(false);
+      if (!result.ok) {
+        expect(result.diagnostics, label).toEqual([
+          expect.objectContaining({
+            code: "KERNEL_ERROR",
+            node: "combined",
+            details: expect.objectContaining({
+              protocolViolation: true,
+              kind: "bodyResultClassification",
+              reason,
+            }),
+          }),
+        ]);
+      }
+      expect(resolver, label).not.toHaveBeenCalled();
+      expectNoWork(harness, label);
+    }
+    expect(envelopeReads).toBe(0);
+
+    let methodReads = 0;
+    for (const mode of ["missing", "not-callable", "accessor"] as const) {
+      const harness = createKernelHarness({
+        omitMethods: ["classifyBodyResult"],
+      });
+      const kernel: Record<string, unknown> = { ...harness.kernel };
+      if (mode === "not-callable") kernel.classifyBodyResult = 17;
+      if (mode === "accessor") {
+        Object.defineProperty(kernel, "classifyBodyResult", {
+          enumerable: true,
+          get() {
+            methodReads += 1;
+            return () => "single-body";
+          },
+        });
+      }
+      const resolver = vi.fn(resolverFor(resources, []));
+      const result = await evaluateBodySetOutputsV7(
+        kernel as unknown as GeometryKernel,
+        document,
+        { resolver },
+      );
+      expect(result.ok, mode).toBe(false);
+      if (!result.ok) {
+        expect(result.diagnostics, mode).toEqual([
+          expect.objectContaining({
+            code: "KERNEL_ERROR",
+            node: "combined",
+            details: expect.objectContaining({
+              protocolViolation: true,
+              kind: "bodyResultClassification",
+              method: mode,
+            }),
+          }),
+        ]);
+      }
+      expect(resolver, mode).not.toHaveBeenCalled();
+      expectNoWork(harness, mode);
+    }
+    expect(methodReads).toBe(0);
+
+    const inherited = createKernelHarness({
+      omitMethods: ["classifyBodyResult"],
+    });
+    class InheritedClassifier {
+      classifyBodyResult(): "single-body" {
+        return "single-body";
+      }
+    }
+    const inheritedKernel = Object.assign(
+      Object.create(InheritedClassifier.prototype) as object,
+      inherited.kernel,
+    ) as GeometryKernel;
+    const inheritedResult = await evaluateBodySetOutputsV7(
+      inheritedKernel,
+      document,
+      { resolver: resolverFor(resources, []) },
+    );
+    expect(inheritedResult.ok, JSON.stringify(inheritedResult.diagnostics)).toBe(
+      true,
+    );
+    if (inheritedResult.ok) inheritedResult.value.dispose();
+    expect(inherited.live.size).toBe(0);
+
+    const booleanFree = await bodySetDocument({
+      nodes: {
+        target: box(),
+        bodies: bodySet([member("target", "target")]),
+      },
+      outputs: { bodies: { node: "bodies", kind: "bodySet" } },
+    });
+    const unclassified = createKernelHarness({
+      omitMethods: ["classifyBodyResult"],
+    });
+    const plain = await evaluateBodySetOutputsV7(
+      withCapabilities(unclassified, absentCapabilities),
+      booleanFree,
+    );
+    expect(plain.ok, JSON.stringify(plain.diagnostics)).toBe(true);
+    if (plain.ok) plain.value.dispose();
+    expect(unclassified.live.size).toBe(0);
+  });
+
+  it("classifies each Boolean result once before it feeds later nodes", async () => {
+    const document = await bodySetDocument({
+      nodes: {
+        target: box(),
+        tool: sphere(),
+        cutter: cylinder(),
+        joined: booleanSolid("union", "target", ["tool"]),
+        moved: transform("joined", [
+          {
+            kind: "translate",
+            value: [length(1), length(0), length(0)],
+          },
+        ]),
+        cut: booleanSolid("subtract", "moved", ["cutter"]),
+        bodies: bodySet([
+          member("cut", "cut"),
+          member("joined", "joined"),
+          member("joined-alias", "joined"),
+        ]),
+      },
+      outputs: { bodies: { node: "bodies", kind: "bodySet" } },
+    });
+    const events: string[] = [];
+    const harness = createKernelHarness({
+      booleanHook: (_operation, _target, _tools, context, shape) => {
+        events.push(`boolean:${String(context?.feature)}`);
+        return shape;
+      },
+      transformHook: (_input, _operations, context, shape) => {
+        events.push(`transform:${String(context?.feature)}`);
+        return shape;
+      },
+      classifyHook: (_shape, context) => {
+        events.push(`classify:${String(context?.feature)}`);
+        return "single-body";
+      },
+    });
+    const controller = new AbortController();
+    const result = await evaluateBodySetOutputsV7(harness.kernel, document, {
+      signal: controller.signal,
+    });
+    expect(result.ok, JSON.stringify(result.diagnostics)).toBe(true);
+    if (!result.ok) return;
+    try {
+      expect(events).toEqual([
+        "boolean:joined",
+        "classify:joined",
+        "transform:moved",
+        "boolean:cut",
+        "classify:cut",
+      ]);
+      expect(harness.classifyCalls.map(({ shape }) => shape)).toEqual(
+        harness.booleanCalls.map(({ shape }) => shape),
+      );
+      for (const call of harness.classifyCalls) {
+        expect(Object.isFrozen(call.context)).toBe(true);
+        expect(call.context?.signal).toBe(controller.signal);
+      }
+    } finally {
+      result.value.dispose();
+    }
+    expect(harness.live.size).toBe(0);
+  });
+
+  it("rejects multiple-body and non-body Boolean results without splitting them", async () => {
+    const document = await bodySetDocument({
+      nodes: {
+        target: box(),
+        tool: sphere(),
+        joined: booleanSolid("union", "target", ["tool"]),
+        moved: transform("joined", [
+          {
+            kind: "translate",
+            value: [length(1), length(0), length(0)],
+          },
+        ]),
+        bodies: bodySet([member("moved", "moved")]),
+      },
+      outputs: { bodies: { node: "bodies", kind: "bodySet" } },
+    });
+    for (const classification of [
+      "multiple-bodies",
+      "non-body-topology",
+    ] as const) {
+      const harness = createKernelHarness({
+        classifyHook: () => classification,
+      });
+      const result = await evaluateBodySetOutputsV7(harness.kernel, document);
+      expect(result.ok, classification).toBe(false);
+      if (!result.ok) {
+        expect(result.diagnostics, classification).toEqual([
+          expect.objectContaining({
+            code: "EVALUATION_UNSUPPORTED",
+            severity: "error",
+            node: "joined",
+            path: "/nodes/joined",
+            details: {
+              phase: "documentV7BodySetEvaluation",
+              kernel: "document-v7-body-set-test",
+              representation: "brep",
+              exact: true,
+              operation: "union",
+              reason: classification,
+            },
+          }),
+        ]);
+      }
+      expect(harness.booleanCalls, classification).toHaveLength(1);
+      expect(harness.classifyCalls, classification).toHaveLength(1);
+      expect(harness.transformCalls, classification).toHaveLength(0);
+      expect(harness.disposed, classification).toHaveLength(3);
+      expect(harness.live.size, classification).toBe(0);
+      expect(harness.disposeKernel, classification).not.toHaveBeenCalled();
+    }
+  });
+
+  it("keeps structured empty results ahead of classification", async () => {
+    const document = await bodySetDocument({
+      nodes: {
+        target: box(),
+        tool: sphere(),
+        cut: booleanSolid("subtract", "target", ["tool"]),
+        bodies: bodySet([member("cut", "cut")]),
+      },
+      outputs: { bodies: { node: "bodies", kind: "bodySet" } },
+    });
+    for (const [label, options] of [
+      [
+        "null shape",
+        {
+          statusHook: (shape: FakeShape) =>
+            shape.source === "boolean"
+              ? { ok: false, code: "NULL_SHAPE" }
+              : { ok: true, code: "VALID" },
+        },
+      ],
+      [
+        "zero volume",
+        {
+          measureHook: (shape: FakeShape) => ({
+            ...defaultMeasurement,
+            volume: shape.source === "boolean" ? 0 : 24,
+          }),
+        },
+      ],
+    ] as const) {
+      const harness = createKernelHarness({
+        ...options,
+        classifyHook: () => "non-body-topology",
+      });
+      const result = await evaluateBodySetOutputsV7(harness.kernel, document);
+      expectFailureCode(result, "EMPTY_RESULT");
+      expect(harness.classifyCalls, label).toHaveLength(0);
+      expect(harness.live.size, label).toBe(0);
+    }
+  });
+
+  it("treats malformed, opaque, and throwing classifier behavior as kernel protocol errors", async () => {
+    const document = await bodySetDocument({
+      nodes: {
+        target: box(),
+        tool: sphere(),
+        joined: booleanSolid("union", "target", ["tool"]),
+        bodies: bodySet([member("joined", "joined")]),
+      },
+      outputs: { bodies: { node: "bodies", kind: "bodySet" } },
+    });
+    let hostileReads = 0;
+    const hostile = new Proxy(
+      {},
+      {
+        get() {
+          hostileReads += 1;
+          throw new Error("must not read");
+        },
+      },
+    );
+    for (const [label, value, classification] of [
+      ["unknown string", "single", "single"],
+      ["empty string", "", ""],
+      ["number", 1, "number"],
+      ["null", null, "null"],
+      ["undefined", undefined, "undefined"],
+      ["object", {}, "object"],
+      ["boxed string", new String("single-body"), "object"],
+      ["symbol", Symbol("single-body"), "symbol"],
+      ["hostile object", hostile, "object"],
+      ["oversized string", "x".repeat(65), "string"],
+    ] as const) {
+      const harness = createKernelHarness({ classifyHook: () => value });
+      const result = await evaluateBodySetOutputsV7(harness.kernel, document);
+      expect(result.ok, label).toBe(false);
+      if (!result.ok) {
+        expect(result.diagnostics, label).toEqual([
+          expect.objectContaining({
+            code: "KERNEL_ERROR",
+            node: "joined",
+            details: expect.objectContaining({
+              protocolViolation: true,
+              kind: "bodyResultClassification",
+              operation: "union",
+              classification,
+            }),
+          }),
+        ]);
+      }
+      expect(harness.live.size, label).toBe(0);
+    }
+
+    let messageReads = 0;
+    const opaque = Object.create(null) as Record<string, unknown>;
+    Object.defineProperty(opaque, "message", {
+      get() {
+        messageReads += 1;
+        return "must not read";
+      },
+    });
+    for (const [label, thrown, cause] of [
+      ["string", "classifier exploded", "classifier exploded"],
+      [
+        "error",
+        new Error("native failure"),
+        "Body-result classification failed with an opaque value",
+      ],
+      [
+        "opaque",
+        opaque,
+        "Body-result classification failed with an opaque value",
+      ],
+    ] as const) {
+      const harness = createKernelHarness({
+        classifyHook: () => {
+          throw thrown;
+        },
+      });
+      const result = await evaluateBodySetOutputsV7(harness.kernel, document);
+      expect(result.ok, label).toBe(false);
+      if (!result.ok) {
+        expect(result.diagnostics, label).toEqual([
+          expect.objectContaining({
+            code: "KERNEL_ERROR",
+            node: "joined",
+            details: expect.objectContaining({
+              protocolViolation: true,
+              kind: "bodyResultClassification",
+              cause,
+            }),
+          }),
+        ]);
+      }
+      expect(harness.live.size, label).toBe(0);
+    }
+    expect(hostileReads).toBe(0);
+    expect(messageReads).toBe(0);
+  });
+
+  it("honors cancellation raised during classification and releases every shape", async () => {
+    const document = await bodySetDocument({
+      nodes: {
+        target: box(),
+        tool: sphere(),
+        joined: booleanSolid("union", "target", ["tool"]),
+        bodies: bodySet([member("joined", "joined")]),
+      },
+      outputs: { bodies: { node: "bodies", kind: "bodySet" } },
+    });
+    for (const mode of ["return", "throw"] as const) {
+      const controller = new AbortController();
+      const harness = createKernelHarness({
+        classifyHook: () => {
+          controller.abort();
+          if (mode === "throw") {
+            throw new DOMException("aborted", "AbortError");
+          }
+          return "single-body";
+        },
+      });
+      const result = await evaluateBodySetOutputsV7(harness.kernel, document, {
+        signal: controller.signal,
+      });
+      expectFailureCode(result, "EVALUATION_ABORTED");
+      expect(harness.classifyCalls, mode).toHaveLength(1);
+      expect(harness.disposed, mode).toHaveLength(3);
+      expect(harness.live.size, mode).toBe(0);
+    }
+  });
+
+  it("retains the captured classifier across later kernel and capability mutation", async () => {
+    const document = await bodySetDocument({
+      nodes: {
+        target: box(),
+        tool: sphere(),
+        first: booleanSolid("union", "target", ["tool"]),
+        cutter: cylinder(),
+        second: booleanSolid("subtract", "first", ["cutter"]),
+        bodies: bodySet([member("second", "second")]),
+      },
+      outputs: { bodies: { node: "bodies", kind: "bodySet" } },
+    });
+    const receivers: unknown[] = [];
+    const replacement = vi.fn(() => "multiple-bodies");
+    let kernel: Record<string, unknown> = {};
+    const harness = createKernelHarness({
+      classifyHook: (_shape, _context, callIndex) => {
+        if (callIndex === 0) {
+          kernel.classifyBodyResult = replacement;
+          (
+            kernel.capabilities as Record<string, unknown>
+          ).bodyResultClassification = { protocolVersion: 99 };
+        }
+        return "single-body";
+      },
+    });
+    const capturedMethod = harness.kernel.classifyBodyResult!;
+    kernel = {
+      ...harness.kernel,
+      capabilities: { ...harness.kernel.capabilities },
+      classifyBodyResult(this: unknown, ...arguments_: unknown[]) {
+        receivers.push(this);
+        return Reflect.apply(capturedMethod, undefined, arguments_);
+      },
+    };
+    const result = await evaluateBodySetOutputsV7(
+      kernel as unknown as GeometryKernel,
+      document,
+    );
+    expect(result.ok, JSON.stringify(result.diagnostics)).toBe(true);
+    if (result.ok) result.value.dispose();
+    expect(harness.classifyCalls).toHaveLength(2);
+    expect(receivers).toEqual([kernel, kernel]);
+    expect(replacement).not.toHaveBeenCalled();
+    expect(harness.live.size).toBe(0);
+  });
+
+  it("enforces one-body Booleans on real Manifold and stock OCCT kernels", async () => {
+    const translate = (x: number) =>
+      [
+        {
+          kind: "translate" as const,
+          value: [length(x), length(0), length(0)] as const,
+        },
+      ] as Extract<NodeIRV7, { readonly kind: "transform" }>["operations"];
+    const nodes: Record<string, NodeIRV7> = {
+      base: box([length(2), length(2), length(2)]),
+      overlapping: transform("base", translate(1)),
+      far: transform("base", translate(10)),
+      slab: transform(
+        "slabLeaf",
+        [
+          {
+            kind: "translate",
+            value: [length(0.75), length(-1), length(-1)],
+          },
+        ],
+      ),
+      slabLeaf: box([length(0.5), length(4), length(4)]),
+      outer: box([length(20), length(20), length(20)], true),
+      inner: box([length(10), length(10), length(10)], true),
+      joined: booleanSolid("union", "base", ["overlapping"]),
+      disjoint: booleanSolid("union", "base", ["far"]),
+      split: booleanSolid("subtract", "base", ["slab"]),
+      cavity: booleanSolid("subtract", "outer", ["inner"]),
+      joinedBodies: bodySet([member("joined", "joined")]),
+      cavityBodies: bodySet([member("cavity", "cavity")]),
+      authoredBodies: bodySet([
+        member("left", "base"),
+        member("right", "far"),
+      ]),
+      disjointBodies: bodySet([member("disjoint", "disjoint")]),
+      splitBodies: bodySet([member("split", "split")]),
+    };
+    const document = await bodySetDocument({
+      nodes,
+      outputs: {
+        joined: { node: "joinedBodies", kind: "bodySet" },
+        cavity: { node: "cavityBodies", kind: "bodySet" },
+        authored: { node: "authoredBodies", kind: "bodySet" },
+        disjoint: { node: "disjointBodies", kind: "bodySet" },
+        split: { node: "splitBodies", kind: "bodySet" },
+      },
+    });
+
+    for (const [createKernel, representation, exact] of [
+      [createManifoldKernel, "mesh", false],
+      [createOcctKernel, "brep", true],
+    ] as const) {
+      const kernel = await createKernel();
+      const liveShapes = (
+        kernel as GeometryKernel & {
+          readonly liveShapes: ReadonlySet<unknown>;
+        }
+      ).liveShapes;
+      const native = (
+        kernel as GeometryKernel & {
+          readonly raw?: { readonly shapeCount: number };
+        }
+      ).raw;
+      const liveBefore = liveShapes.size;
+      const nativeBefore = native?.shapeCount;
+      try {
+        const admitted = await evaluateBodySetOutputsV7(kernel, document, {
+          outputs: ["joined", "cavity", "authored"],
+        });
+        expect(admitted.ok, JSON.stringify(admitted.diagnostics)).toBe(true);
+        if (admitted.ok) {
+          try {
+            const joined = admitted.value.output("joined");
+            const cavity = admitted.value.output("cavity");
+            const authored = admitted.value.output("authored");
+            expect(joined).toMatchObject({ representation, exact });
+            expect(joined.bodyIds).toEqual(["joined"]);
+            expect(
+              joined.body("joined").solid.measure().volume,
+            ).toBeCloseTo(12, 6);
+            expect(
+              cavity.body("cavity").solid.measure().volume,
+            ).toBeCloseTo(7_000, 4);
+            expect(authored.bodyIds).toEqual(["left", "right"]);
+            expect(
+              authored.body("left").solid.measure().volume,
+            ).toBeCloseTo(8, 6);
+            expect(
+              authored.body("right").solid.measure().volume,
+            ).toBeCloseTo(8, 6);
+          } finally {
+            admitted.value.dispose();
+          }
+        }
+        expect(liveShapes.size, representation).toBe(liveBefore);
+
+        for (const [output, node, operation] of [
+          ["disjoint", "disjoint", "union"],
+          ["split", "split", "subtract"],
+        ] as const) {
+          const rejected = await evaluateBodySetOutputsV7(kernel, document, {
+            outputs: [output],
+          });
+          expect(rejected.ok, `${representation}:${output}`).toBe(false);
+          if (!rejected.ok) {
+            expect(rejected.diagnostics).toEqual([
+              expect.objectContaining({
+                code: "EVALUATION_UNSUPPORTED",
+                node,
+                path: `/nodes/${node}`,
+                details: {
+                  phase: "documentV7BodySetEvaluation",
+                  kernel: kernel.id,
+                  representation,
+                  exact,
+                  operation,
+                  reason: "multiple-bodies",
+                },
+              }),
+            ]);
+          }
+          expect(liveShapes.size, `${representation}:${output}`).toBe(
+            liveBefore,
+          );
+        }
+        if (native !== undefined) {
+          expect(native.shapeCount).toBe(nativeBefore);
+        }
+
+        const reused = await evaluateBodySetOutputsV7(kernel, document, {
+          outputs: ["joined"],
+        });
+        expect(reused.ok, JSON.stringify(reused.diagnostics)).toBe(true);
+        if (reused.ok) reused.value.dispose();
+        expect(liveShapes.size).toBe(liveBefore);
+      } finally {
+        kernel.dispose();
+      }
+    }
+  }, 60_000);
 });

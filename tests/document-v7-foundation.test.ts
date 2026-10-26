@@ -16,16 +16,22 @@ import {
   DOCUMENT_VERSION_V5,
   DOCUMENT_VERSION_V6,
   DOCUMENT_VERSION_V7,
+  DESIGN_OUTPUT_KINDS_V7,
   NODE_KINDS,
   NODE_KINDS_V6,
   NODE_KINDS_V7,
   type DesignDocument,
   type DesignDocumentV7,
+  type DesignOutputKindV7,
   type NodeIR,
   type NodeIRV6,
   type NodeIRV7,
+  type OutputKindV7,
+  type RefIRV7,
   type ResourceDefinitionIR,
+  type ShapeOutputKindV7,
 } from "../src/ir.js";
+import type { EvaluatedProductDocumentOutputV7 } from "../src/internal/document-v7-local-assembly-evaluation.js";
 import {
   DesignDocumentSchema,
   DesignDocumentV1Schema,
@@ -47,8 +53,10 @@ import {
 import {
   migrateDocumentToV7,
   parseDocumentValue,
+  parseDocumentValueV7,
   stringifyDocument,
 } from "../src/serialization.js";
+import { validateDocumentV7 } from "../src/validation.js";
 import { design } from "../src/design.js";
 import { mm } from "../src/expressions.js";
 
@@ -361,6 +369,107 @@ describe("staged document-v7 foundation", () => {
           },
         ],
       });
+    }
+  });
+
+  it("closes product outputs to solid, bodySet, part, and assembly", () => {
+    expect(DESIGN_OUTPUT_KINDS_V7).toEqual([
+      "solid",
+      "bodySet",
+      "part",
+      "assembly",
+    ]);
+    expect(Object.isFrozen(DESIGN_OUTPUT_KINDS_V7)).toBe(true);
+    expectTypeOf<DesignOutputKindV7>().toEqualTypeOf<
+      "solid" | "bodySet" | "part" | "assembly"
+    >();
+    expectTypeOf<ShapeOutputKindV7>().toEqualTypeOf<"solid" | "bodySet">();
+    expectTypeOf<
+      DesignDocumentV7["outputs"][string]["kind"]
+    >().toEqualTypeOf<DesignOutputKindV7>();
+    expectTypeOf<
+      EvaluatedProductDocumentOutputV7["kind"]
+    >().toEqualTypeOf<DesignOutputKindV7>();
+    expectTypeOf<
+      Extract<OutputKindV7, "curve" | "wire" | "face" | "shell" | "compound">
+    >().toEqualTypeOf<never>();
+    if (false) {
+      const unavailable: RefIRV7<DesignOutputKindV7> = {
+        node: "primitive" as never,
+        // @ts-expect-error Faces are not admitted product outputs.
+        kind: "face",
+      };
+      void unavailable;
+    }
+
+    const source = stagedV7Document();
+    const admitted = {
+      ...source,
+      outputs: {
+        ...source.outputs,
+        primitive: { node: "primitive", kind: "solid" },
+      },
+    } as unknown as DesignDocumentV7;
+    expect(DesignDocumentV7Schema.safeParse(admitted).success).toBe(true);
+    expect(parseDocumentValueV7(admitted).ok).toBe(true);
+    expect(validateDocumentV7(admitted).ok).toBe(true);
+
+    for (const kind of [
+      "curve",
+      "wire",
+      "face",
+      "shell",
+      "compound",
+      "compsolid",
+      "edge",
+      "vertex",
+      "profile",
+      "path",
+      "datumPlane",
+      "unknown",
+    ]) {
+      const document = {
+        ...source,
+        outputs: {
+          ...source.outputs,
+          unavailable: { node: "primitive", kind },
+        },
+      } as unknown as DesignDocumentV7;
+      const parsed = DesignDocumentV7Schema.safeParse(document);
+      expect(parsed.success, kind).toBe(false);
+      if (!parsed.success) {
+        expect(
+          parsed.error.issues.some(
+            (issue) =>
+              issue.path.join("/") === "outputs/unavailable/kind",
+          ),
+          kind,
+        ).toBe(true);
+      }
+      const value = parseDocumentValueV7(document);
+      expect(value.ok, kind).toBe(false);
+      if (!value.ok) {
+        expect(value.diagnostics, kind).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              code: "IR_INVALID",
+              path: "/outputs/unavailable/kind",
+            }),
+          ]),
+        );
+      }
+      const semantic = validateDocumentV7(document);
+      expect(semantic.ok, kind).toBe(false);
+      if (!semantic.ok) {
+        expect(semantic.diagnostics, kind).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              code: "REFERENCE_KIND_MISMATCH",
+              path: "/outputs/unavailable",
+            }),
+          ]),
+        );
+      }
     }
   });
 
