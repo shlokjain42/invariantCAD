@@ -18,11 +18,12 @@
   cannot detect duplicates an upstream parser collapsed.
 - `stringifyDocument`, `cloneDocument`, and `hashDocument` accept
   `options.limits` and count the frozen canonical bytes, compact or pretty,
-  before building the canonical tree or string. Output above `maxDocumentBytes`
-  (64 MiB by default) throws `TypeError`, and malformed limits throw
-  `TypeError`. Admitted output, including the frozen omission of an own
-  `__proto__` key, and every semantic hash are unchanged. `HashDocumentOptions`
-  names the `hashDocument` options type.
+  before building the canonical tree or string. Normalizing commutative
+  topology queries never builds an operand key larger than the ceiling. Output
+  above `maxDocumentBytes` (64 MiB by default) throws `TypeError`, and
+  malformed limits throw `TypeError`. Admitted output, including the frozen
+  omission of an own `__proto__` key, and every semantic hash are unchanged.
+  `HashDocumentOptions` names the `hashDocument` options type.
 - The CLI checks document and parameter files against the default 64 MiB
   ceiling before reading them, decodes them as strict UTF-8 without stripping a
   byte-order mark, and rejects parameter files with repeated member names.

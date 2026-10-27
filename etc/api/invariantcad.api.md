@@ -3825,7 +3825,7 @@ interface MeshOptions_2 {
 // @public (undocumented)
 export function meters(value: number): LengthExpression;
 
-// @public (undocumented)
+// @public
 export function migrateDocument(value: unknown, options?: ParseDocumentOptions): CadResult<DesignDocumentV6>;
 
 // @public (undocumented)
@@ -4162,7 +4162,7 @@ export interface ParseDocumentOptions {
     readonly limits?: Partial<DesignDocumentLimits>;
 }
 
-// @public (undocumented)
+// @public
 export function parseDocumentValue(value: unknown, options?: ParseDocumentOptions): CadResult<DesignDocument>;
 
 // @public
@@ -6381,9 +6381,9 @@ export function writeArtifactCacheRecord(store: ArtifactCacheStore, record: Arti
 // Warnings were encountered during analysis:
 //
 // dist/vendor/manifold-3d/manifold.d.ts:18:5 - (ae-forgotten-export) The symbol "Vec3_2" needs to be exported by the entry point index.d.ts
-// src/topology.ts:522:22 - (ae-forgotten-export) The symbol "EdgeTopologyQueries" needs to be exported by the entry point index.d.ts
-// src/topology.ts:522:22 - (ae-forgotten-export) The symbol "FaceTopologyQueries" needs to be exported by the entry point index.d.ts
-// src/topology.ts:522:22 - (ae-forgotten-export) The symbol "VertexTopologyQueries" needs to be exported by the entry point index.d.ts
+// src/topology.ts:592:22 - (ae-forgotten-export) The symbol "EdgeTopologyQueries" needs to be exported by the entry point index.d.ts
+// src/topology.ts:592:22 - (ae-forgotten-export) The symbol "FaceTopologyQueries" needs to be exported by the entry point index.d.ts
+// src/topology.ts:592:22 - (ae-forgotten-export) The symbol "VertexTopologyQueries" needs to be exported by the entry point index.d.ts
 
 // (No @packageDocumentation comment for this package)
 

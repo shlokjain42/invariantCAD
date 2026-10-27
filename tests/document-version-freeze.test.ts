@@ -602,13 +602,13 @@ describe("frozen document-version grammar", () => {
     ] as const) {
       const options = { limits } as unknown as { readonly limits: {} };
       expect(() => stringifyDocument(v6, options)).toThrow(
-        "Design-document parse limits are malformed or unsupported",
+        "Design-document serialization limits are malformed or unsupported",
       );
       expect(() => cloneDocument(v6, options)).toThrow(
-        "Design-document parse limits are malformed or unsupported",
+        "Design-document serialization limits are malformed or unsupported",
       );
       await expect(hashDocument(v6, options)).rejects.toThrow(
-        "Design-document parse limits are malformed or unsupported",
+        "Design-document serialization limits are malformed or unsupported",
       );
     }
   });

@@ -85,11 +85,14 @@ variants. Equivalent commutative topology expressions therefore produce the
 same document representation.
 
 The writer counts the canonical UTF-8 bytes, compact or pretty, before it builds
-the canonical tree or string. Output larger than `maxDocumentBytes` (64 MiB by
-default) throws `TypeError` instead of being materialized. Pass
+the canonical tree or string, and topology normalization stops as soon as one
+query operand alone exceeds the ceiling. Output larger than `maxDocumentBytes`
+(64 MiB by default) throws `TypeError` instead of being materialized. Pass
 `{ limits: { maxDocumentBytes } }` to choose another ceiling; malformed limits
 also throw `TypeError`. Output within the ceiling is byte-for-byte unchanged,
-including the frozen writer's omission of an own `__proto__` key.
+including the frozen writer's omission of an own `__proto__` key. The writer
+does not validate its input, so the ceiling assumes plain data whose property
+reads are stable, such as builder output or a parsed document.
 
 ## Parse untrusted text
 

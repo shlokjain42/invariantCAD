@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  DOCUMENT_SCHEMA_V6,
+  DOCUMENT_VERSION_V6,
   design,
+  hashDocument,
   mm,
   parseDocument,
   parseDocumentValue,
@@ -9,6 +12,10 @@ import {
   type CadResult,
   type DesignDocument,
 } from "../src/index.js";
+import {
+  canonicalizeTopologySelectionIR,
+  canonicalizeTopologySelectionIRWithin,
+} from "../src/topology.js";
 
 type JsonPath = readonly (string | number)[];
 
@@ -256,5 +263,123 @@ describe("public document text boundaries", () => {
         "Design-document text must be a primitive string",
       );
     }
+  });
+});
+
+const length = (value: number) =>
+  ({ op: "literal", dimension: "length", value }) as const;
+
+function filletDocument(query: unknown): DesignDocument {
+  return {
+    schema: DOCUMENT_SCHEMA_V6,
+    version: DOCUMENT_VERSION_V6,
+    name: "bounded-topology-rewrite",
+    units: { length: "mm", angle: "rad" },
+    parameters: {},
+    nodes: {
+      box: {
+        kind: "box",
+        size: [length(10), length(10), length(10)],
+        center: false,
+      },
+      fillet: {
+        kind: "fillet",
+        input: { node: "box", kind: "solid" },
+        edges: { topology: "edge", query, cardinality: { min: 1 } },
+        radius: length(1),
+      },
+    },
+    outputs: { main: { node: "fillet", kind: "solid" } },
+  } as unknown as DesignDocument;
+}
+
+/** A query operand whose later member records every read. */
+function watchedOperand(padding: number): {
+  readonly operand: unknown;
+  readonly reads: () => number;
+} {
+  let reads = 0;
+  const operand = Object.defineProperty(
+    { op: "curve", kind: "line", a: "x".repeat(padding) },
+    "z",
+    {
+      enumerable: true,
+      get(): string {
+        reads += 1;
+        return "watched";
+      },
+    },
+  );
+  return { operand, reads: () => reads };
+}
+
+describe("bounded frozen topology rewriting", () => {
+  it("stops building operand keys once one proves the output too large", async () => {
+    const exceeded =
+      /maxDocumentBytes limit 1024 was exceeded before canonical JSON materialization/;
+    const watched = watchedOperand(4_096);
+    const query = {
+      op: "or",
+      queries: [
+        { op: "and", queries: [watched.operand, { op: "curve", kind: "circle" }] },
+        { op: "curve", kind: "line" },
+      ],
+    };
+    const limits = { maxDocumentBytes: 1_024 };
+
+    expect(
+      canonicalizeTopologySelectionIRWithin(
+        { topology: "edge", query, cardinality: { min: 1 } } as never,
+        1_024,
+      ),
+    ).toBeUndefined();
+    expect(() => stringifyDocument(filletDocument(query), { limits })).toThrow(
+      exceeded,
+    );
+    await expect(
+      hashDocument(filletDocument(query), { limits }),
+    ).rejects.toThrow(exceeded);
+    expect(watched.reads()).toBe(0);
+
+    canonicalizeTopologySelectionIR({
+      topology: "edge",
+      query,
+      cardinality: { min: 1 },
+    } as never);
+    expect(watched.reads()).toBeGreaterThan(0);
+  });
+
+  it("charges only the operands the canonical output keeps", async () => {
+    const operand = { op: "curve", kind: "x".repeat(512) };
+    const duplicated = filletDocument({
+      op: "or",
+      queries: [
+        operand,
+        { op: "or", queries: Array.from({ length: 32 }, () => operand) },
+        { op: "curve", kind: "line" },
+      ],
+    });
+    const canonical = filletDocument({
+      op: "or",
+      queries: [{ op: "curve", kind: "line" }, operand],
+    });
+    const expected = stringifyDocument(canonical);
+    const bytes = new TextEncoder().encode(expected).byteLength;
+    const rawBytes = new TextEncoder().encode(
+      JSON.stringify(duplicated),
+    ).byteLength;
+    expect(rawBytes).toBeGreaterThan(bytes * 4);
+
+    expect(
+      stringifyDocument(duplicated, { limits: { maxDocumentBytes: bytes } }),
+    ).toBe(expected);
+    expect(
+      await hashDocument(duplicated, { limits: { maxDocumentBytes: bytes } }),
+    ).toBe(await hashDocument(canonical));
+    expect(() =>
+      stringifyDocument(duplicated, {
+        limits: { maxDocumentBytes: bytes - 1 },
+      }),
+    ).toThrow(/was exceeded before canonical JSON materialization/);
   });
 });

@@ -48,6 +48,8 @@ import {
 import {
   canonicalizeTopologySelectionIR,
   canonicalizeTopologySelectionIRV7,
+  canonicalizeTopologySelectionIRV7Within,
+  canonicalizeTopologySelectionIRWithin,
 } from "./topology.js";
 import { normalizePersistentTopologyReference } from "./topology-signatures.js";
 import { validateDocument, validateDocumentV7 } from "./validation.js";
@@ -325,13 +327,27 @@ function canonicalizeTopologyReferenceEntry(
 
 type SerializableDocument = DesignDocument | DesignDocumentV7;
 
+/**
+ * Normalizes commutative topology queries. Writers of unvalidated documents
+ * pass `maximumBytes` so no operand key larger than the output ceiling is built.
+ */
 function canonicalizeDocumentTopology<T extends SerializableDocument>(
   document: T,
+  maximumBytes?: number,
 ): T {
+  const isV7 = document.version === DOCUMENT_VERSION_V7;
   const canonicalizeSelection: typeof canonicalizeTopologySelectionIR =
-    document.version === DOCUMENT_VERSION_V7
-      ? canonicalizeTopologySelectionIRV7
-      : canonicalizeTopologySelectionIR;
+    maximumBytes === undefined
+      ? isV7
+        ? canonicalizeTopologySelectionIRV7
+        : canonicalizeTopologySelectionIR
+      : (selection) =>
+          (isV7
+            ? canonicalizeTopologySelectionIRV7Within
+            : canonicalizeTopologySelectionIRWithin)(
+            selection,
+            maximumBytes,
+          ) ?? throwCanonicalByteLimitExceeded(maximumBytes);
   const sourceNodes = document.nodes as unknown as Readonly<
     Record<string, NodeIR | NodeIRV7>
   >;
@@ -396,14 +412,17 @@ function canonicalizeDocumentTopology<T extends SerializableDocument>(
 /**
  * Writes the frozen v1-v6 canonical JSON. The output bytes are counted before
  * the canonical tree or string is built, and admitted output is unchanged.
+ * The ceiling assumes plain data, such as builder or parser output, whose
+ * property reads are stable.
  */
 export function stringifyDocument(
   document: DesignDocument,
   options: StringifyOptions = {},
 ): string {
+  const { maxDocumentBytes } = writerLimits(options);
   return canonicalStringifyDocumentWithin(
-    canonicalizeDocumentTopology(document),
-    writerLimits(options).maxDocumentBytes,
+    canonicalizeDocumentTopology(document, maxDocumentBytes),
+    maxDocumentBytes,
     options.pretty ? true : false,
   );
 }
@@ -411,14 +430,13 @@ export function stringifyDocument(
 function writerLimits(options: {
   readonly limits?: Partial<DesignDocumentLimits>;
 }): DesignDocumentLimits {
-  const normalizedLimits = parseLimits(options);
-  if (!normalizedLimits.ok) {
+  const limits = normalizeDesignDocumentLimits(options.limits);
+  if (limits === undefined) {
     throw new TypeError(
-      normalizedLimits.diagnostics[0]?.message ??
-        "Cannot normalize InvariantCAD document serialization limits",
+      "Design-document serialization limits are malformed or unsupported",
     );
   }
-  return normalizedLimits.value;
+  return limits;
 }
 
 function canonicalStringifyDocumentWithin(
@@ -426,13 +444,16 @@ function canonicalStringifyDocumentWithin(
   maximumBytes: number,
   pretty: boolean,
 ): string {
-  const text = canonicalStringifyWithin(value, maximumBytes, pretty);
-  if (text === undefined) {
-    throw new TypeError(
-      `Design-document maxDocumentBytes limit ${maximumBytes} was exceeded before canonical JSON materialization`,
-    );
-  }
-  return text;
+  return (
+    canonicalStringifyWithin(value, maximumBytes, pretty) ??
+    throwCanonicalByteLimitExceeded(maximumBytes)
+  );
+}
+
+function throwCanonicalByteLimitExceeded(maximumBytes: number): never {
+  throw new TypeError(
+    `Design-document maxDocumentBytes limit ${maximumBytes} was exceeded before canonical JSON materialization`,
+  );
 }
 
 /**
@@ -1220,6 +1241,11 @@ export function admitDocumentBytesToV7(
   return captured.ok ? admitCapturedDocumentToV7(captured.value) : captured;
 }
 
+/**
+ * Parses an already-parsed frozen v1-v6 document value. Repeated JSON member
+ * names that an upstream parser collapsed cannot be detected here; use
+ * {@link parseDocument} at text boundaries that require that guarantee.
+ */
 export function parseDocumentValue(
   value: unknown,
   options: ParseDocumentOptions = {},
@@ -1256,7 +1282,10 @@ export async function hashDocument(
   options: HashDocumentOptions = {},
 ): Promise<string> {
   const { maxDocumentBytes } = writerLimits(options);
-  const canonicalDocument = canonicalizeDocumentTopology(document);
+  const canonicalDocument = canonicalizeDocumentTopology(
+    document,
+    maxDocumentBytes,
+  );
   const source = options.includeMetadata
     ? canonicalDocument
     : (() => {
@@ -1336,6 +1365,11 @@ export function cloneDocumentV7(
   return parsed.value;
 }
 
+/**
+ * Validates a frozen v1-v6 document value and migrates it to v6. Like
+ * {@link parseDocumentValue}, it cannot detect repeated JSON member names that
+ * an upstream parser already collapsed.
+ */
 export function migrateDocument(
   value: unknown,
   options: ParseDocumentOptions = {},
