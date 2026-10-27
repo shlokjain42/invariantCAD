@@ -142,7 +142,11 @@ versioned body-result capability as exactly one body. Manifold classifies
 connected components of its approximate mesh and OCCT classifies exact B-Rep
 contents; multiple-body or loose-topology results return structured
 `EVALUATION_UNSUPPORTED` diagnostics instead of becoming invented body-set
-members, and explicit body sets remain the authored multibody boundary. A source-only
+members, and explicit body sets remain the authored multibody boundary.
+Staged v1–v6 to v7 migration fails closed on identities v7 cannot represent.
+An explicit caller-authored rename map, restricted to those blocking
+identities, rewrites each one with every structural reference and returns a
+deterministic audit record. Identities are never renamed automatically. A source-only
 `stagedBodySetDesignV7(...)` facade now authors the bounded product graph
 admitted by the staged evaluators and datum resolver: typed length, angle,
 mass-density, and scalar parameters; named parameter, part-material, and

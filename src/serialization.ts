@@ -65,6 +65,13 @@ import {
 import {
   diagnoseDocumentV7IdentityRepresentability,
 } from "./internal/document-v7-identity-representability.js";
+import {
+  applyDocumentV7IdentityRenames,
+  captureDocumentV7IdentityRenames,
+  documentV7IdentityRenamesAreEmpty,
+  planDocumentV7IdentityRenames,
+  type AppliedDocumentV7IdentityRename,
+} from "./internal/document-v7-identity-renames.js";
 import { auditJsonMemberNames } from "./internal/json-member-audit.js";
 
 const SerializationIntrinsicArray = Array;
@@ -1456,6 +1463,149 @@ export function migrateDocumentToV7(
   );
 }
 
+/** A migrated document together with every identity rename applied to it. */
+export interface MigratedDocumentV7WithIdentityRenames {
+  readonly document: DesignDocumentV7;
+  /** Deterministically ordered audit record; empty when nothing was renamed. */
+  readonly identityRenames: readonly AppliedDocumentV7IdentityRename[];
+}
+
+const IDENTITY_RENAMES_PATH = "/identityRenames";
+
+function identityRenameSnapshotFailure(
+  diagnostics: readonly Diagnostic[],
+): CadResult<never> {
+  return {
+    ok: false,
+    diagnostics: diagnostics.map((item) =>
+      diagnostic(item.code, item.message, {
+        severity: item.severity,
+        path:
+          item.path === undefined || item.path === "/"
+            ? IDENTITY_RENAMES_PATH
+            : `${IDENTITY_RENAMES_PATH}${item.path}`,
+        details: { ...item.details, phase: "documentV7IdentityRenames" },
+      }),
+    ),
+  };
+}
+
+/**
+ * Staged migration from a frozen v1-v6 document to Document v7 with an
+ * explicit caller-authored identity rename map.
+ *
+ * Only identities that block v7 may be renamed: non-conforming parameter,
+ * node, output, sketch-entity, and sketch-constraint IDs, plus occurrences
+ * whose IDs are non-conforming or duplicated. Each rename rewrites its
+ * definition and every structural reference, never metadata or other free
+ * text, and the result must pass strict v7 validation. Like
+ * `migrateDocumentToV7`, this is not re-exported from the package root.
+ */
+export function migrateDocumentToV7WithIdentityRenames(
+  value: unknown,
+  renames: unknown,
+  options: ParseDocumentOptions = {},
+): CadResult<MigratedDocumentV7WithIdentityRenames> {
+  const normalizedLimits = parseV7Limits(options);
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return serializationIntegrityFailure();
+  }
+  if (!normalizedLimits.ok) return normalizedLimits;
+  const limits = normalizedLimits.value;
+
+  const preflight = preflightDocumentValueV7WithLimits(value, limits);
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return serializationIntegrityFailure();
+  }
+  if (!preflight.ok) return preflight;
+
+  const renameSnapshot = preflightDesignDocumentValue(renames, limits, {
+    strictV7Snapshot: true,
+  });
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return serializationIntegrityFailure();
+  }
+  if (!renameSnapshot.ok) {
+    return identityRenameSnapshotFailure(renameSnapshot.diagnostics);
+  }
+  const captured = captureDocumentV7IdentityRenames(renameSnapshot.value);
+  if (!captured.ok) return captured;
+
+  const finish = (
+    migrated: CadResult<DesignDocumentV7>,
+    applied: readonly AppliedDocumentV7IdentityRename[],
+  ): CadResult<MigratedDocumentV7WithIdentityRenames> => {
+    if (!migrated.ok) return migrated;
+    if (!documentV7RuntimeIntrinsicsAreIntact()) {
+      return serializationIntegrityFailure();
+    }
+    return success(
+      deepFreeze({
+        document: migrated.value,
+        identityRenames: applied,
+      }) as MigratedDocumentV7WithIdentityRenames,
+      migrated.diagnostics,
+    );
+  };
+
+  const snapshotRecord =
+    typeof preflight.value === "object" &&
+    preflight.value !== null &&
+    !serializationArrayIsArray(preflight.value)
+      ? (preflight.value as Readonly<Record<string, unknown>>)
+      : undefined;
+  if (snapshotRecord?.version === DOCUMENT_VERSION_V7) {
+    if (!documentV7IdentityRenamesAreEmpty(captured.value)) {
+      return failure(
+        diagnostic(
+          "IR_INVALID",
+          "Identity renames apply only to legacy v1-v6 documents",
+          {
+            severity: "error",
+            path: IDENTITY_RENAMES_PATH,
+            details: {
+              phase: "documentV7IdentityRenames",
+              reason: "identity-renames-require-legacy-document",
+            },
+          },
+        ),
+      );
+    }
+    return finish(
+      migrateTrustedDocumentSnapshotToV7(preflight.value, limits),
+      [],
+    );
+  }
+
+  const parsedLegacy = validateLegacyDocumentSnapshot(preflight.value);
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return serializationIntegrityFailure();
+  }
+  if (!parsedLegacy.ok) return parsedLegacy;
+
+  const plan = planDocumentV7IdentityRenames(parsedLegacy.value, captured.value);
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return serializationIntegrityFailure();
+  }
+  if (!plan.ok) return plan;
+
+  const renamed = validateDocument(
+    applyDocumentV7IdentityRenames(parsedLegacy.value, plan.value),
+  );
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return serializationIntegrityFailure();
+  }
+  if (!renamed.ok) return renamed;
+  return finish(
+    migrateValidatedLegacyDocumentToV7(
+      // Semantic warnings are reported against the renamed identities.
+      renamed,
+      limits,
+    ),
+    plan.value.applied,
+  );
+}
+
 function migrateTrustedDocumentSnapshotToV7(
   snapshot: unknown,
   limits: DesignDocumentLimits,
@@ -1511,7 +1661,13 @@ function migrateTrustedDocumentSnapshotToV7(
     return serializationIntegrityFailure();
   }
   if (!parsedLegacy.ok) return parsedLegacy;
+  return migrateValidatedLegacyDocumentToV7(parsedLegacy, limits);
+}
 
+function migrateValidatedLegacyDocumentToV7(
+  parsedLegacy: CadResult<DesignDocument> & { readonly ok: true },
+  limits: DesignDocumentLimits,
+): CadResult<DesignDocumentV7> {
   const identityDiagnostics =
     diagnoseDocumentV7IdentityRepresentability(parsedLegacy.value);
   if (!documentV7RuntimeIntrinsicsAreIntact()) {

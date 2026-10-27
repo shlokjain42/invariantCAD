@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+- Added a staged, repository-only migration path for legacy documents whose
+  identities Document v7 cannot represent.
+  `migrateDocumentToV7WithIdentityRenames(document, renames, options?)` accepts
+  an explicit caller-authored map for parameter, node, output, sketch-entity,
+  sketch-constraint, and assembly-occurrence identities. Occurrences are keyed
+  by instance index so repeated legacy IDs can be separated. Only identities
+  that block v7 may be renamed, including historical identities found only in
+  stored topology lineage. Every entry must name an existing source, targets
+  must be unique v7 IDs that collide with no retained ID, and renaming a
+  repeated occurrence ID that a configuration references is rejected as
+  ambiguous. Each rename rewrites its definition and every structural
+  reference, never metadata or free text; the result must pass strict v7
+  validation and is returned with a deterministic audit record that marks
+  output renames consumer-visible. `migrateDocumentToV7` still fails closed and
+  never renames.
 - The OCCT kernel no longer silently ignores a `context.signal` or low-level
   STEP export option supplied by a caller-defined prototype, such as a class
   getter. Every operation that reads its context, and `exportShape(...)` for
