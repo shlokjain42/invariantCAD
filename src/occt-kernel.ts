@@ -212,7 +212,9 @@ const occtKernelNumberIsSafeInteger = Number.isSafeInteger;
 const occtKernelObjectGetOwnPropertyDescriptor =
   Object.getOwnPropertyDescriptor;
 const occtKernelObjectHasOwn = Object.hasOwn;
-const occtKernelReflectHas = Reflect.has;
+const occtKernelObjectGetPrototypeOf = Object.getPrototypeOf;
+const occtKernelObjectPrototype = Object.prototype;
+const OCCT_KERNEL_MAX_PROTOTYPE_DEPTH = 64;
 const occtKernelSetHas = Set.prototype.has;
 const occtKernelAbortSignalAbortedGetter =
   typeof AbortSignal === "undefined"
@@ -931,21 +933,77 @@ function occtKernelRecord(value: unknown, label: string): object {
   return value;
 }
 
+/**
+ * Reports whether `property` is defined by a caller-supplied prototype, such
+ * as a class getter or a prototype record. Definitions on the intrinsic
+ * `Object.prototype` are ignored, so prototype pollution cannot change kernel
+ * behavior. Descriptors are read without invoking accessors.
+ */
+function occtKernelInheritedFromCallerPrototype(
+  value: object,
+  property: PropertyKey,
+): boolean {
+  let current = occtKernelReflectApply(
+    occtKernelObjectGetPrototypeOf,
+    Object,
+    [value],
+  ) as object | null;
+  for (
+    let depth = 0;
+    depth < OCCT_KERNEL_MAX_PROTOTYPE_DEPTH;
+    depth += 1
+  ) {
+    if (current === null || current === occtKernelObjectPrototype) {
+      return false;
+    }
+    if (
+      occtKernelReflectApply(
+        occtKernelObjectGetOwnPropertyDescriptor,
+        Object,
+        [current, property],
+      ) !== undefined
+    ) {
+      return true;
+    }
+    current = occtKernelReflectApply(
+      occtKernelObjectGetPrototypeOf,
+      Object,
+      [current],
+    ) as object | null;
+  }
+  throw new OcctKernelBoundaryTypeError("Prototype chain is too deep");
+}
+
+/**
+ * Reads one own data property without invoking accessors. A property supplied
+ * by a caller-defined prototype fails closed instead of being silently treated
+ * as absent, which would otherwise drop a caller's cancellation signal or
+ * export option.
+ */
 function occtKernelOwnDataValue(
   value: object,
   property: PropertyKey,
   label: string,
 ): unknown {
   let descriptor: PropertyDescriptor | undefined;
+  let inherited = false;
   try {
     descriptor = occtKernelReflectApply(
       occtKernelObjectGetOwnPropertyDescriptor,
       Object,
       [value, property],
     ) as PropertyDescriptor | undefined;
+    if (descriptor === undefined) {
+      inherited = occtKernelInheritedFromCallerPrototype(value, property);
+    }
   } catch {
     throw new OcctKernelBoundaryTypeError(
       `${label} could not be inspected safely`,
+    );
+  }
+  if (inherited) {
+    throw new OcctKernelBoundaryTypeError(
+      `${label} must be an own data property`,
     );
   }
   if (descriptor === undefined) return undefined;
@@ -6378,37 +6436,14 @@ class OcctKernel implements GeometryKernel {
     shape: KernelShape,
     context?: KernelFeatureContext,
   ): KernelBodyResultClassification {
-    let signal: unknown;
-    if (context !== undefined) {
-      const record = occtKernelRecord(context, "CAD kernel context");
-      signal = occtKernelOwnDataValue(
-        record,
-        "signal",
-        "CAD kernel context.signal",
-      );
-      // An inherited signal would otherwise be silently ignored.
-      let inherited: boolean;
-      try {
-        inherited =
-          !(occtKernelReflectApply(occtKernelObjectHasOwn, Object, [
-            record,
+    const signal =
+      context === undefined
+        ? undefined
+        : occtKernelOwnDataValue(
+            occtKernelRecord(context, "CAD kernel context"),
             "signal",
-          ]) as boolean) &&
-          (occtKernelReflectApply(occtKernelReflectHas, Reflect, [
-            record,
-            "signal",
-          ]) as boolean);
-      } catch {
-        throw new OcctKernelBoundaryTypeError(
-          "CAD kernel context could not be inspected safely",
-        );
-      }
-      if (inherited) {
-        throw new OcctKernelBoundaryTypeError(
-          "CAD kernel context.signal must be an own data property",
-        );
-      }
-    }
+            "CAD kernel context.signal",
+          );
     checkOcctSignal(signal);
     let current = this.shape(shape)[OCCT_SHAPE];
     let ownsCurrent = false;

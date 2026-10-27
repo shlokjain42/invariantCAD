@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+- The OCCT kernel no longer silently ignores a `context.signal` or low-level
+  STEP export option supplied by a caller-defined prototype, such as a class
+  getter. Every operation that reads its context, and `exportShape(...)` for
+  its context and `stepExport` request, now rejects such a field with
+  `TypeError`, as it already did for accessor-backed fields. A field reachable
+  only through the intrinsic `Object.prototype` is still ignored, so prototype
+  pollution cannot change or break kernel operations. Both body-result
+  classifiers apply the same rule instead of rejecting every inherited signal.
 - Added the optional versioned body-result classification kernel protocol.
   `KERNEL_BODY_RESULT_CLASSIFICATION_PROTOCOL_VERSION` v1,
   `KernelCapabilities.bodyResultClassification`, and
@@ -11,8 +19,9 @@
   `inspectKernelBodyResultClassificationCapabilities(...)` snapshots the
   envelope without invoking accessors and reports malformed metadata
   separately from absent support. Both shipped classifiers are synchronous and
-  reject a context whose `signal` is inherited or accessor-backed before
-  validating the shape. Manifold classifies positive-volume connected
+  reject a context whose `signal` is accessor-backed or supplied by a
+  caller-defined prototype before validating the shape. Manifold classifies
+  positive-volume connected
   components of its approximate mesh, treating the negative-volume components
   it separates for cavity boundaries as voids, checks cancellation before and
   after its uninterruptible synchronous decomposition, and deletes every
