@@ -9,6 +9,8 @@ import {
   canonicalizeProtocol,
   deepFreeze,
 } from "../src/core/json.js";
+import { utf8ByteLengthWithin } from "../src/core/utf8.js";
+import { auditJsonMemberNames } from "../src/internal/json-member-audit.js";
 
 const boundedWriters = [
   {
@@ -160,6 +162,58 @@ describe("canonical JSON", () => {
       expect(writer.write(source, 5)).toBeUndefined();
     }
     expect(getterReads).toBe(0);
+  });
+
+  it("counts every UTF-16 code unit exactly as JSON.stringify writes it", () => {
+    const encoder = new TextEncoder();
+    for (let codeUnit = 0; codeUnit <= 0xffff; codeUnit += 1) {
+      const character = String.fromCharCode(codeUnit);
+      for (const value of [character, `ascii ${character} tail`, `${character}😀`]) {
+        const expected = encoder.encode(JSON.stringify(value)).byteLength;
+        for (const writer of boundedWriters) {
+          if (writer.count(value, Number.MAX_SAFE_INTEGER) !== expected) {
+            expect.fail(`${writer.name} miscounted U+${codeUnit.toString(16)}`);
+          }
+        }
+      }
+    }
+  });
+
+  it("keeps per-character scans on load-time intrinsics", () => {
+    const value = { z: 'é😀"\\\u0001', a: ["ascii", "\ud800"] };
+    const text = '{"a":1,"\\u0061":2}';
+    const limits = { maxStructuralValues: 100, maxNestingDepth: 10 };
+    const expected = [
+      canonicalLegacyByteLengthWithin(value, 1_000),
+      canonicalProtocolByteLengthWithin(value, 1_000),
+      utf8ByteLengthWithin(text, 1_000),
+      auditJsonMemberNames(text, limits),
+    ];
+    const originalCharCodeAt = String.prototype.charCodeAt;
+    const originalExec = RegExp.prototype.exec;
+    const originalCall = Function.prototype.call;
+    const originalApply = Reflect.apply;
+    let observed: unknown[];
+    try {
+      String.prototype.charCodeAt = () => 0x41;
+      RegExp.prototype.exec = () => null;
+      Function.prototype.call = () => 0x41;
+      Reflect.apply = (() => 0x41) as typeof Reflect.apply;
+      observed = [
+        canonicalLegacyByteLengthWithin(value, 1_000),
+        canonicalProtocolByteLengthWithin(value, 1_000),
+        utf8ByteLengthWithin(text, 1_000),
+        auditJsonMemberNames(text, limits),
+      ];
+    } finally {
+      String.prototype.charCodeAt = originalCharCodeAt;
+      RegExp.prototype.exec = originalExec;
+      Function.prototype.call = originalCall;
+      Reflect.apply = originalApply;
+    }
+
+    expect(observed).toEqual(expected);
+    expect(expected[3]).toEqual({ status: "duplicate" });
   });
 
   it("charges nothing for the own __proto__ key the frozen writer omits", () => {

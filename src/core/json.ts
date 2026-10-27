@@ -17,8 +17,18 @@ const intrinsicObjectIs = Object.is;
 const intrinsicObjectIsFrozen = Object.isFrozen;
 const intrinsicObjectKeys = Object.keys;
 const intrinsicObjectValues = Object.values;
-const intrinsicStringCharCodeAt = String.prototype.charCodeAt;
 const reflectApply = Reflect.apply;
+// Uncurried once at load so per-character counting stays fast without
+// trusting later String.prototype or Reflect state.
+const intrinsicStringCharCodeAt = Function.prototype.call.bind(
+  String.prototype.charCodeAt,
+) as (value: string, index: number) => number;
+const intrinsicRegExpExec = Function.prototype.call.bind(
+  RegExp.prototype.exec,
+) as (regexp: RegExp, value: string) => RegExpExecArray | null;
+// The first code unit JSON.stringify does not write as one verbatim byte:
+// anything outside printable ASCII other than the quote and backslash.
+const nonVerbatimJsonCodeUnit = /[^\u0020\u0021\u0023-\u005b\u005d-\u007f]/;
 const canonicalByteLimitExceeded = {};
 
 function objectKeys(value: object): string[] {
@@ -138,7 +148,7 @@ function assertCanonicalByteLimit(maximumBytes: number): void {
 }
 
 function stringCodeUnitAt(value: string, index: number): number {
-  return reflectApply(intrinsicStringCharCodeAt, value, [index]) as number;
+  return intrinsicStringCharCodeAt(value, index);
 }
 
 /**
@@ -185,7 +195,10 @@ function canonicalByteLengthWithin(
 
   const countQuotedString = (text: string): void => {
     addBytes(2);
-    for (let index = 0; index < text.length; index += 1) {
+    const special = intrinsicRegExpExec(nonVerbatimJsonCodeUnit, text);
+    const verbatim = special === null ? text.length : special.index;
+    addBytes(verbatim);
+    for (let index = verbatim; index < text.length; index += 1) {
       const codeUnit = stringCodeUnitAt(text, index);
       if (codeUnit === 0x22 || codeUnit === 0x5c) {
         addBytes(2);

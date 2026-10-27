@@ -1,7 +1,11 @@
 const IntrinsicArray = Array;
 const intrinsicNumberIsSafeInteger = Number.isSafeInteger;
-const intrinsicStringCharCodeAt = String.prototype.charCodeAt;
 const reflectApply = Reflect.apply;
+// Uncurried once at load: later prototype or Reflect tampering cannot redirect
+// it, and unlike Reflect.apply it stays fast in per-character loops.
+const stringCharCodeAt = Function.prototype.call.bind(
+  String.prototype.charCodeAt,
+) as (value: string, index: number) => number;
 const textEncoder = new TextEncoder();
 const fatalTextDecoder = new TextDecoder("utf-8", { fatal: true });
 const fatalTextDecoderDecode = TextDecoder.prototype.decode;
@@ -42,12 +46,7 @@ export function utf8ByteLengthWithin(
 
   let byteLength = 0;
   for (let index = 0; index < value.length; index += 1) {
-    applyArguments[0] = index;
-    const codeUnit = reflectApply(
-      intrinsicStringCharCodeAt,
-      value,
-      applyArguments,
-    ) as number;
+    const codeUnit = stringCharCodeAt(value, index);
     let width: number;
     if (codeUnit <= 0x7f) {
       width = 1;
@@ -56,12 +55,7 @@ export function utf8ByteLengthWithin(
     } else if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
       let trailing = -1;
       if (index + 1 < value.length) {
-        applyArguments[0] = index + 1;
-        trailing = reflectApply(
-          intrinsicStringCharCodeAt,
-          value,
-          applyArguments,
-        ) as number;
+        trailing = stringCharCodeAt(value, index + 1);
       }
       if (trailing >= 0xdc00 && trailing <= 0xdfff) {
         width = 4;

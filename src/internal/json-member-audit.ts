@@ -16,15 +16,15 @@ const jsonMemberAuditJsonParse = JsonMemberAuditIntrinsicJson.parse;
 const jsonMemberAuditReflectApply = JsonMemberAuditIntrinsicReflect.apply;
 const jsonMemberAuditSetAdd = JsonMemberAuditIntrinsicSet.prototype.add;
 const jsonMemberAuditSetHas = JsonMemberAuditIntrinsicSet.prototype.has;
-const jsonMemberAuditStringCharCodeAt = String.prototype.charCodeAt;
+// Uncurried once at load so the per-character scan stays fast without
+// trusting later String.prototype or Reflect state.
+const jsonMemberAuditStringCharCodeAt = Function.prototype.call.bind(
+  String.prototype.charCodeAt,
+) as (value: string, index: number) => number;
 const jsonMemberAuditStringSlice = String.prototype.slice;
 
 function jsonMemberAuditCharCodeAt(value: string, index: number): number {
-  return jsonMemberAuditReflectApply(
-    jsonMemberAuditStringCharCodeAt,
-    value,
-    [index],
-  ) as number;
+  return jsonMemberAuditStringCharCodeAt(value, index);
 }
 
 function jsonMemberAuditSlice(
