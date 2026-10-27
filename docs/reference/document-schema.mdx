@@ -64,6 +64,35 @@ A `solid` output is exactly one body. A `bodySet` is the only multibody output:
 an ordered authored collection with stable member IDs that is never fused or
 turned into a kernel compound. Frozen v1–v6 output grammars are unchanged.
 
+### Identity when migrating to v7
+
+Documents v1–v6 accept any string as a parameter, node, output, sketch-entity,
+sketch-constraint, or assembly-occurrence ID, and accept repeated occurrence
+IDs within one assembly. Document v7 requires `^[A-Za-z][A-Za-z0-9._:-]*$`
+and unique occurrence IDs. Staged migration fails closed with one diagnostic
+per blocking identity; it never renames anything on its own.
+
+A separate staged operation accepts an explicit caller-authored rename map.
+Flat maps cover parameters, nodes, and outputs. Sketch maps are keyed by
+legacy sketch ID. Occurrence maps are keyed by legacy assembly ID and then by
+instance index, because a repeated ID cannot address one occurrence.
+
+- Only identities that block v7 may be renamed; renaming an ID that already
+  conforms is rejected.
+- Node and sketch-entity renames also cover historical identities that exist
+  only in stored topology lineage.
+- Every entry must name an existing source identity, every target must be a
+  unique v7 ID, and no target may collide with a retained ID.
+- Renaming a repeated occurrence ID that a configuration references is
+  rejected, because which occurrence the configuration meant is ambiguous.
+
+Each rename rewrites its definition and every structural reference, including
+expressions, topology queries, and stored lineage. Metadata and other
+free-form text are never rewritten. The result must pass strict v7 validation,
+and the operation returns a deterministic audit record of every applied rename.
+Output renames are marked consumer-visible because callers and external
+documents select outputs by name.
+
 ## Independent version axes
 
 Do not infer one version from another:
