@@ -2405,9 +2405,14 @@ export interface HashDesignFeaturesOptions {
 }
 
 // @public (undocumented)
-export function hashDocument(document: DesignDocument, options?: {
+export function hashDocument(document: DesignDocument, options?: HashDocumentOptions): Promise<string>;
+
+// @public (undocumented)
+export interface HashDocumentOptions {
+    // (undocumented)
     readonly includeMetadata?: boolean;
-}): Promise<string>;
+    readonly limits?: Partial<DesignDocumentLimits>;
+}
 
 // @public
 export const IMPORTED_BODY_MEDIA_TYPES: Readonly<{
@@ -4148,7 +4153,7 @@ export interface ParameterOptions<D extends Dimension> {
 // @public (undocumented)
 export type ParameterOverride = EvaluationParameterOverride;
 
-// @public (undocumented)
+// @public
 export function parseDocument(text: string, options?: ParseDocumentOptions): CadResult<DesignDocument>;
 
 // @public (undocumented)
@@ -5448,7 +5453,7 @@ export interface StepExportOptions {
     readonly signal?: AbortSignal;
 }
 
-// @public (undocumented)
+// @public
 export function stringifyDocument(document: DesignDocument, options?: StringifyOptions): string;
 
 // @public
@@ -5461,6 +5466,7 @@ export interface StringifyImportedBodyDocumentOptions extends ParseDocumentOptio
 
 // @public (undocumented)
 export interface StringifyOptions {
+    readonly limits?: Partial<DesignDocumentLimits>;
     // (undocumented)
     readonly pretty?: boolean;
 }

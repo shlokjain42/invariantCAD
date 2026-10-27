@@ -3,6 +3,7 @@ import {
   canonicalStringify,
   canonicalStringifyProtocol,
   canonicalStringifyProtocolWithin,
+  canonicalStringifyWithin,
   deepFreeze,
 } from "./core/json.js";
 import {
@@ -72,7 +73,10 @@ import {
   planDocumentV7IdentityRenames,
   type AppliedDocumentV7IdentityRename,
 } from "./internal/document-v7-identity-renames.js";
-import { auditJsonMemberNames } from "./internal/json-member-audit.js";
+import {
+  auditJsonMemberNames,
+  type JsonMemberAuditResult,
+} from "./internal/json-member-audit.js";
 
 const SerializationIntrinsicArray = Array;
 const SerializationIntrinsicArrayPrototype = Array.prototype;
@@ -263,6 +267,17 @@ function v7ParsedShapeMatchesSnapshot(
 
 export interface StringifyOptions {
   readonly pretty?: boolean;
+  /**
+   * Bounds the canonical output. Only `maxDocumentBytes` applies to writing;
+   * omitted fields use {@link DEFAULT_DESIGN_DOCUMENT_LIMITS}.
+   */
+  readonly limits?: Partial<DesignDocumentLimits>;
+}
+
+export interface HashDocumentOptions {
+  readonly includeMetadata?: boolean;
+  /** Bounds the hashed canonical bytes through `maxDocumentBytes`. */
+  readonly limits?: Partial<DesignDocumentLimits>;
 }
 
 export interface ParseDocumentOptions {
@@ -378,14 +393,46 @@ function canonicalizeDocumentTopology<T extends SerializableDocument>(
   } as T;
 }
 
+/**
+ * Writes the frozen v1-v6 canonical JSON. The output bytes are counted before
+ * the canonical tree or string is built, and admitted output is unchanged.
+ */
 export function stringifyDocument(
   document: DesignDocument,
   options: StringifyOptions = {},
 ): string {
-  return canonicalStringify(
+  return canonicalStringifyDocumentWithin(
     canonicalizeDocumentTopology(document),
-    options.pretty ? 2 : undefined,
+    writerLimits(options).maxDocumentBytes,
+    options.pretty ? true : false,
   );
+}
+
+function writerLimits(options: {
+  readonly limits?: Partial<DesignDocumentLimits>;
+}): DesignDocumentLimits {
+  const normalizedLimits = parseLimits(options);
+  if (!normalizedLimits.ok) {
+    throw new TypeError(
+      normalizedLimits.diagnostics[0]?.message ??
+        "Cannot normalize InvariantCAD document serialization limits",
+    );
+  }
+  return normalizedLimits.value;
+}
+
+function canonicalStringifyDocumentWithin(
+  value: unknown,
+  maximumBytes: number,
+  pretty: boolean,
+): string {
+  const text = canonicalStringifyWithin(value, maximumBytes, pretty);
+  if (text === undefined) {
+    throw new TypeError(
+      `Design-document maxDocumentBytes limit ${maximumBytes} was exceeded before canonical JSON materialization`,
+    );
+  }
+  return text;
 }
 
 /**
@@ -674,35 +721,41 @@ function parseDocumentValueV7WithLimits(
     : preflight;
 }
 
+/**
+ * Parses frozen v1-v6 document text. Repeated object member names, including
+ * escape-equivalent spellings, are rejected from the raw text, and raw
+ * structural ceilings also charge subtrees that last-key-wins parsing erased.
+ */
 export function parseDocument(
   text: string,
   options: ParseDocumentOptions = {},
 ): CadResult<DesignDocument> {
-  const normalizedLimits = parseLimits(options);
-  if (!normalizedLimits.ok) return normalizedLimits;
-  let documentBytes: number;
-  try {
-    documentBytes = new TextEncoder().encode(text).byteLength;
-  } catch (error) {
+  if (typeof text !== "string") {
     return failure(
       diagnostic(
         "IR_INVALID",
-        safeErrorMessage(error, "The document text could not be read safely"),
+        COMPATIBLE_DOCUMENT_TEXT_MESSAGES.primitiveText,
         { severity: "error" },
       ),
     );
   }
-  if (documentBytes > normalizedLimits.value.maxDocumentBytes) {
+  const normalizedLimits = parseLimits(options);
+  if (!normalizedLimits.ok) return normalizedLimits;
+  const limits = normalizedLimits.value;
+  if (utf8ByteLengthWithin(text, limits.maxDocumentBytes) === undefined) {
+    // Like the structural ceilings, `actual` is the size observed when
+    // measurement stopped rather than the full UTF-8 length.
+    const actual = documentTextBytesLowerBound(text, limits.maxDocumentBytes);
     return failure(
       diagnostic(
         "IR_INVALID",
-        `Design-document maxDocumentBytes limit ${normalizedLimits.value.maxDocumentBytes} was exceeded by ${documentBytes}`,
+        `Design-document maxDocumentBytes limit ${limits.maxDocumentBytes} was exceeded by ${actual}`,
         {
           severity: "error",
           details: {
             resource: "maxDocumentBytes",
-            limit: normalizedLimits.value.maxDocumentBytes,
-            actual: documentBytes,
+            limit: limits.maxDocumentBytes,
+            actual,
           },
         },
       ),
@@ -719,7 +772,23 @@ export function parseDocument(
       }),
     );
   }
-  return parseDocumentValueWithLimits(value, normalizedLimits.value);
+  const preflight = preflightDesignDocumentValue(value, limits);
+  if (!preflight.ok) return preflight;
+  const memberAuditFailure = documentTextMemberAuditFailure(
+    auditDocumentTextMembers(text, limits),
+    COMPATIBLE_DOCUMENT_TEXT_MESSAGES,
+  );
+  return (
+    memberAuditFailure ?? validateLegacyDocumentSnapshot(preflight.value)
+  );
+}
+
+/** Every UTF-16 code unit encodes to at least one UTF-8 byte. */
+function documentTextBytesLowerBound(
+  source: string,
+  maximumBytes: number,
+): number {
+  return source.length > maximumBytes ? source.length : maximumBytes + 1;
 }
 
 interface CapturedDocumentTextV7Boundary {
@@ -796,10 +865,10 @@ function captureDocumentTextV7WithLimits(
           details: {
             resource: "maxDocumentBytes",
             limit: limits.maxDocumentBytes,
-            actualAtLeast:
-              source.length > limits.maxDocumentBytes
-                ? source.length
-                : limits.maxDocumentBytes + 1,
+            actualAtLeast: documentTextBytesLowerBound(
+              source,
+              limits.maxDocumentBytes,
+            ),
           },
         },
       ),
@@ -826,13 +895,45 @@ function captureDocumentTextV7WithLimits(
   }
   const preflight = preflightDocumentValueV7WithLimits(value, limits);
   if (!preflight.ok) return preflight;
-  let memberAudit: ReturnType<typeof auditJsonMemberNames>;
+  const memberAudit = auditDocumentTextMembers(source, limits);
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return serializationIntegrityFailure();
+  }
+  const memberAuditFailure = documentTextMemberAuditFailure(
+    memberAudit,
+    messages,
+  );
+  if (memberAuditFailure !== undefined) return memberAuditFailure;
+  return success({
+    snapshot: preflight.value,
+    limits,
+  });
+}
+
+type DocumentTextMemberAudit =
+  | JsonMemberAuditResult
+  | { readonly status: "audit-failed" };
+
+/**
+ * Audits accepted JSON text for member names and erased subtrees that native
+ * last-key-wins parsing has already collapsed out of the parsed value.
+ */
+function auditDocumentTextMembers(
+  source: string,
+  limits: DesignDocumentLimits,
+): DocumentTextMemberAudit {
   try {
-    memberAudit = auditJsonMemberNames(source, limits);
+    return auditJsonMemberNames(source, limits);
   } catch {
-    if (!documentV7RuntimeIntrinsicsAreIntact()) {
-      return serializationIntegrityFailure();
-    }
+    return { status: "audit-failed" };
+  }
+}
+
+function documentTextMemberAuditFailure(
+  memberAudit: DocumentTextMemberAudit,
+  messages: DocumentTextV7BoundaryMessages,
+): CadResult<never> | undefined {
+  if (memberAudit.status === "audit-failed") {
     return failure(
       diagnostic(
         "IR_INVALID",
@@ -845,9 +946,6 @@ function captureDocumentTextV7WithLimits(
         },
       ),
     );
-  }
-  if (!documentV7RuntimeIntrinsicsAreIntact()) {
-    return serializationIntegrityFailure();
   }
   if (memberAudit.status === "limit-exceeded") {
     return failure(
@@ -879,10 +977,7 @@ function captureDocumentTextV7WithLimits(
       ),
     );
   }
-  return success({
-    snapshot: preflight.value,
-    limits,
-  });
+  return undefined;
 }
 
 function captureDocumentTextV7Boundary(
@@ -1158,8 +1253,9 @@ export function parseDocumentValueV7(
 
 export async function hashDocument(
   document: DesignDocument,
-  options: { readonly includeMetadata?: boolean } = {},
+  options: HashDocumentOptions = {},
 ): Promise<string> {
+  const { maxDocumentBytes } = writerLimits(options);
   const canonicalDocument = canonicalizeDocumentTopology(document);
   const source = options.includeMetadata
     ? canonicalDocument
@@ -1167,7 +1263,9 @@ export async function hashDocument(
         const { metadata: _metadata, ...semanticDocument } = canonicalDocument;
         return semanticDocument;
       })();
-  const bytes = new TextEncoder().encode(canonicalStringify(source));
+  const bytes = new TextEncoder().encode(
+    canonicalStringifyDocumentWithin(source, maxDocumentBytes, false),
+  );
   const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
   return [...new Uint8Array(digest)]
     .map((byte) => byte.toString(16).padStart(2, "0"))
@@ -1178,7 +1276,13 @@ export function cloneDocument(
   document: DesignDocument,
   options: ParseDocumentOptions = {},
 ): DesignDocument {
-  const parsed = parseDocument(stringifyDocument(document), options);
+  const parsed = parseDocument(
+    stringifyDocument(
+      document,
+      options.limits === undefined ? {} : { limits: options.limits },
+    ),
+    options,
+  );
   if (!parsed.ok) {
     throw new TypeError("Cannot clone an invalid InvariantCAD document");
   }
