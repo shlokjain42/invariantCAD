@@ -27,8 +27,8 @@
 - The CLI checks document and parameter files against the default 64 MiB
   ceiling before reading them, decodes them as strict UTF-8 without stripping a
   byte-order mark, and rejects parameter files with repeated member names.
-  Parameter-file errors now print a one-line reason with exit code 1 instead of
-  a stack trace.
+  Missing, unreadable, oversized, or malformed document and parameter files
+  now print a one-line reason with exit code 1 instead of a stack trace.
 - Added a staged, repository-only migration path for legacy documents whose
   identities Document v7 cannot represent.
   `migrateDocumentToV7WithIdentityRenames(document, renames, options?)` accepts

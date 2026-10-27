@@ -108,8 +108,9 @@ decodes the bytes as strict UTF-8: malformed sequences are errors instead of
 replacement characters, and a leading byte-order mark is not stripped, so JSON
 parsing rejects it. Documents go through `parseDocument`, and a parameter file
 that repeats a member name, including an escape-equivalent spelling, is
-rejected instead of silently keeping the last value. These failures write the
-reason to stderr and return exit code 1.
+rejected instead of silently keeping the last value. These failures, and a
+missing or unreadable file, write a one-line reason to stderr and return exit
+code 1.
 
 ## Strict argument handling
 

@@ -312,6 +312,21 @@ describe("CLI", () => {
         expect(result.stderr, message).not.toContain("    at ");
       }
 
+      const missing = join(directory, "missing.json");
+      for (const [arguments_, message] of [
+        [["validate", missing], "Document file could not be read: ENOENT"],
+        [
+          ["inspect", files.document, "--parameters", missing],
+          "Parameter file could not be read: ENOENT",
+        ],
+      ] as const) {
+        const result = invokeCli(arguments_);
+        expect(result.status, message).toBe(1);
+        expect(result.stdout, message).toBe("");
+        expect(result.stderr, message).toContain(message);
+        expect(result.stderr, message).not.toContain("    at ");
+      }
+
       await writeFile(files.parameters, '{"width":0.003}');
       const accepted = invokeCli([
         "inspect",

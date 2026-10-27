@@ -309,21 +309,49 @@ const fatalUtf8Decoder = new TextDecoder("utf-8", {
 });
 
 /**
- * Reads at most one byte past the ceiling, so an oversized or growing file is
- * rejected without buffering it, then decodes without replacement characters.
+ * Reads one bounded input file and decodes it without replacement characters.
+ * Every failure, including a missing file, becomes a one-line reason.
  */
 async function readUtf8FileWithin(
   path: string,
   label: string,
   maximumBytes: number,
 ): Promise<CliInputResult<string>> {
-  const exceeded = {
-    ok: false,
-    message: `${label} exceeds the ${maximumBytes}-byte input limit`,
-  } as const;
+  let bytes: Uint8Array | undefined;
+  try {
+    bytes = await readFileWithin(path, maximumBytes);
+  } catch (error) {
+    return {
+      ok: false,
+      message: `${label} could not be read: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    };
+  }
+  if (bytes === undefined) {
+    return {
+      ok: false,
+      message: `${label} exceeds the ${maximumBytes}-byte input limit`,
+    };
+  }
+  try {
+    return { ok: true, value: fatalUtf8Decoder.decode(bytes) };
+  } catch {
+    return { ok: false, message: `${label} is not valid UTF-8` };
+  }
+}
+
+/**
+ * Reads at most one byte past the ceiling, so an oversized or growing file is
+ * rejected without buffering it. Returns undefined above the ceiling.
+ */
+async function readFileWithin(
+  path: string,
+  maximumBytes: number,
+): Promise<Uint8Array | undefined> {
   const handle = await open(path, "r");
   try {
-    if ((await handle.stat()).size > maximumBytes) return exceeded;
+    if ((await handle.stat()).size > maximumBytes) return undefined;
     const chunks: Uint8Array[] = [];
     let byteLength = 0;
     for (;;) {
@@ -333,7 +361,7 @@ async function readUtf8FileWithin(
       const { bytesRead } = await handle.read(chunk, 0, chunk.byteLength, null);
       if (bytesRead === 0) break;
       byteLength += bytesRead;
-      if (byteLength > maximumBytes) return exceeded;
+      if (byteLength > maximumBytes) return undefined;
       chunks.push(chunk.subarray(0, bytesRead));
     }
     const bytes = new Uint8Array(byteLength);
@@ -342,11 +370,7 @@ async function readUtf8FileWithin(
       bytes.set(chunk, offset);
       offset += chunk.byteLength;
     }
-    try {
-      return { ok: true, value: fatalUtf8Decoder.decode(bytes) };
-    } catch {
-      return { ok: false, message: `${label} is not valid UTF-8` };
-    }
+    return bytes;
   } finally {
     await handle.close();
   }
