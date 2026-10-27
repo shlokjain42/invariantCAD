@@ -2,6 +2,32 @@
 
 ## [Unreleased]
 
+- `parseDocument(text, options?)` now rejects JSON that repeats an object
+  member name, including escape-equivalent spellings such as `"name"` and
+  `"\u006eame"`, with `IR_INVALID` and the `duplicate-json-member` reason.
+  Native `JSON.parse` silently kept the last value, which another JSON parser
+  may resolve differently. InvariantCAD never writes such text, but documents
+  that contain it were ambiguous and now fail.
+  Raw `maxStructuralValues` and `maxNestingDepth` ceilings also charge the
+  subtrees that last-key-wins parsing erased. The UTF-8 size check stops at
+  `maxDocumentBytes` instead of encoding the whole text, so its `actual` detail
+  is the size observed when measurement stopped, as for the other ceilings.
+  `text` must be a primitive string; a `String` object or other value is now
+  rejected rather than coerced. Valid documents parse exactly as before.
+  `parseDocumentValue` and `migrateDocument` receive already-parsed values and
+  cannot detect duplicates an upstream parser collapsed.
+- `stringifyDocument`, `cloneDocument`, and `hashDocument` accept
+  `options.limits` and count the frozen canonical bytes, compact or pretty,
+  before building the canonical tree or string. Output above `maxDocumentBytes`
+  (64 MiB by default) throws `TypeError`, and malformed limits throw
+  `TypeError`. Admitted output, including the frozen omission of an own
+  `__proto__` key, and every semantic hash are unchanged. `HashDocumentOptions`
+  names the `hashDocument` options type.
+- The CLI checks document and parameter files against the default 64 MiB
+  ceiling before reading them, decodes them as strict UTF-8 without stripping a
+  byte-order mark, and rejects parameter files with repeated member names.
+  Parameter-file errors now print a one-line reason with exit code 1 instead of
+  a stack trace.
 - Added a staged, repository-only migration path for legacy documents whose
   identities Document v7 cannot represent.
   `migrateDocumentToV7WithIdentityRenames(document, renames, options?)` accepts

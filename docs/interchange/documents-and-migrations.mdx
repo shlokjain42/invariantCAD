@@ -84,6 +84,13 @@ Serialization canonicalizes topology query ordering and persistent-reference
 variants. Equivalent commutative topology expressions therefore produce the
 same document representation.
 
+The writer counts the canonical UTF-8 bytes, compact or pretty, before it builds
+the canonical tree or string. Output larger than `maxDocumentBytes` (64 MiB by
+default) throws `TypeError` instead of being materialized. Pass
+`{ limits: { maxDocumentBytes } }` to choose another ceiling; malformed limits
+also throw `TypeError`. Output within the ceiling is byte-for-byte unchanged,
+including the frozen writer's omission of an own `__proto__` key.
+
 ## Parse untrusted text
 
 ```ts
@@ -102,12 +109,21 @@ if (!parsed.ok) {
 const document = parsed.value;
 ```
 
-`parseDocument` checks UTF-8 byte size before `JSON.parse`, captures a bounded
-plain snapshot, validates the matching frozen version schema, validates graph
-semantics, and deep-freezes the result.
+`parseDocument` requires a primitive string and measures its UTF-8 size before
+`JSON.parse`, stopping at `maxDocumentBytes` without encoding the text. It then
+captures a bounded plain snapshot and audits the raw text: an object that
+repeats a member name, including an escape-equivalent spelling such as `"name"`
+and `"\u006eame"`, is rejected with `IR_INVALID` and
+`details.reason: "duplicate-json-member"` instead of silently keeping the last
+value. The raw structural and nesting ceilings also charge subtrees that
+last-key-wins parsing would have erased. Finally it validates the matching
+frozen version schema and graph semantics, and deep-freezes the result.
 
 Use `parseDocumentValue(value)` when another parser already produced an unknown
-JavaScript value. It still performs the bounded snapshot and schema checks.
+JavaScript value. It still performs the bounded snapshot and schema checks, but
+it cannot detect member names that the upstream parser already collapsed, and
+neither can `migrateDocument(value)`. Pass the original text to `parseDocument`
+at boundaries that must reject ambiguous JSON.
 
 ## Do not cast
 
@@ -126,8 +142,9 @@ expects a validated document.
 const detached = cloneDocument(document);
 ```
 
-Cloning serializes and reparses through the public protocol. It is appropriate
-when a detached frozen copy is needed; it is not a mutable editing API.
+Cloning serializes and reparses through the public protocol, applying
+`options.limits` to both steps. It is appropriate when a detached frozen copy is
+needed; it is not a mutable editing API.
 
 ## Migrate
 
@@ -148,7 +165,9 @@ received before migration.
 By default, root metadata is excluded so descriptive root changes do not alter
 the semantic document hash. Node metadata and every modeled field follow the
 protocol's canonical representation. Pass `{ includeMetadata: true }` when the
-root metadata is intentionally part of the hash.
+root metadata is intentionally part of the hash. Like `stringifyDocument`,
+`hashDocument` rejects canonical bytes above `limits.maxDocumentBytes` before
+materializing them; the returned promise rejects with `TypeError`.
 
 ## Schema identifiers
 
