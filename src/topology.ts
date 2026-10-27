@@ -1,5 +1,9 @@
 import { entityId } from "./core/ids.js";
-import { canonicalStringify, deepFreeze } from "./core/json.js";
+import {
+  canonicalStringify,
+  canonicalStringifyWithin,
+  deepFreeze,
+} from "./core/json.js";
 import {
   deg,
   mm,
@@ -75,6 +79,9 @@ type CanonicalQueryComparator = (
   second: string,
 ) => number;
 
+/** Produces the frozen canonical JSON used to deduplicate and order operands. */
+type CanonicalQueryKey = (query: TopologyQueryIR) => string;
+
 function legacyLocaleCompare(first: string, second: string): number {
   return first.localeCompare(second);
 }
@@ -87,12 +94,13 @@ function canonicalLogicalQueryWithComparator(
   op: "and" | "or",
   queries: readonly TopologyQueryIR[],
   compare: CanonicalQueryComparator,
+  key: CanonicalQueryKey = canonicalStringify,
 ): TopologyQueryIR {
   const flattened = queries.flatMap((query) =>
     query.op === op ? query.queries : [query],
   );
   const unique = new Map<string, TopologyQueryIR>();
-  for (const query of flattened) unique.set(canonicalStringify(query), query);
+  for (const query of flattened) unique.set(key(query), query);
   return {
     op,
     queries: [...unique.entries()]
@@ -115,6 +123,7 @@ function canonicalLogicalQuery(
 function canonicalizeTopologyQueryIRWithComparator(
   query: TopologyQueryIR,
   compare: CanonicalQueryComparator,
+  key?: CanonicalQueryKey,
 ): TopologyQueryIR {
   switch (query.op) {
     case "and":
@@ -122,9 +131,10 @@ function canonicalizeTopologyQueryIRWithComparator(
       return canonicalLogicalQueryWithComparator(
         query.op,
         query.queries.map((child) =>
-          canonicalizeTopologyQueryIRWithComparator(child, compare),
+          canonicalizeTopologyQueryIRWithComparator(child, compare, key),
         ),
         compare,
+        key,
       );
     case "not":
       return {
@@ -132,6 +142,7 @@ function canonicalizeTopologyQueryIRWithComparator(
         query: canonicalizeTopologyQueryIRWithComparator(
           query.query,
           compare,
+          key,
         ),
       };
     case "adjacentTo":
@@ -140,6 +151,7 @@ function canonicalizeTopologyQueryIRWithComparator(
         selection: canonicalizeTopologySelectionIRWithComparator(
           query.selection,
           compare,
+          key,
         ),
       };
     default:
@@ -152,12 +164,14 @@ function canonicalizeTopologySelectionIRWithComparator<
 >(
   selection: TopologySelectionIR<K>,
   compare: CanonicalQueryComparator,
+  key?: CanonicalQueryKey,
 ): TopologySelectionIR<K> {
   return {
     topology: selection.topology,
     query: canonicalizeTopologyQueryIRWithComparator(
       selection.query,
       compare,
+      key,
     ),
     cardinality: selection.cardinality,
   };
@@ -179,6 +193,62 @@ export function canonicalizeTopologySelectionIR<K extends TopologyKind>(
     selection,
     legacyLocaleCompare,
   );
+}
+
+const topologyCanonicalByteLimitExceeded = {};
+
+/**
+ * Frozen-protocol normalization whose operand keys stop at `maximumBytes`.
+ * Every distinct operand is written into the canonical document, so an operand
+ * key above the ceiling proves the written document exceeds it too. Returns
+ * undefined in that case without building the oversized key.
+ */
+export function canonicalizeTopologySelectionIRWithin<K extends TopologyKind>(
+  selection: TopologySelectionIR<K>,
+  maximumBytes: number,
+): TopologySelectionIR<K> | undefined {
+  return canonicalizeTopologySelectionIRWithComparatorWithin(
+    selection,
+    legacyLocaleCompare,
+    maximumBytes,
+  );
+}
+
+/** Bounded form of {@link canonicalizeTopologySelectionIRV7}. */
+export function canonicalizeTopologySelectionIRV7Within<
+  K extends TopologyKind,
+>(
+  selection: TopologySelectionIRV7<K>,
+  maximumBytes: number,
+): TopologySelectionIRV7<K> | undefined {
+  return canonicalizeTopologySelectionIRWithComparatorWithin(
+    selection,
+    lexicalCodeUnitCompare,
+    maximumBytes,
+  );
+}
+
+function canonicalizeTopologySelectionIRWithComparatorWithin<
+  K extends TopologyKind,
+>(
+  selection: TopologySelectionIR<K>,
+  compare: CanonicalQueryComparator,
+  maximumBytes: number,
+): TopologySelectionIR<K> | undefined {
+  try {
+    return canonicalizeTopologySelectionIRWithComparator(
+      selection,
+      compare,
+      (query) => {
+        const key = canonicalStringifyWithin(query, maximumBytes);
+        if (key === undefined) throw topologyCanonicalByteLimitExceeded;
+        return key;
+      },
+    );
+  } catch (error) {
+    if (error === topologyCanonicalByteLimitExceeded) return undefined;
+    throw error;
+  }
 }
 
 /** Locale-independent staged Document v7 topology-selection normalization. */

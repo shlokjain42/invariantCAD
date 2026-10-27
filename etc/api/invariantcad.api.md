@@ -2405,9 +2405,14 @@ export interface HashDesignFeaturesOptions {
 }
 
 // @public (undocumented)
-export function hashDocument(document: DesignDocument, options?: {
+export function hashDocument(document: DesignDocument, options?: HashDocumentOptions): Promise<string>;
+
+// @public (undocumented)
+export interface HashDocumentOptions {
+    // (undocumented)
     readonly includeMetadata?: boolean;
-}): Promise<string>;
+    readonly limits?: Partial<DesignDocumentLimits>;
+}
 
 // @public
 export const IMPORTED_BODY_MEDIA_TYPES: Readonly<{
@@ -3820,7 +3825,7 @@ interface MeshOptions_2 {
 // @public (undocumented)
 export function meters(value: number): LengthExpression;
 
-// @public (undocumented)
+// @public
 export function migrateDocument(value: unknown, options?: ParseDocumentOptions): CadResult<DesignDocumentV6>;
 
 // @public (undocumented)
@@ -4148,7 +4153,7 @@ export interface ParameterOptions<D extends Dimension> {
 // @public (undocumented)
 export type ParameterOverride = EvaluationParameterOverride;
 
-// @public (undocumented)
+// @public
 export function parseDocument(text: string, options?: ParseDocumentOptions): CadResult<DesignDocument>;
 
 // @public (undocumented)
@@ -4157,7 +4162,7 @@ export interface ParseDocumentOptions {
     readonly limits?: Partial<DesignDocumentLimits>;
 }
 
-// @public (undocumented)
+// @public
 export function parseDocumentValue(value: unknown, options?: ParseDocumentOptions): CadResult<DesignDocument>;
 
 // @public
@@ -5448,7 +5453,7 @@ export interface StepExportOptions {
     readonly signal?: AbortSignal;
 }
 
-// @public (undocumented)
+// @public
 export function stringifyDocument(document: DesignDocument, options?: StringifyOptions): string;
 
 // @public
@@ -5461,6 +5466,7 @@ export interface StringifyImportedBodyDocumentOptions extends ParseDocumentOptio
 
 // @public (undocumented)
 export interface StringifyOptions {
+    readonly limits?: Partial<DesignDocumentLimits>;
     // (undocumented)
     readonly pretty?: boolean;
 }
@@ -6375,9 +6381,9 @@ export function writeArtifactCacheRecord(store: ArtifactCacheStore, record: Arti
 // Warnings were encountered during analysis:
 //
 // dist/vendor/manifold-3d/manifold.d.ts:18:5 - (ae-forgotten-export) The symbol "Vec3_2" needs to be exported by the entry point index.d.ts
-// src/topology.ts:522:22 - (ae-forgotten-export) The symbol "EdgeTopologyQueries" needs to be exported by the entry point index.d.ts
-// src/topology.ts:522:22 - (ae-forgotten-export) The symbol "FaceTopologyQueries" needs to be exported by the entry point index.d.ts
-// src/topology.ts:522:22 - (ae-forgotten-export) The symbol "VertexTopologyQueries" needs to be exported by the entry point index.d.ts
+// src/topology.ts:592:22 - (ae-forgotten-export) The symbol "EdgeTopologyQueries" needs to be exported by the entry point index.d.ts
+// src/topology.ts:592:22 - (ae-forgotten-export) The symbol "FaceTopologyQueries" needs to be exported by the entry point index.d.ts
+// src/topology.ts:592:22 - (ae-forgotten-export) The symbol "VertexTopologyQueries" needs to be exported by the entry point index.d.ts
 
 // (No @packageDocumentation comment for this package)
 

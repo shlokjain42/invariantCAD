@@ -29,6 +29,7 @@ import {
   NodeV6Schema,
   PersistentTopologyReferenceV2Schema,
   EvaluatedSolid,
+  cloneDocument,
   createEvaluator,
   design,
   hashDocument,
@@ -495,6 +496,120 @@ describe("frozen document-version grammar", () => {
         label,
       ).toBe(await hashDocument(emptyMetadata, { includeMetadata: true }));
       expect(({} as { readonly polluted?: unknown }).polluted).toBeUndefined();
+
+      const erasedMetadata = {
+        ...document,
+        metadata: JSON.parse(
+          `{"__proto__":{"erased":"${"x".repeat(4_096)}"}}`,
+        ),
+      } as typeof document;
+      const limits = {
+        maxDocumentBytes: new TextEncoder().encode(
+          stringifyDocument(emptyMetadata),
+        ).byteLength,
+      };
+      expect(stringifyDocument(erasedMetadata, { limits }), label).toBe(
+        stringifyDocument(emptyMetadata),
+      );
+      expect(
+        await hashDocument(erasedMetadata, { includeMetadata: true, limits }),
+        label,
+      ).toBe(await hashDocument(emptyMetadata, { includeMetadata: true }));
+    }
+  });
+
+  it("bounds frozen canonical writing, cloning, and hashing at the exact byte ceiling", async () => {
+    const encoder = new TextEncoder();
+    const exceeded = /maxDocumentBytes limit \d+ was exceeded before canonical JSON materialization/;
+    for (const { label, document: source } of versionCases()) {
+      const document = {
+        ...source,
+        metadata: { note: "é😀\u0000\"" },
+      } as typeof source;
+      for (const pretty of [false, true]) {
+        const expected = stringifyDocument(document, { pretty });
+        const bytes = encoder.encode(expected).byteLength;
+        expect(
+          stringifyDocument(document, {
+            pretty,
+            limits: { maxDocumentBytes: bytes },
+          }),
+          label,
+        ).toBe(expected);
+        expect(
+          () =>
+            stringifyDocument(document, {
+              pretty,
+              limits: { maxDocumentBytes: bytes - 1 },
+            }),
+          label,
+        ).toThrow(exceeded);
+      }
+
+      const bytes = encoder.encode(stringifyDocument(document)).byteLength;
+      expect(
+        stringifyDocument(
+          cloneDocument(document, { limits: { maxDocumentBytes: bytes } }),
+        ),
+        label,
+      ).toBe(stringifyDocument(document));
+      expect(
+        () =>
+          cloneDocument(document, { limits: { maxDocumentBytes: bytes - 1 } }),
+        label,
+      ).toThrow(exceeded);
+
+      const { metadata: _metadata, ...semantic } = document;
+      const semanticBytes = encoder.encode(
+        stringifyDocument(semantic as typeof document),
+      ).byteLength;
+      expect(semanticBytes).toBeLessThan(bytes);
+      expect(
+        await hashDocument(document, {
+          limits: { maxDocumentBytes: semanticBytes },
+        }),
+        label,
+      ).toBe(await hashDocument(document));
+      await expect(
+        hashDocument(document, {
+          limits: { maxDocumentBytes: semanticBytes - 1 },
+        }),
+        label,
+      ).rejects.toThrow(exceeded);
+      expect(
+        await hashDocument(document, {
+          includeMetadata: true,
+          limits: { maxDocumentBytes: bytes },
+        }),
+        label,
+      ).toBe(await hashDocument(document, { includeMetadata: true }));
+      await expect(
+        hashDocument(document, {
+          includeMetadata: true,
+          limits: { maxDocumentBytes: semanticBytes },
+        }),
+        label,
+      ).rejects.toThrow(exceeded);
+    }
+  });
+
+  it("rejects malformed writer limits before serializing", async () => {
+    const { v6 } = versionedDocuments();
+    for (const limits of [
+      { maxDocumentBytes: -1 },
+      { maxDocumentBytes: 1.5 },
+      { unknownLimit: 1 },
+    ] as const) {
+      const options = { limits } as unknown as { readonly limits: {} };
+      expect(() => stringifyDocument(v6, options)).toThrow(
+        "Design-document serialization limits are malformed or unsupported",
+      );
+      expect(() => cloneDocument(v6, options)).toThrow(
+        "Design-document serialization limits are malformed or unsupported",
+      );
+      await expect(hashDocument(v6, options)).rejects.toThrow(
+        "Design-document serialization limits are malformed or unsupported",
+      );
     }
   });
 

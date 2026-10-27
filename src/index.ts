@@ -742,6 +742,7 @@ export {
   parseDocument,
   parseDocumentValue,
   stringifyDocument,
+  type HashDocumentOptions,
   type StringifyOptions,
   type ParseDocumentOptions,
 } from "./serialization.js";

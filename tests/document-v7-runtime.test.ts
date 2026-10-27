@@ -626,10 +626,17 @@ describe("staged document-v7 serialization and validation", () => {
       const legacy = legacyDocument(schema, version);
       expect(parseDocumentValue(legacy).ok, `document v${version}`).toBe(true);
       const text = JSON.stringify(legacy);
-      const duplicate = `{"name":"shadowed",${text.slice(1)}`;
-      const parsed = parseDocument(duplicate);
+      const parsed = parseDocument(text);
       expect(parsed.ok, `document v${version}`).toBe(true);
       if (parsed.ok) expect(parsed.value.name).toBe(`document-v${version}`);
+      // Both parsers reject the member ambiguity last-key-wins would hide.
+      const duplicate = parseDocument(`{"name":"shadowed",${text.slice(1)}`);
+      expect(duplicate.ok, `document v${version}`).toBe(false);
+      if (!duplicate.ok) {
+        expect(duplicate.diagnostics[0]?.details).toEqual({
+          reason: "duplicate-json-member",
+        });
+      }
       expect(parseDocumentValueV7(legacy).ok).toBe(false);
     }
   });

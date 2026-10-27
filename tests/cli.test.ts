@@ -1,10 +1,18 @@
 import { spawnSync } from "node:child_process";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import {
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  truncate,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_DESIGN_DOCUMENT_LIMITS,
   design,
   kgPerCubicMeter,
   mm,
@@ -230,6 +238,108 @@ describe("CLI", () => {
       expect(result.stderr, arguments_.join(" ")).not.toContain("ENOENT");
     }
   }, 30_000);
+
+  it("bounds, strictly decodes, and audits document and parameter files", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "invariantcad-cli-"));
+    try {
+      const cad = design("cli-input-boundaries");
+      const width = cad.parameter.length("width", mm(2));
+      const box = cad.box("box", { size: vec3(width, mm(3), mm(4)) });
+      cad.output("box", box);
+      const text = stringifyDocument(cad.build());
+      const limit = DEFAULT_DESIGN_DOCUMENT_LIMITS.maxDocumentBytes;
+      const files = {
+        document: join(directory, "model.json"),
+        oversized: join(directory, "oversized.json"),
+        invalidUtf8: join(directory, "invalid-utf8.json"),
+        byteOrderMark: join(directory, "byte-order-mark.json"),
+        duplicate: join(directory, "duplicate.json"),
+        parameters: join(directory, "parameters.json"),
+      };
+      await writeFile(files.document, text);
+      await writeFile(files.oversized, "");
+      await truncate(files.oversized, limit + 1);
+      await writeFile(
+        files.invalidUtf8,
+        Buffer.concat([Buffer.from(text), Buffer.from([0xff])]),
+      );
+      await writeFile(files.byteOrderMark, `\ufeff${text}`);
+      await writeFile(files.duplicate, `{"name":"shadowed",${text.slice(1)}`);
+
+      const documentCases = [
+        [files.oversized, `Document file exceeds the ${limit}-byte input limit`],
+        [files.invalidUtf8, "Document file is not valid UTF-8"],
+        [files.byteOrderMark, "The document is not valid JSON"],
+        [
+          files.duplicate,
+          "Design-document JSON contains a duplicate object member name",
+        ],
+      ] as const;
+      for (const [path, message] of documentCases) {
+        const result = invokeCli(["validate", path]);
+        expect(result.status, path).toBe(1);
+        expect(result.stdout, path).toBe("");
+        expect(result.stderr, path).toContain(message);
+        expect(result.stderr, path).not.toContain("    at ");
+      }
+
+      const duplicateParameter =
+        "Parameter file contains a duplicate object member name";
+      const parameterCases = [
+        ['{"width":0.003,"width":0.004}', duplicateParameter],
+        ['{"width":0.003,"\\u0077idth":0.004}', duplicateParameter],
+        ['{"width":', "Parameter file is not valid JSON"],
+        ["[0.003]", "Parameter file must contain a JSON object"],
+        [Buffer.from([0x7b, 0xff, 0x7d]), "Parameter file is not valid UTF-8"],
+        [undefined, `Parameter file exceeds the ${limit}-byte input limit`],
+      ] as const;
+      for (const [contents, message] of parameterCases) {
+        if (contents === undefined) {
+          await writeFile(files.parameters, "");
+          await truncate(files.parameters, limit + 1);
+        } else {
+          await writeFile(files.parameters, contents);
+        }
+        const result = invokeCli([
+          "inspect",
+          files.document,
+          "--parameters",
+          files.parameters,
+        ]);
+        expect(result.status, message).toBe(1);
+        expect(result.stdout, message).toBe("");
+        expect(result.stderr, message).toContain(message);
+        expect(result.stderr, message).not.toContain("    at ");
+      }
+
+      const missing = join(directory, "missing.json");
+      for (const [arguments_, message] of [
+        [["validate", missing], "Document file could not be read: ENOENT"],
+        [
+          ["inspect", files.document, "--parameters", missing],
+          "Parameter file could not be read: ENOENT",
+        ],
+      ] as const) {
+        const result = invokeCli(arguments_);
+        expect(result.status, message).toBe(1);
+        expect(result.stdout, message).toBe("");
+        expect(result.stderr, message).toContain(message);
+        expect(result.stderr, message).not.toContain("    at ");
+      }
+
+      await writeFile(files.parameters, '{"width":0.003}');
+      const accepted = invokeCli([
+        "inspect",
+        files.document,
+        "--parameters",
+        files.parameters,
+      ]);
+      expect(accepted.stderr).toBe("");
+      expect(accepted.status).toBe(0);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, 60_000);
 
   it("applies repeatable finite inline parameters above named configurations", async () => {
     const directory = await mkdtemp(join(tmpdir(), "invariantcad-cli-"));

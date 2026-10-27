@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { readFile, writeFile } from "node:fs/promises";
+import { open, writeFile } from "node:fs/promises";
 import { extname } from "node:path";
 import {
   createEvaluator,
@@ -16,6 +16,8 @@ import {
   type PhysicalMassProperties,
 } from "./mass-properties.js";
 import { parseDocument } from "./serialization.js";
+import { DEFAULT_DESIGN_DOCUMENT_LIMITS } from "./document-limits.js";
+import { auditJsonMemberNames } from "./internal/json-member-audit.js";
 import type { Diagnostic } from "./core/result.js";
 
 type CliCommand = "validate" | "inspect" | "bom" | "export";
@@ -295,23 +297,132 @@ function parseInlineParameters(
   return { ok: true, value: output };
 }
 
+type CliInputResult<T> =
+  | { readonly ok: true; readonly value: T }
+  | { readonly ok: false; readonly message: string };
+
+const CLI_INPUT_READ_CHUNK_BYTES = 64 * 1024;
+// A leading byte-order mark stays in the text, which JSON parsing rejects.
+const fatalUtf8Decoder = new TextDecoder("utf-8", {
+  fatal: true,
+  ignoreBOM: true,
+});
+
+/**
+ * Reads one bounded input file and decodes it without replacement characters.
+ * Every failure, including a missing file, becomes a one-line reason.
+ */
+async function readUtf8FileWithin(
+  path: string,
+  label: string,
+  maximumBytes: number,
+): Promise<CliInputResult<string>> {
+  let bytes: Uint8Array | undefined;
+  try {
+    bytes = await readFileWithin(path, maximumBytes);
+  } catch (error) {
+    return {
+      ok: false,
+      message: `${label} could not be read: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    };
+  }
+  if (bytes === undefined) {
+    return {
+      ok: false,
+      message: `${label} exceeds the ${maximumBytes}-byte input limit`,
+    };
+  }
+  try {
+    return { ok: true, value: fatalUtf8Decoder.decode(bytes) };
+  } catch {
+    return { ok: false, message: `${label} is not valid UTF-8` };
+  }
+}
+
+/**
+ * Reads at most one byte past the ceiling, so an oversized or growing file is
+ * rejected without buffering it. Returns undefined above the ceiling.
+ */
+async function readFileWithin(
+  path: string,
+  maximumBytes: number,
+): Promise<Uint8Array | undefined> {
+  const handle = await open(path, "r");
+  try {
+    if ((await handle.stat()).size > maximumBytes) return undefined;
+    const chunks: Uint8Array[] = [];
+    let byteLength = 0;
+    for (;;) {
+      const chunk = new Uint8Array(
+        Math.min(CLI_INPUT_READ_CHUNK_BYTES, maximumBytes - byteLength + 1),
+      );
+      const { bytesRead } = await handle.read(chunk, 0, chunk.byteLength, null);
+      if (bytesRead === 0) break;
+      byteLength += bytesRead;
+      if (byteLength > maximumBytes) return undefined;
+      chunks.push(chunk.subarray(0, bytesRead));
+    }
+    const bytes = new Uint8Array(byteLength);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return bytes;
+  } finally {
+    await handle.close();
+  }
+}
+
 async function loadParameters(
   path: string | undefined,
   inline: Readonly<Record<string, number>>,
-): Promise<Record<string, number>> {
-  if (path === undefined) return { ...inline };
-  const value: unknown = JSON.parse(await readFile(path, "utf8"));
+): Promise<CliInputResult<Record<string, number>>> {
+  if (path === undefined) return { ok: true, value: { ...inline } };
+  const text = await readUtf8FileWithin(
+    path,
+    "Parameter file",
+    DEFAULT_DESIGN_DOCUMENT_LIMITS.maxDocumentBytes,
+  );
+  if (!text.ok) return text;
+  let value: unknown;
+  try {
+    value = JSON.parse(text.value);
+  } catch {
+    return { ok: false, message: "Parameter file is not valid JSON" };
+  }
+  const memberAudit = auditJsonMemberNames(
+    text.value,
+    DEFAULT_DESIGN_DOCUMENT_LIMITS,
+  );
+  if (memberAudit.status === "duplicate") {
+    return {
+      ok: false,
+      message: "Parameter file contains a duplicate object member name",
+    };
+  }
+  if (memberAudit.status === "limit-exceeded") {
+    return {
+      ok: false,
+      message: `Parameter file ${memberAudit.resource} limit ${memberAudit.limit} was exceeded by ${memberAudit.actual}`,
+    };
+  }
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new TypeError("Parameter file must contain a JSON object");
+    return { ok: false, message: "Parameter file must contain a JSON object" };
   }
   const output = Object.create(null) as Record<string, number>;
   for (const [name, parameter] of Object.entries(value)) {
     if (typeof parameter !== "number" || !Number.isFinite(parameter)) {
-      throw new TypeError(`Parameter '${name}' must be a finite number in base units`);
+      return {
+        ok: false,
+        message: `Parameter '${name}' must be a finite number in base units`,
+      };
     }
     output[name] = parameter;
   }
-  return output;
+  return { ok: true, value: output };
 }
 
 function inferFormat(path: string, explicit?: string): ShapeExportFormat {
@@ -442,7 +553,16 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
     return usageError(`Command '${args.command}' requires one document path`);
   }
 
-  const parsed = parseDocument(await readFile(args.documentPath, "utf8"));
+  const documentText = await readUtf8FileWithin(
+    args.documentPath,
+    "Document file",
+    DEFAULT_DESIGN_DOCUMENT_LIMITS.maxDocumentBytes,
+  );
+  if (!documentText.ok) {
+    process.stderr.write(`${documentText.message}\n`);
+    return 1;
+  }
+  const parsed = parseDocument(documentText.value);
   if (!parsed.ok) {
     process.stderr.write(`${formatDiagnostics(parsed.diagnostics)}\n`);
     return 1;
@@ -455,6 +575,10 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
     parametersPath,
     inlineParameters.value,
   );
+  if (!parameterOverrides.ok) {
+    process.stderr.write(`${parameterOverrides.message}\n`);
+    return 1;
+  }
   const exactExport =
     exportFormat === "step" ||
     exportFormat === "brep" ||
@@ -468,7 +592,7 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
       : await createEvaluator();
   try {
     const evaluated = await evaluator.evaluate(parsed.value, {
-      parameters: parameterOverrides,
+      parameters: parameterOverrides.value,
       ...(requestedConfiguration !== undefined
         ? { configuration: requestedConfiguration }
         : {}),

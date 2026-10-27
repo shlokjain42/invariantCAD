@@ -87,6 +87,11 @@ console.log(diagnosticsLimitSummary);
 The release gate compiles and executes the source module from
 `examples/docs/diagnostics-and-resource-limits.ts`.
 
+Document parsing stops measuring as soon as a ceiling is exceeded, so
+`details.actual` for `maxDocumentBytes`, `maxStructuralValues`, and
+`maxNestingDepth` is the size observed at that point: a lower bound on the full
+input, not its total size.
+
 ## Common code families
 
 | Family | Examples | Typical action |

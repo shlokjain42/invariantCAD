@@ -17,8 +17,18 @@ const intrinsicObjectIs = Object.is;
 const intrinsicObjectIsFrozen = Object.isFrozen;
 const intrinsicObjectKeys = Object.keys;
 const intrinsicObjectValues = Object.values;
-const intrinsicStringCharCodeAt = String.prototype.charCodeAt;
 const reflectApply = Reflect.apply;
+// Uncurried once at load so per-character counting stays fast without
+// trusting later String.prototype or Reflect state.
+const intrinsicStringCharCodeAt = Function.prototype.call.bind(
+  String.prototype.charCodeAt,
+) as (value: string, index: number) => number;
+const intrinsicRegExpExec = Function.prototype.call.bind(
+  RegExp.prototype.exec,
+) as (regexp: RegExp, value: string) => RegExpExecArray | null;
+// The first code unit JSON.stringify does not write as one verbatim byte:
+// anything outside printable ASCII other than the quote and backslash.
+const nonVerbatimJsonCodeUnit = /[^\u0020\u0021\u0023-\u005b\u005d-\u007f]/;
 const canonicalByteLimitExceeded = {};
 
 function objectKeys(value: object): string[] {
@@ -138,7 +148,7 @@ function assertCanonicalByteLimit(maximumBytes: number): void {
 }
 
 function stringCodeUnitAt(value: string, index: number): number {
-  return reflectApply(intrinsicStringCharCodeAt, value, [index]) as number;
+  return intrinsicStringCharCodeAt(value, index);
 }
 
 /**
@@ -150,6 +160,28 @@ export function canonicalProtocolByteLengthWithin(
   value: unknown,
   maximumBytes: number,
   pretty = false,
+): number | undefined {
+  return canonicalByteLengthWithin(value, maximumBytes, pretty, false);
+}
+
+/**
+ * Counts the frozen-protocol canonical JSON bytes produced by
+ * {@link canonicalStringify}, including its omission of own `__proto__` keys,
+ * without constructing the canonical tree, string, or UTF-8 buffer.
+ */
+export function canonicalLegacyByteLengthWithin(
+  value: unknown,
+  maximumBytes: number,
+  pretty = false,
+): number | undefined {
+  return canonicalByteLengthWithin(value, maximumBytes, pretty, true);
+}
+
+function canonicalByteLengthWithin(
+  value: unknown,
+  maximumBytes: number,
+  pretty: boolean,
+  omitLegacyProtoKey: boolean,
 ): number | undefined {
   assertCanonicalByteLimit(maximumBytes);
   let byteLength = 0;
@@ -163,7 +195,10 @@ export function canonicalProtocolByteLengthWithin(
 
   const countQuotedString = (text: string): void => {
     addBytes(2);
-    for (let index = 0; index < text.length; index += 1) {
+    const special = intrinsicRegExpExec(nonVerbatimJsonCodeUnit, text);
+    const verbatim = special === null ? text.length : special.index;
+    addBytes(verbatim);
+    for (let index = verbatim; index < text.length; index += 1) {
       const codeUnit = stringCodeUnitAt(text, index);
       if (codeUnit === 0x22 || codeUnit === 0x5c) {
         addBytes(2);
@@ -249,6 +284,9 @@ export function canonicalProtocolByteLengthWithin(
       let included = 0;
       for (let index = 0; index < keys.length; index += 1) {
         const key = keys[index]!;
+        // The frozen writer assigns into ordinary records, whose `__proto__`
+        // setter drops the key from the output.
+        if (omitLegacyProtoKey && key === "__proto__") continue;
         const grandchild = (child as Record<string, unknown>)[key];
         if (grandchild === undefined) continue;
         if (pretty) {
@@ -279,6 +317,23 @@ export function canonicalProtocolByteLengthWithin(
     if (error === canonicalByteLimitExceeded) return undefined;
     throw error;
   }
+}
+
+/**
+ * Frozen-protocol form of {@link canonicalStringifyProtocolWithin}: serializes
+ * with {@link canonicalStringify} only after its output is proven to fit.
+ */
+export function canonicalStringifyWithin(
+  value: unknown,
+  maximumBytes: number,
+  pretty = false,
+): string | undefined {
+  if (
+    canonicalLegacyByteLengthWithin(value, maximumBytes, pretty) === undefined
+  ) {
+    return undefined;
+  }
+  return canonicalStringify(value, pretty ? 2 : undefined);
 }
 
 /**
