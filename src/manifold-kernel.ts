@@ -118,8 +118,30 @@ const manifoldAbortSignalAbortedGetter =
     : Object.getOwnPropertyDescriptor(AbortSignal.prototype, "aborted")?.get;
 
 /**
+ * Reports whether `property` is defined by a caller-supplied prototype rather
+ * than the intrinsic `Object.prototype`, whose pollution must not change
+ * kernel behavior. Descriptors are read without invoking accessors.
+ */
+function manifoldInheritedFromCallerPrototype(
+  value: object,
+  property: PropertyKey,
+): boolean {
+  let current = Object.getPrototypeOf(value) as object | null;
+  for (let depth = 0; depth < 64; depth += 1) {
+    if (current === null || current === Object.prototype) return false;
+    if (Object.getOwnPropertyDescriptor(current, property) !== undefined) {
+      return true;
+    }
+    current = Object.getPrototypeOf(current) as object | null;
+  }
+  throw new TypeError("Prototype chain is too deep");
+}
+
+/**
  * Reads `context.signal` as an own data property without invoking accessors.
- * An inherited signal fails closed rather than being silently ignored.
+ * A signal supplied by a caller-defined prototype fails closed rather than
+ * being silently ignored; one reachable only through `Object.prototype` is
+ * ignored as prototype pollution.
  */
 function manifoldContextSignal(
   context: KernelFeatureContext | undefined,
@@ -140,7 +162,9 @@ function manifoldContextSignal(
   let inherited: boolean;
   try {
     descriptor = Object.getOwnPropertyDescriptor(context, "signal");
-    inherited = descriptor === undefined && Reflect.has(context, "signal");
+    inherited =
+      descriptor === undefined &&
+      manifoldInheritedFromCallerPrototype(context, "signal");
   } catch {
     throw uninspectable();
   }

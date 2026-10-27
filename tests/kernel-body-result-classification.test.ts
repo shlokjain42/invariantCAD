@@ -146,6 +146,18 @@ function expectConsistentContextBoundary(
   expect(
     kernel.classifyBodyResult!(shape, { signal: new AbortController().signal }),
   ).toBe("single-body");
+  // Object.prototype pollution is ignored rather than honored or rejected.
+  Object.defineProperty(Object.prototype, "signal", {
+    configurable: true,
+    value: AbortSignal.abort(),
+  });
+  try {
+    expect(kernel.classifyBodyResult!(shape, { feature: "polluted" })).toBe(
+      "single-body",
+    );
+  } finally {
+    Reflect.deleteProperty(Object.prototype, "signal");
+  }
 }
 
 describe("kernel body-result classification capability", () => {

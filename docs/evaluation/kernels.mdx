@@ -45,6 +45,14 @@ Choose stock OCCT for analytic B-Rep geometry, topology snapshots, exact bounded
 lofts/sweeps, fillets/chamfers/shells/offsets, and STEP/BREP exchange. Stock
 history for several complex features remains partial.
 
+The OCCT kernel reads `context.signal` and every low-level STEP export option
+from own data properties only. An accessor-backed field, or one supplied by a
+caller-defined prototype such as a class getter, fails with `TypeError`
+instead of being ignored, so a class-based cancellation signal is never
+silently dropped. A field reachable only through the intrinsic
+`Object.prototype` is ignored, so prototype pollution cannot change or break
+kernel operations.
+
 The profile is stronger than checking `representation === "brep"`: creation
 also requires the documented primitive and feature baseline, native exchange
 methods, exactness, and face/edge/vertex topology. For custom loading, create
@@ -182,8 +190,9 @@ Both classifiers are synchronous. They observe a signal that is already aborted
 when the call starts or that code running during the call aborts; an `abort()`
 scheduled from elsewhere on the same thread cannot run until the call returns.
 `context` must be a plain object, and `context.signal`, when present, must be
-an own data property; an inherited or accessor-backed signal fails with
-`TypeError` instead of being ignored. Context and cancellation are checked
+an own data property; an accessor-backed signal or one supplied by a
+caller-defined prototype fails with `TypeError` instead of being ignored, while
+one reachable only through `Object.prototype` is ignored as pollution. Context and cancellation are checked
 before the shape is validated.
 
 Classification is structural. It does not validate the bodies it counts:

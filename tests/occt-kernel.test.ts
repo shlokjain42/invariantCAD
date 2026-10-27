@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { OcctKernel as RawOcctKernel } from "occt-wasm";
 import {
+  KERNEL_STEP_EXPORT_PROTOCOL_VERSION,
   angleVec3,
   createEvaluator,
   deg,
@@ -13,7 +14,10 @@ import {
   tf,
   vec2,
   vec3,
+  type KernelFeatureContext,
   type KernelShape,
+  type KernelShapeExportContext,
+  type KernelStepExportMetadata,
   type ProfileCurveSource,
   type ResolvedProfile,
 } from "../src/index.js";
@@ -63,6 +67,101 @@ describe("OCCT exact-kernel integration", () => {
       if (tool !== undefined) kernel.disposeShape(tool);
       kernel.disposeShape(toolBase);
       kernel.disposeShape(target);
+      kernel.dispose();
+    }
+  });
+
+  it("rejects caller-prototype context fields while ignoring Object.prototype pollution", async () => {
+    const kernel = await createOcctKernel();
+    const box = kernel.box!([1, 2, 3], false);
+    const tool = kernel.box!([1, 1, 1], false);
+    let accessorReads = 0;
+    class InheritedSignal {
+      get signal(): AbortSignal {
+        accessorReads += 1;
+        return AbortSignal.abort();
+      }
+    }
+    const inheritedField = (key: string, value: unknown): object =>
+      Object.create({ [key]: value }) as object;
+    const nativeBefore = (
+      kernel as unknown as { readonly raw: { readonly shapeCount: number } }
+    ).raw.shapeCount;
+    try {
+      for (const context of [
+        new InheritedSignal(),
+        inheritedField("signal", AbortSignal.abort()),
+      ] as unknown as KernelFeatureContext[]) {
+        expect(() => kernel.box!([1, 1, 1], false, context)).toThrow(
+          "CAD kernel context.signal must be an own data property",
+        );
+        expect(() => kernel.boolean!("union", box, [tool], context)).toThrow(
+          "CAD kernel context.signal must be an own data property",
+        );
+        expect(() =>
+          kernel.transform!(
+            box,
+            [{ kind: "translate", value: [1, 0, 0] }],
+            context,
+          ),
+        ).toThrow("CAD kernel context.signal must be an own data property");
+        expect(() => kernel.classifyBodyResult!(box, context)).toThrow(
+          "CAD kernel context.signal must be an own data property",
+        );
+        expect(() => kernel.exportShape!(box, "step", context)).toThrow(
+          "OCCT shape export context.signal must be an own data property",
+        );
+      }
+      expect(() =>
+        kernel.exportShape!(
+          box,
+          "step",
+          inheritedField("stepExport", {
+            protocolVersion: KERNEL_STEP_EXPORT_PROTOCOL_VERSION,
+            metadata: {},
+          }) as KernelShapeExportContext,
+        ),
+      ).toThrow(
+        "OCCT shape export context.stepExport must be an own data property",
+      );
+      expect(() =>
+        kernel.exportShape!(box, "step", {
+          stepExport: {
+            protocolVersion: KERNEL_STEP_EXPORT_PROTOCOL_VERSION,
+            metadata: Object.assign(
+              Object.create({ productId: "inherited" }) as object,
+              {
+                fileName: "own.step",
+                timestamp: "1970-01-01T00:00:00",
+                productName: "own",
+                productDescription: "",
+              },
+            ) as KernelStepExportMetadata,
+          },
+        }),
+      ).toThrow(/productId must be an own data property/u);
+      expect(accessorReads).toBe(0);
+      Object.defineProperty(Object.prototype, "signal", {
+        configurable: true,
+        value: AbortSignal.abort(),
+      });
+      try {
+        const polluted = kernel.boolean!("union", box, [tool], {
+          feature: "polluted",
+        });
+        expect(kernel.classifyBodyResult!(polluted, {})).toBe("single-body");
+        kernel.disposeShape(polluted);
+      } finally {
+        Reflect.deleteProperty(Object.prototype, "signal");
+      }
+      expect(
+        (kernel as unknown as { readonly raw: { readonly shapeCount: number } })
+          .raw.shapeCount,
+      ).toBe(nativeBefore);
+      expect(kernel.status(box).ok).toBe(true);
+    } finally {
+      kernel.disposeShape(tool);
+      kernel.disposeShape(box);
       kernel.dispose();
     }
   });
