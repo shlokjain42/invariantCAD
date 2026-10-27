@@ -151,6 +151,28 @@ export function canonicalProtocolByteLengthWithin(
   maximumBytes: number,
   pretty = false,
 ): number | undefined {
+  return canonicalByteLengthWithin(value, maximumBytes, pretty, false);
+}
+
+/**
+ * Counts the frozen-protocol canonical JSON bytes produced by
+ * {@link canonicalStringify}, including its omission of own `__proto__` keys,
+ * without constructing the canonical tree, string, or UTF-8 buffer.
+ */
+export function canonicalLegacyByteLengthWithin(
+  value: unknown,
+  maximumBytes: number,
+  pretty = false,
+): number | undefined {
+  return canonicalByteLengthWithin(value, maximumBytes, pretty, true);
+}
+
+function canonicalByteLengthWithin(
+  value: unknown,
+  maximumBytes: number,
+  pretty: boolean,
+  omitLegacyProtoKey: boolean,
+): number | undefined {
   assertCanonicalByteLimit(maximumBytes);
   let byteLength = 0;
 
@@ -249,6 +271,9 @@ export function canonicalProtocolByteLengthWithin(
       let included = 0;
       for (let index = 0; index < keys.length; index += 1) {
         const key = keys[index]!;
+        // The frozen writer assigns into ordinary records, whose `__proto__`
+        // setter drops the key from the output.
+        if (omitLegacyProtoKey && key === "__proto__") continue;
         const grandchild = (child as Record<string, unknown>)[key];
         if (grandchild === undefined) continue;
         if (pretty) {
@@ -279,6 +304,23 @@ export function canonicalProtocolByteLengthWithin(
     if (error === canonicalByteLimitExceeded) return undefined;
     throw error;
   }
+}
+
+/**
+ * Frozen-protocol form of {@link canonicalStringifyProtocolWithin}: serializes
+ * with {@link canonicalStringify} only after its output is proven to fit.
+ */
+export function canonicalStringifyWithin(
+  value: unknown,
+  maximumBytes: number,
+  pretty = false,
+): string | undefined {
+  if (
+    canonicalLegacyByteLengthWithin(value, maximumBytes, pretty) === undefined
+  ) {
+    return undefined;
+  }
+  return canonicalStringify(value, pretty ? 2 : undefined);
 }
 
 /**

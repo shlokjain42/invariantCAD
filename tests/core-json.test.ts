@@ -1,15 +1,32 @@
 import { describe, expect, it } from "vitest";
 import {
+  canonicalLegacyByteLengthWithin,
   canonicalProtocolByteLengthWithin,
   canonicalStringify,
   canonicalStringifyProtocol,
   canonicalStringifyProtocolWithin,
+  canonicalStringifyWithin,
   canonicalizeProtocol,
   deepFreeze,
 } from "../src/core/json.js";
 
+const boundedWriters = [
+  {
+    name: "protocol",
+    count: canonicalProtocolByteLengthWithin,
+    write: canonicalStringifyProtocolWithin,
+    unbounded: canonicalStringifyProtocol,
+  },
+  {
+    name: "frozen legacy",
+    count: canonicalLegacyByteLengthWithin,
+    write: canonicalStringifyWithin,
+    unbounded: canonicalStringify,
+  },
+] as const;
+
 describe("canonical JSON", () => {
-  it("counts and writes bounded protocol JSON byte-for-byte", () => {
+  it.each(boundedWriters)("counts and writes bounded $name JSON byte-for-byte", (writer) => {
     const ownProto = JSON.parse(
       '{"z":1,"__proto__":{"polluted":true},"a":2}',
     ) as Record<string, unknown>;
@@ -52,31 +69,20 @@ describe("canonical JSON", () => {
 
     for (const pretty of [false, true]) {
       for (const value of cases) {
-        const expected = canonicalStringifyProtocol(
-          value,
-          pretty ? 2 : undefined,
-        );
+        const expected = writer.unbounded(value, pretty ? 2 : undefined);
         const expectedBytes = encoder.encode(expected).byteLength;
 
         expect(
-          canonicalProtocolByteLengthWithin(
-            value,
-            Number.MAX_SAFE_INTEGER,
-            pretty,
-          ),
+          writer.count(value, Number.MAX_SAFE_INTEGER, pretty),
         ).toBe(expectedBytes);
-        expect(
-          canonicalStringifyProtocolWithin(
-            value,
-            Number.MAX_SAFE_INTEGER,
-            pretty,
-          ),
-        ).toBe(expected);
+        expect(writer.write(value, Number.MAX_SAFE_INTEGER, pretty)).toBe(
+          expected,
+        );
       }
     }
   });
 
-  it("accepts the exact byte ceiling and stops one byte below it", () => {
+  it.each(boundedWriters)("accepts the exact $name byte ceiling and stops one byte below it", (writer) => {
     const value = {
       z: ["é", "😀", "\ud800", "\udc00"],
       a: { nested: true },
@@ -84,32 +90,21 @@ describe("canonical JSON", () => {
     const encoder = new TextEncoder();
 
     for (const pretty of [false, true]) {
-      const expected = canonicalStringifyProtocol(
-        value,
-        pretty ? 2 : undefined,
-      );
+      const expected = writer.unbounded(value, pretty ? 2 : undefined);
       const bytes = encoder.encode(expected).byteLength;
 
-      expect(canonicalProtocolByteLengthWithin(value, bytes, pretty)).toBe(
-        bytes,
-      );
-      expect(canonicalStringifyProtocolWithin(value, bytes, pretty)).toBe(
-        expected,
-      );
-      expect(
-        canonicalProtocolByteLengthWithin(value, bytes - 1, pretty),
-      ).toBeUndefined();
-      expect(
-        canonicalStringifyProtocolWithin(value, bytes - 1, pretty),
-      ).toBeUndefined();
+      expect(writer.count(value, bytes, pretty)).toBe(bytes);
+      expect(writer.write(value, bytes, pretty)).toBe(expected);
+      expect(writer.count(value, bytes - 1, pretty)).toBeUndefined();
+      expect(writer.write(value, bytes - 1, pretty)).toBeUndefined();
     }
   });
 
   it("rejects invalid byte ceilings and invalid JSON values", () => {
-    const boundedOperations = [
-      canonicalProtocolByteLengthWithin,
-      canonicalStringifyProtocolWithin,
-    ];
+    const boundedOperations = boundedWriters.flatMap((writer) => [
+      writer.count,
+      writer.write,
+    ]);
 
     for (const operation of boundedOperations) {
       for (const maximumBytes of [
@@ -160,9 +155,36 @@ describe("canonical JSON", () => {
       },
     );
 
-    expect(canonicalProtocolByteLengthWithin(source, 5)).toBeUndefined();
-    expect(canonicalStringifyProtocolWithin(source, 5)).toBeUndefined();
+    for (const writer of boundedWriters) {
+      expect(writer.count(source, 5)).toBeUndefined();
+      expect(writer.write(source, 5)).toBeUndefined();
+    }
     expect(getterReads).toBe(0);
+  });
+
+  it("charges nothing for the own __proto__ key the frozen writer omits", () => {
+    const source = JSON.parse(
+      `{"a":1,"__proto__":{"erased":"${"x".repeat(1_000)}"},"z":2}`,
+    ) as Record<string, unknown>;
+    const encoder = new TextEncoder();
+
+    for (const pretty of [false, true]) {
+      const expected = canonicalStringify(source, pretty ? 2 : undefined);
+      const bytes = encoder.encode(expected).byteLength;
+
+      expect(expected).not.toContain("erased");
+      expect(canonicalLegacyByteLengthWithin(source, bytes, pretty)).toBe(
+        bytes,
+      );
+      expect(canonicalStringifyWithin(source, bytes, pretty)).toBe(expected);
+      expect(
+        canonicalStringifyWithin(source, bytes - 1, pretty),
+      ).toBeUndefined();
+      expect(
+        canonicalProtocolByteLengthWithin(source, bytes, pretty),
+      ).toBeUndefined();
+    }
+    expect(({} as { erased?: string }).erased).toBeUndefined();
   });
 
   it("preserves own __proto__ keys without mutating object prototypes", () => {
