@@ -206,6 +206,13 @@ single synchronous native WASM call is never interrupted. An aborted evaluation
 returns `EVALUATION_ABORTED` and releases every shape it created, including
 finished outputs.
 
+Because other code can run at those yields, an evaluation that receives a
+`signal` first captures its request: it structured-clones the document and
+copies the options, keeping the same `signal`. Changing the caller's document,
+`outputs` array, or other options after `evaluate(...)` returns its promise
+does not affect that evaluation. A document that cannot be structured-cloned,
+such as one wrapped in a `Proxy`, fails with `IR_INVALID`.
+
 For hard latency isolation, or to stop one large output mid-run, evaluate in a
 worker or separate process that the host can terminate. See
 [browser and workers](/evaluation/browser-and-workers).

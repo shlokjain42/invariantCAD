@@ -4,6 +4,8 @@ import {
   design,
   mm,
   vec3,
+  type DesignDocument,
+  type EvaluatedSolid,
   type GeometryKernel,
   type KernelShape,
 } from "../src/index.js";
@@ -141,6 +143,65 @@ describe("evaluation cancellation", () => {
       ]);
       expect(harness.calls).toEqual(["box"]);
       expect(harness.live.size).toBe(0);
+    } finally {
+      evaluator.dispose();
+    }
+  });
+
+  it("captures a signal-bearing request so caller changes at a yield are ignored", async () => {
+    const document = structuredClone(twoBoxes()) as DesignDocument;
+    const nodes = document.nodes as Record<string, unknown>;
+    const outputs = ["a", "b"];
+    let changed = false;
+    const harness = await recordingKernel((method) => {
+      if (method !== "box" || changed) return;
+      // Runs at the yield before output 'b'.
+      setTimeout(() => {
+        nodes.b = nodes.a;
+        outputs[1] = "missing";
+        changed = true;
+      }, 0);
+    });
+    const evaluator = await createEvaluator({ kernel: harness.kernel });
+    try {
+      const result = await evaluator.evaluate(document, {
+        outputs,
+        signal: new AbortController().signal,
+      });
+      expect(changed).toBe(true);
+      expect(result.ok, JSON.stringify(result.diagnostics)).toBe(true);
+      if (!result.ok) return;
+      try {
+        expect(result.value.outputNames).toEqual(["a", "b"]);
+        const b = result.value.output("b") as EvaluatedSolid;
+        expect(b.measure().volume).toBeCloseTo(8, 6);
+      } finally {
+        result.value.dispose();
+      }
+    } finally {
+      evaluator.dispose();
+    }
+  });
+
+  it("rejects a document it cannot capture only when a signal is supplied", async () => {
+    const harness = await recordingKernel();
+    const evaluator = await createEvaluator({ kernel: harness.kernel });
+    try {
+      const proxied = new Proxy(twoBoxes(), {});
+      const captured = await evaluator.evaluate(proxied, {
+        signal: new AbortController().signal,
+      });
+      expect(captured.ok).toBe(false);
+      expect(captured.diagnostics).toEqual([
+        expect.objectContaining({ code: "IR_INVALID", path: "/" }),
+      ]);
+      expect(harness.calls).toEqual([]);
+
+      const synchronous = await evaluator.evaluate(proxied);
+      expect(synchronous.ok, JSON.stringify(synchronous.diagnostics)).toBe(
+        true,
+      );
+      if (synchronous.ok) synchronous.value.dispose();
     } finally {
       evaluator.dispose();
     }

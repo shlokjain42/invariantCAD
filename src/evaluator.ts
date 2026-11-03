@@ -522,6 +522,35 @@ function snapshotPrivateEvaluationOptions(
   }
 }
 
+/**
+ * Detaches a public evaluation request that will yield to the host. The
+ * document is structured-cloned, so validation and every node read after a
+ * yield see the same values; the options keep the caller's signal.
+ */
+function captureYieldingEvaluationRequest(
+  document: DesignDocument,
+  options: EvaluationOptions,
+): CadResult<{
+  readonly document: DesignDocument;
+  readonly options: EvaluationOptions;
+}> {
+  const capturedOptions = snapshotPrivateEvaluationOptions(options);
+  if (!capturedOptions.ok) return capturedOptions;
+  let capturedDocument: DesignDocument;
+  try {
+    capturedDocument = structuredClone(document);
+  } catch (error) {
+    return failure(
+      diagnostic(
+        "IR_INVALID",
+        safeErrorMessage(error, "The document could not be captured"),
+        { severity: "error", path: "/" },
+      ),
+    );
+  }
+  return success({ document: capturedDocument, options: capturedOptions.value });
+}
+
 type SignatureCapabilityInspection =
   | { readonly status: "missing" }
   | { readonly status: "invalid" }
@@ -13513,6 +13542,17 @@ export class Evaluator {
       if (!capturedOptions.ok) return capturedOptions;
       document = parsed.value;
       options = capturedOptions.value;
+    } else if (inputOptions.signal !== undefined) {
+      // A signal-bearing evaluation yields to the host, so work on a captured
+      // request: later changes to the caller's objects cannot reach nodes
+      // evaluated after a yield.
+      const captured = captureYieldingEvaluationRequest(
+        inputDocument,
+        inputOptions,
+      );
+      if (!captured.ok) return captured;
+      document = captured.value.document;
+      options = captured.value.options;
     }
     if (
       (this.kernel.capabilities.protocolVersion as number) !==
