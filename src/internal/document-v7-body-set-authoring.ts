@@ -92,6 +92,7 @@ const STAGED_EXTERNAL_ASSEMBLY_REFERENCE_CONSTRUCTION = Symbol(
   "InvariantCAD.StagedExternalAssemblyReferenceConstructionV7",
 );
 const RESOURCE_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
+const RESOURCE_LOCATION_LIMIT_MESSAGE = `Resource locations exceed the authoring limit of ${DEFAULT_DESIGN_DOCUMENT_LIMITS.maxResourceLocations}`;
 const RESOURCE_MEDIA_TYPE_PATTERN =
   /^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+(?:\s*;.*)?$/;
 const INVARIANT_CAD_DOCUMENT_MEDIA_TYPE =
@@ -634,6 +635,7 @@ function captureDenseOwnDataArray(
   options: {
     readonly exactLength?: number;
     readonly maximumLength?: number;
+    readonly maximumLengthMessage?: string;
   } = {},
 ): readonly unknown[] {
   let copied: unknown[] | undefined;
@@ -676,7 +678,9 @@ function captureDenseOwnDataArray(
           options.maximumLength !== undefined &&
           (length as number) > options.maximumLength
         ) {
-          rangeProblem = `${label} exceeds the authoring limit of ${options.maximumLength}`;
+          rangeProblem =
+            options.maximumLengthMessage ??
+            `${label} exceeds the authoring limit of ${options.maximumLength}`;
         } else {
           const ownKeys = authoringApply<(string | symbol)[]>(
             authoringReflectOwnKeys,
@@ -2194,24 +2198,18 @@ export class StagedBodySetDesignBuilderV7 {
     ) {
       throw new TypeError(`Material '${id}' requires a non-empty name`);
     }
-    const massDensity = captured.massDensity as
-      | MassDensityExpression
-      | undefined;
-    if (
-      massDensity === undefined ||
-      massDensity.dimension !== "massDensity"
-    ) {
-      throw new TypeError(
-        "Material massDensity must be a mass-density expression",
-      );
-    }
+    const massDensity = captureDatumExpressionIR(
+      captured.massDensity,
+      "massDensity",
+      "Material massDensity",
+    );
     assertOptionalString(
       captured.description,
       "Material options.description",
     );
     const definition = deepFreeze({
       name: captured.name,
-      massDensity: massDensity.ir,
+      massDensity,
       ...(captured.description === undefined
         ? {}
         : { description: captured.description }),
@@ -2300,17 +2298,14 @@ export class StagedBodySetDesignBuilderV7 {
         );
       }
     }
-    const massDensity = captured.massDensity as
-      | MassDensityExpression
-      | undefined;
-    if (
-      massDensity !== undefined &&
-      massDensity.dimension !== "massDensity"
-    ) {
-      throw new TypeError(
-        "Part massDensity must be a mass-density expression",
-      );
-    }
+    const massDensity =
+      captured.massDensity === undefined
+        ? undefined
+        : captureDatumExpressionIR(
+            captured.massDensity,
+            "massDensity",
+            "Part massDensity",
+          );
     const metadata =
       captured.metadata === undefined
         ? undefined
@@ -2335,9 +2330,7 @@ export class StagedBodySetDesignBuilderV7 {
       ...(materialReferenceId === undefined
         ? {}
         : { materialId: materialReferenceId }),
-      ...(massDensity === undefined
-        ? {}
-        : { massDensity: massDensity.ir }),
+      ...(massDensity === undefined ? {} : { massDensity }),
       ...(metadata === undefined ? {} : { metadata }),
     };
     const definition = deepFreeze(node);
@@ -2454,26 +2447,25 @@ export class StagedBodySetDesignBuilderV7 {
     let locations: readonly string[] | undefined;
     let addedLocationBytes = 0;
     if (rawLocations !== undefined) {
-      if (!authoringIsArray(rawLocations) || rawLocations.length === 0) {
+      const capturedLocations = captureDenseOwnDataArray(
+        rawLocations,
+        "Resource locations",
+        {
+          maximumLength:
+            DEFAULT_DESIGN_DOCUMENT_LIMITS.maxResourceLocations -
+            this.#resourceLocationCount,
+          maximumLengthMessage: RESOURCE_LOCATION_LIMIT_MESSAGE,
+        },
+      );
+      if (capturedLocations.length === 0) {
         throw new TypeError(
           "Resource locations must be a non-empty dense array",
         );
       }
-      if (
-        this.#resourceLocationCount + rawLocations.length >
-        DEFAULT_DESIGN_DOCUMENT_LIMITS.maxResourceLocations
-      ) {
-        throw new RangeError(
-          `Resource locations exceed the authoring limit of ${DEFAULT_DESIGN_DOCUMENT_LIMITS.maxResourceLocations}`,
-        );
-      }
-      const copied = authoringDenseArray<string>(rawLocations.length);
+      const copied = authoringDenseArray<string>(capturedLocations.length);
       const seen = new AuthoringSet<string>();
-      for (let index = 0; index < rawLocations.length; index += 1) {
-        if (!authoringHasOwn(rawLocations, index)) {
-          throw new TypeError("Resource locations must be a dense array");
-        }
-        const location = rawLocations[index];
+      for (let index = 0; index < capturedLocations.length; index += 1) {
+        const location = capturedLocations[index];
         if (typeof location !== "string" || location.length === 0) {
           throw new TypeError("Resource locations must be non-empty strings");
         }
@@ -2698,27 +2690,24 @@ export class StagedBodySetDesignBuilderV7 {
     members: readonly StagedBodySetMemberAuthoringV7[],
   ): StagedBodySetRefV7 {
     const key = this.#assertNodeAvailable(id);
-    if (!authoringIsArray(members) || members.length === 0) {
+    const capturedMembers = captureDenseOwnDataArray(
+      members,
+      "Body-set members",
+      {
+        maximumLength: DEFAULT_DESIGN_DOCUMENT_LIMITS.maxStructuralValues,
+        maximumLengthMessage: `Body-set members exceed the authoring structural-value limit of ${DEFAULT_DESIGN_DOCUMENT_LIMITS.maxStructuralValues}`,
+      },
+    );
+    if (capturedMembers.length === 0) {
       throw new TypeError("A body set requires a non-empty dense array");
     }
-    if (
-      members.length >
-      DEFAULT_DESIGN_DOCUMENT_LIMITS.maxStructuralValues
-    ) {
-      throw new RangeError(
-        `Body-set members exceed the authoring structural-value limit of ${DEFAULT_DESIGN_DOCUMENT_LIMITS.maxStructuralValues}`,
-      );
-    }
     const copied = authoringDenseArray<BodySetMemberIRV7>(
-      members.length,
+      capturedMembers.length,
     );
     const seen = new AuthoringSet<EntityId>();
-    for (let index = 0; index < members.length; index += 1) {
-      if (!authoringHasOwn(members, index)) {
-        throw new TypeError("Body-set members must be a dense array");
-      }
+    for (let index = 0; index < capturedMembers.length; index += 1) {
       const member = captureExactOwnDataRecord(
-        members[index],
+        capturedMembers[index],
         ["id", "solid", "name", "metadata"],
         `Body-set member ${index}`,
       );

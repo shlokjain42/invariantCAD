@@ -13,7 +13,7 @@ import {
   evaluateBodySetOutputsV7,
   evaluateImportedBodyOutputsV7,
 } from "../src/evaluator.js";
-import { deg, mm, scalar } from "../src/expressions.js";
+import { deg, kgPerCubicMeter, mm, scalar } from "../src/expressions.js";
 import { hashDesignFeaturesV2 } from "../src/feature-hashes-v2.js";
 import {
   DOCUMENT_SCHEMA_V7,
@@ -1347,6 +1347,178 @@ describe("staged document-v7 body-set authoring", () => {
     expect(() =>
       custom.build({ limits: { maxResourceDefinitions: 0 } }),
     ).toThrow(/maxResourceDefinitions|resource.*limit/i);
+  });
+
+  it("captures body-set members and resource locations as dense own-data arrays", () => {
+    const reads: string[] = [];
+    const cad = stagedBodySetDesignV7("dense-own-data-arrays");
+    const box = cad.box("box", { size: [mm(1), mm(1), mm(1)] });
+
+    const accessorMembers: unknown[] = [];
+    Object.defineProperty(accessorMembers, 0, {
+      enumerable: true,
+      configurable: true,
+      get() {
+        reads.push("members[0]");
+        return { id: "box", solid: box };
+      },
+    });
+    expect(() =>
+      cad.bodySet("accessor-members", accessorMembers as never),
+    ).toThrow(/body-set members\/0.*own data/i);
+
+    const extraMembers = [{ id: "box", solid: box }] as unknown[] & {
+      extra?: string;
+    };
+    extraMembers.extra = "ignored";
+    expect(() =>
+      cad.bodySet("extra-members", extraMembers as never),
+    ).toThrow(/body-set members.*non-index/i);
+
+    const accessorLocations: string[] = [];
+    Object.defineProperty(accessorLocations, 0, {
+      enumerable: true,
+      configurable: true,
+      get() {
+        reads.push("locations[0]");
+        return "project://fixtures/accessor";
+      },
+    });
+    expect(() =>
+      cad.resource(
+        "accessor-locations",
+        resourceCommitment({ locations: accessorLocations }),
+      ),
+    ).toThrow(/resource locations\/0.*own data/i);
+
+    const extraLocations = ["project://fixtures/extra"] as string[] & {
+      extra?: string;
+    };
+    extraLocations.extra = "ignored";
+    expect(() =>
+      cad.resource(
+        "extra-locations",
+        resourceCommitment({ locations: extraLocations }),
+      ),
+    ).toThrow(/resource locations.*non-index/i);
+    expect(reads).toEqual([]);
+
+    let lengthGets = 0;
+    const oversized = Array.from(
+      { length: DEFAULT_DESIGN_DOCUMENT_LIMITS.maxResourceLocations + 5 },
+      (_, index) => `project://locations/${index}`,
+    );
+    const shrinkingLength = new Proxy(oversized, {
+      get(target, key, receiver) {
+        if (key === "length") {
+          lengthGets += 1;
+          return lengthGets <= 2 ? 1 : target.length;
+        }
+        return Reflect.get(target, key, receiver) as unknown;
+      },
+    });
+    expect(() =>
+      cad.resource(
+        "proxy-locations",
+        resourceCommitment({ locations: shrinkingLength }),
+      ),
+    ).toThrow(
+      `Resource locations exceed the authoring limit of ${DEFAULT_DESIGN_DOCUMENT_LIMITS.maxResourceLocations}`,
+    );
+    expect(lengthGets).toBe(0);
+
+    cad.resource(
+      "first",
+      resourceCommitment({
+        locations: Array.from(
+          { length: DEFAULT_DESIGN_DOCUMENT_LIMITS.maxResourceLocations - 1 },
+          (_, index) => `project://first/${index}`,
+        ),
+      }),
+    );
+    expect(() =>
+      cad.resource(
+        "second",
+        resourceCommitment({
+          locations: ["project://second/0", "project://second/1"],
+        }),
+      ),
+    ).toThrow(
+      `Resource locations exceed the authoring limit of ${DEFAULT_DESIGN_DOCUMENT_LIMITS.maxResourceLocations}`,
+    );
+    cad.resource(
+      "last",
+      resourceCommitment({ locations: ["project://last/0"] }),
+    );
+
+    const members = cad.bodySet("members", [{ id: "box", solid: box }]);
+    cad.output("members", members);
+    const document = cad.build();
+    expect(Object.keys(document.resources ?? {}).sort()).toEqual([
+      "first",
+      "last",
+    ]);
+    expect(document.nodes).not.toHaveProperty("accessor-members");
+    expect(document.nodes).not.toHaveProperty("extra-members");
+  });
+
+  it("captures material and part densities as detached staged expressions", () => {
+    const getterReads: string[] = [];
+    const forgedAccessor = {
+      get dimension() {
+        getterReads.push("dimension");
+        return "massDensity";
+      },
+      get ir() {
+        getterReads.push("ir");
+        return kgPerCubicMeter(1_000).ir;
+      },
+    };
+    const forgedPlain = {
+      dimension: "massDensity",
+      ir: { op: "literal", dimension: "massDensity", value: 1e-6 },
+    };
+    for (const forged of [forgedAccessor, forgedPlain]) {
+      const cad = stagedBodySetDesignV7("forged-density");
+      const box = cad.box("box", { size: [mm(1), mm(1), mm(1)] });
+      expect(() =>
+        cad.material("material", {
+          name: "Forged",
+          massDensity: forged as never,
+        }),
+      ).toThrow(/material massDensity must be a massDensity expression/i);
+      expect(() =>
+        cad.part("part", box, { massDensity: forged as never }),
+      ).toThrow(/part massDensity must be a massDensity expression/i);
+    }
+    expect(getterReads).toEqual([]);
+
+    const cad = stagedBodySetDesignV7("detached-density");
+    const materialDensity = kgPerCubicMeter(7_850);
+    const partDensity = cad.parameter.massDensity(
+      "density",
+      kgPerCubicMeter(2_700),
+    );
+    const steel = cad.material("steel", {
+      name: "Steel",
+      massDensity: materialDensity,
+    });
+    const box = cad.box("box", { size: [mm(1), mm(1), mm(1)] });
+    const bodies = cad.bodySet("bodies", [{ id: "box", solid: box }]);
+    const steelPart = cad.part("steel-part", bodies, { materialRef: steel });
+    const densityPart = cad.part("density-part", box, {
+      massDensity: partDensity,
+    });
+    cad.output("steel-part", steelPart);
+    cad.output("density-part", densityPart);
+    const document = cad.build();
+    const stored = document.materials?.[steel.id as never]?.massDensity;
+    expect(stored).toEqual(materialDensity.ir);
+    expect(stored).not.toBe(materialDensity.ir);
+    expect(document.nodes["density-part" as never]).toMatchObject({
+      kind: "part",
+      massDensity: { op: "parameter", id: "density" },
+    });
   });
 
   it("keeps the package-root builder, aliases, and schemas on v6", () => {
