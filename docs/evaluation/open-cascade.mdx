@@ -85,7 +85,9 @@ loads WebAssembly, with `TypeError` for a non-number and `RangeError` for NaN,
 zero, a negative value, or infinity. Tessellation deflections must likewise be
 finite and positive, and `relative` must be a boolean. The kernel checks the
 creation-time defaults and every per-call `mesh()` override before native
-meshing starts.
+meshing starts. It reads each tessellation field once from an own data
+property: an accessor or a field inherited from a caller-defined prototype
+fails with `TypeError`, and `Object.prototype` entries are ignored.
 
 The tolerance applies only to lengths. It never relaxes dimensionless values:
 a transform scale is treated as uniform only when its three factors agree to

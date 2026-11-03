@@ -148,6 +148,57 @@ describe("OCCT kernel instance contracts", () => {
       expect(kernel.mesh(sphere).indices.length).toBeGreaterThan(0);
     }));
 
+  it("reads tessellation options once from own data properties", () =>
+    withCleanup(async (defer) => {
+      const kernel = await createOcctKernel();
+      defer(() => kernel.dispose());
+      const sphere = kernel.sphere!(5);
+      defer(() => kernel.disposeShape(sphere));
+      const baseline = kernel.mesh(sphere);
+
+      // A polluted Object.prototype field must reach neither validation nor
+      // the native request. A getter could otherwise pass validation and then
+      // hand NaN to BRepMesh.
+      let pollutedReads = 0;
+      Object.defineProperty(Object.prototype, "linearDeflection", {
+        configurable: true,
+        get() {
+          pollutedReads += 1;
+          return 1000;
+        },
+      });
+      let polluted: ReturnType<typeof kernel.mesh>;
+      try {
+        polluted = kernel.mesh(sphere, {});
+      } finally {
+        delete (Object.prototype as { linearDeflection?: unknown })
+          .linearDeflection;
+      }
+      expect(pollutedReads).toBe(0);
+      expect(polluted.indices).toEqual(baseline.indices);
+      expect(polluted.positions).toEqual(baseline.positions);
+
+      let accessorReads = 0;
+      const accessor = {
+        get linearDeflection() {
+          accessorReads += 1;
+          return 0.5;
+        },
+      };
+      expect(() => kernel.mesh(sphere, accessor)).toThrow(TypeError);
+      expect(accessorReads).toBe(0);
+      expect(() =>
+        kernel.mesh(
+          sphere,
+          Object.create({ linearDeflection: 0.5 }) as MeshOptions,
+        ),
+      ).toThrow(TypeError);
+      await expect(
+        createOcctKernel({ tessellation: accessor }),
+      ).rejects.toThrow(TypeError);
+      expect(accessorReads).toBe(0);
+    }));
+
   it("applies anisotropic scale factors independently of the length tolerance", () =>
     withCleanup(async (defer) => {
       // modelingTolerance is a length; a 0.9 % anisotropy on a 100 mm box

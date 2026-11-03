@@ -301,17 +301,25 @@ function occtModelingTolerance(value: unknown): number | undefined {
 }
 
 /**
- * Validates tessellation controls before they reach BRepMesh. A NaN
- * deflection otherwise sends the native mesher into an unbounded loop, and
- * zero or negative values fail with an opaque native exception.
+ * Captures and validates tessellation controls before they reach BRepMesh. A
+ * NaN deflection otherwise sends the native mesher into an unbounded loop,
+ * and zero or negative values fail with an opaque native exception.
+ *
+ * Each field is read once from an own data property, so an accessor or a
+ * caller-defined prototype cannot return one value to validation and another
+ * to the mesher. The result is a frozen null-prototype snapshot holding only
+ * the defined fields, so reading an absent field never reaches
+ * `Object.prototype`.
  */
 function occtMeshOptions(value: unknown, label: string): MeshOptions {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new TypeError(`${label} must be an object`);
-  }
-  const options = value as MeshOptions;
+  const record = occtKernelRecord(value, label);
+  const captured = Object.create(null) as {
+    linearDeflection?: number;
+    angularDeflection?: number;
+    relative?: boolean;
+  };
   for (const key of ["linearDeflection", "angularDeflection"] as const) {
-    const deflection: unknown = options[key];
+    const deflection = occtKernelOwnDataValue(record, key, `${label}.${key}`);
     if (deflection === undefined) continue;
     if (typeof deflection !== "number") {
       throw new TypeError(`${label}.${key} must be a number`);
@@ -319,12 +327,20 @@ function occtMeshOptions(value: unknown, label: string): MeshOptions {
     if (!Number.isFinite(deflection) || !(deflection > 0)) {
       throw new RangeError(`${label}.${key} must be finite and positive`);
     }
+    captured[key] = deflection;
   }
-  const relative: unknown = options.relative;
-  if (relative !== undefined && typeof relative !== "boolean") {
-    throw new TypeError(`${label}.relative must be a boolean`);
+  const relative = occtKernelOwnDataValue(
+    record,
+    "relative",
+    `${label}.relative`,
+  );
+  if (relative !== undefined) {
+    if (typeof relative !== "boolean") {
+      throw new TypeError(`${label}.relative must be a boolean`);
+    }
+    captured.relative = relative;
   }
-  return options;
+  return Object.freeze(captured);
 }
 
 type TopologyHistory = KernelTopologySnapshot["history"];
@@ -1630,7 +1646,11 @@ class OcctKernel implements GeometryKernel {
   ) {
     this.raw = raw;
     this.facade = facade;
-    this.tessellation = Object.freeze({ ...(options.tessellation ?? {}) });
+    this.tessellation = occtMeshOptions(
+      occtKernelOwnDataValue(options, "tessellation", "OCCT tessellation") ??
+        {},
+      "OCCT tessellation",
+    );
     this.modelingTolerance = options.modelingTolerance ?? 1e-7;
     this.maxExactBooleanHistoryRecords = maxExactBooleanHistoryRecords;
     this.maxExactEdgeTreatmentHistoryRecords =
@@ -6618,24 +6638,35 @@ class OcctKernel implements GeometryKernel {
 
   mesh(shape: KernelShape, options: MeshOptions = {}): MeshData {
     const handle = this.shape(shape)[OCCT_SHAPE];
-    const merged = occtMeshOptions(
-      { ...this.tessellation, ...options },
-      "OCCT mesh options",
-    );
+    // Both snapshots are frozen null-prototype records of validated own data
+    // fields, so these reads return exactly the checked values.
+    const overrides = occtMeshOptions(options, "OCCT mesh options");
+    const defaults = this.tessellation;
+    const linearDeflection =
+      overrides.linearDeflection ?? defaults.linearDeflection;
+    const angularDeflection =
+      overrides.angularDeflection ?? defaults.angularDeflection;
+    const relative = overrides.relative ?? defaults.relative;
+    // occt-wasm reads absent fields through [[Get]] before applying its own
+    // defaults, so the request has no prototype for pollution to reach.
+    const request = Object.create(null) as {
+      linearDeflection?: number;
+      angularDeflection?: number;
+      relative?: boolean;
+    };
+    if (linearDeflection !== undefined) {
+      request.linearDeflection = linearDeflection;
+    }
+    if (angularDeflection !== undefined) {
+      request.angularDeflection = angularDeflection;
+    }
+    if (relative !== undefined) request.relative = relative;
     // BRepMesh stores its triangulation on the faces it meshes and reuses a
     // finer stored one for later coarser requests; BREP export would also
     // serialize it. Mesh a cache-free copy so neither depends on call order.
     const meshSource = this.raw.copy(handle);
     try {
-      const mesh = this.raw.tessellate(meshSource, {
-        ...(merged.linearDeflection === undefined
-          ? {}
-          : { linearDeflection: merged.linearDeflection }),
-        ...(merged.angularDeflection === undefined
-          ? {}
-          : { angularDeflection: merged.angularDeflection }),
-        ...(merged.relative === undefined ? {} : { relative: merged.relative }),
-      });
+      const mesh = this.raw.tessellate(meshSource, Object.freeze(request));
       return {
         positions: mesh.positions.slice(),
         indices: mesh.indices.slice(),
@@ -7031,15 +7062,12 @@ export async function createOcctKernel(
   ) {
     throw new TypeError("OCCT tessellation must be an object");
   }
-  // Validate the frozen snapshot, not the caller's object, so the checked
-  // values are exactly the values the kernel later uses.
+  // Capture each field once from own data; the frozen snapshot holds exactly
+  // the validated values that the kernel later uses.
   const tessellation =
     tessellationInput === undefined
       ? undefined
-      : occtMeshOptions(
-          Object.freeze({ ...tessellationInput }),
-          "OCCT tessellation",
-        );
+      : occtMeshOptions(tessellationInput, "OCCT tessellation");
   const modelingTolerance = occtModelingTolerance(options.modelingTolerance);
   const onOutput = options.onOutput;
   const onError = options.onError;
