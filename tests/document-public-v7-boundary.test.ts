@@ -132,6 +132,32 @@ describe("public v1-v6 document APIs at the Document v7 boundary", () => {
     expect(parseImportedBodyDocument(text).ok).toBe(true);
   });
 
+  it("rejects mixed v7 identity fields at parseDocument and parseDocumentValue", () => {
+    const v7 = JSON.parse(importedBodyText()) as Record<string, unknown>;
+    const legacy = JSON.parse(stringifyDocument(legacyDocument())) as Record<
+      string,
+      unknown
+    >;
+    for (const [value, identity] of [
+      [
+        { ...v7, version: DOCUMENT_VERSION_V6 },
+        { schema: DOCUMENT_SCHEMA_V7, version: DOCUMENT_VERSION_V6 },
+      ],
+      [
+        { ...legacy, version: DOCUMENT_VERSION_V7 },
+        { schema: DOCUMENT_SCHEMA_V6, version: DOCUMENT_VERSION_V7 },
+      ],
+      [
+        { ...legacy, schema: DOCUMENT_SCHEMA_V7 },
+        { schema: DOCUMENT_SCHEMA_V7, version: DOCUMENT_VERSION_V6 },
+      ],
+    ] as const) {
+      expectV7Rejection(parseDocumentValue(value), identity);
+      expectV7Rejection(parseDocument(JSON.stringify(value)), identity);
+      expectV7Rejection(migrateDocument(value), identity);
+    }
+  });
+
   it("refuses to write or hash v7 through the frozen writers", async () => {
     const document = v7AsLegacy();
     expect(() => stringifyDocument(document)).toThrow(TypeError);

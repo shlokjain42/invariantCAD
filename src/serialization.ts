@@ -633,18 +633,12 @@ function validateLegacyDocumentSnapshot(
 ): CadResult<DesignDocument> {
   let parsed: ReturnType<typeof DesignDocumentSchema.safeParse>;
   try {
-    const record =
+    const version =
       typeof snapshot === "object" &&
       snapshot !== null &&
       !Array.isArray(snapshot)
-        ? (snapshot as Readonly<Record<string, unknown>>)
+        ? (snapshot as Readonly<Record<string, unknown>>).version
         : undefined;
-    const version = record?.version;
-    if (version === DOCUMENT_VERSION_V7) {
-      // Without this, the v1-v6 union reports only an opaque root mismatch.
-      const rejected = legacyDocumentApiV7Diagnostic(record?.schema, version);
-      if (rejected !== undefined) return failure(rejected);
-    }
     const schema =
       version === 1
         ? DesignDocumentV1Schema
@@ -697,13 +691,36 @@ function schemaIssuePointer(path: readonly PropertyKey[]): string {
     .join("/")}`;
 }
 
+/**
+ * The public v1-v6 readers refuse a snapshot whose schema or version names
+ * Document v7 with the same diagnostic as validateDocument. Without this the
+ * v1-v6 union reports only opaque structural mismatches.
+ */
+function validatePublicLegacyDocumentSnapshot(
+  snapshot: unknown,
+): CadResult<DesignDocument> {
+  if (
+    typeof snapshot === "object" &&
+    snapshot !== null &&
+    !Array.isArray(snapshot)
+  ) {
+    const record = snapshot as Readonly<Record<string, unknown>>;
+    const rejected = legacyDocumentApiV7Diagnostic(
+      record.schema,
+      record.version,
+    );
+    if (rejected !== undefined) return failure(rejected);
+  }
+  return validateLegacyDocumentSnapshot(snapshot);
+}
+
 function parseDocumentValueWithLimits(
   value: unknown,
   limits: DesignDocumentLimits,
 ): CadResult<DesignDocument> {
   const preflight = preflightDesignDocumentValue(value, limits);
   return preflight.ok
-    ? validateLegacyDocumentSnapshot(preflight.value)
+    ? validatePublicLegacyDocumentSnapshot(preflight.value)
     : preflight;
 }
 
@@ -850,7 +867,8 @@ export function parseDocument(
     COMPATIBLE_DOCUMENT_TEXT_MESSAGES,
   );
   return (
-    memberAuditFailure ?? validateLegacyDocumentSnapshot(preflight.value)
+    memberAuditFailure ??
+    validatePublicLegacyDocumentSnapshot(preflight.value)
   );
 }
 
