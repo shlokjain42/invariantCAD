@@ -103,3 +103,24 @@ export function evaluateAuditAdvisories(
     stale: exceptions.filter((entry) => !matched.has(entry)),
   };
 }
+
+/** How `scripts/check-production-audit.ts` launches `pnpm audit --json`. */
+export interface PnpmAuditCommand {
+  readonly command: string;
+  readonly args: readonly string[];
+  readonly shell: boolean;
+}
+
+/**
+ * On Windows pnpm is a `pnpm.cmd` shim (or a standalone `pnpm.exe`), and Node
+ * refuses to spawn `.cmd` and `.bat` files without a shell since the
+ * CVE-2024-27980 fix, failing with EINVAL. There the audit runs as one
+ * constant command line through the shell, which resolves either form;
+ * arguments are not passed separately because Node concatenates them
+ * unescaped under `shell: true` (DEP0190).
+ */
+export function pnpmAuditCommand(platform: NodeJS.Platform): PnpmAuditCommand {
+  return platform === "win32"
+    ? { command: "pnpm audit --json", args: [], shell: true }
+    : { command: "pnpm", args: ["audit", "--json"], shell: false };
+}

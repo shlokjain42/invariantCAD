@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   DOCUMENTED_AUDIT_EXCEPTIONS,
   evaluateAuditAdvisories,
+  pnpmAuditCommand,
   type AuditAdvisory,
 } from "../scripts/audit-policy.js";
 
@@ -122,4 +123,21 @@ describe("dependency audit policy", () => {
       }
     },
   );
+
+  it("runs pnpm audit through a shell only on Windows, without separate arguments", () => {
+    // Node refuses to spawn the pnpm.cmd shim without a shell (CVE-2024-27980),
+    // and passing arguments alongside shell: true is deprecated (DEP0190).
+    expect(pnpmAuditCommand("win32")).toEqual({
+      command: "pnpm audit --json",
+      args: [],
+      shell: true,
+    });
+    for (const platform of ["linux", "darwin", "freebsd"] as const) {
+      expect(pnpmAuditCommand(platform)).toEqual({
+        command: "pnpm",
+        args: ["audit", "--json"],
+        shell: false,
+      });
+    }
+  });
 });
