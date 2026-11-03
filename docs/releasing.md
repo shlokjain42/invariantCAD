@@ -60,22 +60,27 @@ release commit the workflow:
    dependency audit, Mintlify validation and links, and the production browser
    bundle;
 2. waits for approval in the `npm` environment, then publishes that exact
-   smoke-tested tarball through npm trusted publishing with provenance;
+   smoke-tested tarball through npm trusted publishing with provenance. It
+   refuses a version older than one already on npm, so npm's `latest`
+   dist-tag never moves backwards;
 3. confirms that the registry serves the same tarball integrity;
 4. creates the annotated `v<version>` tag on the release commit and the
    GitHub release from the body of `docs/releases/<version>.md`, without its
-   YAML frontmatter; and
+   YAML frontmatter, marking it latest only when it is the highest stable tag;
+   and
 5. fast-forwards the `docs-live` branch, from which the hosted Mintlify site
-   deploys, to the release commit.
+   deploys, to the release commit, never moving it backwards.
 
 Acceptance and publication use Node.js 24 because the pinned Mint CLI accepts
 Node 20.17 through 24 and rejects Node 25 and newer. Independent CI continues to
 gate InvariantCAD on Node 26, so this tooling ceiling is not a package runtime
 ceiling.
 
-Every step is idempotent. If a job fails, fix the cause and use **Re-run failed
-jobs** on the original workflow run; it resumes from the same commit, skips an
-already-published npm version, and refuses a tag that points elsewhere.
+Every step is idempotent. If a job fails, fix the cause and re-run the original
+workflow run. **Re-run failed jobs** resumes from the same commit; **Re-run all
+jobs** repeats acceptance and then finishes whatever is missing among the npm
+version, tag, GitHub release, and `docs-live`. Both skip work already done and
+refuse a tag that points elsewhere.
 Published npm versions are immutable. If verification uncovers a defect, do not
 attempt to replace the version; fix it and release a new patch version.
 

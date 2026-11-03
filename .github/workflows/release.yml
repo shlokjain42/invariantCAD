@@ -46,6 +46,8 @@ jobs:
       - name: Compare the package version with the previous main commit
         id: plan
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
@@ -61,6 +63,15 @@ jobs:
           tag="v${version}"
           tag_commit="$(git rev-parse -q --verify "refs/tags/${tag}^{commit}" || true)"
           published="$(npm view "invariantcad@${version}" version 2>/dev/null || true)"
+          github_release=false
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            github_release=true
+          fi
+          docs_live=false
+          if git fetch --no-tags origin "+refs/heads/docs-live:refs/remotes/origin/docs-live" 2>/dev/null &&
+            git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/docs-live; then
+            docs_live=true
+          fi
 
           release=false
           if [[ "$version" == "$previous" ]]; then
@@ -68,8 +79,8 @@ jobs:
           elif [[ -n "$tag_commit" && "$tag_commit" != "$GITHUB_SHA" ]]; then
             echo "::error::${tag} already points at ${tag_commit}, not ${GITHUB_SHA}."
             exit 1
-          elif [[ "$published" == "$version" && -n "$tag_commit" ]]; then
-            echo "invariantcad@${version} and ${tag} already exist; nothing to resume."
+          elif [[ "$published" == "$version" && -n "$tag_commit" && "$github_release" == "true" && "$docs_live" == "true" ]]; then
+            echo "invariantcad@${version}, ${tag}, its GitHub release, and docs-live are complete; nothing to resume."
           else
             release=true
             echo "Releasing invariantcad ${version} (previous ${previous})."
@@ -144,6 +155,8 @@ jobs:
     concurrency:
       group: invariantcad-npm-publish
       cancel-in-progress: false
+    outputs:
+      published: ${{ steps.publish.outputs.published }}
     env:
       VERSION: ${{ needs.plan.outputs.version }}
 
@@ -165,14 +178,40 @@ jobs:
         run: npm install --global npm@12.0.1
 
       - name: Publish the verified tarball through npm trusted publishing
+        id: publish
         shell: bash
         run: |
           set -euo pipefail
           if [[ "$(npm view "invariantcad@${VERSION}" version 2>/dev/null || true)" == "$VERSION" ]]; then
             echo "invariantcad@${VERSION} is already on npm; continuing to the GitHub release."
+            echo "published=earlier" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # Publishing an older version after a newer one would move npm's
+          # `latest` dist-tag backwards, so a stale release stops here.
+          newer="$(npm view invariantcad versions --json | node -e '
+            let text = "";
+            process.stdin.on("data", (chunk) => (text += chunk)).on("end", () => {
+              const parts = (value) => value.split(".").map(Number);
+              const newer = (left, right) => {
+                const [a, b] = [parts(left), parts(right)];
+                for (let index = 0; index < 3; index += 1) {
+                  if (a[index] !== b[index]) return a[index] > b[index];
+                }
+                return false;
+              };
+              const versions = [].concat(JSON.parse(text));
+              process.stdout.write(
+                versions.filter((value) => /^\d+\.\d+\.\d+$/.test(value) && newer(value, process.argv[1])).join(" "),
+              );
+            });
+          ' "$VERSION")"
+          if [[ -n "$newer" ]]; then
+            echo "::error::npm already has newer invariantcad ${newer}; refusing to publish stale ${VERSION}."
+            exit 1
+          fi
           npm publish "./release/invariantcad-${VERSION}.tgz" --access public --provenance
+          echo "published=now" >> "$GITHUB_OUTPUT"
 
   github-release:
     name: Tag, GitHub release, and live docs
@@ -186,6 +225,7 @@ jobs:
       cancel-in-progress: false
     env:
       VERSION: ${{ needs.plan.outputs.version }}
+      PUBLISHED: ${{ needs.publish.outputs.published }}
       GH_TOKEN: ${{ github.token }}
 
     steps:
@@ -212,6 +252,17 @@ jobs:
           set -euo pipefail
           tarball="${RUNNER_TEMP}/release/invariantcad-${VERSION}.tgz"
           expected="$(node -e 'const {createHash}=require("node:crypto");process.stdout.write("sha512-"+createHash("sha512").update(require("node:fs").readFileSync(process.argv[1])).digest("base64"))' "$tarball")"
+          if [[ "$PUBLISHED" != "now" ]]; then
+            # An earlier attempt published this version; a re-run rebuilds the
+            # tarball, so its bytes need not match what the registry holds.
+            actual="$(npm view "invariantcad@${VERSION}" dist.integrity)"
+            if [[ "$actual" == "$expected" ]]; then
+              echo "npm serves invariantcad-${VERSION}.tgz (${actual})."
+            else
+              echo "::notice::invariantcad@${VERSION} was published by an earlier attempt (${actual}); this attempt's rebuilt tarball is ${expected}."
+            fi
+            exit 0
+          fi
           for attempt in 1 2 3 4 5 6 7 8 9 10; do
             actual="$(npm view "invariantcad@${VERSION}" dist.integrity 2>/dev/null || true)"
             if [[ "$actual" == "$expected" ]]; then
@@ -252,7 +303,12 @@ jobs:
             echo "The ${tag} GitHub release already exists."
             exit 0
           fi
-          gh release create "$tag" --verify-tag --latest \
+          # Only the highest stable tag may become the latest GitHub release.
+          git fetch --tags --force origin
+          highest="$(git tag --list 'v[0-9]*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)"
+          latest=false
+          if [[ "$highest" == "$tag" ]]; then latest=true; fi
+          gh release create "$tag" --verify-tag --latest="$latest" \
             --title "InvariantCAD ${VERSION}" \
             --notes-file "${RUNNER_TEMP}/release/notes.md"
 
@@ -261,6 +317,11 @@ jobs:
         run: |
           set -euo pipefail
           git fetch --no-tags origin "+refs/heads/docs-live:refs/remotes/origin/docs-live"
+          if git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/docs-live; then
+            # Already live, or a newer release has advanced it; never move docs backwards.
+            echo "docs-live already contains ${GITHUB_SHA}."
+            exit 0
+          fi
           if ! git merge-base --is-ancestor refs/remotes/origin/docs-live "$GITHUB_SHA"; then
             echo "::error::docs-live is not an ancestor of ${GITHUB_SHA}; refusing a non-fast-forward update."
             exit 1
