@@ -596,7 +596,7 @@ describe("builder expression inputs", () => {
         edges: new Selection("edge", Object.freeze(sparse), template.ir.cardinality),
         radius: mm(1),
       }),
-    ).toThrow(/must contain dense query lists/);
+    ).toThrow(/query list cannot be sparse/);
     expect(cad.build().nodes).not.toHaveProperty("cyclic");
   });
 
@@ -1417,12 +1417,52 @@ describe("builder own-data reads", () => {
     }
     expect(counter.reads).toBe(0);
 
+    // Unchecked query fields cannot hide behind a frozen record.
+    const curve = Object.freeze(
+      Object.defineProperty({ op: "curve" }, "kind", countingAccessor("line", counter)),
+    );
+    expect(() =>
+      cad.fillet("frozen-getter", base, {
+        edges: new Selection("edge", curve, own.ir.cardinality),
+        radius: mm(1),
+      }),
+    ).toThrow("must be a data property, not an accessor");
+    expect(counter.reads).toBe(0);
+
+    // The node stores a builder-owned copy, so caller records nested inside
+    // a frozen query cannot change the built document later.
+    const source = { kind: "sketch-entity", sketch: "profile", entity: "disk" };
+    const origin = Object.freeze({
+      op: "origin",
+      feature: "base",
+      relation: "created",
+      source,
+    });
+    const aliased = cad.chamfer("aliased", base, {
+      edges: new Selection("edge", origin, own.ir.cardinality),
+      distance: mm(1),
+    });
+
     cad.output("result", filleted);
+    cad.output("aliased", aliased);
     const document = cad.build();
-    const stored = (document.nodes as Readonly<Record<string, any>>).fillet.edges;
-    expect(stored).toBe(substituting.ir);
-    expect(stored.query).toBe(own.ir.query);
-    expect(validateDocument(document).ok).toBe(true);
+    const nodes = document.nodes as Readonly<Record<string, any>>;
+    const stored = nodes.fillet.edges;
+    expect(stored).toEqual(own.ir);
+    expect(stored).not.toBe(substituting.ir);
+    // Expression IR keeps its identity: the stored radius is this design's
+    // own parameter node, not the foreign one toIR() returned.
+    expect(stored.query.value).toBe(width.ir);
+    expect(stored.query.value).not.toBe(foreignWidth.ir);
+    const before = stringifyDocument(document);
+    source.entity = "mutated";
+    expect(nodes.aliased.edges.query.source).toEqual({
+      kind: "sketch-entity",
+      sketch: "profile",
+      entity: "disk",
+    });
+    expect(Object.isFrozen(nodes.aliased.edges.query.source)).toBe(true);
+    expect(stringifyDocument(document)).toBe(before);
   });
 
   it("reads expression dimensions without running accessors", () => {

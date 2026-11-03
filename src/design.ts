@@ -336,14 +336,16 @@ function ownedPlaneIR(
   };
 }
 
-const QUERY_ACTIVE = 1;
-const QUERY_COMPLETE = 2;
-
 /**
- * Checks parameter owners in every expression a topology selection holds and
- * returns the selection IR that was checked, so the node stores exactly that
- * rather than whatever an overridden `toIR()` would return. Fields are read
- * through own data properties only, so caller accessors never run.
+ * Copies a topology selection into builder-owned records and returns the
+ * copy for the node to store, rather than the caller's objects or whatever
+ * an overridden `toIR()` would return. Every container is snapshotted once
+ * through its own data properties, so caller accessors never run and no
+ * caller record or array reaches the document. Expression IR is validated,
+ * frozen in place, and checked for parameter owners, like every other builder
+ * expression. Like the parser, every query occurrence, aliases included,
+ * counts against the query-node limit before it is copied; shared subtrees
+ * are copied once, and cycles or excessive nesting throw.
  */
 function ownedTopologySelectionIR<K extends TopologyKind>(
   owner: DesignBuilder,
@@ -351,120 +353,201 @@ function ownedTopologySelectionIR<K extends TopologyKind>(
   topology: K,
   label: string,
 ): TopologySelectionIR<K> {
-  const field = (container: unknown, key: string | number): unknown => {
-    if (typeof container !== "object" || container === null) return undefined;
-    const value = readOwnData(container, key);
-    if (value === NOT_OWN_DATA) {
-      throw new TypeError(`${label} must contain only data properties`);
-    }
-    return value;
-  };
-  const selectionIR = field(selection, "ir");
-  if (typeof selectionIR !== "object" || selectionIR === null) {
-    throw new TypeError(`${label} must be an explicit topology selection`);
-  }
-  if (field(selectionIR, "topology") !== topology) {
-    throw new TypeError(`${label} must select ${topology} topology`);
-  }
-  const expression = (value: unknown): void => {
-    assertExpressionParametersOwned(
-      owner,
-      assertExpressionIR(value, label),
-      label,
-    );
-  };
-  // Like the parser, count every scheduled query occurrence, aliases
-  // included, against the query-node limit before queueing it, so a wide or
-  // aliased selection cannot schedule unbounded work.
-  const limit = DEFAULT_DESIGN_DOCUMENT_LIMITS.maxTopologyQueryNodes;
+  const limits = DEFAULT_DESIGN_DOCUMENT_LIMITS;
   let scheduled = 0;
   const reserve = (count: number): void => {
     scheduled += count;
-    if (scheduled > limit) {
+    if (scheduled > limits.maxTopologyQueryNodes) {
       throw new RangeError(
-        `${label} exceeds the authoring limit of ${limit} topology query nodes`,
+        `${label} exceeds the authoring limit of ${limits.maxTopologyQueryNodes} topology query nodes`,
       );
     }
   };
-  // Query nodes on the current walk path are active, so meeting one again
-  // is a cycle; finished nodes are complete, so a shared subtree is walked
-  // once.
-  const states = new WeakMap<object, typeof QUERY_ACTIVE | typeof QUERY_COMPLETE>();
-  const nodes: object[] = [];
-  const exits: boolean[] = [];
-  const enqueue = (value: unknown): void => {
-    if (typeof value !== "object" || value === null) return;
-    const state = states.get(value);
-    if (state === QUERY_ACTIVE) {
-      throw new TypeError(`${label} cannot contain cyclic topology queries`);
+  let structuralValues = 0;
+  const enter = (depth: number): void => {
+    structuralValues += 1;
+    if (structuralValues > limits.maxStructuralValues) {
+      throw new RangeError(
+        `${label} exceeds the authoring limit of ${limits.maxStructuralValues} structural values`,
+      );
     }
-    if (state === QUERY_COMPLETE) return;
-    nodes.push(value);
-    exits.push(false);
+    if (depth > limits.maxNestingDepth) {
+      throw new RangeError(
+        `${label} exceeds the authoring nesting depth of ${limits.maxNestingDepth}`,
+      );
+    }
   };
-  reserve(1);
-  enqueue(field(selectionIR, "query"));
-  while (nodes.length > 0) {
-    const node = nodes.pop()!;
-    if (exits.pop()!) {
-      states.set(node, QUERY_COMPLETE);
-      continue;
-    }
-    if (states.has(node)) continue;
-    states.set(node, QUERY_ACTIVE);
-    nodes.push(node);
-    exits.push(true);
-    switch (field(node, "op")) {
-      case "and":
-      case "or": {
-        const queries = field(node, "queries");
-        if (Array.isArray(queries)) {
-          const length = field(queries, "length");
-          if (typeof length !== "number" || !Number.isSafeInteger(length)) {
-            throw new TypeError(`${label} must contain dense query lists`);
-          }
-          reserve(length);
-          // Queue one at a time: spreading a large operand list could exceed
-          // the engine's argument limit.
-          for (let index = 0; index < length; index += 1) {
-            if (!Object.hasOwn(queries, index)) {
-              throw new TypeError(`${label} must contain dense query lists`);
-            }
-            enqueue(field(queries, index));
-          }
+  // Define rather than assign, so an own "__proto__" key stays data.
+  const define = (
+    target: Record<string, unknown>,
+    key: string,
+    value: unknown,
+  ): void => {
+    Object.defineProperty(target, key, {
+      value,
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
+  };
+  // Containers whose copy is in progress, so meeting one again is a cycle.
+  const active = new Set<object>();
+  // Finished query copies, so an aliased query is copied once.
+  const queryCopies = new Map<object, object>();
+
+  const expression = (value: unknown): ExpressionIR => {
+    const ir = assertExpressionIR(value, label);
+    assertExpressionParametersOwned(owner, ir, label);
+    return ir;
+  };
+
+  const json = (value: unknown, depth: number): JsonValue => {
+    enter(depth);
+    switch (typeof value) {
+      case "string":
+      case "boolean":
+        return value;
+      case "number":
+        if (!Number.isFinite(value)) {
+          throw new TypeError(`${label} must contain only finite numbers`);
         }
-        break;
-      }
-      case "not":
-        reserve(1);
-        enqueue(field(node, "query"));
-        break;
-      case "adjacentTo":
-        reserve(1);
-        enqueue(field(field(node, "selection"), "query"));
-        break;
-      case "direction":
-      case "normal":
-      case "position": {
-        const vector = field(node, "value");
-        if (!Array.isArray(vector) || field(vector, "length") !== 3) {
-          throw new TypeError(`${label} must contain three-component vectors`);
-        }
-        for (let index = 0; index < 3; index += 1) {
-          expression(field(vector, index));
-        }
-        expression(field(node, "tolerance"));
-        break;
-      }
-      case "radius":
-        expression(field(node, "value"));
-        expression(field(node, "tolerance"));
+        return value;
+      case "object":
         break;
       default:
-        break;
+        throw new TypeError(`${label} cannot contain ${typeof value} values`);
     }
+    if (value === null) return null;
+    if (active.has(value)) {
+      throw new TypeError(`${label} cannot contain object cycles`);
+    }
+    active.add(value);
+    let result: JsonValue;
+    if (Array.isArray(value)) {
+      result = ownDenseArray(value as readonly unknown[], label).map((item) =>
+        json(item, depth + 1),
+      );
+    } else {
+      const snapshot = ownRecord(value, label) as Readonly<
+        Record<string, unknown>
+      >;
+      const copy: Record<string, JsonValue> = {};
+      for (const key of Object.keys(snapshot)) {
+        const child = snapshot[key];
+        // Undefined members are omitted, exactly as the canonical writer does.
+        if (child !== undefined) define(copy, key, json(child, depth + 1));
+      }
+      result = copy;
+    }
+    active.delete(value);
+    return result;
+  };
+
+  const query = (value: unknown, depth: number): object => {
+    if (typeof value !== "object" || value === null) {
+      throw new TypeError(`${label} queries must be plain records`);
+    }
+    const copied = queryCopies.get(value);
+    if (copied !== undefined) return copied;
+    if (active.has(value)) {
+      throw new TypeError(`${label} cannot contain cyclic topology queries`);
+    }
+    enter(depth);
+    active.add(value);
+    const node = ownRecord(value, `${label} query`) as Readonly<
+      Record<string, unknown>
+    >;
+    const op = node.op;
+    const vectorPredicate =
+      op === "direction" || op === "normal" || op === "position";
+    const copy: Record<string, unknown> = {};
+    for (const key of Object.keys(node)) {
+      const child = node[key];
+      if (child === undefined) continue;
+      if ((op === "and" || op === "or") && key === "queries") {
+        if (!Array.isArray(child)) {
+          throw new TypeError(`${label} must contain dense query lists`);
+        }
+        const length = (child as readonly unknown[]).length;
+        // Count operands before copying them: a list can alias one query
+        // many times.
+        reserve(length);
+        define(
+          copy,
+          key,
+          ownDenseArray(child as readonly unknown[], `${label} query list`, {
+            exactLength: length,
+          }).map((item) => query(item, depth + 1)),
+        );
+      } else if (op === "not" && key === "query") {
+        reserve(1);
+        define(copy, key, query(child, depth + 1));
+      } else if (op === "adjacentTo" && key === "selection") {
+        define(copy, key, selectionRecord(child, depth + 1));
+      } else if (vectorPredicate && key === "value") {
+        if (!Array.isArray(child) || child.length !== 3) {
+          throw new TypeError(`${label} must contain three-component vectors`);
+        }
+        define(
+          copy,
+          key,
+          ownDenseArray(child as readonly unknown[], label).map((item) =>
+            expression(item),
+          ),
+        );
+      } else if (
+        (vectorPredicate || op === "radius") &&
+        (key === "tolerance" || key === "value")
+      ) {
+        define(copy, key, expression(child));
+      } else {
+        define(copy, key, json(child, depth + 1));
+      }
+    }
+    active.delete(value);
+    queryCopies.set(value, copy);
+    return copy;
+  };
+
+  const selectionRecord = (
+    value: unknown,
+    depth: number,
+    expected?: K,
+  ): object => {
+    if (typeof value !== "object" || value === null) {
+      throw new TypeError(`${label} must be an explicit topology selection`);
+    }
+    if (active.has(value)) {
+      throw new TypeError(`${label} cannot contain cyclic topology queries`);
+    }
+    enter(depth);
+    active.add(value);
+    const record = ownRecord(value, `${label} selection`) as Readonly<
+      Record<string, unknown>
+    >;
+    if (expected !== undefined && record.topology !== expected) {
+      throw new TypeError(`${label} must select ${expected} topology`);
+    }
+    const copy: Record<string, unknown> = {};
+    for (const key of Object.keys(record)) {
+      const child = record[key];
+      if (child === undefined) continue;
+      if (key === "query") {
+        reserve(1);
+        define(copy, key, query(child, depth + 1));
+      } else {
+        define(copy, key, json(child, depth + 1));
+      }
+    }
+    active.delete(value);
+    return copy;
+  };
+
+  const selectionIR = readOwnData(selection, "ir");
+  if (selectionIR === NOT_OWN_DATA) {
+    throw new TypeError(`${label} must contain only data properties`);
   }
-  return selectionIR as TopologySelectionIR<K>;
+  return selectionRecord(selectionIR, 0, topology) as TopologySelectionIR<K>;
 }
 
 /**
