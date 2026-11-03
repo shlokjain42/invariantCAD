@@ -55,8 +55,10 @@ result order, or selected-edge indices. Generated and residual-created edges,
 residual-created faces, vertex-caused faces, and generated shell/offset topology
 remain unnamed. Vertices have no semantic role vocabulary at all. Protocol v2
 can nevertheless resolve a vertex semantically when both complete snapshots
-provide the same fully anchored incident-edge set. Otherwise it falls back to
-point plus incident-edge geometry, and a parameter change may fail missing.
+provide the same fully anchored incident-edge set; if only one side is fully
+anchored, the vertex does not match. When neither side is fully anchored, or
+either snapshot has partial history, it falls back to point plus incident-edge
+geometry, and a parameter change may fail missing.
 Distinct coincident vertices remain separate candidates and fail ambiguous when
 their evidence cannot distinguish them.
 
