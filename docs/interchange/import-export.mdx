@@ -131,8 +131,10 @@ instead: control characters become spaces and unpaired UTF-16 surrogates
 become U+FFFD. An empty required default becomes `InvariantCAD Shape`. When
 the resolved strings would exceed the metadata budget, the longest defaulted
 values are truncated at Unicode scalar boundaries until they fit; explicit
-overrides are never altered. Pass an explicit `metadata` field to control the
-exact text.
+overrides are never altered. Defaults longer than the whole budget share it in
+field order. Only as much authored or explicit text as the budget could hold is
+read, so a very long name or description costs no more work than the budget.
+Pass an explicit `metadata` field to control the exact text.
 
 An explicit timestamp must be a real calendar value in
 `YYYY-MM-DDTHH:MM:SS` form. It remains deterministic because it is

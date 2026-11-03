@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   AUTOMATIC_STEP_TEXT_FALLBACK,
+  boundedAutomaticStepText,
   fitAutomaticStepTexts,
   normalizeAutomaticStepText,
   resolveAutomaticStepTexts,
   stepTextUtf8Length,
+  stepTextUtf8LengthUpTo,
 } from "../src/internal/step-export-defaults.js";
 
 const emoji = "\u{1F600}";
@@ -80,5 +82,40 @@ describe("automatic STEP metadata defaults", () => {
         "explicit".length + 1,
       ),
     ).toEqual(["explicit", "product", "name", ""]);
+  });
+
+  it("never reads text past the budget", () => {
+    // Measuring stops once the size exceeds the limit.
+    expect(stepTextUtf8LengthUpTo("abc", 3)).toBe(3);
+    expect(stepTextUtf8LengthUpTo("a".repeat(1_000_000), 10)).toBe(11);
+    expect(stepTextUtf8LengthUpTo(emoji.repeat(10), 5)).toBe(8);
+
+    // Only maximumBytes + 1 code units are normalized and kept, extended so a
+    // surrogate pair is never split.
+    const long = "a\u0001".repeat(500_000);
+    expect(boundedAutomaticStepText(long, 6)).toBe("a a a a");
+    expect(boundedAutomaticStepText(`abc${emoji}def`, 3)).toBe(`abc${emoji}`);
+    expect(boundedAutomaticStepText("short\t", 64)).toBe("short ");
+
+    // Values longer than the whole budget tie, so their text past the budget
+    // cannot reorder them or change the result.
+    const full = ["b".repeat(1_000), "a".repeat(500)];
+    const prefixes = full.map((value) => value.slice(0, 120));
+    const fitted = fitAutomaticStepTexts(full, 101);
+    expect(fitted).toEqual(fitAutomaticStepTexts(prefixes, 101));
+    expect(fitted).toEqual(["b".repeat(50), "a".repeat(51)]);
+
+    // An explicit overflow returns the automatic values for strict
+    // validation without copying long authored text.
+    const resolved = resolveAutomaticStepTexts(
+      ["x".repeat(100), undefined, undefined, undefined],
+      [long, "id", "name", long],
+      [true, true, true, false],
+      50,
+      64,
+    );
+    expect(resolved[0]).toBe("x".repeat(100));
+    expect(resolved.slice(1, 3)).toEqual(["id", "name"]);
+    expect(resolved[3]).toBe(normalizeAutomaticStepText(long.slice(0, 65)));
   });
 });

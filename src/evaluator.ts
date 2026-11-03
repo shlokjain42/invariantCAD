@@ -197,7 +197,7 @@ import {
 import {
   markAutomaticStepExportContext,
   resolveAutomaticStepTexts,
-  stepTextUtf8Length,
+  stepTextUtf8LengthUpTo,
 } from "./internal/step-export-defaults.js";
 import {
   DOCUMENT_V7_RUNTIME_INTEGRITY_MESSAGE,
@@ -1733,7 +1733,9 @@ function evaluatedStepExportContext(
         identity.productDescription,
       ],
       [true, true, true, false],
-      maxMetadataBytes - stepTextUtf8Length(timestamp),
+      maxMetadataBytes -
+        stepTextUtf8LengthUpTo(timestamp, maxMetadataBytes),
+      maxMetadataBytes,
     ) as [string, string, string, string];
   let remainingMetadataBytes = maxMetadataBytes;
   remainingMetadataBytes = validateStepExportMetadataString(

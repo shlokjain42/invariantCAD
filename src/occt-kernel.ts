@@ -174,9 +174,9 @@ import {
 } from "./internal/occt-step-metadata.js";
 import {
   AUTOMATIC_STEP_TEXT_FALLBACK,
+  boundedAutomaticStepText,
   fitAutomaticStepTexts,
   isAutomaticStepExportContext,
-  normalizeAutomaticStepText,
 } from "./internal/step-export-defaults.js";
 import { CadError, diagnostic } from "./core/result.js";
 import {
@@ -1270,14 +1270,17 @@ function deterministicStepExportMetadata(
   if (context.stepExport === undefined) {
     // Automatic defaults must not fail: normalize text the strict metadata
     // rules would reject and fit the three copies into the metadata budget.
+    // Only the prefix that the budget could hold is read from the feature.
+    const budget =
+      DEFAULT_OCCT_STEP_METADATA_LIMITS.maxMetadataUtf8Bytes -
+      OCCT_STEP_METADATA_TIMESTAMP.length;
     const feature =
       typeof context.feature === "string" && context.feature.length > 0
-        ? normalizeAutomaticStepText(context.feature)
+        ? boundedAutomaticStepText(context.feature, budget)
         : AUTOMATIC_STEP_TEXT_FALLBACK;
     const [fileName, productId, productName] = fitAutomaticStepTexts(
       [feature, feature, feature],
-      DEFAULT_OCCT_STEP_METADATA_LIMITS.maxMetadataUtf8Bytes -
-        OCCT_STEP_METADATA_TIMESTAMP.length,
+      budget,
       [true, true, true],
     ) as [string, string, string];
     return {
