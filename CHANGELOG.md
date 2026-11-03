@@ -2,6 +2,49 @@
 
 ## [Unreleased]
 
+- `invariantcad export` now reports export and write failures as diagnostics
+  instead of a JavaScript stack trace. Exporting an assembly to an exact format,
+  or requesting STEP/BREP with `--kernel manifold`, now prints the structured
+  `ERROR EXPORT_UNSUPPORTED: ...` line. A destination that cannot be written,
+  such as one in a missing directory, prints a one-line `Output file could not
+  be written: ...` reason. Both still exit with code 1, and any other `CadError`
+  that reaches the CLI is also printed as diagnostics. The published 0.1.1 CLI
+  printed stack traces with absolute source paths for these failures.
+- `invariantcad export` now requires `--output` when the document has more than
+  one output, and otherwise fails with usage exit code 2 after validating the
+  document and before initializing a kernel. The published 0.1.1 CLI silently
+  exported only the alphabetically first output (saved documents sort output
+  names) and dropped the rest. Single-output documents may still omit
+  `--output`, and a document with no outputs now prints a one-line reason with
+  exit code 1 instead of a stack trace. Scripts that relied on the implicit
+  choice must now name the output. Because frozen v1-v6 output names may be
+  the empty string, `--output` (unlike the other options) accepts an empty
+  value, so `--output ""` or `--output=` selects such an output.
+- The CLI now escapes control characters, Unicode line and paragraph separators,
+  and bidirectional embedding, override, and isolate controls as `\uXXXX`
+  wherever it echoes text from a document: the `validate` success line,
+  diagnostic paths and messages, and one-line input-file reasons. The published
+  0.1.1 CLI wrote them raw, so an untrusted document could send terminal escape
+  sequences or forge extra output lines, such as a second success line or a CI
+  workflow command. Ordinary names print unchanged.
+- `analyzeDesignImpact` now accepts as a change seed any node or parameter key
+  the parsed document contains. This includes keys that frozen v1-v6 documents
+  preserve but the builder would not author, such as `"node with space"`,
+  `"1width"`, or an empty key. 0.1.1 rejected such seeds with `IR_INVALID`, even
+  though parsing and feature hashing accept the same document. Unknown seeds,
+  including ones outside the builder ID grammar, now report `REFERENCE_MISSING`,
+  `PARAMETER_MISSING`, or `CONFIGURATION_MISSING` at their `/changes` path
+  instead of `IR_INVALID`. Non-string seeds still fail with `IR_INVALID`.
+- The npm package no longer ships TypeScript declaration maps. In 0.1.1, every
+  `.d.ts.map` pointed to a `../src/*.ts` file that the package does not include,
+  so editors could not follow them. Declarations keep their JSDoc, and the
+  JavaScript source maps, which embed their sources, are unchanged.
+- CLI: inspect and bom JSON output now writes DEL, C1 controls, U+2028/U+2029
+  and bidi embedding/override/isolate controls inside strings as \uXXXX escapes,
+  so untrusted document text cannot drive the terminal; the JSON parses to the
+  same values.
+- analyzeDesignImpact: parameter dependency edges no longer collide when stored
+  parameter keys contain NUL, so every impacted parameter is reported.
 - Manifold `measure()` no longer rejects valid slender, thin-walled, rotated, or
   widely separated geometry. Its check that the Float32 mesh volume matches the
   native volume now allows for Float32 rounding of the mesh positions, so
