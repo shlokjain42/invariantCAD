@@ -63,7 +63,9 @@ release commit the workflow:
    smoke-tested tarball through npm trusted publishing with provenance. It
    refuses a version older than one already on npm, so npm's `latest`
    dist-tag never moves backwards;
-3. confirms that the registry serves the same tarball integrity;
+3. confirms through npm's SLSA provenance that the registry package was built
+   from this repository, workflow, and commit, and, when this attempt
+   published it, that the registry serves the same tarball integrity;
 4. creates the annotated `v<version>` tag on the release commit and the
    GitHub release from the body of `docs/releases/<version>.md`, without its
    YAML frontmatter, marking it latest only when it is the highest stable tag;

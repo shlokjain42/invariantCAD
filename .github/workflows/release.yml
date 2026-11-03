@@ -246,33 +246,56 @@ jobs:
           node-version: 24.x
           package-manager-cache: false
 
-      - name: Confirm npm serves the verified tarball
+      - name: Confirm npm holds this commit's verified package
         shell: bash
         run: |
           set -euo pipefail
           tarball="${RUNNER_TEMP}/release/invariantcad-${VERSION}.tgz"
           expected="$(node -e 'const {createHash}=require("node:crypto");process.stdout.write("sha512-"+createHash("sha512").update(require("node:fs").readFileSync(process.argv[1])).digest("base64"))' "$tarball")"
-          if [[ "$PUBLISHED" != "now" ]]; then
-            # An earlier attempt published this version; a re-run rebuilds the
-            # tarball, so its bytes need not match what the registry holds.
-            actual="$(npm view "invariantcad@${VERSION}" dist.integrity)"
-            if [[ "$actual" == "$expected" ]]; then
-              echo "npm serves invariantcad-${VERSION}.tgz (${actual})."
-            else
-              echo "::notice::invariantcad@${VERSION} was published by an earlier attempt (${actual}); this attempt's rebuilt tarball is ${expected}."
-            fi
-            exit 0
-          fi
-          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+          # npm's SLSA provenance names the repository, workflow, and commit that
+          # published the version. Require this commit, whether this attempt or
+          # an earlier one published it.
+          wanted="https://github.com/${GITHUB_REPOSITORY} .github/workflows/release.yml ${GITHUB_SHA}"
+          provenance=""
+          actual=""
+          for attempt in $(seq 1 20); do
+            provenance="$(curl -fsS "https://registry.npmjs.org/-/npm/v1/attestations/invariantcad@${VERSION}" 2>/dev/null | node -e '
+              let text = "";
+              process.stdin.on("data", (chunk) => (text += chunk)).on("end", () => {
+                for (const attestation of JSON.parse(text).attestations ?? []) {
+                  if (!attestation.predicateType.startsWith("https://slsa.dev/provenance/")) continue;
+                  const statement = JSON.parse(
+                    Buffer.from(attestation.bundle.dsseEnvelope.payload, "base64").toString("utf8"),
+                  );
+                  const build = statement.predicate.buildDefinition;
+                  const workflow = build.externalParameters.workflow;
+                  const commit = (build.resolvedDependencies ?? [])
+                    .map((dependency) => dependency.digest?.gitCommit)
+                    .find(Boolean);
+                  process.stdout.write(`${workflow.repository} ${workflow.path} ${commit}`);
+                }
+              });
+            ' || true)"
             actual="$(npm view "invariantcad@${VERSION}" dist.integrity 2>/dev/null || true)"
-            if [[ "$actual" == "$expected" ]]; then
-              echo "npm serves the smoke-tested invariantcad-${VERSION}.tgz (${expected})."
-              exit 0
+            if [[ "$provenance" == "$wanted" ]]; then
+              if [[ "$actual" == "$expected" ]]; then
+                echo "npm serves this commit's smoke-tested invariantcad-${VERSION}.tgz (${expected})."
+                exit 0
+              fi
+              if [[ "$PUBLISHED" != "now" ]]; then
+                # A re-run rebuilds the tarball; provenance already binds the
+                # registry package to this commit and workflow.
+                echo "::notice::invariantcad@${VERSION} was published from ${GITHUB_SHA} by an earlier attempt (${actual}); this attempt rebuilt ${expected}."
+                exit 0
+              fi
+            elif [[ -n "$provenance" ]]; then
+              echo "::error::invariantcad@${VERSION} provenance is '${provenance}', expected '${wanted}'."
+              exit 1
             fi
-            echo "Waiting for the registry (attempt ${attempt}): '${actual}'"
+            echo "Waiting for the registry (attempt ${attempt}): provenance '${provenance}', integrity '${actual}'"
             sleep 15
           done
-          echo "::error::npm integrity '${actual}' does not match the verified tarball '${expected}'."
+          echo "::error::npm did not report this commit's verified package: provenance '${provenance}', integrity '${actual}', expected '${wanted}' and '${expected}'."
           exit 1
 
       - name: Create the annotated release tag
