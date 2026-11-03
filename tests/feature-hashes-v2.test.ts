@@ -1111,6 +1111,210 @@ describe("document-v7 feature hashes protocol v2", () => {
     expect(exact.ok, JSON.stringify(exact.diagnostics)).toBe(true);
   });
 
+  it("checks the realm when a digest await resumes", async () => {
+    const document = comprehensiveDocument();
+    const baseline = await reportValue(hashDesignFeaturesV2(document));
+
+    // A trap can queue a microtask while the post-digest signal read runs.
+    // That callback executes after digestEnvelope returns but before its
+    // caller resumes, swapping in a push() that drops evidence; the trap then
+    // restores the original on the next signal read, so only a realm check at
+    // the resumption point can notice before evidence is lost.
+    const original = Object.getOwnPropertyDescriptor(Array.prototype, "push")!;
+    let tamperedPushes = 0;
+    const dropPush = function (this: unknown[]) {
+      tamperedPushes += 1;
+      return this.length;
+    };
+    const stackLimit = Error.stackTraceLimit;
+    let digestReads = 0;
+    const controller = new AbortController();
+    const signal = new Proxy(controller.signal, {
+      get(target, key) {
+        Object.defineProperty(Array.prototype, "push", original);
+        if ((new Error().stack ?? "").includes("digestEnvelope")) {
+          digestReads += 1;
+          if (digestReads === 6) {
+            queueMicrotask(() => {
+              Object.defineProperty(Array.prototype, "push", {
+                ...original,
+                value: dropPush,
+              });
+            });
+          }
+        }
+        return Reflect.get(target, key, target);
+      },
+    });
+    let result: CadResult<DesignFeatureHashReportV2>;
+    try {
+      Error.stackTraceLimit = 100;
+      result = await hashDesignFeaturesV2(document, { signal });
+    } finally {
+      Error.stackTraceLimit = stackLimit;
+      Object.defineProperty(Array.prototype, "push", original);
+    }
+    expect(digestReads).toBeGreaterThanOrEqual(6);
+    // Hashing never ran with the tampered push().
+    expect(tamperedPushes).toBe(0);
+    // A different successful hash would be a silent corruption.
+    if (result.ok) expect(result.value).toEqual(baseline);
+    else expectRealmFailure(result);
+  });
+
+  it("keeps a proxied signal from changing selector work between realm scans", async () => {
+    const legacy = {
+      schema: DOCUMENT_SCHEMA_V6,
+      version: 6,
+      name: "feature-hash-v2-proxied-signal",
+      units: { length: "mm", angle: "rad" },
+      parameters: {},
+      nodes: {
+        body: {
+          kind: "box",
+          size: [length(10), length(10), length(10)],
+          center: false,
+        },
+        treated: {
+          kind: "fillet",
+          input: { node: "body", kind: "solid" },
+          edges: {
+            topology: "edge",
+            query: {
+              op: "or",
+              queries: Array.from({ length: 4 }, (_, index) => ({
+                op: "radius",
+                value: length(1 + index),
+                tolerance: length(1e-6),
+              })),
+            },
+            cardinality: { min: 1, max: 1 },
+          },
+          radius: length(0.1),
+        },
+      },
+      outputs: { treated: { node: "treated", kind: "solid" } },
+    } as unknown as DesignDocument;
+    const migrated = migrateDocumentToV7(legacy);
+    if (!migrated.ok) throw new Error("Expected v7 migration");
+    const baseline = await reportValue(hashDesignFeaturesV2(migrated.value));
+
+    // Node's AbortSignal brand check reads internal properties through the
+    // Proxy, so this trap runs (several times) on every signal read. A trap
+    // that swaps in a map() dropping one branch at the end of a read inside
+    // selector canonicalization, and restores it on the next read, used to
+    // change the hash silently: the `or` node's own map() ran tampered and
+    // every later realm scan saw an intact realm.
+    const original = Object.getOwnPropertyDescriptor(Array.prototype, "map")!;
+    const dropLast = function (this: unknown[], ...rest: unknown[]) {
+      return Reflect.apply(original.value, this.slice(0, -1), rest);
+    };
+    const stackLimit = Error.stackTraceLimit;
+    let readsDuringSelectorWork = 0;
+    const controller = new AbortController();
+    const signal = new Proxy(controller.signal, {
+      get(target, key) {
+        const duringSelectorWork = (new Error().stack ?? "").includes(
+          "canonicalizeFeatureTopologyQuery",
+        );
+        if (duringSelectorWork) readsDuringSelectorWork += 1;
+        Object.defineProperty(Array.prototype, "map", {
+          ...original,
+          value:
+            duringSelectorWork && readsDuringSelectorWork === 3
+              ? dropLast
+              : original.value,
+        });
+        return Reflect.get(target, key, target);
+      },
+    });
+    let result: CadResult<DesignFeatureHashReportV2>;
+    try {
+      Error.stackTraceLimit = 100;
+      result = await hashDesignFeaturesV2(migrated.value, { signal });
+    } finally {
+      Error.stackTraceLimit = stackLimit;
+      Object.defineProperty(Array.prototype, "map", original);
+    }
+    // Below the realm-check interval, selector work never reads the signal,
+    // so caller code cannot run between two realm scans.
+    expect(readsDuringSelectorWork).toBe(0);
+    // A different successful hash would be a silent corruption.
+    if (result.ok) expect(result.value).toEqual(baseline);
+    else expectRealmFailure(result);
+  });
+
+  it("meters selector work without a realm scan per topology-work unit", async () => {
+    const atoms = 5_000;
+    const legacy = {
+      schema: DOCUMENT_SCHEMA_V6,
+      version: 6,
+      name: "feature-hash-v2-topology-work-cost",
+      units: { length: "mm", angle: "rad" },
+      parameters: {},
+      nodes: {
+        body: {
+          kind: "box",
+          size: [length(10), length(10), length(10)],
+          center: false,
+        },
+        treated: {
+          kind: "fillet",
+          input: { node: "body", kind: "solid" },
+          edges: {
+            topology: "edge",
+            query: {
+              op: "or",
+              queries: Array.from({ length: atoms }, (_, index) => ({
+                op: "radius",
+                value: length(1 + index / 1_000),
+                tolerance: length(1e-6),
+              })),
+            },
+            cardinality: { min: 1, max: 1 },
+          },
+          radius: length(0.1),
+        },
+      },
+      outputs: { treated: { node: "treated", kind: "solid" } },
+    } as unknown as DesignDocument;
+    const migrated = migrateDocumentToV7(legacy);
+    expect(migrated.ok, JSON.stringify(migrated.diagnostics)).toBe(true);
+    if (!migrated.ok) throw new Error("Expected v7 migration");
+
+    // The flattened `or` selector costs one unit per query node plus one per
+    // reference-collection step: 2 * atoms + 2 units in total.
+    const exhausted = await hashDesignFeaturesV2(migrated.value, {
+      limits: { maxTopologyWork: 2 * atoms + 1 },
+    });
+    expect(exhausted.ok).toBe(false);
+    if (!exhausted.ok) {
+      expect(exhausted.diagnostics[0]?.details).toMatchObject({
+        resource: "maxTopologyWork",
+        limit: 2 * atoms + 1,
+      });
+    }
+
+    // Hashing first parses the same document, so the strict v7 parse is the
+    // baseline. A full realm-integrity scan per unit made hashing about six
+    // times the parse cost here; amortized scans keep it near the parse cost.
+    // The fastest of three runs filters out transient host load.
+    let fastestParse = Number.POSITIVE_INFINITY;
+    let fastestHash = Number.POSITIVE_INFINITY;
+    for (let run = 0; run < 3; run += 1) {
+      let started = performance.now();
+      expect(parseDocumentValueV7(migrated.value).ok).toBe(true);
+      fastestParse = Math.min(fastestParse, performance.now() - started);
+      started = performance.now();
+      const report = await hashDesignFeaturesV2(migrated.value, {
+        limits: { maxTopologyWork: 2 * atoms + 2 },
+      });
+      fastestHash = Math.min(fastestHash, performance.now() - started);
+      expect(report.ok, JSON.stringify(report.diagnostics)).toBe(true);
+    }
+    expect(fastestHash).toBeLessThan(2 * fastestParse + 250);
+  }, 60_000);
+
   it(
     "enforces the exact cumulative canonical-byte boundary and in-flight cancellation",
     async () => {

@@ -17,8 +17,12 @@ icon: "package-open"
 }
 ```
 
-Each JavaScript entry has a matching declaration file. Declaration maps point
-back to source JSDoc for editors and source-aware tooling.
+Each JavaScript entry has a matching declaration file, and the declarations
+carry the source JSDoc that editors show for completions and hovers. The
+package does not ship TypeScript sources, so it does not ship declaration maps
+either. The 0.1.1 package does include `.d.ts.map` files, but they point to
+`../src/*.ts` files that are not in the package, so editors cannot follow them.
+JavaScript source maps embed their sources and work as shipped.
 
 ## Supported imports
 
@@ -37,11 +41,22 @@ without a public API decision.
 ## ESM only
 
 The package defines `"type": "module"` and only an `import` condition. It does
-not ship a CommonJS wrapper. Use dynamic `import()` from a legacy CommonJS host
-if migration cannot happen immediately:
+not ship a CommonJS wrapper, and `require("invariantcad")` is not supported.
+Use dynamic `import()` from a legacy CommonJS host if migration cannot happen
+immediately. CommonJS has no top-level `await`, so call it inside an async
+function:
 
 ```js
-const { design } = await import("invariantcad");
+async function main() {
+  const { design } = await import("invariantcad");
+  const cad = design("legacy-host");
+  // ...
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
 ```
 
 ## Node and browser

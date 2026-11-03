@@ -18,7 +18,7 @@ import {
 import { parseDocument } from "./serialization.js";
 import { DEFAULT_DESIGN_DOCUMENT_LIMITS } from "./document-limits.js";
 import { auditJsonMemberNames } from "./internal/json-member-audit.js";
-import type { Diagnostic } from "./core/result.js";
+import { CadError, type Diagnostic } from "./core/result.js";
 
 type CliCommand = "validate" | "inspect" | "bom" | "export";
 type CliValueOption =
@@ -163,7 +163,9 @@ function parseArguments(values: readonly string[]): ParsedArgumentsResult {
       optionValue = next;
       index += 1;
     }
-    if (optionValue.length === 0) {
+    // Frozen v1-v6 output names are arbitrary strings, so `--output ""` and
+    // `--output=` must still select an output named by the empty string.
+    if (optionValue.length === 0 && rawName !== "output") {
       return {
         ok: false,
         message: `Option '--${rawName}' requires a non-empty value`,
@@ -241,13 +243,52 @@ function optionValues(
   return arguments_.options.get(name) ?? [];
 }
 
+// C0/C1 controls, line/paragraph separators, and bidirectional embedding,
+// override, and isolate controls from documents must not reach a terminal raw.
+const TERMINAL_UNSAFE_CHARACTERS =
+  /[\p{Cc}\u2028\u2029\u202a-\u202e\u2066-\u2069]/gu;
+
+/**
+ * Escapes characters that could drive a terminal or forge extra output lines
+ * when untrusted document text is echoed, so each report stays on its line.
+ */
+function terminalSafe(text: string): string {
+  return text.replace(TERMINAL_UNSAFE_CHARACTERS, unicodeEscape);
+}
+
+function unicodeEscape(character: string): string {
+  return `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`;
+}
+
+// JSON.stringify escapes C0 controls but leaves these raw. They can occur only
+// inside JSON strings, where a \uXXXX escape keeps the parsed value unchanged.
+const JSON_TERMINAL_UNSAFE_CHARACTERS =
+  /[\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/gu;
+
+/** Pretty-prints JSON with untrusted strings made safe for a terminal. */
+function terminalSafeJson(value: unknown): string {
+  return JSON.stringify(value, null, 2).replace(
+    JSON_TERMINAL_UNSAFE_CHARACTERS,
+    unicodeEscape,
+  );
+}
+
 function formatDiagnostics(diagnostics: readonly Diagnostic[]): string {
   return diagnostics
     .map(
       (item) =>
-        `${item.severity.toUpperCase()} ${item.code}${item.path === undefined ? "" : ` ${item.path}`}: ${item.message}`,
+        `${item.severity.toUpperCase()} ${item.code}${item.path === undefined ? "" : ` ${terminalSafe(item.path)}`}: ${terminalSafe(item.message)}`,
     )
     .join("\n");
+}
+
+function failureReason(error: unknown, label: string): string {
+  if (error instanceof CadError && error.diagnostics.length > 0) {
+    return formatDiagnostics(error.diagnostics);
+  }
+  return terminalSafe(
+    `${label}: ${error instanceof Error ? error.message : String(error)}`,
+  );
 }
 
 type InlineParametersResult =
@@ -559,7 +600,7 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
     DEFAULT_DESIGN_DOCUMENT_LIMITS.maxDocumentBytes,
   );
   if (!documentText.ok) {
-    process.stderr.write(`${documentText.message}\n`);
+    process.stderr.write(`${terminalSafe(documentText.message)}\n`);
     return 1;
   }
   const parsed = parseDocument(documentText.value);
@@ -568,15 +609,29 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
     return 1;
   }
   if (args.command === "validate") {
-    process.stdout.write(`Valid InvariantCAD v${parsed.value.version} document: ${parsed.value.name}\n`);
+    process.stdout.write(
+      `Valid InvariantCAD v${parsed.value.version} document: ${terminalSafe(parsed.value.name)}\n`,
+    );
     return 0;
+  }
+  if (args.command === "export" && requestedOutput === undefined) {
+    const outputCount = Object.keys(parsed.value.outputs).length;
+    if (outputCount === 0) {
+      process.stderr.write("Document has no outputs to export\n");
+      return 1;
+    }
+    if (outputCount > 1) {
+      return usageError(
+        `export requires --output <name> because the document has ${outputCount} outputs`,
+      );
+    }
   }
   const parameterOverrides = await loadParameters(
     parametersPath,
     inlineParameters.value,
   );
   if (!parameterOverrides.ok) {
-    process.stderr.write(`${parameterOverrides.message}\n`);
+    process.stderr.write(`${terminalSafe(parameterOverrides.message)}\n`);
     return 1;
   }
   const exactExport =
@@ -610,7 +665,7 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
             measurements(evaluated.value.output(name)),
           ]),
         );
-        process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+        process.stdout.write(`${terminalSafeJson(report)}\n`);
         return 0;
       }
       if (args.command === "bom") {
@@ -635,30 +690,40 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
           return 1;
         }
         process.stdout.write(
-          `${JSON.stringify(
-            {
-              output: outputName,
-              ...bom.value,
-              diagnostics: bom.diagnostics,
-            },
-            null,
-            2,
-          )}\n`,
+          `${terminalSafeJson({
+            output: outputName,
+            ...bom.value,
+            diagnostics: bom.diagnostics,
+          })}\n`,
         );
         return 0;
       }
       if (typeof destination !== "string") {
         throw new Error("Export destination was not captured");
       }
+      // Several outputs require --output, checked before kernel startup.
       const outputName =
         requestedOutput !== undefined
           ? requestedOutput
           : evaluated.value.outputNames[0];
       if (outputName === undefined) throw new Error("No output is available to export");
-      const data = evaluated.value.output(outputName).export(
-        exportFormat ?? inferFormat(destination, requestedFormat),
-      );
-      await writeFile(destination, data);
+      let data: Uint8Array | string;
+      try {
+        data = evaluated.value.output(outputName).export(
+          exportFormat ?? inferFormat(destination, requestedFormat),
+        );
+      } catch (error: unknown) {
+        process.stderr.write(`${failureReason(error, "Export failed")}\n`);
+        return 1;
+      }
+      try {
+        await writeFile(destination, data);
+      } catch (error: unknown) {
+        process.stderr.write(
+          `${failureReason(error, "Output file could not be written")}\n`,
+        );
+        return 1;
+      }
       process.stdout.write(`Wrote ${destination}\n`);
       return 0;
     } finally {
@@ -674,7 +739,16 @@ runCli().then(
     process.exitCode = code;
   },
   (error: unknown) => {
-    process.stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`);
+    // Structured failures keep their diagnostics; only defects show a stack.
+    process.stderr.write(
+      `${
+        error instanceof CadError && error.diagnostics.length > 0
+          ? formatDiagnostics(error.diagnostics)
+          : error instanceof Error
+            ? error.stack
+            : String(error)
+      }\n`,
+    );
     process.exitCode = 1;
   },
 );

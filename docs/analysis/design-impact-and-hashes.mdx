@@ -26,9 +26,20 @@ console.log(impact.value.configurations);
 ```
 
 The report contains normalized seed inventory, impacted parameters, materials,
-configurations, nodes, and outputs. Every item includes structured reasons such
-as seed, parameter dependency, node dependency, material, configuration, or
-topology-reference reachability.
+configurations, nodes, and outputs. Parameter, material, configuration, and
+node entries include structured reasons such as seed, parameter dependency,
+node dependency, material, configuration, or topology-reference reachability.
+Seed inventory entries are bare sorted IDs. Output entries carry only the
+output `name` and its `node`; look up that node in `nodes` for the reasons it
+is impacted.
+
+An unknown seed fails with `REFERENCE_MISSING`, `PARAMETER_MISSING`, or
+`CONFIGURATION_MISSING` at its `/changes/...` path. In the unreleased 0.2 line,
+seeds may name any node or parameter key the parsed document contains,
+including keys preserved by frozen documents that the current builder would
+not author, such as `"node with space"`. The 0.1.1 package rejects seeds
+outside the builder ID grammar with `IR_INVALID`, even when the document
+contains them.
 
 Impact is existential across the base design and named configurations. It says
 an authored context can be affected; it does not execute geometry or prove the
@@ -79,9 +90,10 @@ Use it as one input to a cache key, not as the complete cache key.
 
 ## Document hash
 
-`hashDocument` computes SHA-256 over canonical document JSON, optionally
-excluding root metadata. It is broader than a feature hash and does not isolate
-which outputs depend on a change.
+`hashDocument` computes SHA-256 over canonical document JSON. Root metadata is
+excluded by default and included only with `{ includeMetadata: true }`, so a
+default hash does not change when only root metadata changes. It is broader
+than a feature hash and does not isolate which outputs depend on a change.
 
 ## Shape artifact foundation
 

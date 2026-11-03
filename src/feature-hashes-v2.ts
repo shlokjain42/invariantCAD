@@ -184,6 +184,8 @@ interface HashMeterV2 {
 interface TopologyWorkMeterV2 {
   work: number;
   readonly limit: number;
+  /** Work total at the most recent interval realm-integrity check. */
+  realmCheckedAt: number;
 }
 
 interface ResolvedFeatureContextV2 {
@@ -870,13 +872,20 @@ function resolvedExpression(
   return value;
 }
 
+/**
+ * Topology work runs in synchronous stretches that begin after a realm check
+ * (per contextual state and per topology-reference entry, and around every
+ * digest await), so no foreign code can run inside them. A full realm scan per
+ * unit cost far more than the work it metered; the interval scan keeps a
+ * bounded tripwire without making `maxTopologyWork` a CPU-time multiplier.
+ */
+const TOPOLOGY_WORK_REALM_CHECK_INTERVAL = 1024;
+
 function consumeTopologyWork(
   meter: TopologyWorkMeterV2,
   amount: number,
   signal: AbortSignal | undefined,
 ): void {
-  throwIfAborted(signal);
-  throwIfRealmCompromised();
   if (amount > meter.limit - meter.work) {
     throw limitFailure(
       "maxTopologyWork",
@@ -885,6 +894,18 @@ function consumeTopologyWork(
     );
   }
   meter.work += amount;
+  if (
+    meter.work - meter.realmCheckedAt >=
+    TOPOLOGY_WORK_REALM_CHECK_INTERVAL
+  ) {
+    meter.realmCheckedAt = meter.work;
+    // Reading the signal can run caller code: Node's AbortSignal brand check
+    // reads an internal property, which a Proxy-wrapped signal intercepts. Read
+    // it only here, immediately before the realm scan, so nothing that code
+    // leaves behind can affect selector work without being detected.
+    throwIfAborted(signal);
+    throwIfRealmCompromised();
+  }
 }
 
 function accountTopologyValue(
@@ -1242,6 +1263,8 @@ function canonicalTopologyReferenceEntry(
   meter: TopologyWorkMeterV2,
   signal: AbortSignal | undefined,
 ): TopologyReferenceEntryIRV7 {
+  // Later entries run after a digest await resumes, before the next digest.
+  throwIfRealmCompromised();
   consumeTopologyWork(meter, 1, signal);
   const variants = entry.variants.map((variant) => {
     accountTopologyValue(variant, meter, signal);
@@ -1377,8 +1400,8 @@ async function digestEnvelope(
   meter: HashMeterV2,
   signal: AbortSignal | undefined,
 ): Promise<string> {
-  throwIfRealmCompromised();
   throwIfAborted(signal);
+  throwIfRealmCompromised();
   const envelope = {
     algorithm: FEATURE_HASH_ALGORITHM_V2,
     domain,
@@ -1418,8 +1441,8 @@ async function digestEnvelope(
     capturedCryptoDigest.target,
     ["SHA-256", bytes],
   ) as PromiseLike<ArrayBuffer>);
-  throwIfRealmCompromised();
   throwIfAborted(signal);
+  throwIfRealmCompromised();
   const digestBytes = new IntrinsicUint8Array(digest);
   const digestByteLength =
     typedArrayByteLengthGetter === undefined
@@ -1787,6 +1810,7 @@ export async function hashDesignFeaturesV2(
   };
   const topologyMeter: TopologyWorkMeterV2 = {
     work: 0,
+    realmCheckedAt: 0,
     limit: limits.maxTopologyWork,
   };
   let cursor = 0;
@@ -1867,6 +1891,9 @@ export async function hashDesignFeaturesV2(
             meter,
             capturedOptions.value.signal,
           );
+          // Code that reading the signal scheduled can run while this await
+          // resumes, so check the realm before using any intrinsic again.
+          throwIfRealmCompromised();
           referenceHashes.set(reference, hash);
         }
         topologyReferencePayload.push({ reference, hash });
@@ -1890,6 +1917,9 @@ export async function hashDesignFeaturesV2(
             meter,
             capturedOptions.value.signal,
           );
+          // Code that reading the signal scheduled can run while this await
+          // resumes, so check the realm before using any intrinsic again.
+          throwIfRealmCompromised();
           resourceHashes.set(resource, hash);
         }
         resourcePayload.push({ resource, hash });
@@ -1913,6 +1943,9 @@ export async function hashDesignFeaturesV2(
         meter,
         capturedOptions.value.signal,
       );
+      // Code that reading the signal scheduled can run while this await
+      // resumes, so check the realm before using any intrinsic again.
+      throwIfRealmCompromised();
       const hash = `${FEATURE_HASH_PREFIX_V2}${digest}` as FeatureHashV2;
       hashes.set(key, hash);
       entries.set(

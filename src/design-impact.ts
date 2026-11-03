@@ -1,5 +1,4 @@
 import {
-  assertValidId,
   type EntityId,
   type ConfigurationId,
   type MaterialId,
@@ -201,16 +200,10 @@ function copySeedArray<I extends string>(
       });
     }
     const item: unknown = value[index];
-    if (typeof item !== "string" || item.length === 0) {
-      return invalid(`Design-impact '${key}' IDs must be non-empty strings`, {
-        severity: "error",
-        path: `/changes/${key}/${index}`,
-      });
-    }
-    try {
-      assertValidId(item, "Design-impact ID");
-    } catch {
-      return invalid(`Design-impact '${key}' IDs must use the shared ID grammar`, {
+    // Frozen v1-v6 node and parameter keys are unconstrained strings, so a
+    // seed is checked only against the parsed document's own inventory.
+    if (typeof item !== "string") {
+      return invalid(`Design-impact '${key}' IDs must be strings`, {
         severity: "error",
         path: `/changes/${key}/${index}`,
       });
@@ -1046,7 +1039,9 @@ function computeImpact(
           consumer,
           source,
         );
-        const edgeKey = `${dependency}\u0000${consumer}`;
+        // Parameter keys are unconstrained strings, so a separator alone could
+        // collide; the length prefix marks where the dependency ends.
+        const edgeKey = `${dependency.length}:${dependency}${consumer}`;
         const edge = contextParameterEdges.get(edgeKey);
         if (edge === undefined) {
           contextParameterEdges.set(edgeKey, {

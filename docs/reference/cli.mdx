@@ -14,7 +14,11 @@ invariantcad validate model.invariantcad.json
 ```
 
 Parses and validates the frozen document grammar without evaluating geometry.
-Success prints the document version and name.
+Success prints the document version and name. In the unreleased 0.2 line,
+control characters, Unicode line and paragraph separators, and bidirectional
+embedding, override, and isolate controls in the name are printed as `\uXXXX`
+escapes, so an untrusted document cannot drive the terminal or forge extra
+output lines. The 0.1.1 CLI prints the name verbatim.
 
 ## Inspect
 
@@ -22,8 +26,7 @@ Success prints the document version and name.
 invariantcad inspect model.json \
   --configuration manufacturing \
   --kernel occt \
-  --parameter width=120 \
-  --parameter draftAngle=0.03490658503988659
+  --parameters parameters.json
 ```
 
 Prints JSON measurements for every selected output, including geometric
@@ -62,10 +65,33 @@ Supported `--format` values:
 - `brep`
 - `brep-binary`
 
-If `--format` is omitted, `.obj`, `.step`/`.stp`, and `.brep` extensions are
-recognized; other destinations default to binary STL. Exact formats default
-the kernel to OCCT, while mesh formats default to Manifold unless `--kernel` is
-explicit.
+If `--format` is omitted, the destination extension selects the format,
+ignoring case: `.obj` writes OBJ, `.step` and `.stp` write STEP, and `.brep`
+and `.brp` write text BREP. Any other extension, or none, writes binary STL.
+Exact formats (`step`, `brep`, `brep-binary`) default the kernel to OCCT, while
+mesh formats default to Manifold unless `--kernel` is explicit. Assembly
+outputs export only as `stl`, `stl-ascii`, or `obj`; an exact format fails with
+`EXPORT_UNSUPPORTED`, as does an exact format with `--kernel manifold`.
+
+`--output` names the output to export. A document with exactly one output may
+omit it. When the document has several outputs, `export` requires `--output`
+and otherwise fails with exit code 2 after validating the document and before
+initializing a kernel, instead of choosing one for you. Frozen v1-v6 documents
+may name an output with the empty string; select it with `--output ""` or
+`--output=`.
+
+Export failures, such as an unsupported format for the selected kernel or
+output, are written to stderr as diagnostics; a destination that cannot be
+written, such as one in a missing directory, prints a one-line
+`Output file could not be written: ...` reason. Both return exit code 1.
+
+<Note>
+  Requiring `--output` for multi-output documents and reporting export or
+  write failures without a stack trace are implemented for the unreleased 0.2
+  line, not the current 0.1.1 npm package. The 0.1.1 CLI silently exports only
+  the first output in sorted name order when `--output` is omitted, and prints
+  a JavaScript stack trace when export or writing fails.
+</Note>
 
 ## Parameter overrides
 
@@ -77,6 +103,14 @@ explicit.
   "draftAngle": 0.03490658503988659
 }
 ```
+
+<Note>
+  Inline `--parameter` overrides and the rule against mixing them with
+  `--parameters` are implemented for the unreleased 0.2 line, not the current
+  0.1.1 npm package. The 0.1.1 CLI accepts only `--parameters values.json` and
+  silently ignores `--parameter`, so the model evaluates at its default and
+  configured values without an error.
+</Note>
 
 For one-off automation, repeat `--parameter name=value` instead:
 
@@ -102,6 +136,12 @@ configuration and the document defaults.
 
 ## Input files
 
+<Note>
+  These input-file checks are implemented for the unreleased 0.2 line. The
+  0.1.1 CLI reads whole files without them and reports a missing or unreadable
+  document or parameter file with a JavaScript stack trace.
+</Note>
+
 Document and parameter files are limited to the default `maxDocumentBytes`
 ceiling of 64 MiB. The CLI rejects a larger file without buffering it, then
 decodes the bytes as strict UTF-8: malformed sequences are errors instead of
@@ -114,11 +154,21 @@ code 1.
 
 ## Strict argument handling
 
+<Note>
+  Fail-closed argument handling is implemented for the unreleased 0.2 line,
+  not the current 0.1.1 npm package. The 0.1.1 CLI ignores unknown options and
+  extra positional arguments instead of returning exit code 2, so a misspelled
+  option silently has no effect.
+</Note>
+
 Options are command-specific. Unknown or inapplicable options, extra positional
-arguments, missing values, malformed inline parameters, and duplicate
+arguments, missing or empty values, malformed inline parameters, and duplicate
 single-value options fail before document reading, kernel initialization,
 evaluation, or export. These failures write the reason and usage text to stderr
 and return exit code 2; the CLI never silently ignores a misspelled option.
+`--output` is the one option that accepts an empty value, because frozen v1-v6
+output names are arbitrary strings; an empty name that the document does not
+define fails during evaluation with `OUTPUT_MISSING` and exit code 1.
 Command-scoped help validates any supplied option values without requiring or
 reading a document. For evaluation commands, a parameter file is read and
 validated before the selected geometry kernel is initialized.
@@ -131,6 +181,11 @@ validated before the selected geometry kernel is initialized.
 | 1 | Document, evaluation, BOM, or export operation failed |
 | 2 | Command-line usage or argument error |
 
-Diagnostics are written to stderr as `SEVERITY CODE path: message`. Machine
-integrations should prefer the TypeScript API when they need complete structured
-diagnostic details rather than parsing CLI text.
+Diagnostics are written to stderr as `SEVERITY CODE path: message`. In the
+unreleased 0.2 line, control characters and the other terminal-unsafe
+characters described under [Validate](#validate) are escaped as `\uXXXX` in
+paths and messages. The same characters inside `inspect` and `bom` JSON strings
+are written as `\uXXXX` escapes, so the output still parses to the same values;
+the 0.1.1 CLI escapes only the controls that `JSON.stringify` escapes. Machine
+integrations should prefer the TypeScript API when they need complete
+structured diagnostic details rather than parsing CLI text.

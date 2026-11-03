@@ -637,6 +637,91 @@ describe("authored design-impact analysis", () => {
     );
   });
 
+  it("seeds every node and parameter key the frozen document grammar accepts", () => {
+    const cad = design("impact-arbitrary-keys");
+    const width = cad.parameter.length("width", mm(2));
+    const body = cad.box("body", { size: vec3(width, mm(3), mm(4)) });
+    const moved = cad.transform("moved", body, [
+      tf.translate(vec3(mm(1), mm(0), mm(0))),
+    ]);
+    cad.output("moved", moved);
+    // Document v1-v6 node and parameter keys are unconstrained strings, so a
+    // stored document may hold IDs that the builder grammar would not author.
+    const document = JSON.parse(
+      JSON.stringify(cad.build())
+        .replaceAll('"body"', '"node with space 🚀"')
+        .replaceAll('"width"', '"1width"'),
+    ) as DesignDocument;
+
+    const nodeReport = impactValue(
+      analyzeDesignImpact(document, { nodes: ["node with space 🚀"] }),
+    );
+    expect(nodeReport.seeds.nodes).toEqual(["node with space 🚀"]);
+    expect(nodeReport.nodes).toEqual([
+      {
+        node: "moved",
+        direct: false,
+        reasons: [{ kind: "dependency", node: "node with space 🚀" }],
+      },
+      { node: "node with space 🚀", direct: true, reasons: [{ kind: "seed" }] },
+    ]);
+    expect(nodeReport.outputs).toEqual([{ name: "moved", node: "moved" }]);
+
+    const parameterReport = impactValue(
+      analyzeDesignImpact(document, { parameters: ["1width"] }),
+    );
+    expect(parameterReport.seeds.parameters).toEqual(["1width"]);
+    expect(parameterReport.parameters).toEqual([
+      { parameter: "1width", reasons: [{ kind: "seed" }] },
+    ]);
+    expect(parameterReport.nodes.map(({ node }) => node)).toEqual([
+      "moved",
+      "node with space 🚀",
+    ]);
+
+    const emptyKeyDocument = JSON.parse(
+      JSON.stringify(cad.build()).replaceAll('"body"', '""'),
+    ) as DesignDocument;
+    expect(
+      impactValue(analyzeDesignImpact(emptyKeyDocument, { nodes: [""] })).seeds
+        .nodes,
+    ).toEqual([""]);
+  });
+
+  it("keeps parameter dependency edges distinct when keys contain separators", () => {
+    const cad = design("impact-edge-keys");
+    const ab = cad.parameter.length("keyab", mm(1));
+    const a = cad.parameter.length("keya", mm(2));
+    const c = cad.parameter.length("keyc", ab.mul(2));
+    const bc = cad.parameter.length("keybc", a.mul(3));
+    cad.output("body", cad.box("body", { size: vec3(c, bc, mm(1)) }));
+    // The edges "a\0b" -> "c" and "a" -> "b\0c" shared one separator-joined
+    // key, so the second edge and its consumer's reason were dropped.
+    const document = JSON.parse(
+      JSON.stringify(cad.build())
+        .replaceAll('"keyab"', JSON.stringify("a\u0000b"))
+        .replaceAll('"keya"', '"a"')
+        .replaceAll('"keyc"', '"c"')
+        .replaceAll('"keybc"', JSON.stringify("b\u0000c")),
+    ) as DesignDocument;
+
+    const report = impactValue(
+      analyzeDesignImpact(document, { parameters: ["a\u0000b", "a"] }),
+    );
+    expect(report.parameters).toEqual([
+      { parameter: "a", reasons: [{ kind: "seed" }] },
+      { parameter: "a\u0000b", reasons: [{ kind: "seed" }] },
+      {
+        parameter: "b\u0000c",
+        reasons: [{ kind: "dependency", parameter: "a" }],
+      },
+      {
+        parameter: "c",
+        reasons: [{ kind: "dependency", parameter: "a\u0000b" }],
+      },
+    ]);
+  });
+
   it("rejects empty, malformed, sparse, and unknown change seeds", () => {
     const document = authoredFixture();
     expect(analyzeDesignImpact(document, {}).diagnostics[0]).toMatchObject({
@@ -704,6 +789,14 @@ describe("authored design-impact analysis", () => {
     expect(
       analyzeDesignImpact(document, { nodes: ["not a valid id"] })
         .diagnostics[0],
+    ).toMatchObject({ code: "REFERENCE_MISSING", path: "/changes/nodes/0" });
+    expect(
+      analyzeDesignImpact(document, { nodes: [""] }).diagnostics[0],
+    ).toMatchObject({ code: "REFERENCE_MISSING", path: "/changes/nodes/0" });
+    expect(
+      analyzeDesignImpact(document, {
+        nodes: [7],
+      } as unknown as Parameters<typeof analyzeDesignImpact>[1]).diagnostics[0],
     ).toMatchObject({ code: "IR_INVALID", path: "/changes/nodes/0" });
 
     let lengthReads = 0;

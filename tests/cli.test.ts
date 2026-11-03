@@ -1156,4 +1156,316 @@ describe("CLI", () => {
       await rm(directory, { recursive: true, force: true });
     }
   }, 15_000);
+
+  it("escapes control characters taken from untrusted documents", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "invariantcad-cli-"));
+    try {
+      const cad = design("placeholder");
+      cad.output(
+        "solid",
+        cad.box("solid", { size: vec3(mm(1), mm(1), mm(1)) }),
+      );
+      const hostileName =
+        "evil\u001b[2J\u001b]0;pwned\u0007\nValid InvariantCAD v6 document: other\u009b\u2028\u202e\u2066";
+      const documentValue = { ...cad.build(), name: hostileName };
+      const documentPath = join(directory, "hostile.json");
+      await writeFile(documentPath, stringifyDocument(documentValue));
+
+      const validated = invokeCli(["validate", documentPath]);
+      expect(validated.stderr).toBe("");
+      expect(validated.status).toBe(0);
+      expect(validated.stdout).toBe(
+        "Valid InvariantCAD v6 document: evil\\u001b[2J\\u001b]0;pwned\\u0007\\u000aValid InvariantCAD v6 document: other\\u009b\\u2028\\u202e\\u2066\n",
+      );
+
+      const brokenPath = join(directory, "broken.json");
+      const broken = JSON.parse(stringifyDocument(cad.build())) as {
+        outputs: Record<string, unknown>;
+      };
+      broken.outputs["bad\u001b]0;x\u0007\nINFO FORGED"] = {
+        node: "missing\u001b[2J",
+        kind: "solid",
+      };
+      await writeFile(brokenPath, JSON.stringify(broken));
+      const rejected = invokeCli(["validate", brokenPath]);
+      expect(rejected.status).toBe(1);
+      expect(rejected.stdout).toBe("");
+      expect(rejected.stderr).toContain("\\u001b");
+      expect(rejected.stderr).not.toMatch(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/u);
+      for (const line of rejected.stderr.trimEnd().split("\n")) {
+        expect(line).toMatch(/^ERROR [A-Z_]+/u);
+      }
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("escapes terminal controls inside inspect and bom JSON strings", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "invariantcad-cli-"));
+    try {
+      const cad = design("cli-json-controls");
+      cad.output(
+        "item",
+        cad.part("item", cad.box("solid", { size: vec3(mm(1), mm(2), mm(3)) })),
+      );
+      // JSON.stringify escapes C0 controls itself but leaves DEL, C1 controls,
+      // line and paragraph separators, and bidi controls raw.
+      const hostile = "item\u007f\u009b\u2028\u202e\u2066";
+      const documentPath = join(directory, "hostile.json");
+      await writeFile(
+        documentPath,
+        stringifyDocument(cad.build()).replaceAll(
+          '"item"',
+          JSON.stringify(hostile),
+        ),
+      );
+      const unsafe = /[\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/u;
+
+      const inspected = invokeCli(["inspect", documentPath]);
+      expect(inspected.stderr).toBe("");
+      expect(inspected.status).toBe(0);
+      expect(inspected.stdout).not.toMatch(unsafe);
+      expect(inspected.stdout).toContain(
+        '"item\\u007f\\u009b\\u2028\\u202e\\u2066": {',
+      );
+      expect(
+        Object.keys(JSON.parse(inspected.stdout) as Record<string, unknown>),
+      ).toEqual([hostile]);
+
+      const bom = invokeCli(["bom", documentPath, "--output", hostile]);
+      expect(bom.stderr).toBe("");
+      expect(bom.status).toBe(0);
+      expect(bom.stdout).not.toMatch(unsafe);
+      expect(JSON.parse(bom.stdout)).toMatchObject({
+        output: hostile,
+        items: [{ partNode: hostile, quantity: 1 }],
+      });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("reports export and write failures as diagnostics instead of stack traces", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "invariantcad-cli-"));
+    try {
+      const cad = design("cli-export-failures");
+      const solid = cad.box("solid", { size: vec3(mm(1), mm(2), mm(3)) });
+      const part = cad.part("part", solid);
+      const product = cad.assembly("product", (assembly) => {
+        assembly.instance("left", part);
+        assembly.instance("right", part, {
+          placement: [tf.translate(vec3(mm(5), mm(0), mm(0)))],
+        });
+      });
+      cad.output("solid", solid).output("product", product);
+      const documentPath = join(directory, "model.json");
+      await writeFile(documentPath, stringifyDocument(cad.build()));
+
+      const cases = [
+        {
+          label: "assembly to an exact format",
+          arguments: ["--output", "product", "--to", "product.step"],
+          message:
+            "ERROR EXPORT_UNSUPPORTED: Assembly 'product' cannot be exported as step yet",
+        },
+        {
+          label: "exact format from the mesh kernel",
+          arguments: [
+            "--output",
+            "solid",
+            "--to",
+            "solid.step",
+            "--kernel",
+            "manifold",
+          ],
+          message: "ERROR EXPORT_UNSUPPORTED",
+        },
+        {
+          label: "unwritable destination",
+          arguments: [
+            "--output",
+            "solid",
+            "--to",
+            join("missing-directory", "solid.stl"),
+          ],
+          message: "Output file could not be written: ENOENT",
+        },
+      ] as const;
+      for (const testCase of cases) {
+        const result = invokeCli([
+          "export",
+          documentPath,
+          ...testCase.arguments.map((argument) =>
+            argument.includes(".") ? join(directory, argument) : argument,
+          ),
+        ]);
+        expect(result.status, testCase.label).toBe(1);
+        expect(result.stdout, testCase.label).toBe("");
+        expect(result.stderr, testCase.label).toContain(testCase.message);
+        expect(result.stderr, testCase.label).not.toContain("    at ");
+        expect(result.stderr.trim().split("\n"), testCase.label).toHaveLength(
+          1,
+        );
+      }
+      await expect(stat(join(directory, "product.step"))).rejects.toThrow();
+      await expect(stat(join(directory, "solid.step"))).rejects.toThrow();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it("requires --output to export a document with several outputs", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "invariantcad-cli-"));
+    try {
+      const cad = design("cli-export-selection");
+      cad.output(
+        "zeta",
+        cad.box("zeta", { size: vec3(mm(100), mm(1), mm(1)) }),
+      );
+      cad.output(
+        "alpha",
+        cad.box("alpha", { size: vec3(mm(1), mm(1), mm(1)) }),
+      );
+      const documentPath = join(directory, "model.json");
+      await writeFile(documentPath, stringifyDocument(cad.build()));
+      const outputPath = join(directory, "model.obj");
+
+      const ambiguous = invokeCli(["export", documentPath, "--to", outputPath]);
+      expect(ambiguous.status).toBe(2);
+      expect(ambiguous.stdout).toBe("");
+      expect(ambiguous.stderr).toContain(
+        "export requires --output <name> because the document has 2 outputs",
+      );
+      expect(ambiguous.stderr).toContain("Usage:");
+      await expect(stat(outputPath)).rejects.toThrow();
+
+      const selected = invokeCli([
+        "export",
+        documentPath,
+        "--output",
+        "zeta",
+        "--to",
+        outputPath,
+      ]);
+      expect(selected.stderr).toBe("");
+      expect(selected.status).toBe(0);
+      const vertexXs = (await readFile(outputPath, "utf8"))
+        .split("\n")
+        .filter((line) => line.startsWith("v "))
+        .map((line) => Number(line.split(/\s+/)[1]));
+      expect(Math.max(...vertexXs)).toBeCloseTo(100, 10);
+
+      const empty = design("cli-export-empty").build();
+      const emptyPath = join(directory, "empty.json");
+      await writeFile(emptyPath, stringifyDocument(empty));
+      const nothing = invokeCli(["export", emptyPath, "--to", outputPath]);
+      expect(nothing.status).toBe(1);
+      expect(nothing.stdout).toBe("");
+      expect(nothing.stderr).toBe("Document has no outputs to export\n");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("selects an output named by the empty string with --output", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "invariantcad-cli-"));
+    try {
+      const cad = design("cli-empty-output-name");
+      cad.output(
+        "wide",
+        cad.box("wide", { size: vec3(mm(100), mm(1), mm(1)) }),
+      );
+      cad.output(
+        "small",
+        cad.box("small", { size: vec3(mm(1), mm(1), mm(1)) }),
+      );
+      // Frozen v1-v6 output names are arbitrary strings, including "".
+      const document = JSON.parse(stringifyDocument(cad.build())) as {
+        outputs: Record<string, unknown>;
+      };
+      document.outputs = {
+        "": document.outputs.wide,
+        small: document.outputs.small,
+      };
+      const documentPath = join(directory, "model.json");
+      await writeFile(documentPath, JSON.stringify(document));
+
+      const ambiguous = invokeCli([
+        "export",
+        documentPath,
+        "--to",
+        join(directory, "ambiguous.obj"),
+      ]);
+      expect(ambiguous.status).toBe(2);
+      expect(ambiguous.stderr).toContain("export requires --output <name>");
+
+      for (const selection of [["--output", ""], ["--output="]]) {
+        const outputPath = join(directory, "empty-name.obj");
+        await rm(outputPath, { force: true });
+        const result = invokeCli([
+          "export",
+          documentPath,
+          ...selection,
+          "--to",
+          outputPath,
+        ]);
+        expect(result.stderr, selection.join(" ")).toBe("");
+        expect(result.status, selection.join(" ")).toBe(0);
+        const vertexXs = (await readFile(outputPath, "utf8"))
+          .split("\n")
+          .filter((line) => line.startsWith("v "))
+          .map((line) => Number(line.split(/\s+/)[1]));
+        expect(Math.max(...vertexXs), selection.join(" ")).toBeCloseTo(100, 10);
+      }
+
+      const inspected = invokeCli(["inspect", documentPath, "--output="]);
+      expect(inspected.stderr).toBe("");
+      expect(inspected.status).toBe(0);
+      expect(Object.keys(JSON.parse(inspected.stdout) as object)).toEqual([""]);
+
+      const single = design("cli-no-empty-output-name");
+      single.output(
+        "body",
+        single.box("body", { size: vec3(mm(1), mm(1), mm(1)) }),
+      );
+      const singlePath = join(directory, "single.json");
+      await writeFile(singlePath, stringifyDocument(single.build()));
+      const unknown = invokeCli(["inspect", singlePath, "--output", ""]);
+      expect(unknown.status).toBe(1);
+      expect(unknown.stdout).toBe("");
+      expect(unknown.stderr).toContain("ERROR OUTPUT_MISSING");
+      expect(unknown.stderr).not.toContain("Usage:");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it("infers export formats from case-insensitive extensions and the .brp alias", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "invariantcad-cli-"));
+    try {
+      const cad = design("cli-extensions");
+      cad.output(
+        "solid",
+        cad.box("solid", { size: vec3(mm(2), mm(3), mm(4)) }),
+      );
+      const documentPath = join(directory, "model.json");
+      await writeFile(documentPath, stringifyDocument(cad.build()));
+      const cases = [
+        ["model.STP", "ISO-10303-21"],
+        ["model.brp", "CASCADE Topology"],
+        ["model.Brep", "CASCADE Topology"],
+        ["model.OBJ", "\nv "],
+      ] as const;
+      for (const [name, marker] of cases) {
+        const outputPath = join(directory, name);
+        const result = invokeCli(["export", documentPath, "--to", outputPath]);
+        expect(result.stderr, name).toBe("");
+        expect(result.status, name).toBe(0);
+        expect(result.stdout.trim(), name).toBe(`Wrote ${outputPath}`);
+        expect(await readFile(outputPath, "utf8"), name).toContain(marker);
+      }
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, 60_000);
 });
