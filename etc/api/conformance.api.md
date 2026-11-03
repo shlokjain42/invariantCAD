@@ -1696,9 +1696,9 @@ interface VolumetricMassProperties {
 
 // Warnings were encountered during analysis:
 //
-// dist/conformance.d.ts:33:9 - (ae-forgotten-export) The symbol "GeometryKernel" needs to be exported by the entry point conformance.d.ts
-// dist/core/result.d.ts:21:5 - (ae-forgotten-export) The symbol "Diagnostic" needs to be exported by the entry point conformance.d.ts
-// dist/kernel.d.ts:233:5 - (ae-forgotten-export) The symbol "KernelDocumentBodyLengthUnit" needs to be exported by the entry point conformance.d.ts
+// src/conformance.ts:129:9 - (ae-forgotten-export) The symbol "GeometryKernel" needs to be exported by the entry point conformance.d.ts
+// src/core/result.ts:75:7 - (ae-forgotten-export) The symbol "Diagnostic" needs to be exported by the entry point conformance.d.ts
+// src/kernel.ts:363:7 - (ae-forgotten-export) The symbol "KernelDocumentBodyLengthUnit" needs to be exported by the entry point conformance.d.ts
 
 // (No @packageDocumentation comment for this package)
 
