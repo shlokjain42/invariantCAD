@@ -2,6 +2,63 @@
 
 ## [Unreleased]
 
+- Manifold `measure()` no longer rejects valid slender, thin-walled, rotated, or
+  widely separated geometry. Its check that the Float32 mesh volume matches the
+  native volume now allows for Float32 rounding of the mesh positions, so
+  `evaluate()` on the default kernel no longer fails with `KERNEL_ERROR`
+  ("Manifold mesh and native volume disagree beyond the measurement tolerance")
+  for such documents, a failure that also affected 0.1.1. Center of mass and
+  inertia are still integrated over the Float32 mesh, so their precision is
+  relative to the shape's bounding-box size.
+- `principalInertia` no longer throws "Principal inertia decomposition did not
+  converge" for valid tensors whose remaining off-diagonal entries are each
+  below the solver threshold but whose combined norm is just above it. Slender
+  parts and ordinary blocks analyzed about distant points no longer fail
+  `physicalMassProperties()` with `MASS_PROPERTIES_INVALID` or crash
+  `invariantcad inspect`. Tensors that converged before return identical
+  results.
+- `radiusOfGyrationAboutAxis` and `principalRadiiOfGyration` now validate the
+  axis and the degeneracy options before returning `null` for zero-weight
+  properties, so an invalid argument throws the same `RangeError` as in
+  `momentOfInertiaAboutAxis` and `principalInertia` instead of being silently
+  accepted.
+- `EvaluatedAssembly.measure()` now takes surface area, bounding box, and
+  tolerance from the occurrence kernel measurements instead of the merged
+  Float32 default tessellation and a literal tolerance of 0. Behavior change
+  from 0.1.1: on OCCT, a single unplaced occurrence now reports exactly its
+  part's area, bounds, and tolerance, where it previously reported about 0.3%
+  less area for curved parts and bounds that left out real material. Area is
+  the kernel area times the squared scale under rigid, mirrored, and uniformly
+  scaled placements; only nonuniformly scaled or sheared occurrences use their
+  placed default tessellation. Bounds enclose every placed kernel bounding box:
+  exact for axis-aligned placements, and possibly larger than the tight box for
+  rotations that are not quarter turns. `tolerance` is the largest occurrence
+  kernel tolerance times its placement's magnification.
+- Manifold `measure()` of an empty result (kept with `evaluate(document, {
+  allowEmpty: true })`) now returns zero volume and area, a `null` center, a
+  zero tensor, a zero bounding box at the origin, tolerance `0`, and genus `0`.
+  The zero bounding box matches the OCCT kernel, which keeps its modeling
+  tolerance and a `null` genus for an empty result. Previously the bounds were
+  inverted infinities that serialized to `null` and the tolerance was `-1`.
+- A failed Manifold runtime initialization, such as a wrong `wasmUrl`, a 404, or
+  a network error, is no longer cached for the life of the page, worker, or
+  process. A later `createEvaluator()` or `createManifoldKernel()` can retry
+  with the same or a corrected URL instead of replaying the old error or
+  refusing the corrected URL as "already initialized with a different WASM URL".
+  Only a successful initialization fixes the URL for the realm, so supply
+  `wasmUrl` on the first initialization in each page, worker, or process.
+- Each `ManifoldKernel` instance now accepts only the shapes it created, as the
+  OCCT kernel already did. Behavior change from 0.1.1: passing another
+  instance's shape to `measure`, `mesh`, `status`, `transform`, `boolean`, or
+  `disposeShape` throws a `TypeError`, where it previously operated on or freed
+  that shape and broke its owner.
+- `ManifoldKernel.transform(shape, [])` now returns a fresh, independently owned
+  shape instead of a second wrapper around the input's native Manifold.
+  Disposing either shape could previously leave the other dangling and make
+  `kernel.dispose()` throw and leak every other live shape. `kernel.dispose()`
+  now releases every live shape before rethrowing the first release failure, or
+  an `AggregateError` for several, and a failed transform deletes its
+  intermediate result.
 - Breaking for published behavior: the general v1-v6 document APIs no longer
   accept Document v7, including imported-body JSON and mixed pairs such as a v7
   schema with another version. validateDocument, parseDocument,
