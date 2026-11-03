@@ -1240,6 +1240,61 @@ describe("semantic topology selections", () => {
     });
   });
 
+  it("reports structurally malformed selector IR as a selector error, not a kernel fault", () => {
+    const context: TopologyResolutionContext = {
+      evaluate: (expression) =>
+        expression.op === "literal" ? expression.value : Number.NaN,
+      node: "rounded",
+      path: "/nodes/rounded/edges",
+    };
+    const cardinality = { min: 1, max: 1 };
+    const malformed = {
+      "and without queries": { topology: "edge", query: { op: "and" }, cardinality },
+      "or without queries": { topology: "edge", query: { op: "or" }, cardinality },
+      "not without query": { topology: "edge", query: { op: "not" }, cardinality },
+      "missing query": { topology: "edge", cardinality },
+      "adjacentTo without selection": {
+        topology: "edge",
+        query: { op: "adjacentTo" },
+        cardinality,
+      },
+      "nested missing query": {
+        topology: "edge",
+        query: { op: "adjacentTo", selection: { topology: "face", cardinality } },
+        cardinality,
+      },
+    } as const;
+    for (const [label, selection] of Object.entries(malformed)) {
+      for (const run of [resolveTopologySelection, explainTopologySelection]) {
+        const result = run(
+          selection as unknown as TopologySelectionIR<"edge">,
+          snapshot(),
+          context,
+        );
+        expect(result.ok, label).toBe(false);
+        expect(result.diagnostics, label).toHaveLength(1);
+        expect(result.diagnostics[0], label).toMatchObject({
+          code: "TOPOLOGY_SELECTOR_INVALID",
+          severity: "error",
+          node: "rounded",
+          path: "/nodes/rounded/edges",
+        });
+        expect(result.diagnostics[0]?.details, label).toBeUndefined();
+      }
+    }
+
+    // A malformed snapshot behind a well-formed selector is still the kernel's fault.
+    const duplicate = resolveTopologySelection(
+      topology.edges.all().atLeast(1).ir,
+      snapshot([verticalEdges[0]!, verticalEdges[0]!]),
+      context,
+    );
+    expect(duplicate.diagnostics[0]).toMatchObject({
+      code: "KERNEL_ERROR",
+      details: { protocolViolation: true },
+    });
+  });
+
   it("distinguishes ambiguous, missing, incomplete-history, and invalid snapshots", () => {
     const context = {
       evaluate: (expression: any): number => expression.value,

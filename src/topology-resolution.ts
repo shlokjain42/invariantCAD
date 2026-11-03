@@ -1079,9 +1079,12 @@ function runTopologySelection<K extends TopologyKind, T>(
   context: TopologyResolutionContext,
   project: (analysis: TopologySelectionAnalysis<K>) => CadResult<T>,
 ): CadResult<T> {
-  let snapshotValidated = false;
+  // Only reading the kernel snapshot can be a kernel protocol violation. A
+  // selector that cannot be walked is caller input in every phase.
+  let readingSnapshot = false;
   try {
     const requirements = topologySelectionRequirements(selection);
+    readingSnapshot = true;
     const profiles =
       requirements.persistentReferences.length > 0 &&
       context.persistent !== undefined
@@ -1155,7 +1158,7 @@ function runTopologySelection<K extends TopologyKind, T>(
       // A persistent atom without a context is rejected at its exact query path.
       persistent = undefined;
     }
-    snapshotValidated = true;
+    readingSnapshot = false;
     return project(
       analyzeSelectionOrThrow(
         selection,
@@ -1177,13 +1180,13 @@ function runTopologySelection<K extends TopologyKind, T>(
             },
           })
         : diagnostic(
-            snapshotValidated ? "TOPOLOGY_SELECTOR_INVALID" : "KERNEL_ERROR",
+            readingSnapshot ? "KERNEL_ERROR" : "TOPOLOGY_SELECTOR_INVALID",
             safeErrorMessage(error, "Topology selector input could not be read"),
             {
               ...location(context),
-              ...(snapshotValidated
-                ? {}
-                : { details: { protocolViolation: true } }),
+              ...(readingSnapshot
+                ? { details: { protocolViolation: true } }
+                : {}),
             },
           );
     return { ok: false, diagnostics: [value] };
