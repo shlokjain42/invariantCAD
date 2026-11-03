@@ -184,6 +184,8 @@ interface HashMeterV2 {
 interface TopologyWorkMeterV2 {
   work: number;
   readonly limit: number;
+  /** Work total at the most recent interval realm-integrity check. */
+  realmCheckedAt: number;
 }
 
 interface ResolvedFeatureContextV2 {
@@ -870,13 +872,21 @@ function resolvedExpression(
   return value;
 }
 
+/**
+ * Topology work runs in synchronous stretches that begin after a realm check
+ * (per contextual state and per topology-reference entry, and around every
+ * digest await), so no foreign code can run inside them. A full realm scan per
+ * unit cost far more than the work it metered; the interval scan keeps a
+ * bounded tripwire without making `maxTopologyWork` a CPU-time multiplier.
+ */
+const TOPOLOGY_WORK_REALM_CHECK_INTERVAL = 1024;
+
 function consumeTopologyWork(
   meter: TopologyWorkMeterV2,
   amount: number,
   signal: AbortSignal | undefined,
 ): void {
   throwIfAborted(signal);
-  throwIfRealmCompromised();
   if (amount > meter.limit - meter.work) {
     throw limitFailure(
       "maxTopologyWork",
@@ -885,6 +895,13 @@ function consumeTopologyWork(
     );
   }
   meter.work += amount;
+  if (
+    meter.work - meter.realmCheckedAt >=
+    TOPOLOGY_WORK_REALM_CHECK_INTERVAL
+  ) {
+    meter.realmCheckedAt = meter.work;
+    throwIfRealmCompromised();
+  }
 }
 
 function accountTopologyValue(
@@ -1242,6 +1259,8 @@ function canonicalTopologyReferenceEntry(
   meter: TopologyWorkMeterV2,
   signal: AbortSignal | undefined,
 ): TopologyReferenceEntryIRV7 {
+  // Later entries run after a digest await resumes, before the next digest.
+  throwIfRealmCompromised();
   consumeTopologyWork(meter, 1, signal);
   const variants = entry.variants.map((variant) => {
     accountTopologyValue(variant, meter, signal);
@@ -1787,6 +1806,7 @@ export async function hashDesignFeaturesV2(
   };
   const topologyMeter: TopologyWorkMeterV2 = {
     work: 0,
+    realmCheckedAt: 0,
     limit: limits.maxTopologyWork,
   };
   let cursor = 0;

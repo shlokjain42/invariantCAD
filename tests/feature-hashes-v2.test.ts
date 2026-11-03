@@ -1111,6 +1111,77 @@ describe("document-v7 feature hashes protocol v2", () => {
     expect(exact.ok, JSON.stringify(exact.diagnostics)).toBe(true);
   });
 
+  it("meters selector work without a realm scan per topology-work unit", async () => {
+    const atoms = 5_000;
+    const legacy = {
+      schema: DOCUMENT_SCHEMA_V6,
+      version: 6,
+      name: "feature-hash-v2-topology-work-cost",
+      units: { length: "mm", angle: "rad" },
+      parameters: {},
+      nodes: {
+        body: {
+          kind: "box",
+          size: [length(10), length(10), length(10)],
+          center: false,
+        },
+        treated: {
+          kind: "fillet",
+          input: { node: "body", kind: "solid" },
+          edges: {
+            topology: "edge",
+            query: {
+              op: "or",
+              queries: Array.from({ length: atoms }, (_, index) => ({
+                op: "radius",
+                value: length(1 + index / 1_000),
+                tolerance: length(1e-6),
+              })),
+            },
+            cardinality: { min: 1, max: 1 },
+          },
+          radius: length(0.1),
+        },
+      },
+      outputs: { treated: { node: "treated", kind: "solid" } },
+    } as unknown as DesignDocument;
+    const migrated = migrateDocumentToV7(legacy);
+    expect(migrated.ok, JSON.stringify(migrated.diagnostics)).toBe(true);
+    if (!migrated.ok) throw new Error("Expected v7 migration");
+
+    // The flattened `or` selector costs one unit per query node plus one per
+    // reference-collection step: 2 * atoms + 2 units in total.
+    const exhausted = await hashDesignFeaturesV2(migrated.value, {
+      limits: { maxTopologyWork: 2 * atoms + 1 },
+    });
+    expect(exhausted.ok).toBe(false);
+    if (!exhausted.ok) {
+      expect(exhausted.diagnostics[0]?.details).toMatchObject({
+        resource: "maxTopologyWork",
+        limit: 2 * atoms + 1,
+      });
+    }
+
+    // Hashing first parses the same document, so the strict v7 parse is the
+    // baseline. A full realm-integrity scan per unit made hashing about six
+    // times the parse cost here; amortized scans keep it near the parse cost.
+    // The fastest of three runs filters out transient host load.
+    let fastestParse = Number.POSITIVE_INFINITY;
+    let fastestHash = Number.POSITIVE_INFINITY;
+    for (let run = 0; run < 3; run += 1) {
+      let started = performance.now();
+      expect(parseDocumentValueV7(migrated.value).ok).toBe(true);
+      fastestParse = Math.min(fastestParse, performance.now() - started);
+      started = performance.now();
+      const report = await hashDesignFeaturesV2(migrated.value, {
+        limits: { maxTopologyWork: 2 * atoms + 2 },
+      });
+      fastestHash = Math.min(fastestHash, performance.now() - started);
+      expect(report.ok, JSON.stringify(report.diagnostics)).toBe(true);
+    }
+    expect(fastestHash).toBeLessThan(2 * fastestParse + 250);
+  }, 60_000);
+
   it(
     "enforces the exact cumulative canonical-byte boundary and in-flight cancellation",
     async () => {
