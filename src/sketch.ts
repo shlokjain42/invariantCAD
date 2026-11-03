@@ -240,7 +240,7 @@ export class SketchBuilder {
   private addEntity(id: string, entity: SketchEntityIR): EntityId {
     this.assertOpen();
     const key = entityId(id);
-    if (this.entities[key] !== undefined || this.constraints[key] !== undefined) {
+    if (Object.hasOwn(this.entities, key) || Object.hasOwn(this.constraints, key)) {
       throw new TypeError(`Duplicate sketch ID '${id}'`);
     }
     const record = deepFreeze(entity);
@@ -252,7 +252,7 @@ export class SketchBuilder {
   private addConstraint(id: string, constraint: SketchConstraintIR): void {
     this.assertOpen();
     const key = entityId(id);
-    if (this.entities[key] !== undefined || this.constraints[key] !== undefined) {
+    if (Object.hasOwn(this.entities, key) || Object.hasOwn(this.constraints, key)) {
       throw new TypeError(`Duplicate sketch ID '${id}'`);
     }
     const record = deepFreeze(constraint);

@@ -189,7 +189,9 @@ function validateExpression(
       }
       break;
     case "parameter": {
-      const parameter = document.parameters[expression.id];
+      const parameter = Object.hasOwn(document.parameters, expression.id)
+        ? document.parameters[expression.id]
+        : undefined;
       if (parameter === undefined) {
         diagnostics.push(
           diagnostic(

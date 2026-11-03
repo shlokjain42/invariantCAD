@@ -15395,7 +15395,9 @@ export class Evaluator {
       }
       const rawOutputs = new Map<string, NodeValue>();
       for (const name of requested) {
-        const reference = document.outputs[name];
+        const reference = Object.hasOwn(document.outputs, name)
+          ? document.outputs[name]
+          : undefined;
         if (reference === undefined) {
           throw new EvaluationFailure(
             diagnostic("OUTPUT_MISSING", `Unknown output '${name}'`, {
