@@ -10,7 +10,7 @@ Comprehensive, type-safe CAD-as-code for TypeScript.
 
 InvariantCAD represents a design as immutable, versioned JSON and evaluates it through replaceable geometry and sketch-solver backends. The public API never exposes WASM pointers or kernel-specific objects.
 
-> **Project status:** `0.1.1` is the current public foundation release. It includes named definition-scoped configurations and variant-aware BOMs, kernel-independent effective-feature Merkle hashes, a strict kernel-shape artifact/cache protocol foundation with a canonical semantic-observation audit surface, an exact OpenCascade B-Rep backend, analytic sketch-profile transfer, STEP/BREP exchange, bounded ruled solid lofts, explicit 3D polyline, circular-arc, and ordered line/arc composite paths with bounded exact solid sweeps, closed semantic face/edge roles through those bounded sweeps, sketch-boundary provenance, document-owned persistent face/edge/vertex selectors, exact selector-driven fillets and equal-distance chamfers, exact face-selected inward/outward shells, exact whole-solid inward/outward offsets, atomic semantic-face draft, and owned exact multi-input Boolean, fillet/chamfer, and shell/offset evolution when the matched InvariantCAD-owned OCCT facade is loaded. No shipped geometry backend advertises the artifact codec yet, the semantic observer confers no eligibility, and the evaluator does not consume a cross-run cache. Complete topology history outside those owned feature slices is still under active development; see the [support matrix](#support-matrix) and [roadmap](/roadmap).
+> **Project status:** `0.1.1` is the current public foundation release. It includes named definition-scoped configurations and variant-aware BOMs, kernel-independent effective-feature Merkle hashes, a strict kernel-shape artifact/cache protocol foundation with a canonical semantic-observation audit surface, an exact OpenCascade B-Rep backend, analytic sketch-profile transfer, STEP/BREP exchange, bounded ruled solid lofts, explicit 3D polyline, circular-arc, and ordered line/arc composite paths with bounded exact solid sweeps, closed semantic face/edge roles through those bounded sweeps, sketch-boundary provenance, document-owned persistent face/edge/vertex selectors, exact selector-driven fillets and equal-distance chamfers, exact face-selected inward/outward shells, exact whole-solid inward/outward offsets, atomic semantic-face draft, and owned exact multi-input Boolean, fillet/chamfer, and shell/offset evolution when the matched InvariantCAD-owned OCCT facade is loaded. No shipped geometry backend advertises the artifact codec yet, the semantic observer confers no eligibility, and the evaluator does not consume a cross-run cache. Complete topology history outside those owned feature slices is still under active development; see the [support matrix](#support-matrix) and [roadmap](/roadmap). Behavior that exists only on `main` is marked as unreleased 0.2 wherever it appears below. The general Document v7 grammar and the OCCT artifact candidate are repository-staged and are not exported from any package entry point.
 
 <Note>
   This is the exhaustive single-page reference retained for readers who prefer
@@ -29,9 +29,9 @@ browsers. Release CI executes a production Vite bundle in Chromium and loads
 both the Manifold and stock OpenCascade WebAssembly backends through their
 public package entry points.
 
-The npm package contains the TypeScript API, a pinned standalone Manifold core
-runtime, and stock `occt-wasm`; it does not contain the InvariantCAD-owned facade runtime or its
-local compliance bundle. No facade bundle has been published to npm yet, and
+The npm package contains the TypeScript API and a pinned standalone Manifold
+core runtime, and it depends on stock `occt-wasm` 3.8.0; it does not contain
+the InvariantCAD-owned facade runtime or its local compliance bundle. No facade bundle has been published to npm yet, and
 InvariantCAD never downloads one implicitly.
 
 ## Quick start
