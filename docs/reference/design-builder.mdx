@@ -12,8 +12,11 @@ builder as owner. The `AssemblyBuilder` and `ConfigurationBuilder` passed to
 `assembly(...)` and `configuration(...)` callbacks close when the callback
 returns or throws, so later calls through an escaped builder throw instead of
 being silently dropped. An assembly stores only the instances that
-`instance(...)` added, and a configuration ID stays reserved while its callback
-runs, so a nested `configuration(...)` call with the same ID throws.
+`instance(...)` added, and a sketch stores only the entity and constraint
+records its `SketchBuilder` methods placed in `entities` or `constraints`,
+each in the same map and under the same key, so a raw record or a record
+moved between the two maps throws. A configuration ID stays reserved while its
+callback runs, so a nested `configuration(...)` call with the same ID throws.
 
 The builder copies caller-supplied metadata, transform operations, assembly
 placements, and topology selections into its own records, so changing those
@@ -544,6 +547,10 @@ Methods throw `TypeError` or `RangeError` for invalid direct calls, including:
 - metadata that is not plain JSON data, such as non-finite numbers, `Map`,
   `Set`, `Date`, or class instances, functions, BigInts, sparse arrays,
   accessor properties, or cycles
+- metadata with more than the default `maxStructuralValues` of 1,000,000
+  values or nested deeper than the default `maxNestingDepth` of 128, counting
+  a shared subtree in full, at its own depth, everywhere it occurs, as the
+  writer and parser do
 - sparse or accessor-backed lists, such as `polylinePath` points,
   `compositePath` segments, loft profiles, Boolean tools, transform
   operations, sketch `polyline` points, `loop` edges, and profile holes
@@ -551,9 +558,10 @@ Methods throw `TypeError` or `RangeError` for invalid direct calls, including:
   edge uses, and topology selections whose fields are accessors, inherited, or
   not held by a plain record
 - cyclic topology selections, selections with more query nodes than the
-  default `maxTopologyQueryNodes` limit of 100,000, counting each aliased
-  occurrence as the parser does, and selections nested deeper than the default
-  `maxNestingDepth` of 128
+  default `maxTopologyQueryNodes` limit of 100,000 or more structural values
+  than the default `maxStructuralValues` of 1,000,000, and selections nested
+  deeper than the default `maxNestingDepth` of 128; like the parser, these
+  limits count a shared query in full, at its own depth, everywhere it occurs
 - references targeting the wrong direct solid
 
 These failures indicate an invalid model definition or unvalidated UI input,

@@ -140,4 +140,6 @@ inside one closed document. Raw expression IR passed through
 when that ID names a parameter it already defines, with the same dimension.
 Raw IR must be plain JSON records and arrays whose fields are own enumerable
 data properties. Accessors, inherited fields, and class instances throw
-`TypeError` without running any accessor.
+`TypeError` without running any accessor. A record may hold no symbol or
+non-enumerable fields, and a `min` or `max` value array may hold nothing but
+its operands, because the freeze would not reach such extra data.
