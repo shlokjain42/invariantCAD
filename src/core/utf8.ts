@@ -7,11 +7,18 @@ const stringCharCodeAt = Function.prototype.call.bind(
   String.prototype.charCodeAt,
 ) as (value: string, index: number) => number;
 const textEncoder = new TextEncoder();
-const fatalTextDecoder = new TextDecoder("utf-8", { fatal: true });
+// ignoreBOM keeps a leading U+FEFF in the text. The default would strip it,
+// so canonical round trips would fail and BOM-prefixed document bytes would
+// be admitted although every JSON text path and the CLI reject them.
+const fatalTextDecoder = new TextDecoder("utf-8", {
+  fatal: true,
+  ignoreBOM: true,
+});
 const fatalTextDecoderDecode = TextDecoder.prototype.decode;
 
 /**
- * Decodes one complete UTF-8 payload without replacement characters.
+ * Decodes one complete UTF-8 payload without replacement characters. A
+ * leading byte-order mark is kept as U+FEFF rather than stripped.
  *
  * Callers that own protocol byte ceilings must check the encoded byte length
  * before invoking this helper.

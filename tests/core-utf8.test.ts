@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { utf8ByteLengthWithin } from "../src/core/utf8.js";
+import {
+  decodeUtf8Fatal,
+  isCanonicalUtf8StringWithin,
+  utf8ByteLengthWithin,
+} from "../src/core/utf8.js";
 
 describe("bounded UTF-8 byte counting", () => {
   it("matches TextEncoder across Unicode and surrogate boundaries", () => {
@@ -49,5 +53,29 @@ describe("bounded UTF-8 byte counting", () => {
         "maximumBytes must be a nonnegative safe integer",
       );
     }
+  });
+});
+
+describe("fatal UTF-8 decoding and canonical strings", () => {
+  it("keeps a leading byte-order mark instead of stripping it", () => {
+    const bytes = Uint8Array.of(0xef, 0xbb, 0xbf, 0x7b, 0x7d);
+    expect(decodeUtf8Fatal(bytes)).toBe("\ufeff{}");
+    expect(decodeUtf8Fatal(Uint8Array.of(0x7b, 0x7d))).toBe("{}");
+    expect(() => decodeUtf8Fatal(Uint8Array.of(0xc3, 0x28))).toThrow(
+      TypeError,
+    );
+  });
+
+  it("accepts U+FEFF at any position of a canonical string", () => {
+    for (const value of ["\ufeffkernel", "ker\ufeffnel", "kernel\ufeff"]) {
+      expect(
+        isCanonicalUtf8StringWithin(value, 64),
+        JSON.stringify(value),
+      ).toBe(true);
+    }
+    expect(isCanonicalUtf8StringWithin("\ufeff", 3)).toBe(true);
+    expect(isCanonicalUtf8StringWithin("\ufeff", 2)).toBe(false);
+    expect(isCanonicalUtf8StringWithin("\ud800", 64)).toBe(false);
+    expect(isCanonicalUtf8StringWithin("", 64)).toBe(false);
   });
 });
