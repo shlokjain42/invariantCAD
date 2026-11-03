@@ -232,7 +232,8 @@ product.
 A staged configuration can call
 `instanceSuppressed(assembly, instanceId, suppressed?)`; the configuration
 active for each containing assembly overrides that definition's authored
-suppression, and `false` reactivates an instance authored as suppressed. This
+suppression. `suppressed` defaults to `true`, and `false` reactivates an
+instance authored as suppressed. This
 entire section describes repository-only work staged for 0.2. It is not
 available from the public 0.1.1 package root, a package subpath, the public
 builder/evaluator, or the CLI, and the public document alias and migration

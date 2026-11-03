@@ -378,8 +378,10 @@ Omitted instance options mean an empty placement, `suppressed: false`, and
 The configuration active for every containing assembly controls its
 definition-scoped instance suppression and placement expressions.
 `configuration.instanceSuppressed(...)` can target any owned assembly
-definition. Passing `false` explicitly unsuppresses an instance authored with
-`suppressed: true`; omission retains the authored value. Suppression is
+definition. Its `suppressed` argument defaults to `true`, so omitting it writes
+a suppression override; pass `false` to reactivate an instance authored with
+`suppressed: true`. Only an instance with no `instanceSuppressed(...)` override
+in the active configuration keeps its authored value. Suppression is
 resolved before component support is checked, so suppressing an assembly edge
 prunes its entire subtree, including external or otherwise unsupported
 descendants. A suppressed nested external component therefore performs no
