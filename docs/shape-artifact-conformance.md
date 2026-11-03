@@ -540,7 +540,11 @@ or impossible minimum representation before allocating topology tables. Nested
 reads charge the same lineage, adjacency, UTF-16 byte, and orientation totals;
 indices must be sorted, unique, and in range; canonical lineage order is strict;
 and exact end-of-input is mandatory. There is no JSON parse/object/re-encode
-canonicality pass.
+canonicality pass. The later topology remap re-enforces only the item,
+adjacency-link, and lineage-record ceilings on the decoded and fresh snapshots.
+It does not apply a second string budget to synthesized or runtime topology
+keys, which no declared total covers, so the remap never rejects an artifact
+on size when it is within every declared sidecar ceiling.
 
 Native identity v1 represents each unique located solid, shell, wire, face,
 edge, and vertex by the zero-based direct-child sequence from the serialized

@@ -161,7 +161,6 @@ const MAX_STATE_BYTES = 16 * 1024 * 1024;
 const MAX_TOPOLOGY_ITEMS = 100_000;
 const MAX_ADJACENCY_LINKS = 1_000_000;
 const MAX_LINEAGE_RECORDS = 1_000_000;
-const MAX_STRING_BYTES = 1_000_000;
 const MAGIC = new Uint8Array([
   0x49, 0x43, 0x41, 0x44, 0x4f, 0x43, 0x43, 0x54,
   0x41, 0x52, 0x54, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -970,11 +969,19 @@ export function remapOcctShapeArtifactTopology(
   signal?: AbortSignal,
 ): KernelTopologySnapshot {
   checkAbort(signal);
+  // Both snapshots are already materialized and bounded: the stored one by
+  // the sidecar decoder's declared item, link, lineage-record, and UTF-16
+  // string totals, the fresh one by this kernel's topology of the restored
+  // root. Detaching copies string references, not contents. A string charge
+  // here would count synthesized and runtime topology keys once per adjacency
+  // occurrence, which no declared sidecar total covers, and would reject
+  // artifacts the encoder admitted. Only the structural ceilings are
+  // re-enforced, so no artifact within the declared ceilings fails here on
+  // size.
   const limits = {
     maxTopologyItems: MAX_TOPOLOGY_ITEMS,
     maxAdjacencyLinks: MAX_ADJACENCY_LINKS,
     maxEvidenceRecords: MAX_LINEAGE_RECORDS,
-    maxStringBytes: MAX_STRING_BYTES,
   } as const;
   const stored = detachKernelTopologySnapshot(storedSnapshot, limits);
   checkAbort(signal);

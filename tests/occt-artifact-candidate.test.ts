@@ -840,6 +840,61 @@ describe("OCCT shape-artifact codec candidate", { timeout: 30_000 }, () => {
     }
   });
 
+  it("decodes every artifact the encoder admits at the sidecar string ceiling", async () => {
+    const producer = await createOcctKernel();
+    const consumer = await createOcctKernel();
+    const producerCodec = codec(producer);
+    // U+4E00 is two UTF-16 bytes, which the sidecar ceiling counts, but three
+    // UTF-8 bytes. Synthesized topology keys and every adjacency occurrence
+    // add further UTF-8 strings that no declared sidecar total includes.
+    const featureOf = (length: number) => "一".repeat(length);
+    const encodes = async (length: number): Promise<boolean> => {
+      const shape = box(producer, featureOf(length));
+      try {
+        await producerCodec.encodeShapeArtifact(shape, ARTIFACT_CONTEXT);
+        return true;
+      } catch (error) {
+        if (!(error instanceof RangeError)) throw error;
+        expect(error.message).toMatch(/string budget was exceeded/u);
+        return false;
+      } finally {
+        producer.disposeShape(shape);
+      }
+    };
+    let source: KernelShape | undefined;
+    let decoded: KernelShape | undefined;
+    try {
+      let admitted = 1;
+      let refused = 64_000;
+      expect(await encodes(admitted)).toBe(true);
+      expect(await encodes(refused)).toBe(false);
+      while (refused - admitted > 1) {
+        const middle = Math.floor((admitted + refused) / 2);
+        if (await encodes(middle)) admitted = middle;
+        else refused = middle;
+      }
+
+      source = box(producer, featureOf(admitted));
+      const artifact = await producerCodec.encodeShapeArtifact(
+        source,
+        ARTIFACT_CONTEXT,
+      );
+      decoded = await codec(consumer).decodeShapeArtifact(artifact, {
+        ...ARTIFACT_CONTEXT,
+        maxArtifactBytes: artifact.byteLength,
+      });
+      expect(consumer.status(decoded)).toEqual({ ok: true, code: "VALID" });
+      expect(topology(consumer, decoded).faces[0]?.lineage).toEqual(
+        topology(producer, source).faces[0]?.lineage,
+      );
+    } finally {
+      if (decoded !== undefined) consumer.disposeShape(decoded);
+      if (source !== undefined) producer.disposeShape(source);
+      consumer.dispose();
+      producer.dispose();
+    }
+  }, 60_000);
+
   it("preflights unique identity counts before materializing topology handle arrays", async () => {
     const kernel = await createOcctKernel();
     let source: KernelShape | undefined;
