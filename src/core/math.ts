@@ -26,6 +26,33 @@ export const IDENTITY_MATRIX: Mat4 = [
   0, 0, 0, 1,
 ];
 
+/**
+ * Returns the unit vector in the direction of `value`, or `undefined` when any
+ * component is not finite or every component is zero.
+ *
+ * Components are divided by the largest magnitude before squaring, so every
+ * finite non-zero vector normalizes without overflow or underflow. The helper
+ * uses only operators, so later changes to `Math` or `Number` globals cannot
+ * change its result.
+ */
+export function unitVector3(value: Vec3): Vec3 | undefined {
+  const x = value[0];
+  const y = value[1];
+  const z = value[2];
+  // `v - v` is 0 only for finite numbers; NaN and infinities give NaN.
+  if (!(x - x === 0 && y - y === 0 && z - z === 0)) return undefined;
+  const ax = x < 0 ? -x : x;
+  const ay = y < 0 ? -y : y;
+  const az = z < 0 ? -z : z;
+  const largest = ax > ay ? (ax > az ? ax : az) : ay > az ? ay : az;
+  if (largest === 0) return undefined;
+  const sx = x / largest;
+  const sy = y / largest;
+  const sz = z / largest;
+  const length = (sx * sx + sy * sy + sz * sz) ** 0.5;
+  return [sx / length, sy / length, sz / length];
+}
+
 export function add2(a: Vec2, b: Vec2): Vec2 {
   return [a[0] + b[0], a[1] + b[1]];
 }

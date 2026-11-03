@@ -12,6 +12,7 @@ import {
   rotationMatrix,
   scaleMatrix,
   translationMatrix,
+  unitVector3,
   type Mat4,
   type Vec3,
 } from "./core/math.js";
@@ -693,11 +694,11 @@ class EvaluationFailure extends Error {
 }
 
 function mirrorMatrix(normal: Vec3): Mat4 {
-  const magnitude = Math.hypot(...normal);
-  if (magnitude < Number.EPSILON) {
-    throw new RangeError("Mirror normal cannot be zero");
+  const unit = unitVector3(normal);
+  if (unit === undefined) {
+    throw new RangeError("Mirror normal must be finite and non-zero");
   }
-  const [x, y, z] = normal.map((value) => value / magnitude) as unknown as Vec3;
+  const [x, y, z] = unit;
   return [
     1 - 2 * x * x,
     -2 * x * y,
@@ -9256,18 +9257,10 @@ function resolvedTransformOperationV7(
     }
   }
   if (operation.kind === "mirror") {
-    const squaredNorm =
-      vector[0] * vector[0] +
-      vector[1] * vector[1] +
-      vector[2] * vector[2];
-    if (
-      !importedBodyApply<boolean>(
-        importedBodyNumberIsFinite,
-        Number,
-        [squaredNorm],
-      ) ||
-      !(squaredNorm > 0)
-    ) {
+    // Scale before squaring so every finite non-zero normal is accepted, and
+    // hand kernels a unit normal they cannot overflow while normalizing.
+    const unit = unitVector3(vector);
+    if (unit === undefined) {
       return failure(
         diagnostic(
           "FEATURE_INVALID",
@@ -9278,7 +9271,7 @@ function resolvedTransformOperationV7(
             path: `/nodes/${nodeId}/operations/${operationIndex}/normal`,
             details: {
               phase: diagnostics.phase,
-              squaredNorm,
+              normal: vector,
             },
           },
         ),
@@ -9288,7 +9281,16 @@ function resolvedTransformOperationV7(
       importedBodyApply<ResolvedTransformOperation>(
         importedBodyObjectFreeze,
         Object,
-        [{ kind: "mirror", normal: vector }],
+        [
+          {
+            kind: "mirror",
+            normal: importedBodyApply<Vec3>(
+              importedBodyObjectFreeze,
+              Object,
+              [unit],
+            ),
+          },
+        ],
       ),
     );
   }
@@ -13513,12 +13515,27 @@ export class Evaluator {
     };
     const resolvedTransform = (
       operation: TransformOperationIR,
+      node: NodeId,
+      path: string,
     ): ResolvedTransformOperation => {
       if (operation.kind === "mirror") {
-        return {
-          kind: "mirror",
-          normal: operation.normal.map(expression) as unknown as Vec3,
-        };
+        const authored = operation.normal.map(expression) as unknown as Vec3;
+        const normal = unitVector3(authored);
+        if (normal === undefined) {
+          throw new EvaluationFailure(
+            diagnostic(
+              "FEATURE_INVALID",
+              "Mirror normal must be finite and non-zero",
+              {
+                severity: "error",
+                node,
+                path: `${path}/normal`,
+                details: { normal: authored },
+              },
+            ),
+          );
+        }
+        return { kind: "mirror", normal };
       }
       return {
         kind: operation.kind,
@@ -14996,7 +15013,13 @@ export class Evaluator {
             result = ownShape(
               this.kernel.transform!(
                 solidRef(node.input),
-                node.operations.map(resolvedTransform),
+                node.operations.map((operation, index) =>
+                  resolvedTransform(
+                    operation,
+                    id,
+                    `/nodes/${id}/operations/${index}`,
+                  ),
+                ),
                 featureContext(id),
               ),
               id,
@@ -15291,14 +15314,20 @@ export class Evaluator {
           }
           case "assembly": {
             const occurrences: AssemblyOccurrence[] = [];
-            for (const instance of node.instances) {
+            for (const [instanceIndex, instance] of node.instances.entries()) {
               const suppressed =
                 configuredInstanceSuppression(id, instance.id) ??
                 instance.suppressed;
               if (suppressed) continue;
               const component = evaluateNode(instance.component.node);
               const placement = operationsMatrix(
-                instance.placement.map(resolvedTransform),
+                instance.placement.map((operation, operationIndex) =>
+                  resolvedTransform(
+                    operation,
+                    id,
+                    `/nodes/${id}/instances/${instanceIndex}/placement/${operationIndex}`,
+                  ),
+                ),
               );
               if (component.kind === "part") {
                 occurrences.push({

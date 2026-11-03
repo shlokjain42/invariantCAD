@@ -84,8 +84,15 @@ const mirrored = cad.mirror(
 );
 ```
 
-The vector is the mirror-plane normal. It must resolve to a usable finite
-direction. A zero normal is invalid.
+The vector is the normal of the mirror plane through the origin. Only its
+direction matters: the evaluator normalizes every finite, non-zero normal before
+calling the kernel, so `scalarVec3(2, 0, 0)`, `scalarVec3(1e-200, 0, 0)`, and
+`scalarVec3(1e200, 0, 0)` all mirror across the same plane. A normal whose
+components all resolve to zero, for example through a parameter override, fails
+with `FEATURE_INVALID` at `/nodes/<id>/operations/<index>/normal` before the
+kernel is asked to transform anything. The same rule applies to a `tf.mirror`
+assembly placement, whose diagnostic path ends in
+`/instances/<index>/placement/<index>/normal`.
 
 ## Topology through transforms
 
