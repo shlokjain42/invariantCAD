@@ -21,12 +21,14 @@ later cannot alter a built document, and authoring never freezes them.
 Expression IR is the exception: expressions are immutable, so raw IR passed to
 `fromExpressionIR` is validated and frozen in place.
 
-Lists and records that reach a document, including path points and segments,
-loft profiles, Boolean tools, transform operations, placements, plane IR,
-topology selection IR, sketch entity and constraint records, raw loop edge
-uses, and profile holes, are read once through their own data properties.
-Caller accessors never run and inherited fields are never used, so every check
-applies to exactly the value the document stores.
+Option records, and the lists and records that reach a document, including
+path points and segments, loft profiles, Boolean tools, transform operations,
+placements, plane IR, topology selection IR, sketch entity and constraint
+records, raw loop edge uses, and profile holes, are read once through their own
+data properties. Caller accessors never run and inherited fields are never
+used, so every check applies to exactly the value the document stores. Option
+records must be plain objects; fields a method does not use are ignored, except
+in `part(...)`, which rejects them.
 
 ## Document definitions
 
@@ -544,9 +546,9 @@ Methods throw `TypeError` or `RangeError` for invalid direct calls, including:
 - sparse or accessor-backed lists, such as `polylinePath` points,
   `compositePath` segments, loft profiles, Boolean tools, transform
   operations, sketch `polyline` points, `loop` edges, and profile holes
-- transform operations, plane IR, path segments, raw loop edge uses, and
-  topology selections whose fields are accessors, inherited, or not held by a
-  plain record
+- option records, transform operations, plane IR, path segments, raw loop
+  edge uses, and topology selections whose fields are accessors, inherited, or
+  not held by a plain record
 - cyclic topology selections, and selections with more query nodes than the
   default `maxTopologyQueryNodes` limit of 100,000, counting each aliased
   occurrence as the parser does

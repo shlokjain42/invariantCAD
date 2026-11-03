@@ -914,6 +914,7 @@ export class AssemblyBuilder {
         "This assembly builder is closed; add instances inside its assembly() callback",
       );
     }
+    options = ownRecord(options, `Assembly instance '${id}' options`);
     this.owner.assertOwned(component);
     const stableId = entityId(id);
     if (this.instances.some((instance) => instance.id === stableId)) {
@@ -1035,6 +1036,7 @@ export class ConfigurationBuilder {
   }
 
   toIR(options: ConfigurationOptions = {}): DesignConfigurationIR {
+    options = ownRecord(options, "Configuration options");
     if (
       Object.keys(this.parameterRecords).length === 0 &&
       Object.keys(this.instanceSuppressionRecords).length === 0 &&
@@ -1145,6 +1147,7 @@ export class DesignBuilder {
     if (typeof name !== "string" || name.trim().length === 0) {
       throw new TypeError("A design requires a name");
     }
+    options = ownRecord(options, "Design options");
     this.name = name;
     this.metadata =
       options.metadata === undefined
@@ -1228,6 +1231,7 @@ export class DesignBuilder {
     defaultValue: Expression<D>,
     options: ParameterOptions<D> = {},
   ): Parameter<D> {
+    options = ownRecord(options, `Parameter '${id}' options`);
     const key = parameterId(id);
     if (Object.hasOwn(this.parameterRecords, key)) {
       throw new TypeError(`Duplicate parameter '${id}'`);
@@ -1305,14 +1309,14 @@ export class DesignBuilder {
     if (Object.hasOwn(this.materialRecords, key)) {
       throw new TypeError(`Duplicate material '${id}'`);
     }
-    // Read each option once, so an accessor cannot pass a check with one
-    // value and supply another to the stored record.
+    // Snapshot own data fields once: caller accessors never run, inherited
+    // fields are never used, and every check applies to the stored value.
     const {
       name,
       description: rawDescription,
       massDensity: rawMassDensity,
       metadata: rawMetadata,
-    } = options;
+    } = ownRecord(options, `Material '${id}' options`);
     if (typeof name !== "string" || name.trim().length === 0) {
       throw new TypeError(`Material '${id}' requires a non-empty name`);
     }
@@ -1477,6 +1481,7 @@ export class DesignBuilder {
     id: string,
     options: { readonly size: Vec3Expression; readonly center?: boolean },
   ): SolidRef {
+    options = ownRecord(options, `Box '${id}' options`);
     const key = this.addNode(id, {
       kind: "box",
       size: ownedVec3IR(this, options.size, "length", `Box '${id}' size`),
@@ -1495,6 +1500,7 @@ export class DesignBuilder {
       readonly segments?: number;
     },
   ): SolidRef {
+    options = ownRecord(options, `Cylinder '${id}' options`);
     const key = this.addNode(id, {
       kind: "cylinder",
       height: ownedExpressionIR(
@@ -1525,6 +1531,7 @@ export class DesignBuilder {
     id: string,
     options: { readonly radius: LengthExpression; readonly segments?: number },
   ): SolidRef {
+    options = ownRecord(options, `Sphere '${id}' options`);
     const key = this.addNode(id, {
       kind: "sphere",
       radius: ownedExpressionIR(
@@ -1544,6 +1551,7 @@ export class DesignBuilder {
     build: (sketch: SketchBuilder) => ProfileDefinition,
     options: { readonly tolerance?: number } = {},
   ): ProfileRef {
+    options = ownRecord(options, `Sketch '${id}' options`);
     const planeIR = ownedPlaneIR(this, sketchPlane, `Sketch '${id}' plane`);
     const tolerance = positiveTolerance(
       options.tolerance ?? 1e-7,
@@ -1577,6 +1585,7 @@ export class DesignBuilder {
     points: readonly Vec3Expression[],
     options: { readonly tolerance?: number } = {},
   ): PathRef {
+    options = ownRecord(options, `Polyline path '${id}' options`);
     const orderedPoints = ownDenseArray(points, `Polyline path '${id}' points`, {
       maximumLength: DEFAULT_DESIGN_DOCUMENT_LIMITS.maxStructuralValues,
     });
@@ -1607,6 +1616,8 @@ export class DesignBuilder {
     },
     options: { readonly tolerance?: number } = {},
   ): PathRef {
+    options = ownRecord(options, `Circular-arc path '${id}' options`);
+    points = ownRecord(points, `Circular-arc path '${id}' points`);
     const tolerance = options.tolerance ?? 1e-7;
     if (!Number.isFinite(tolerance) || !(tolerance > 0)) {
       throw new RangeError(
@@ -1634,6 +1645,8 @@ export class DesignBuilder {
     },
     options: { readonly tolerance?: number } = {},
   ): PathRef {
+    options = ownRecord(options, `Composite path '${id}' options`);
+    path = ownRecord(path, `Composite path '${id}'`);
     // Snapshot each segment's own data fields once, so its kind cannot change
     // between the checks below and the node that is stored.
     const segments = ownDenseArray(
@@ -1698,11 +1711,13 @@ export class DesignBuilder {
       readonly divisions?: number;
     },
   ): SolidRef {
+    options = ownRecord(options, `Extrude '${id}' options`);
     this.assertOwned(profile);
-    const scaleTop = options.scaleTop ?? [scalar(1), scalar(1)];
-    if (!Array.isArray(scaleTop) || scaleTop.length !== 2) {
+    const rawScaleTop = options.scaleTop ?? [scalar(1), scalar(1)];
+    if (!Array.isArray(rawScaleTop) || rawScaleTop.length !== 2) {
       throw new TypeError(`Extrude '${id}' scaleTop must contain two scalars`);
     }
+    const scaleTop = ownDenseArray(rawScaleTop, `Extrude '${id}' scaleTop`);
     const key = this.addNode(id, {
       kind: "extrude",
       profile: profile.toIR(),
@@ -1741,6 +1756,7 @@ export class DesignBuilder {
       readonly segments?: number;
     } = {},
   ): SolidRef {
+    options = ownRecord(options, `Revolve '${id}' options`);
     this.assertOwned(profile);
     const key = this.addNode(id, {
       kind: "revolve",
@@ -1764,6 +1780,7 @@ export class DesignBuilder {
       readonly ruled?: true;
     } = {},
   ): SolidRef {
+    options = ownRecord(options, `Loft '${id}' options`);
     // Copy once, so the checked profiles are exactly the ones stored.
     const sections = ownDenseArray(profiles, "Loft profiles", {
       maximumLength: DEFAULT_DESIGN_DOCUMENT_LIMITS.maxStructuralValues,
@@ -1797,6 +1814,7 @@ export class DesignBuilder {
       readonly frame?: "corrected-frenet";
     } = {},
   ): SolidRef {
+    options = ownRecord(options, `Sweep '${id}' options`);
     this.assertOwned(profile);
     this.assertOwned(path);
     if (
@@ -1901,8 +1919,8 @@ export class DesignBuilder {
       readonly radius: LengthExpression;
     },
   ): SolidRef {
+    options = ownRecord(options, `Fillet '${id}' options`);
     this.assertOwned(input);
-    // Read once, so every check below applies to the selection that is stored.
     const edges = options.edges;
     if (!(edges instanceof TopologySelection)) {
       throw new TypeError("Fillet edges must be an explicit topology selection");
@@ -1943,6 +1961,7 @@ export class DesignBuilder {
       readonly distance: LengthExpression;
     },
   ): SolidRef {
+    options = ownRecord(options, `Chamfer '${id}' options`);
     this.assertOwned(input);
     const edges = options.edges;
     if (!(edges instanceof TopologySelection)) {
@@ -1986,6 +2005,7 @@ export class DesignBuilder {
       readonly tolerance?: LengthExpression;
     },
   ): SolidRef {
+    options = ownRecord(options, `Shell '${id}' options`);
     this.assertOwned(input);
     const openings = options.openings;
     if (!(openings instanceof TopologySelection)) {
@@ -2039,6 +2059,7 @@ export class DesignBuilder {
       readonly tolerance?: LengthExpression;
     },
   ): SolidRef {
+    options = ownRecord(options, `Offset '${id}' options`);
     this.assertOwned(input);
     const direction = options.direction ?? "outward";
     if (!OFFSET_DIRECTIONS.includes(direction)) {
@@ -2081,6 +2102,7 @@ export class DesignBuilder {
       };
     },
   ): SolidRef {
+    options = ownRecord(options, `Draft '${id}' options`);
     this.assertOwned(input);
     const faces = options.faces;
     if (!(faces instanceof TopologySelection)) {
@@ -2099,6 +2121,10 @@ export class DesignBuilder {
       "face",
       `Draft '${id}' faces`,
     );
+    const neutralPlane = ownRecord(
+      options.neutralPlane,
+      `Draft '${id}' neutralPlane`,
+    );
     const key = this.addNode(id, {
       kind: "draft",
       input: input.toIR(),
@@ -2113,13 +2139,13 @@ export class DesignBuilder {
       neutralPlane: {
         origin: ownedVec3IR(
           this,
-          options.neutralPlane.origin,
+          neutralPlane.origin,
           "length",
           `Draft '${id}' neutralPlane origin`,
         ),
         normal: ownedVec3IR(
           this,
-          options.neutralPlane.normal,
+          neutralPlane.normal,
           "scalar",
           `Draft '${id}' neutralPlane normal`,
         ),
@@ -2134,20 +2160,11 @@ export class DesignBuilder {
     options: PartOptions = {},
   ): PartRef {
     this.assertOwned(solid);
-    if (typeof options !== "object" || options === null) {
-      throw new TypeError(`Part '${id}' options must be a record`);
-    }
     // Options often come from a variable, which TypeScript's excess-property
     // check does not cover; unknown keys must not reach or override the node.
-    for (const key of Object.keys(options)) {
-      if (!PART_OPTION_KEYS.includes(key)) {
-        throw new TypeError(
-          `Part '${id}' options contain unsupported field '${key}'`,
-        );
-      }
-    }
-    // Read each option once, so an accessor cannot pass a check with one
-    // value and supply another to the stored node.
+    // Own data fields are snapshotted once: caller accessors never run,
+    // inherited fields are never used, and every check applies to the stored
+    // value.
     const {
       partNumber: rawPartNumber,
       description: rawDescription,
@@ -2155,7 +2172,7 @@ export class DesignBuilder {
       materialRef,
       massDensity: rawMassDensity,
       metadata: rawMetadata,
-    } = options;
+    } = ownRecord(options, `Part '${id}' options`, PART_OPTION_KEYS);
     if (rawMaterial !== undefined && materialRef !== undefined) {
       throw new TypeError("A part cannot use both material and materialRef");
     }
@@ -2250,6 +2267,7 @@ export class DesignBuilder {
     ) {
       throw new TypeError(`Duplicate configuration '${id}'`);
     }
+    options = ownRecord(options, `Configuration '${id}' options`);
     const builder = new ConfigurationBuilder(this);
     // Reserve the ID while the callback runs, so a nested configuration()
     // with the same ID cannot succeed and then be overwritten.

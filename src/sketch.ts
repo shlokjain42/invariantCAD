@@ -4,6 +4,7 @@ import { DEFAULT_DESIGN_DOCUMENT_LIMITS } from "./document-limits.js";
 import {
   deg,
   expressionIROf,
+  fromExpressionIR,
   mm,
   scalar,
   type AngleExpression,
@@ -92,6 +93,7 @@ export class CircleRef implements OwnedSketchReference {
   }
 
   loop(options: { readonly reversed?: boolean } = {}): LoopRef {
+    options = ownRecord(options, `Circle loop '${this.id}' options`);
     const loop = new LoopRef(this[SKETCH_OWNER], {
       kind: "circle",
       entity: this.id,
@@ -173,6 +175,27 @@ function optionalSegments(
   return { segments: value };
 }
 
+/**
+ * Rebuilds a caller length expression from its checked IR, so derived
+ * coordinates are computed by library methods rather than caller code. The
+ * IR object is reused, so parameter ownership checks still see it.
+ */
+function lengthExpression(value: unknown, label: string): LengthExpression {
+  return fromExpressionIR(expressionIROf(value, "length", label), "length");
+}
+
+/** Reads a two-coordinate position through its own data elements. */
+function lengthPair(
+  value: unknown,
+  label: string,
+): readonly [LengthExpression, LengthExpression] {
+  if (!Array.isArray(value) || value.length !== 2) {
+    throw new TypeError(`${label} requires two length coordinates`);
+  }
+  const [x, y] = ownDenseArray(value as readonly unknown[], label);
+  return [lengthExpression(x, `${label} x`), lengthExpression(y, `${label} y`)];
+}
+
 export interface RectangleOptions {
   readonly width: LengthExpression;
   readonly height: LengthExpression;
@@ -231,13 +254,11 @@ export class SketchBuilder {
   }
 
   point(id: string, position: Vec2Expression): PointRef {
-    if (!Array.isArray(position) || position.length !== 2) {
-      throw new TypeError(`Sketch point '${id}' requires two length coordinates`);
-    }
+    const [x, y] = lengthPair(position, `Sketch point '${id}'`);
     const key = this.addEntity(id, {
       kind: "point",
-      x: expressionIROf(position[0], "length", `Sketch point '${id}' x`),
-      y: expressionIROf(position[1], "length", `Sketch point '${id}' y`),
+      x: x.ir,
+      y: y.ir,
     });
     return issued(new PointRef(this, key));
   }
@@ -254,6 +275,7 @@ export class SketchBuilder {
   }
 
   circle(id: string, options: CircleOptions): CircleRef {
+    options = ownRecord(options, `Sketch circle '${id}' options`);
     const center = this.point(`${id}.center`, options.center ?? [mm(0), mm(0)]);
     const key = this.addEntity(id, {
       kind: "circle",
@@ -265,6 +287,7 @@ export class SketchBuilder {
   }
 
   arc(id: string, options: ArcOptions): ArcRef {
+    options = ownRecord(options, `Sketch arc '${id}' options`);
     const center = this.point(`${id}.center`, options.center ?? [mm(0), mm(0)]);
     const key = this.addEntity(id, {
       kind: "arc",
@@ -291,6 +314,7 @@ export class SketchBuilder {
     positions: readonly Vec2Expression[],
     options: { readonly closed?: boolean } = {},
   ): LoopRef | readonly LineRef[] {
+    options = ownRecord(options, `Sketch polyline '${id}' options`);
     const ordered = ownDenseArray(positions, `Sketch polyline '${id}' points`, {
       maximumLength: DEFAULT_DESIGN_DOCUMENT_LIMITS.maxStructuralValues,
     });
@@ -316,11 +340,19 @@ export class SketchBuilder {
   }
 
   rectangle(id: string, options: RectangleOptions): LoopRef {
-    const [cx, cy] = options.center ?? [mm(0), mm(0)];
-    expressionIROf(options.width, "length", `Sketch rectangle '${id}' width`);
-    expressionIROf(options.height, "length", `Sketch rectangle '${id}' height`);
-    const halfWidth = options.width.mul(0.5);
-    const halfHeight = options.height.mul(0.5);
+    options = ownRecord(options, `Sketch rectangle '${id}' options`);
+    const [cx, cy] = lengthPair(
+      options.center ?? [mm(0), mm(0)],
+      `Sketch rectangle '${id}' center`,
+    );
+    const halfWidth = lengthExpression(
+      options.width,
+      `Sketch rectangle '${id}' width`,
+    ).mul(0.5);
+    const halfHeight = lengthExpression(
+      options.height,
+      `Sketch rectangle '${id}' height`,
+    ).mul(0.5);
     return this.polyline(
       id,
       [
@@ -362,6 +394,7 @@ export class SketchBuilder {
     options: { readonly holes?: readonly LoopRef[] } = {},
   ): ProfileDefinition {
     this.assertOpen();
+    options = ownRecord(options, "Sketch profile options");
     this.assertOwned(outer);
     // Copy once, so the checked holes are exactly the ones stored.
     const rawHoles = options.holes;
@@ -602,8 +635,15 @@ export class SketchBuilder {
         `A regular polygon cannot have more than ${DEFAULT_DESIGN_DOCUMENT_LIMITS.maxStructuralValues} sides`,
       );
     }
-    expressionIROf(radius, "length", `Sketch regular polygon '${id}' radius`);
-    const [cx, cy] = options.center ?? [mm(0), mm(0)];
+    options = ownRecord(options, `Sketch regular polygon '${id}' options`);
+    const circumradius = lengthExpression(
+      radius,
+      `Sketch regular polygon '${id}' radius`,
+    );
+    const [cx, cy] = lengthPair(
+      options.center ?? [mm(0), mm(0)],
+      `Sketch regular polygon '${id}' center`,
+    );
     // Vertex directions are resolved while authoring, so only the base
     // rotation must be literal; each vertex angle is computed numerically.
     const rotation = evaluateLiteralAngle(options.rotation ?? deg(0));
@@ -611,8 +651,8 @@ export class SketchBuilder {
     for (let index = 0; index < sides; index += 1) {
       const angle = rotation + (index * 2 * Math.PI) / sides;
       points.push([
-        cx.add(radius.mul(scalar(Math.cos(angle)))),
-        cy.add(radius.mul(scalar(Math.sin(angle)))),
+        cx.add(circumradius.mul(scalar(Math.cos(angle)))),
+        cy.add(circumradius.mul(scalar(Math.sin(angle)))),
       ]);
     }
     return this.polyline(id, points, { closed: true }) as LoopRef;

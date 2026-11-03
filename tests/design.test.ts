@@ -1418,19 +1418,20 @@ describe("builder own-data reads", () => {
     ).toThrow("must be a data property, not an accessor");
     expect(counter.reads).toBe(0);
 
-    // A getter that changes the holes after the ownership check is read once.
+    // A getter that could change the holes after the ownership check never runs.
+    expect(() =>
+      cad.sketch("accessor-holes", plane.xy(), (sketch) => {
+        const hole = sketch.circle("hole", { radius: mm(1) }).loop();
+        const options = Object.defineProperty({}, "holes", countingAccessor([hole], counter));
+        return sketch.profile(sketch.circle("outer", { radius: mm(3) }).loop(), options);
+      }),
+    ).toThrow("must be a data property, not an accessor");
+    expect(counter.reads).toBe(0);
     const profile = cad.sketch("holes", plane.xy(), (sketch) => {
       const hole = sketch.circle("hole", { radius: mm(1) }).loop();
-      const forgedHole = new LoopRef(sketch, { kind: "circle", entity: "ghost" as never });
-      let reads = 0;
-      const options = Object.defineProperty({}, "holes", {
-        enumerable: true,
-        get: () => {
-          reads += 1;
-          return reads === 1 ? [hole] : [forgedHole];
-        },
+      return sketch.profile(sketch.circle("outer", { radius: mm(3) }).loop(), {
+        holes: [hole],
       });
-      return sketch.profile(sketch.circle("outer", { radius: mm(3) }).loop(), options);
     });
     const document = cad.build();
     expect((document.nodes as Readonly<Record<string, any>>)[profile.node].profile.holes).toEqual([
@@ -1507,51 +1508,177 @@ describe("part options", () => {
     expect(await hashDocument(reparsed.value)).toBe(await hashDocument(document));
   });
 
-  it("reads each part and material option once", () => {
+  it("reads part and material options only through own data properties", () => {
     const { cad, housing, steel } = setup();
-    const foreign = design("foreign").material("forged", {
-      name: "Forged",
-      massDensity: gramsPerCubicCentimeter(1),
+    let reads = 0;
+    const accessor = (value: unknown) => ({
+      enumerable: true,
+      get: () => {
+        reads += 1;
+        return value;
+      },
     });
-    // Each getter returns a valid value first and an invalid one afterward.
-    const flipping = <T,>(first: T, later: unknown) => {
-      let reads = 0;
-      return {
+    const accessorPart = Object.defineProperties(
+      { partNumber: "HSG-1" },
+      { materialRef: accessor(steel) },
+    );
+    expect(() => cad.part("part", housing, accessorPart as never)).toThrow(
+      "must be a data property, not an accessor",
+    );
+    const accessorMaterial = Object.defineProperties(
+      { name: "Brass" },
+      { massDensity: accessor(gramsPerCubicCentimeter(8.5)) },
+    );
+    expect(() => cad.material("brass", accessorMaterial as never)).toThrow(
+      "must be a data property, not an accessor",
+    );
+    expect(reads).toBe(0);
+
+    // Inherited fields never supply an option.
+    const inheritedPart = Object.create({ materialRef: steel }) as object;
+    expect(() => cad.part("inherited", housing, inheritedPart as never)).toThrow(
+      "must be a plain record",
+    );
+    const inheritedMaterial = Object.assign(
+      Object.create({ massDensity: gramsPerCubicCentimeter(8.5) }) as object,
+      { name: "Brass" },
+    );
+    expect(() => cad.material("inherited", inheritedMaterial as never)).toThrow(
+      "must be a plain record",
+    );
+    const document = cad.build();
+    expect(document.nodes).not.toHaveProperty("part");
+    expect(document.materials).not.toHaveProperty("brass");
+  });
+
+  it("reads every builder option record only through own data properties", () => {
+    const cad = design("option-records");
+    const box = cad.box("box", { size: vec3(mm(10), mm(10), mm(10)) });
+    const profile = cad.sketch("profile", plane.xy(), (sketch) =>
+      sketch.profile(sketch.circle("disk", { radius: mm(1) }).loop()),
+    );
+    let reads = 0;
+    const withAccessor = (
+      fields: Record<string, unknown>,
+      key: string,
+      value: unknown,
+    ) =>
+      Object.defineProperty({ ...fields }, key, {
         enumerable: true,
         get: () => {
           reads += 1;
-          return reads === 1 ? first : later;
+          return value;
         },
-      };
-    };
-    const partOptions = Object.defineProperties(
-      {},
-      {
-        material: flipping(undefined, "Aluminium 6061"),
-        materialRef: flipping(steel, foreign),
-        partNumber: flipping("HSG-1", 7),
-      },
-    );
-    cad.part("part", housing, partOptions as never);
-    expect(cad.build().nodes).toHaveProperty("part", {
-      kind: "part",
-      solid: { node: "housing", kind: "solid" },
-      partNumber: "HSG-1",
-      materialId: "steel",
-    });
-
-    const materialOptions = Object.defineProperties(
-      {},
-      {
-        name: flipping("Brass", ""),
-        massDensity: flipping(gramsPerCubicCentimeter(8.5), mm(1)),
-      },
-    );
-    cad.material("brass", materialOptions as never);
-    expect(cad.build().materials).toHaveProperty("brass", {
-      name: "Brass",
-      massDensity: gramsPerCubicCentimeter(8.5).ir,
-    });
+      }) as never;
+    const size = vec3(mm(1), mm(1), mm(1));
+    const calls: readonly (readonly [string, () => unknown])[] = [
+      ["design", () => design("d", withAccessor({}, "metadata", { a: 1 }))],
+      ["parameter", () => cad.parameter.length("p", mm(1), withAccessor({}, "min", mm(0)))],
+      ["box", () => cad.box("b", withAccessor({ size }, "center", true))],
+      ["cylinder", () => cad.cylinder("c", withAccessor({ height: mm(1) }, "radius", mm(1)))],
+      ["sphere", () => cad.sphere("s", withAccessor({}, "radius", mm(1)))],
+      [
+        "sketch",
+        () =>
+          cad.sketch(
+            "k",
+            plane.xy(),
+            (sketch) => sketch.profile(sketch.circle("disk", { radius: mm(1) }).loop()),
+            withAccessor({}, "tolerance", 1e-6),
+          ),
+      ],
+      [
+        "polylinePath",
+        () => cad.polylinePath("l", [size, vec3(mm(2), mm(1), mm(1))], withAccessor({}, "tolerance", 1e-6)),
+      ],
+      [
+        "circularArcPath",
+        () =>
+          cad.circularArcPath(
+            "a",
+            withAccessor({ start: size, through: vec3(mm(2), mm(2), mm(1)) }, "end", vec3(mm(3), mm(1), mm(1))),
+          ),
+      ],
+      ["extrude", () => cad.extrude("e", profile, withAccessor({}, "distance", mm(1)))],
+      ["revolve", () => cad.revolve("r", profile, withAccessor({}, "angle", deg(90)))],
+      ["offset", () => cad.offset("o", box, withAccessor({}, "distance", mm(1)))],
+      [
+        "fillet",
+        () =>
+          cad.fillet("f", box, withAccessor({ radius: mm(1) }, "edges", topology.edges.createdBy(box).atLeast(1))),
+      ],
+      [
+        "draft neutralPlane",
+        () =>
+          cad.draft("dr", box, {
+            faces: topology.faces.createdBy(box).select(),
+            angle: deg(1),
+            pullDirection: scalarVec3(0, 0, 1),
+            neutralPlane: withAccessor({ origin: size }, "normal", scalarVec3(0, 0, 1)),
+          }),
+      ],
+      [
+        "assembly instance",
+        () => {
+          const part = cad.part("instanced", box);
+          return cad.assembly("assembly", (assembly) =>
+            assembly.instance("i", part, withAccessor({}, "suppressed", false)),
+          );
+        },
+      ],
+      [
+        "configuration",
+        () =>
+          cad.configuration(
+            "variant",
+            (configuration) => configuration.parameter(cad.parameter.length("w", mm(1)), mm(2)),
+            withAccessor({}, "description", "Variant"),
+          ),
+      ],
+      [
+        "sketch circle",
+        () =>
+          cad.sketch("sc", plane.xy(), (sketch) =>
+            sketch.profile(sketch.circle("disk", withAccessor({}, "radius", mm(1))).loop()),
+          ),
+      ],
+      [
+        "sketch rectangle",
+        () =>
+          cad.sketch("sr", plane.xy(), (sketch) =>
+            sketch.profile(sketch.rectangle("r", withAccessor({ width: mm(1) }, "height", mm(1)))),
+          ),
+      ],
+      [
+        "sketch center pair",
+        () =>
+          cad.sketch("sp", plane.xy(), (sketch) =>
+            sketch.profile(
+              sketch.regularPolygon("g", 5, mm(1), {
+                center: Object.defineProperty([mm(0), mm(0)], 1, {
+                  enumerable: true,
+                  get: () => {
+                    reads += 1;
+                    return mm(0);
+                  },
+                }) as never,
+              }),
+            ),
+          ),
+      ],
+      [
+        "circle loop",
+        () =>
+          cad.sketch("sl", plane.xy(), (sketch) =>
+            sketch.profile(sketch.circle("disk", { radius: mm(1) }).loop(withAccessor({}, "reversed", true))),
+          ),
+      ],
+    ];
+    for (const [label, call] of calls) {
+      expect(call, label).toThrow("must be a data property, not an accessor");
+    }
+    expect(reads).toBe(0);
+    expect(validateDocument(cad.build()).ok).toBe(true);
   });
 });
 
