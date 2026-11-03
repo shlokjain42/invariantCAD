@@ -13,7 +13,7 @@ import {
   evaluateBodySetOutputsV7,
   evaluateImportedBodyOutputsV7,
 } from "../src/evaluator.js";
-import { deg, mm, scalar } from "../src/expressions.js";
+import { deg, kgPerCubicMeter, mm, scalar } from "../src/expressions.js";
 import { hashDesignFeaturesV2 } from "../src/feature-hashes-v2.js";
 import {
   DOCUMENT_SCHEMA_V7,
@@ -1347,6 +1347,417 @@ describe("staged document-v7 body-set authoring", () => {
     expect(() =>
       custom.build({ limits: { maxResourceDefinitions: 0 } }),
     ).toThrow(/maxResourceDefinitions|resource.*limit/i);
+  });
+
+  it("captures body-set members and resource locations as dense own-data arrays", () => {
+    const reads: string[] = [];
+    const cad = stagedBodySetDesignV7("dense-own-data-arrays");
+    const box = cad.box("box", { size: [mm(1), mm(1), mm(1)] });
+
+    const accessorMembers: unknown[] = [];
+    Object.defineProperty(accessorMembers, 0, {
+      enumerable: true,
+      configurable: true,
+      get() {
+        reads.push("members[0]");
+        return { id: "box", solid: box };
+      },
+    });
+    expect(() =>
+      cad.bodySet("accessor-members", accessorMembers as never),
+    ).toThrow(/body-set members\/0.*own data/i);
+
+    const extraMembers = [{ id: "box", solid: box }] as unknown[] & {
+      extra?: string;
+    };
+    extraMembers.extra = "ignored";
+    expect(() =>
+      cad.bodySet("extra-members", extraMembers as never),
+    ).toThrow(/body-set members.*non-index/i);
+
+    const accessorLocations: string[] = [];
+    Object.defineProperty(accessorLocations, 0, {
+      enumerable: true,
+      configurable: true,
+      get() {
+        reads.push("locations[0]");
+        return "project://fixtures/accessor";
+      },
+    });
+    expect(() =>
+      cad.resource(
+        "accessor-locations",
+        resourceCommitment({ locations: accessorLocations }),
+      ),
+    ).toThrow(/resource locations\/0.*own data/i);
+
+    const extraLocations = ["project://fixtures/extra"] as string[] & {
+      extra?: string;
+    };
+    extraLocations.extra = "ignored";
+    expect(() =>
+      cad.resource(
+        "extra-locations",
+        resourceCommitment({ locations: extraLocations }),
+      ),
+    ).toThrow(/resource locations.*non-index/i);
+    expect(reads).toEqual([]);
+
+    let lengthGets = 0;
+    const oversized = Array.from(
+      { length: DEFAULT_DESIGN_DOCUMENT_LIMITS.maxResourceLocations + 5 },
+      (_, index) => `project://locations/${index}`,
+    );
+    const shrinkingLength = new Proxy(oversized, {
+      get(target, key, receiver) {
+        if (key === "length") {
+          lengthGets += 1;
+          return lengthGets <= 2 ? 1 : target.length;
+        }
+        return Reflect.get(target, key, receiver) as unknown;
+      },
+    });
+    expect(() =>
+      cad.resource(
+        "proxy-locations",
+        resourceCommitment({ locations: shrinkingLength }),
+      ),
+    ).toThrow(
+      `Resource locations exceed the authoring limit of ${DEFAULT_DESIGN_DOCUMENT_LIMITS.maxResourceLocations}`,
+    );
+    expect(lengthGets).toBe(0);
+
+    cad.resource(
+      "first",
+      resourceCommitment({
+        locations: Array.from(
+          { length: DEFAULT_DESIGN_DOCUMENT_LIMITS.maxResourceLocations - 1 },
+          (_, index) => `project://first/${index}`,
+        ),
+      }),
+    );
+    expect(() =>
+      cad.resource(
+        "second",
+        resourceCommitment({
+          locations: ["project://second/0", "project://second/1"],
+        }),
+      ),
+    ).toThrow(
+      `Resource locations exceed the authoring limit of ${DEFAULT_DESIGN_DOCUMENT_LIMITS.maxResourceLocations}`,
+    );
+    cad.resource(
+      "last",
+      resourceCommitment({ locations: ["project://last/0"] }),
+    );
+
+    const members = cad.bodySet("members", [{ id: "box", solid: box }]);
+    cad.output("members", members);
+    const document = cad.build();
+    expect(Object.keys(document.resources ?? {}).sort()).toEqual([
+      "first",
+      "last",
+    ]);
+    expect(document.nodes).not.toHaveProperty("accessor-members");
+    expect(document.nodes).not.toHaveProperty("extra-members");
+  });
+
+  it("captures material and part densities as detached staged expressions", () => {
+    const getterReads: string[] = [];
+    const forgedAccessor = {
+      get dimension() {
+        getterReads.push("dimension");
+        return "massDensity";
+      },
+      get ir() {
+        getterReads.push("ir");
+        return kgPerCubicMeter(1_000).ir;
+      },
+    };
+    const forgedPlain = {
+      dimension: "massDensity",
+      ir: { op: "literal", dimension: "massDensity", value: 1e-6 },
+    };
+    for (const forged of [forgedAccessor, forgedPlain]) {
+      const cad = stagedBodySetDesignV7("forged-density");
+      const box = cad.box("box", { size: [mm(1), mm(1), mm(1)] });
+      expect(() =>
+        cad.material("material", {
+          name: "Forged",
+          massDensity: forged as never,
+        }),
+      ).toThrow(/material massDensity must be a massDensity expression/i);
+      expect(() =>
+        cad.part("part", box, { massDensity: forged as never }),
+      ).toThrow(/part massDensity must be a massDensity expression/i);
+    }
+    expect(getterReads).toEqual([]);
+
+    const cad = stagedBodySetDesignV7("detached-density");
+    const materialDensity = kgPerCubicMeter(7_850);
+    const partDensity = cad.parameter.massDensity(
+      "density",
+      kgPerCubicMeter(2_700),
+    );
+    const steel = cad.material("steel", {
+      name: "Steel",
+      massDensity: materialDensity,
+    });
+    const box = cad.box("box", { size: [mm(1), mm(1), mm(1)] });
+    const bodies = cad.bodySet("bodies", [{ id: "box", solid: box }]);
+    const steelPart = cad.part("steel-part", bodies, { materialRef: steel });
+    const densityPart = cad.part("density-part", box, {
+      massDensity: partDensity,
+    });
+    cad.output("steel-part", steelPart);
+    cad.output("density-part", densityPart);
+    const document = cad.build();
+    const stored = document.materials?.[steel.id as never]?.massDensity;
+    expect(stored).toEqual(materialDensity.ir);
+    expect(stored).not.toBe(materialDensity.ir);
+    expect(document.nodes["density-part" as never]).toMatchObject({
+      kind: "part",
+      massDensity: { op: "parameter", id: "density" },
+    });
+  });
+
+  it("keeps namespace reservations exact across re-entrant authoring calls", () => {
+    {
+      const cad = stagedBodySetDesignV7("reentrant-datum");
+      let inner: unknown;
+      const origin = new Proxy([mm(0), mm(0), mm(0)], {
+        ownKeys(target) {
+          if (inner === undefined) {
+            try {
+              inner = cad.box("dup", { size: [mm(2), mm(2), mm(2)] });
+            } catch (error) {
+              inner = error;
+            }
+          }
+          return Reflect.ownKeys(target);
+        },
+      });
+      let outer: unknown;
+      try {
+        outer = cad.datumAxis("dup", {
+          origin: origin as never,
+          direction: [scalar(0), scalar(0), scalar(1)],
+        });
+      } catch (error) {
+        outer = error;
+      }
+      expect([inner, outer].filter((value) => value instanceof Error))
+        .toHaveLength(1);
+      const survivor = [inner, outer].find(
+        (value) => !(value instanceof Error),
+      ) as { readonly kind: string };
+      expect(
+        [inner, outer].find((value) => value instanceof Error),
+      ).toMatchObject({ message: "Duplicate feature 'dup'" });
+      const keep = cad.box("keep", { size: [mm(1), mm(1), mm(1)] });
+      cad.output("main", cad.bodySet("set", [{ id: "body", solid: keep }]));
+      expect(cad.build().nodes["dup" as never]).toMatchObject({
+        kind: survivor.kind === "datumAxis" ? "datumAxis" : "box",
+      });
+      expect(inner).toBeDefined();
+    }
+
+    for (const order of ["box-outer", "datum-outer"] as const) {
+      const cad = stagedBodySetDesignV7(`reentrant-${order}`);
+      let inner: unknown;
+      const reenter = (): void => {
+        if (inner !== undefined) return;
+        try {
+          inner =
+            order === "box-outer"
+              ? cad.datumPoint("dup", { position: [mm(1), mm(1), mm(1)] })
+              : cad.sphere("dup", { radius: mm(1) });
+        } catch (error) {
+          inner = error;
+        }
+      };
+      const size = new Proxy([mm(1), mm(1), mm(1)], {
+        ownKeys(target) {
+          reenter();
+          return Reflect.ownKeys(target);
+        },
+        get(target, key, receiver) {
+          reenter();
+          return Reflect.get(target, key, receiver) as unknown;
+        },
+      });
+      let outer: unknown;
+      try {
+        outer =
+          order === "box-outer"
+            ? cad.box("dup", { size } as never)
+            : cad.datumPoint("dup", { position: size } as never);
+      } catch (error) {
+        outer = error;
+      }
+      expect(inner).toBeDefined();
+      const failures = [inner, outer].filter(
+        (value) => value instanceof Error,
+      );
+      expect(failures).toHaveLength(1);
+      expect(failures[0]).toMatchObject({
+        message: "Duplicate feature 'dup'",
+      });
+      const keep = cad.box("keep", { size: [mm(1), mm(1), mm(1)] });
+      cad.output("main", cad.bodySet("set", [{ id: "body", solid: keep }]));
+      const built = cad.build().nodes["dup" as never] as
+        | { readonly kind: string }
+        | undefined;
+      const survivor = [inner, outer].find(
+        (value) => !(value instanceof Error),
+      ) as { readonly kind: string };
+      expect(built?.kind).toBe(
+        survivor.kind === "solid"
+          ? order === "box-outer"
+            ? "box"
+            : "sphere"
+          : "datumPoint",
+      );
+    }
+
+    {
+      const cad = stagedBodySetDesignV7("reentrant-body-set");
+      const box = cad.box("box", { size: [mm(1), mm(1), mm(1)] });
+      let datumError: unknown;
+      const member = new Proxy(
+        { id: "body", solid: box },
+        {
+          ownKeys(target) {
+            if (datumError === undefined) {
+              try {
+                cad.datumPoint("set", { position: [mm(9), mm(9), mm(9)] });
+                datumError = null;
+              } catch (error) {
+                datumError = error;
+              }
+            }
+            return Reflect.ownKeys(target);
+          },
+        },
+      );
+      let setError: unknown;
+      try {
+        cad.output("main", cad.bodySet("set", [member]));
+      } catch (error) {
+        setError = error;
+      }
+      expect(
+        [datumError, setError].filter((value) => value instanceof Error),
+      ).toHaveLength(1);
+      const built = cad.build({}).nodes["set" as never] as
+        | { readonly kind: string }
+        | undefined;
+      expect(built?.kind).toBe(
+        setError instanceof Error ? "datumPoint" : "bodySet",
+      );
+    }
+
+    {
+      const cad = stagedBodySetDesignV7("reentrant-configuration");
+      const width = cad.parameter.length("width", mm(1));
+      let innerError: unknown;
+      let outerError: unknown;
+      try {
+        cad.configuration("c", (outer) => {
+          outer.parameter(width, mm(2));
+          try {
+            cad.configuration("c", (inner) => {
+              inner.parameter(width, mm(3));
+            });
+          } catch (error) {
+            innerError = error;
+          }
+        });
+      } catch (error) {
+        outerError = error;
+      }
+      const failures = [innerError, outerError].filter(
+        (value) => value instanceof Error,
+      );
+      expect(failures).toHaveLength(1);
+      expect(failures[0]).toMatchObject({
+        message: "Duplicate configuration 'c'",
+      });
+      const box = cad.box("box", { size: [width, mm(1), mm(1)] });
+      cad.output("main", cad.bodySet("set", [{ id: "body", solid: box }]));
+      expect(
+        cad.build().configurations?.[configurationId("c")]?.parameterOverrides,
+      ).toEqual({
+        [parameterId("width")]: mm(outerError === undefined ? 2 : 3).ir,
+      });
+    }
+
+    {
+      const cad = stagedBodySetDesignV7("reentrant-material");
+      let innerError: unknown;
+      const metadata = new Proxy(
+        { grade: "outer" },
+        {
+          ownKeys(target) {
+            if (innerError === undefined) {
+              try {
+                cad.material("steel", {
+                  name: "Inner",
+                  massDensity: kgPerCubicMeter(1),
+                });
+                innerError = null;
+              } catch (error) {
+                innerError = error;
+              }
+            }
+            return Reflect.ownKeys(target);
+          },
+        },
+      );
+      let outerError: unknown;
+      try {
+        cad.material("steel", {
+          name: "Outer",
+          massDensity: kgPerCubicMeter(2),
+          metadata,
+        });
+      } catch (error) {
+        outerError = error;
+      }
+      expect(
+        [innerError, outerError].filter((value) => value instanceof Error),
+      ).toHaveLength(1);
+    }
+
+    {
+      const cad = stagedBodySetDesignV7("reentrant-resource");
+      let innerError: unknown;
+      const metadata = new Proxy(
+        { note: "outer" },
+        {
+          ownKeys(target) {
+            if (innerError === undefined) {
+              try {
+                cad.resource("fixture", resourceCommitment());
+                innerError = null;
+              } catch (error) {
+                innerError = error;
+              }
+            }
+            return Reflect.ownKeys(target);
+          },
+        },
+      );
+      let outerError: unknown;
+      try {
+        cad.resource("fixture", { ...resourceCommitment(), metadata });
+      } catch (error) {
+        outerError = error;
+      }
+      expect(
+        [innerError, outerError].filter((value) => value instanceof Error),
+      ).toHaveLength(1);
+    }
   });
 
   it("keeps the package-root builder, aliases, and schemas on v6", () => {

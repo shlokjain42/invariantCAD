@@ -92,6 +92,7 @@ const STAGED_EXTERNAL_ASSEMBLY_REFERENCE_CONSTRUCTION = Symbol(
   "InvariantCAD.StagedExternalAssemblyReferenceConstructionV7",
 );
 const RESOURCE_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
+const RESOURCE_LOCATION_LIMIT_MESSAGE = `Resource locations exceed the authoring limit of ${DEFAULT_DESIGN_DOCUMENT_LIMITS.maxResourceLocations}`;
 const RESOURCE_MEDIA_TYPE_PATTERN =
   /^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+(?:\s*;.*)?$/;
 const INVARIANT_CAD_DOCUMENT_MEDIA_TYPE =
@@ -634,6 +635,7 @@ function captureDenseOwnDataArray(
   options: {
     readonly exactLength?: number;
     readonly maximumLength?: number;
+    readonly maximumLengthMessage?: string;
   } = {},
 ): readonly unknown[] {
   let copied: unknown[] | undefined;
@@ -676,7 +678,9 @@ function captureDenseOwnDataArray(
           options.maximumLength !== undefined &&
           (length as number) > options.maximumLength
         ) {
-          rangeProblem = `${label} exceeds the authoring limit of ${options.maximumLength}`;
+          rangeProblem =
+            options.maximumLengthMessage ??
+            `${label} exceeds the authoring limit of ${options.maximumLength}`;
         } else {
           const ownKeys = authoringApply<(string | symbol)[]>(
             authoringReflectOwnKeys,
@@ -1748,6 +1752,29 @@ export class StagedBodySetDesignBuilderV7 {
     return key;
   }
 
+  /**
+   * Native primitive construction reads caller options, so the ID is reserved
+   * first; a re-entrant registration of the same ID then fails instead of
+   * being replaced later.
+   */
+  #registerNativeLeaf(
+    id: string,
+    construct: () => { readonly node: NodeId },
+  ): StagedBodyLeafRefV7 {
+    const key = this.#assertNodeAvailable(id);
+    authoringSetInsert(this.#nodeIds, key);
+    let reference: { readonly node: NodeId };
+    try {
+      reference = construct();
+    } catch (error) {
+      authoringSetRemove(this.#nodeIds, key);
+      throw error;
+    }
+    return this.#registerLeaf(
+      new StagedBodyLeafRefV7(this, reference.node),
+    );
+  }
+
   #registerLeaf<T extends StagedBodyLeafRefV7>(reference: T): T {
     authoringWeakSetInsert(this.#solidHandles, reference);
     return reference;
@@ -1768,11 +1795,8 @@ export class StagedBodySetDesignBuilderV7 {
     id: string,
     options: { readonly size: Vec3Expression; readonly center?: boolean },
   ): StagedBodyLeafRefV7 {
-    const key = this.#assertNodeAvailable(id);
-    const reference = this.#base.box(id, options);
-    authoringSetInsert(this.#nodeIds, key);
-    return this.#registerLeaf(
-      new StagedBodyLeafRefV7(this, reference.node),
+    return this.#registerNativeLeaf(id, () =>
+      this.#base.box(id, options),
     );
   }
 
@@ -1786,11 +1810,8 @@ export class StagedBodySetDesignBuilderV7 {
       readonly segments?: number;
     },
   ): StagedBodyLeafRefV7 {
-    const key = this.#assertNodeAvailable(id);
-    const reference = this.#base.cylinder(id, options);
-    authoringSetInsert(this.#nodeIds, key);
-    return this.#registerLeaf(
-      new StagedBodyLeafRefV7(this, reference.node),
+    return this.#registerNativeLeaf(id, () =>
+      this.#base.cylinder(id, options),
     );
   }
 
@@ -1801,11 +1822,8 @@ export class StagedBodySetDesignBuilderV7 {
       readonly segments?: number;
     },
   ): StagedBodyLeafRefV7 {
-    const key = this.#assertNodeAvailable(id);
-    const reference = this.#base.sphere(id, options);
-    authoringSetInsert(this.#nodeIds, key);
-    return this.#registerLeaf(
-      new StagedBodyLeafRefV7(this, reference.node),
+    return this.#registerNativeLeaf(id, () =>
+      this.#base.sphere(id, options),
     );
   }
 
@@ -1988,7 +2006,6 @@ export class StagedBodySetDesignBuilderV7 {
       ["position"],
       "Datum-point options",
     );
-    const key = this.#assertNodeAvailable(id);
     const node: DatumPointNodeIRV7 = {
       kind: "datumPoint",
       position: captureDatumVectorIR(
@@ -1998,6 +2015,8 @@ export class StagedBodySetDesignBuilderV7 {
       ),
     };
     const definition = deepFreeze(node);
+    // Vector capture can run caller traps; check the ID only afterwards.
+    const key = this.#assertNodeAvailable(id);
     const reference = new StagedDatumPointRefV7(
       this,
       key,
@@ -2020,7 +2039,6 @@ export class StagedBodySetDesignBuilderV7 {
       ["origin", "direction"],
       "Datum-axis options",
     );
-    const key = this.#assertNodeAvailable(id);
     const node: DatumAxisNodeIRV7 = {
       kind: "datumAxis",
       origin: captureDatumVectorIR(
@@ -2035,6 +2053,8 @@ export class StagedBodySetDesignBuilderV7 {
       ),
     };
     const definition = deepFreeze(node);
+    // Vector capture can run caller traps; check the ID only afterwards.
+    const key = this.#assertNodeAvailable(id);
     const reference = new StagedDatumAxisRefV7(
       this,
       key,
@@ -2058,7 +2078,6 @@ export class StagedBodySetDesignBuilderV7 {
       ["origin", "xDirection", "normal"],
       "Datum-plane options",
     );
-    const key = this.#assertNodeAvailable(id);
     const node: DatumPlaneNodeIRV7 = {
       kind: "datumPlane",
       origin: captureDatumVectorIR(
@@ -2078,6 +2097,8 @@ export class StagedBodySetDesignBuilderV7 {
       ),
     };
     const definition = deepFreeze(node);
+    // Vector capture can run caller traps; check the ID only afterwards.
+    const key = this.#assertNodeAvailable(id);
     const reference = new StagedDatumPlaneRefV7(
       this,
       key,
@@ -2101,7 +2122,6 @@ export class StagedBodySetDesignBuilderV7 {
       ["origin", "xDirection", "yDirection"],
       "Coordinate-system options",
     );
-    const key = this.#assertNodeAvailable(id);
     const node: CoordinateSystemNodeIRV7 = {
       kind: "coordinateSystem",
       origin: captureDatumVectorIR(
@@ -2121,6 +2141,8 @@ export class StagedBodySetDesignBuilderV7 {
       ),
     };
     const definition = deepFreeze(node);
+    // Vector capture can run caller traps; check the ID only afterwards.
+    const key = this.#assertNodeAvailable(id);
     const reference = new StagedCoordinateSystemRefV7(
       this,
       key,
@@ -2173,8 +2195,13 @@ export class StagedBodySetDesignBuilderV7 {
       this.#assemblyHandleInstanceIds,
     );
     build(configuration);
-    this.#configurationRecords[key] =
+    const definition =
       configuration[STAGED_CONFIGURATION_TO_IR](capturedOptions);
+    // The callback is caller code; a re-entrant registration of this ID wins.
+    if (authoringHasOwn(this.#configurationRecords, key)) {
+      throw new TypeError(`Duplicate configuration '${id}'`);
+    }
+    this.#configurationRecords[key] = definition;
     return key;
   }
 
@@ -2194,24 +2221,18 @@ export class StagedBodySetDesignBuilderV7 {
     ) {
       throw new TypeError(`Material '${id}' requires a non-empty name`);
     }
-    const massDensity = captured.massDensity as
-      | MassDensityExpression
-      | undefined;
-    if (
-      massDensity === undefined ||
-      massDensity.dimension !== "massDensity"
-    ) {
-      throw new TypeError(
-        "Material massDensity must be a mass-density expression",
-      );
-    }
+    const massDensity = captureDatumExpressionIR(
+      captured.massDensity,
+      "massDensity",
+      "Material massDensity",
+    );
     assertOptionalString(
       captured.description,
       "Material options.description",
     );
     const definition = deepFreeze({
       name: captured.name,
-      massDensity: massDensity.ir,
+      massDensity,
       ...(captured.description === undefined
         ? {}
         : { description: captured.description }),
@@ -2224,6 +2245,10 @@ export class StagedBodySetDesignBuilderV7 {
             ),
           }),
     });
+    // Density and metadata capture can run caller traps; recheck the ID.
+    if (authoringHasOwn(this.#materialRecords, key)) {
+      throw new TypeError(`Duplicate material '${id}'`);
+    }
     const reference = authoringFreeze(
       new MaterialRef(this.#handleOwner, key),
     );
@@ -2300,17 +2325,14 @@ export class StagedBodySetDesignBuilderV7 {
         );
       }
     }
-    const massDensity = captured.massDensity as
-      | MassDensityExpression
-      | undefined;
-    if (
-      massDensity !== undefined &&
-      massDensity.dimension !== "massDensity"
-    ) {
-      throw new TypeError(
-        "Part massDensity must be a mass-density expression",
-      );
-    }
+    const massDensity =
+      captured.massDensity === undefined
+        ? undefined
+        : captureDatumExpressionIR(
+            captured.massDensity,
+            "massDensity",
+            "Part massDensity",
+          );
     const metadata =
       captured.metadata === undefined
         ? undefined
@@ -2335,9 +2357,7 @@ export class StagedBodySetDesignBuilderV7 {
       ...(materialReferenceId === undefined
         ? {}
         : { materialId: materialReferenceId }),
-      ...(massDensity === undefined
-        ? {}
-        : { massDensity: massDensity.ir }),
+      ...(massDensity === undefined ? {} : { massDensity }),
       ...(metadata === undefined ? {} : { metadata }),
     };
     const definition = deepFreeze(node);
@@ -2454,26 +2474,25 @@ export class StagedBodySetDesignBuilderV7 {
     let locations: readonly string[] | undefined;
     let addedLocationBytes = 0;
     if (rawLocations !== undefined) {
-      if (!authoringIsArray(rawLocations) || rawLocations.length === 0) {
+      const capturedLocations = captureDenseOwnDataArray(
+        rawLocations,
+        "Resource locations",
+        {
+          maximumLength:
+            DEFAULT_DESIGN_DOCUMENT_LIMITS.maxResourceLocations -
+            this.#resourceLocationCount,
+          maximumLengthMessage: RESOURCE_LOCATION_LIMIT_MESSAGE,
+        },
+      );
+      if (capturedLocations.length === 0) {
         throw new TypeError(
           "Resource locations must be a non-empty dense array",
         );
       }
-      if (
-        this.#resourceLocationCount + rawLocations.length >
-        DEFAULT_DESIGN_DOCUMENT_LIMITS.maxResourceLocations
-      ) {
-        throw new RangeError(
-          `Resource locations exceed the authoring limit of ${DEFAULT_DESIGN_DOCUMENT_LIMITS.maxResourceLocations}`,
-        );
-      }
-      const copied = authoringDenseArray<string>(rawLocations.length);
+      const copied = authoringDenseArray<string>(capturedLocations.length);
       const seen = new AuthoringSet<string>();
-      for (let index = 0; index < rawLocations.length; index += 1) {
-        if (!authoringHasOwn(rawLocations, index)) {
-          throw new TypeError("Resource locations must be a dense array");
-        }
-        const location = rawLocations[index];
+      for (let index = 0; index < capturedLocations.length; index += 1) {
+        const location = capturedLocations[index];
         if (typeof location !== "string" || location.length === 0) {
           throw new TypeError("Resource locations must be non-empty strings");
         }
@@ -2513,6 +2532,34 @@ export class StagedBodySetDesignBuilderV7 {
             ),
           }),
     });
+    // Location and metadata capture can run caller traps that author other
+    // resources, so the namespace and the aggregate ceilings are checked
+    // again immediately before the record is committed.
+    if (authoringHasOwn(this.#resourceRecords, key)) {
+      throw new TypeError(`Duplicate resource '${id}'`);
+    }
+    if (
+      this.#resourceCount >=
+      DEFAULT_DESIGN_DOCUMENT_LIMITS.maxResourceDefinitions
+    ) {
+      throw new RangeError(
+        `Resource definition count exceeds the authoring limit of ${DEFAULT_DESIGN_DOCUMENT_LIMITS.maxResourceDefinitions}`,
+      );
+    }
+    if (
+      this.#resourceLocationCount + (locations?.length ?? 0) >
+      DEFAULT_DESIGN_DOCUMENT_LIMITS.maxResourceLocations
+    ) {
+      throw new RangeError(RESOURCE_LOCATION_LIMIT_MESSAGE);
+    }
+    if (
+      this.#resourceLocationBytes + addedLocationBytes >
+      DEFAULT_DESIGN_DOCUMENT_LIMITS.maxResourceLocationBytes
+    ) {
+      throw new RangeError(
+        `Resource location bytes exceed the authoring limit of ${DEFAULT_DESIGN_DOCUMENT_LIMITS.maxResourceLocationBytes}`,
+      );
+    }
     const reference = new StagedResourceRefV7(this, key);
     authoringWeakSetInsert(this.#resourceHandles, reference);
     authoringWeakMapWrite(this.#resourceHandleIds, reference, key);
@@ -2697,28 +2744,24 @@ export class StagedBodySetDesignBuilderV7 {
     id: string,
     members: readonly StagedBodySetMemberAuthoringV7[],
   ): StagedBodySetRefV7 {
-    const key = this.#assertNodeAvailable(id);
-    if (!authoringIsArray(members) || members.length === 0) {
+    const capturedMembers = captureDenseOwnDataArray(
+      members,
+      "Body-set members",
+      {
+        maximumLength: DEFAULT_DESIGN_DOCUMENT_LIMITS.maxStructuralValues,
+        maximumLengthMessage: `Body-set members exceed the authoring structural-value limit of ${DEFAULT_DESIGN_DOCUMENT_LIMITS.maxStructuralValues}`,
+      },
+    );
+    if (capturedMembers.length === 0) {
       throw new TypeError("A body set requires a non-empty dense array");
     }
-    if (
-      members.length >
-      DEFAULT_DESIGN_DOCUMENT_LIMITS.maxStructuralValues
-    ) {
-      throw new RangeError(
-        `Body-set members exceed the authoring structural-value limit of ${DEFAULT_DESIGN_DOCUMENT_LIMITS.maxStructuralValues}`,
-      );
-    }
     const copied = authoringDenseArray<BodySetMemberIRV7>(
-      members.length,
+      capturedMembers.length,
     );
     const seen = new AuthoringSet<EntityId>();
-    for (let index = 0; index < members.length; index += 1) {
-      if (!authoringHasOwn(members, index)) {
-        throw new TypeError("Body-set members must be a dense array");
-      }
+    for (let index = 0; index < capturedMembers.length; index += 1) {
       const member = captureExactOwnDataRecord(
-        members[index],
+        capturedMembers[index],
         ["id", "solid", "name", "metadata"],
         `Body-set member ${index}`,
       );
@@ -2755,6 +2798,8 @@ export class StagedBodySetDesignBuilderV7 {
       kind: "bodySet",
       bodies: authoringFreeze(copied),
     });
+    // Member capture can run caller traps; check the ID only afterwards.
+    const key = this.#assertNodeAvailable(id);
     const reference = new StagedBodySetRefV7(this, key);
     authoringWeakSetInsert(this.#bodySetHandles, reference);
     authoringSetInsert(this.#nodeIds, key);
@@ -2829,6 +2874,9 @@ export class StagedBodySetDesignBuilderV7 {
         throw new TypeError(
           `Unsupported node '${id}' escaped the staged authoring facade`,
         );
+      }
+      if (authoringHasOwn(this.#nodeRecords, id)) {
+        throw new TypeError(`Duplicate feature '${id}'`);
       }
       nativeNodes[id] = node;
     }

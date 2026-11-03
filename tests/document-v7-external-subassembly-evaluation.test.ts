@@ -32,6 +32,7 @@ import {
   EvaluatedLocalAssemblyV7,
   evaluateProductAssemblyOutputsV7,
 } from "../src/internal/document-v7-local-assembly-evaluation.js";
+import { evaluateProductDocument } from "../src/internal/document-v7-product-evaluation.js";
 
 const DOCUMENT_MEDIA_TYPE =
   "application/vnd.invariantcad.document+json";
@@ -56,6 +57,16 @@ interface TrackedManifold {
 interface LinearCarriageFixture {
   readonly document: DesignDocumentV7;
   readonly child: CommittedDocument;
+}
+
+function capturedCadError(action: () => unknown): CadError {
+  try {
+    action();
+  } catch (error) {
+    if (error instanceof CadError) return error;
+    throw error;
+  }
+  throw new Error("Expected a CadError");
 }
 
 async function digestBytes(
@@ -1396,6 +1407,202 @@ describe("external fixed-subassembly evaluation", () => {
     } finally {
       result.value.dispose();
       expect(harness.liveShapes.size).toBe(0);
+      harness.disposeBase();
+    }
+  });
+
+  it("prepares one child batch for an external part and a fixed subassembly of the same document", async () => {
+    const childCad = stagedBodySetDesignV7("shared-child");
+    const leafSolid = childCad.box("leaf-solid", {
+      size: [mm(4), mm(3), mm(2)],
+    });
+    const leaf = childCad.part("leaf", leafSolid, {
+      partNumber: "LEAF-1",
+      massDensity: kgPerCubicMillimeter(1e-6),
+    });
+    const otherSolid = childCad.box("other-solid", {
+      size: [mm(1), mm(1), mm(1)],
+    });
+    const other = childCad.part("other", otherSolid, {
+      partNumber: "OTHER-1",
+      massDensity: kgPerCubicMillimeter(1e-6),
+    });
+    const childModule = childCad.assembly("module", (instances) => {
+      instances.instance("leaf-occ", leaf);
+    });
+    childCad.output("leafPart", leaf);
+    // A child output named like the leaf part node but selecting another part.
+    childCad.output("leaf", other);
+    childCad.output("module", childModule);
+    const child = await commitDocument(childCad.build());
+
+    const product = (directOutput: string): DesignDocumentV7 => {
+      const cad = stagedBodySetDesignV7("shared-child-product");
+      const resource = cad.resource("carriageModule", {
+        digest: child.digest,
+        byteLength: child.bytes.byteLength,
+        mediaType: DOCUMENT_MEDIA_TYPE,
+      });
+      const direct = cad.externalPart(resource, directOutput);
+      const fixed = cad.externalAssembly(resource, "module");
+      const assembly = cad.assembly("product", (instances) => {
+        instances.instance("direct-part", direct);
+        instances.instance("fixed-sub", fixed, {
+          placement: [tf.translate([mm(20), mm(0), mm(0)])],
+        });
+      });
+      cad.output("product", assembly);
+      return cad.build();
+    };
+
+    for (const testCase of [
+      { directOutput: "leafPart", directNode: "leaf", boxCalls: 1 },
+      { directOutput: "leaf", directNode: "other", boxCalls: 2 },
+    ]) {
+      const resolved = resolverFor(child);
+      const harness = await trackedManifold();
+      try {
+        const result = await evaluateProductAssemblyOutputsV7(
+          harness.kernel,
+          product(testCase.directOutput),
+          {
+            resolver: resolved.resolver,
+            evaluationLimits: {
+              maxDistinctSolids: testCase.boxCalls,
+              maxSolidGraphNodes: testCase.boxCalls,
+            },
+          },
+        );
+        expect(result.ok, JSON.stringify(result.diagnostics)).toBe(true);
+        if (!result.ok) continue;
+        try {
+          expect(harness.boxCalls).toHaveBeenCalledTimes(testCase.boxCalls);
+          const [direct, fixedLeaf] =
+            result.value.output("product").occurrences;
+          expect(direct!.component).toMatchObject({
+            source: "external",
+            output: testCase.directOutput,
+            outputKind: "part",
+            partNode: testCase.directNode,
+          });
+          expect(direct!.part.name).toBe(testCase.directOutput);
+          expect(direct!.part.node).toBe(testCase.directNode);
+          expect(fixedLeaf!.component).toMatchObject({
+            source: "external",
+            output: "module",
+            outputKind: "assembly",
+            partNode: "leaf",
+          });
+          expect(fixedLeaf!.part.name).toBe("leaf");
+          expect(fixedLeaf!.part.node).toBe("leaf");
+          for (const occurrence of [direct!, fixedLeaf!]) {
+            const geometry = occurrence.part.geometry;
+            expect(geometry.kind).toBe("solid");
+            if (geometry.kind === "solid") {
+              expect(geometry.solid.name).toBe(occurrence.part.name);
+            }
+            expect(
+              (occurrence.part.export("stl-ascii") as string).split("\n")[0],
+            ).toBe(`solid ${occurrence.part.name}`);
+          }
+          const leafBox =
+            fixedLeaf!.part.geometry.kind === "solid"
+              ? fixedLeaf!.part.geometry.solid.measure().boundingBox
+              : undefined;
+          expect(leafBox?.max[0]! - leafBox?.min[0]!).toBeCloseTo(4);
+
+          const bom = result.value.output("product").billOfMaterials();
+          expect(bom.ok, JSON.stringify(bom.diagnostics)).toBe(true);
+          if (bom.ok) {
+            expect(
+              bom.value.items.map((item) => [
+                item.component.source === "external"
+                  ? item.component.output
+                  : undefined,
+                item.partNode,
+                item.quantity,
+              ]),
+            ).toEqual(
+              expect.arrayContaining([
+                [testCase.directOutput, testCase.directNode, 1],
+                ["module", "leaf", 1],
+              ]),
+            );
+          }
+        } finally {
+          result.value.dispose();
+        }
+        expect(harness.disposedShapes).toHaveLength(testCase.boxCalls);
+        expect(harness.liveShapes.size).toBe(0);
+      } finally {
+        harness.disposeBase();
+      }
+    }
+  });
+
+  it("reports external component provenance for deferred mesh failures through product meshing", async () => {
+    const fixture = await singleExternalAssemblyProduct(
+      childModule(),
+      "mesh-module",
+    );
+    const resolved = resolverFor(fixture.child);
+    const harness = await trackedManifold();
+    const kernel: GeometryKernel = {
+      ...harness.kernel,
+      mesh: () => {
+        throw new Error("child tessellation failed");
+      },
+    };
+    const expected = {
+      code: "KERNEL_ERROR",
+      node: "product",
+      path: "/nodes/product/instances/0/component",
+      details: {
+        phase: "documentV7LocalAssemblyEvaluation",
+        resource: "carriageModule",
+        componentResource: "carriageModule",
+        digest: fixture.child.digest,
+        byteLength: fixture.child.bytes.byteLength,
+        output: "module",
+        outputKind: "assembly",
+        sourceVersion: 7,
+        assemblyOutput: "product",
+        reason: "mesh-callback-threw",
+        occurrencePath: ["mesh-module", "core-instance", "carriage-leaf"],
+        childNode: "carriage",
+        childAssemblyNode: "core",
+        childPath: "/nodes/core/instances/0/component",
+        cause: "child tessellation failed",
+      },
+    };
+    try {
+      const result = await evaluateProductDocument(
+        kernel,
+        fixture.document,
+        { resolver: resolved.resolver },
+      );
+      expect(result.ok, JSON.stringify(result.diagnostics)).toBe(true);
+      if (!result.ok) return;
+      try {
+        const assemblyError = capturedCadError(() =>
+          result.value.assembly("product").mesh(),
+        );
+        expect(assemblyError.diagnostics).toHaveLength(1);
+        expect(assemblyError.diagnostics[0]).toMatchObject(expected);
+
+        const productError = capturedCadError(() => result.value.mesh());
+        expect(productError.diagnostics).toEqual(
+          assemblyError.diagnostics,
+        );
+        const exportError = capturedCadError(() =>
+          result.value.export("stl"),
+        );
+        expect(exportError.diagnostics).toEqual(assemblyError.diagnostics);
+      } finally {
+        result.value.dispose();
+      }
+      expect(harness.liveShapes.size).toBe(0);
+    } finally {
       harness.disposeBase();
     }
   });

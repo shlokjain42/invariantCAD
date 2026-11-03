@@ -69,8 +69,15 @@ turned into a kernel compound. Frozen v1–v6 output grammars are unchanged.
 Documents v1–v6 accept any string as a parameter, node, output, sketch-entity,
 sketch-constraint, or assembly-occurrence ID, and accept repeated occurrence
 IDs within one assembly. Document v7 requires `^[A-Za-z][A-Za-z0-9._:-]*$`
-and unique occurrence IDs. Staged migration fails closed with one diagnostic
-per blocking identity; it never renames anything on its own.
+and unique occurrence IDs. Staged migration fails closed and never renames
+anything on its own. It reports every blocking location rather than one
+diagnostic per identity: a non-conforming ID gets an `IR_INVALID` diagnostic
+(reason `document-v7-id-grammar-incompatible`) at its definition and again at
+each stored topology-lineage entry, variant or adjacency, that names it. Each
+repeat of an occurrence ID within one assembly adds a `DUPLICATE_ID`
+diagnostic (reason `document-v7-duplicate-assembly-occurrence-id`) that
+points back to the first occurrence. Diagnostics are ordered by JSON Pointer
+path.
 
 A separate staged operation accepts an explicit caller-authored rename map.
 Flat maps cover parameters, nodes, and outputs. Sketch maps are keyed by

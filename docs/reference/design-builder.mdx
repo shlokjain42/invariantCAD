@@ -378,8 +378,10 @@ Omitted instance options mean an empty placement, `suppressed: false`, and
 The configuration active for every containing assembly controls its
 definition-scoped instance suppression and placement expressions.
 `configuration.instanceSuppressed(...)` can target any owned assembly
-definition. Passing `false` explicitly unsuppresses an instance authored with
-`suppressed: true`; omission retains the authored value. Suppression is
+definition. Its `suppressed` argument defaults to `true`, so omitting it writes
+a suppression override; pass `false` to reactivate an instance authored with
+`suppressed: true`. Only an instance with no `instanceSuppressed(...)` override
+in the active configuration keeps its authored value. Suppression is
 resolved before component support is checked, so suppressing an assembly edge
 prunes its entire subtree, including external or otherwise unsupported
 descendants. A suppressed nested external component therefore performs no
@@ -402,6 +404,14 @@ states and direct external parts for equal
 `(resource, output, child configuration)` states. Fixed-subassembly leaves
 share geometry by resource, child part node, and child configuration; distinct
 assembly output aliases retain separate component, diagnostic, and BOM identity.
+Every external component of one child document and child configuration, whether
+reached through `externalPart(...)` or `externalAssembly(...)`, is prepared in
+one batch, so the solid graph of a child part used both ways is constructed
+once and counted once toward `maxDistinctSolids`, `maxSolidGraphNodes`,
+`maxSolidDependencyLinks`, and `maxTransformOperations`, while keeping separate
+component and BOM identity.
+The direct selection and the fixed-subassembly leaf selection of that part
+still count their bodies separately toward `maxPartBodies`.
 Direct part evaluation may additionally deduplicate solid-DAG acquisition
 within a configuration batch. Authoring does not create a persistent or
 cross-run cache commitment.
@@ -459,7 +469,11 @@ configuration, material, part, assembly instance, placement, resource, import,
 unit-policy, datum, or body-member option record contains an accessor or
 unknown field. Those inputs must be plain own-data records; required arrays
 must be dense own-data arrays. Accessors are not invoked and unsupported
-semantics are rejected rather than silently discarded. Build then applies
+semantics are rejected rather than silently discarded. Namespace checks also
+hold across re-entrant calls: if a callback or a Proxy trap registers the same
+node, configuration, material, or resource ID while another call is still
+capturing its inputs, one of the two calls fails with the duplicate error and
+neither definition is silently replaced at build. Build then applies
 caller-selected document limits and strict v7 validation before returning the
 detached, recursively frozen document.
 

@@ -208,9 +208,20 @@ selected by the parent. The original child location is preserved as
 `childNode` and `childPath` when supplied. A fixed-subassembly leaf also retains
 its child part node and the child assembly/component location when the failure
 belongs to that leaf. Internal selectors used to evaluate those leaves are never
-reported as authored output names. Deferred external BOM warnings keep the same
-component provenance, so applications can identify both the product occurrence
-and the child-document cause without parsing message text.
+reported as authored output names.
+
+The same top-level provenance applies to deferred failures raised later by an
+evaluated assembly, such as an occurrence mesh failure, an occurrence
+mass-property failure, or a BOM warning. For a fixed-subassembly leaf,
+`childAssemblyNode` names the child assembly that owns the leaf instance and
+`childPath` points at that instance's component in the child document; a child
+diagnostic's own path, when it has one, moves to `childDiagnosticPath`. A
+deferred assembly mesh failure names the assembly being meshed as
+`assemblyOutput`, because `output` names the external component.
+`EvaluatedProductDocumentV7.mesh()` and `export(...)` rethrow that structured
+assembly failure unchanged instead of reducing it to a message string, so
+applications can identify both the product occurrence and the child-document
+cause without parsing message text.
 
 An aggregate limit, preflight, or shared child-resource failure that cannot be
 attributed to one leaf remains at the selected external component boundary. A

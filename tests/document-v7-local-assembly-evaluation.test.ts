@@ -37,9 +37,11 @@ import {
 } from "../src/internal/document-v7-body-set-authoring.js";
 import {
   EvaluatedLocalAssemblyV7,
+  EvaluatedProductDocumentV7,
   evaluateLocalAssemblyOutputsV7,
   type LocalAssemblyEvaluationLimitsV7,
 } from "../src/internal/document-v7-local-assembly-evaluation.js";
+import { evaluateProductDocument } from "../src/internal/document-v7-product-evaluation.js";
 
 const literal = (
   dimension:
@@ -2346,6 +2348,273 @@ describe("staged Document v7 local assembly evaluation", () => {
     }
     expect(harness.boxCalls).not.toHaveBeenCalled();
     harness.disposeBase();
+  });
+
+  it("names local leaf parts by part node, never by planner selection or output names", async () => {
+    // Output "part" names a body set while part node "part" is the leaf, so
+    // the product planner must rename the leaf's internal selection.
+    const document = {
+      schema: DOCUMENT_SCHEMA_V7,
+      version: DOCUMENT_VERSION_V7,
+      name: "leaf-selection-collision",
+      units: { length: "mm", angle: "rad", mass: "kg" },
+      parameters: {},
+      nodes: {
+        shared: {
+          kind: "box",
+          size: [
+            literal("length", 4),
+            literal("length", 2),
+            literal("length", 3),
+          ],
+          center: false,
+        },
+        bodies: {
+          kind: "bodySet",
+          bodies: [{ id: "b1", solid: { node: "shared", kind: "solid" } }],
+        },
+        part: {
+          kind: "part",
+          geometry: { node: "shared", kind: "solid" },
+          partNumber: "P-1",
+          massDensity: literal("massDensity", 1e-6),
+        },
+        multi: {
+          kind: "part",
+          geometry: { node: "bodies", kind: "bodySet" },
+          massDensity: literal("massDensity", 1e-6),
+        },
+        bare: {
+          kind: "part",
+          geometry: { node: "shared", kind: "solid" },
+        },
+        asm: {
+          kind: "assembly",
+          instances: [
+            localPartInstance("leaf", { mode: "inherit" }),
+            {
+              ...localPartInstance("multi-leaf", { mode: "inherit" }),
+              component: {
+                source: "local",
+                reference: { node: "multi" as NodeId, kind: "part" },
+              },
+            },
+            {
+              ...localPartInstance("bare-leaf", { mode: "inherit" }),
+              component: {
+                source: "local",
+                reference: { node: "bare" as NodeId, kind: "part" },
+              },
+            },
+          ],
+        },
+      },
+      outputs: {
+        part: { node: "bodies", kind: "bodySet" },
+        product: { node: "asm", kind: "assembly" },
+      },
+    } as unknown as DesignDocumentV7;
+    const kernel = await createManifoldKernel();
+    try {
+      const evaluations = [
+        () => evaluateProductDocument(kernel, document),
+        () =>
+          evaluateLocalAssemblyOutputsV7(kernel, document, {
+            outputs: ["product"],
+          }),
+      ];
+      // Each result is checked and disposed before the next one exists.
+      for (const evaluate of evaluations) {
+        const result = await evaluate();
+        expect(result.ok, JSON.stringify(result.diagnostics)).toBe(true);
+        if (!result.ok) continue;
+        try {
+          const assembly =
+            result.value instanceof EvaluatedProductDocumentV7
+              ? result.value.assembly("product")
+              : result.value.output("product");
+          const [leaf, multiLeaf, bareLeaf] = assembly.occurrences;
+          const part = leaf!.part;
+          expect(part.name).toBe("part");
+          expect(part.geometry.kind).toBe("solid");
+          if (part.geometry.kind === "solid") {
+            expect(part.geometry.solid.name).toBe("part");
+          }
+          expect(
+            (part.export("stl-ascii") as string).split("\n")[0],
+          ).toBe("solid part");
+          expect(
+            (part.export("obj") as string)
+              .split("\n")
+              .find((line) => line.startsWith("o ")),
+          ).toBe("o part");
+          const exported = capturedCadError(() =>
+            (part.export as unknown as (format: "step") => unknown)(
+              "step",
+            ),
+          );
+          expect(exported.diagnostics[0]).toMatchObject({
+            code: "EXPORT_UNSUPPORTED",
+            node: "part",
+            path: "/nodes/part/geometry",
+            details: { partNode: "part", format: "step" },
+          });
+          expect(exported.diagnostics[0]?.details).not.toHaveProperty(
+            "output",
+          );
+
+          // Part-level mass checks keep pointing at the authored density.
+          const bareMass = bareLeaf!.part.physicalMassProperties();
+          expect(bareMass.ok).toBe(false);
+          if (!bareMass.ok) {
+            expect(bareMass.diagnostics[0]).toMatchObject({
+              code: "MASS_DENSITY_MISSING",
+              node: "bare",
+              path: "/nodes/bare/massDensity",
+            });
+            expect(bareMass.diagnostics[0]?.details ?? {}).not.toHaveProperty(
+              "partNode",
+            );
+          }
+
+          const multi = multiLeaf!.part;
+          expect(multi.name).toBe("multi");
+          expect(multi.geometry.kind).toBe("bodySet");
+          if (multi.geometry.kind !== "bodySet") continue;
+          expect(multi.geometry.bodySet.name).toBe("multi");
+          const multiBodySet = multi.geometry.bodySet;
+          const multibody = capturedCadError(() =>
+            (
+              multiBodySet.export as unknown as (format: "step") => unknown
+            )("step"),
+          );
+          expect(multibody.diagnostics[0]).toMatchObject({
+            code: "EXPORT_UNSUPPORTED",
+            path: "/nodes/multi/geometry",
+            details: { partNode: "multi", format: "step" },
+          });
+          expect(multibody.diagnostics[0]?.details).not.toHaveProperty(
+            "output",
+          );
+          for (const name of [
+            part.name,
+            multi.name,
+            JSON.stringify(exported.diagnostics),
+            JSON.stringify(multibody.diagnostics),
+          ]) {
+            expect(name).not.toContain("\u0000");
+            expect(name).not.toContain("\\u0000");
+          }
+        } finally {
+          result.value.dispose();
+        }
+      }
+    } finally {
+      kernel.dispose();
+    }
+  });
+
+  it("points batch limit and preflight provenance at the selection, not at a node named like it", async () => {
+    // Output "alpha" selects node "shared"; no node is named "alpha".
+    const document = {
+      schema: DOCUMENT_SCHEMA_V7,
+      version: DOCUMENT_VERSION_V7,
+      name: "batch-provenance-paths",
+      units: { length: "mm", angle: "rad", mass: "kg" },
+      parameters: {
+        w: { dimension: "length", default: literal("length", 4) },
+      },
+      configurations: {
+        a: { parameterOverrides: { w: literal("length", 5) } },
+        z: { parameterOverrides: { w: literal("length", 6) } },
+      },
+      nodes: {
+        shared: {
+          kind: "box",
+          size: [
+            literal("length", 4),
+            literal("length", 2),
+            literal("length", 3),
+          ],
+          center: false,
+        },
+        part: {
+          kind: "part",
+          geometry: { node: "shared", kind: "solid" },
+          massDensity: literal("massDensity", 1e-6),
+        },
+        asm: {
+          kind: "assembly",
+          instances: [
+            localPartInstance("leaf", {
+              mode: "named",
+              id: "a" as ConfigurationId,
+            }),
+          ],
+        },
+      },
+      outputs: {
+        alpha: { node: "shared", kind: "solid" },
+        product: { node: "asm", kind: "assembly" },
+      },
+    } as unknown as DesignDocumentV7;
+    const base = await createManifoldKernel();
+    try {
+      const limited = await evaluateProductDocument(base, document, {
+        configuration: "z",
+        evaluationLimits: { maxSolidGraphNodes: 1 },
+      });
+      if (limited.ok) limited.value.dispose();
+      expect(limited.ok).toBe(false);
+      if (!limited.ok) {
+        expect(limited.diagnostics[0]).toMatchObject({
+          code: "RESOURCE_LIMIT_EXCEEDED",
+          path: "/outputs/alpha",
+          details: { resource: "maxSolidGraphNodes", limit: 1, actual: 2 },
+        });
+      }
+
+      const leafLimited = await evaluateProductDocument(base, document, {
+        outputs: ["product"],
+        evaluationLimits: { maxSolidGraphNodes: 0 },
+      });
+      if (leafLimited.ok) leafLimited.value.dispose();
+      expect(leafLimited.ok).toBe(false);
+      if (!leafLimited.ok) {
+        expect(leafLimited.diagnostics[0]).toMatchObject({
+          code: "RESOURCE_LIMIT_EXCEEDED",
+          path: "/nodes/part/geometry",
+        });
+      }
+
+      // The kernel advertises box but does not implement it.
+      const kernel = {
+        id: base.id,
+        capabilities: base.capabilities,
+        status: base.status.bind(base),
+        measure: base.measure.bind(base),
+        mesh: base.mesh.bind(base),
+        disposeShape: base.disposeShape.bind(base),
+        dispose() {},
+      } as unknown as GeometryKernel;
+      const preflight = await evaluateProductDocument(kernel, document, {
+        outputs: ["alpha"],
+      });
+      if (preflight.ok) preflight.value.dispose();
+      expect(preflight.ok).toBe(false);
+      if (!preflight.ok) {
+        expect(preflight.diagnostics[0]).toMatchObject({
+          code: "KERNEL_CAPABILITY_MISSING",
+          details: {
+            productBatchIndex: 0,
+            documentScope: { source: "root" },
+            selectionPath: "/outputs/alpha",
+          },
+        });
+      }
+    } finally {
+      base.dispose();
+    }
   });
 
   it("rolls back every acquired child shape when a kernel callback aborts evaluation", async () => {
