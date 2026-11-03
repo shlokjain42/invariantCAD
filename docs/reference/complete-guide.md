@@ -1027,11 +1027,29 @@ invariantcad export design.invariantcad.json --output plate --to plate.step
 invariantcad inspect design.invariantcad.json --kernel occt
 ```
 
+<Note>
+  Inline `--parameter` overrides, fail-closed argument parsing, bounded input
+  files, the `--output` requirement for multi-output exports, export and write
+  failures reported as diagnostics, and terminal-safe escaping are implemented
+  for the unreleased 0.2 line, not the current 0.1.1 npm package. The 0.1.1 CLI
+  accepts only `--parameters values.json`; silently ignores `--parameter`,
+  unknown options, and stray arguments; exports only the first output in sorted
+  name order when `--output` is omitted; prints JavaScript stack traces for
+  missing or malformed input files and for export or write failures; and writes
+  document text without escaping. See the [CLI reference](/reference/cli).
+</Note>
+
 Parameter JSON and inline `--parameter name=value` values use base units: millimetres, radians, `kg/mm^3` mass density, and unitless scalars. Repeat `--parameter` for multiple finite JSON-number overrides. Inline names are exact stored parameter keys; splitting at the final `=` keeps keys containing `=` addressable for directly evaluable frozen legacy documents. Use the attached `--parameter=-legacy-key=5` form when a stored key begins with `-`. Choose either inline overrides or one `--parameters` JSON file; mixing them is a usage error. Runtime overrides take precedence over the selected configuration and document defaults. `--configuration <id>` selects the same named variant for `inspect`, `bom`, and `export`; `validate` checks every stored configuration without selecting one.
-CLI parsing is fail-closed and command-specific. Unknown or inapplicable options, extra positional arguments, missing values, malformed inline assignments, and duplicate single-value options fail with exit code 2 before document I/O or kernel initialization. Command-scoped help still validates supplied option values, while valid parameter files are loaded before geometry-kernel initialization.
+
+CLI parsing is fail-closed and command-specific. Unknown or inapplicable options, extra positional arguments, missing values, malformed inline assignments, and duplicate single-value options fail with exit code 2 before document I/O or kernel initialization. Command-scoped help still validates supplied option values, while valid parameter files are loaded before geometry-kernel initialization. Document and parameter files are limited to the default 64 MiB `maxDocumentBytes` ceiling and decoded as strict UTF-8 without stripping a byte-order mark, and a parameter file that repeats a member name is rejected. These failures, and a missing or unreadable file, print a one-line reason and exit with code 1.
+
 `inspect` includes geometric `centerOfMass`, the three-row `inertiaTensor`, principal inertia, and world/principal radii alongside `volume`, `surfaceArea`, `boundingBox`, `genus`, `tolerance`, and `triangles`. In the unreleased 0.2 line, genus is a nonnegative exact integer when supported and JSON `null` otherwise; stock/owned OCCT and assembly aggregates return `null`, while Manifold returns the exact sum for its connected mesh components. The 0.1.1 CLI prints the numeric genus described under [Measurements and mass properties](#measurements-and-mass-properties). Part and assembly reports additionally include analyzed `physicalMassProperties`; if an active density is missing, that field is `null` and `physicalMassDiagnostics` explains why.
+
 `bom` evaluates the selected part or assembly output and prints the same deterministic item, quantity, mass-completeness, and warning-diagnostic contract exposed by `billOfMaterials()`, including its `configurationId`.
-The CLI selects stock OCCT automatically for `.step` and `.brep` destinations. Use `--kernel manifold|occt` to select a backend explicitly. The current CLI does not inject a custom module factory, so document draft evaluation, exact Boolean, fillet/chamfer, and shell/offset topology evolution, and owned-facade-only composite refinements require programmatic initialization with the matched pair. Boolean, fillet/chamfer, and shell/offset geometry itself remains available through supported stock paths with partial history.
+
+Without `--format`, `export` selects the format from the destination extension regardless of case: `.obj` writes OBJ, `.step` and `.stp` write STEP, `.brep` and `.brp` write text BREP, and any other extension, or none, writes binary STL. Binary BREP requires `--format brep-binary`. Exact formats select stock OCCT automatically; use `--kernel manifold|occt` to select a backend explicitly. `export` requires `--output` when the document has more than one output and otherwise fails with exit code 2 before kernel initialization. An export failure, such as an exact format for an assembly output or with `--kernel manifold`, prints `EXPORT_UNSUPPORTED` diagnostics, and a destination that cannot be written prints a one-line `Output file could not be written: ...` reason; both exit with code 1. The `validate` success line and diagnostic paths and messages escape control characters, Unicode line and paragraph separators, and bidirectional controls as `\uXXXX`, and `inspect` and `bom` JSON escape the same characters inside strings, so untrusted document text cannot drive the terminal.
+
+The current CLI does not inject a custom module factory, so document draft evaluation, exact Boolean, fillet/chamfer, and shell/offset topology evolution, and owned-facade-only composite refinements require programmatic initialization with the matched pair. Boolean, fillet/chamfer, and shell/offset geometry itself remains available through supported stock paths with partial history.
 
 ## Browser initialization
 
