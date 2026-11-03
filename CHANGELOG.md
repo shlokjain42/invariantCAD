@@ -2,6 +2,78 @@
 
 ## [Unreleased]
 
+- Revolve now rejects a profile that crosses its axis, the sketch plane's local
+  v axis through the sketch origin (u = 0). It fails with `FEATURE_INVALID` at
+  `/nodes/<id>/profile`, reason `profile-crosses-axis`, before any kernel call.
+  Before this, the default Manifold kernel silently kept only the positive-u
+  half and returned clipped geometry, and stock OCCT failed with an opaque
+  `KERNEL_ERROR`. Profiles that touch the axis are still accepted. Manifold also
+  now revolves profiles that lie wholly on the negative side of the axis, as
+  OCCT always did, instead of failing with `KERNEL_ERROR` or `EMPTY_RESULT`.
+  This is a published-behavior change: documents that revolved a straddling
+  profile on Manifold now fail.
+- Sweep admission now accounts for the right-corner miter. At a polyline corner
+  or composite line-line junction that turns by θ, each adjacent straight
+  segment must be longer than the setback r · tan(θ / 2) at each of its ends,
+  where r is the profile envelope radius. Remote segments must also clear the
+  segments extended by that outer miter reach. Short segments between sharp
+  corners, and miter spikes that reach a remote segment, previously produced
+  self-overlapping solids that OCCT reported as VALID. They now fail with
+  `FEATURE_INVALID` (reason `path-clearance`). This is a published-behavior
+  change: some sweeps accepted by 0.1.1 are now rejected.
+- Ruled lofts now check that each section keeps its authored curve phase against
+  its neighbouring section rather than against the first section, because OCCT
+  re-pairs adjacent sections. Lofts such as squares rotated 0, -44 and +44
+  degrees, which OCCT silently re-paired into different geometry, now fail with
+  `curve-phase-mismatch`. Gradual twists whose every adjacent pair keeps its
+  authored pairing, such as 0/40/80 degrees, are now accepted.
+- Polyline paths and composite line-line junctions now reject a segment that
+  folds back within tolerance of its neighbour with `FEATURE_INVALID` (reason
+  `self-intersection`). Before, such a path was accepted as simple whenever the
+  corner sine was above the 1e-10 collinearity floor.
+- The reference sketch solver no longer hangs on very large angle-constraint
+  values. Repeated 2π subtraction took time proportional to the value and never
+  ended above about 3.6e16, which the abort signal could not interrupt. Huge
+  targets are now reduced in constant time, and ordinary solves are unchanged.
+- The evaluator now enforces the sketch-solver protocol for replaceable solvers.
+  A sketch whose entity or constraint kinds the solver does not advertise fails
+  with `KERNEL_CAPABILITY_MISSING` before `solve` is called.
+  `SolvedSketch.status` is authoritative: only `solved` and `underconstrained`
+  with a finite residual produce geometry. `overconstrained` fails with
+  `SKETCH_OVER_CONSTRAINED`. `nonconvergent`, `invalid`, an unrecognized status,
+  or a non-finite residual fail with `SKETCH_SOLVE_FAILED`, even when the solver
+  returns no error diagnostic. A solver's own error is reported once, scoped to
+  the sketch node, and gets the path `/nodes/<sketch>` when the solver gave
+  none. The reference solver no longer reports a NaN residual as solved, and
+  its solve failures now carry a path: `/nodes/<sketch>/constraints` for
+  `SKETCH_OVER_CONSTRAINED` and `/nodes/<sketch>` for `SKETCH_SOLVE_FAILED`.
+  This is a published-behavior change for custom solvers that under-declare
+  their capabilities or report failure only through `status`.
+- Hole containment no longer misclassifies holes level with an arc endpoint.
+  Examples are a hole centred at the step height of an L-bracket with an inside
+  fillet that ends at its circle's lowest point, and a hole a rounding error
+  above or below the point where an arc meets a line. Such holes were wrongly
+  rejected with `hole-outside-outer`, and holes outside the outer loop or
+  nested in another hole could be accepted and produce wrong solids. Each
+  junction between curves is now classified once against the containment ray,
+  so an arc endpoint and the line it meets always agree, and an arc's
+  crossings are counted from the sides of its pieces between its circle's
+  highest and lowest points rather than from crossing angles, which are
+  ill-conditioned near a tangency.
+- The `SKETCH_NO_CLOSED_REGION` diagnostic for an open sketch loop keeps its
+  code, message and profile path, and now adds detail. `details` gives the
+  resolved curve indices on either side of the first gap and the gap size, and
+  `related` names those authored entities when solver provenance matches. When
+  an arc borders the gap, a hint explains that the reference solver derives arc
+  endpoints from the center, radius and authored angles, so constraints that
+  change a loop arc's radius or center do not move adjacent line endpoints.
+- Documentation fixes: the Features page revolve example now uses an off-axis
+  profile and states the axis rule, and the page notes that fillet, chamfer,
+  shell and offset need the `mechanical-exact` profile. The paths page arc and
+  composite examples now use exact coordinates and evaluate, with a CI-executed
+  composite sweep example; the page also lists every loft compatibility rule and
+  explains miter clearance. The sketches page documents arc constraints inside
+  closed loops and their workarounds.
 - `invariantcad export` now reports export and write failures as diagnostics
   instead of a JavaScript stack trace. Exporting an assembly to an exact format,
   or requesting STEP/BREP with `--kernel manifold`, now prints the structured
