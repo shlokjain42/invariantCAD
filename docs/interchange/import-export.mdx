@@ -256,6 +256,83 @@ Parsing uses the bounded, duplicate-member-rejecting document boundary and
 then admits only one resource, one imported-body node, and one direct solid
 output. It does not publish or accept the broader product Document v7 grammar.
 
+### Imported-body document format
+
+The JSON that `stringifyImportedBodyDocument` writes is a fixed, minimal
+subset of Document v7. It carries schema
+`https://invariantcad.dev/schema/document/v7` and version `7`, and contains
+exactly:
+
+- one resource commitment: `digest`, `byteLength`, `mediaType`, and optional
+  `locations`;
+- one `importedBody` node that references that resource, with its `format`,
+  `units`, `healing: { mode: "none" }`, and `expected: "single-solid"`;
+- one output with the same name as the node, referencing it directly as a
+  `solid`;
+- empty `parameters` and the fixed `units: { length: "mm", angle: "rad" }`.
+
+It has no metadata, materials, configurations, topology references, or other
+nodes. The writer emits canonical bytes with object keys in sorted order; the
+example above serializes as:
+
+```json
+{
+  "name": "verified-housing",
+  "nodes": {
+    "housing": {
+      "expected": "single-solid",
+      "format": "step",
+      "healing": {
+        "mode": "none"
+      },
+      "kind": "importedBody",
+      "resource": "housingStep",
+      "units": {
+        "mode": "from-file"
+      }
+    }
+  },
+  "outputs": {
+    "housing": {
+      "kind": "solid",
+      "node": "housing"
+    }
+  },
+  "parameters": {},
+  "resources": {
+    "housingStep": {
+      "byteLength": 18342,
+      "digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "locations": [
+        "memory:housing.step"
+      ],
+      "mediaType": "model/step"
+    }
+  },
+  "schema": "https://invariantcad.dev/schema/document/v7",
+  "units": {
+    "angle": "rad",
+    "length": "mm"
+  },
+  "version": 7
+}
+```
+
+Read these documents only with `parseImportedBodyDocument`, write them only
+with `stringifyImportedBodyDocument`, and evaluate them only with
+`Evaluator.evaluateImportedBody`. General Document v7 stays repository-staged,
+so the general document APIs refuse imported-body JSON instead of
+misinterpreting it: `parseDocument`, `parseDocumentValue`, `validateDocument`,
+`migrateDocument`, `hashDesignFeatures`, `analyzeDesignImpact`, and
+`Evaluator.evaluate` return one `IR_INVALID` diagnostic at `/` whose hint names
+the imported-body functions, and `stringifyDocument`, `hashDocument`, and
+`cloneDocument` throw a `TypeError` with the same message.
+
+The subset is frozen. Repository tests pin its canonical bytes and their
+SHA-256, and a future public Document v7 will keep accepting every document in
+this subset with the same meaning, so imported-body JSON saved by 0.2 stays
+readable.
+
 Evaluation requires an exact B-Rep evaluator with the strong document-body
 import capability and a caller-supplied resolver:
 
