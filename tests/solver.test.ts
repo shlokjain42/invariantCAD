@@ -203,6 +203,56 @@ function solveReference(
   }
 }
 
+function angleTriangle(value: number): DesignDocument {
+  return sketchDocument((sketch) => {
+    const a = sketch.point("a", vec2(mm(0), mm(0)));
+    const b = sketch.point("b", vec2(mm(10), mm(0)));
+    const c = sketch.point("c", vec2(mm(0), mm(10)));
+    const ab = sketch.line("ab", a, b);
+    const bc = sketch.line("bc", b, c);
+    const ca = sketch.line("ca", c, a);
+    sketch
+      .fixed("anchor", a)
+      .horizontal("base", ab)
+      .length("base-length", ab, mm(10))
+      .length("side-length", ca, mm(10))
+      .angle("apex", ab, ca, rad(value));
+    return sketch.profile(sketch.loop([ab, bc, ca]));
+  });
+}
+
+describe("reference solver angle constraints", () => {
+  it("reduces huge finite angle constraints in bounded time", () => {
+    const reduced = (value: number): number => Math.atan2(Math.sin(value), Math.cos(value));
+    for (const value of [1e7, 1e17, 1e20, Number.MAX_VALUE, -1e20]) {
+      const started = performance.now();
+      const solved = solveReference(angleTriangle(value));
+      expect(performance.now() - started).toBeLessThan(2_000);
+      const equivalent = solveReference(angleTriangle(reduced(value)));
+      expect(solved.status).toBe("solved");
+      expect(equivalent.status).toBe("solved");
+      expect(solved.points["c" as never]![0]).toBeCloseTo(
+        equivalent.points["c" as never]![0],
+        6,
+      );
+      expect(solved.points["c" as never]![1]).toBeCloseTo(
+        equivalent.points["c" as never]![1],
+        6,
+      );
+    }
+  });
+
+  it("keeps a huge angle document cancellable and bounded through the evaluator", async () => {
+    const result = await evaluator.evaluate(angleTriangle(1e20), {
+      signal: AbortSignal.timeout(5_000),
+    });
+    expect(result.diagnostics.some((item) => item.code === "EVALUATION_ABORTED")).toBe(
+      false,
+    );
+    if (result.ok) result.value.dispose();
+  });
+});
+
 function statusSolver(
   status: SketchSolveStatus | string,
   options: {

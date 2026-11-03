@@ -167,8 +167,28 @@ function lineVector(
   return subtract2(end, start);
 }
 
+/**
+ * Angle magnitude below which 2π subtraction stays exact and needs at most
+ * eight steps. Larger finite values are reduced in constant time.
+ */
+const ANGLE_SUBTRACTION_LIMIT = Math.PI * 16;
+
+/**
+ * Returns an equivalent angle whose magnitude is at most
+ * `ANGLE_SUBTRACTION_LIMIT`. Ordinary values are returned unchanged; huge
+ * values are reduced directly, because repeated 2π subtraction is linear in
+ * the magnitude and never terminates once 2π falls below the value's ULP, and
+ * because subtracting a small measured angle from a huge one discards it.
+ */
+function principalAngle(value: number): number {
+  return Math.abs(value) > ANGLE_SUBTRACTION_LIMIT
+    ? Math.atan2(Math.sin(value), Math.cos(value))
+    : value;
+}
+
 function wrapAngle(value: number): number {
-  let result = value;
+  if (!Number.isFinite(value)) return Number.NaN;
+  let result = principalAngle(value);
   while (result > Math.PI) result -= Math.PI * 2;
   while (result < -Math.PI) result += Math.PI * 2;
   return result;
@@ -257,7 +277,7 @@ function residualTerms(
         const first = lineVector(sketch, variables, values, constraint.first);
         const second = lineVector(sketch, variables, values, constraint.second);
         const actual = Math.atan2(cross2(first, second), dot2(first, second));
-        term(wrapAngle(actual - evaluate(constraint.value)));
+        term(wrapAngle(actual - principalAngle(evaluate(constraint.value))));
         break;
       }
       case "radius":
