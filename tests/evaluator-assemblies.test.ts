@@ -61,7 +61,8 @@ describe("evaluated assembly occurrence transforms", () => {
     const first = await evaluatePair(50);
     try {
       const before = first.assembly.measure();
-      expect(before.centerOfMass[0]).toBeCloseTo(30, 8);
+      const beforePositions = first.assembly.mesh().positions;
+      expect(before.centerOfMass![0]).toBeCloseTo(30, 8);
       for (const instance of first.assembly.instances) {
         expect(Object.isFrozen(instance.transform)).toBe(true);
         expect(instance.transform).not.toBe(IDENTITY_MATRIX);
@@ -76,9 +77,7 @@ describe("evaluated assembly occurrence transforms", () => {
         [0, 50],
       );
       expect(first.assembly.measure().centerOfMass).toEqual(before.centerOfMass);
-      expect(first.assembly.mesh().positions).toEqual(
-        first.assembly.mesh().positions,
-      );
+      expect(first.assembly.mesh().positions).toEqual(beforePositions);
     } finally {
       first.design.dispose();
     }
@@ -88,7 +87,7 @@ describe("evaluated assembly occurrence transforms", () => {
       expect(
         second.assembly.instances.map((item) => item.transform[12]),
       ).toEqual([0, 50]);
-      expect(second.assembly.measure().centerOfMass[0]).toBeCloseTo(30, 8);
+      expect(second.assembly.measure().centerOfMass![0]).toBeCloseTo(30, 8);
     } finally {
       second.design.dispose();
     }
