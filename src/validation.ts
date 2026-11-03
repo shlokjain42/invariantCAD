@@ -33,6 +33,13 @@ import {
   DOCUMENT_VERSION_V5,
   DOCUMENT_VERSION_V6,
   DOCUMENT_VERSION_V7,
+  NODE_KINDS_V1,
+  NODE_KINDS_V2,
+  NODE_KINDS_V3,
+  NODE_KINDS_V4,
+  NODE_KINDS_V5,
+  NODE_KINDS_V6,
+  NODE_KINDS_V7,
   nodeDependencies,
   nodeDependenciesV7,
   outputKindForNode,
@@ -76,9 +83,13 @@ function nodeDependenciesForDocument(
   node: ValidatableNode,
   document: ValidatableDocument,
 ): readonly ValidatableRef[] {
-  return document.version === DOCUMENT_VERSION_V7
-    ? nodeDependenciesV7(node as NodeIRV7)
-    : nodeDependencies(node as NodeIR);
+  const dependencies: readonly ValidatableRef[] | undefined =
+    document.version === DOCUMENT_VERSION_V7
+      ? nodeDependenciesV7(node as NodeIRV7)
+      : nodeDependencies(node as NodeIR);
+  // validateNode reports a node kind outside the grammar; graph walks treat it
+  // as a leaf instead of failing on its missing dependency list.
+  return Array.isArray(dependencies) ? dependencies : [];
 }
 
 function outputKindForDocumentNode(
@@ -88,6 +99,29 @@ function outputKindForDocumentNode(
   return document.version === DOCUMENT_VERSION_V7
     ? outputKindForNodeV7(node as NodeIRV7)
     : outputKindForNode(node as NodeIR);
+}
+
+function nodeKindsForDocumentVersion(
+  version: ValidatableDocument["version"],
+): readonly string[] {
+  switch (version) {
+    case DOCUMENT_VERSION_V1:
+      return NODE_KINDS_V1;
+    case DOCUMENT_VERSION_V2:
+      return NODE_KINDS_V2;
+    case DOCUMENT_VERSION_V3:
+      return NODE_KINDS_V3;
+    case DOCUMENT_VERSION_V4:
+      return NODE_KINDS_V4;
+    case DOCUMENT_VERSION_V5:
+      return NODE_KINDS_V5;
+    case DOCUMENT_VERSION_V6:
+      return NODE_KINDS_V6;
+    case DOCUMENT_VERSION_V7:
+      return NODE_KINDS_V7;
+    default:
+      return [];
+  }
 }
 
 function topologyRolesForDocumentVersion(
@@ -107,6 +141,8 @@ function topologyRolesForDocumentVersion(
     case DOCUMENT_VERSION_V6:
     case DOCUMENT_VERSION_V7:
       return TOPOLOGY_ROLES_V6;
+    default:
+      return [];
   }
 }
 
@@ -1258,6 +1294,16 @@ function validateNode(
     dimension: Dimension,
     suffix: string,
   ): void => validateExpression(value, dimension, document, `${path}/${suffix}`, diagnostics);
+  if (!nodeKindsForDocumentVersion(document.version).includes(node.kind)) {
+    diagnostics.push(
+      diagnostic(
+        "IR_INVALID",
+        `Node kind '${String(node.kind)}' is not supported by document version ${document.version}`,
+        { severity: "error", node: id, path: `${path}/kind` },
+      ),
+    );
+    return;
+  }
   switch (node.kind) {
     case "box":
       node.size.forEach((value, index) => expression(value, "length", `size/${index}`));
