@@ -782,15 +782,21 @@ function validateSketch(
  *
  * A check walks up from the descendant. Walks are resumable: a walk stops at
  * the possible ancestor, and a later check about the same descendant continues
- * where it stopped. Nearby origins therefore cost a few steps, and many checks
- * about one input walk its ancestors at most once. Once the walks toward one
- * possible ancestor have cost as many steps as the graph has nodes, that
- * ancestor's descendants are collected once through the reverse edges, so
- * many distant consumers of one base feature stay linear as well.
+ * where it stopped. A matched ancestor's own inputs are queued only when a
+ * later check needs to walk past it, so a nearby origin costs a few steps even
+ * when it has many inputs, and many checks about one input walk its ancestors
+ * at most once. A walk's steps count the nodes it pops and the inputs it
+ * queues. Once the walks toward one possible ancestor have cost as many steps
+ * as the graph has nodes, that ancestor's descendants are collected once
+ * through the reverse edges, so many distant consumers of one base feature
+ * stay linear as well, even when the path to it crosses a feature with many
+ * inputs.
  */
 interface AncestorWalk {
   readonly visited: Set<NodeId>;
   readonly pending: NodeId[];
+  /** A visited node, the last match, whose inputs are not yet queued. */
+  unexpanded: NodeId | undefined;
   steps: number;
 }
 
@@ -832,23 +838,42 @@ function advanceAncestorWalk(
   possibleAncestor: NodeId,
 ): boolean {
   const { visited, pending } = walk;
+  if (walk.unexpanded !== undefined) {
+    walk.steps += queueAncestorInputs(document, pending, walk.unexpanded);
+    walk.unexpanded = undefined;
+  }
   while (pending.length > 0) {
     const id = pending.pop()!;
     walk.steps += 1;
     if (visited.has(id)) continue;
     visited.add(id);
-    const node = Object.hasOwn(document.nodes, id)
-      ? document.nodes[id]
-      : undefined;
-    if (node !== undefined) {
-      const dependencies = nodeDependenciesForDocument(node, document);
-      for (let index = dependencies.length - 1; index >= 0; index -= 1) {
-        pending.push(dependencies[index]!.node);
-      }
+    if (id === possibleAncestor) {
+      walk.unexpanded = id;
+      return true;
     }
-    if (id === possibleAncestor) return true;
+    walk.steps += queueAncestorInputs(document, pending, id);
   }
   return false;
+}
+
+/**
+ * Queues a node's direct inputs so the first input is walked first, and
+ * returns how many were queued.
+ */
+function queueAncestorInputs(
+  document: ValidatableDocument,
+  pending: NodeId[],
+  id: NodeId,
+): number {
+  const node = Object.hasOwn(document.nodes, id)
+    ? document.nodes[id]
+    : undefined;
+  if (node === undefined) return 0;
+  const dependencies = nodeDependenciesForDocument(node, document);
+  for (let index = dependencies.length - 1; index >= 0; index -= 1) {
+    pending.push(dependencies[index]!.node);
+  }
+  return dependencies.length;
 }
 
 /** Reverse dependency edges, built once per validation pass on demand. */
@@ -912,7 +937,12 @@ function nodeIsAncestor(
   if (cache === undefined) {
     return advanceAncestorWalk(
       document,
-      { visited: new Set(), pending: [descendant], steps: 0 },
+      {
+        visited: new Set(),
+        pending: [descendant],
+        unexpanded: undefined,
+        steps: 0,
+      },
       possibleAncestor,
     );
   }
@@ -921,7 +951,9 @@ function nodeIsAncestor(
   let walk = cache.walks.get(descendant);
   if (walk !== undefined) {
     if (walk.visited.has(possibleAncestor)) return true;
-    if (walk.pending.length === 0) return false;
+    if (walk.pending.length === 0 && walk.unexpanded === undefined) {
+      return false;
+    }
   }
   const spent = cache.walkSteps.get(possibleAncestor) ?? 0;
   cache.nodeCount ??= Object.keys(document.nodes).length;
@@ -934,7 +966,12 @@ function nodeIsAncestor(
   const retained =
     walk === undefined ? 0 : walk.visited.size + walk.pending.length;
   if (walk === undefined) {
-    walk = { visited: new Set(), pending: [descendant], steps: 0 };
+    walk = {
+      visited: new Set(),
+      pending: [descendant],
+      unexpanded: undefined,
+      steps: 0,
+    };
     cache.walks.set(descendant, walk);
   }
   const stepsBefore = walk.steps;

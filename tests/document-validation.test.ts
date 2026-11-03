@@ -274,6 +274,79 @@ function nodeReadsDuringValidation(document: MutableDocument): {
   return { ok: result.ok, reads };
 }
 
+/**
+ * A union `hub` of a `base` box with `width` tool boxes, then `consumers`
+ * transforms of the hub, each followed by a fillet whose edges were created by
+ * `origin`. Returns how many tool entries of the hub validation read, which is
+ * how many tool inputs the ancestor walks queued plus a fixed number of
+ * whole-document passes.
+ */
+function hubToolReadsDuringValidation(
+  width: number,
+  consumers: number,
+  origin: "hub" | "base",
+): { readonly ok: boolean; readonly toolReads: number } {
+  const literal = (value: number) => ({
+    op: "literal",
+    dimension: "length",
+    value,
+  });
+  const box = () => ({
+    kind: "box",
+    size: [literal(1), literal(1), literal(1)],
+    center: false,
+  });
+  const nodes: Record<string, Record<string, unknown>> = { base: box() };
+  const tools: Record<string, unknown>[] = [];
+  for (let index = 0; index < width; index += 1) {
+    nodes[`t${index}`] = box();
+    tools.push({ node: `t${index}`, kind: "solid" });
+  }
+  let toolReads = 0;
+  nodes.hub = {
+    kind: "boolean",
+    operation: "union",
+    target: { node: "base", kind: "solid" },
+    tools: new Proxy(tools, {
+      get(target, key, receiver) {
+        if (typeof key === "string" && /^\d+$/.test(key)) toolReads += 1;
+        return Reflect.get(target, key, receiver) as unknown;
+      },
+    }),
+  };
+  for (let index = 0; index < consumers; index += 1) {
+    nodes[`m${index}`] = {
+      kind: "transform",
+      input: { node: "hub", kind: "solid" },
+      operations: [
+        { kind: "translate", value: [literal(0), literal(0), literal(0)] },
+      ],
+    };
+    nodes[`f${index}`] = {
+      kind: "fillet",
+      input: { node: `m${index}`, kind: "solid" },
+      edges: {
+        topology: "edge",
+        query: { op: "origin", feature: origin, relation: "created" },
+        cardinality: { min: 1 },
+      },
+      radius: literal(0.1),
+    };
+  }
+  const result = validateDocument(
+    asDocument({
+      schema: DOCUMENT_SCHEMA_V6,
+      version: 6,
+      name: "wide-origin-hub",
+      units: { length: "mm", angle: "rad" },
+      parameters: {},
+      nodes,
+      outputs: { out: { node: "f0", kind: "solid" } },
+    }),
+  );
+  return { ok: result.ok, toolReads };
+}
+
 describe("bounded topology-origin validation", () => {
   it("walks each consuming feature's ancestors once, not once per query", () => {
     const single = nodeReadsDuringValidation(originQueryChain(300, 1));
@@ -315,6 +388,28 @@ describe("bounded topology-origin validation", () => {
       );
       expect(long.reads, `reverse: ${reverse}`).toBeLessThanOrEqual(20 * 400);
     }
+  });
+
+  it("does not queue a nearby origin's inputs once per consumer", () => {
+    // Every fillet's origin is the 400-input union two steps up. Queuing the
+    // union's inputs at each match would read about 400 more tools per fillet.
+    const few = hubToolReadsDuringValidation(400, 25, "hub");
+    const many = hubToolReadsDuringValidation(400, 200, "hub");
+    expect(few.ok).toBe(true);
+    expect(many.ok).toBe(true);
+    expect(many.toolReads).toBe(few.toolReads);
+  });
+
+  it("stays linear when the path to a shared origin crosses a wide feature", () => {
+    // Every walk from a fillet to the base box passes the 400-input union.
+    // Without counting queued inputs as walk work, each fillet would queue all
+    // 400 again (about 80,000 reads at 200 fillets).
+    const few = hubToolReadsDuringValidation(400, 25, "base");
+    const many = hubToolReadsDuringValidation(400, 200, "base");
+    expect(few.ok).toBe(true);
+    expect(many.ok).toBe(true);
+    expect(many.toolReads).toBeLessThanOrEqual(few.toolReads + 2 * 400);
+    expect(many.toolReads).toBeLessThanOrEqual(12 * 400);
   });
 
   it("still rejects an origin that is not an ancestor of the input", () => {
