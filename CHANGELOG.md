@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+- GitHub release notes now link to the hosted documentation site. The release
+  workflow used to copy each release page verbatim, so site-relative links such
+  as `/evaluation/evaluator` and `../roadmap.md` resolved against the repository
+  on GitHub and were broken in the v0.1.0 and v0.1.1 releases. Release metadata
+  checks now also reject a relative link that leaves the documentation site, so
+  a dead link is caught before publication.
+- The installation guide now states that InvariantCAD and its runtime
+  dependencies declare no install scripts, so `npm install --ignore-scripts` and
+  pnpm's default blocking of dependency build scripts are supported. It
+  previously suggested that the OCCT and browser toolchains might need
+  unspecified install-time preparation allowed.
+- The generated export index can no longer silently omit a public export. Its
+  generator rejects export forms it cannot read, such as destructured constants
+  and generator functions, accepts a final re-export written without a
+  semicolon, and requires each entry point's names to match its API Extractor
+  report. It also sorts names with an explicit English collation, so `pnpm
+  docs:generate` and `pnpm docs:check` produce the same result on every host
+  locale.
+- GitHub release notes now publish documentation links, image sources, angle-
+  bracketed destinations and reference definitions as absolute URLs on the
+  hosted site, and leave inline code (including wrapped and multi-backtick
+  spans) and fenced code unchanged.
+- The documentation gate now rejects title or description frontmatter values
+  that continue onto an indented line, including after blank or comment lines.
 - `parseDocument(text, options?)` now rejects JSON that repeats an object
   member name, including escape-equivalent spellings such as `"name"` and
   `"\u006eame"`, with `IR_INVALID` and the `duplicate-json-member` reason.
