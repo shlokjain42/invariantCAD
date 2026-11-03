@@ -362,15 +362,19 @@ export function evaluateExpression(
       break;
     }
     case "min":
-      result = Math.min(
-        ...expression.values.map((value) => evaluateExpression(value, context)),
-      );
+    case "max": {
+      // Fold instead of spreading: a valid document may hold more operands
+      // than a call can pass as arguments.
+      const fold = expression.op === "min" ? Math.min : Math.max;
+      result = expression.op === "min" ? Infinity : -Infinity;
+      for (let index = 0; index < expression.values.length; index += 1) {
+        result = fold(
+          result,
+          evaluateExpression(expression.values[index]!, context),
+        );
+      }
       break;
-    case "max":
-      result = Math.max(
-        ...expression.values.map((value) => evaluateExpression(value, context)),
-      );
-      break;
+    }
   }
   if (!Number.isFinite(result)) {
     throw new RangeError("CAD expression evaluated to a non-finite number");
