@@ -91,8 +91,13 @@ query operand alone exceeds the ceiling. Output larger than `maxDocumentBytes`
 `{ limits: { maxDocumentBytes } }` to choose another ceiling; malformed limits
 also throw `TypeError`. Output within the ceiling is byte-for-byte unchanged,
 including the frozen writer's omission of an own `__proto__` key. The writer
-does not validate its input, so the ceiling assumes plain data whose property
-reads are stable, such as builder output or a parsed document.
+does not otherwise validate its input, so the ceiling assumes plain data whose
+property reads are stable, such as builder output or a parsed document. It does
+reject values JSON cannot preserve: non-finite numbers, `undefined` array
+items, functions, symbols, and BigInts, and any object that is not an array, a
+plain object, or a null-prototype object, such as a `Map`, `Set`, `Date`, typed
+array, or class instance, throw `TypeError` instead of being written as `{}`.
+`hashDocument` and `cloneDocument` share this writer.
 
 ## Parse untrusted text
 

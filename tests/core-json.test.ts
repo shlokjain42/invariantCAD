@@ -143,6 +143,32 @@ describe("canonical JSON", () => {
     }
   });
 
+  it("rejects objects JSON cannot preserve instead of writing them as records", () => {
+    class Point {
+      readonly x = 1;
+    }
+    for (const writer of boundedWriters) {
+      for (const value of [
+        new Map([["a", 1]]),
+        new Set([1]),
+        new Date(0),
+        new Point(),
+        { nested: [new Map()] },
+        new Uint8Array([1]),
+      ]) {
+        expect(() => writer.count(value, 1_000), writer.name).toThrow(
+          "CAD documents can contain only plain JSON objects and arrays",
+        );
+        expect(() => writer.write(value, 1_000), writer.name).toThrow(
+          "CAD documents can contain only plain JSON objects and arrays",
+        );
+      }
+      expect(writer.write(Object.assign(Object.create(null), { a: 1 }), 1_000)).toBe(
+        '{"a":1}',
+      );
+    }
+  });
+
   it("stops before reading later properties once the byte ceiling is exceeded", () => {
     let getterReads = 0;
     const source = Object.defineProperty(

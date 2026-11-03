@@ -894,3 +894,153 @@ describe("builder option values", () => {
     expect(validateDocument(source).ok).toBe(true);
   });
 });
+
+describe("builder input detachment", () => {
+  it("deeply freezes documents built from shallow-frozen caller data", async () => {
+    const owner = { team: "fixtures" };
+    const supplier = { name: "Acme" };
+    const translation = { op: "literal", dimension: "length", value: 5 };
+    const cad = design("detached", { metadata: Object.freeze({ owner }) });
+    const box = cad.box("box", { size: vec3(mm(10), mm(10), mm(10)) });
+    const moved = cad.transform("moved", box, [
+      Object.freeze({
+        kind: "translate" as const,
+        value: [translation as never, mm(0).ir, mm(0).ir] as const,
+      }),
+    ]);
+    const steel = cad.material("steel", {
+      name: "Steel",
+      massDensity: gramsPerCubicCentimeter(7.8),
+      metadata: Object.freeze({ supplier }),
+    });
+    const part = cad.part("part", moved, {
+      materialRef: steel,
+      metadata: Object.freeze({ supplier }),
+    });
+    cad.configuration(
+      "variant",
+      (configuration) => configuration.partMaterial(part, steel),
+      { metadata: Object.freeze({ owner }) },
+    );
+    cad.output("part", part);
+    const document = cad.build();
+    const before = stringifyDocument(document);
+    const hash = await hashDocument(document, { includeMetadata: true });
+
+    const unfrozen: string[] = [];
+    const visit = (value: unknown, path: string): void => {
+      if (typeof value !== "object" || value === null) return;
+      if (!Object.isFrozen(value)) unfrozen.push(path);
+      for (const [key, child] of Object.entries(value)) visit(child, `${path}/${key}`);
+    };
+    visit(document, "");
+    expect(unfrozen).toEqual([]);
+
+    owner.team = "mutated";
+    supplier.name = "Mutated";
+    expect(() => {
+      translation.value = 100;
+    }).toThrow(TypeError);
+    expect(stringifyDocument(document)).toBe(before);
+    expect(await hashDocument(document, { includeMetadata: true })).toBe(hash);
+  });
+
+  it("leaves caller arrays and metadata reusable after authoring", () => {
+    const cad = design("reusable");
+    const box = cad.box("box", { size: vec3(mm(1), mm(1), mm(1)) });
+    const operations = [tf.translate(vec3(mm(1), mm(0), mm(0)))];
+    cad.transform("first", box, operations);
+    operations.push(tf.translate(vec3(mm(0), mm(1), mm(0))));
+    cad.transform("second", box, operations);
+    const metadata: Record<string, unknown> = { revision: 1 };
+    const part = cad.part("part", box, { metadata: metadata as never });
+    metadata.revision = 2;
+    const placement = [tf.translate(vec3(mm(1), mm(0), mm(0)))];
+    cad.assembly("assembly", (assembly) => {
+      assembly.instance("first", part, { placement });
+      placement.push(tf.translate(vec3(mm(0), mm(0), mm(1))));
+      assembly.instance("second", part, { placement });
+    });
+    const document = cad.build();
+    expect(Object.isFrozen(operations)).toBe(false);
+    expect(Object.isFrozen(metadata)).toBe(false);
+    expect(Object.isFrozen(placement)).toBe(false);
+    const nodes = document.nodes as Readonly<Record<string, any>>;
+    expect(nodes.first.operations).toHaveLength(1);
+    expect(nodes.second.operations).toHaveLength(2);
+    expect(nodes.part.metadata).toEqual({ revision: 1 });
+    expect(nodes.assembly.instances[0].placement).toHaveLength(1);
+    expect(nodes.assembly.instances[1].placement).toHaveLength(2);
+  });
+
+  it("rejects metadata that JSON cannot preserve", () => {
+    class Tag {
+      readonly label = "tag";
+    }
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    const invalid: readonly unknown[] = [
+      { value: Number.NaN },
+      { value: Number.POSITIVE_INFINITY },
+      { value: new Map([["a", 1]]) },
+      { value: new Set([1]) },
+      { value: new Date(0) },
+      { value: new Tag() },
+      { value: 1n },
+      { value: () => undefined },
+      { value: Symbol("symbol") },
+      { value: [undefined] },
+      { value: Object.assign(new Array<number>(3), { 0: 1, 2: 3 }) },
+      cyclic,
+      new Map(),
+      ["not", "a", "record"],
+    ];
+    for (const metadata of invalid) {
+      expect(() => design("metadata", { metadata: metadata as never })).toThrow(
+        TypeError,
+      );
+      const cad = design("metadata");
+      const box = cad.box("box", { size: vec3(mm(1), mm(1), mm(1)) });
+      expect(() => cad.part("part", box, { metadata: metadata as never })).toThrow(
+        TypeError,
+      );
+      expect(() =>
+        cad.material("material", {
+          name: "Material",
+          massDensity: gramsPerCubicCentimeter(1),
+          metadata: metadata as never,
+        }),
+      ).toThrow(TypeError);
+    }
+
+    const shared = { a: 1 };
+    const accepted = design("accepted", {
+      metadata: {
+        nested: { list: [1, "two", true, null, shared, shared] },
+        omitted: undefined,
+        own: JSON.parse('{"__proto__":{"kept":true}}'),
+      } as never,
+    }).build();
+    expect(accepted.metadata).toEqual({
+      nested: { list: [1, "two", true, null, { a: 1 }, { a: 1 }] },
+      own: JSON.parse('{"__proto__":{"kept":true}}'),
+    });
+    expect(Object.hasOwn(accepted.metadata!.own as object, "__proto__")).toBe(true);
+    expect(Object.getPrototypeOf(accepted.metadata!.own)).toBe(Object.prototype);
+    const reparsed = parseDocument(stringifyDocument(accepted));
+    expect(reparsed.ok, JSON.stringify(reparsed.diagnostics)).toBe(true);
+  });
+
+  it("refuses to write hand-built documents with non-JSON metadata", async () => {
+    const document = design("hand-built").build();
+    for (const value of [new Map([["a", 1]]), new Date(0), new Set([1])]) {
+      const handBuilt = { ...document, metadata: { value } } as never;
+      expect(() => stringifyDocument(handBuilt)).toThrow(
+        "CAD documents can contain only plain JSON objects and arrays",
+      );
+      await expect(
+        hashDocument(handBuilt, { includeMetadata: true }),
+      ).rejects.toThrow("CAD documents can contain only plain JSON objects and arrays");
+    }
+  });
+});

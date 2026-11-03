@@ -342,6 +342,111 @@ function assertTopologySelectionParametersOwned(
   }
 }
 
+/**
+ * Copies caller metadata into builder-owned plain JSON records, so later
+ * caller mutation cannot reach a built document and authoring never freezes
+ * caller objects. Values JSON cannot preserve are rejected rather than being
+ * written as `{}` or failing only when the document is saved.
+ */
+function detachMetadata(
+  value: unknown,
+  label: string,
+): Readonly<Record<string, JsonValue>> {
+  const limits = DEFAULT_DESIGN_DOCUMENT_LIMITS;
+  const copies = new Map<object, JsonValue>();
+  const active = new Set<object>();
+  let structuralValues = 0;
+  const copy = (current: unknown, depth: number, path: string): JsonValue => {
+    structuralValues += 1;
+    if (structuralValues > limits.maxStructuralValues) {
+      throw new RangeError(
+        `${label} exceeds the authoring limit of ${limits.maxStructuralValues} structural values`,
+      );
+    }
+    if (depth > limits.maxNestingDepth) {
+      throw new RangeError(
+        `${label} exceeds the authoring nesting depth of ${limits.maxNestingDepth}`,
+      );
+    }
+    switch (typeof current) {
+      case "string":
+      case "boolean":
+        return current;
+      case "number":
+        if (!Number.isFinite(current)) {
+          throw new TypeError(`${label}${path} must be a finite number`);
+        }
+        return current;
+      case "object":
+        break;
+      default:
+        throw new TypeError(
+          `${label}${path} cannot contain a ${typeof current} value`,
+        );
+    }
+    if (current === null) return null;
+    const known = copies.get(current);
+    if (known !== undefined) return known;
+    if (active.has(current)) {
+      throw new TypeError(`${label} cannot contain object cycles`);
+    }
+    active.add(current);
+    let result: JsonValue;
+    if (Array.isArray(current)) {
+      if (Object.getPrototypeOf(current) !== Array.prototype) {
+        throw new TypeError(`${label}${path} must be a plain JSON array`);
+      }
+      const items: JsonValue[] = [];
+      for (let index = 0; index < current.length; index += 1) {
+        if (!Object.hasOwn(current, index) || current[index] === undefined) {
+          throw new TypeError(
+            `${label}${path}/${index} must be a JSON value; arrays cannot be sparse or hold undefined`,
+          );
+        }
+        items.push(copy(current[index], depth + 1, `${path}/${index}`));
+      }
+      result = items;
+    } else {
+      const prototype = Object.getPrototypeOf(current);
+      if (prototype !== Object.prototype && prototype !== null) {
+        throw new TypeError(
+          `${label}${path} must contain only plain JSON objects and arrays`,
+        );
+      }
+      const record: Record<string, JsonValue> = {};
+      for (const key of Object.keys(current)) {
+        const child = (current as Readonly<Record<string, unknown>>)[key];
+        // Undefined members are omitted, exactly as the canonical writer does.
+        if (child === undefined) continue;
+        const copied = copy(
+          child,
+          depth + 1,
+          `${path}/${key.replaceAll("~", "~0").replaceAll("/", "~1")}`,
+        );
+        // Define rather than assign so an own "__proto__" key stays data.
+        Object.defineProperty(record, key, {
+          value: copied,
+          writable: true,
+          enumerable: true,
+          configurable: true,
+        });
+      }
+      result = record;
+    }
+    active.delete(current);
+    copies.set(current, result);
+    return result;
+  };
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value)
+  ) {
+    throw new TypeError(`${label} must be a plain JSON record`);
+  }
+  return deepFreeze(copy(value, 0, "")) as Readonly<Record<string, JsonValue>>;
+}
+
 function optionalBoolean(
   value: unknown,
   fallback: boolean,
@@ -831,7 +936,14 @@ export class ConfigurationBuilder {
       ...(Object.keys(this.partMaterialRecords).length === 0
         ? {}
         : { partMaterialOverrides: { ...this.partMaterialRecords } }),
-      ...(options.metadata === undefined ? {} : { metadata: options.metadata }),
+      ...(options.metadata === undefined
+        ? {}
+        : {
+            metadata: detachMetadata(
+              options.metadata,
+              "Configuration metadata",
+            ),
+          }),
     });
   }
 }
@@ -905,7 +1017,10 @@ export class DesignBuilder {
       throw new TypeError("A design requires a name");
     }
     this.name = name;
-    this.metadata = options.metadata;
+    this.metadata =
+      options.metadata === undefined
+        ? undefined
+        : detachMetadata(options.metadata, "Design metadata");
     DESIGN_PARAMETER_RECORDS.set(this, this.parameterRecords);
   }
 
@@ -1072,7 +1187,9 @@ export class DesignBuilder {
       name: options.name,
       massDensity,
       ...(description === undefined ? {} : { description }),
-      ...(options.metadata === undefined ? {} : { metadata: options.metadata }),
+      ...(options.metadata === undefined
+        ? {}
+        : { metadata: detachMetadata(options.metadata, `Material '${id}' metadata`) }),
     });
     this.usesMassDensity = true;
     return new MaterialRef(this, key);
@@ -1836,7 +1953,11 @@ export class DesignBuilder {
     ) {
       throw new TypeError("Part massDensity must be a mass-density expression");
     }
-    const { massDensity, materialRef, ...definition } = options;
+    const { massDensity, materialRef, metadata, ...definition } = options;
+    const detachedMetadata =
+      metadata === undefined
+        ? undefined
+        : detachMetadata(metadata, `Part '${id}' metadata`);
     const massDensityIR =
       massDensity === undefined
         ? undefined
@@ -1851,6 +1972,7 @@ export class DesignBuilder {
       kind: "part",
       solid: solid.toIR(),
       ...definition,
+      ...(detachedMetadata === undefined ? {} : { metadata: detachedMetadata }),
       ...(materialRef === undefined ? {} : { materialId: materialRef.id }),
       ...(massDensityIR === undefined ? {} : { massDensity: massDensityIR }),
     });

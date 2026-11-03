@@ -13,6 +13,8 @@ const intrinsicNumberIsFinite = Number.isFinite;
 const intrinsicNumberIsSafeInteger = Number.isSafeInteger;
 const intrinsicObjectCreate = Object.create;
 const intrinsicObjectFreeze = Object.freeze;
+const intrinsicObjectGetPrototypeOf = Object.getPrototypeOf;
+const intrinsicObjectPrototype = Object.prototype;
 const intrinsicObjectIs = Object.is;
 const intrinsicObjectIsFrozen = Object.isFrozen;
 const intrinsicObjectKeys = Object.keys;
@@ -279,6 +281,16 @@ function canonicalByteLengthWithin(
       return;
     }
     if (typeof child === "object") {
+      // Maps, Sets, Dates, typed arrays, and class instances have no lossless
+      // JSON form; enumerating their own keys would silently write `{}`.
+      const prototype = reflectApply(intrinsicObjectGetPrototypeOf, Object, [
+        child,
+      ]) as object | null;
+      if (prototype !== intrinsicObjectPrototype && prototype !== null) {
+        throw new TypeError(
+          "CAD documents can contain only plain JSON objects and arrays",
+        );
+      }
       addBytes(1);
       const keys = sortedObjectKeys(child);
       let included = 0;
