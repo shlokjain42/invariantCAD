@@ -605,6 +605,79 @@ describe("persistent topology signatures", () => {
     });
   });
 
+  it("compares a vertex's own sketch-source anchor before its incident edges", () => {
+    const role = (
+      value: Exclude<KernelTopologyLineage["role"], undefined>,
+    ): readonly KernelTopologyLineage[] => [
+      { feature: "box", relation: "created", role: value },
+    ];
+    const sourced = (entity: string): readonly KernelTopologyLineage[] => [
+      {
+        feature: "pad",
+        relation: "created",
+        source: { kind: "sketch-entity", sketch: "profile", entity },
+      },
+    ];
+    const minimumRoles = [
+      "box.edge.y-min-z-min",
+      "box.edge.x-min-z-min",
+      "box.edge.x-min-y-min",
+    ] as const;
+    const maximumRoles = [
+      "box.edge.y-max-z-max",
+      "box.edge.x-max-z-max",
+      "box.edge.x-max-y-max",
+    ] as const;
+    const corner = (
+      id: string,
+      point: readonly [number, number, number],
+      entity: string,
+      roles: typeof minimumRoles | typeof maximumRoles,
+    ) => ({
+      edges: roles.map((value, index) =>
+        edge(`${id}-edge-${index}`, {
+          center: [point[0] + index + 1, point[1], point[2]],
+          lineage: role(value),
+          vertices: [id],
+        }),
+      ),
+      vertex: vertex(id, {
+        point,
+        lineage: sourced(entity),
+        edges: roles.map((_, index) => `${id}-edge-${index}`),
+      }),
+    });
+    const old = corner("old-corner", [0, 0, 0], "corner", minimumRoles);
+    const captured = captureTopologyReference(
+      snapshot([], old.edges, "complete", [old.vertex]),
+      "vertex",
+      key("old-corner"),
+      { capabilities: capabilitiesV2, tolerance },
+    );
+    expect(captured.ok).toBe(true);
+    if (!captured.ok) return;
+
+    // The moved corner keeps the direct anchor but not the incident-edge
+    // roles. The other corner keeps the incident-edge roles but not the
+    // direct anchor. Only the direct anchor decides.
+    const moved = corner("moved-corner", [100, 20, 30], "corner", maximumRoles);
+    const other = corner("other-corner", [0, 0, 0], "other", minimumRoles);
+    expect(
+      resolveTopologyReference(
+        captured.value,
+        snapshot([], [...moved.edges, ...other.edges], "complete", [
+          moved.vertex,
+          other.vertex,
+        ]),
+        { capabilities: capabilitiesV2 },
+      ),
+    ).toEqual({
+      ok: true,
+      value: { key: key("moved-corner"), evidence: "semantic-lineage" },
+      diagnostics: [],
+    });
+  });
+
   it("never cross-matches face and vertex neighbors in protocol-v2 edge evidence", () => {
     const anchored = (entity: string): readonly KernelTopologyLineage[] => [
       {

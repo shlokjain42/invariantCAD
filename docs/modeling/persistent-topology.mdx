@@ -172,7 +172,9 @@ silently upgrades a stored protocol or loosens a fingerprint.
    sketch-source creation anchor, compare only those anchors. Exact agreement
    is a `semantic-lineage` match and any difference is a mismatch. Geometry is
    not consulted, even when several current items share the anchor.
-5. A protocol-v2 vertex has no anchor of its own. With complete history, if
+5. Vertices have no semantic roles, but a protocol-v2 vertex can carry a
+   sketch-source creation anchor, which step 4 compares like any other. For a
+   vertex with no direct anchor on either side, under complete history, if
    every incident edge on either side is anchored, the vertex matches by
    `semantic-lineage` only when the complete incident-edge anchor sets agree
    one-to-one.
