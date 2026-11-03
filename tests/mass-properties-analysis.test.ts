@@ -292,6 +292,58 @@ describe("public principal-inertia analysis", () => {
     expect(result.moments).toEqual([0, minimum * 2, minimum * 2]);
     expect(result.degeneracy).toBe("maximum-repeated");
   });
+
+  it("converges when every residual off-diagonal is below the pivot threshold", () => {
+    // After one sweep each scaled off-diagonal of this slender-wire tensor is
+    // at most 64 ulp while their Euclidean norm is slightly above it.
+    const tensor: InertiaTensor = [
+      [100.57190247726933, -1.0819051145941208, 0.09045535111039982],
+      [-1.0819051145941208, 0.7099217656643042, 8.350509636448896],
+      [0.09045535111039982, 8.350509636448896, 99.88542386499125],
+    ];
+    const result = principalInertia(tensor);
+
+    expect(result.degeneracy).toBe("distinct");
+    for (let index = 0; index < 3; index += 1) {
+      const axis = result.axes[index]!;
+      expectVectorClose(
+        matrixVector(tensor, axis),
+        axis.map((value) => value * result.moments[index]!) as unknown as Vec3,
+        1e-12,
+        // About 1e-12 of the tensor's largest entry.
+        1e-10,
+      );
+    }
+    expectClose(
+      result.moments[0] + result.moments[1] + result.moments[2],
+      tensor[0][0] + tensor[1][1] + tensor[2][2],
+    );
+  });
+
+  it("analyzes an ordinary block about a distant point without stalling", () => {
+    const volume = 6000;
+    const block = physicalMassProperties(
+      {
+        volume,
+        centerOfMass: [0, 0, 0],
+        inertiaTensor: [
+          [(volume * (400 + 900)) / 12, 0, 0],
+          [0, (volume * (100 + 900)) / 12, 0],
+          [0, 0, (volume * (100 + 400)) / 12],
+        ],
+      },
+      2.7e-6,
+    );
+    const point: Vec3 = [4728, 3326, -8160];
+    const shifted = inertiaTensorAboutPoint(block, point);
+
+    expect(principalInertia(shifted).degeneracy).toBe("distinct");
+    expectClose(
+      momentOfInertiaAboutAxis(block, { point, direction: [0, 0, 1] }),
+      shifted[2][2],
+      1e-12,
+    );
+  });
 });
 
 describe("public point and axis inertia analysis", () => {

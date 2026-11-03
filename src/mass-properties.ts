@@ -303,10 +303,13 @@ export function principalInertia(
         vectors[axis]![q] = sine * vip + cosine * viq;
       }
     }
-    const offDiagonal = Math.hypot(
-      matrix[0]![1]!,
-      matrix[0]![2]!,
-      matrix[1]![2]!,
+    // Stop on the same per-entry test that skips a pivot. A norm test could
+    // stay above the threshold while every pivot is skipped, so the loop
+    // would exhaust its sweeps without rotating again.
+    const offDiagonal = Math.max(
+      Math.abs(matrix[0]![1]!),
+      Math.abs(matrix[0]![2]!),
+      Math.abs(matrix[1]![2]!),
     );
     if (offDiagonal <= convergence) {
       converged = true;
