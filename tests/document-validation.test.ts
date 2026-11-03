@@ -423,3 +423,86 @@ describe("diagnostic JSON Pointers for IDs containing '/' and '~'", () => {
     );
   });
 });
+
+describe("REFERENCE_KIND_MISMATCH messages", () => {
+  it("names the required kind when the declaration matches its target", () => {
+    const assembly = parseDocument(
+      v6Json({
+        nodes: {
+          b: plainBox,
+          asm: {
+            kind: "assembly",
+            instances: [
+              {
+                id: "i1",
+                component: { node: "b", kind: "solid" },
+                placement: [],
+                suppressed: false,
+              },
+            ],
+          },
+        },
+        outputs: { a: { node: "asm", kind: "assembly" } },
+      }),
+    );
+    expect(assembly.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "REFERENCE_KIND_MISMATCH",
+        path: "/nodes/asm/instances/0/component",
+        message: "Reference requires part or assembly, but node 'b' produces solid",
+        details: {
+          expected: ["part", "assembly"],
+          actual: "solid",
+          declared: "solid",
+        },
+      }),
+    );
+
+    const booleanTarget = parseDocument(
+      v6Json({
+        nodes: {
+          b: plainBox,
+          p: { kind: "part", solid: { node: "b", kind: "solid" } },
+          u: {
+            kind: "boolean",
+            operation: "union",
+            target: { node: "p", kind: "part" },
+            tools: [{ node: "b", kind: "solid" }],
+          },
+        },
+        outputs: { out: { node: "u", kind: "solid" } },
+      }),
+    );
+    expect(booleanTarget.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "REFERENCE_KIND_MISMATCH",
+        path: "/nodes/u/target",
+        message: "Reference requires solid, but node 'p' produces part",
+      }),
+    );
+  });
+
+  it("keeps the declared-versus-produced message for a wrong declaration", () => {
+    const result = parseDocument(
+      v6Json({
+        nodes: {
+          b: plainBox,
+          moved: {
+            kind: "transform",
+            input: { node: "b", kind: "part" },
+            operations: [noMove],
+          },
+        },
+        outputs: { out: { node: "moved", kind: "solid" } },
+      }),
+    );
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "REFERENCE_KIND_MISMATCH",
+        path: "/nodes/moved/input",
+        message: "Node 'b' produces solid, but the reference declares part",
+        details: { expected: ["solid"], actual: "solid", declared: "part" },
+      }),
+    );
+  });
+});

@@ -449,8 +449,20 @@ function validateRef(
     diagnostics.push(
       diagnostic(
         "REFERENCE_KIND_MISMATCH",
-        `Node '${reference.node}' produces ${actual}, but the reference declares ${reference.kind}`,
-        { severity: "error", path },
+        // A declaration that matches its target can still name a kind this
+        // consumer does not accept; name the required kinds in that case.
+        reference.kind === actual
+          ? `Reference requires ${expectedKinds.join(" or ")}, but node '${reference.node}' produces ${actual}`
+          : `Node '${reference.node}' produces ${actual}, but the reference declares ${reference.kind}`,
+        {
+          severity: "error",
+          path,
+          details: {
+            expected: [...expectedKinds],
+            actual: actual ?? null,
+            declared: reference.kind,
+          },
+        },
       ),
     );
   }
