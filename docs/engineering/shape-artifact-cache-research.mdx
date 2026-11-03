@@ -306,9 +306,11 @@ through the trusted parent:
   followed by fresh-process recovery.
 
 The parent record transfer uses versioned magic, a little-endian 32-bit header
-length, a 32 KiB closed canonical-JSON header ceiling, fatal UTF-8, exact
+length, a 32 KiB ceiling on a closed-field JSON header, fatal UTF-8, exact
 payload/EOF checks, key/integrity validation, SHA-256, and
-request-specific byte bounds.
+request-specific byte bounds. The header is ordinary `JSON.stringify` output,
+not canonical JSON, and its key order is not checked; artifact-cache record
+validation and SHA-256 carry the integrity checks.
 
 The trust boundary is explicitly `trusted-parent-mediated-record`. Record
 authentication remains false.

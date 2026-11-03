@@ -733,16 +733,20 @@ measurements and topology. A consumer with another solver fingerprint derives a
 different key, records `miss`, performs one native box call, and invokes neither
 codec direction.
 
-The parent-mediated record is one exact binary frame: an 8-byte versioned magic,
-a little-endian 32-bit canonical-JSON header length capped at 32 KiB, then the
-exact artifact payload. Fatal UTF-8, closed header fields, protocol/key/metadata
-and integrity validation, request-specific byte ceilings, SHA-256, exact
-payload length, and exact EOF are checked. The gate preserves caller-owned
-input, rejects a changed payload, forged key/metadata, shared or hostile
-typed-array input, and post-start abort, then proves recovery with another fresh
-consumer. Its evidence names `trusted-parent-mediated-record` and explicitly
-sets `recordIntegrityAuthenticated: false`; the digest detects corruption, not
-an authorized parent's malicious substitution.
+The parent-mediated record is one exact binary frame: an 8-byte versioned
+magic, a little-endian 32-bit length for a closed-field JSON header capped at
+32 KiB, then the exact artifact payload. The header is ordinary
+`JSON.stringify` output rather than canonical JSON, and the consuming child
+does not require a canonical key order; record metadata is instead revalidated
+by the artifact-cache record checks and the payload by SHA-256. The consuming
+child checks fatal UTF-8, closed header fields, protocol/key/metadata and
+integrity validation, request-specific byte ceilings, SHA-256, exact payload
+length, and exact EOF. The gate preserves caller-owned input, rejects a changed
+payload, forged key/metadata, shared or hostile typed-array input, and
+post-start abort, then proves recovery with another fresh consumer. Its
+evidence names `trusted-parent-mediated-record` and explicitly sets
+`recordIntegrityAuthenticated: false`; the digest detects corruption, not an
+authorized parent's malicious substitution.
 
 The verified facade-bundle gate invokes the same command against its packaged
 runtime automatically. Every successful result records one-shot cleanup before
