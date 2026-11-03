@@ -104,6 +104,26 @@ function rectangleProfile(
   };
 }
 
+function rotatedSquareProfile(station: number, degrees: number): ResolvedProfile {
+  const angle = (degrees * Math.PI) / 180;
+  const corner = (x: number, y: number): readonly [number, number] => [
+    x * Math.cos(angle) - y * Math.sin(angle),
+    x * Math.sin(angle) + y * Math.cos(angle),
+  ];
+  const points = [corner(-1, -1), corner(1, -1), corner(1, 1), corner(-1, 1)];
+  return {
+    plane: { plane: "XY", origin: [0, 0, station] },
+    outer: {
+      curves: points.map((start, index) => ({
+        kind: "line" as const,
+        start,
+        end: points[(index + 1) % points.length]!,
+      })),
+    },
+    holes: [],
+  };
+}
+
 function circleProfile(station: number, reversed = false): ResolvedProfile {
   return {
     plane: { plane: "XY", origin: [0, 0, station] },
@@ -582,6 +602,60 @@ describe("ruled solid loft profile compatibility", () => {
         }),
       );
     }
+  });
+
+  it("checks curve phase between adjacent sections, the pairing OCCT re-phases", () => {
+    // Each section is within 45 degrees of section 0, but sections 1 and 2
+    // differ by 88 degrees, so OCCT would silently re-pair them.
+    expect(
+      validateRuledSolidLoftProfiles(
+        [
+          rotatedSquareProfile(0, 0),
+          rotatedSquareProfile(10, -44),
+          rotatedSquareProfile(20, 44),
+        ],
+        LOFT_TOLERANCE,
+      ),
+    ).toEqual(
+      expect.objectContaining({
+        reason: "curve-phase-mismatch",
+        path: "profiles/2",
+        profileIndex: 2,
+        curveIndex: 0,
+        expected: 0,
+        actual: 3,
+      }),
+    );
+    // A gradual twist keeps every adjacent pairing authored even though the
+    // last section is 80 degrees from the first.
+    expect(
+      validateRuledSolidLoftProfiles(
+        [
+          rotatedSquareProfile(0, 0),
+          rotatedSquareProfile(10, 40),
+          rotatedSquareProfile(20, 80),
+        ],
+        LOFT_TOLERANCE,
+      ),
+    ).toBeUndefined();
+    expect(
+      validateRuledSolidLoftProfiles(
+        [
+          rotatedSquareProfile(0, 0),
+          rotatedSquareProfile(10, 40),
+          rotatedSquareProfile(20, 80),
+          rotatedSquareProfile(30, 120),
+          rotatedSquareProfile(40, 170),
+        ],
+        LOFT_TOLERANCE,
+      ),
+    ).toEqual(
+      expect.objectContaining({
+        reason: "curve-phase-mismatch",
+        profileIndex: 4,
+        actual: 3,
+      }),
+    );
   });
 
   it("treats arc traversal direction as part of the ordered signature", () => {

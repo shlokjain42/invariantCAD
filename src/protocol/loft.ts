@@ -274,11 +274,17 @@ export function validateRuledSolidLoftProfiles(
       };
     }
 
-    const preferredShift = preferredCurvePhaseShift(
-      first.outer.curves,
-      profile.outer.curves,
-      tolerance,
-    );
+    // OCCT ThruSections re-phases each section against its neighbour, so the
+    // authored pairing must be preferred between adjacent sections, not only
+    // against the first one.
+    const preferredShift =
+      index === 0
+        ? 0
+        : preferredCurvePhaseShift(
+            profiles[index - 1]!.outer.curves,
+            profile.outer.curves,
+            tolerance,
+          );
     if (preferredShift !== 0) {
       return {
         message:
