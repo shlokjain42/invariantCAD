@@ -32,9 +32,12 @@ interface Diagnostic {
 
 Branch on `code`, not message text. Messages are written for people and can be
 clarified without a protocol change. `path` uses document-oriented paths when a
-specific authored field is responsible. Document paths are JSON Pointers: an
-ID segment that contains `~` or `/` is escaped as `~0` or `~1`, so a node named
-`a/b` is reported under `/nodes/a~1b`. `related` identifies other document
+specific authored field is responsible. Paths from parsing and
+`validateDocument` are JSON Pointers: an ID segment that contains `~` or `/` is
+escaped as `~0` or `~1`, so a node named `a/b` is reported under
+`/nodes/a~1b`. Some diagnostics raised later, during evaluation or feature
+hashing, still place such IDs unescaped, so prefer IDs without `~` or `/`.
+`related` identifies other document
 locations involved in the same failure, such as the other end of a conflicting
 reference.
 

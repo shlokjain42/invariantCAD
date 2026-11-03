@@ -272,8 +272,9 @@ exactly:
 - empty `parameters` and the fixed `units: { length: "mm", angle: "rad" }`.
 
 It has no metadata, materials, configurations, topology references, or other
-nodes. The writer emits canonical bytes with object keys in sorted order; the
-example above serializes as:
+nodes. The writer emits canonical bytes with object keys in sorted order, on
+one line by default. With an illustrative digest and a 18,342-byte file, the
+example above serializes with `{ pretty: true }` as:
 
 ```json
 {
