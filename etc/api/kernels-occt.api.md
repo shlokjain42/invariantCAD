@@ -1143,7 +1143,7 @@ interface VolumetricMassProperties {
 
 // Warnings were encountered during analysis:
 //
-// src/kernel.ts:363:7 - (ae-forgotten-export) The symbol "KernelDocumentBodyLengthUnit" needs to be exported by the entry point occt-kernel.d.ts
+// dist/kernel.d.ts:233:5 - (ae-forgotten-export) The symbol "KernelDocumentBodyLengthUnit" needs to be exported by the entry point occt-kernel.d.ts
 
 // (No @packageDocumentation comment for this package)
 

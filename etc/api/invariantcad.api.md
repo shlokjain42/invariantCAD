@@ -6380,10 +6380,10 @@ export function writeArtifactCacheRecord(store: ArtifactCacheStore, record: Arti
 
 // Warnings were encountered during analysis:
 //
+// dist/topology.d.ts:81:5 - (ae-forgotten-export) The symbol "EdgeTopologyQueries" needs to be exported by the entry point index.d.ts
+// dist/topology.d.ts:82:5 - (ae-forgotten-export) The symbol "FaceTopologyQueries" needs to be exported by the entry point index.d.ts
+// dist/topology.d.ts:83:5 - (ae-forgotten-export) The symbol "VertexTopologyQueries" needs to be exported by the entry point index.d.ts
 // dist/vendor/manifold-3d/manifold.d.ts:18:5 - (ae-forgotten-export) The symbol "Vec3_2" needs to be exported by the entry point index.d.ts
-// src/topology.ts:592:22 - (ae-forgotten-export) The symbol "EdgeTopologyQueries" needs to be exported by the entry point index.d.ts
-// src/topology.ts:592:22 - (ae-forgotten-export) The symbol "FaceTopologyQueries" needs to be exported by the entry point index.d.ts
-// src/topology.ts:592:22 - (ae-forgotten-export) The symbol "VertexTopologyQueries" needs to be exported by the entry point index.d.ts
 
 // (No @packageDocumentation comment for this package)
 

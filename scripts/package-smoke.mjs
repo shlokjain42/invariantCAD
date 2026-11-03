@@ -1,7 +1,15 @@
 import { spawnSync } from "node:child_process";
-import { access, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import {
+  access,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const projectRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -59,6 +67,48 @@ async function assertMissing(path, label) {
     throw error;
   }
   throw new Error(label + " must remain outside the invariantcad npm package");
+}
+
+/**
+ * Lists source-map sources that neither embed their content nor resolve to a
+ * file shipped inside the installed package, so editors could not follow them.
+ */
+async function unresolvedSourceMapSources(packageRoot) {
+  const failures = [];
+  const visit = async (directory) => {
+    const entries = await readdir(directory, { withFileTypes: true });
+    for (const entry of entries) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) {
+        await visit(path);
+        continue;
+      }
+      if (!entry.name.endsWith(".map")) continue;
+      const map = JSON.parse(await readFile(path, "utf8"));
+      const sources = Array.isArray(map.sources) ? map.sources : [];
+      for (let index = 0; index < sources.length; index += 1) {
+        if (typeof map.sourcesContent?.[index] === "string") continue;
+        const source = resolve(
+          dirname(path),
+          map.sourceRoot ?? "",
+          sources[index],
+        );
+        let shipped = source.startsWith(packageRoot + sep);
+        if (shipped) {
+          try {
+            await access(source);
+          } catch {
+            shipped = false;
+          }
+        }
+        if (!shipped) {
+          failures.push(relative(packageRoot, path) + " -> " + sources[index]);
+        }
+      }
+    }
+  };
+  await visit(join(packageRoot, "dist"));
+  return failures;
 }
 
 function run(command, arguments_, cwd, options = {}) {
@@ -1694,6 +1744,13 @@ try {
     join(installedPackage, "native"),
     "Native facade sources and bundles",
   );
+  const unresolvedSources = await unresolvedSourceMapSources(installedPackage);
+  if (unresolvedSources.length !== 0) {
+    throw new Error(
+      "Installed source maps point to files outside the package: " +
+        unresolvedSources.slice(0, 5).join(", "),
+    );
+  }
   run(
     process.execPath,
     [join(projectRoot, "node_modules", "typescript", "bin", "tsc"), "-p", "."],
