@@ -406,8 +406,12 @@ share geometry by resource, child part node, and child configuration; distinct
 assembly output aliases retain separate component, diagnostic, and BOM identity.
 Every external component of one child document and child configuration, whether
 reached through `externalPart(...)` or `externalAssembly(...)`, is prepared in
-one batch, so a child part used both ways is constructed and charged against
-the product limits once while keeping separate component and BOM identity.
+one batch, so the solid graph of a child part used both ways is constructed
+once and counted once toward `maxDistinctSolids`, `maxSolidGraphNodes`,
+`maxSolidDependencyLinks`, and `maxTransformOperations`, while keeping separate
+component and BOM identity.
+The direct selection and the fixed-subassembly leaf selection of that part
+still count their bodies separately toward `maxPartBodies`.
 Direct part evaluation may additionally deduplicate solid-DAG acquisition
 within a configuration batch. Authoring does not create a persistent or
 cross-run cache commitment.
