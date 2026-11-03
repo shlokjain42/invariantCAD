@@ -202,7 +202,7 @@ contract; it does not certify that contract across platforms.
 | `resource-limit` | Manifest, JavaScript, or WASM input is empty or exceeds its hard cap |
 | `cryptography-unavailable` | Web Crypto SHA-256 is unavailable or failed |
 | `release-manifest-digest-mismatch` | Manifest does not match the independent pin |
-| `invalid-release-manifest` | Trusted bytes are not exact canonical closed-schema v1 JSON |
+| `invalid-release-manifest` | Trusted bytes are not exact canonical closed-schema v1 JSON; a leading UTF-8 byte-order mark is noncanonical |
 | `javascript-size-mismatch` / `webassembly-size-mismatch` | Runtime size differs from the trusted manifest |
 | `javascript-digest-mismatch` / `webassembly-digest-mismatch` | Runtime digest differs from the trusted manifest |
 | `loader-unavailable` | Browser Blob-module loader primitives are unavailable |

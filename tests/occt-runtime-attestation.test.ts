@@ -648,6 +648,22 @@ describe("OCCT runtime attestation", () => {
       reason: "invalid-release-manifest",
     });
 
+    const bom = new Uint8Array([0xef, 0xbb, 0xbf]);
+    const canonical = canonicalManifest();
+    const bomPrefixedManifest = new Uint8Array(
+      bom.byteLength + canonical.byteLength,
+    );
+    bomPrefixedManifest.set(bom);
+    bomPrefixedManifest.set(canonical, bom.byteLength);
+    await expect(
+      verifyOcctRuntimeRelease(
+        loaderOptions(JAVASCRIPT, WEBASSEMBLY, bomPrefixedManifest),
+      ),
+    ).rejects.toMatchObject({
+      name: "OcctRuntimeAttestationError",
+      reason: "invalid-release-manifest",
+    });
+
     const noDefault = textEncoder.encode("export const value = 1;\n");
     const verified = await verifyOcctRuntimeRelease(
       loaderOptions(noDefault),
