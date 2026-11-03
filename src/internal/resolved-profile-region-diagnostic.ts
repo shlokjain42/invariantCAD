@@ -69,6 +69,96 @@ function admittedProfileCurveSource(
   }
 }
 
+const ARC_GAP_HINT =
+  "With the reference solver, arc endpoints follow the arc center, radius, and authored start and end angles; constraints that change a loop arc's radius or move its center do not move the adjacent line endpoints. Drive those endpoints from the same expressions, or constrain them to the arc center with distanceX and distanceY.";
+
+/**
+ * Keeps the established profile-scoped closure diagnostic and adds the first
+ * gap's resolved curve indices, its size, and, where solver provenance matches
+ * the authored loop, the entities on either side.
+ */
+function openLoopDiagnostic(
+  node: NodeId,
+  sketch: SketchNodeIR,
+  tolerance: number,
+  issue: ResolvedProfileRegionValidationIssue,
+  profilePath: string,
+): Diagnostic {
+  const sides = [
+    [issue.curveSource, issue.curveIndex],
+    [issue.otherCurveSource, issue.otherCurveIndex],
+  ] as const;
+  const sources = sides.map(([source, curveIndex]) =>
+    admittedProfileCurveSource(
+      node,
+      sketch,
+      source,
+      issue.loop,
+      issue.holeIndex,
+      curveIndex,
+    ),
+  );
+  const related = sources.flatMap((source, index) =>
+    source === undefined
+      ? []
+      : [
+          {
+            node,
+            path: `/nodes/${node}/entities/${source.entity}`,
+            message:
+              index === 0
+                ? "Profile boundary entity before the gap"
+                : "Profile boundary entity after the gap",
+          },
+        ],
+  );
+  const touchesArc = sides.some(([, curveIndex]) => {
+    const entity = authoredProfileCurveEntity(
+      sketch,
+      issue.loop,
+      issue.holeIndex,
+      curveIndex,
+    );
+    return (
+      entity !== undefined &&
+      Object.prototype.hasOwnProperty.call(sketch.entities, entity) &&
+      sketch.entities[entity]?.kind === "arc"
+    );
+  });
+  const [curveSource, otherCurveSource] = sources;
+  return diagnostic(
+    "SKETCH_NO_CLOSED_REGION",
+    "Sketch did not produce a closed region",
+    {
+      severity: "error",
+      node,
+      path: profilePath,
+      ...(related.length === 0 ? {} : { related }),
+      ...(touchesArc ? { hints: [ARC_GAP_HINT] } : {}),
+      details: {
+        phase: "sketch-profile-validation",
+        reason: issue.reason,
+        loopIssueReason: "open-loop",
+        tolerance,
+        indexSpace: "resolved-profile",
+        ...(issue.loop === undefined ? {} : { loop: issue.loop }),
+        ...(issue.holeIndex === undefined
+          ? {}
+          : { holeIndex: issue.holeIndex }),
+        ...(issue.curveIndex === undefined
+          ? {}
+          : { curveIndex: issue.curveIndex }),
+        ...(issue.otherCurveIndex === undefined
+          ? {}
+          : { otherCurveIndex: issue.otherCurveIndex }),
+        ...(issue.gap === undefined ? {} : { gap: issue.gap }),
+        ...(curveSource === undefined ? {} : { curveSource }),
+        ...(otherCurveSource === undefined ? {} : { otherCurveSource }),
+      },
+    },
+  );
+}
+
 export function resolvedProfileRegionDiagnostic(
   node: NodeId,
   sketch: SketchNodeIR,
@@ -118,15 +208,7 @@ export function resolvedProfileRegionDiagnostic(
     issue.reason === "invalid-loop" &&
     issue.loopIssueReason === "open-loop"
   ) {
-    return diagnostic(
-      "SKETCH_NO_CLOSED_REGION",
-      "Sketch did not produce a closed region",
-      {
-        severity: "error",
-        node,
-        path: profilePath,
-      },
-    );
+    return openLoopDiagnostic(node, sketch, tolerance, issue, profilePath);
   }
 
   const curveSource = admittedProfileCurveSource(

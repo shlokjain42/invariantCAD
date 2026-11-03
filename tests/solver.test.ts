@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   createEvaluator,
   createReferenceSketchSolver,
+  deg,
   design,
   evaluateExpression,
   mm,
@@ -365,6 +366,184 @@ describe("reference solver degrees of freedom and status", () => {
         severity: "error",
       }),
     ]);
+  });
+});
+
+function slotDocument(
+  constrain: (
+    sketch: SketchBuilder,
+    refs: {
+      readonly a: ReturnType<SketchBuilder["point"]>;
+      readonly b: ReturnType<SketchBuilder["point"]>;
+      readonly c: ReturnType<SketchBuilder["point"]>;
+      readonly d: ReturnType<SketchBuilder["point"]>;
+      readonly right: ReturnType<SketchBuilder["arc"]>;
+      readonly left: ReturnType<SketchBuilder["arc"]>;
+    },
+  ) => void,
+  halfWidth = 5,
+): DesignDocument {
+  return sketchDocument((sketch) => {
+    const a = sketch.point("a", vec2(mm(0), mm(-halfWidth)));
+    const b = sketch.point("b", vec2(mm(20), mm(-halfWidth)));
+    const c = sketch.point("c", vec2(mm(20), mm(halfWidth)));
+    const d = sketch.point("d", vec2(mm(0), mm(halfWidth)));
+    const right = sketch.arc("right", {
+      center: vec2(mm(20), mm(0)),
+      radius: mm(halfWidth),
+      startAngle: deg(-90),
+      endAngle: deg(90),
+    });
+    const left = sketch.arc("left", {
+      center: vec2(mm(0), mm(0)),
+      radius: mm(halfWidth),
+      startAngle: deg(90),
+      endAngle: deg(270),
+    });
+    constrain(sketch, { a, b, c, d, right, left });
+    return sketch.profile(
+      sketch.loop([
+        sketch.line("bottom", a, b),
+        right,
+        sketch.line("top", c, d),
+        left,
+      ]),
+    );
+  });
+}
+
+describe("reference solver arc constraints inside closed loops", () => {
+  const slotVolume = (radius: number) => (20 * 2 * radius + Math.PI * radius ** 2) * 2;
+
+  it("keeps a loop closed when an arc constraint restates the authored radius", async () => {
+    const result = await evaluator.evaluate(
+      slotDocument((sketch, refs) => {
+        sketch.radius("radius", refs.right, mm(5));
+      }),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    try {
+      expect(
+        Math.abs(result.value.output("solid").measure().volume - slotVolume(5)),
+      ).toBeLessThan(1);
+    } finally {
+      result.value.dispose();
+    }
+  });
+
+  it("names the first gap when a radius constraint detaches an arc from its lines", async () => {
+    const result = await evaluator.evaluate(
+      slotDocument((sketch, refs) => {
+        sketch.radius("radius", refs.right, mm(6));
+      }),
+    );
+    expect(result.ok).toBe(false);
+    const errors = result.diagnostics.filter((item) => item.severity === "error");
+    expect(errors).toEqual([
+      {
+        code: "SKETCH_NO_CLOSED_REGION",
+        message: "Sketch did not produce a closed region",
+        severity: "error",
+        node: "profile",
+        path: "/nodes/profile/profile",
+        related: [
+          {
+            node: "profile",
+            path: "/nodes/profile/entities/bottom",
+            message: "Profile boundary entity before the gap",
+          },
+          {
+            node: "profile",
+            path: "/nodes/profile/entities/right",
+            message: "Profile boundary entity after the gap",
+          },
+        ],
+        hints: [expect.stringContaining("arc endpoints follow the arc center")],
+        details: {
+          phase: "sketch-profile-validation",
+          reason: "invalid-loop",
+          loopIssueReason: "open-loop",
+          tolerance: 1e-7,
+          indexSpace: "resolved-profile",
+          loop: "outer",
+          curveIndex: 0,
+          otherCurveIndex: 1,
+          gap: expect.closeTo(1, 9),
+          curveSource: { kind: "sketch-entity", sketch: "profile", entity: "bottom" },
+          otherCurveSource: { kind: "sketch-entity", sketch: "profile", entity: "right" },
+        },
+      },
+    ]);
+  });
+
+  it("opens the loop the same way for diameter, equal-radius, and centre moves", async () => {
+    for (const [name, constrain] of [
+      [
+        "diameter",
+        (sketch: SketchBuilder, refs: Parameters<Parameters<typeof slotDocument>[0]>[1]) => {
+          sketch.diameter("diameter", refs.right, mm(12));
+        },
+      ],
+      [
+        "equalRadius",
+        (sketch: SketchBuilder, refs: Parameters<Parameters<typeof slotDocument>[0]>[1]) => {
+          sketch.radius("radius", refs.left, mm(6)).equalRadius("equal", refs.left, refs.right);
+        },
+      ],
+      [
+        "centre move",
+        (sketch: SketchBuilder, refs: Parameters<Parameters<typeof slotDocument>[0]>[1]) => {
+          sketch
+            .fixed("anchor", refs.left.center)
+            .distanceX("offset", refs.left.center, refs.right.center, mm(25));
+        },
+      ],
+    ] as const) {
+      const result = await evaluator.evaluate(slotDocument(constrain));
+      expect(result.ok, name).toBe(false);
+      expect(
+        result.diagnostics.find((item) => item.severity === "error"),
+        name,
+      ).toEqual(
+        expect.objectContaining({
+          code: "SKETCH_NO_CLOSED_REGION",
+          details: expect.objectContaining({ loopIssueReason: "open-loop" }),
+        }),
+      );
+    }
+  });
+
+  it("closes the loop when line endpoints are constrained to follow the arcs", async () => {
+    for (const document of [
+      slotDocument((sketch, refs) => {
+        sketch
+          .fixed("left-centre", refs.left.center)
+          .fixed("right-centre", refs.right.center)
+          .radius("radius", refs.right, mm(6))
+          .equalRadius("equal", refs.left, refs.right)
+          .distanceX("ax", refs.left.center, refs.a, mm(0))
+          .distanceY("ay", refs.left.center, refs.a, mm(-6))
+          .distanceX("bx", refs.right.center, refs.b, mm(0))
+          .distanceY("by", refs.right.center, refs.b, mm(-6))
+          .distanceX("cx", refs.right.center, refs.c, mm(0))
+          .distanceY("cy", refs.right.center, refs.c, mm(6))
+          .distanceX("dx", refs.left.center, refs.d, mm(0))
+          .distanceY("dy", refs.left.center, refs.d, mm(6));
+      }),
+      slotDocument(() => {}, 6),
+    ]) {
+      const result = await evaluator.evaluate(document);
+      expect(result.ok).toBe(true);
+      if (!result.ok) continue;
+      try {
+        expect(
+          Math.abs(result.value.output("solid").measure().volume - slotVolume(6)),
+        ).toBeLessThan(1);
+      } finally {
+        result.value.dispose();
+      }
+    }
   });
 });
 

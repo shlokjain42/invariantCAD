@@ -49,6 +49,8 @@ export interface ResolvedProfileRegionValidationIssue {
   readonly curveSource?: ProfileCurveSource;
   readonly otherCurveSource?: ProfileCurveSource;
   readonly loopIssueReason?: string;
+  /** Distance between a curve end and the next curve start in an open loop. */
+  readonly gap?: number;
   readonly workUnits: number;
   readonly maxWorkUnits: number;
 }
@@ -565,7 +567,8 @@ function validateLoopClosure(
         },
       );
     }
-    const next = loop.curves[(curveIndex + 1) % loop.curves.length]!;
+    const nextIndex = (curveIndex + 1) % loop.curves.length;
+    const next = loop.curves[nextIndex]!;
     const gap = distance2(curveEnd(curve), curveStart(next));
     if (!Number.isFinite(gap) || gap > tolerance) {
       return issue(
@@ -576,8 +579,11 @@ function validateLoopClosure(
           loop: role,
           ...(holeIndex === undefined ? {} : { holeIndex }),
           curveIndex,
+          otherCurveIndex: nextIndex,
           ...curveSourceDetails(curve),
+          ...otherCurveSourceDetails(next),
           loopIssueReason: "open-loop",
+          ...(Number.isFinite(gap) ? { gap } : {}),
         },
       );
     }
