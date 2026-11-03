@@ -1034,11 +1034,12 @@ invariantcad inspect design.invariantcad.json --kernel occt
   failures reported as diagnostics, and terminal-safe escaping are implemented
   for the unreleased 0.2 line, not the current 0.1.1 npm package. The 0.1.1 CLI
   accepts only `--parameters values.json`; silently ignores `--parameter`,
-  unknown options, and stray arguments; exports only the first output in sorted
-  name order when `--output` is omitted; prints JavaScript stack traces for
-  missing or unreadable input files, malformed parameter files, and export or
-  write failures; and writes document text without escaping. See the
-  [CLI reference](/reference/cli).
+  unknown options, and stray arguments; exports only the first output in the
+  parsed document's `outputs` key order, which is sorted name order only for a
+  canonically serialized document, when `--output` is omitted; prints
+  JavaScript stack traces for missing or unreadable input files, malformed
+  parameter files, and export or write failures; and writes document text
+  without escaping. See the [CLI reference](/reference/cli).
 </Note>
 
 Parameter JSON and inline `--parameter name=value` values use base units: millimetres, radians, `kg/mm^3` mass density, and unitless scalars. Repeat `--parameter` for multiple finite JSON-number overrides. Inline names are exact stored parameter keys; splitting at the final `=` keeps keys containing `=` addressable for directly evaluable frozen legacy documents. Use the attached `--parameter=-legacy-key=5` form when a stored key begins with `-`. Choose either inline overrides or one `--parameters` JSON file; mixing them is a usage error. Runtime overrides take precedence over the selected configuration and document defaults. `--configuration <id>` selects the same named variant for `inspect`, `bom`, and `export`; `validate` checks every stored configuration without selecting one.
