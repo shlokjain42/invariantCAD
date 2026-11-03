@@ -21,7 +21,7 @@ import {
   type KernelShapeArtifactCapabilities,
   type KernelShapeArtifactContext,
 } from "./kernel.js";
-import { decodeUtf8Fatal, isCanonicalUtf8StringWithin } from "./core/utf8.js";
+import { hasUnpairedUtf16Surrogate, isCanonicalUtf8StringWithin } from "./core/utf8.js";
 import {
   encodeKernelShapeSemanticObservation,
   encodeKernelShapeSemanticObservationV2,
@@ -990,9 +990,10 @@ async function hashBounded(
     if (typeof input === "string") {
       bytes = encodeBoundedUtf8(input, maximum);
       // TextEncoder replaces unpaired surrogates with U+FFFD, which would let
-      // distinct strings share one witness. Reject them like the artifact
-      // cache does instead of hashing a replacement.
-      if (bytes !== undefined && decodeUtf8Fatal(bytes) !== input) {
+      // distinct strings share one witness. Reject them instead of hashing a
+      // replacement. A direct scan, unlike a fatal decode round trip, keeps a
+      // leading U+FEFF hashable as its exact bytes.
+      if (bytes !== undefined && hasUnpairedUtf16Surrogate(input)) {
         return invalidOptions(
           "Witness input string contains an unpaired UTF-16 surrogate",
         );

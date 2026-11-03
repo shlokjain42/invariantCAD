@@ -112,3 +112,20 @@ export function isCanonicalUtf8StringWithin(
     return false;
   }
 }
+
+/**
+ * Reports whether a string contains an unpaired UTF-16 surrogate, which
+ * TextEncoder would silently replace with U+FFFD. Unlike a fatal decode round
+ * trip, this does not treat a leading U+FEFF as malformed.
+ */
+export function hasUnpairedUtf16Surrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = stringCharCodeAt(value, index);
+    if (codeUnit < 0xd800 || codeUnit > 0xdfff) continue;
+    if (codeUnit > 0xdbff || index + 1 >= value.length) return true;
+    const trailing = stringCharCodeAt(value, index + 1);
+    if (trailing < 0xdc00 || trailing > 0xdfff) return true;
+    index += 1;
+  }
+  return false;
+}

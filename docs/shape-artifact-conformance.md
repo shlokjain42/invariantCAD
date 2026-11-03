@@ -166,10 +166,11 @@ the runtime under test:
 
 Both modes validate these fields with the artifact-cache protocol's own rules,
 for the expected identity and for a candidate codec's declaration alike: the
-kernel ID and format must be nonempty, well-formed UTF-8 of at most `256`
-bytes, and the fingerprint at most `2,048` bytes. Unpaired UTF-16 surrogates
-are rejected rather than replaced. An identity the cache could never advertise
-or key therefore cannot pass a candidate audit either.
+kernel ID and format must be nonempty strings of at most `256` UTF-8 bytes,
+and the fingerprint at most `2,048` bytes, that decode back unchanged under a
+fatal UTF-8 decoder. Unpaired UTF-16 surrogates and a leading U+FEFF are
+therefore rejected rather than replaced or stripped. An identity the cache
+could never advertise or key cannot pass a candidate audit either.
 
 The compatibility fingerprint is not a topology-signature fingerprint or a
 friendly runtime label. It must identify every implementation, native/WASM
@@ -191,8 +192,8 @@ frozen v1 audit admits any digest in the v1 semantic-witness domain, whether it
 came from `hashKernelShapeSemanticObservation(...)` over an
 `observeKernelShapeSemantics(...)` result or from
 `hashKernelShapeArtifactSemanticWitness(...)` over caller-canonicalized
-material. That helper hashes a string as its exact UTF-8 bytes and rejects a
-string containing an unpaired UTF-16 surrogate with
+material. That helper hashes a string as its exact UTF-8 bytes, including any
+leading U+FEFF, and rejects a string containing an unpaired UTF-16 surrogate with
 `ARTIFACT_CACHE_ENTRY_INVALID` instead of replacing it, so distinct strings
 cannot share one witness. The explicit v2 audit admits only digests in the v2
 domain, which the corresponding `...V2` functions produce. Each audit checks

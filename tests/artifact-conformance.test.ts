@@ -745,7 +745,7 @@ describe("kernel shape-artifact codec audit", () => {
 
     // Each identity is 256 or fewer UTF-16 code units, so a code-unit count
     // admitted it even though the artifact-cache protocol never can.
-    for (const format of ["é".repeat(129), "format-\ud800", "\udc00-format"]) {
+    for (const format of ["é".repeat(129), "format-\ud800", "\udc00-format", "\ufeffformat"]) {
       const capabilities: KernelShapeArtifactCapabilities = Object.freeze({
         ...ARTIFACT_CAPABILITIES,
         format,
@@ -1105,7 +1105,7 @@ describe("shape-artifact witness helpers", () => {
     const replacement = await valueOf(
       hashKernelShapeArtifactSemanticWitness("obs\ufffd"),
     );
-    for (const input of ["obs\ud800", "obs\udbff", "\udc00obs", "obs\udc00\ud800"]) {
+    for (const input of ["obs\ud800", "obs\udbff", "\udc00obs", "obs\udc00\ud800", "\ufeff\ud800"]) {
       const result = await hashKernelShapeArtifactSemanticWitness(input);
       expectFailure(result, "ARTIFACT_CACHE_ENTRY_INVALID");
       expect(result.ok ? undefined : result.diagnostics[0]?.message).toMatch(
@@ -1116,13 +1116,19 @@ describe("shape-artifact witness helpers", () => {
       new RegExp(`^${KERNEL_SHAPE_ARTIFACT_SEMANTIC_WITNESS_PREFIX}[0-9a-f]{64}$`),
     );
 
-    // Paired surrogates are well formed and hash as their exact UTF-8 bytes.
-    const paired = "obs\u{1f600}";
-    expect(await valueOf(hashKernelShapeArtifactSemanticWitness(paired))).toBe(
-      await valueOf(
-        hashKernelShapeArtifactSemanticWitness(new TextEncoder().encode(paired)),
-      ),
-    );
+    // Paired surrogates and a leading U+FEFF, which a default fatal decoder
+    // would strip, are well formed and hash as their exact UTF-8 bytes.
+    for (const wellFormed of ["obs\u{1f600}", "\ufeffobs", "\u{1f600}"]) {
+      expect(
+        await valueOf(hashKernelShapeArtifactSemanticWitness(wellFormed)),
+      ).toBe(
+        await valueOf(
+          hashKernelShapeArtifactSemanticWitness(
+            new TextEncoder().encode(wellFormed),
+          ),
+        ),
+      );
+    }
 
     // The byte ceiling is still enforced before well-formedness is inspected.
     const oversized = await hashKernelShapeArtifactSemanticWitness(
