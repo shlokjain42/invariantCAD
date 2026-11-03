@@ -105,6 +105,13 @@ function box(kernel: GeometryKernel, feature = "role-box"): KernelShape {
   return kernel.box([2, 3, 5], false, { feature });
 }
 
+function sphere(kernel: GeometryKernel, feature: string): KernelShape {
+  if (kernel.sphere === undefined) {
+    throw new Error("OCCT sphere support is unavailable");
+  }
+  return kernel.sphere(2, undefined, { feature });
+}
+
 function topology(
   kernel: GeometryKernel,
   shape: KernelShape,
@@ -548,13 +555,16 @@ describe("OCCT shape-artifact codec candidate", { timeout: 30_000 }, () => {
     }
   });
 
-  it("does not change an already mesh- and topology-warm source", async () => {
+  it.each([
+    ["role-rich box", (kernel: GeometryKernel) => box(kernel, "warm-role-box")],
+    ["curved sphere", (kernel: GeometryKernel) => sphere(kernel, "warm-sphere")],
+  ] as const)("does not change an already mesh- and topology-warm %s source", async (_name, create) => {
     const producer = await createOcctKernel();
     const consumer = await createOcctKernel();
     let source: KernelShape | undefined;
     let decoded: KernelShape | undefined;
     try {
-      source = box(producer, "warm-role-box");
+      source = create(producer);
       const plan = observationPlan(producer);
       const beforeObservation = await observe(producer, source, plan);
       const beforeMesh = producer.mesh(source);
@@ -579,7 +589,7 @@ describe("OCCT shape-artifact codec candidate", { timeout: 30_000 }, () => {
       consumer.dispose();
       producer.dispose();
     }
-  });
+  }, 30_000);
 
   it("preserves partial history from a binary-BREP import", async () => {
     const producer = await createOcctKernel();
@@ -1431,4 +1441,118 @@ describe("OCCT shape-artifact codec candidate", { timeout: 30_000 }, () => {
       producer.dispose();
     }
   });
+});
+
+describe("stock OCCT semantic observation repeatability", () => {
+  const coarse = Object.freeze({ linearDeflection: 1 });
+  const fine = Object.freeze({ linearDeflection: 0.05 });
+
+  function meshPlan(
+    kernel: GeometryKernel,
+    meshes: KernelShapeSemanticObservationPlan["meshes"],
+  ): KernelShapeSemanticObservationPlan {
+    return {
+      id: "occt-mesh-repeatability",
+      meshes,
+      topology: "omit",
+      nativeExchanges: [],
+      probes: [],
+      notApplicableFeatures: kernel.capabilities.features.map((feature) => ({
+        feature,
+        reason: "Mesh repeatability does not exercise downstream features",
+      })),
+    };
+  }
+
+  function triangles(
+    observation: KernelShapeSemanticObservationV2,
+    id: string,
+  ): KernelShapeSemanticObservationV2["meshes"][number]["triangles"] {
+    const mesh = observation.meshes.find((candidate) => candidate.id === id);
+    if (mesh === undefined) throw new Error(`Missing observed mesh ${id}`);
+    return mesh.triangles;
+  }
+
+  function curvedSphere(kernel: GeometryKernel, feature: string): KernelShape {
+    if (kernel.sphere === undefined) {
+      throw new Error("OCCT sphere support is unavailable");
+    }
+    return kernel.sphere(5, undefined, { feature });
+  }
+
+  it("observes the same curved shape twice with equal witnesses", async () => {
+    const kernel = await createOcctKernel();
+    let shape: KernelShape | undefined;
+    try {
+      shape = curvedSphere(kernel, "repeat-sphere");
+      const plan = meshPlan(kernel, [
+        { id: "a-fine", options: fine },
+        { id: "b-coarse", options: coarse },
+      ]);
+      const first = await observe(kernel, shape, plan);
+      const second = await observe(kernel, shape, plan);
+      expect(triangles(first, "b-coarse").length).toBeLessThan(
+        triangles(first, "a-fine").length,
+      );
+      expect(second).toEqual(first);
+    } finally {
+      if (shape !== undefined) kernel.disposeShape(shape);
+      kernel.dispose();
+    }
+  }, 30_000);
+
+  it("does not let request-id order change any request's triangles", async () => {
+    const kernel = await createOcctKernel();
+    const shapes: KernelShape[] = [];
+    try {
+      const fineFirst = curvedSphere(kernel, "fine-first-sphere");
+      shapes.push(fineFirst);
+      const coarseFirst = curvedSphere(kernel, "coarse-first-sphere");
+      shapes.push(coarseFirst);
+      const fineSortsFirst = await observe(
+        kernel,
+        fineFirst,
+        meshPlan(kernel, [
+          { id: "b-coarse", options: coarse },
+          { id: "a-fine", options: fine },
+        ]),
+      );
+      const coarseSortsFirst = await observe(
+        kernel,
+        coarseFirst,
+        meshPlan(kernel, [
+          { id: "a-coarse", options: coarse },
+          { id: "b-fine", options: fine },
+        ]),
+      );
+      expect(triangles(fineSortsFirst, "b-coarse")).toEqual(
+        triangles(coarseSortsFirst, "a-coarse"),
+      );
+      expect(triangles(fineSortsFirst, "a-fine")).toEqual(
+        triangles(coarseSortsFirst, "b-fine"),
+      );
+    } finally {
+      for (const shape of shapes) kernel.disposeShape(shape);
+      kernel.dispose();
+    }
+  }, 30_000);
+
+  it("does not let an earlier kernel mesh change the observation", async () => {
+    const kernel = await createOcctKernel();
+    const shapes: KernelShape[] = [];
+    try {
+      const plan = meshPlan(kernel, [{ id: "coarse", options: coarse }]);
+      const cold = curvedSphere(kernel, "cold-sphere");
+      shapes.push(cold);
+      const warmed = curvedSphere(kernel, "warmed-sphere");
+      shapes.push(warmed);
+      expect(kernel.mesh(warmed, fine).indices.length).toBeGreaterThan(0);
+      const coldObservation = await observe(kernel, cold, plan);
+      const warmedObservation = await observe(kernel, warmed, plan);
+      expect(warmedObservation.meshes).toEqual(coldObservation.meshes);
+    } finally {
+      for (const shape of shapes) kernel.disposeShape(shape);
+      kernel.dispose();
+    }
+  }, 30_000);
 });

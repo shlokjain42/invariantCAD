@@ -252,6 +252,14 @@ identity source, while retaining duplicate triangles and their multiplicity.
 The request ID and exact tessellation options are part of the observation, so
 release plans can exercise more than one reviewed tessellation profile.
 
+The observer meshes the same live shape once per request, in request-ID order,
+so a kernel's `mesh()` must depend only on the shape and that request's
+options. The stock OCCT adapter tessellates a mesh-free native copy for every
+call and never stores triangulation on the owned shape. Request-ID order,
+repeated observations, and earlier `mesh()` calls therefore cannot change a
+recorded triangle multiset, and a coarse request never reuses a finer
+triangulation produced by an earlier request.
+
 ### Exact key-neutral topology labeling
 
 When topology is observed, the ordinary topology validator first detaches and
