@@ -674,7 +674,7 @@ function validateLegacyDocumentSnapshot(
     const diagnostics: Diagnostic[] = parsed.error.issues.map((issue) =>
       diagnostic("IR_INVALID", issue.message, {
         severity: "error",
-        path: `/${issue.path.map(String).join("/")}`,
+        path: schemaIssuePointer(issue.path),
         details: { code: issue.code },
       }),
     );
@@ -682,6 +682,18 @@ function validateLegacyDocumentSnapshot(
   }
   const document = deepFreeze(parsed.data) as DesignDocument;
   return validateDocument(document);
+}
+
+/**
+ * Renders a schema issue path as a JSON Pointer. Record keys are authored IDs
+ * and may contain `~` or `/`, so each segment is escaped per RFC 6901.
+ */
+function schemaIssuePointer(path: readonly PropertyKey[]): string {
+  return `/${path
+    .map((segment) =>
+      String(segment).replaceAll("~", "~0").replaceAll("/", "~1"),
+    )
+    .join("/")}`;
 }
 
 function parseDocumentValueWithLimits(
@@ -740,7 +752,7 @@ function validateDocumentV7Snapshot(
       diagnostics: parsed.error.issues.map((issue) =>
         diagnostic("IR_INVALID", issue.message, {
           severity: "error",
-          path: `/${issue.path.map(String).join("/")}`,
+          path: schemaIssuePointer(issue.path),
           details: { code: issue.code },
         }),
       ),

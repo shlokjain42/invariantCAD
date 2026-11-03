@@ -79,6 +79,14 @@ type ValidatableDocument = DesignDocument | DesignDocumentV7;
 type ValidatableNode = NodeIR | NodeIRV7;
 type ValidatableRef = RefIR | RefIRV7;
 
+/**
+ * Escapes one ID-derived JSON Pointer segment (RFC 6901). Documents v1-v6
+ * accept any string as an ID, including `/` and `~`.
+ */
+function pointerSegment(value: string): string {
+  return String(value).replaceAll("~", "~0").replaceAll("/", "~1");
+}
+
 function nodeDependenciesForDocument(
   node: ValidatableNode,
   document: ValidatableDocument,
@@ -301,14 +309,14 @@ function validateConfiguration(
   document: ValidatableDocument,
   diagnostics: Diagnostic[],
 ): void {
-  const path = `/configurations/${id}`;
+  const path = `/configurations/${pointerSegment(id)}`;
   for (const [parameterId, value] of Object.entries(
     configuration.parameterOverrides ?? {},
   ) as [ParameterId, ExpressionIR][]) {
     const definition = Object.hasOwn(document.parameters, parameterId)
       ? document.parameters[parameterId]
       : undefined;
-    const valuePath = `${path}/parameterOverrides/${parameterId}`;
+    const valuePath = `${path}/parameterOverrides/${pointerSegment(parameterId)}`;
     if (definition === undefined) {
       diagnostics.push(
         diagnostic(
@@ -334,7 +342,7 @@ function validateConfiguration(
     NodeId,
     NonNullable<DesignConfigurationIR["instanceSuppressions"]>[NodeId],
   ][]) {
-    const assemblyPath = `${path}/instanceSuppressions/${assemblyId}`;
+    const assemblyPath = `${path}/instanceSuppressions/${pointerSegment(assemblyId)}`;
     const node = Object.hasOwn(document.nodes, assemblyId)
       ? document.nodes[assemblyId]
       : undefined;
@@ -367,7 +375,7 @@ function validateConfiguration(
             {
               severity: "error",
               node: assemblyId,
-              path: `${assemblyPath}/${instanceId}`,
+              path: `${assemblyPath}/${pointerSegment(instanceId)}`,
             },
           ),
         );
@@ -378,7 +386,7 @@ function validateConfiguration(
   for (const [partId, materialId] of Object.entries(
     configuration.partMaterialOverrides ?? {},
   ) as [NodeId, MaterialId][]) {
-    const materialPath = `${path}/partMaterialOverrides/${partId}`;
+    const materialPath = `${path}/partMaterialOverrides/${pointerSegment(partId)}`;
     const node = Object.hasOwn(document.nodes, partId)
       ? document.nodes[partId]
       : undefined;
@@ -588,7 +596,7 @@ function validateSketch(
     );
   }
   for (const [id, entity] of Object.entries(node.entities)) {
-    const entityPath = `${path}/entities/${id}`;
+    const entityPath = `${path}/entities/${pointerSegment(id)}`;
     switch (entity.kind) {
       case "point":
         validateExpression(entity.x, "length", document, `${entityPath}/x`, diagnostics);
@@ -660,7 +668,7 @@ function validateSketch(
     }
   }
   for (const [id, constraint] of Object.entries(node.constraints)) {
-    const constraintPath = `${path}/constraints/${id}`;
+    const constraintPath = `${path}/constraints/${pointerSegment(id)}`;
     const checkEntity = (value: EntityId, kinds: readonly string[]): void => {
       const entity = node.entities[value];
       if (entity === undefined || !kinds.includes(entity.kind)) {
@@ -946,7 +954,7 @@ function validateTopologySelection(
                 related: [
                   {
                     message: "Persistent topology reference is declared here",
-                    path: `/topologyReferences/${query.reference}/topology`,
+                    path: `/topologyReferences/${pointerSegment(query.reference)}/topology`,
                   },
                 ],
                 details: {
@@ -969,7 +977,7 @@ function validateTopologySelection(
                 related: [
                   {
                     message: "Persistent topology reference target is declared here",
-                    path: `/topologyReferences/${query.reference}/target`,
+                    path: `/topologyReferences/${pointerSegment(query.reference)}/target`,
                   },
                 ],
                 details: {
@@ -1331,7 +1339,7 @@ function validateNode(
   document: ValidatableDocument,
   diagnostics: Diagnostic[],
 ): void {
-  const path = `/nodes/${id}`;
+  const path = `/nodes/${pointerSegment(id)}`;
   const expression = (
     value: ExpressionIR,
     dimension: Dimension,
@@ -1999,7 +2007,7 @@ function validateTopologyReferences(
     );
   }
   for (const [id, entry] of entries) {
-    const path = `/topologyReferences/${id}`;
+    const path = `/topologyReferences/${pointerSegment(id)}`;
     validateRef(entry.target, "solid", document, `${path}/target`, diagnostics);
     if (
       entry.topology !== "face" &&
@@ -2194,7 +2202,7 @@ function detectGraphCycles(
             {
               severity: "error",
               node: dependency,
-              path: `/nodes/${dependency}`,
+              path: `/nodes/${pointerSegment(dependency)}`,
             },
           ),
         );
@@ -2258,7 +2266,7 @@ function validateDocumentRules<T extends ValidatableDocument>(
     ParameterId,
     ValidatableDocument["parameters"][ParameterId],
   ][]) {
-    const path = `/parameters/${id}`;
+    const path = `/parameters/${pointerSegment(id)}`;
     validateExpression(parameter.default, parameter.dimension, document, `${path}/default`, diagnostics);
     if (parameter.min !== undefined) {
       validateExpression(parameter.min, parameter.dimension, document, `${path}/min`, diagnostics);
@@ -2275,7 +2283,7 @@ function validateDocumentRules<T extends ValidatableDocument>(
       material.massDensity,
       "massDensity",
       document,
-      `/materials/${id}/massDensity`,
+      `/materials/${pointerSegment(id)}/massDensity`,
       diagnostics,
     );
   }
@@ -2299,7 +2307,7 @@ function validateDocumentRules<T extends ValidatableDocument>(
       output,
       expectedOutputKinds,
       document,
-      `/outputs/${name}`,
+      `/outputs/${pointerSegment(name)}`,
       diagnostics,
     );
   }

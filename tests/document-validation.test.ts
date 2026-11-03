@@ -4,6 +4,7 @@ import {
   createEvaluator,
   design,
   mm,
+  parseDocument,
   parseDocumentValue,
   stringifyDocument,
   topology,
@@ -252,5 +253,173 @@ describe("bounded topology-origin validation", () => {
       relation: "created",
     };
     expect(validateDocument(asDocument(document)).ok).toBe(true);
+  });
+});
+
+const lengthLiteral = (value: number, dimension = "length") => ({
+  op: "literal",
+  dimension,
+  value,
+});
+const noMove = {
+  kind: "translate",
+  value: [lengthLiteral(0), lengthLiteral(0), lengthLiteral(0)],
+};
+const plainBox = {
+  kind: "box",
+  size: [lengthLiteral(1), lengthLiteral(1), lengthLiteral(1)],
+  center: false,
+};
+
+function v6Json(fields: Record<string, unknown>): string {
+  return JSON.stringify({
+    schema: DOCUMENT_SCHEMA_V6,
+    version: 6,
+    name: "pointer-probe",
+    units: { length: "mm", angle: "rad" },
+    parameters: {},
+    ...fields,
+  });
+}
+
+/** Resolves an RFC 6901 JSON Pointer, or returns undefined when absent. */
+function resolvePointer(root: unknown, pointer: string): unknown {
+  if (pointer === "") return root;
+  expect(pointer.startsWith("/")).toBe(true);
+  let current: unknown = root;
+  for (const raw of pointer.slice(1).split("/")) {
+    const segment = raw.replaceAll("~1", "/").replaceAll("~0", "~");
+    if (
+      typeof current !== "object" ||
+      current === null ||
+      !Object.hasOwn(current, segment)
+    ) {
+      return undefined;
+    }
+    current = (current as Record<string, unknown>)[segment];
+  }
+  return current;
+}
+
+function expectPointerDiagnostic(
+  text: string,
+  code: string,
+  path: string,
+): void {
+  const result = parseDocument(text);
+  expect(result.ok).toBe(false);
+  expect(codesAndPaths(result)).toContainEqual([code, path]);
+  expect(resolvePointer(JSON.parse(text), path)).toBeDefined();
+}
+
+describe("diagnostic JSON Pointers for IDs containing '/' and '~'", () => {
+  it("escapes node, parameter, and output IDs", () => {
+    expectPointerDiagnostic(
+      v6Json({
+        nodes: {
+          "a/b": {
+            ...plainBox,
+            size: [
+              { op: "parameter", id: "missing", dimension: "length" },
+              lengthLiteral(1),
+              lengthLiteral(1),
+            ],
+          },
+        },
+        outputs: { out: { node: "a/b", kind: "solid" } },
+      }),
+      "PARAMETER_MISSING",
+      "/nodes/a~1b/size/0/id",
+    );
+    expectPointerDiagnostic(
+      v6Json({
+        nodes: {
+          "a~1b": {
+            ...plainBox,
+            size: [
+              lengthLiteral(1, "angle"),
+              lengthLiteral(1),
+              lengthLiteral(1),
+            ],
+          },
+        },
+        outputs: { out: { node: "a~1b", kind: "solid" } },
+      }),
+      "EXPRESSION_DIMENSION_MISMATCH",
+      "/nodes/a~01b/size/0",
+    );
+    expectPointerDiagnostic(
+      v6Json({
+        parameters: {
+          "w/h": { dimension: "length", default: lengthLiteral(1, "angle") },
+        },
+        nodes: { b: plainBox },
+        outputs: { out: { node: "b", kind: "solid" } },
+      }),
+      "EXPRESSION_DIMENSION_MISMATCH",
+      "/parameters/w~1h/default",
+    );
+    expectPointerDiagnostic(
+      v6Json({
+        nodes: { b: plainBox },
+        outputs: { "x/y": { node: "missing", kind: "solid" } },
+      }),
+      "REFERENCE_MISSING",
+      "/outputs/x~1y/node",
+    );
+  });
+
+  it("escapes structural parse paths and graph-cycle paths", () => {
+    expectPointerDiagnostic(
+      v6Json({
+        nodes: { b: plainBox },
+        outputs: { out: { node: "b", kind: "solid" } },
+        configurations: {
+          "c/1": { parameterOverrides: { width: lengthLiteral(1) } },
+        },
+      }),
+      "IR_INVALID",
+      "/configurations/c~11",
+    );
+    expectPointerDiagnostic(
+      v6Json({
+        nodes: {
+          "a/b": { ...plainBox, size: [lengthLiteral(1), lengthLiteral(1)] },
+        },
+        outputs: { out: { node: "a/b", kind: "solid" } },
+      }),
+      "IR_INVALID",
+      "/nodes/a~1b/size",
+    );
+    expectPointerDiagnostic(
+      v6Json({
+        nodes: {
+          "t/1": {
+            kind: "transform",
+            input: { node: "t/2", kind: "solid" },
+            operations: [noMove],
+          },
+          "t/2": {
+            kind: "transform",
+            input: { node: "t/1", kind: "solid" },
+            operations: [noMove],
+          },
+        },
+        outputs: { out: { node: "t/1", kind: "solid" } },
+      }),
+      "GRAPH_CYCLE",
+      "/nodes/t~11",
+    );
+  });
+
+  it("keeps ordinary IDs unchanged", () => {
+    expectPointerDiagnostic(
+      v6Json({
+        nodes: { b: plainBox },
+        outputs: { out: { node: "missing", kind: "solid" } },
+      }),
+      "REFERENCE_MISSING",
+      "/outputs/out/node",
+    );
   });
 });
