@@ -286,11 +286,16 @@ Canonical observation-local `f*`, `e*`, and `v*` labels are produced by exact
 incidence-graph canonicalization: intrinsic labels are refined by neighbor
 colors, unresolved color cells are exhaustively individualized, and the
 lexicographically least complete labeling wins. Search states are bounded by
-`maxCanonicalLabelStates`; color-refinement and labeling node/link work is
-separately bounded by `maxCanonicalWork`. Either ceiling fails rather than using
-enumeration as a tiebreaker. Thus isomorphic key-renamed snapshots encode
-equally, including symmetric graphs, provided the exact bounded search
-completes.
+`maxCanonicalLabelStates`. `maxCanonicalWork` separately bounds
+color-refinement and labeling node/link work plus the canonical serialization
+of every discrete search leaf after the first: each later leaf charges its
+canonical UTF-8 byte length before it is serialized and compared, because that
+cost scales with descriptor and lineage payload rather than with node count.
+The first leaf is the emitted topology payload and is bounded by
+`maxObservationBytes`, so a graph whose refinement is already discrete pays no
+serialization work. Either ceiling fails rather than using enumeration as a
+tiebreaker. Thus isomorphic key-renamed snapshots encode equally, including
+symmetric graphs, provided the exact bounded search completes.
 
 ### Feature, native-exchange, and ownership coverage
 
@@ -427,7 +432,7 @@ The semantic observer has a separate cumulative resource envelope. Defaults are:
 | `maxAdjacencyLinks` | `1_000_000` | Incidence entries in one normalized snapshot |
 | `maxLineageRecords` | `1_000_000` | Lineage records in one normalized snapshot |
 | `maxCanonicalLabelStates` | `1_000_000` | Exact graph-labeling search states |
-| `maxCanonicalWork` | `10_000_000` | Color-refinement and canonical-label node/link work units |
+| `maxCanonicalWork` | `10_000_000` | Color-refinement and canonical-label node/link work units, plus canonical bytes of each search leaf after the first |
 | `maxNativeExchangeBytes` | `64 MiB` | One detached native export |
 | `maxProbes` | `64` | Each probe or feature-exclusion inventory |
 | `maxDerivedShapes` | `256` | Accepted imported and probe-produced shapes |
