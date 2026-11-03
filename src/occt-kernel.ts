@@ -6,7 +6,7 @@ import type {
   Vec3 as OcctVec3,
 } from "occt-wasm";
 import type { Vec2, Vec3 } from "./core/math.js";
-import { canonicalStringifyProtocol } from "./core/json.js";
+import { canonicalStringifyProtocol, deepFreeze } from "./core/json.js";
 import {
   KERNEL_BODY_RESULT_CLASSIFICATION_PROTOCOL_VERSION,
   KERNEL_DOCUMENT_BODY_IMPORT_PROTOCOL_VERSION,
@@ -1388,7 +1388,9 @@ class OcctKernel implements GeometryKernel {
   readonly id = "occt";
   readonly capabilities: KernelCapabilities;
   declare readonly draft?: NonNullable<GeometryKernel["draft"]>;
-  private static readonly BASE_CAPABILITIES: KernelCapabilities = {
+  // Deeply frozen: the constructor shares these nested arrays between
+  // instances, so no kernel may mutate another kernel's declaration.
+  private static readonly BASE_CAPABILITIES: KernelCapabilities = deepFreeze({
     protocolVersion: 1,
     representation: "brep",
     exact: true,
@@ -1432,7 +1434,7 @@ class OcctKernel implements GeometryKernel {
       geometry: true,
       adjacency: true,
     },
-  };
+  });
   private readonly raw: RawOcctKernel;
   private readonly facade: OcctFacadeProbe | undefined;
   private readonly tessellation: MeshOptions;
@@ -1506,7 +1508,7 @@ class OcctKernel implements GeometryKernel {
             `runtime=${topologySignatureRuntime}`,
             `modelingTolerance=${this.modelingTolerance}`,
           ].join(";");
-    this.capabilities = {
+    this.capabilities = deepFreeze({
       ...OcctKernel.BASE_CAPABILITIES,
       ...(this.deterministicStepExport
         ? {
@@ -1574,7 +1576,7 @@ class OcctKernel implements GeometryKernel {
               ],
             },
           }),
-    };
+    });
     this.artifactCandidateCompatibilityFingerprint =
       occtArtifactCandidateCompatibilityFingerprint(
         topologySignatureRuntime,
