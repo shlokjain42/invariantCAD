@@ -501,6 +501,15 @@ function positiveTolerance(value: unknown, label: string): number {
   return value;
 }
 
+const PART_OPTION_KEYS: readonly string[] = Object.freeze([
+  "partNumber",
+  "description",
+  "material",
+  "materialRef",
+  "massDensity",
+  "metadata",
+]);
+
 /** Checks parameter owners in every expression a sketch callback authored. */
 function assertSketchParametersOwned(
   owner: DesignBuilder,
@@ -1943,6 +1952,18 @@ export class DesignBuilder {
     options: PartOptions = {},
   ): PartRef {
     this.assertOwned(solid);
+    if (typeof options !== "object" || options === null) {
+      throw new TypeError(`Part '${id}' options must be a record`);
+    }
+    // Options often come from a variable, which TypeScript's excess-property
+    // check does not cover; unknown keys must not reach or override the node.
+    for (const key of Object.keys(options)) {
+      if (!PART_OPTION_KEYS.includes(key)) {
+        throw new TypeError(
+          `Part '${id}' options contain unsupported field '${key}'`,
+        );
+      }
+    }
     if (options.material !== undefined && options.materialRef !== undefined) {
       throw new TypeError("A part cannot use both material and materialRef");
     }
@@ -1953,29 +1974,40 @@ export class DesignBuilder {
     ) {
       throw new TypeError("Part massDensity must be a mass-density expression");
     }
-    const { massDensity, materialRef, metadata, ...definition } = options;
-    const detachedMetadata =
-      metadata === undefined
+    const partNumber = optionalString(
+      options.partNumber,
+      `Part '${id}' partNumber`,
+    );
+    const description = optionalString(
+      options.description,
+      `Part '${id}' description`,
+    );
+    const material = optionalString(options.material, `Part '${id}' material`);
+    const metadata =
+      options.metadata === undefined
         ? undefined
-        : detachMetadata(metadata, `Part '${id}' metadata`);
-    const massDensityIR =
-      massDensity === undefined
+        : detachMetadata(options.metadata, `Part '${id}' metadata`);
+    const massDensity =
+      options.massDensity === undefined
         ? undefined
         : ownedExpressionIR(
             this,
-            massDensity,
+            options.massDensity,
             "massDensity",
             `Part '${id}' massDensity`,
           );
-    if (massDensity !== undefined) this.usesMassDensity = true;
+    const materialId = options.materialRef?.id;
     const key = this.addNode(id, {
       kind: "part",
       solid: solid.toIR(),
-      ...definition,
-      ...(detachedMetadata === undefined ? {} : { metadata: detachedMetadata }),
-      ...(materialRef === undefined ? {} : { materialId: materialRef.id }),
-      ...(massDensityIR === undefined ? {} : { massDensity: massDensityIR }),
+      ...(partNumber === undefined ? {} : { partNumber }),
+      ...(description === undefined ? {} : { description }),
+      ...(material === undefined ? {} : { material }),
+      ...(metadata === undefined ? {} : { metadata }),
+      ...(materialId === undefined ? {} : { materialId }),
+      ...(massDensity === undefined ? {} : { massDensity }),
     });
+    if (massDensity !== undefined) this.usesMassDensity = true;
     return new PartRef(this, key);
   }
 

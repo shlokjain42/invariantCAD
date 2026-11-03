@@ -1044,3 +1044,71 @@ describe("builder input detachment", () => {
     }
   });
 });
+
+describe("part options", () => {
+  function setup() {
+    const cad = design("part-options");
+    const housing = cad.box("housing", { size: vec3(mm(100), mm(10), mm(100)) });
+    const fastener = cad.box("fastener", { size: vec3(mm(1), mm(1), mm(1)) });
+    const steel = cad.material("steel", {
+      name: "Steel",
+      massDensity: gramsPerCubicCentimeter(7.8),
+    });
+    return { cad, housing, fastener, steel };
+  }
+
+  it("rejects unknown and node-overriding keys from an options variable", () => {
+    const { cad, housing, fastener } = setup();
+    const bomRow = { partNumber: "BRK-1", quantity: 4 };
+    const overrides: readonly Record<string, unknown>[] = [
+      bomRow,
+      { partNumber: "HSG-100", solid: fastener.toIR() },
+      { kind: "assembly" },
+      { material: "Aluminium 6061", materialId: "steel" },
+      { materialId: "steel" },
+    ];
+    for (const options of overrides) {
+      expect(() => cad.part("part", housing, options as never), JSON.stringify(options))
+        .toThrow(/unsupported field/);
+    }
+    expect(cad.build().nodes).not.toHaveProperty("part");
+  });
+
+  it("checks part field types and builds only authored fields", async () => {
+    const { cad, housing, steel } = setup();
+    expect(() => cad.part("p1", housing, { partNumber: 7 as never })).toThrow(TypeError);
+    expect(() => cad.part("p2", housing, { description: {} as never })).toThrow(TypeError);
+    expect(() => cad.part("p3", housing, { material: false as never })).toThrow(TypeError);
+    const part = cad.part("part", housing, {
+      partNumber: "HSG-100",
+      description: "Housing",
+      materialRef: steel,
+      massDensity: gramsPerCubicCentimeter(2.7),
+      metadata: { finish: "anodized" },
+      material: undefined as never,
+    });
+    const labelled = cad.part("labelled", housing, { material: "Aluminium 6061" });
+    cad.output("part", part);
+    cad.output("labelled", labelled);
+    const document = cad.build();
+    const nodes = document.nodes as Readonly<Record<string, unknown>>;
+    expect(nodes.part).toEqual({
+      kind: "part",
+      solid: { node: "housing", kind: "solid" },
+      partNumber: "HSG-100",
+      description: "Housing",
+      materialId: "steel",
+      massDensity: gramsPerCubicCentimeter(2.7).ir,
+      metadata: { finish: "anodized" },
+    });
+    expect(nodes.labelled).toEqual({
+      kind: "part",
+      solid: { node: "housing", kind: "solid" },
+      material: "Aluminium 6061",
+    });
+    const reparsed = parseDocument(stringifyDocument(document));
+    expect(reparsed.ok, JSON.stringify(reparsed.diagnostics)).toBe(true);
+    if (!reparsed.ok) return;
+    expect(await hashDocument(reparsed.value)).toBe(await hashDocument(document));
+  });
+});

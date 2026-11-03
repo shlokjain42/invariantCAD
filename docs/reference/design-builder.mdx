@@ -515,6 +515,9 @@ Methods throw `TypeError` or `RangeError` for invalid direct calls, including:
 - wrong topology kind
 - invalid option enum/literal values, non-boolean flags, and non-string
   labels or descriptions
+- `part(...)` option fields other than `partNumber`, `description`,
+  `material`, `materialRef`, `massDensity`, and `metadata`, even when the
+  options come from a variable that TypeScript's excess-property check skips
 - `segments` or `divisions` values that are not integers within the document
   grammar's bounds
 - empty required lists
