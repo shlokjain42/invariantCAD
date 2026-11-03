@@ -88,7 +88,7 @@ const result = await evaluator.evaluate(document, {
 | Option | Meaning |
 | --- | --- |
 | `configuration` | Exact document-owned configuration ID; omission selects the base design |
-| `parameters` | Finite overrides in document base units |
+| `parameters` | Overrides by parameter ID: finite numbers in document base units, or expressions of the parameter's dimension such as `mm(120)` |
 | `outputs` | Evaluate only the named output closure instead of every output |
 | `signal` | Cooperative cancellation signal |
 | `allowEmpty` | Accept zero-volume feature results: `EMPTY_RESULT` becomes a warning instead of an error, and an empty solid can be returned as an output |
