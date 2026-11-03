@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { createManifoldKernel, type KernelShape } from "../src/index.js";
+import {
+  createEvaluator,
+  createManifoldKernel,
+  design,
+  mm,
+  vec3,
+  type KernelShape,
+} from "../src/index.js";
 import { geometryKernelConformance } from "./kernel-conformance.js";
 
 geometryKernelConformance({
@@ -80,6 +87,39 @@ describe("Manifold mass-property integration", () => {
       expect(Math.abs(measured.centerOfMass![2])).toBeLessThan(1e-3);
     } finally {
       kernel.dispose();
+    }
+  });
+
+  it("measures an allowed empty evaluation result with finite zero bounds", async () => {
+    const evaluator = await createEvaluator();
+    try {
+      const cad = design("empty-intersection");
+      const first = cad.box("first", { size: vec3(mm(1), mm(1), mm(1)) });
+      const second = cad.translate(
+        "second",
+        cad.box("second-box", { size: vec3(mm(1), mm(1), mm(1)) }),
+        vec3(mm(5), mm(0), mm(0)),
+      );
+      cad.output("empty", cad.intersect("empty", first, [second]));
+      const result = await evaluator.evaluate(cad.build(), { allowEmpty: true });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      try {
+        expect(result.diagnostics.map((item) => item.code)).toContain(
+          "EMPTY_RESULT",
+        );
+        const measured = result.value.output("empty").measure();
+        expect(measured.volume).toBe(0);
+        expect(measured.boundingBox).toEqual({
+          min: [0, 0, 0],
+          max: [0, 0, 0],
+        });
+        expect(measured.tolerance).toBe(0);
+      } finally {
+        result.value.dispose();
+      }
+    } finally {
+      evaluator.dispose();
     }
   });
 });

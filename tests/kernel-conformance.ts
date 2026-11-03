@@ -827,6 +827,50 @@ export function geometryKernelConformance(
       expectMeasurement(expectLiveShape(subtraction), "volume", 4, relativeTolerance);
     });
 
+    it("measures an empty Boolean result with zero bounds and a non-negative tolerance", () => {
+      if (
+        !kernelSupports(kernel.capabilities, "primitive", "box") ||
+        !kernelSupports(kernel.capabilities, "feature", "transform") ||
+        !kernelSupports(kernel.capabilities, "feature", "boolean")
+      ) {
+        return;
+      }
+      const shapes: KernelShape[] = [];
+      const own = (shape: KernelShape): KernelShape => {
+        shapes.push(shape);
+        return shape;
+      };
+      try {
+        const box = own(kernel.box!([1, 1, 1], false));
+        const far = own(
+          kernel.transform!(box, [{ kind: "translate", value: [5, 0, 0] }]),
+        );
+        const empty = own(kernel.boolean!("intersect", box, [far]));
+        const measured = kernel.measure(empty);
+
+        expect(measured.volume).toBe(0);
+        expect(measured.surfaceArea).toBe(0);
+        expect(measured.centerOfMass).toBeNull();
+        expect(measured.inertiaTensor).toEqual([
+          [0, 0, 0],
+          [0, 0, 0],
+          [0, 0, 0],
+        ]);
+        expect(measured.boundingBox).toEqual({
+          min: [0, 0, 0],
+          max: [0, 0, 0],
+        });
+        expect(Number.isFinite(measured.tolerance)).toBe(true);
+        expect(measured.tolerance).toBeGreaterThanOrEqual(0);
+        expect(measured.genus === null || measured.genus === 0).toBe(true);
+        expect(JSON.parse(JSON.stringify(measured))).toEqual(measured);
+      } finally {
+        for (let index = shapes.length - 1; index >= 0; index -= 1) {
+          kernel.disposeShape(shapes[index]!);
+        }
+      }
+    });
+
     it("classifies one-body, multibody, and cavity Boolean results when declared", () => {
       if (
         inspectKernelBodyResultClassificationCapabilities(kernel.capabilities)

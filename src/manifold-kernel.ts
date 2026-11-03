@@ -485,6 +485,20 @@ export class ManifoldKernel implements GeometryKernel {
 
   measure(shape: KernelShape): ShapeMeasurements {
     const manifold = asManifoldShape(shape)[MANIFOLD_SHAPE];
+    if (manifold.isEmpty()) {
+      // Native Manifold reports inverted infinite bounds and tolerance -1 for
+      // an empty shape. Use the zero convention shared with the OCCT kernel;
+      // Manifold's tolerance scales with the bounds, so it is zero here.
+      return {
+        volume: 0,
+        surfaceArea: 0,
+        centerOfMass: null,
+        inertiaTensor: zeroMassProperties().inertiaTensor,
+        boundingBox: { min: [0, 0, 0], max: [0, 0, 0] },
+        genus: 0,
+        tolerance: 0,
+      };
+    }
     const bounds = manifold.boundingBox();
     const volume = manifold.volume();
     const surfaceArea = manifold.surfaceArea();

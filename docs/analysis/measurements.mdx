@@ -37,6 +37,11 @@ The inertia tensor uses the standard mechanics sign convention
 `∫((r · r)I - rrᵀ) dV` about `centerOfMass`, expressed in world axes. It is a
 volumetric tensor until scaled by density.
 
+An empty result, which `evaluate(document, { allowEmpty: true })` keeps with an
+`EMPTY_RESULT` warning, measures as zero volume and surface area, a `null`
+center of mass, a zero inertia tensor, a zero bounding box at the origin, and a
+finite non-negative `tolerance` on both bundled kernels.
+
 ## Principal inertia
 
 ```ts

@@ -352,6 +352,7 @@ describe("genus measurement capability", () => {
         },
       }));
       const solid = {
+        isEmpty: () => false,
         boundingBox: () => ({ min: [0, 0, 0], max: [0, 0, 0] }),
         volume: () => 0,
         surfaceArea: () => 0,
