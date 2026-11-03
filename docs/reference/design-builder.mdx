@@ -13,12 +13,13 @@ builder as owner. The `AssemblyBuilder` and `ConfigurationBuilder` passed to
 returns or throws, so later calls through an escaped builder throw instead of
 being silently dropped. An assembly stores only the instances that
 `instance(...)` added, and a configuration ID stays reserved while its callback
-runs, so a nested `configuration(...)` call with the same ID throws. The builder copies caller-supplied
-metadata, transform operations, and assembly placements into its own records,
-so changing those caller objects later cannot alter a built document, and
-authoring never freezes them. Expression IR is the exception: expressions are
-immutable, so raw IR passed to `fromExpressionIR` is validated and frozen in
-place.
+runs, so a nested `configuration(...)` call with the same ID throws.
+
+The builder copies caller-supplied metadata, transform operations, and
+assembly placements into its own records, so changing those caller objects
+later cannot alter a built document, and authoring never freezes them.
+Expression IR is the exception: expressions are immutable, so raw IR passed to
+`fromExpressionIR` is validated and frozen in place.
 
 ## Document definitions
 
@@ -531,8 +532,10 @@ Methods throw `TypeError` or `RangeError` for invalid direct calls, including:
 - empty required lists
 - non-positive or non-finite numeric sketch and path tolerances
 - metadata that is not plain JSON data, such as non-finite numbers, `Map`,
-  `Set`, `Date`, or class instances, functions, BigInts, sparse arrays, or
-  cycles
+  `Set`, `Date`, or class instances, functions, BigInts, sparse arrays,
+  accessor properties, or cycles
+- sparse point, segment, or edge lists, such as `polylinePath` points,
+  `compositePath` segments, or sketch `polyline` points and `loop` edges
 - references targeting the wrong direct solid
 
 These failures indicate an invalid model definition or unvalidated UI input,
@@ -541,10 +544,10 @@ not a geometry-kernel failure.
 Because every input is checked when its method is called, `build()` output
 satisfies the strict document grammar, and `parseDocument` accepts the text
 `stringifyDocument` writes for it unless semantic validation finds a modeling
-problem. `build()` itself does not run semantic validation or apply document
-size limits. Unresolvable topology selections, unclosed sketch loops, and
-similar model errors are reported as diagnostics by `validateDocument`,
-`parseDocument`, and evaluation.
+problem or the document exceeds the parse limits. `build()` itself does not
+run semantic validation or apply document size limits. Unresolvable topology
+selections, unclosed sketch loops, and similar model errors are reported as
+diagnostics by `validateDocument`, `parseDocument`, and evaluation.
 
 Expression values are resolved only during evaluation. An expression-valued
 tolerance (shell, offset, or topology predicate), a zero direction vector, or a
