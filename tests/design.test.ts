@@ -1387,6 +1387,26 @@ describe("builder own-data reads", () => {
         distance: mm(1),
       }),
     ).toThrow("must select edge topology");
+    // The selection's kind and handle lists are own data too.
+    const forgedFields = (fields: PropertyDescriptorMap) =>
+      Object.create(Selection.prototype, {
+        topology: { value: "edge" },
+        references: { value: [] },
+        persistentReferences: { value: [] },
+        ir: { value: own.ir },
+        ...fields,
+      }) as typeof own;
+    for (const fields of [
+      { topology: countingAccessor("edge", counter) },
+      { references: countingAccessor([], counter) },
+      { persistentReferences: countingAccessor([], counter) },
+      { references: { value: Object.defineProperty([base], 0, countingAccessor(base, counter)) } },
+    ]) {
+      expect(() =>
+        cad.fillet("forged-fields", base, { edges: forgedFields(fields), radius: mm(1) }),
+      ).toThrow(TypeError);
+    }
+    expect(counter.reads).toBe(0);
 
     cad.output("result", filleted);
     const document = cad.build();
@@ -1394,6 +1414,31 @@ describe("builder own-data reads", () => {
     expect(stored).toBe(substituting.ir);
     expect(stored.query).toBe(own.ir.query);
     expect(validateDocument(document).ok).toBe(true);
+  });
+
+  it("reads expression dimensions without running accessors", () => {
+    const cad = design("own-data-dimensions");
+    const width = cad.parameter.length("width", mm(1));
+    const box = cad.box("box", { size: vec3(mm(1), mm(1), mm(1)) });
+    const counter = { reads: 0 };
+    const accessorDimension = (expression: { readonly ir: ExpressionIR }, dimension: string) =>
+      Object.defineProperty({ ir: expression.ir }, "dimension", countingAccessor(dimension, counter)) as never;
+    expect(() => cad.parameter.length("p", accessorDimension(mm(1), "length"))).toThrow(
+      "must have dimension length",
+    );
+    expect(() =>
+      cad.configuration("variant", (configuration) =>
+        configuration.parameter(width, accessorDimension(mm(2), "length")),
+      ),
+    ).toThrow("must have dimension length");
+    const density = gramsPerCubicCentimeter(1);
+    expect(() =>
+      cad.material("m", { name: "M", massDensity: accessorDimension(density, "massDensity") }),
+    ).toThrow("must be a mass-density expression");
+    expect(() =>
+      cad.part("p", box, { massDensity: accessorDimension(density, "massDensity") }),
+    ).toThrow("must be a mass-density expression");
+    expect(counter.reads).toBe(0);
   });
 
   it("stores only the sketch records and profile holes it checked", () => {

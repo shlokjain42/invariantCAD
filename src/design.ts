@@ -159,6 +159,13 @@ function assertExpressionParametersOwned(
   });
 }
 
+/** Reads an expression's own `dimension` data field without running accessors. */
+function ownDimension(value: unknown): unknown {
+  return typeof value === "object" && value !== null
+    ? readOwnData(value, "dimension")
+    : undefined;
+}
+
 /** Reads an expression's IR after checking its dimension and parameter owner. */
 function ownedExpressionIR(
   owner: DesignBuilder,
@@ -972,11 +979,7 @@ export class ConfigurationBuilder {
   ): this {
     assertConfigurationBuilderOpen(this);
     this.owner.assertParameterOwned(parameter);
-    if (
-      typeof value !== "object" ||
-      value === null ||
-      value.dimension !== parameter.dimension
-    ) {
+    if (ownDimension(value) !== parameter.dimension) {
       throw new TypeError(
         `Configuration value for '${parameter.id}' must have dimension ${parameter.dimension}`,
       );
@@ -1178,10 +1181,10 @@ export class DesignBuilder {
   }
 
   private assertPersistentTopologyReferences(
-    selection: TopologySelection,
+    persistentReferences: readonly TopologyReferenceRef[],
     input: SolidRef,
   ): void {
-    for (const reference of selection.persistentReferences) {
+    for (const reference of persistentReferences) {
       if (
         !this.topologyReferenceHandles.has(reference) ||
         reference[DESIGN_OWNER] !== this
@@ -1206,6 +1209,46 @@ export class DesignBuilder {
         );
       }
     }
+  }
+
+  /**
+   * Checks an explicit topology selection option and returns the IR the node
+   * stores. The selection's kind and handle lists are read once through own
+   * data properties, so caller accessors never run.
+   */
+  private ownedSelectionIR<K extends TopologyKind>(
+    selection: unknown,
+    topology: K,
+    input: SolidRef,
+    messages: { readonly explicit: string; readonly kind: string },
+    label: string,
+  ): TopologySelectionIR<K> {
+    if (!(selection instanceof TopologySelection)) {
+      throw new TypeError(messages.explicit);
+    }
+    if (readOwnData(selection, "topology") !== topology) {
+      throw new TypeError(messages.kind);
+    }
+    const handles = <T,>(key: string): readonly T[] => {
+      const list = readOwnData(selection, key);
+      if (typeof list !== "object" || list === null) {
+        throw new TypeError(messages.explicit);
+      }
+      return ownDenseArray(list as readonly T[], `${label} ${key}`);
+    };
+    for (const reference of handles<ModelRef<OutputKind>>("references")) {
+      this.assertOwned(reference);
+    }
+    this.assertPersistentTopologyReferences(
+      handles<TopologyReferenceRef>("persistentReferences"),
+      input,
+    );
+    return ownedTopologySelectionIR(
+      this,
+      selection as TopologySelection<K>,
+      topology,
+      label,
+    );
   }
 
   assertAssemblyInstance(assembly: AssemblyRef, id: string): EntityId {
@@ -1236,11 +1279,7 @@ export class DesignBuilder {
     if (Object.hasOwn(this.parameterRecords, key)) {
       throw new TypeError(`Duplicate parameter '${id}'`);
     }
-    if (
-      typeof defaultValue !== "object" ||
-      defaultValue === null ||
-      defaultValue.dimension !== dimension
-    ) {
+    if (ownDimension(defaultValue) !== dimension) {
       throw new TypeError(`Parameter '${id}' must have dimension ${dimension}`);
     }
     const defaultIR = ownedExpressionIR(
@@ -1324,7 +1363,7 @@ export class DesignBuilder {
       rawDescription,
       `Material '${id}' description`,
     );
-    if (rawMassDensity?.dimension !== "massDensity") {
+    if (ownDimension(rawMassDensity) !== "massDensity") {
       throw new TypeError("Material massDensity must be a mass-density expression");
     }
     const massDensity = ownedExpressionIR(
@@ -1921,21 +1960,14 @@ export class DesignBuilder {
   ): SolidRef {
     options = ownRecord(options, `Fillet '${id}' options`);
     this.assertOwned(input);
-    const edges = options.edges;
-    if (!(edges instanceof TopologySelection)) {
-      throw new TypeError("Fillet edges must be an explicit topology selection");
-    }
-    if (edges.topology !== "edge") {
-      throw new TypeError("A fillet requires an edge topology selection");
-    }
-    for (const reference of edges.references) {
-      this.assertOwned(reference);
-    }
-    this.assertPersistentTopologyReferences(edges, input);
-    const edgesIR = ownedTopologySelectionIR(
-      this,
-      edges,
+    const edgesIR = this.ownedSelectionIR(
+      options.edges,
       "edge",
+      input,
+      {
+        explicit: "Fillet edges must be an explicit topology selection",
+        kind: "A fillet requires an edge topology selection",
+      },
       `Fillet '${id}' edges`,
     );
     const key = this.addNode(id, {
@@ -1963,21 +1995,14 @@ export class DesignBuilder {
   ): SolidRef {
     options = ownRecord(options, `Chamfer '${id}' options`);
     this.assertOwned(input);
-    const edges = options.edges;
-    if (!(edges instanceof TopologySelection)) {
-      throw new TypeError("Chamfer edges must be an explicit topology selection");
-    }
-    if (edges.topology !== "edge") {
-      throw new TypeError("A chamfer requires an edge topology selection");
-    }
-    for (const reference of edges.references) {
-      this.assertOwned(reference);
-    }
-    this.assertPersistentTopologyReferences(edges, input);
-    const edgesIR = ownedTopologySelectionIR(
-      this,
-      edges,
+    const edgesIR = this.ownedSelectionIR(
+      options.edges,
       "edge",
+      input,
+      {
+        explicit: "Chamfer edges must be an explicit topology selection",
+        kind: "A chamfer requires an edge topology selection",
+      },
       `Chamfer '${id}' edges`,
     );
     const key = this.addNode(id, {
@@ -2007,27 +2032,20 @@ export class DesignBuilder {
   ): SolidRef {
     options = ownRecord(options, `Shell '${id}' options`);
     this.assertOwned(input);
-    const openings = options.openings;
-    if (!(openings instanceof TopologySelection)) {
-      throw new TypeError("Shell openings must be an explicit topology selection");
-    }
-    if (openings.topology !== "face") {
-      throw new TypeError("A shell requires a face topology selection");
-    }
-    for (const reference of openings.references) {
-      this.assertOwned(reference);
-    }
-    this.assertPersistentTopologyReferences(openings, input);
+    const openingsIR = this.ownedSelectionIR(
+      options.openings,
+      "face",
+      input,
+      {
+        explicit: "Shell openings must be an explicit topology selection",
+        kind: "A shell requires a face topology selection",
+      },
+      `Shell '${id}' openings`,
+    );
     const direction = options.direction ?? "inward";
     if (!SHELL_DIRECTIONS.includes(direction)) {
       throw new TypeError("Shell direction must be 'inward' or 'outward'");
     }
-    const openingsIR = ownedTopologySelectionIR(
-      this,
-      openings,
-      "face",
-      `Shell '${id}' openings`,
-    );
     const key = this.addNode(id, {
       kind: "shell",
       input: input.toIR(),
@@ -2104,21 +2122,14 @@ export class DesignBuilder {
   ): SolidRef {
     options = ownRecord(options, `Draft '${id}' options`);
     this.assertOwned(input);
-    const faces = options.faces;
-    if (!(faces instanceof TopologySelection)) {
-      throw new TypeError("Draft faces must be an explicit topology selection");
-    }
-    if (faces.topology !== "face") {
-      throw new TypeError("A draft requires a face topology selection");
-    }
-    for (const reference of faces.references) {
-      this.assertOwned(reference);
-    }
-    this.assertPersistentTopologyReferences(faces, input);
-    const facesIR = ownedTopologySelectionIR(
-      this,
-      faces,
+    const facesIR = this.ownedSelectionIR(
+      options.faces,
       "face",
+      input,
+      {
+        explicit: "Draft faces must be an explicit topology selection",
+        kind: "A draft requires a face topology selection",
+      },
       `Draft '${id}' faces`,
     );
     const neutralPlane = ownRecord(
@@ -2179,7 +2190,7 @@ export class DesignBuilder {
     if (materialRef !== undefined) this.assertOwned(materialRef);
     if (
       rawMassDensity !== undefined &&
-      rawMassDensity?.dimension !== "massDensity"
+      ownDimension(rawMassDensity) !== "massDensity"
     ) {
       throw new TypeError("Part massDensity must be a mass-density expression");
     }
