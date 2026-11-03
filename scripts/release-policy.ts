@@ -11,6 +11,9 @@
 
 export const REPOSITORY_URL = "https://github.com/shlokjain42/invariantCAD";
 
+/** The hosted documentation site, package.json `homepage`. */
+export const DOCUMENTATION_URL = "https://invariant-cad.mintlify.site";
+
 const STABLE_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
 const RELEASE_DATE = /^(\d{4})-(\d{2})-(\d{2})$/u;
 const UNRELEASED_HEADING = "\n## [Unreleased]\n";
@@ -154,7 +157,10 @@ export function releaseNotesPage(version: string, changelogEntries: string): str
 
 /**
  * Returns the GitHub release body for a release-notes page: the Markdown after
- * the page's YAML frontmatter, as published for earlier releases.
+ * the page's YAML frontmatter. Release pages link to other documentation pages
+ * with site-relative or file-relative targets, which GitHub would resolve
+ * against the repository, so those targets become absolute documentation-site
+ * URLs. Fenced code and inline code spans are left as written.
  */
 export function releaseNotesBody(page: string): string {
   if (!page.startsWith("---\n")) {
@@ -164,7 +170,93 @@ export function releaseNotesBody(page: string): string {
   if (end === -1) throw new Error("Release notes frontmatter is not closed");
   const body = page.slice(end + "\n---\n".length).replace(/^\n+/u, "");
   if (body.trim() === "") throw new Error("Release notes body is empty");
-  return body;
+  return absoluteDocumentationLinks(body);
+}
+
+const RELEASE_NOTES_DIRECTORY = "releases";
+const LINK_TARGET =
+  /(`+)[^`]*?\1|(\]\(\s*)([^)\s]+)|(\bhref=["'])([^"']+)/gu;
+const REFERENCE_DEFINITION = /^( {0,3}\[[^\]\n]+\]:[ \t]*)(\S+)/u;
+const FENCE = /^ {0,3}(`{3,}|~{3,})/u;
+
+function absoluteDocumentationLinks(markdown: string): string {
+  let fence: string | undefined;
+  return markdown
+    .split("\n")
+    .map((line) => {
+      const marker = FENCE.exec(line)?.[1];
+      if (fence !== undefined) {
+        if (
+          marker !== undefined &&
+          marker[0] === fence[0] &&
+          marker.length >= fence.length &&
+          line.trim() === marker
+        ) {
+          fence = undefined;
+        }
+        return line;
+      }
+      if (marker !== undefined) {
+        fence = marker;
+        return line;
+      }
+      return line
+        .replace(
+          REFERENCE_DEFINITION,
+          (_match, prefix: string, target: string) =>
+            `${prefix}${documentationUrl(target)}`,
+        )
+        .replace(
+          LINK_TARGET,
+          (
+            match: string,
+            code: string | undefined,
+            linkPrefix: string | undefined,
+            linkTarget: string | undefined,
+            hrefPrefix: string | undefined,
+            hrefTarget: string | undefined,
+          ) => {
+            if (code !== undefined) return match;
+            if (linkPrefix !== undefined && linkTarget !== undefined) {
+              return `${linkPrefix}${documentationUrl(linkTarget)}`;
+            }
+            return `${hrefPrefix ?? ""}${documentationUrl(hrefTarget ?? "")}`;
+          },
+        );
+    })
+    .join("\n");
+}
+
+/** Resolves one link target the way the documentation site does. */
+function documentationUrl(target: string): string {
+  if (target.startsWith("#") || /^[a-z][a-z\d+.-]*:/iu.test(target)) {
+    return target;
+  }
+  if (target.startsWith("//")) {
+    throw new Error(
+      `Release notes link '${target}' must name its scheme; use an absolute URL`,
+    );
+  }
+  const suffixStart = target.search(/[?#]/u);
+  const path = suffixStart === -1 ? target : target.slice(0, suffixStart);
+  const suffix = suffixStart === -1 ? "" : target.slice(suffixStart);
+  const segments = path.startsWith("/") ? [] : [RELEASE_NOTES_DIRECTORY];
+  for (const segment of path.split("/")) {
+    if (segment === "" || segment === ".") continue;
+    if (segment === "..") {
+      if (segments.pop() === undefined) {
+        throw new Error(
+          `Release notes link '${target}' leaves the documentation site; use an absolute URL`,
+        );
+      }
+      continue;
+    }
+    segments.push(segment);
+  }
+  const last = segments.length - 1;
+  if (last >= 0) segments[last] = segments[last]!.replace(/\.mdx?$/u, "");
+  if (segments[segments.length - 1] === "index") segments.pop();
+  return `${DOCUMENTATION_URL}/${segments.join("/")}${suffix}`;
 }
 
 /** Lists every disagreement between the merged files and `version`. */

@@ -41,7 +41,12 @@ push. It has not reviewed Dependabot pull requests automatically; comment
    Opening it yourself, rather than with the workflow token, starts every
    required check and review.
 4. In that pull request, curate `docs/releases/0.2.0.md` into release notes;
-   its body becomes the GitHub release. Update release status text such as
+   its body becomes the GitHub release. Link other documentation pages with
+   the same site-relative or file-relative targets as any other page; the
+   GitHub release receives them as absolute links to the hosted site.
+   `pnpm release:metadata:check 0.2.0` rejects a relative link that leaves
+   the documentation site, such as `../../CHANGELOG.md`; link to repository
+   files with an absolute GitHub URL instead. Update release status text such as
    the README status line, roadmap, support matrix, and supported versions in
    `SECURITY.md`. Review the `etc/api/` diff since the previous release.
 5. Merge when every required check passes and every thread is resolved.
@@ -68,8 +73,9 @@ merge commit, squash, or rebase. For a release the workflow:
    published it, that the registry serves the same tarball integrity;
 4. creates the annotated `v<version>` tag on the release commit and the
    GitHub release from the body of `docs/releases/<version>.md`, without its
-   YAML frontmatter, marking it latest only when it is the highest stable tag;
-   and
+   YAML frontmatter and with documentation links made absolute
+   (`pnpm exec tsx scripts/release.ts notes <version>` prints it), marking it
+   latest only when it is the highest stable tag; and
 5. fast-forwards the `docs-live` branch, from which the hosted Mintlify site
    deploys, to the release commit, never moving it backwards.
 

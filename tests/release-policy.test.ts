@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
+  DOCUMENTATION_URL,
   REPOSITORY_URL,
   assertReleaseDate,
   compareStableVersions,
@@ -185,6 +186,56 @@ describe("release verification", () => {
     }
   });
 
+  it("rewrites documentation-relative links to absolute site URLs for GitHub", () => {
+    const page = [
+      "---",
+      'title: "InvariantCAD 1.3.0"',
+      "---",
+      "",
+      "# InvariantCAD 1.3.0",
+      "",
+      "See [profiles](/evaluation/evaluator) and [the matrix](/reference/support-matrix#occt).",
+      "Read the [roadmap](../roadmap.md), [import](../interchange/import-export.mdx),",
+      "the [previous notes](0.1.1.md), [this release](./1.3.0), and the [home](/).",
+      '![diagram](/assets/flow.svg "Flow") and <a href="/get-started/quickstart">start</a>.',
+      "Keep [GitHub](https://github.com/shlokjain42/invariantCAD), [mail](mailto:a@b.c),",
+      "and [anchors](#highlights) as written, as well as `[code](/not-a-link)`.",
+      "",
+      "[reference]: /guides/index",
+      "",
+      "```md",
+      "[fenced](/not-a-link)",
+      "```",
+      "",
+    ].join("\n");
+    expect(releaseNotesBody(page)).toBe(
+      [
+        "# InvariantCAD 1.3.0",
+        "",
+        `See [profiles](${DOCUMENTATION_URL}/evaluation/evaluator) and [the matrix](${DOCUMENTATION_URL}/reference/support-matrix#occt).`,
+        `Read the [roadmap](${DOCUMENTATION_URL}/roadmap), [import](${DOCUMENTATION_URL}/interchange/import-export),`,
+        `the [previous notes](${DOCUMENTATION_URL}/releases/0.1.1), [this release](${DOCUMENTATION_URL}/releases/1.3.0), and the [home](${DOCUMENTATION_URL}/).`,
+        `![diagram](${DOCUMENTATION_URL}/assets/flow.svg "Flow") and <a href="${DOCUMENTATION_URL}/get-started/quickstart">start</a>.`,
+        "Keep [GitHub](https://github.com/shlokjain42/invariantCAD), [mail](mailto:a@b.c),",
+        "and [anchors](#highlights) as written, as well as `[code](/not-a-link)`.",
+        "",
+        `[reference]: ${DOCUMENTATION_URL}/guides`,
+        "",
+        "```md",
+        "[fenced](/not-a-link)",
+        "```",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("rejects a release-notes link that leaves the documentation site", () => {
+    const page = '---\ntitle: "x"\n---\n\nSee [changes](../../CHANGELOG.md).\n';
+    expect(() => releaseNotesBody(page)).toThrow(
+      "Release notes link '../../CHANGELOG.md' leaves the documentation site; use an absolute URL",
+    );
+  });
+
   it("rejects release notes without frontmatter or body", () => {
     expect(() => releaseNotesBody("# Title\n")).toThrow(/frontmatter/u);
     expect(() => releaseNotesBody("---\ntitle: x\n")).toThrow(/not closed/u);
@@ -214,6 +265,17 @@ describe("repository release state", () => {
     const body = releaseNotesBody(repositoryFile(`docs/releases/${currentVersion}.md`));
     expect(body.startsWith(`# InvariantCAD ${currentVersion}\n`)).toBe(true);
     expect(body).not.toMatch(/^title:/mu);
+  });
+
+  it("publishes no site-relative links in any release body", () => {
+    expect(JSON.parse(sources.packageJson)).toMatchObject({ homepage: DOCUMENTATION_URL });
+    const pages = sources.docsJson.match(/releases\/\d+\.\d+\.\d+/gu) ?? [];
+    expect(pages).toContain(`releases/${currentVersion}`);
+    for (const page of pages) {
+      const body = releaseNotesBody(repositoryFile(`docs/${page}.md`));
+      expect(body).not.toMatch(/\]\((?!https:\/\/|mailto:|#)/u);
+      expect(body).toContain(`](${DOCUMENTATION_URL}/`);
+    }
   });
 
   it("keeps the changelog preparable for the next release", () => {
