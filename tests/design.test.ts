@@ -1186,6 +1186,231 @@ describe("builder input detachment", () => {
   });
 });
 
+describe("builder own-data reads", () => {
+  /** An enumerable accessor that counts its reads and returns `value`. */
+  function countingAccessor(value: unknown, counter: { reads: number }) {
+    return {
+      enumerable: true,
+      configurable: true,
+      get: () => {
+        counter.reads += 1;
+        return value;
+      },
+    };
+  }
+
+  it("reads transform operations and plane IR without running accessors", () => {
+    const cad = design("own-data-transforms");
+    const box = cad.box("box", { size: vec3(mm(1), mm(1), mm(1)) });
+    const part = cad.part("part", box);
+    const translation = tf.translate(vec3(mm(1), mm(0), mm(0)));
+    const counter = { reads: 0 };
+    const accessorKind = Object.defineProperties(
+      {},
+      {
+        kind: countingAccessor("translate", counter),
+        value: { value: (translation as { readonly value: unknown }).value, enumerable: true },
+      },
+    );
+    expect(() => cad.transform("t1", box, [accessorKind as never])).toThrow(
+      "must be a data property, not an accessor",
+    );
+    expect(() =>
+      cad.assembly("a1", (assembly) =>
+        assembly.instance("i", part, { placement: [accessorKind as never] }),
+      ),
+    ).toThrow("must be a data property, not an accessor");
+    const accessorItem = Object.defineProperty(
+      [translation],
+      0,
+      countingAccessor(translation, counter),
+    );
+    expect(() => cad.transform("t2", box, accessorItem)).toThrow(
+      "must be a data property, not an accessor",
+    );
+    // Inherited fields never supply an operation.
+    const inherited = Object.create(translation) as typeof translation;
+    expect(() => cad.transform("t3", box, [inherited])).toThrow(
+      "must be a plain record",
+    );
+
+    const origin = plane.xy().ir.origin;
+    const accessorPlane = Object.defineProperty({}, "ir", countingAccessor(plane.xy().ir, counter));
+    const accessorOrigin = {
+      ir: Object.defineProperties(
+        {},
+        {
+          type: { value: "principal", enumerable: true },
+          plane: { value: "XY", enumerable: true },
+          origin: countingAccessor(origin, counter),
+        },
+      ),
+    };
+    for (const sketchPlane of [accessorPlane, accessorOrigin]) {
+      expect(() =>
+        cad.sketch("s", sketchPlane as never, (sketch) =>
+          sketch.profile(sketch.circle("disk", { radius: mm(1) }).loop()),
+        ),
+      ).toThrow(TypeError);
+    }
+    expect(counter.reads).toBe(0);
+    expect(validateDocument(cad.build()).ok).toBe(true);
+  });
+
+  it("reads path points, segments, and solid lists once without accessors", () => {
+    const cad = design("own-data-paths");
+    const box = cad.box("box", { size: vec3(mm(10), mm(10), mm(10)) });
+    const sphere = cad.sphere("sphere", { radius: mm(2) });
+    const counter = { reads: 0 };
+    const start = vec3(mm(0), mm(0), mm(0));
+    const end = vec3(mm(10), mm(0), mm(0));
+    const points = Object.defineProperty([start, end], 1, countingAccessor(end, counter));
+    expect(() => cad.polylinePath("polyline", points)).toThrow(
+      "must be a data property, not an accessor",
+    );
+    const arc = {
+      kind: "circularArc" as const,
+      through: vec3(mm(5), mm(5), mm(0)),
+      end,
+    };
+    const accessorSegment = Object.defineProperties(
+      {},
+      {
+        kind: countingAccessor("line", counter),
+        end: { value: vec3(mm(20), mm(0), mm(0)), enumerable: true },
+      },
+    );
+    expect(() =>
+      cad.compositePath("composite", {
+        start,
+        segments: [arc, accessorSegment as never],
+      }),
+    ).toThrow("must be a data property, not an accessor");
+    expect(() =>
+      cad.union("union", box, Object.defineProperty([sphere], 0, countingAccessor(sphere, counter))),
+    ).toThrow("must be a data property, not an accessor");
+    const profile = cad.sketch("profile", plane.xy(), (sketch) =>
+      sketch.profile(sketch.circle("disk", { radius: mm(1) }).loop()),
+    );
+    const top = cad.sketch("top", plane.xy(vec3(mm(0), mm(0), mm(5))), (sketch) =>
+      sketch.profile(sketch.circle("disk", { radius: mm(1) }).loop()),
+    );
+    expect(() =>
+      cad.loft(
+        "loft",
+        Object.defineProperty([profile, top], 1, countingAccessor(top, counter)),
+      ),
+    ).toThrow("must be a data property, not an accessor");
+    expect(counter.reads).toBe(0);
+
+    const segment = cad.compositePath("valid", {
+      start,
+      segments: [arc, { kind: "line", end: vec3(mm(20), mm(0), mm(0)) }],
+    });
+    cad.output("result", cad.union("joined", box, [sphere]));
+    const document = cad.build();
+    expect((document.nodes as Readonly<Record<string, any>>)[segment.node].segments).toEqual([
+      { kind: "circularArc", through: arc.through.map((value) => value.ir), end: end.map((value) => value.ir) },
+      { kind: "line", end: vec3(mm(20), mm(0), mm(0)).map((value) => value.ir) },
+    ]);
+    expect(validateDocument(document).ok).toBe(true);
+  });
+
+  it("stores the topology selection IR it checked", () => {
+    const cad = design("own-data-selection");
+    const width = cad.parameter.length("width", mm(1));
+    const base = cad.box("base", { size: vec3(mm(10), mm(10), mm(10)) });
+    const other = design("other");
+    const foreignWidth = other.parameter.length("width", mm(1));
+    const own = topology.edges.radius(width).atLeast(1);
+    const foreign = topology.edges.radius(foreignWidth).atLeast(1);
+    const Selection = own.constructor as new (
+      ...args: readonly unknown[]
+    ) => typeof own;
+
+    // An overridden toIR() cannot substitute IR that was never checked.
+    class Substituting extends Selection {
+      override toIR() {
+        return foreign.ir;
+      }
+    }
+    const substituting = new Substituting("edge", own.ir.query, own.ir.cardinality);
+    const filleted = cad.fillet("fillet", base, { edges: substituting, radius: mm(1) });
+
+    const counter = { reads: 0 };
+    const forged = (ir: PropertyDescriptor) =>
+      Object.create(Selection.prototype, {
+        topology: { value: "edge" },
+        references: { value: [] },
+        persistentReferences: { value: [] },
+        ir,
+      }) as typeof own;
+    expect(() =>
+      cad.fillet("accessor", base, {
+        edges: forged(countingAccessor(own.ir, counter)),
+        radius: mm(1),
+      }),
+    ).toThrow("must contain only data properties");
+    expect(counter.reads).toBe(0);
+    expect(() =>
+      cad.chamfer("mismatch", base, {
+        edges: forged({ value: { ...own.ir, topology: "face" }, enumerable: true }),
+        distance: mm(1),
+      }),
+    ).toThrow("must select edge topology");
+
+    cad.output("result", filleted);
+    const document = cad.build();
+    const stored = (document.nodes as Readonly<Record<string, any>>).fillet.edges;
+    expect(stored).toBe(substituting.ir);
+    expect(stored.query).toBe(own.ir.query);
+    expect(validateDocument(document).ok).toBe(true);
+  });
+
+  it("stores only the sketch records and profile holes it checked", () => {
+    const cad = design("own-data-sketch");
+    const counter = { reads: 0 };
+    expect(() =>
+      cad.sketch("accessor-entity", plane.xy(), (sketch) => {
+        sketch.circle("disk", { radius: mm(2) });
+        const record = sketch.entities["disk" as never];
+        Object.defineProperty(sketch.entities, "disk", countingAccessor(record, counter));
+        return sketch.profile(sketch.circle("outer", { radius: mm(3) }).loop());
+      }),
+    ).toThrow(/SketchBuilder method/);
+    expect(() =>
+      cad.sketch("accessor-edge", plane.xy(), (sketch) => {
+        const a = sketch.point("a", vec2(mm(0), mm(0)));
+        const b = sketch.point("b", vec2(mm(1), mm(0)));
+        sketch.line("ab", a, b);
+        const use = Object.defineProperty({}, "entity", countingAccessor("ab", counter));
+        return sketch.profile(sketch.loop([use as never]));
+      }),
+    ).toThrow("must be a data property, not an accessor");
+    expect(counter.reads).toBe(0);
+
+    // A getter that changes the holes after the ownership check is read once.
+    const profile = cad.sketch("holes", plane.xy(), (sketch) => {
+      const hole = sketch.circle("hole", { radius: mm(1) }).loop();
+      const forgedHole = new LoopRef(sketch, { kind: "circle", entity: "ghost" as never });
+      let reads = 0;
+      const options = Object.defineProperty({}, "holes", {
+        enumerable: true,
+        get: () => {
+          reads += 1;
+          return reads === 1 ? [hole] : [forgedHole];
+        },
+      });
+      return sketch.profile(sketch.circle("outer", { radius: mm(3) }).loop(), options);
+    });
+    const document = cad.build();
+    expect((document.nodes as Readonly<Record<string, any>>)[profile.node].profile.holes).toEqual([
+      { kind: "circle", entity: "hole" },
+    ]);
+    expect(validateDocument(document).ok).toBe(true);
+  });
+});
+
 describe("part options", () => {
   function setup() {
     const cad = design("part-options");

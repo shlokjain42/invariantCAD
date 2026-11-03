@@ -51,14 +51,23 @@ import {
   type PlaneIR,
   type PrincipalPlane,
   type RefIR,
+  type SketchConstraintIR,
+  type SketchEntityIR,
   type TopologyReferenceEntryIR,
+  type TopologySelectionIR,
   type TransformOperationIR,
 } from "./ir.js";
 import {
+  NOT_OWN_DATA,
+  ownDenseArray,
+  ownRecord,
+  readOwnData,
+} from "./internal/own-data.js";
+import {
   ProfileDefinition,
   SketchBuilder,
-  assertSketchProfile,
   closeSketchBuilder,
+  issuedSketchRecords,
 } from "./sketch.js";
 import { TopologySelection } from "./topology.js";
 import {
@@ -183,7 +192,7 @@ function threeComponents(value: unknown, label: string): readonly unknown[] {
   if (!Array.isArray(value) || value.length !== 3) {
     throw new TypeError(`${label} must contain exactly three components`);
   }
-  return value;
+  return ownDenseArray(value as readonly unknown[], label);
 }
 
 function ownedVec3IR(
@@ -226,11 +235,16 @@ function ownedTransformOperation(
   if (typeof value !== "object" || value === null) {
     throw new TypeError(`${label} must be a transform operation`);
   }
-  const operation = value as {
-    readonly kind?: unknown;
-    readonly value?: unknown;
-    readonly normal?: unknown;
-  };
+  // Snapshot own data fields once, so caller accessors never run and an
+  // inherited field cannot supply the kind or vector.
+  const operation = ownRecord(
+    value as {
+      readonly kind?: unknown;
+      readonly value?: unknown;
+      readonly normal?: unknown;
+    },
+    label,
+  );
   switch (operation.kind) {
     case "translate":
       return {
@@ -264,21 +278,6 @@ function ownedTransformOperation(
   }
 }
 
-/** Copies a caller array after rejecting holes, which `map` would skip. */
-function denseArray<T>(value: readonly T[], label: string): readonly T[] {
-  if (!Array.isArray(value)) {
-    throw new TypeError(`${label} must be an array`);
-  }
-  const items: T[] = [];
-  for (let index = 0; index < value.length; index += 1) {
-    if (!Object.hasOwn(value, index)) {
-      throw new TypeError(`${label} cannot be sparse`);
-    }
-    items.push(value[index]!);
-  }
-  return items;
-}
-
 function ownedTransformOperations(
   owner: DesignBuilder,
   value: unknown,
@@ -287,21 +286,12 @@ function ownedTransformOperations(
   if (!Array.isArray(value)) {
     throw new TypeError(`${label} must be an array of transform operations`);
   }
-  if (value.length > DEFAULT_DESIGN_DOCUMENT_LIMITS.maxStructuralValues) {
-    throw new RangeError(
-      `${label} exceed the authoring limit of ${DEFAULT_DESIGN_DOCUMENT_LIMITS.maxStructuralValues} operations`,
-    );
-  }
-  const operations: TransformOperationIR[] = [];
-  for (let index = 0; index < value.length; index += 1) {
-    if (!Object.hasOwn(value, index)) {
-      throw new TypeError(`${label} cannot be sparse`);
-    }
-    operations.push(
-      ownedTransformOperation(owner, value[index], `${label}[${index}]`),
-    );
-  }
-  return operations;
+  const operations = ownDenseArray(value as readonly unknown[], label, {
+    maximumLength: DEFAULT_DESIGN_DOCUMENT_LIMITS.maxStructuralValues,
+  });
+  return operations.map((operation, index) =>
+    ownedTransformOperation(owner, operation, `${label}[${index}]`),
+  );
 }
 
 function ownedPlaneIR(
@@ -311,16 +301,19 @@ function ownedPlaneIR(
 ): PlaneIR {
   const ir =
     typeof value === "object" && value !== null
-      ? (value as { readonly ir?: unknown }).ir
+      ? readOwnData(value, "ir")
       : undefined;
   if (typeof ir !== "object" || ir === null) {
     throw new TypeError(`${label} must be created by plane.xy(), plane.xz(), or plane.yz()`);
   }
-  const candidate = ir as {
-    readonly type?: unknown;
-    readonly plane?: unknown;
-    readonly origin?: unknown;
-  };
+  const candidate = ownRecord(
+    ir as {
+      readonly type?: unknown;
+      readonly plane?: unknown;
+      readonly origin?: unknown;
+    },
+    label,
+  );
   if (
     candidate.type !== "principal" ||
     (candidate.plane !== "XY" &&
@@ -336,13 +329,34 @@ function ownedPlaneIR(
   };
 }
 
-/** Checks parameter owners in every expression a topology selection holds. */
-function assertTopologySelectionParametersOwned(
+/**
+ * Checks parameter owners in every expression a topology selection holds and
+ * returns the selection IR that was checked, so the node stores exactly that
+ * rather than whatever an overridden `toIR()` would return. Fields are read
+ * through own data properties only, so caller accessors never run.
+ */
+function ownedTopologySelectionIR<K extends TopologyKind>(
   owner: DesignBuilder,
-  selection: TopologySelection,
+  selection: TopologySelection<K>,
+  topology: K,
   label: string,
-): void {
-  const pending: unknown[] = [selection.ir.query];
+): TopologySelectionIR<K> {
+  const field = (container: unknown, key: string | number): unknown => {
+    if (typeof container !== "object" || container === null) return undefined;
+    const value = readOwnData(container, key);
+    if (value === NOT_OWN_DATA) {
+      throw new TypeError(`${label} must contain only data properties`);
+    }
+    return value;
+  };
+  const selectionIR = field(selection, "ir");
+  if (typeof selectionIR !== "object" || selectionIR === null) {
+    throw new TypeError(`${label} must be an explicit topology selection`);
+  }
+  if (field(selectionIR, "topology") !== topology) {
+    throw new TypeError(`${label} must select ${topology} topology`);
+  }
+  const pending: unknown[] = [field(selectionIR, "query")];
   const expression = (value: unknown): void => {
     assertExpressionParametersOwned(
       owner,
@@ -351,47 +365,48 @@ function assertTopologySelectionParametersOwned(
     );
   };
   while (pending.length > 0) {
-    const query = pending.pop();
-    if (typeof query !== "object" || query === null) continue;
-    const node = query as {
-      readonly op?: unknown;
-      readonly queries?: unknown;
-      readonly query?: unknown;
-      readonly selection?: { readonly query?: unknown };
-      readonly value?: unknown;
-      readonly tolerance?: unknown;
-    };
-    switch (node.op) {
+    const node = pending.pop();
+    if (typeof node !== "object" || node === null) continue;
+    switch (field(node, "op")) {
       case "and":
-      case "or":
-        // Push one at a time: spreading a large operand list could exceed
-        // the engine's argument limit.
-        if (Array.isArray(node.queries)) {
-          for (const child of node.queries as readonly unknown[]) {
-            pending.push(child);
+      case "or": {
+        const queries = field(node, "queries");
+        if (Array.isArray(queries)) {
+          // Push one at a time: spreading a large operand list could exceed
+          // the engine's argument limit.
+          for (let index = 0; index < queries.length; index += 1) {
+            pending.push(field(queries, index));
           }
         }
         break;
+      }
       case "not":
-        pending.push(node.query);
+        pending.push(field(node, "query"));
         break;
       case "adjacentTo":
-        pending.push(node.selection?.query);
+        pending.push(field(field(node, "selection"), "query"));
         break;
       case "direction":
       case "normal":
-      case "position":
-        if (Array.isArray(node.value)) node.value.forEach(expression);
-        expression(node.tolerance);
+      case "position": {
+        const vector = field(node, "value");
+        if (Array.isArray(vector)) {
+          for (let index = 0; index < vector.length; index += 1) {
+            expression(field(vector, index));
+          }
+        }
+        expression(field(node, "tolerance"));
         break;
+      }
       case "radius":
-        expression(node.value);
-        expression(node.tolerance);
+        expression(field(node, "value"));
+        expression(field(node, "tolerance"));
         break;
       default:
         break;
     }
   }
+  return selectionIR as TopologySelectionIR<K>;
 }
 
 /**
@@ -575,11 +590,12 @@ const PART_OPTION_KEYS: readonly string[] = Object.freeze([
 function assertSketchParametersOwned(
   owner: DesignBuilder,
   id: string,
-  sketch: SketchBuilder,
+  entities: Readonly<Record<EntityId, SketchEntityIR>>,
+  constraints: Readonly<Record<EntityId, SketchConstraintIR>>,
 ): void {
   const check = (value: ExpressionIR, path: string): void =>
     assertExpressionParametersOwned(owner, value, `Sketch '${id}' ${path}`);
-  for (const [entityKey, entity] of Object.entries(sketch.entities)) {
+  for (const [entityKey, entity] of Object.entries(entities)) {
     switch (entity.kind) {
       case "point":
         check(entity.x, `entity '${entityKey}' x`);
@@ -597,9 +613,7 @@ function assertSketchParametersOwned(
         break;
     }
   }
-  for (const [constraintKey, constraint] of Object.entries(
-    sketch.constraints,
-  )) {
+  for (const [constraintKey, constraint] of Object.entries(constraints)) {
     if ("value" in constraint) {
       check(constraint.value, `constraint '${constraintKey}' value`);
     }
@@ -1497,13 +1511,13 @@ export class DesignBuilder {
     if (!(profile instanceof ProfileDefinition)) {
       throw new TypeError("A sketch callback must return sketch.profile(...)");
     }
-    assertSketchProfile(sketch, profile);
-    assertSketchParametersOwned(this, id, sketch);
+    const { entities, constraints } = issuedSketchRecords(sketch, profile);
+    assertSketchParametersOwned(this, id, entities, constraints);
     const key = this.addNode(id, {
       kind: "sketch",
       plane: planeIR,
-      entities: sketch.entities,
-      constraints: sketch.constraints,
+      entities,
+      constraints,
       profile: profile.ir,
       tolerance,
     });
@@ -1515,7 +1529,9 @@ export class DesignBuilder {
     points: readonly Vec3Expression[],
     options: { readonly tolerance?: number } = {},
   ): PathRef {
-    const orderedPoints = denseArray(points, `Polyline path '${id}' points`);
+    const orderedPoints = ownDenseArray(points, `Polyline path '${id}' points`, {
+      maximumLength: DEFAULT_DESIGN_DOCUMENT_LIMITS.maxStructuralValues,
+    });
     if (orderedPoints.length < 2) {
       throw new TypeError("A polyline path requires at least two ordered points");
     }
@@ -1570,26 +1586,28 @@ export class DesignBuilder {
     },
     options: { readonly tolerance?: number } = {},
   ): PathRef {
-    const segments = denseArray(
+    // Snapshot each segment's own data fields once, so its kind cannot change
+    // between the checks below and the node that is stored.
+    const segments = ownDenseArray(
       path.segments,
       `Composite path '${id}' segments`,
-    );
+      { maximumLength: DEFAULT_DESIGN_DOCUMENT_LIMITS.maxStructuralValues },
+    ).map((segment, index) => {
+      const label = `Composite path '${id}' segment ${index}`;
+      if (typeof segment !== "object" || segment === null) {
+        throw new TypeError(`${label} must be a line or circularArc segment`);
+      }
+      const snapshot = ownRecord(segment, label);
+      if (snapshot.kind !== "line" && snapshot.kind !== "circularArc") {
+        throw new TypeError(`${label} must be a line or circularArc segment`);
+      }
+      return snapshot;
+    });
     if (segments.length < 2) {
       throw new TypeError(
         "A composite path requires at least two ordered segments",
       );
     }
-    segments.forEach((segment, index) => {
-      if (
-        typeof segment !== "object" ||
-        segment === null ||
-        (segment.kind !== "line" && segment.kind !== "circularArc")
-      ) {
-        throw new TypeError(
-          `Composite path '${id}' segment ${index} must be a line or circularArc segment`,
-        );
-      }
-    });
     if (!segments.some((segment) => segment.kind === "circularArc")) {
       throw new TypeError(
         "A composite path requires at least one circular-arc segment; use polylinePath for line-only paths",
@@ -1698,12 +1716,16 @@ export class DesignBuilder {
       readonly ruled?: true;
     } = {},
   ): SolidRef {
-    if (profiles.length < 2) {
+    // Copy once, so the checked profiles are exactly the ones stored.
+    const sections = ownDenseArray(profiles, "Loft profiles", {
+      maximumLength: DEFAULT_DESIGN_DOCUMENT_LIMITS.maxStructuralValues,
+    });
+    if (sections.length < 2) {
       throw new TypeError("Loft requires at least two ordered profiles");
     }
-    for (const profile of profiles) this.assertOwned(profile);
+    for (const profile of sections) this.assertOwned(profile);
     if (
-      new Set(profiles.map((profile) => profile.node)).size !== profiles.length
+      new Set(sections.map((profile) => profile.node)).size !== sections.length
     ) {
       throw new TypeError("Loft requires distinct ordered profiles");
     }
@@ -1712,7 +1734,7 @@ export class DesignBuilder {
     }
     const key = this.addNode(id, {
       kind: "loft",
-      profiles: profiles.map((profile) => profile.toIR()),
+      profiles: sections.map((profile) => profile.toIR()),
       ruled: true,
     });
     return issued(new SolidRef(this, key));
@@ -1755,15 +1777,19 @@ export class DesignBuilder {
     tools: readonly SolidRef[],
   ): SolidRef {
     this.assertOwned(target);
-    if (tools.length === 0) {
+    // Copy once, so the checked tools are exactly the ones stored.
+    const toolSolids = ownDenseArray(tools, `${operation} tools`, {
+      maximumLength: DEFAULT_DESIGN_DOCUMENT_LIMITS.maxStructuralValues,
+    });
+    if (toolSolids.length === 0) {
       throw new TypeError(`${operation} requires at least one tool solid`);
     }
-    for (const tool of tools) this.assertOwned(tool);
+    for (const tool of toolSolids) this.assertOwned(tool);
     const key = this.addNode(id, {
       kind: "boolean",
       operation,
       target: target.toIR(),
-      tools: tools.map((tool) => tool.toIR()),
+      tools: toolSolids.map((tool) => tool.toIR()),
     });
     return issued(new SolidRef(this, key));
   }
@@ -1828,25 +1854,28 @@ export class DesignBuilder {
     },
   ): SolidRef {
     this.assertOwned(input);
-    if (!(options.edges instanceof TopologySelection)) {
+    // Read once, so every check below applies to the selection that is stored.
+    const edges = options.edges;
+    if (!(edges instanceof TopologySelection)) {
       throw new TypeError("Fillet edges must be an explicit topology selection");
     }
-    if (options.edges.topology !== "edge") {
+    if (edges.topology !== "edge") {
       throw new TypeError("A fillet requires an edge topology selection");
     }
-    for (const reference of options.edges.references) {
+    for (const reference of edges.references) {
       this.assertOwned(reference);
     }
-    this.assertPersistentTopologyReferences(options.edges, input);
-    assertTopologySelectionParametersOwned(
+    this.assertPersistentTopologyReferences(edges, input);
+    const edgesIR = ownedTopologySelectionIR(
       this,
-      options.edges,
+      edges,
+      "edge",
       `Fillet '${id}' edges`,
     );
     const key = this.addNode(id, {
       kind: "fillet",
       input: input.toIR(),
-      edges: options.edges.toIR(),
+      edges: edgesIR,
       radius: ownedExpressionIR(
         this,
         options.radius,
@@ -1867,25 +1896,27 @@ export class DesignBuilder {
     },
   ): SolidRef {
     this.assertOwned(input);
-    if (!(options.edges instanceof TopologySelection)) {
+    const edges = options.edges;
+    if (!(edges instanceof TopologySelection)) {
       throw new TypeError("Chamfer edges must be an explicit topology selection");
     }
-    if (options.edges.topology !== "edge") {
+    if (edges.topology !== "edge") {
       throw new TypeError("A chamfer requires an edge topology selection");
     }
-    for (const reference of options.edges.references) {
+    for (const reference of edges.references) {
       this.assertOwned(reference);
     }
-    this.assertPersistentTopologyReferences(options.edges, input);
-    assertTopologySelectionParametersOwned(
+    this.assertPersistentTopologyReferences(edges, input);
+    const edgesIR = ownedTopologySelectionIR(
       this,
-      options.edges,
+      edges,
+      "edge",
       `Chamfer '${id}' edges`,
     );
     const key = this.addNode(id, {
       kind: "chamfer",
       input: input.toIR(),
-      edges: options.edges.toIR(),
+      edges: edgesIR,
       distance: ownedExpressionIR(
         this,
         options.distance,
@@ -1908,29 +1939,31 @@ export class DesignBuilder {
     },
   ): SolidRef {
     this.assertOwned(input);
-    if (!(options.openings instanceof TopologySelection)) {
+    const openings = options.openings;
+    if (!(openings instanceof TopologySelection)) {
       throw new TypeError("Shell openings must be an explicit topology selection");
     }
-    if (options.openings.topology !== "face") {
+    if (openings.topology !== "face") {
       throw new TypeError("A shell requires a face topology selection");
     }
-    for (const reference of options.openings.references) {
+    for (const reference of openings.references) {
       this.assertOwned(reference);
     }
-    this.assertPersistentTopologyReferences(options.openings, input);
+    this.assertPersistentTopologyReferences(openings, input);
     const direction = options.direction ?? "inward";
     if (!SHELL_DIRECTIONS.includes(direction)) {
       throw new TypeError("Shell direction must be 'inward' or 'outward'");
     }
-    assertTopologySelectionParametersOwned(
+    const openingsIR = ownedTopologySelectionIR(
       this,
-      options.openings,
+      openings,
+      "face",
       `Shell '${id}' openings`,
     );
     const key = this.addNode(id, {
       kind: "shell",
       input: input.toIR(),
-      openings: options.openings.toIR(),
+      openings: openingsIR,
       thickness: ownedExpressionIR(
         this,
         options.thickness,
@@ -2001,25 +2034,27 @@ export class DesignBuilder {
     },
   ): SolidRef {
     this.assertOwned(input);
-    if (!(options.faces instanceof TopologySelection)) {
+    const faces = options.faces;
+    if (!(faces instanceof TopologySelection)) {
       throw new TypeError("Draft faces must be an explicit topology selection");
     }
-    if (options.faces.topology !== "face") {
+    if (faces.topology !== "face") {
       throw new TypeError("A draft requires a face topology selection");
     }
-    for (const reference of options.faces.references) {
+    for (const reference of faces.references) {
       this.assertOwned(reference);
     }
-    this.assertPersistentTopologyReferences(options.faces, input);
-    assertTopologySelectionParametersOwned(
+    this.assertPersistentTopologyReferences(faces, input);
+    const facesIR = ownedTopologySelectionIR(
       this,
-      options.faces,
+      faces,
+      "face",
       `Draft '${id}' faces`,
     );
     const key = this.addNode(id, {
       kind: "draft",
       input: input.toIR(),
-      faces: options.faces.toIR(),
+      faces: facesIR,
       angle: ownedExpressionIR(this, options.angle, "angle", `Draft '${id}' angle`),
       pullDirection: ownedVec3IR(
         this,

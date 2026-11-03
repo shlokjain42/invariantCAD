@@ -21,6 +21,13 @@ later cannot alter a built document, and authoring never freezes them.
 Expression IR is the exception: expressions are immutable, so raw IR passed to
 `fromExpressionIR` is validated and frozen in place.
 
+Lists and records that reach a document, including path points and segments,
+loft profiles, Boolean tools, transform operations, placements, plane IR,
+topology selection IR, sketch entity and constraint records, raw loop edge
+uses, and profile holes, are read once through their own data properties.
+Caller accessors never run and inherited fields are never used, so every check
+applies to exactly the value the document stores.
+
 ## Document definitions
 
 | Method | Returns | Purpose |
@@ -534,8 +541,12 @@ Methods throw `TypeError` or `RangeError` for invalid direct calls, including:
 - metadata that is not plain JSON data, such as non-finite numbers, `Map`,
   `Set`, `Date`, or class instances, functions, BigInts, sparse arrays,
   accessor properties, or cycles
-- sparse point, segment, or edge lists, such as `polylinePath` points,
-  `compositePath` segments, or sketch `polyline` points and `loop` edges
+- sparse or accessor-backed lists, such as `polylinePath` points,
+  `compositePath` segments, loft profiles, Boolean tools, transform
+  operations, sketch `polyline` points, `loop` edges, and profile holes
+- transform operations, plane IR, path segments, raw loop edge uses, and
+  topology selections whose fields are accessors, inherited, or not held by a
+  plain record
 - references targeting the wrong direct solid
 
 These failures indicate an invalid model definition or unvalidated UI input,

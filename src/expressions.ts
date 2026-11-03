@@ -1,5 +1,12 @@
 import { deepFreeze } from "./core/json.js";
 import { assertValidId, type ParameterId } from "./core/ids.js";
+import {
+  NOT_OWN_DATA,
+  isPlainArray,
+  isPlainRecord,
+  ownDenseArray,
+  readOwnData,
+} from "./internal/own-data.js";
 
 export type Dimension = "scalar" | "length" | "angle" | "massDensity";
 
@@ -41,8 +48,6 @@ const objectHasOwn = Object.hasOwn;
 const objectKeys = Object.keys;
 const arrayIsArray = Array.isArray;
 const objectDefineProperty = Object.defineProperty;
-const objectGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
-const objectGetPrototypeOf = Object.getPrototypeOf;
 const IntrinsicWeakSet = WeakSet;
 const intrinsicWeakSetAdd = WeakSet.prototype.add;
 const intrinsicWeakSetHas = WeakSet.prototype.has;
@@ -76,48 +81,12 @@ function arrayAppend<T>(array: T[], value: T): void {
   });
 }
 
-function prototypeOf(value: object): object | null {
-  return reflectApply(objectGetPrototypeOf, Object, [value]) as object | null;
-}
-
-/** A plain record's prototype is null or some realm's Object.prototype. */
-function isPlainRecord(value: object): boolean {
-  const prototype = prototypeOf(value);
-  return prototype === null || prototypeOf(prototype) === null;
-}
-
-/**
- * A plain array's prototype is some realm's Array.prototype, which is itself
- * an array and inherits directly from that realm's Object.prototype.
- */
-function isPlainArray(value: object): boolean {
-  if (!arrayIsArray(value)) return false;
-  const prototype = prototypeOf(value);
-  if (prototype === null || !arrayIsArray(prototype)) return false;
-  const root = prototypeOf(prototype);
-  return root !== null && prototypeOf(root) === null;
-}
-
-/** Marks a property that exists but is an accessor or is not enumerable. */
-const NOT_OWN_DATA: unique symbol = Symbol("InvariantCAD.NotOwnData");
-
 /**
  * Reads an own enumerable data property without running accessors or
  * consulting the prototype chain; a missing property reads as undefined.
  */
-function ownDataValue(
-  container: object,
-  key: string | number,
-): unknown {
-  const descriptor = reflectApply(objectGetOwnPropertyDescriptor, Object, [
-    container,
-    key,
-  ]) as PropertyDescriptor | undefined;
-  if (descriptor === undefined) return undefined;
-  if (!objectHasOwn(descriptor, "value") || descriptor.enumerable !== true) {
-    return NOT_OWN_DATA;
-  }
-  return descriptor.value;
+function ownDataValue(container: object, key: string | number): unknown {
+  return readOwnData(container, key, true);
 }
 
 function isDimension(value: unknown): value is Dimension {
@@ -491,10 +460,11 @@ export function expressionVectorIROf(
   if (!arrayIsArray(value) || value.length !== 3) {
     throw new TypeError(`${label} must contain exactly three components`);
   }
+  const components = ownDenseArray(value as readonly unknown[], label);
   return [
-    expressionIROf(value[0], dimension, `${label}[0]`),
-    expressionIROf(value[1], dimension, `${label}[1]`),
-    expressionIROf(value[2], dimension, `${label}[2]`),
+    expressionIROf(components[0], dimension, `${label}[0]`),
+    expressionIROf(components[1], dimension, `${label}[1]`),
+    expressionIROf(components[2], dimension, `${label}[2]`),
   ];
 }
 

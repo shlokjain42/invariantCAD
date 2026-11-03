@@ -17,6 +17,12 @@ import type {
   SketchLoopIR,
   SketchProfileIR,
 } from "./ir.js";
+import {
+  NOT_OWN_DATA,
+  ownDenseArray,
+  ownRecord,
+  readOwnData,
+} from "./internal/own-data.js";
 
 const SKETCH_OWNER = Symbol("InvariantCAD.SketchOwner");
 
@@ -128,18 +134,6 @@ export class ProfileDefinition implements OwnedSketchReference {
     this[SKETCH_OWNER] = owner;
     this.ir = deepFreeze(ir);
     Object.freeze(this);
-  }
-}
-
-/** Rejects holes before `map`, which would skip them and keep them sparse. */
-function assertDenseArray(value: readonly unknown[], label: string): void {
-  if (!Array.isArray(value)) {
-    throw new TypeError(`${label} must be an array`);
-  }
-  for (let index = 0; index < value.length; index += 1) {
-    if (!Object.hasOwn(value, index)) {
-      throw new TypeError(`${label} cannot be sparse`);
-    }
   }
 }
 
@@ -297,11 +291,13 @@ export class SketchBuilder {
     positions: readonly Vec2Expression[],
     options: { readonly closed?: boolean } = {},
   ): LoopRef | readonly LineRef[] {
-    assertDenseArray(positions, `Sketch polyline '${id}' points`);
-    if (positions.length < 2) {
+    const ordered = ownDenseArray(positions, `Sketch polyline '${id}' points`, {
+      maximumLength: DEFAULT_DESIGN_DOCUMENT_LIMITS.maxStructuralValues,
+    });
+    if (ordered.length < 2) {
       throw new TypeError("A polyline requires at least two points");
     }
-    const points = positions.map((position, index) =>
+    const points = ordered.map((position, index) =>
       this.point(`${id}.p${index}`, position),
     );
     const lines: LineRef[] = [];
@@ -339,9 +335,11 @@ export class SketchBuilder {
 
   loop(edges: readonly (LineRef | ArcRef | EdgeUseIR)[]): LoopRef {
     this.assertOpen();
-    assertDenseArray(edges, "Sketch loop edges");
-    if (edges.length === 0) throw new TypeError("A loop cannot be empty");
-    const uses = edges.map((edge, index): EdgeUseIR => {
+    const ordered = ownDenseArray(edges, "Sketch loop edges", {
+      maximumLength: DEFAULT_DESIGN_DOCUMENT_LIMITS.maxStructuralValues,
+    });
+    if (ordered.length === 0) throw new TypeError("A loop cannot be empty");
+    const uses = ordered.map((edge, index): EdgeUseIR => {
       if (edge instanceof LineRef || edge instanceof ArcRef) {
         this.assertOwned(edge);
         return { entity: edge.id };
@@ -349,9 +347,11 @@ export class SketchBuilder {
       if (typeof edge !== "object" || edge === null) {
         throw new TypeError(`Loop edge ${index} must be a line, arc, or edge use`);
       }
+      // Raw edge uses are read through own data fields, exactly once.
+      const use = ownRecord(edge, `Loop edge ${index}`);
       return {
-        entity: entityId(edge.entity),
-        ...optionalReversed(edge.reversed, `Loop edge ${index}`),
+        entity: entityId(use.entity),
+        ...optionalReversed(use.reversed, `Loop edge ${index}`),
       };
     });
     return issued(new LoopRef(this, { kind: "edges", edges: uses }));
@@ -363,11 +363,19 @@ export class SketchBuilder {
   ): ProfileDefinition {
     this.assertOpen();
     this.assertOwned(outer);
-    for (const hole of options.holes ?? []) this.assertOwned(hole);
+    // Copy once, so the checked holes are exactly the ones stored.
+    const rawHoles = options.holes;
+    const holes =
+      rawHoles === undefined
+        ? []
+        : ownDenseArray(rawHoles, "Sketch profile holes", {
+            maximumLength: DEFAULT_DESIGN_DOCUMENT_LIMITS.maxStructuralValues,
+          });
+    for (const hole of holes) this.assertOwned(hole);
     return issued(
       new ProfileDefinition(this, {
         outer: outer.ir,
-        holes: (options.holes ?? []).map((hole) => hole.ir),
+        holes: holes.map((hole) => hole.ir),
       }),
     );
   }
@@ -642,30 +650,63 @@ export function closeSketchBuilder(sketch: SketchBuilder): void {
 }
 
 /**
+ * Copies one public record map of a closed sketch through own data
+ * properties, requiring every entry to be a record a builder method created
+ * under the same key. Accessors never run, so the copy holds exactly the
+ * records that were checked.
+ */
+function copyIssuedSketchRecords<T>(
+  sketch: SketchBuilder,
+  field: "entities" | "constraints",
+): Record<EntityId, T> {
+  const records = readOwnData(sketch, field);
+  if (typeof records !== "object" || records === null) {
+    throw new TypeError(`Sketch ${field} must be a record of builder records`);
+  }
+  const copy: Record<string, T> = {};
+  for (const key of Object.keys(records)) {
+    const record = readOwnData(records, key);
+    const issuedRecord =
+      typeof record === "object" && record !== null
+        ? ISSUED_SKETCH_RECORDS.get(record)
+        : undefined;
+    if (
+      record === NOT_OWN_DATA ||
+      issuedRecord?.owner !== sketch ||
+      issuedRecord.key !== key
+    ) {
+      throw new TypeError(
+        `Sketch record '${key}' must be created by a SketchBuilder method`,
+      );
+    }
+    copy[key] = record as T;
+  }
+  return copy;
+}
+
+/**
  * Requires a closed sketch callback's result to be a profile its own builder
  * issued, and every stored entity and constraint to be a record a builder
- * method created under the same key.
+ * method created under the same key. Returns detached copies of the checked
+ * entity and constraint maps for the sketch node to store.
  *
  * @internal Not re-exported from the package root.
  */
-export function assertSketchProfile(
+export function issuedSketchRecords(
   sketch: SketchBuilder,
   profile: ProfileDefinition,
-): void {
+): {
+  readonly entities: Record<EntityId, SketchEntityIR>;
+  readonly constraints: Record<EntityId, SketchConstraintIR>;
+} {
   assertSketchReference(sketch, profile);
-  for (const records of [sketch.entities, sketch.constraints]) {
-    for (const [key, record] of Object.entries(records)) {
-      const issuedRecord =
-        typeof record === "object" && record !== null
-          ? ISSUED_SKETCH_RECORDS.get(record)
-          : undefined;
-      if (issuedRecord?.owner !== sketch || issuedRecord.key !== key) {
-        throw new TypeError(
-          `Sketch record '${key}' must be created by a SketchBuilder method`,
-        );
-      }
-    }
-  }
+  return {
+    entities: copyIssuedSketchRecords<SketchEntityIR>(sketch, "entities"),
+    constraints: copyIssuedSketchRecords<SketchConstraintIR>(
+      sketch,
+      "constraints",
+    ),
+  };
 }
 
 function evaluateLiteralAngle(value: AngleExpression): number {
