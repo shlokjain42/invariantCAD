@@ -70,6 +70,7 @@ const importedBodyRuntimeObjectPrototype = Object.prototype;
 const importedBodyRuntimeReflectApply = Reflect.apply;
 const importedBodyRuntimeReflectOwnKeys = Reflect.ownKeys;
 const importedBodyRuntimeStringReplaceAll = String.prototype.replaceAll;
+const importedBodyRuntimeStringSlice = String.prototype.slice;
 const importedBodyRuntimeWeakMapGet = WeakMap.prototype.get;
 const importedBodyRuntimeWeakMapSet = WeakMap.prototype.set;
 const importedBodyRuntimeWeakSetAdd = WeakSet.prototype.add;
@@ -190,7 +191,75 @@ function mapImportedBodyArray<T, U>(
   return freezeImportedBodyRuntime(mapped);
 }
 
+function isImportedBodyWordCharacter(character: string | undefined): boolean {
+  return (
+    character !== undefined &&
+    ((character >= "0" && character <= "9") ||
+      (character >= "A" && character <= "Z") ||
+      (character >= "a" && character <= "z") ||
+      character === "_")
+  );
+}
+
+function sliceImportedBodyText(
+  value: string,
+  start: number,
+  end: number,
+): string {
+  return applyImportedBodyRuntime<string>(
+    importedBodyRuntimeStringSlice,
+    value,
+    [start, end],
+  );
+}
+
+/**
+ * Hides staged implementation names in a public imported-body message.
+ *
+ * Diagnostics single-quote every interpolated user value, such as resource,
+ * body, and kernel IDs and resource locations. Quoted spans are copied
+ * verbatim and only the wording around them is rewritten, so an authored
+ * 'bracket_v7' stays intact. A quote opens only after a non-word character
+ * and closes only before one, so apostrophes inside words are not quotes.
+ */
 export function publicImportedBodyText(value: string): string {
+  let rewritten = "";
+  let wordingStart = 0;
+  let index = 0;
+  while (index < value.length) {
+    if (
+      value[index] !== "'" ||
+      isImportedBodyWordCharacter(value[index - 1])
+    ) {
+      index += 1;
+      continue;
+    }
+    let close = index + 1;
+    while (
+      close < value.length &&
+      (value[close] !== "'" ||
+        isImportedBodyWordCharacter(value[close + 1]))
+    ) {
+      close += 1;
+    }
+    if (close >= value.length) break;
+    rewritten +=
+      publicImportedBodyWording(
+        sliceImportedBodyText(value, wordingStart, index),
+      ) + sliceImportedBodyText(value, index, close + 1);
+    wordingStart = close + 1;
+    index = close + 1;
+  }
+  return (
+    rewritten +
+    publicImportedBodyWording(
+      sliceImportedBodyText(value, wordingStart, value.length),
+    )
+  );
+}
+
+/** Rewrites staged names in message wording that holds no user values. */
+function publicImportedBodyWording(value: string): string {
   let rewritten = applyImportedBodyRuntime<string>(
     importedBodyRuntimeStringReplaceAll,
     value,

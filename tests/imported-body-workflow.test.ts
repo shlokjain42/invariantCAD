@@ -512,6 +512,93 @@ describe("public imported-body document workflow", () => {
     }
   });
 
+  it("keeps user IDs, locations, and kernel IDs that contain v7 or staged verbatim", async () => {
+    const bytes = encoder.encode("user-authored-v7-names");
+    const quotedValues = (message: string): string[] =>
+      [...message.matchAll(/'([^']*)'/gu)].map((match) => match[1]!);
+    /** Wording outside the quoted user values stays public. */
+    const expectPublicWording = (result: CadResult<unknown>): void => {
+      for (const item of result.diagnostics) {
+        let wording = item.message;
+        for (const value of quotedValues(item.message)) {
+          wording = wording.replaceAll(`'${value}'`, "''");
+        }
+        expect(wording).not.toMatch(/v7|staged/i);
+      }
+    };
+
+    const duplicate = createImportedBodyDocument(
+      "Versioned bracket",
+      await stepDefinition(bytes, {
+        bodyId: "bracket_v7",
+        resourceId: "bracket_v7_step",
+        locations: ["parts/bracket_v7.step", "parts/bracket_v7.step"],
+      }),
+    );
+    expectFailure(duplicate, "IMPORT_SOURCE_INVALID");
+    expect(duplicate.diagnostics[0]?.message).toBe(
+      "Resource location 'parts/bracket_v7.step' is duplicated",
+    );
+    expectPublicWording(duplicate);
+
+    const invalidId = createImportedBodyDocument(
+      "Staged body",
+      await stepDefinition(bytes, { bodyId: "staged V7 body" }),
+    );
+    expectFailure(invalidId, "IMPORT_SOURCE_INVALID");
+    expect(quotedValues(invalidId.diagnostics[0]!.message)).toContain(
+      "staged V7 body",
+    );
+    expectPublicWording(invalidId);
+
+    const document = valueOf(
+      createImportedBodyDocument(
+        "Versioned bracket",
+        await stepDefinition(bytes, {
+          bodyId: "housingV7",
+          resourceId: "v7Mount",
+        }),
+      ),
+    );
+    const evaluator = await createEvaluator({
+      kernel: exactImportKernel({ id: "occtV7-custom" }),
+    });
+    try {
+      const corrupt = await evaluator.evaluateImportedBody(document, {
+        resolver: () => new Uint8Array(bytes.byteLength),
+      });
+      expectFailure(corrupt, "RESOURCE_INTEGRITY_MISMATCH");
+      expect(corrupt.diagnostics[0]?.message).toBe(
+        "Resource 'v7Mount' digest does not match its commitment",
+      );
+      expectPublicWording(corrupt);
+    } finally {
+      evaluator.dispose();
+    }
+
+    const missingCapability = await createEvaluator({
+      kernel: exactImportKernel({
+        id: "occtV7-custom",
+        capabilities: {
+          ...exactImportKernel().capabilities,
+          documentBodyImport: undefined,
+        },
+      }),
+    });
+    try {
+      const result = await missingCapability.evaluateImportedBody(document, {
+        resolver: () => bytes,
+      });
+      expectFailure(result, "KERNEL_CAPABILITY_MISSING");
+      expect(quotedValues(result.diagnostics[0]!.message)).toContain(
+        "occtV7-custom",
+      );
+      expectPublicWording(result);
+    } finally {
+      missingCapability.dispose();
+    }
+  });
+
   it("does not expose staged document-v7 implementation names", () => {
     const leakedNames = Object.keys(publicApi).filter(
       (name) =>
