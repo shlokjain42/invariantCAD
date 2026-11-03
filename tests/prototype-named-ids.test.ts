@@ -82,7 +82,9 @@ describe("prototype-named parameter references", () => {
     "reports a reference to a missing parameter %s as PARAMETER_MISSING",
     (name) => {
       const document = structuredClone(boxDocument()) as DesignDocument;
-      (document.nodes.body as { size: unknown[] }).size[0] = {
+      (
+        (document.nodes as Record<string, unknown>).body as { size: unknown[] }
+      ).size[0] = {
         op: "parameter",
         dimension: "length",
         id: name,
@@ -126,7 +128,9 @@ describe("prototype-named sketch IDs", () => {
       cad.extrude("solid", profile, { distance: mm(2) }),
     );
     const document = cad.build();
-    const sketchNode = document.nodes.profile as { entities: object };
+    const sketchNode = (document.nodes as Record<string, unknown>).profile as {
+      entities: object;
+    };
     expect(Object.keys(sketchNode.entities)).toEqual(
       expect.arrayContaining(["constructor", "toString", "valueOf"]),
     );
