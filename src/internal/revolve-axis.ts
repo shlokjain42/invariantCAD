@@ -18,13 +18,24 @@ function normalizedTurn(angle: number): number {
   return turn < 0 ? turn + FULL_TURN : turn;
 }
 
-/** Whether an arc's authored traversal passes through the given polar angle. */
+/**
+ * Whether an arc's authored traversal passes through the given polar angle.
+ *
+ * The start angle is first reduced to (-pi, pi] from its sine and cosine, the
+ * values the arc's start point is evaluated from. Subtracting a large
+ * unreduced angle directly rounds away the fractional turn, so the traversal
+ * would be measured from a different start than the geometry uses.
+ */
 function arcReachesAngle(curve: ResolvedArcCurve, angle: number): boolean {
   const sweep = resolvedArcSweep(curve);
+  const start = Math.atan2(
+    Math.sin(curve.startAngle),
+    Math.cos(curve.startAngle),
+  );
   const travelled =
     sweep >= 0
-      ? normalizedTurn(angle - curve.startAngle)
-      : normalizedTurn(curve.startAngle - angle);
+      ? normalizedTurn(angle - start)
+      : normalizedTurn(start - angle);
   return travelled <= Math.abs(sweep);
 }
 

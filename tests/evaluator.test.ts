@@ -578,6 +578,56 @@ describe("revolve axis admission", () => {
     expect(error?.details?.minimumU).toBeCloseTo(-8, 12);
   });
 
+  it("finds the axis crossing of an arc authored with a large unwrapped angle", async () => {
+    // 1e15 + 1 rad reduces to about 3.1097 rad, just short of pi, so the arc
+    // sweeps through pi to u = -0.001 although both endpoints lie at u > 0.
+    // Subtracting the raw angle from pi rounds that fractional turn away.
+    const startAngle = 1e15 + 1;
+    const endAngle = startAngle + 0.5;
+    const radius = 10;
+    const centerU = 9.999;
+    const at = (angle: number): readonly [number, number] => [
+      centerU + radius * Math.cos(angle),
+      radius * Math.sin(angle),
+    ];
+    const [startU, startV] = at(startAngle);
+    const [endU, endV] = at(endAngle);
+    expect(Math.min(startU, endU)).toBeGreaterThan(0);
+    const { result, calls } = await revolveCalls(
+      revolveDocument((sketch) => {
+        const start = sketch.point("start", vec2(mm(startU), mm(startV)));
+        const end = sketch.point("end", vec2(mm(endU), mm(endV)));
+        const lower = sketch.point("lower", vec2(mm(40), mm(endV)));
+        const upper = sketch.point("upper", vec2(mm(40), mm(startV)));
+        const sweep = sketch.arc("sweep", {
+          center: vec2(mm(centerU), mm(0)),
+          radius: mm(radius),
+          startAngle: rad(startAngle),
+          endAngle: rad(endAngle),
+        });
+        return sketch.profile(
+          sketch.loop([
+            sweep,
+            sketch.line("bottom", end, lower),
+            sketch.line("right", lower, upper),
+            sketch.line("top", upper, start),
+          ]),
+        );
+      }),
+    );
+    expect(result.ok).toBe(false);
+    expect(calls).toBe(0);
+    const error = result.diagnostics.find((item) => item.severity === "error");
+    expect(error).toEqual(
+      expect.objectContaining({
+        code: "FEATURE_INVALID",
+        path: "/nodes/revolution/profile",
+        details: expect.objectContaining({ reason: "profile-crosses-axis" }),
+      }),
+    );
+    expect(error?.details?.minimumU).toBeCloseTo(-0.001, 9);
+  });
+
   it("rejects a circle that straddles the axis", async () => {
     const { result, calls } = await revolveCalls(
       revolveDocument((sketch) =>
