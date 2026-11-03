@@ -1,6 +1,63 @@
 import { describe, expect, it } from "vitest";
-import { createEvaluator, design, mm, plane, vec2 } from "../src/index.js";
-import { MANIFOLD_MAX_PROFILE_COORDINATE } from "../src/manifold-kernel.js";
+import {
+  createEvaluator,
+  design,
+  mm,
+  plane,
+  vec2,
+  type ResolvedProfile,
+} from "../src/index.js";
+import {
+  MANIFOLD_MAX_PROFILE_COORDINATE,
+  ManifoldKernel,
+} from "../src/manifold-kernel.js";
+
+const UNIT_SQUARE: ResolvedProfile = {
+  plane: { plane: "XY", origin: [0, 0, 0] },
+  outer: {
+    curves: [
+      { kind: "line", start: [1, 0], end: [2, 0] },
+      { kind: "line", start: [2, 0], end: [2, 1] },
+      { kind: "line", start: [2, 1], end: [1, 1] },
+      { kind: "line", start: [1, 1], end: [1, 0] },
+    ],
+  },
+  holes: [],
+};
+
+type ThrowingStage = "construct" | "extrude" | "revolve";
+
+/**
+ * A stand-in Manifold module whose CrossSection throws a raw native value (an
+ * exception-pointer number, as the WebAssembly runtime does) at one stage.
+ */
+function throwingManifoldModule(stage: ThrowingStage) {
+  const deletes: number[] = [];
+  let created = 0;
+  class CrossSection {
+    readonly #index: number;
+    constructor() {
+      if (stage === "construct") throw 107360;
+      this.#index = created;
+      created += 1;
+      deletes[this.#index] = 0;
+    }
+    extrude(): never {
+      throw 108952;
+    }
+    revolve(): never {
+      throw 109504;
+    }
+    delete(): void {
+      deletes[this.#index] = (deletes[this.#index] ?? 0) + 1;
+    }
+  }
+  return {
+    module: { CrossSection } as unknown as ConstructorParameters<typeof ManifoldKernel>[0],
+    deletes,
+    created: () => created,
+  };
+}
 
 function squarePlate(halfExtent: number) {
   const cad = design("bounded-plate");
@@ -63,4 +120,40 @@ describe("Manifold profile coordinate ceiling", () => {
       evaluator.dispose();
     }
   });
+});
+
+describe("Manifold native failures", () => {
+  const extrudeOptions = {
+    distance: 1,
+    symmetric: false,
+    twist: 0,
+    scaleTop: [1, 1] as const,
+    divisions: 0,
+  };
+
+  it.each([
+    ["construct", "extrude", /Manifold cross section failed with a native exception/u],
+    ["construct", "revolve", /Manifold cross section failed with a native exception/u],
+    ["extrude", "extrude", /Manifold extrude failed with a native exception/u],
+    ["revolve", "revolve", /Manifold revolve failed with a native exception/u],
+  ] as const)(
+    "names the operation when %s throws a raw value during %s",
+    (stage, operation, message) => {
+      const fake = throwingManifoldModule(stage);
+      const kernel = new ManifoldKernel(fake.module);
+      let thrown: unknown;
+      try {
+        if (operation === "extrude") kernel.extrude(UNIT_SQUARE, extrudeOptions);
+        else kernel.revolve(UNIT_SQUARE, { angle: Math.PI });
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(Error);
+      expect((thrown as Error).message).toMatch(message);
+      // A section is created unless construction itself failed, and the one
+      // that was created is released exactly once.
+      expect(fake.created()).toBe(stage === "construct" ? 0 : 1);
+      expect(fake.deletes).toEqual(stage === "construct" ? [] : [1]);
+    },
+  );
 });
