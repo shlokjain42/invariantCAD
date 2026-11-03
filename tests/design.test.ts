@@ -1295,6 +1295,11 @@ describe("configuration builders", () => {
     });
     expect(() => escaped!.parameter(height, mm(2))).toThrow(/closed/);
     expect(() => escaped!.instanceSuppressed(assembly, "first")).toThrow(/closed/);
+    expect(() =>
+      cad.configuration("flag", (configuration) =>
+        configuration.instanceSuppressed(assembly, "first", "yes" as never),
+      ),
+    ).toThrow(/must be a boolean/);
     expect(() => escaped!.partMaterial(part, steel)).toThrow(/closed/);
     expect(cad.build().configurations).toEqual({
       d: { parameterOverrides: { w: mm(40).ir } },

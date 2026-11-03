@@ -927,6 +927,11 @@ export class ConfigurationBuilder {
   ): this {
     assertConfigurationBuilderOpen(this);
     const stableId = this.owner.assertAssemblyInstance(assembly, instanceId);
+    const flag = optionalBoolean(
+      suppressed,
+      true,
+      `Configuration suppression of '${assembly.node}/${stableId}'`,
+    );
     let instances = this.instanceSuppressionRecords[assembly.node];
     if (instances === undefined) {
       instances = Object.create(null) as Record<EntityId, boolean>;
@@ -937,7 +942,7 @@ export class ConfigurationBuilder {
         `Duplicate configuration instance override '${assembly.node}/${stableId}'`,
       );
     }
-    instances[stableId] = suppressed;
+    instances[stableId] = flag;
     return this;
   }
 
