@@ -1268,9 +1268,6 @@ function scanData(
         }
         if (scanDataRecord(scanner, metadata, replacements)) {
           productCount += 1;
-          if (productCount !== 1) {
-            throw multipleProductsRefusal();
-          }
         }
         records += 1;
         scanner.skipTrivia();
@@ -1284,13 +1281,16 @@ function scanData(
     } else {
       if (scanDataRecord(scanner, metadata, replacements)) {
         productCount += 1;
-        if (productCount !== 1) {
-          throw multipleProductsRefusal();
-        }
       }
     }
     scanner.skipTrivia();
     scanner.expectCode(0x3b, "';'");
+  }
+  // A second product is reported only after the whole DATA section has been
+  // scanned, so every entity, scan, and input limit applies to the complete
+  // document before a caller may fall back to the native bytes.
+  if (productCount > 1) {
+    throw multipleProductsRefusal();
   }
   if (productCount !== 1) {
     throw new OcctStepTypeError(

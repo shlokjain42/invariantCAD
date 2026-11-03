@@ -5213,8 +5213,22 @@ class OcctKernel implements GeometryKernel {
             ) {
               // No strong contract was requested: keep the weak native
               // exchange bytes for shapes OCCT writes as several products.
+              // The scan above already applied the entity, scan, and input
+              // limits to the whole document; apply the output ceiling too.
               checkOcctSignal(capturedContext.signal);
-              return encodeUtf8(nativeSource);
+              const weakBytes = encodeUtf8(nativeSource);
+              if (weakBytes.byteLength > request.maxOutputBytes) {
+                throwOcctStepExportRefusal(
+                  "RESOURCE_LIMIT_EXCEEDED",
+                  `OCCT STEP export exceeds maxOutputBytes ${request.maxOutputBytes}`,
+                  {
+                    resource: "maxOutputBytes",
+                    limit: request.maxOutputBytes,
+                    actual: weakBytes.byteLength,
+                  },
+                );
+              }
+              return weakBytes;
             }
             throwOcctStepExportRefusal(
               "EXPORT_UNSUPPORTED",
