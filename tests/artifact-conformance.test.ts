@@ -733,6 +733,65 @@ describe("kernel shape-artifact codec audit", () => {
     ).toBe(2_048);
   });
 
+  it("uses the artifact-cache canonical UTF-8 identity ceiling for formats", async () => {
+    const boundaryCapabilities: KernelShapeArtifactCapabilities =
+      Object.freeze({ ...ARTIFACT_CAPABILITIES, format: "é".repeat(128) });
+    const boundaryHarness = new SyntheticHarness("none", boundaryCapabilities);
+    const accepted = await auditKernelShapeArtifactCodec(
+      await optionsFor(boundaryHarness, "candidate"),
+    );
+    expect(accepted.ok, JSON.stringify(accepted.diagnostics)).toBe(true);
+    boundaryHarness.expectFullyDisposed();
+
+    // Each identity is 256 or fewer UTF-16 code units, so a code-unit count
+    // admitted it even though the artifact-cache protocol never can.
+    for (const format of ["é".repeat(129), "format-\ud800", "\udc00-format"]) {
+      const capabilities: KernelShapeArtifactCapabilities = Object.freeze({
+        ...ARTIFACT_CAPABILITIES,
+        format,
+      });
+      const harness = new SyntheticHarness("none", capabilities);
+      const rejected = await auditKernelShapeArtifactCodec(
+        await optionsFor(harness, "candidate"),
+      );
+      expectFailure(rejected, "ARTIFACT_CACHE_ENTRY_INVALID");
+      expect(harness.runtimes).toHaveLength(0);
+
+      // A malformed codec declaration is refused even when the caller's
+      // expected identity is itself well formed.
+      const codecHarness = new SyntheticHarness("none", capabilities);
+      const malformedCodec = await auditKernelShapeArtifactCodec(
+        await optionsFor(codecHarness, "candidate", {
+          expectedIdentity: {
+            kernelId: KERNEL_ID,
+            artifact: ARTIFACT_CAPABILITIES,
+          },
+        }),
+      );
+      expectFailure(malformedCodec, "ARTIFACT_CACHE_ENTRY_INVALID");
+      expect(malformedCodec.ok ? "" : malformedCodec.diagnostics[0]?.message)
+        .toMatch(/codec is incomplete or malformed/u);
+      codecHarness.expectFullyDisposed();
+    }
+  });
+
+  it.each([
+    ["multibyte kernel ID over the byte ceiling", "é".repeat(129)],
+    ["lone-surrogate kernel ID", "kernel-\ud800"],
+  ] as const)(
+    "rejects a %s before creating a runtime",
+    async (_label, kernelId) => {
+      const harness = new SyntheticHarness();
+      const result = await auditKernelShapeArtifactCodec(
+        await optionsFor(harness, "candidate", {
+          expectedIdentity: { kernelId, artifact: ARTIFACT_CAPABILITIES },
+        }),
+      );
+      expectFailure(result, "ARTIFACT_CACHE_ENTRY_INVALID");
+      expect(harness.runtimes).toHaveLength(0);
+    },
+  );
+
   it.each([
     ["kernel ID", { kernelId: "other-kernel", artifact: ARTIFACT_CAPABILITIES }],
     [

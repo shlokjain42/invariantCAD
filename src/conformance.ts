@@ -1,4 +1,5 @@
 import {
+  ARTIFACT_CACHE_MAX_IDENTITY_BYTES,
   inspectKernelShapeArtifactSupport,
   type KernelShapeArtifactSupportInspection,
 } from "./artifact-cache.js";
@@ -650,7 +651,10 @@ function captureIdentity(
     if (
       !isPlainRecord(raw) ||
       !exactKeys(raw, ["kernelId", "artifact"]) ||
-      !boundedString(raw.kernelId, 256) ||
+      !isCanonicalUtf8StringWithin(
+        raw.kernelId,
+        ARTIFACT_CACHE_MAX_IDENTITY_BYTES,
+      ) ||
       !isPlainRecord(raw.artifact) ||
       !exactKeys(raw.artifact, [
         "protocolVersion",
@@ -659,7 +663,10 @@ function captureIdentity(
         "compatibilityFingerprint",
       ]) ||
       raw.artifact.protocolVersion !== KERNEL_SHAPE_ARTIFACT_PROTOCOL_VERSION ||
-      !boundedString(raw.artifact.format, 256) ||
+      !isCanonicalUtf8StringWithin(
+        raw.artifact.format,
+        ARTIFACT_CACHE_MAX_IDENTITY_BYTES,
+      ) ||
       typeof raw.artifact.formatVersion !== "number" ||
       !Number.isSafeInteger(raw.artifact.formatVersion) ||
       raw.artifact.formatVersion < 1 ||
@@ -1196,7 +1203,10 @@ function normalizeCandidateCapabilities(
         "compatibilityFingerprint",
       ]) ||
       value.protocolVersion !== KERNEL_SHAPE_ARTIFACT_PROTOCOL_VERSION ||
-      !boundedString(value.format, 256) ||
+      !isCanonicalUtf8StringWithin(
+        value.format,
+        ARTIFACT_CACHE_MAX_IDENTITY_BYTES,
+      ) ||
       typeof value.formatVersion !== "number" ||
       !Number.isSafeInteger(value.formatVersion) ||
       value.formatVersion < 1 ||

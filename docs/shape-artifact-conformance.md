@@ -164,6 +164,13 @@ the runtime under test:
 - backend-owned format version; and
 - compatibility fingerprint.
 
+Both modes validate these fields with the artifact-cache protocol's own rules,
+for the expected identity and for a candidate codec's declaration alike: the
+kernel ID and format must be nonempty, well-formed UTF-8 of at most `256`
+bytes, and the fingerprint at most `2,048` bytes. Unpaired UTF-16 surrogates
+are rejected rather than replaced. An identity the cache could never advertise
+or key therefore cannot pass a candidate audit either.
+
 The compatibility fingerprint is not a topology-signature fingerprint or a
 friendly runtime label. It must identify every implementation, native/WASM
 runtime, serialization format, tolerance, option, and semantic choice that can
