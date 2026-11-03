@@ -1321,4 +1321,33 @@ describe("CLI", () => {
       await rm(directory, { recursive: true, force: true });
     }
   }, 30_000);
+
+  it("infers export formats from case-insensitive extensions and the .brp alias", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "invariantcad-cli-"));
+    try {
+      const cad = design("cli-extensions");
+      cad.output(
+        "solid",
+        cad.box("solid", { size: vec3(mm(2), mm(3), mm(4)) }),
+      );
+      const documentPath = join(directory, "model.json");
+      await writeFile(documentPath, stringifyDocument(cad.build()));
+      const cases = [
+        ["model.STP", "ISO-10303-21"],
+        ["model.brp", "CASCADE Topology"],
+        ["model.Brep", "CASCADE Topology"],
+        ["model.OBJ", "\nv "],
+      ] as const;
+      for (const [name, marker] of cases) {
+        const outputPath = join(directory, name);
+        const result = invokeCli(["export", documentPath, "--to", outputPath]);
+        expect(result.stderr, name).toBe("");
+        expect(result.status, name).toBe(0);
+        expect(result.stdout.trim(), name).toBe(`Wrote ${outputPath}`);
+        expect(await readFile(outputPath, "utf8"), name).toContain(marker);
+      }
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, 60_000);
 });
