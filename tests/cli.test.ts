@@ -1166,7 +1166,7 @@ describe("CLI", () => {
         cad.box("solid", { size: vec3(mm(1), mm(1), mm(1)) }),
       );
       const hostileName =
-        "evil\u001b[2J\u001b]0;pwned\u0007\nValid InvariantCAD v6 document: other\u009b\u2028";
+        "evil\u001b[2J\u001b]0;pwned\u0007\nValid InvariantCAD v6 document: other\u009b\u2028\u202e\u2066";
       const documentValue = { ...cad.build(), name: hostileName };
       const documentPath = join(directory, "hostile.json");
       await writeFile(documentPath, stringifyDocument(documentValue));
@@ -1175,7 +1175,7 @@ describe("CLI", () => {
       expect(validated.stderr).toBe("");
       expect(validated.status).toBe(0);
       expect(validated.stdout).toBe(
-        "Valid InvariantCAD v6 document: evil\\u001b[2J\\u001b]0;pwned\\u0007\\u000aValid InvariantCAD v6 document: other\\u009b\\u2028\n",
+        "Valid InvariantCAD v6 document: evil\\u001b[2J\\u001b]0;pwned\\u0007\\u000aValid InvariantCAD v6 document: other\\u009b\\u2028\\u202e\\u2066\n",
       );
 
       const brokenPath = join(directory, "broken.json");
@@ -1195,6 +1195,51 @@ describe("CLI", () => {
       for (const line of rejected.stderr.trimEnd().split("\n")) {
         expect(line).toMatch(/^ERROR [A-Z_]+/u);
       }
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("escapes terminal controls inside inspect and bom JSON strings", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "invariantcad-cli-"));
+    try {
+      const cad = design("cli-json-controls");
+      cad.output(
+        "item",
+        cad.part("item", cad.box("solid", { size: vec3(mm(1), mm(2), mm(3)) })),
+      );
+      // JSON.stringify escapes C0 controls itself but leaves DEL, C1 controls,
+      // line and paragraph separators, and bidi controls raw.
+      const hostile = "item\u007f\u009b\u2028\u202e\u2066";
+      const documentPath = join(directory, "hostile.json");
+      await writeFile(
+        documentPath,
+        stringifyDocument(cad.build()).replaceAll(
+          '"item"',
+          JSON.stringify(hostile),
+        ),
+      );
+      const unsafe = /[\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/u;
+
+      const inspected = invokeCli(["inspect", documentPath]);
+      expect(inspected.stderr).toBe("");
+      expect(inspected.status).toBe(0);
+      expect(inspected.stdout).not.toMatch(unsafe);
+      expect(inspected.stdout).toContain(
+        '"item\\u007f\\u009b\\u2028\\u202e\\u2066": {',
+      );
+      expect(
+        Object.keys(JSON.parse(inspected.stdout) as Record<string, unknown>),
+      ).toEqual([hostile]);
+
+      const bom = invokeCli(["bom", documentPath, "--output", hostile]);
+      expect(bom.stderr).toBe("");
+      expect(bom.status).toBe(0);
+      expect(bom.stdout).not.toMatch(unsafe);
+      expect(JSON.parse(bom.stdout)).toMatchObject({
+        output: hostile,
+        items: [{ partNode: hostile, quantity: 1 }],
+      });
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

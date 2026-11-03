@@ -179,5 +179,8 @@ validated before the selected geometry kernel is initialized.
 Diagnostics are written to stderr as `SEVERITY CODE path: message`. In the
 unreleased 0.2 line, control characters and the other terminal-unsafe
 characters described under [Validate](#validate) are escaped as `\uXXXX` in
-paths and messages. Machine integrations should prefer the TypeScript API when
-they need complete structured diagnostic details rather than parsing CLI text.
+paths and messages. The same characters inside `inspect` and `bom` JSON strings
+are written as `\uXXXX` escapes, so the output still parses to the same values;
+the 0.1.1 CLI escapes only the controls that `JSON.stringify` escapes. Machine
+integrations should prefer the TypeScript API when they need complete
+structured diagnostic details rather than parsing CLI text.

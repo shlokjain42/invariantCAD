@@ -251,10 +251,23 @@ const TERMINAL_UNSAFE_CHARACTERS =
  * when untrusted document text is echoed, so each report stays on its line.
  */
 function terminalSafe(text: string): string {
-  return text.replace(
-    TERMINAL_UNSAFE_CHARACTERS,
-    (character) =>
-      `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  return text.replace(TERMINAL_UNSAFE_CHARACTERS, unicodeEscape);
+}
+
+function unicodeEscape(character: string): string {
+  return `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`;
+}
+
+// JSON.stringify escapes C0 controls but leaves these raw. They can occur only
+// inside JSON strings, where a \uXXXX escape keeps the parsed value unchanged.
+const JSON_TERMINAL_UNSAFE_CHARACTERS =
+  /[\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/gu;
+
+/** Pretty-prints JSON with untrusted strings made safe for a terminal. */
+function terminalSafeJson(value: unknown): string {
+  return JSON.stringify(value, null, 2).replace(
+    JSON_TERMINAL_UNSAFE_CHARACTERS,
+    unicodeEscape,
   );
 }
 
@@ -650,7 +663,7 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
             measurements(evaluated.value.output(name)),
           ]),
         );
-        process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+        process.stdout.write(`${terminalSafeJson(report)}\n`);
         return 0;
       }
       if (args.command === "bom") {
@@ -675,15 +688,11 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
           return 1;
         }
         process.stdout.write(
-          `${JSON.stringify(
-            {
-              output: outputName,
-              ...bom.value,
-              diagnostics: bom.diagnostics,
-            },
-            null,
-            2,
-          )}\n`,
+          `${terminalSafeJson({
+            output: outputName,
+            ...bom.value,
+            diagnostics: bom.diagnostics,
+          })}\n`,
         );
         return 0;
       }
