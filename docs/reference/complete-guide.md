@@ -31,8 +31,9 @@ public package entry points.
 
 The npm package contains the TypeScript API and a pinned standalone Manifold
 core runtime, and it depends on stock `occt-wasm` 3.8.0; it does not contain
-the InvariantCAD-owned facade runtime or its local compliance bundle. No facade bundle has been published to npm yet, and
-InvariantCAD never downloads one implicitly.
+the InvariantCAD-owned facade runtime or its local compliance bundle. No facade
+bundle has been published to npm yet, and InvariantCAD never downloads one
+implicitly.
 
 ## Quick start
 
@@ -226,7 +227,7 @@ Explicit `wasm`, `moduleFactory`, and `attestedRuntime` initialization retains
 weak raw STEP export and omits this strong envelope until that exact writer
 artifact is separately qualified.
 
-The backend is explicitly selected; a design document never contains OCCT handles or backend-specific objects. The default `createOcctKernel()` loads stock `occt-wasm` and supports the exact geometry features listed below except draft, but its Boolean, fillet/chamfer, and shell/offset topology history is partial. The stronger capabilities are advertised only when a matched InvariantCAD-owned facade passes the exact facade probe, which recognizes ABI 0.2 through 0.9. Every recognized owned facade advertises draft with its exact evolution; ABI 0.3 and later add the stronger major multi-arc/eccentric-profile composite guarantees; ABI 0.4 adds complete exact multi-input Boolean evolution, ABI 0.5 fillet/chamfer evolution, and ABI 0.6 shell/offset evolution. The repository builds ABI 0.9, which carries all of them. A caller can supply that pair directly through `moduleFactory` plus optional `wasm`, or preferably verify a reviewed bundle first with the Node/browser attested loader and pass its opaque `attestedRuntime`. ABI 0.9 retains the complete ABI 0.6 modeling/history surface, ABI 0.7's bounded artifact transport, and ABI 0.8's private cumulative native allocation-request budget, then adds exact owned-profile BinTools-v4 structural preflight only for the repository-private candidate; it does not advertise a shape-artifact codec. The repository can turn that local build into a verified, package-neutral bundle, but applications must still acquire and supply its runtime explicitly. See [Browser initialization](#browser-initialization) and [OCCT runtime attestation](/evaluation/occt-runtime-attestation).
+The backend is explicitly selected; a design document never contains OCCT handles or backend-specific objects. The default `createOcctKernel()` loads stock `occt-wasm` and supports the exact geometry features listed below except draft, but its Boolean, fillet/chamfer, and shell/offset topology history is partial. The stronger capabilities are advertised only when a matched InvariantCAD-owned facade passes the exact facade probe, which recognizes ABI 0.2 through 0.9. Every recognized owned facade advertises draft with its exact evolution; ABI 0.3 and later add the stronger major multi-arc/eccentric-profile composite guarantees; ABI 0.4 adds complete exact multi-input Boolean evolution, ABI 0.5 fillet/chamfer evolution, and ABI 0.6 shell/offset evolution. The repository builds ABI 0.9, which carries all of them. A caller can supply the matched JavaScript/WASM pair directly through `moduleFactory` plus optional `wasm`, or preferably verify a reviewed bundle first with the Node/browser attested loader and pass its opaque `attestedRuntime`. ABI 0.9 retains the complete ABI 0.6 modeling/history surface, ABI 0.7's bounded artifact transport, and ABI 0.8's private cumulative native allocation-request budget, then adds exact owned-profile BinTools-v4 structural preflight only for the repository-private candidate; it does not advertise a shape-artifact codec. The repository can turn that local build into a verified, package-neutral bundle, but applications must still acquire and supply its runtime explicitly. See [Browser initialization](#browser-initialization) and [OCCT runtime attestation](/evaluation/occt-runtime-attestation).
 
 In the unreleased 0.2 line, `createOcctKernel()` validates `modelingTolerance` and `tessellation` before loading WebAssembly. A non-number tolerance or a non-boolean `tessellation.relative` throws `TypeError`; a NaN, zero, negative, or infinite tolerance or deflection throws `RangeError`; every `mesh()` call checks its tessellation options the same way. 0.1.1 accepted such values. The 0.2 line also stops comparing dimensionless values with the length `modelingTolerance`: a transform scale is uniform only when its factors agree to floating-point rounding, and exact extrusion rejects any twist other than `0` and any top scale other than `[1, 1]` with `KERNEL_ERROR`, where 0.1.1 silently built an untwisted, untapered, or uniformly scaled solid when a raised tolerance covered the difference.
 
@@ -1035,8 +1036,9 @@ invariantcad inspect design.invariantcad.json --kernel occt
   accepts only `--parameters values.json`; silently ignores `--parameter`,
   unknown options, and stray arguments; exports only the first output in sorted
   name order when `--output` is omitted; prints JavaScript stack traces for
-  missing or malformed input files and for export or write failures; and writes
-  document text without escaping. See the [CLI reference](/reference/cli).
+  missing or unreadable input files, malformed parameter files, and export or
+  write failures; and writes document text without escaping. See the
+  [CLI reference](/reference/cli).
 </Note>
 
 Parameter JSON and inline `--parameter name=value` values use base units: millimetres, radians, `kg/mm^3` mass density, and unitless scalars. Repeat `--parameter` for multiple finite JSON-number overrides. Inline names are exact stored parameter keys; splitting at the final `=` keeps keys containing `=` addressable for directly evaluable frozen legacy documents. Use the attached `--parameter=-legacy-key=5` form when a stored key begins with `-`. Choose either inline overrides or one `--parameters` JSON file; mixing them is a usage error. Runtime overrides take precedence over the selected configuration and document defaults. `--configuration <id>` selects the same named variant for `inspect`, `bom`, and `export`; `validate` checks every stored configuration without selecting one.
