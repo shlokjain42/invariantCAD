@@ -1503,6 +1503,7 @@ describe("resolved sketch profile containment", () => {
       }
 
       const outside = await evaluator.evaluate(bracket(-5));
+      if (outside.ok) outside.value.dispose();
       expect(outside.ok).toBe(false);
       expect(diagnosticWithCode(outside, "SKETCH_NO_CLOSED_REGION")).toEqual(
         expect.objectContaining({

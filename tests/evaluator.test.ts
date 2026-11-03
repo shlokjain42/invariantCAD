@@ -611,32 +611,40 @@ describe("revolve axis admission", () => {
   it("revolves a negative-side profile into the same solid as its mirror image", async () => {
     for (const angle of [deg(90), deg(270)]) {
       const positive = await evaluate(revolveDocument(rectangleAt(30), angle));
-      const negative = await evaluate(revolveDocument(rectangleAt(-30), angle));
       try {
-        const positiveMeasure = positive.output("solid").measure();
-        const negativeMeasure = negative.output("solid").measure();
-        expect(negativeMeasure.volume).toBeCloseTo(positiveMeasure.volume, 6);
-        // Revolving the mirrored profile is the positive revolution turned
-        // half a turn about the axis: (x, y, z) -> (-x, y, -z).
-        expect(negativeMeasure.boundingBox.min[0]).toBeCloseTo(
-          -positiveMeasure.boundingBox.max[0],
-          6,
+        const negative = await evaluate(
+          revolveDocument(rectangleAt(-30), angle),
         );
-        expect(negativeMeasure.boundingBox.max[0]).toBeCloseTo(
-          -positiveMeasure.boundingBox.min[0],
-          6,
-        );
-        expect(negativeMeasure.boundingBox.min[2]).toBeCloseTo(
-          -positiveMeasure.boundingBox.max[2],
-          6,
-        );
-        expect(negativeMeasure.boundingBox.max[2]).toBeCloseTo(
-          -positiveMeasure.boundingBox.min[2],
-          6,
-        );
+        try {
+          const positiveMeasure = positive.output("solid").measure();
+          const negativeMeasure = negative.output("solid").measure();
+          expect(negativeMeasure.volume).toBeCloseTo(
+            positiveMeasure.volume,
+            6,
+          );
+          // Revolving the mirrored profile is the positive revolution turned
+          // half a turn about the axis: (x, y, z) -> (-x, y, -z).
+          expect(negativeMeasure.boundingBox.min[0]).toBeCloseTo(
+            -positiveMeasure.boundingBox.max[0],
+            6,
+          );
+          expect(negativeMeasure.boundingBox.max[0]).toBeCloseTo(
+            -positiveMeasure.boundingBox.min[0],
+            6,
+          );
+          expect(negativeMeasure.boundingBox.min[2]).toBeCloseTo(
+            -positiveMeasure.boundingBox.max[2],
+            6,
+          );
+          expect(negativeMeasure.boundingBox.max[2]).toBeCloseTo(
+            -positiveMeasure.boundingBox.min[2],
+            6,
+          );
+        } finally {
+          negative.dispose();
+        }
       } finally {
         positive.dispose();
-        negative.dispose();
       }
     }
   });

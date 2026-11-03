@@ -252,6 +252,7 @@ describe("OCCT exact-kernel integration", { timeout: 30_000 }, () => {
         return cad.build();
       };
       const straddling = await evaluator.evaluate(revolved(0));
+      if (straddling.ok) straddling.value.dispose();
       expect(straddling.ok).toBe(false);
       expect(
         straddling.diagnostics.filter((item) => item.severity === "error"),
