@@ -28,11 +28,14 @@ a single unplaced occurrence reports the same area, bounds, and tolerance as
 its part; see
 [assembly aggregation](/analysis/measurements#assembly-aggregation). Volume and
 inertia normally come from the same native shape; the documented validated
-analytic volume-override path for admitted sweep and revolve cases replaces the
-volume and rescales density-one inertia. Genus is currently `null`, not zero:
-the stock and owned facades do not expose the degenerate-edge predicate needed
-to evaluate the B-Rep Euler formula correctly for spheres, cones, seams, holes,
-and disconnected shells.
+analytic volume-override path for admitted circular-arc and composite sweep
+results, and for transforms of those results, replaces the volume and rescales
+density-one inertia. Revolve and other features use the native volume. A
+compound that repeats the same solid occurrence counts it once per occurrence
+in volume, inertia, and surface area alike, matching `classifyBodyResult()`.
+Genus is currently `null`, not zero: the stock and owned facades do not expose
+the degenerate-edge predicate needed to evaluate the B-Rep Euler formula
+correctly for spheres, cones, seams, holes, and disconnected shells.
 
 ## Load a WASM source explicitly
 
