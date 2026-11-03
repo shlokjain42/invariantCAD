@@ -1060,6 +1060,16 @@ function analyzeSelectionOrThrow<K extends TopologyKind>(
         );
         return new Set([...byKey.keys()].filter((key) => !excluded.has(key)));
       }
+      default: {
+        // Typed callers cannot get here. Untyped IR with a missing or unknown
+        // operator must fail instead of resolving to an empty match set.
+        const op: unknown = (query as { readonly op?: unknown }).op;
+        invalid(
+          "Topology query operator is missing or unknown",
+          queryContext,
+          typeof op === "string" ? { op } : {},
+        );
+      }
     }
   };
 

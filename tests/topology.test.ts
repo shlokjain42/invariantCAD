@@ -1298,6 +1298,53 @@ describe("semantic topology selections", () => {
     });
   });
 
+  it("rejects missing and unknown query operators instead of matching nothing", () => {
+    const context: TopologyResolutionContext = {
+      evaluate: (expression) =>
+        expression.op === "literal" ? expression.value : Number.NaN,
+      node: "rounded",
+      path: "/nodes/rounded/edges",
+    };
+    const cardinality = { min: 1, max: 1 };
+    const edges = (query: unknown) => ({ topology: "edge", query, cardinality });
+    const root = "/nodes/rounded/edges/query";
+    // [label, selection, reported path, reported op]
+    const malformed = [
+      ["and with an operand without op", edges({ op: "and", queries: [{}] }), `${root}/queries/0`, undefined],
+      ["and with an unknown first operand", edges({ op: "and", queries: [{ op: "bogus" }, { op: "all" }] }), `${root}/queries/0`, "bogus"],
+      ["and with a non-object operand", edges({ op: "and", queries: [42] }), `${root}/queries/0`, undefined],
+      ["or with an operand without op", edges({ op: "or", queries: [{ op: "all" }, {}] }), `${root}/queries/1`, undefined],
+      ["not with an unknown operand", edges({ op: "not", query: { op: "bogus" } }), `${root}/query`, "bogus"],
+      ["unknown root operator", edges({ op: "bogus" }), root, "bogus"],
+      [
+        "nested selection without op",
+        edges({ op: "adjacentTo", selection: { topology: "face", query: {}, cardinality } }),
+        `${root}/selection/query`,
+        undefined,
+      ],
+    ] as const;
+    for (const [label, selection, path, op] of malformed) {
+      for (const run of [resolveTopologySelection, explainTopologySelection]) {
+        const result = run(
+          selection as unknown as TopologySelectionIR<"edge">,
+          snapshot(),
+          context,
+        );
+        expect(result.ok, label).toBe(false);
+        expect(result.diagnostics, label).toEqual([
+          {
+            code: "TOPOLOGY_SELECTOR_INVALID",
+            severity: "error",
+            message: "Topology query operator is missing or unknown",
+            node: "rounded",
+            path,
+            details: op === undefined ? {} : { op },
+          },
+        ]);
+      }
+    }
+  });
+
   it("distinguishes ambiguous, missing, incomplete-history, and invalid snapshots", () => {
     const context = {
       evaluate: (expression: any): number => expression.value,

@@ -125,9 +125,16 @@ else stays a failed result:
 - an exhausted operational limit
 - a malformed kernel snapshot (`KERNEL_ERROR` with `protocolViolation: true`)
 
-A structurally malformed selection is always reported as
-`TOPOLOGY_SELECTOR_INVALID`, never as a kernel fault, even when it is detected
-before the snapshot is read.
+Selector input is never reported as a kernel fault. Resolution rejects a
+missing or unknown query operator, an `and` or `or` without operands, a `not`
+without its query, an `adjacentTo` without its selection, an invalid count, a
+zero `normal` or `direction` vector, and an invalid tolerance with
+`TOPOLOGY_SELECTOR_INVALID`, whether it finds the problem before or after
+reading the snapshot. The direct functions do not schema-check every leaf
+field, so hand-built IR with a missing leaf field, such as a `surface` query
+without a kind, can match nothing and report a missing selection instead.
+Selections built with the `topology` builders or read by `parseDocument` are
+always well formed.
 
 Persistent resolution distinguishes:
 
