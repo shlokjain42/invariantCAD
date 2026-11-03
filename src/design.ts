@@ -427,6 +427,9 @@ function ownedTopologySelectionIR<K extends TopologyKind>(
           // Queue one at a time: spreading a large operand list could exceed
           // the engine's argument limit.
           for (let index = 0; index < length; index += 1) {
+            if (!Object.hasOwn(queries, index)) {
+              throw new TypeError(`${label} must contain dense query lists`);
+            }
             enqueue(field(queries, index));
           }
         }

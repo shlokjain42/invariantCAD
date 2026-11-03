@@ -588,6 +588,15 @@ describe("builder expression inputs", () => {
         distance: mm(1),
       }),
     ).toThrow(/cannot contain cyclic topology queries/);
+    const holes: unknown[] = [operand, operand, operand];
+    delete holes[1];
+    const sparse = { op: "or", queries: Object.freeze(holes) };
+    expect(() =>
+      cad.fillet("sparse", base, {
+        edges: new Selection("edge", Object.freeze(sparse), template.ir.cardinality),
+        radius: mm(1),
+      }),
+    ).toThrow(/must contain dense query lists/);
     expect(cad.build().nodes).not.toHaveProperty("cyclic");
   });
 
