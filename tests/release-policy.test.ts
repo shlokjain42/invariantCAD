@@ -324,6 +324,17 @@ describe("release verification", () => {
     expect(releaseBody(lines)).toBe(absoluteGuides(lines));
   });
 
+  it("lets a list item end a quoted paragraph whose line has no quote marker", () => {
+    // CommonMark, and GitHub's renderer, close the quote here and start an
+    // ordered list at 2, so the link is real rather than inline code.
+    expect(() => releaseBody(["> Try `text", "2. [changes](../../CHANGELOG.md)`"])).toThrow(
+      "Release notes link '../../CHANGELOG.md' leaves the documentation site",
+    );
+    expect(releaseBody(["> Try `text", "> 2. [example](/not-a-link)`"])).toBe(
+      "> Try `text\n> 2. [example](/not-a-link)`",
+    );
+  });
+
   it("rejects a release-notes link that leaves the documentation site", () => {
     const page = '---\ntitle: "x"\n---\n\nSee [changes](../../CHANGELOG.md).\n';
     expect(() => releaseNotesBody(page)).toThrow(
