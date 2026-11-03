@@ -342,8 +342,8 @@ function parseReleaseManifest(
   let text: string;
   let parsed: unknown;
   try {
-    // Keep a leading U+FEFF so a BOM-prefixed copy fails the exact canonical
-    // comparison below instead of aliasing the canonical declared identity.
+    // Keep a leading U+FEFF so a BOM-prefixed copy is rejected as noncanonical
+    // (JSON.parse refuses it) instead of decoding to the canonical text.
     text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
       bytes,
     );
