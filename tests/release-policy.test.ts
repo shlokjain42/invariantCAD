@@ -164,6 +164,27 @@ describe("release verification", () => {
     ]);
   });
 
+  it("accepts the just-released state, whose Unreleased section is empty", () => {
+    const released = prepareRelease(fixture, "1.3.0", "2026-11-03");
+    expect(released.changelog).toContain("## [Unreleased]\n\n## [1.3.0] - 2026-11-03\n");
+    expect(releaseProblems({ ...released, releaseNotes: released.releaseNotes }, "1.3.0")).toEqual(
+      [],
+    );
+    expect(() => prepareRelease(released, "1.4.0", "2026-11-04")).toThrow(
+      /no Unreleased entries/u,
+    );
+  });
+
+  it("requires a real date on the version heading", () => {
+    const prepared = prepareRelease(fixture, "1.3.0", "2026-11-03");
+    for (const heading of ["## [1.3.0] - 2026-13-03", "## [1.3.0] - 2026-11-03 (yanked)"]) {
+      const changelog = prepared.changelog.replace("## [1.3.0] - 2026-11-03", heading);
+      expect(
+        releaseProblems({ ...prepared, changelog, releaseNotes: prepared.releaseNotes }, "1.3.0"),
+      ).toContain("CHANGELOG.md has no dated '## [1.3.0] - YYYY-MM-DD' section");
+    }
+  });
+
   it("rejects release notes without frontmatter or body", () => {
     expect(() => releaseNotesBody("# Title\n")).toThrow(/frontmatter/u);
     expect(() => releaseNotesBody("---\ntitle: x\n")).toThrow(/not closed/u);
@@ -195,10 +216,18 @@ describe("repository release state", () => {
     expect(body).not.toMatch(/^title:/mu);
   });
 
-  it("can prepare the next minor release from the current Unreleased entries", () => {
+  it("keeps the changelog preparable for the next release", () => {
+    // A merged release legitimately leaves Unreleased empty, so add one entry
+    // rather than depending on the current Unreleased contents.
+    const heading = "\n## [Unreleased]\n";
+    expect(sources.changelog.split(heading)).toHaveLength(2);
+    const changelog = sources.changelog.replace(
+      heading,
+      `${heading}\n- Synthetic entry for the next release.\n`,
+    );
     const [major, minor] = parseStableVersion(currentVersion);
     const next = `${major}.${minor + 1}.0`;
-    const prepared = prepareRelease(sources, next, "2026-11-03");
+    const prepared = prepareRelease({ ...sources, changelog }, next, "2026-11-03");
     expect(
       releaseProblems({ ...prepared, releaseNotes: prepared.releaseNotes }, next),
     ).toEqual([]);

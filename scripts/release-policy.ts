@@ -237,18 +237,18 @@ function splitUnreleased(changelog: string): UnreleasedSplit {
 }
 
 function changelogSection(changelog: string, version: string): string | undefined {
-  const heading = new RegExp(
-    `\\n## \\[${version.replaceAll(".", "\\.")}\\] - (\\d{4}-\\d{2}-\\d{2})\\n`,
-    "u",
-  );
-  const match = heading.exec(changelog);
-  if (match === null || match[1] === undefined) return undefined;
+  const headingPrefix = `${SECTION_HEADING_PREFIX}${version}] - `;
+  const headingStart = changelog.indexOf(headingPrefix);
+  if (headingStart === -1) return undefined;
+  const dateStart = headingStart + headingPrefix.length;
+  const date = changelog.slice(dateStart, dateStart + "YYYY-MM-DD".length);
+  if (changelog[dateStart + date.length] !== "\n") return undefined;
   try {
-    assertReleaseDate(match[1]);
+    assertReleaseDate(date);
   } catch {
     return undefined;
   }
-  const bodyStart = match.index + match[0].length;
+  const bodyStart = dateStart + date.length + 1;
   const next = changelog.indexOf(SECTION_HEADING_PREFIX, bodyStart);
   const linksStart = changelog.indexOf("\n[Unreleased]: ", bodyStart);
   const ends = [next, linksStart].filter((index) => index !== -1);
