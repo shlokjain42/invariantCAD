@@ -47,6 +47,7 @@ describe("prototype-named evaluation outputs", () => {
       const result = await evaluator.evaluate(boxDocument(), {
         outputs: [name],
       });
+      if (result.ok) result.value.dispose();
       expect(result.ok).toBe(false);
       expect(result.diagnostics).toEqual([
         expect.objectContaining({

@@ -85,7 +85,11 @@ function countingKernel(kernel: GeometryKernel): {
   return { kernel: proxy, calls };
 }
 
-function failureOf<T>(result: CadResult<T>) {
+function failureOf<T extends { dispose(): void }>(result: CadResult<T>) {
+  if (result.ok) {
+    // Release an unexpected success before the assertion fails.
+    result.value.dispose();
+  }
   expect(result.ok).toBe(false);
   if (result.ok) throw new Error("expected failure");
   return result.diagnostics;

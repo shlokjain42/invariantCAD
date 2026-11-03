@@ -43,6 +43,7 @@ describe("sketch solve failure diagnostics", () => {
     const evaluator = await createEvaluator();
     try {
       const result = await evaluator.evaluate(overConstrainedDocument());
+      if (result.ok) result.value.dispose();
       expect(result.ok).toBe(false);
       expect(summary(result.diagnostics)).toEqual([
         { code: "SKETCH_OVER_CONSTRAINED", severity: "error", node: "profile" },
@@ -78,6 +79,7 @@ describe("sketch solve failure diagnostics", () => {
     const evaluator = await createEvaluator({ sketchSolver: solver });
     try {
       const result = await evaluator.evaluate(overConstrainedDocument());
+      if (result.ok) result.value.dispose();
       expect(result.ok).toBe(false);
       expect(summary(result.diagnostics)).toEqual([
         {

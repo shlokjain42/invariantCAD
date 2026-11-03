@@ -74,6 +74,7 @@ describe("evaluation cancellation", () => {
       const result = await evaluator.evaluate(cad.build(), {
         signal: controller.signal,
       });
+      if (result.ok) result.value.dispose();
       expect(result.ok).toBe(false);
       expect(result.diagnostics).toEqual([
         expect.objectContaining({ code: "EVALUATION_ABORTED" }),
@@ -94,6 +95,7 @@ describe("evaluation cancellation", () => {
       const result = await evaluator.evaluate(twoBoxes(), {
         signal: controller.signal,
       });
+      if (result.ok) result.value.dispose();
       expect(result.ok).toBe(false);
       expect(result.diagnostics).toEqual([
         expect.objectContaining({ code: "EVALUATION_ABORTED" }),
@@ -115,6 +117,7 @@ describe("evaluation cancellation", () => {
         outputs: ["a", "b"],
         signal: controller.signal,
       });
+      if (result.ok) result.value.dispose();
       expect(result.ok).toBe(false);
       expect(result.diagnostics).toEqual([
         expect.objectContaining({ code: "EVALUATION_ABORTED" }),
@@ -137,6 +140,7 @@ describe("evaluation cancellation", () => {
         outputs: ["a"],
         signal: controller.signal,
       });
+      if (result.ok) result.value.dispose();
       expect(result.ok).toBe(false);
       expect(result.diagnostics).toEqual([
         expect.objectContaining({ code: "EVALUATION_ABORTED" }),
@@ -213,16 +217,28 @@ describe("evaluation cancellation", () => {
   it("refuses to dispose the evaluator while a cancellable evaluation is pending", async () => {
     const harness = await recordingKernel();
     const evaluator = await createEvaluator({ kernel: harness.kernel });
-    const pending = evaluator.evaluate(twoBoxes(), {
-      signal: new AbortController().signal,
-    });
-    expect(() => evaluator.dispose()).toThrow(
-      "Cannot dispose an evaluator during an evaluation",
-    );
-    const result = await pending;
-    expect(result.ok, JSON.stringify(result.diagnostics)).toBe(true);
-    if (result.ok) result.value.dispose();
-    evaluator.dispose();
+    try {
+      const pending = evaluator.evaluate(twoBoxes(), {
+        signal: new AbortController().signal,
+      });
+      let disposeError: unknown;
+      try {
+        evaluator.dispose();
+      } catch (error) {
+        disposeError = error;
+      }
+      const result = await pending;
+      try {
+        expect(disposeError).toEqual(
+          new Error("Cannot dispose an evaluator during an evaluation"),
+        );
+        expect(result.ok, JSON.stringify(result.diagnostics)).toBe(true);
+      } finally {
+        if (result.ok) result.value.dispose();
+      }
+    } finally {
+      evaluator.dispose();
+    }
   });
 
   it("still completes an evaluation without a signal inside the evaluate() call", async () => {
@@ -230,10 +246,14 @@ describe("evaluation cancellation", () => {
     const evaluator = await createEvaluator({ kernel: harness.kernel });
     try {
       const pending = evaluator.evaluate(twoBoxes());
-      expect(harness.calls).toEqual(["box", "box"]);
+      const callsInsideEvaluate = [...harness.calls];
       const result = await pending;
-      expect(result.ok).toBe(true);
-      if (result.ok) result.value.dispose();
+      try {
+        expect(callsInsideEvaluate).toEqual(["box", "box"]);
+        expect(result.ok).toBe(true);
+      } finally {
+        if (result.ok) result.value.dispose();
+      }
     } finally {
       evaluator.dispose();
     }

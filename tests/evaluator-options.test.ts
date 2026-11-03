@@ -18,6 +18,7 @@ describe("output selection and allowEmpty", () => {
           outputs: [],
           allowEmpty,
         });
+        if (result.ok) result.value.dispose();
         expect(result.ok).toBe(false);
         expect(result.diagnostics).toEqual([
           expect.objectContaining({
@@ -40,6 +41,7 @@ describe("output selection and allowEmpty", () => {
     const evaluator = await createEvaluator();
     try {
       const strict = await evaluator.evaluate(document);
+      if (strict.ok) strict.value.dispose();
       expect(strict.ok).toBe(false);
       expect(strict.diagnostics).toEqual([
         expect.objectContaining({ code: "EMPTY_RESULT", severity: "error" }),

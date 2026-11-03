@@ -81,6 +81,7 @@ describe("evaluation failure cleanup", () => {
         threeBoxes({ invalidThird: true }),
         { outputs: ["a", "b", "c"] },
       );
+      if (result.ok) result.value.dispose();
       expect(result.ok).toBe(false);
       expect(result.diagnostics).toEqual([
         expect.objectContaining({
@@ -106,19 +107,29 @@ describe("EvaluatedDesign disposal", () => {
       const result = await evaluator.evaluate(threeBoxes());
       expect(result.ok).toBe(true);
       if (!result.ok) return;
-      expect(harness.created).toHaveLength(3);
-      expect(() => result.value.dispose()).toThrow(
-        "transient release failure on call 2",
-      );
-      expect(harness.attempts).toEqual(harness.created);
-      expect(harness.released).toEqual(
-        new Set([harness.created[0], harness.created[2]]),
-      );
-      expect(() => result.value.output("a").measure()).toThrow(
-        "This evaluation result has been disposed",
-      );
-      result.value.dispose();
-      expect(harness.attempts).toHaveLength(3);
+      try {
+        expect(harness.created).toHaveLength(3);
+        expect(() => result.value.dispose()).toThrow(
+          "transient release failure on call 2",
+        );
+        expect(harness.attempts).toEqual(harness.created);
+        expect(harness.released).toEqual(
+          new Set([harness.created[0], harness.created[2]]),
+        );
+        expect(() => result.value.output("a").measure()).toThrow(
+          "This evaluation result has been disposed",
+        );
+        result.value.dispose();
+        expect(harness.attempts).toHaveLength(3);
+      } finally {
+        try {
+          // A no-op after the first dispose; releases the design if an
+          // assertion failed before it.
+          result.value.dispose();
+        } catch {
+          // The injected release failure is asserted above.
+        }
+      }
     } finally {
       evaluator.dispose();
     }

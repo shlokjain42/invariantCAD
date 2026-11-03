@@ -43,9 +43,15 @@ async function evaluatePair(offset: number) {
   const result = await evaluator.evaluate(placedPair(offset));
   expect(result.ok, JSON.stringify(result.diagnostics)).toBe(true);
   if (!result.ok) throw new Error("evaluation failed");
-  const output = result.value.output("pair");
-  expect(output).toBeInstanceOf(EvaluatedAssembly);
-  return { design: result.value, assembly: output as EvaluatedAssembly };
+  try {
+    const output = result.value.output("pair");
+    expect(output).toBeInstanceOf(EvaluatedAssembly);
+    return { design: result.value, assembly: output as EvaluatedAssembly };
+  } catch (error) {
+    // The caller owns the design only once it is returned.
+    result.value.dispose();
+    throw error;
+  }
 }
 
 describe("evaluated assembly occurrence transforms", () => {
@@ -216,6 +222,7 @@ describe("public assembly evaluation ceilings", () => {
     // a0 holds 400 parts; each of a1's instances copies those 400 records.
     // After 249 copies the evaluation holds 400 + 249 * 400 = 100,000.
     const result = await evaluator.evaluate(fanOutDocument(2, 400));
+    if (result.ok) result.value.dispose();
     expect(result.ok).toBe(false);
     expect(result.diagnostics).toEqual([
       expect.objectContaining({
@@ -238,6 +245,7 @@ describe("public assembly evaluation ceilings", () => {
       // Through a14 the evaluation stores 917,506 path segments; a15's first
       // copy adds 16 * 32,768 more.
       const result = await evaluator.evaluate(fanOutDocument(levels));
+      if (result.ok) result.value.dispose();
       expect(result.ok).toBe(false);
       expect(result.diagnostics).toEqual([
         expect.objectContaining({
@@ -259,17 +267,21 @@ describe("public assembly evaluation ceilings", () => {
     const accepted = await evaluator.evaluate(nestedChainDocument(64));
     expect(accepted.ok, JSON.stringify(accepted.diagnostics)).toBe(true);
     if (accepted.ok) {
-      expect(
-        (accepted.value.output("top") as EvaluatedAssembly).instances[0]!.id
-          .split("/"),
-      ).toHaveLength(64);
-      accepted.value.dispose();
+      try {
+        expect(
+          (accepted.value.output("top") as EvaluatedAssembly).instances[0]!.id
+            .split("/"),
+        ).toHaveLength(64);
+      } finally {
+        accepted.value.dispose();
+      }
     }
 
     // The 65th nested assembly is reached from a1 when evaluation descends
     // from a64, so the reference that would exceed the ceiling is a1's.
     for (const levels of [65, 5_000]) {
       const rejected = await evaluator.evaluate(nestedChainDocument(levels));
+      if (rejected.ok) rejected.value.dispose();
       expect(rejected.ok).toBe(false);
       const deepest = levels - 64;
       expect(rejected.diagnostics).toEqual([
@@ -298,6 +310,7 @@ describe("public assembly evaluation ceilings", () => {
     const result = await evaluator.evaluate(cad, {
       outputs: ["inner", "top"],
     });
+    if (result.ok) result.value.dispose();
     expect(result.ok).toBe(false);
     expect(result.diagnostics).toEqual([
       expect.objectContaining({
@@ -341,6 +354,7 @@ describe("public assembly evaluation ceilings", () => {
     expect(accepted.ok, JSON.stringify(accepted.diagnostics)).toBe(true);
     if (accepted.ok) accepted.value.dispose();
     const rejected = await evaluator.evaluate(chain(45));
+    if (rejected.ok) rejected.value.dispose();
     expect(rejected.ok).toBe(false);
     expect(rejected.diagnostics).toEqual([
       expect.objectContaining({
