@@ -53,13 +53,22 @@ async function loadManifold(wasmUrl?: string): Promise<ManifoldToplevel> {
     return modulePromise;
   }
   configuredWasmUrl = wasmUrl;
-  modulePromise = initializeManifold(
+  const attempt = initializeManifold(
     wasmUrl === undefined ? undefined : { locateFile: () => wasmUrl },
   ).then((module) => {
     module.setup();
     return module;
   });
-  return modulePromise;
+  modulePromise = attempt;
+  // Cache only a successful initialization. A failed attempt left no module
+  // instance, so a later call may retry with the same or a corrected URL.
+  attempt.catch(() => {
+    if (modulePromise === attempt) {
+      modulePromise = undefined;
+      configuredWasmUrl = undefined;
+    }
+  });
+  return attempt;
 }
 
 function exactPerConnectedComponentGenus(

@@ -29,9 +29,14 @@ const evaluator = await createEvaluator({
 });
 ```
 
-The runtime is initialized once per JavaScript realm. The first URL becomes the
-configured location. A later call with a different explicit URL fails because
-two incompatible global module instances would make ownership unclear.
+The runtime is initialized once per JavaScript realm (a page, worker, or
+Node.js process). The first successful initialization fixes the configured
+location: later calls without a URL reuse it, and a later call with a different
+explicit URL fails because two incompatible global module instances would make
+ownership unclear. Supply `wasmUrl` on the first initialization in each realm;
+an explicit URL after a default initialization also fails. A failed
+initialization, such as a missing asset or a network error, is not cached, so a
+later call can retry with the same or a corrected URL.
 
 ## Capabilities
 
@@ -76,9 +81,9 @@ output shapes are deleted by the owning evaluation. A kernel instance accepts
 only shapes it created: passing a shape from another `createManifoldKernel()`
 instance throws a `TypeError` and leaves the shape with its owner. Disposing
 the kernel releases every remaining live adapter shape; if a native release
-fails, the others are still released before the error is rethrown. The
-initialized Manifold module promise remains cached for the lifetime of the
-JavaScript realm.
+fails, the others are still released before the error is rethrown. A
+successfully initialized Manifold module remains cached for the lifetime of the
+JavaScript realm; a failed initialization is discarded.
 
 ## Security and provenance
 

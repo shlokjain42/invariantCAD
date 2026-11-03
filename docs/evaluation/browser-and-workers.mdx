@@ -45,6 +45,12 @@ const evaluator = await createEvaluator({
 });
 ```
 
+Pass `wasmUrl` on the first Manifold initialization in each page or worker. The
+first successful initialization fixes the location for that realm, and a later
+call with a different explicit URL fails, including one after a default
+`createEvaluator()`. A failed load, such as a 404, is not cached, so a later
+call can retry with the same or a corrected URL.
+
 For OCCT:
 
 ```ts
@@ -145,6 +151,11 @@ self.onmessage = async (event) => {
 Create it with
 `new Worker(new URL("./geometry.worker.ts", import.meta.url), { type: "module" })`
 in bundlers that support module-worker URLs.
+
+`evaluatorPromise` holds a single initialization attempt. If that attempt can
+fail in your deployment, for example because the WASM asset is missing, clear
+the cached promise when it rejects and call `createEvaluator()` again;
+InvariantCAD does not cache a failed Manifold initialization.
 
 ## Cancellation strategy
 
