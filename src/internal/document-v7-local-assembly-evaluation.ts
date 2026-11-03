@@ -32,6 +32,7 @@ import {
   admitCapturedProductDocumentBytesV7,
   captureProductDocumentV7,
   createExternalAssemblyPartViewV7,
+  createLocalAssemblyPartViewV7,
   createPreparedPartShapeOwnershipTransactionV7,
   executePreparedProductGeometryOutputsV7,
   prepareProductGeometryOutputsV7,
@@ -6461,13 +6462,23 @@ async function evaluateProductDocumentCoreV7(
           source: "local" as const,
           partNode: geometryOutput.node,
         });
+        // The selection name may be an output name or an internal selector;
+        // occurrences expose the part node identity instead.
+        const leaf = createLocalAssemblyPartViewV7(
+          part,
+          geometryOutput.node,
+        );
+        if (!leaf.ok) {
+          cleanupChildren(children);
+          return leaf;
+        }
         localAssemblyMapInsert(
           partResults,
           productComponentContextKey(
             component,
             batch.configurationId,
           ),
-          part,
+          leaf.value,
         );
         continue;
       }

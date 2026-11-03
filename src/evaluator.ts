@@ -2752,6 +2752,11 @@ type EvaluatedPartDiagnosticIdentityV7 =
       readonly output: string;
       readonly outputKind: "assembly";
       readonly childPartNode: NodeId;
+    }
+  | {
+      /** A local assembly leaf: a part node, never an authored output. */
+      readonly kind: "assemblyPart";
+      readonly partNode: NodeId;
     };
 
 type EvaluatedBodySetDiagnosticIdentityV7 =
@@ -2815,7 +2820,7 @@ function evaluatedBodySetV7DiagnosticPath(
   return identity.kind === "output"
     ? `/outputs/${importedBodyJsonPointerSegment(identity.output)}`
     : `/nodes/${importedBodyJsonPointerSegment(
-        identity.kind === "part"
+        identity.kind === "part" || identity.kind === "assemblyPart"
           ? identity.partNode
           : identity.childPartNode,
       )}/geometry`;
@@ -2837,12 +2842,17 @@ function evaluatedBodySetV7DiagnosticDetails(
           outputKind: "part",
           partNode: identity.partNode,
         }
-      : {
-          phase: PART_EVALUATION_PHASE,
-          output: identity.output,
-          outputKind: identity.outputKind,
-          childPartNode: identity.childPartNode,
-        };
+      : identity.kind === "assemblyPart"
+        ? {
+            phase: PART_EVALUATION_PHASE,
+            partNode: identity.partNode,
+          }
+        : {
+            phase: PART_EVALUATION_PHASE,
+            output: identity.output,
+            outputKind: identity.outputKind,
+            childPartNode: identity.childPartNode,
+          };
 }
 
 function evaluatedBodySetV7RuntimeCadError(
@@ -3853,25 +3863,28 @@ export class EvaluatedPartV7 {
     ) {
       const renderedFormat =
         typeof format === "string" ? format : "unsupported value";
+      const identity = this.#diagnosticIdentity;
       const value = diagnostic(
         "EXPORT_UNSUPPORTED",
-        this.#diagnosticIdentity.kind === "output"
+        identity.kind === "output"
           ? `Aggregate part export for '${this.#name}' is unsupported for ${renderedFormat}`
-          : `Aggregate part export for child part '${this.#diagnosticIdentity.childPartNode}' is unsupported for ${renderedFormat}`,
+          : identity.kind === "assemblyPart"
+            ? `Aggregate part export for part '${identity.partNode}' is unsupported for ${renderedFormat}`
+            : `Aggregate part export for child part '${identity.childPartNode}' is unsupported for ${renderedFormat}`,
         {
           severity: "error",
           node: this.#value.node,
           details:
-            this.#diagnosticIdentity.kind === "output"
+            identity.kind === "output"
               ? { output: this.#name, format: renderedFormat }
-              : {
-                  output: this.#diagnosticIdentity.output,
-                  outputKind:
-                    this.#diagnosticIdentity.outputKind,
-                  childPartNode:
-                    this.#diagnosticIdentity.childPartNode,
-                  format: renderedFormat,
-                },
+              : identity.kind === "assemblyPart"
+                ? { partNode: identity.partNode, format: renderedFormat }
+                : {
+                    output: identity.output,
+                    outputKind: identity.outputKind,
+                    childPartNode: identity.childPartNode,
+                    format: renderedFormat,
+                  },
         },
       );
       throw new CadError(value.message, [value]);
@@ -4092,6 +4105,121 @@ export class EvaluatedPartV7 {
 }
 
 /**
+ * Rebuilds one owned part as an assembly-leaf view named by its part node.
+ * Solid and body-set geometry views are renamed as well, so a planner
+ * selection name never reaches result names, export headers, or diagnostics.
+ * The view shares the exact owner, shapes, and multibody backing state.
+ */
+function createAssemblyLeafPartViewV7(
+  state: EvaluatedPartV7ViewState,
+  partNode: NodeId,
+  diagnosticIdentity: EvaluatedPartDiagnosticIdentityV7,
+  label: string,
+  selectedPart: string,
+): CadResult<EvaluatedPartV7> {
+  if (state.value.node !== partNode) {
+    return failure(
+      diagnostic(
+        "IR_INVALID",
+        `${label} does not belong to the selected ${selectedPart}`,
+        {
+          severity: "error",
+          node: partNode,
+          details: {
+            phase: PART_EVALUATION_PHASE,
+            partOwner: true,
+            selectedPartNode: partNode,
+            evaluatedPartNode: state.value.node,
+          },
+        },
+      ),
+    );
+  }
+  try {
+    state.owner.assertLive();
+  } catch {
+    return failure(
+      diagnostic(
+        "IR_INVALID",
+        `${label} cannot retain a disposed evaluation`,
+        {
+          severity: "error",
+          node: partNode,
+          details: {
+            phase: PART_EVALUATION_PHASE,
+            evaluationDisposed: true,
+          },
+        },
+      ),
+    );
+  }
+  let geometry: EvaluatedPartGeometryV7;
+  if (state.value.geometry.kind === "bodySet") {
+    const source = state.value.geometry.bodySet;
+    geometry = importedBodyApply<EvaluatedPartGeometryV7>(
+      importedBodyObjectFreeze,
+      Object,
+      [
+        {
+          kind: "bodySet",
+          node: state.value.geometry.node,
+          bodySet: new EvaluatedBodySetV7(
+            partNode,
+            state.owner,
+            source.bodies,
+            source.representation,
+            source.exact,
+            diagnosticIdentity,
+          ),
+        },
+      ],
+    );
+  } else {
+    let solid: StagedBodySetEvaluatedSolidV7;
+    try {
+      solid = createStagedBodySetEvaluatedSolidV7Alias(
+        state.value.geometry.solid,
+        partNode,
+      );
+    } catch {
+      return failure(
+        diagnostic(
+          "IR_INVALID",
+          `${label} is not owned by this evaluator`,
+          {
+            severity: "error",
+            node: partNode,
+            details: {
+              phase: PART_EVALUATION_PHASE,
+              partOwner: true,
+              solidOwner: false,
+            },
+          },
+        ),
+      );
+    }
+    geometry = importedBodyApply<EvaluatedPartGeometryV7>(
+      importedBodyObjectFreeze,
+      Object,
+      [{ kind: "solid", node: state.value.geometry.node, solid }],
+    );
+  }
+  const contextualValue = importedBodyApply<EvaluatedPartValueV7>(
+    importedBodyObjectFreeze,
+    Object,
+    [{ ...state.value, geometry }],
+  );
+  const view = new EvaluatedPartV7(
+    partNode,
+    state.owner,
+    contextualValue,
+    diagnosticIdentity,
+  );
+  const boundary = partPostBoundaryFailure(undefined, partNode);
+  return boundary ?? success(view);
+}
+
+/**
  * Creates an immutable diagnostic facade for one part leaf selected through
  * an authored external assembly output. The facade shares the exact owner,
  * geometry, and multibody backing state; it does not construct or copy shape
@@ -4131,43 +4259,9 @@ export function createExternalAssemblyPartViewV7(
       ),
     );
   }
-  if (state.value.node !== childPartNode) {
-    return failure(
-      diagnostic(
-        "IR_INVALID",
-        "External assembly part view does not belong to the selected child part",
-        {
-          severity: "error",
-          node: childPartNode,
-          details: {
-            phase: PART_EVALUATION_PHASE,
-            partOwner: true,
-            selectedPartNode: childPartNode,
-            evaluatedPartNode: state.value.node,
-          },
-        },
-      ),
-    );
-  }
-  try {
-    state.owner.assertLive();
-  } catch {
-    return failure(
-      diagnostic(
-        "IR_INVALID",
-        "External assembly part view cannot retain a disposed evaluation",
-        {
-          severity: "error",
-          node: childPartNode,
-          details: {
-            phase: PART_EVALUATION_PHASE,
-            evaluationDisposed: true,
-          },
-        },
-      ),
-    );
-  }
-  const diagnosticIdentity =
+  return createAssemblyLeafPartViewV7(
+    state,
+    childPartNode,
     importedBodyApply<EvaluatedPartDiagnosticIdentityV7>(
       importedBodyObjectFreeze,
       Object,
@@ -4179,45 +4273,55 @@ export function createExternalAssemblyPartViewV7(
           childPartNode,
         },
       ],
-    );
-  let contextualValue = state.value;
-  if (state.value.geometry.kind === "bodySet") {
-    const source = state.value.geometry.bodySet;
-    const bodySet = new EvaluatedBodySetV7(
-      childPartNode,
-      state.owner,
-      source.bodies,
-      source.representation,
-      source.exact,
-      diagnosticIdentity,
-    );
-    const geometry =
-      importedBodyApply<EvaluatedPartGeometryV7>(
-        importedBodyObjectFreeze,
-        Object,
-        [
-          {
-            kind: "bodySet",
-            node: state.value.geometry.node,
-            bodySet,
-          },
-        ],
-      );
-    contextualValue =
-      importedBodyApply<EvaluatedPartValueV7>(
-        importedBodyObjectFreeze,
-        Object,
-        [{ ...state.value, geometry }],
-      );
-  }
-  const view = new EvaluatedPartV7(
-    childPartNode,
-    state.owner,
-    contextualValue,
-    diagnosticIdentity,
+    ),
+    "External assembly part view",
+    "child part",
   );
-  const boundary = partPostBoundaryFailure(undefined, childPartNode);
-  return boundary ?? success(view);
+}
+
+/**
+ * Creates an immutable facade for one part leaf of a root-document assembly.
+ * The view is named by the part node and reports node-scoped diagnostics, so
+ * the planner's selection name (which may be an output name or an internal
+ * selector) is never presented as an authored output.
+ *
+ * @internal
+ */
+export function createLocalAssemblyPartViewV7(
+  part: EvaluatedPartV7,
+  partNode: NodeId,
+): CadResult<EvaluatedPartV7> {
+  if (!documentV7RuntimeIntrinsicsAreIntact()) {
+    return partRuntimeIntegrityFailure();
+  }
+  const state = evaluatedPartV7ViewState(part);
+  if (state === undefined || typeof partNode !== "string") {
+    return failure(
+      diagnostic(
+        "IR_INVALID",
+        "Local assembly part view is not owned by this evaluator",
+        {
+          severity: "error",
+          details: {
+            phase: PART_EVALUATION_PHASE,
+            partOwner: state !== undefined,
+            partNodeIsString: typeof partNode === "string",
+          },
+        },
+      ),
+    );
+  }
+  return createAssemblyLeafPartViewV7(
+    state,
+    partNode,
+    importedBodyApply<EvaluatedPartDiagnosticIdentityV7>(
+      importedBodyObjectFreeze,
+      Object,
+      [{ kind: "assemblyPart", partNode }],
+    ),
+    "Local assembly part view",
+    "part",
+  );
 }
 
 function createStagedBodySetEvaluatedSolidV7Alias(
