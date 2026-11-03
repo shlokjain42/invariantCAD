@@ -160,6 +160,7 @@ import {
   resolveEvaluationParameters,
   type EvaluationParameterOverride,
 } from "./internal/evaluation-parameters.js";
+import { captureYieldingEvaluationRequest } from "./internal/evaluation-request-capture.js";
 import { getArtifactCacheSessionInternalAccess } from "./internal/artifact-cache-session-access.js";
 import {
   getEvaluatorArtifactCacheCandidateBinding,
@@ -520,26 +521,6 @@ function snapshotPrivateEvaluationOptions(
       ),
     );
   }
-}
-
-/**
- * Detaches a public evaluation request that will yield to the host. The
- * document is admitted through the bounded `parseDocumentValue` snapshot, so
- * it is size-checked before it is copied and every node read after a yield
- * sees the validated values; the options keep the caller's signal.
- */
-function captureYieldingEvaluationRequest(
-  document: DesignDocument,
-  options: EvaluationOptions,
-): CadResult<{
-  readonly document: DesignDocument;
-  readonly options: EvaluationOptions;
-}> {
-  const parsed = parseDocumentValue(document);
-  if (!parsed.ok) return parsed;
-  const capturedOptions = snapshotPrivateEvaluationOptions(options);
-  if (!capturedOptions.ok) return capturedOptions;
-  return success({ document: parsed.value, options: capturedOptions.value });
 }
 
 type SignatureCapabilityInspection =
@@ -13555,6 +13536,7 @@ export class Evaluator {
   ): Promise<CadResult<EvaluatedDesign>> {
     let document = inputDocument;
     let options = inputOptions;
+    let yieldsToHost = false;
     if (artifactCache !== undefined) {
       const parsed = parseDocumentValue(inputDocument);
       if (!parsed.ok) return parsed;
@@ -13562,7 +13544,8 @@ export class Evaluator {
       if (!capturedOptions.ok) return capturedOptions;
       document = parsed.value;
       options = capturedOptions.value;
-    } else if (inputOptions.signal !== undefined) {
+      yieldsToHost = options.signal !== undefined;
+    } else {
       // A signal-bearing evaluation yields to the host, so work on a captured
       // request: later changes to the caller's objects cannot reach nodes
       // evaluated after a yield.
@@ -13570,9 +13553,12 @@ export class Evaluator {
         inputDocument,
         inputOptions,
       );
-      if (!captured.ok) return captured;
-      document = captured.value.document;
-      options = captured.value.options;
+      if (captured !== undefined) {
+        if (!captured.ok) return captured;
+        document = captured.value.document;
+        options = captured.value.options;
+        yieldsToHost = true;
+      }
     }
     if (
       (this.kernel.capabilities.protocolVersion as number) !==
@@ -15633,7 +15619,7 @@ export class Evaluator {
       }
       const rawOutputs = new Map<string, NodeValue>();
       for (const name of requested) {
-        if (options.signal !== undefined) {
+        if (yieldsToHost) {
           // Let timers, UI events, and worker messages run, so a host abort
           // can land before evaluation starts and between selected outputs.
           await this.#yieldToHost();
@@ -15658,7 +15644,7 @@ export class Evaluator {
         }
         rawOutputs.set(name, evaluateNode(reference.node));
       }
-      if (options.signal !== undefined) {
+      if (yieldsToHost) {
         // Observe a host abort issued while the last output was evaluated.
         await this.#yieldToHost();
         ensureLive();

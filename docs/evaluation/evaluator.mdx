@@ -209,13 +209,20 @@ finished outputs.
 Because other code can run at those yields, an evaluation that receives a
 `signal` first captures its request. It admits the document through the same
 bounded snapshot as `parseDocumentValue(document)`, using the default
-[document preflight limits](/evaluation/diagnostics-and-limits#document-preflight-limits),
-and copies the options while keeping the same `signal`. Changing the caller's
+[document preflight limits](/evaluation/diagnostics-and-limits#document-preflight-limits).
+It reads each option once as an own data property, ignores inherited option
+values, and keeps the same `signal`. `outputs` must be an array; duplicates are
+dropped and entries after the first name the document does not declare are
+never read. Changing the caller's
 document, `outputs` array, or other options after `evaluate(...)` returns its
 promise does not affect that evaluation. A document that exceeds a limit or
-does not match its version's schema fails with `IR_INVALID` before any geometry
-work. Evaluations without a `signal` never yield, so they read the document
-directly as before.
+does not match its version's schema, an option defined by a getter, a
+non-array `outputs`, or an `outputs` array with a hole fails with `IR_INVALID`
+before any geometry work.
+
+These yields and checks apply when `signal` is an own data property of the
+options object, as in `{ signal }`. Without one, evaluation never yields and
+reads the document and options directly as before.
 
 For hard latency isolation, or to stop one large output mid-run, evaluate in a
 worker or separate process that the host can terminate. See

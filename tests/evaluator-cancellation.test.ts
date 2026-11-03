@@ -6,6 +6,7 @@ import {
   vec3,
   type DesignDocument,
   type EvaluatedSolid,
+  type EvaluationOptions,
   type GeometryKernel,
   type KernelShape,
 } from "../src/index.js";
@@ -209,6 +210,118 @@ describe("evaluation cancellation", () => {
         }),
       ]);
       expect(harness.calls).toEqual([]);
+    } finally {
+      evaluator.dispose();
+    }
+  });
+
+  it("captures options as own data without iterating or invoking caller code", async () => {
+    const harness = await recordingKernel();
+    const evaluator = await createEvaluator({ kernel: harness.kernel });
+    try {
+      const signal = new AbortController().signal;
+      let advanced = 0;
+      function* forever() {
+        for (;;) {
+          advanced += 1;
+          yield "a";
+        }
+      }
+      let getterReads = 0;
+      const sparse: string[] = [];
+      sparse[0] = "a";
+      sparse[2] = "b";
+      const cases: readonly {
+        readonly options: EvaluationOptions;
+        readonly path: string;
+      }[] = [
+        {
+          options: {
+            signal,
+            outputs: forever() as unknown as readonly string[],
+          },
+          path: "/options/outputs",
+        },
+        {
+          options: {
+            signal,
+            get allowEmpty() {
+              getterReads += 1;
+              return true;
+            },
+          },
+          path: "/options/allowEmpty",
+        },
+        { options: { signal, outputs: sparse }, path: "/options/outputs/1" },
+      ];
+      for (const { options, path } of cases) {
+        const result = await evaluator.evaluate(twoBoxes(), options);
+        if (result.ok) result.value.dispose();
+        expect(result.ok).toBe(false);
+        expect(result.diagnostics).toEqual([
+          expect.objectContaining({ code: "IR_INVALID", path }),
+        ]);
+      }
+      expect(advanced).toBe(0);
+      expect(getterReads).toBe(0);
+      expect(harness.calls).toEqual([]);
+    } finally {
+      evaluator.dispose();
+    }
+  });
+
+  it("reads the output selection only up to the first undeclared name", async () => {
+    const harness = await recordingKernel();
+    const evaluator = await createEvaluator({ kernel: harness.kernel });
+    try {
+      let laterReads = 0;
+      const outputs = ["a", "a", "missing"];
+      Object.defineProperty(outputs, 3, {
+        enumerable: true,
+        get() {
+          laterReads += 1;
+          return "b";
+        },
+      });
+      const result = await evaluator.evaluate(twoBoxes(), {
+        outputs,
+        signal: new AbortController().signal,
+      });
+      if (result.ok) result.value.dispose();
+      expect(result.ok).toBe(false);
+      expect(result.diagnostics).toEqual([
+        expect.objectContaining({
+          code: "OUTPUT_MISSING",
+          path: "/outputs/missing",
+        }),
+      ]);
+      expect(harness.calls).toEqual(["box"]);
+      expect(harness.live.size).toBe(0);
+      expect(laterReads).toBe(0);
+    } finally {
+      evaluator.dispose();
+    }
+  });
+
+  it("evaluates synchronously when the signal is not an own data property", async () => {
+    const harness = await recordingKernel();
+    const evaluator = await createEvaluator({ kernel: harness.kernel });
+    try {
+      const controller = new AbortController();
+      const options = {
+        get signal() {
+          return controller.signal;
+        },
+      };
+      const pending = evaluator.evaluate(twoBoxes(), options);
+      const callsInsideEvaluate = [...harness.calls];
+      const result = await pending;
+      try {
+        expect(callsInsideEvaluate).toEqual(["box", "box"]);
+        expect(result.ok, JSON.stringify(result.diagnostics)).toBe(true);
+      } finally {
+        if (result.ok) result.value.dispose();
+      }
     } finally {
       evaluator.dispose();
     }
