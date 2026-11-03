@@ -599,6 +599,18 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
     );
     return 0;
   }
+  if (args.command === "export" && requestedOutput === undefined) {
+    const outputCount = Object.keys(parsed.value.outputs).length;
+    if (outputCount === 0) {
+      process.stderr.write("Document has no outputs to export\n");
+      return 1;
+    }
+    if (outputCount > 1) {
+      return usageError(
+        `export requires --output <name> because the document has ${outputCount} outputs`,
+      );
+    }
+  }
   const parameterOverrides = await loadParameters(
     parametersPath,
     inlineParameters.value,
@@ -678,6 +690,7 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
       if (typeof destination !== "string") {
         throw new Error("Export destination was not captured");
       }
+      // Several outputs require --output, checked before kernel startup.
       const outputName =
         requestedOutput !== undefined
           ? requestedOutput

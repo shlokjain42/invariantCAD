@@ -1268,4 +1268,57 @@ describe("CLI", () => {
       await rm(directory, { recursive: true, force: true });
     }
   }, 60_000);
+
+  it("requires --output to export a document with several outputs", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "invariantcad-cli-"));
+    try {
+      const cad = design("cli-export-selection");
+      cad.output(
+        "zeta",
+        cad.box("zeta", { size: vec3(mm(100), mm(1), mm(1)) }),
+      );
+      cad.output(
+        "alpha",
+        cad.box("alpha", { size: vec3(mm(1), mm(1), mm(1)) }),
+      );
+      const documentPath = join(directory, "model.json");
+      await writeFile(documentPath, stringifyDocument(cad.build()));
+      const outputPath = join(directory, "model.obj");
+
+      const ambiguous = invokeCli(["export", documentPath, "--to", outputPath]);
+      expect(ambiguous.status).toBe(2);
+      expect(ambiguous.stdout).toBe("");
+      expect(ambiguous.stderr).toContain(
+        "export requires --output <name> because the document has 2 outputs",
+      );
+      expect(ambiguous.stderr).toContain("Usage:");
+      await expect(stat(outputPath)).rejects.toThrow();
+
+      const selected = invokeCli([
+        "export",
+        documentPath,
+        "--output",
+        "zeta",
+        "--to",
+        outputPath,
+      ]);
+      expect(selected.stderr).toBe("");
+      expect(selected.status).toBe(0);
+      const vertexXs = (await readFile(outputPath, "utf8"))
+        .split("\n")
+        .filter((line) => line.startsWith("v "))
+        .map((line) => Number(line.split(/\s+/)[1]));
+      expect(Math.max(...vertexXs)).toBeCloseTo(100, 10);
+
+      const empty = design("cli-export-empty").build();
+      const emptyPath = join(directory, "empty.json");
+      await writeFile(emptyPath, stringifyDocument(empty));
+      const nothing = invokeCli(["export", emptyPath, "--to", outputPath]);
+      expect(nothing.status).toBe(1);
+      expect(nothing.stdout).toBe("");
+      expect(nothing.stderr).toBe("Document has no outputs to export\n");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, 30_000);
 });
