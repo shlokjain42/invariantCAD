@@ -19,6 +19,7 @@ import {
   assertExpressionIR,
   deg,
   expressionIROf,
+  expressionVectorIROf,
   forEachExpressionParameter,
   mm,
   scalar,
@@ -751,32 +752,15 @@ function principalPlane(
   value: PrincipalPlane,
   origin: Vec3Expression = [mm(0), mm(0), mm(0)],
 ): Plane {
-  const components = threeComponents(origin, "Plane origin");
   return deepFreeze({
     ir: {
       type: "principal",
       plane: value,
-      origin: [
-        expressionIROf(components[0], "length", "Plane origin[0]"),
-        expressionIROf(components[1], "length", "Plane origin[1]"),
-        expressionIROf(components[2], "length", "Plane origin[2]"),
-      ],
+      origin: expressionVectorIROf(origin, "length", "Plane origin"),
     },
   });
 }
 
-function vectorIR(
-  value: unknown,
-  dimension: Dimension,
-  label: string,
-): Vec3ExpressionIR {
-  const components = threeComponents(value, label);
-  return [
-    expressionIROf(components[0], dimension, `${label}[0]`),
-    expressionIROf(components[1], dimension, `${label}[1]`),
-    expressionIROf(components[2], dimension, `${label}[2]`),
-  ];
-}
 
 export const plane = {
   xy(origin?: Vec3Expression): Plane {
@@ -794,25 +778,25 @@ export const tf = {
   translate(value: Vec3Expression): TransformOperationIR {
     return deepFreeze({
       kind: "translate",
-      value: vectorIR(value, "length", "Translation"),
+      value: expressionVectorIROf(value, "length", "Translation"),
     });
   },
   rotate(value: AngleVec3Expression): TransformOperationIR {
     return deepFreeze({
       kind: "rotate",
-      value: vectorIR(value, "angle", "Rotation"),
+      value: expressionVectorIROf(value, "angle", "Rotation"),
     });
   },
   scale(value: ScalarVec3Expression): TransformOperationIR {
     return deepFreeze({
       kind: "scale",
-      value: vectorIR(value, "scalar", "Scale"),
+      value: expressionVectorIROf(value, "scalar", "Scale"),
     });
   },
   mirror(normal: ScalarVec3Expression): TransformOperationIR {
     const operation: TransformOperationIR = {
       kind: "mirror",
-      normal: vectorIR(normal, "scalar", "Mirror normal"),
+      normal: expressionVectorIROf(normal, "scalar", "Mirror normal"),
     };
     return deepFreeze(operation);
   },

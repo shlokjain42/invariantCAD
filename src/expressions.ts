@@ -396,6 +396,26 @@ export function expressionIROf(
   return ir;
 }
 
+/**
+ * Reads a three-component vector of expressions of one dimension.
+ *
+ * @internal Not re-exported from the package root.
+ */
+export function expressionVectorIROf(
+  value: unknown,
+  dimension: Dimension,
+  label: string,
+): readonly [ExpressionIR, ExpressionIR, ExpressionIR] {
+  if (!arrayIsArray(value) || value.length !== 3) {
+    throw new TypeError(`${label} must contain exactly three components`);
+  }
+  return [
+    expressionIROf(value[0], dimension, `${label}[0]`),
+    expressionIROf(value[1], dimension, `${label}[1]`),
+    expressionIROf(value[2], dimension, `${label}[2]`),
+  ];
+}
+
 function expressionOperand<D extends Dimension>(
   value: unknown,
   dimension: D,

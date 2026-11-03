@@ -3922,22 +3922,22 @@ export function nodeParameterDependencies(node: NodeIR): readonly ParameterId[];
 // @public
 export const NodeSchema: z.ZodType<NodeIR>;
 
-// @public
+// @public (undocumented)
 export const NodeV1Schema: z.ZodType<NodeIRV1>;
 
-// @public
+// @public (undocumented)
 export const NodeV2Schema: z.ZodType<NodeIRV2>;
 
-// @public
+// @public (undocumented)
 export const NodeV3Schema: z.ZodType<NodeIRV3>;
 
-// @public
+// @public (undocumented)
 export const NodeV4Schema: z.ZodType<NodeIRV4>;
 
-// @public
+// @public (undocumented)
 export const NodeV5Schema: z.ZodType<NodeIRV5>;
 
-// @public
+// @public (undocumented)
 export const NodeV6Schema: z.ZodType<NodeIRV6>;
 
 // @public (undocumented)
@@ -5383,7 +5383,9 @@ export interface SketchSolverBackend {
 
 // @public (undocumented)
 export interface SketchSolverCapabilities {
+    // (undocumented)
     readonly constraints: readonly SketchConstraintIR["kind"][];
+    // (undocumented)
     readonly entities: readonly SketchEntityIR["kind"][];
     // (undocumented)
     readonly reportsConflicts: boolean;
@@ -5391,7 +5393,7 @@ export interface SketchSolverCapabilities {
     readonly reportsDegreesOfFreedom: boolean;
 }
 
-// @public
+// @public (undocumented)
 export type SketchSolveStatus = "solved" | "underconstrained" | "overconstrained" | "nonconvergent" | "invalid";
 
 // @public (undocumented)
@@ -5409,6 +5411,7 @@ export class SolidRef extends ModelRef<"solid"> {
 export interface SolvedSketch {
     // (undocumented)
     readonly degreesOfFreedom: number;
+    // (undocumented)
     readonly diagnostics: readonly Diagnostic[];
     // (undocumented)
     readonly iterations: number;
@@ -5418,7 +5421,9 @@ export interface SolvedSketch {
     readonly profile: ResolvedProfile;
     // (undocumented)
     readonly radii: Readonly<Record<EntityId, number>>;
+    // (undocumented)
     readonly residual: number;
+    // (undocumented)
     readonly status: SketchSolveStatus;
 }
 
@@ -6375,10 +6380,10 @@ export function writeArtifactCacheRecord(store: ArtifactCacheStore, record: Arti
 
 // Warnings were encountered during analysis:
 //
-// dist/topology.d.ts:81:5 - (ae-forgotten-export) The symbol "EdgeTopologyQueries" needs to be exported by the entry point index.d.ts
-// dist/topology.d.ts:82:5 - (ae-forgotten-export) The symbol "FaceTopologyQueries" needs to be exported by the entry point index.d.ts
-// dist/topology.d.ts:83:5 - (ae-forgotten-export) The symbol "VertexTopologyQueries" needs to be exported by the entry point index.d.ts
 // dist/vendor/manifold-3d/manifold.d.ts:18:5 - (ae-forgotten-export) The symbol "Vec3_2" needs to be exported by the entry point index.d.ts
+// src/topology.ts:594:22 - (ae-forgotten-export) The symbol "EdgeTopologyQueries" needs to be exported by the entry point index.d.ts
+// src/topology.ts:594:22 - (ae-forgotten-export) The symbol "FaceTopologyQueries" needs to be exported by the entry point index.d.ts
+// src/topology.ts:594:22 - (ae-forgotten-export) The symbol "VertexTopologyQueries" needs to be exported by the entry point index.d.ts
 
 // (No @packageDocumentation comment for this package)
 
