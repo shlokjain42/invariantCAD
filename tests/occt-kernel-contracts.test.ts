@@ -384,3 +384,36 @@ describe("OCCT measurement multiplicity", () => {
     }
   });
 });
+
+describe("OCCT stock edge-treatment failures", () => {
+  it("names the operation and native message instead of a bare WebAssembly.Exception", async () => {
+    const kernel = await createOcctKernel();
+    const box = kernel.box!([2, 3, 4], false, { feature: "block" });
+    try {
+      const edge = kernel.topology!(box).edges[0]!.key;
+      for (const [operation, run] of [
+        ["fillet", () => kernel.fillet!(box, [edge], { radius: 3 })],
+        ["chamfer", () => kernel.chamfer!(box, [edge], { distance: 5 })],
+      ] as const) {
+        let thrown: unknown;
+        try {
+          const result = run();
+          kernel.disposeShape(result);
+        } catch (error) {
+          thrown = error;
+        }
+        expect(thrown, operation).toBeInstanceOf(Error);
+        const message = (thrown as Error).message;
+        expect(message).toContain(`OCCT ${operation} failed`);
+        expect(message).not.toContain("[object WebAssembly.Exception]");
+      }
+      // The kernel stays usable after the native failure.
+      const rounded = kernel.fillet!(box, [edge], { radius: 0.5 });
+      expect(kernel.measure(rounded).volume).toBeLessThan(24);
+      kernel.disposeShape(rounded);
+    } finally {
+      kernel.disposeShape(box);
+      kernel.dispose();
+    }
+  });
+});

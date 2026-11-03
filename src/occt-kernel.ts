@@ -1156,6 +1156,57 @@ function captureOcctShapeExportContext(
   };
 }
 
+const OcctNativeException: (new (...args: never[]) => object) | undefined =
+  typeof WebAssembly === "undefined"
+    ? undefined
+    : (WebAssembly as { Exception?: new (...args: never[]) => object })
+        .Exception;
+
+/**
+ * Runs one raw Embind call that occt-wasm does not wrap. A native C++
+ * exception escapes as a bare `WebAssembly.Exception` with no message, so
+ * translate it with the module's `getExceptionMessage`, release its native
+ * reference, and throw an Error that names the operation.
+ */
+function callOcctNative<T>(
+  module: unknown,
+  operation: string,
+  invoke: () => T,
+): T {
+  try {
+    return invoke();
+  } catch (error) {
+    if (
+      OcctNativeException === undefined ||
+      !(error instanceof OcctNativeException)
+    ) {
+      throw error;
+    }
+    const helpers = module as {
+      readonly getExceptionMessage?: (error: unknown) => unknown;
+      readonly decrementExceptionRefcount?: (error: unknown) => void;
+    };
+    let detail = "native exception";
+    try {
+      const described = helpers.getExceptionMessage?.(error);
+      if (Array.isArray(described)) {
+        const parts = described.filter(
+          (part): part is string => typeof part === "string" && part !== "",
+        );
+        if (parts.length > 0) detail = parts.join(": ");
+      }
+    } catch {
+      // Keep the generic detail; the operation name still identifies it.
+    }
+    try {
+      helpers.decrementExceptionRefcount?.(error);
+    } catch {
+      // Releasing the exception object is best effort.
+    }
+    throw new Error(`OCCT ${operation} failed: ${detail}`, { cause: error });
+  }
+}
+
 /**
  * Reports a deterministic STEP export the kernel cannot complete for a valid
  * shape (several products, or a post-write ceiling) as a structured
@@ -5918,12 +5969,14 @@ class OcctKernel implements GeometryKernel {
       edgeIds: selected.handles,
       inputFaceHashes: faceHashes,
       invoke: (edgeIds, inputHashes) =>
-        rawKernel.filletWithHistory(
-          input[OCCT_SHAPE],
-          edgeIds as Parameters<typeof rawKernel.filletWithHistory>[1],
-          options.radius,
-          inputHashes as Parameters<typeof rawKernel.filletWithHistory>[3],
-          TOPOLOGY_HASH_UPPER_BOUND,
+        callOcctNative(module, "fillet", () =>
+          rawKernel.filletWithHistory(
+            input[OCCT_SHAPE],
+            edgeIds as Parameters<typeof rawKernel.filletWithHistory>[1],
+            options.radius,
+            inputHashes as Parameters<typeof rawKernel.filletWithHistory>[3],
+            TOPOLOGY_HASH_UPPER_BOUND,
+          ),
         ),
       adopt: (evolution) =>
         this.own(evolution.resultId as ShapeHandle, context, {
@@ -5974,12 +6027,14 @@ class OcctKernel implements GeometryKernel {
       edgeIds: selected.handles,
       inputFaceHashes: faceHashes,
       invoke: (edgeIds, inputHashes) =>
-        rawKernel.chamferWithHistory(
-          input[OCCT_SHAPE],
-          edgeIds as Parameters<typeof rawKernel.chamferWithHistory>[1],
-          options.distance,
-          inputHashes as Parameters<typeof rawKernel.chamferWithHistory>[3],
-          TOPOLOGY_HASH_UPPER_BOUND,
+        callOcctNative(module, "chamfer", () =>
+          rawKernel.chamferWithHistory(
+            input[OCCT_SHAPE],
+            edgeIds as Parameters<typeof rawKernel.chamferWithHistory>[1],
+            options.distance,
+            inputHashes as Parameters<typeof rawKernel.chamferWithHistory>[3],
+            TOPOLOGY_HASH_UPPER_BOUND,
+          ),
         ),
       adopt: (evolution) =>
         this.own(evolution.resultId as ShapeHandle, context, {
