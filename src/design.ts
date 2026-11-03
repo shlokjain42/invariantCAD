@@ -364,7 +364,13 @@ function assertTopologySelectionParametersOwned(
     switch (node.op) {
       case "and":
       case "or":
-        if (Array.isArray(node.queries)) pending.push(...node.queries);
+        // Push one at a time: spreading a large operand list could exceed
+        // the engine's argument limit.
+        if (Array.isArray(node.queries)) {
+          for (const child of node.queries as readonly unknown[]) {
+            pending.push(child);
+          }
+        }
         break;
       case "not":
         pending.push(node.query);

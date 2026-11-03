@@ -543,6 +543,26 @@ describe("builder expression inputs", () => {
     }
   });
 
+  it("checks topology selections with very many operands", () => {
+    const cad = design("wide-selection");
+    const width = cad.parameter.length("width", mm(1));
+    const base = cad.box("base", { size: vec3(mm(10), mm(10), mm(10)) });
+    const template = topology.edges.radius(width).atLeast(1);
+    const Selection = template.constructor as new (
+      ...args: readonly unknown[]
+    ) => typeof template;
+    const operand = template.ir.query;
+    // More operands than a spread call can pass as arguments.
+    const wide = new Selection(
+      "edge",
+      { op: "or", queries: Array.from({ length: 300_000 }, () => operand) },
+      template.ir.cardinality,
+    );
+    expect(() =>
+      cad.fillet("wide", base, { edges: wide, radius: mm(1) }),
+    ).not.toThrow();
+  });
+
   it("binds raw IR by ID only to an existing parameter of the same dimension", () => {
     const cad = design("raw-parameter-ir");
     cad.parameter.length("width", mm(10));
