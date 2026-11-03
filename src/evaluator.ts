@@ -195,6 +195,7 @@ import {
   retainEvaluatedImportedBody,
 } from "./internal/imported-body-runtime.js";
 import {
+  markAutomaticStepExportContext,
   resolveAutomaticStepTexts,
   stepTextUtf8Length,
 } from "./internal/step-export-defaults.js";
@@ -1905,7 +1906,9 @@ function isStepMultipleProductsRefusal(error: unknown): boolean {
  * as several STEP products (a disjoint union, a split subtraction) and the
  * caller passed no options, the export keeps the weak native exchange
  * instead of failing, as published 0.1.1 did. Explicit options never fall
- * back.
+ * back. Kernels in this package recognize the marked context and return the
+ * weak bytes from their first native write; other kernels that refuse are
+ * retried once without `stepExport`.
  */
 function exportWithAutomaticStepFallback<T>(
   invoke: (context: KernelShapeExportContext) => T,
@@ -1914,6 +1917,7 @@ function exportWithAutomaticStepFallback<T>(
   assertLive: () => void,
 ): T {
   if (automaticStepName === undefined) return invoke(context);
+  markAutomaticStepExportContext(context);
   try {
     return invoke(context);
   } catch (error) {

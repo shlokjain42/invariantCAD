@@ -175,6 +175,7 @@ import {
 import {
   AUTOMATIC_STEP_TEXT_FALLBACK,
   fitAutomaticStepTexts,
+  isAutomaticStepExportContext,
   normalizeAutomaticStepText,
 } from "./internal/step-export-defaults.js";
 import { CadError, diagnostic } from "./core/result.js";
@@ -5119,6 +5120,9 @@ class OcctKernel implements GeometryKernel {
     context?: KernelShapeExportContext,
   ): Uint8Array {
     const capturedContext = captureOcctShapeExportContext(context);
+    // A plain evaluated-output export marks its context: it binds strong
+    // defaults but accepts the weak native bytes for a multi-product shape.
+    const automaticStepExport = isAutomaticStepExportContext(context);
     if (format !== "step" && capturedContext.stepExport !== undefined) {
       throw new OcctKernelBoundaryTypeError(
         "OCCT deterministic STEP export options require the 'step' format",
@@ -5180,7 +5184,8 @@ class OcctKernel implements GeometryKernel {
           const refusal = occtStepRewriteRefusal(error);
           if (refusal?.kind === "multiple-products") {
             if (
-              capturedContext.stepExport === undefined &&
+              (capturedContext.stepExport === undefined ||
+                automaticStepExport) &&
               nativeSource !== undefined
             ) {
               // No strong contract was requested: keep the weak native

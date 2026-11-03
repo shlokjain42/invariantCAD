@@ -1,15 +1,58 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   CadError,
   EvaluatedPart,
   EvaluatedSolid,
   createEvaluator,
   design,
+  diagnostic,
   mm,
   vec3,
   type DesignDocument,
+  type GeometryKernel,
+  type KernelShapeExportContext,
 } from "../src/index.js";
 import { createOcctKernel } from "../src/occt-kernel.js";
+
+type Defer = (cleanup: () => void) => void;
+
+/**
+ * Runs a test body and then every cleanup it registered, newest first, even
+ * when the body or another cleanup fails, so a failed setup step still
+ * releases every kernel, evaluator, result, and shape acquired before it.
+ * The first failure wins.
+ */
+async function withCleanup(
+  body: (defer: Defer) => Promise<void> | void,
+): Promise<void> {
+  const cleanups: (() => void)[] = [];
+  const failures: unknown[] = [];
+  try {
+    await body((cleanup) => {
+      cleanups.push(cleanup);
+    });
+  } catch (error) {
+    failures.push(error);
+  }
+  for (let index = cleanups.length - 1; index >= 0; index -= 1) {
+    try {
+      cleanups[index]!();
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length > 0) throw failures[0];
+}
+
+/** Spies on the stock kernel's native STEP writer. */
+function spyNativeStepWriter(
+  kernel: GeometryKernel,
+): ReturnType<typeof vi.spyOn> {
+  const raw = (kernel as unknown as {
+    raw: { exportStep(shape: unknown): string };
+  }).raw;
+  return vi.spyOn(raw, "exportStep");
+}
 
 const decoder = new TextDecoder();
 
@@ -68,64 +111,123 @@ function twoSolidDocument(kind: "union" | "subtract"): DesignDocument {
 }
 
 describe("OCCT STEP export contract", () => {
-  it("keeps plain STEP export working for valid multi-solid outputs", async () => {
-    const kernel = await createOcctKernel();
-    const evaluator = await createEvaluator({ kernel });
-    try {
+  it("keeps plain STEP export working for valid multi-solid outputs", () =>
+    withCleanup(async (defer) => {
+      const kernel = await createOcctKernel();
+      defer(() => kernel.dispose());
+      const evaluator = await createEvaluator({ kernel });
+      defer(() => evaluator.dispose());
+      const writer = spyNativeStepWriter(kernel);
+      defer(() => writer.mockRestore());
       for (const kind of ["union", "subtract"] as const) {
         const result = await evaluator.evaluate(twoSolidDocument(kind));
         expect(result.ok, JSON.stringify(result.diagnostics)).toBe(true);
         if (!result.ok) continue;
-        let imported:
-          | ReturnType<NonNullable<typeof kernel.importShape>>
-          | undefined;
-        try {
-          const output = result.value.output("pair");
-          expect(output).toBeInstanceOf(EvaluatedSolid);
-          if (!(output instanceof EvaluatedSolid)) continue;
-          const expectedVolume = output.measure().volume;
+        defer(() => result.value.dispose());
+        const output = result.value.output("pair");
+        expect(output).toBeInstanceOf(EvaluatedSolid);
+        if (!(output instanceof EvaluatedSolid)) continue;
+        const expectedVolume = output.measure().volume;
 
-          // No options: the weak native exchange, as in 0.1.1.
-          const bytes = output.export("step");
-          const text = decoder.decode(bytes);
-          expect(productRecords(text), kind).toBeGreaterThan(1);
-          imported = kernel.importShape!(bytes, "step");
-          expect(kernel.measure(imported).volume, kind).toBeCloseTo(
-            expectedVolume,
-            6,
+        // No options: the weak native exchange, as in 0.1.1, from one
+        // native write.
+        writer.mockClear();
+        const bytes = output.export("step");
+        expect(writer, kind).toHaveBeenCalledTimes(1);
+        const text = decoder.decode(bytes);
+        expect(productRecords(text), kind).toBeGreaterThan(1);
+        const imported = kernel.importShape!(bytes, "step");
+        defer(() => kernel.disposeShape(imported));
+        expect(kernel.measure(imported).volume, kind).toBeCloseTo(
+          expectedVolume,
+          6,
+        );
+
+        // Explicit options request the strong single-product contract.
+        for (const options of [{}, { metadata: { fileName: "pair" } }]) {
+          const refused = cadErrorDiagnostic(() =>
+            output.export("step", options),
           );
-
-          // Explicit options request the strong single-product contract.
-          for (const options of [{}, { metadata: { fileName: "pair" } }]) {
-            const refused = cadErrorDiagnostic(() =>
-              output.export("step", options),
-            );
-            expect(refused.code).toBe("EXPORT_UNSUPPORTED");
-            expect(refused.details).toMatchObject({
-              kernel: "occt",
-              format: "step",
-              reason: "multiple-products",
-            });
-          }
-        } finally {
-          if (imported !== undefined) kernel.disposeShape(imported);
-          result.value.dispose();
+          expect(refused.code).toBe("EXPORT_UNSUPPORTED");
+          expect(refused.details).toMatchObject({
+            kernel: "occt",
+            format: "step",
+            reason: "multiple-products",
+          });
         }
       }
-    } finally {
-      evaluator.dispose();
-    }
-  });
+    }));
 
-  it("keeps low-level weak STEP export for multi-product shapes and normalizes feature text", async () => {
-    const kernel = await createOcctKernel();
-    const left = kernel.box!([1, 1, 1], false);
-    const rightSource = kernel.box!([1, 1, 1], false);
-    const right = kernel.transform!(rightSource, [
-      { kind: "translate", value: [3, 0, 0] },
-    ]);
-    const pair = kernel.boolean!("union", left, [right]);
-    try {
+  it("retries a plain export without the strong request when another kernel refuses it", () =>
+    withCleanup(async (defer) => {
+      const kernel = await createOcctKernel();
+      defer(() => kernel.dispose());
+      const evaluator = await createEvaluator({ kernel });
+      defer(() => evaluator.dispose());
+      const cad = design("refusing-kernel");
+      cad.output(
+        "body",
+        cad.box("body", { size: vec3(mm(2), mm(3), mm(5)) }),
+      );
+      const result = await evaluator.evaluate(cad.build());
+      expect(result.ok, JSON.stringify(result.diagnostics)).toBe(true);
+      if (!result.ok) return;
+      defer(() => result.value.dispose());
+      const output = result.value.output("body");
+      if (!(output instanceof EvaluatedSolid)) throw new Error("not a solid");
+
+      // Stand in for a kernel outside this package: it follows the
+      // documented refusal convention but does not know the evaluator's
+      // context marker, so the evaluator must retry on the weak contract.
+      const exportShape = kernel.exportShape!.bind(kernel);
+      const requests: (KernelShapeExportContext | undefined)[] = [];
+      const refusing = vi
+        .spyOn(kernel, "exportShape")
+        .mockImplementation((shape, format, context) => {
+          requests.push(context);
+          if (context?.stepExport !== undefined) {
+            const value = diagnostic(
+              "EXPORT_UNSUPPORTED",
+              "Several STEP products",
+              {
+                severity: "error",
+                details: { reason: "multiple-products" },
+              },
+            );
+            throw new CadError(value.message, [value]);
+          }
+          return exportShape(shape, format, context);
+        });
+      defer(() => refusing.mockRestore());
+
+      const bytes = output.export("step");
+      expect(productRecords(decoder.decode(bytes))).toBe(1);
+      expect(requests).toHaveLength(2);
+      expect(requests[0]?.stepExport).toBeDefined();
+      expect(requests[1]?.stepExport).toBeUndefined();
+      expect(requests[1]?.feature).toBe("body");
+
+      requests.length = 0;
+      const refused = cadErrorDiagnostic(() => output.export("step", {}));
+      expect(refused.code).toBe("EXPORT_UNSUPPORTED");
+      expect(requests).toHaveLength(1);
+    }));
+
+  it("keeps low-level weak STEP export for multi-product shapes and normalizes feature text", () =>
+    withCleanup(async (defer) => {
+      const kernel = await createOcctKernel();
+      defer(() => kernel.dispose());
+      const left = kernel.box!([1, 1, 1], false);
+      defer(() => kernel.disposeShape(left));
+      const rightSource = kernel.box!([1, 1, 1], false);
+      defer(() => kernel.disposeShape(rightSource));
+      const right = kernel.transform!(rightSource, [
+        { kind: "translate", value: [3, 0, 0] },
+      ]);
+      defer(() => kernel.disposeShape(right));
+      const pair = kernel.boolean!("union", left, [right]);
+      defer(() => kernel.disposeShape(pair));
+
       const raw = decoder.decode(kernel.exportShape!(pair, "step"));
       expect(productRecords(raw)).toBeGreaterThan(1);
       const refused = cadErrorDiagnostic(() =>
@@ -157,45 +259,38 @@ describe("OCCT STEP export contract", () => {
       expect(directStepStrings(stepRecord(text, "PRODUCT")).slice(0, 2)).toEqual(
         ["bad name ", "bad name "],
       );
-    } finally {
-      kernel.disposeShape(pair);
-      kernel.disposeShape(right);
-      kernel.disposeShape(rightSource);
-      kernel.disposeShape(left);
-      kernel.dispose();
-    }
-  });
+    }));
 
-  it("derives total automatic metadata from unrestricted authored text", async () => {
-    const kernel = await createOcctKernel();
-    const evaluator = await createEvaluator({ kernel });
-    const longDescription = "Ω".repeat(40_000);
-    const cad = design("Bracket\tRev B\r\n");
-    const body = cad.box("body", { size: vec3(mm(2), mm(3), mm(5)) });
-    const multiline = cad.part("bracket", body, {
-      partNumber: "PN\u0001-7",
-      description: "Bracket\nAnodize after machining\u0085",
-    });
-    const long = cad.part("long", body, { description: longDescription });
-    cad
-      .output("solid-alias", body)
-      .output("multiline", multiline)
-      .output("long", long);
-    // The design builder restricts output names to IDs, but JSON documents
-    // accept any output name string.
-    const built = cad.build();
-    const { "solid-alias": solidOutput, ...otherOutputs } = built.outputs;
-    const document = {
-      ...built,
-      outputs: { "solid\u0000alias": solidOutput!, ...otherOutputs },
-    } as DesignDocument;
-    const result = await evaluator.evaluate(document);
-    expect(result.ok, JSON.stringify(result.diagnostics)).toBe(true);
-    if (!result.ok) {
-      evaluator.dispose();
-      return;
-    }
-    try {
+  it("derives total automatic metadata from unrestricted authored text", () =>
+    withCleanup(async (defer) => {
+      const kernel = await createOcctKernel();
+      defer(() => kernel.dispose());
+      const evaluator = await createEvaluator({ kernel });
+      defer(() => evaluator.dispose());
+      const longDescription = "Ω".repeat(40_000);
+      const cad = design("Bracket\tRev B\r\n");
+      const body = cad.box("body", { size: vec3(mm(2), mm(3), mm(5)) });
+      const multiline = cad.part("bracket", body, {
+        partNumber: "PN\u0001-7",
+        description: "Bracket\nAnodize after machining\u0085",
+      });
+      const long = cad.part("long", body, { description: longDescription });
+      cad
+        .output("solid-alias", body)
+        .output("multiline", multiline)
+        .output("long", long);
+      // The design builder restricts output names to IDs, but JSON documents
+      // accept any output name string.
+      const built = cad.build();
+      const { "solid-alias": solidOutput, ...otherOutputs } = built.outputs;
+      const document = {
+        ...built,
+        outputs: { "solid\u0000alias": solidOutput!, ...otherOutputs },
+      } as DesignDocument;
+      const result = await evaluator.evaluate(document);
+      expect(result.ok, JSON.stringify(result.diagnostics)).toBe(true);
+      if (!result.ok) return;
+      defer(() => result.value.dispose());
       const solid = result.value.output("solid\u0000alias");
       const part = result.value.output("multiline");
       const longPart = result.value.output("long");
@@ -226,7 +321,9 @@ describe("OCCT STEP export contract", () => {
       // The long description is truncated so the five resolved strings fit
       // the advertised 64 KiB metadata budget.
       const longText = decoder.decode(longPart.export("step"));
-      const description = directStepStrings(stepRecord(longText, "PRODUCT"))[2]!;
+      const description = directStepStrings(
+        stepRecord(longText, "PRODUCT"),
+      )[2]!;
       const decoded = description.replaceAll(
         /\\X2\\((?:[0-9A-F]{4})+)\\X0\\/gu,
         (_, hex: string) =>
@@ -251,24 +348,23 @@ describe("OCCT STEP export contract", () => {
       );
       expect(invalid.code).toBe("EXPORT_OPTIONS_INVALID");
       expect(invalid.path).toBe("/metadata/productDescription");
-    } finally {
-      result.value.dispose();
-      evaluator.dispose();
-    }
-  });
+    }));
 
-  it("reports exceeded STEP output ceilings as structured errors", async () => {
-    const kernel = await createOcctKernel();
-    const evaluator = await createEvaluator({ kernel });
-    const cad = design("ceiling");
-    cad.output("body", cad.box("body", { size: vec3(mm(2), mm(3), mm(5)) }));
-    const result = await evaluator.evaluate(cad.build());
-    expect(result.ok, JSON.stringify(result.diagnostics)).toBe(true);
-    if (!result.ok) {
-      evaluator.dispose();
-      return;
-    }
-    try {
+  it("reports exceeded STEP output ceilings as structured errors", () =>
+    withCleanup(async (defer) => {
+      const kernel = await createOcctKernel();
+      defer(() => kernel.dispose());
+      const evaluator = await createEvaluator({ kernel });
+      defer(() => evaluator.dispose());
+      const cad = design("ceiling");
+      cad.output(
+        "body",
+        cad.box("body", { size: vec3(mm(2), mm(3), mm(5)) }),
+      );
+      const result = await evaluator.evaluate(cad.build());
+      expect(result.ok, JSON.stringify(result.diagnostics)).toBe(true);
+      if (!result.ok) return;
+      defer(() => result.value.dispose());
       const output = result.value.output("body");
       if (!(output instanceof EvaluatedSolid)) throw new Error("not a solid");
       const exceeded = cadErrorDiagnostic(() =>
@@ -286,36 +382,29 @@ describe("OCCT STEP export contract", () => {
 
       // The low-level kernel boundary reports the same structured ceiling.
       const box = kernel.box!([2, 3, 5], false);
-      try {
-        const lowLevel = cadErrorDiagnostic(() =>
-          kernel.exportShape!(box, "step", {
-            stepExport: {
-              protocolVersion: 1,
-              maxOutputBytes: 1000,
-              metadata: {
-                fileName: "ceiling",
-                timestamp: "1970-01-01T00:00:00",
-                productId: "body",
-                productName: "body",
-                productDescription: "",
-              },
+      defer(() => kernel.disposeShape(box));
+      const lowLevel = cadErrorDiagnostic(() =>
+        kernel.exportShape!(box, "step", {
+          stepExport: {
+            protocolVersion: 1,
+            maxOutputBytes: 1000,
+            metadata: {
+              fileName: "ceiling",
+              timestamp: "1970-01-01T00:00:00",
+              productId: "body",
+              productName: "body",
+              productDescription: "",
             },
-          }),
-        );
-        expect(lowLevel.code).toBe("RESOURCE_LIMIT_EXCEEDED");
-        expect(lowLevel.details).toMatchObject({
-          kernel: "occt",
-          operation: "export",
-          format: "step",
-          resource: "maxOutputBytes",
-          limit: 1000,
-        });
-      } finally {
-        kernel.disposeShape(box);
-      }
-    } finally {
-      result.value.dispose();
-      evaluator.dispose();
-    }
-  });
+          },
+        }),
+      );
+      expect(lowLevel.code).toBe("RESOURCE_LIMIT_EXCEEDED");
+      expect(lowLevel.details).toMatchObject({
+        kernel: "occt",
+        operation: "export",
+        format: "step",
+        resource: "maxOutputBytes",
+        limit: 1000,
+      });
+    }));
 });

@@ -8,14 +8,50 @@
  * fail. These helpers replace control characters with spaces, replace
  * unpaired UTF-16 surrogates with U+FFFD, and truncate the longest values at
  * Unicode scalar boundaries until the combined UTF-8 size fits a budget.
+ * A package-private marker also tells a bundled kernel that an export context
+ * came from a plain, option-free `export("step")` call.
  */
 
 const stepDefaultsReflectApply = Reflect.apply;
 const stepDefaultsStringCharCodeAt = String.prototype.charCodeAt;
 const stepDefaultsStringSlice = String.prototype.slice;
+const stepDefaultsWeakSetAdd = WeakSet.prototype.add;
+const stepDefaultsWeakSetHas = WeakSet.prototype.has;
+const automaticStepExportContexts = new WeakSet<object>();
 
 /** Placeholder for a required automatic field whose authored text is empty. */
 export const AUTOMATIC_STEP_TEXT_FALLBACK = "InvariantCAD Shape";
+
+/**
+ * Marks an export context that the evaluator built for a plain
+ * `export("step")` call with no options. A kernel in this package that can
+ * write the shape only as several STEP products returns its weak native bytes
+ * for a marked context instead of refusing, so the plain export runs the
+ * native writer once. Code outside the package cannot mark a context.
+ */
+export function markAutomaticStepExportContext<T extends object>(
+  context: T,
+): T {
+  stepDefaultsReflectApply(
+    stepDefaultsWeakSetAdd,
+    automaticStepExportContexts,
+    [context],
+  );
+  return context;
+}
+
+/** Whether {@link markAutomaticStepExportContext} marked this context. */
+export function isAutomaticStepExportContext(context: unknown): boolean {
+  return (
+    typeof context === "object" &&
+    context !== null &&
+    (stepDefaultsReflectApply(
+      stepDefaultsWeakSetHas,
+      automaticStepExportContexts,
+      [context],
+    ) as boolean)
+  );
+}
 
 function codeUnitAt(value: string, index: number): number {
   return stepDefaultsReflectApply(
