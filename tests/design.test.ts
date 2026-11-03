@@ -721,6 +721,7 @@ describe("builder option values", () => {
       ["sketch tolerance -1", (cad) => profile(cad, { tolerance: -1 }), RangeError],
       ["sketch tolerance NaN", (cad) => profile(cad, { tolerance: Number.NaN }), RangeError],
       ["sketch tolerance Infinity", (cad) => profile(cad, { tolerance: Number.POSITIVE_INFINITY }), RangeError],
+      ["sketch tolerance string", (cad) => profile(cad, { tolerance: "0.1" as never }), TypeError],
       [
         "circle segments",
         (cad) =>

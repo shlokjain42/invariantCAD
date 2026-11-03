@@ -174,8 +174,9 @@ cad.sketch("precision-profile", plane.xy(), buildProfile, {
 ```
 
 Tolerance is a positive finite number in millimetres; `cad.sketch(...)` throws
-`RangeError` for any other value, and `validateDocument` reports
-`FEATURE_INVALID` for one in a document built by hand. It affects sketch
+`TypeError` for a value that is not a number and `RangeError` for any other
+number, and `validateDocument` reports `FEATURE_INVALID` for an invalid
+tolerance in a document built by hand. It affects sketch
 solution and profile validity checks; it is not permission to accept arbitrary
 gaps. Circle `segments` must be an integer of at least 3 and arc `segments` an
 integer of at least 2.
