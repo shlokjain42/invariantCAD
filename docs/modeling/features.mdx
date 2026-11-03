@@ -9,7 +9,11 @@ icon: "combine"
 ```ts
 const profile = cad.sketch("profile", plane.xy(), (sketch) =>
   sketch.profile(
-    sketch.rectangle("outline", { width: mm(40), height: mm(20) }),
+    sketch.rectangle("outline", {
+      width: mm(40),
+      height: mm(20),
+      center: vec2(mm(30), mm(0)),
+    }),
   ),
 );
 
@@ -23,6 +27,16 @@ const revolution = cad.revolve("revolution", profile, {
   segments: 96,
 });
 ```
+
+Revolve turns the profile about the sketch plane's local `v` axis through the
+sketch origin, the line `u = 0` in sketch coordinates. For `plane.xy()` that is
+the world Y axis. The whole profile must lie on one side of the axis; it may
+touch the axis (a profile starting at `u = 0` gives a solid with no bore), but
+it cannot cross it. Here the rectangle spans `u = 10..50`. A profile with
+material on both sides fails with `FEATURE_INVALID` at `/nodes/<id>/profile`
+(reason `profile-crosses-axis`) before any kernel call, so Manifold and OCCT
+reject it the same way. `segments` is a Manifold tessellation hint; OCCT
+revolves exactly and ignores it.
 
 Manifold additionally supports twisted and top-scaled extrusion:
 

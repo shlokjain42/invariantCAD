@@ -262,8 +262,16 @@ function extrusionMatrix(plane: NumericPlane): Mat4 {
   return matrixFromColumns(u, v, n, plane.origin);
 }
 
-function revolutionMatrix(plane: NumericPlane): Mat4 {
+function revolutionMatrix(plane: NumericPlane, mirrored = false): Mat4 {
   const { u, v, n } = numericPlaneBasis(plane);
+  if (mirrored) {
+    // Manifold revolves the section about its Y axis, which becomes local Z.
+    // A half turn about that axis, (x, y, z) -> (-x, -y, z), commutes with the
+    // revolution and maps the revolved mirror section (-x, y) exactly onto
+    // the revolution of the authored section (x, y).
+    const negativeU: Vec3 = [-u[0], -u[1], -u[2]];
+    return matrixFromColumns(negativeU, n, v, plane.origin);
+  }
   const negativeNormal: Vec3 = [-n[0], -n[1], -n[2]];
   return matrixFromColumns(u, negativeNormal, v, plane.origin);
 }
@@ -410,8 +418,23 @@ export class ManifoldKernel implements GeometryKernel {
     profile: ResolvedProfile,
     options: { readonly angle: number; readonly segments?: number },
   ): KernelShape {
-    const contours = tessellateProfile(profile).contours.map((contour) =>
-      contour.map((point) => [point[0], point[1]] as [number, number]),
+    const tessellated = tessellateProfile(profile).contours;
+    let minimumX = Number.POSITIVE_INFINITY;
+    let maximumX = Number.NEGATIVE_INFINITY;
+    for (const contour of tessellated) {
+      for (const point of contour) {
+        minimumX = Math.min(minimumX, point[0]);
+        maximumX = Math.max(maximumX, point[0]);
+      }
+    }
+    // Manifold keeps only the positive-X side of a revolved section, so a
+    // profile on the negative side of the axis is revolved as its mirror image.
+    const mirrored = -minimumX > maximumX;
+    const contours = tessellated.map((contour) =>
+      contour.map(
+        (point) =>
+          [mirrored ? -point[0] : point[0], point[1]] as [number, number],
+      ),
     );
     const section = new this.module.CrossSection(contours, "EvenOdd");
     let local: ManifoldSolid;
@@ -421,7 +444,7 @@ export class ManifoldKernel implements GeometryKernel {
       section.delete();
     }
     const placed = local.transform(
-      revolutionMatrix(profile.plane) as ManifoldMat4,
+      revolutionMatrix(profile.plane, mirrored) as ManifoldMat4,
     );
     local.delete();
     return this.own(placed);

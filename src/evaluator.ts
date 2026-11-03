@@ -117,6 +117,7 @@ import {
   validateResolvedProfileRegion,
 } from "./internal/resolved-profile-region.js";
 import { resolvedProfileRegionDiagnostic } from "./internal/resolved-profile-region-diagnostic.js";
+import { revolveAxisCrossing } from "./internal/revolve-axis.js";
 import {
   sketchSolveFailureDiagnostic,
   sketchSolverCapabilityDiagnostic,
@@ -14680,6 +14681,35 @@ export class Evaluator {
               );
             }
             const effectiveAngle = Math.min(angle, Math.PI * 2);
+            const revolveProfileNode = Object.hasOwn(
+              document.nodes,
+              node.profile.node,
+            )
+              ? document.nodes[node.profile.node]
+              : undefined;
+            const axisCrossing = revolveAxisCrossing(
+              profile.profile,
+              revolveProfileNode?.kind === "sketch"
+                ? revolveProfileNode.tolerance
+                : 1e-7,
+            );
+            if (axisCrossing !== undefined) {
+              throw new EvaluationFailure(
+                diagnostic(
+                  "FEATURE_INVALID",
+                  "Revolve profile must lie on one side of the revolve axis",
+                  {
+                    severity: "error",
+                    node: id,
+                    path: `/nodes/${id}/profile`,
+                    hints: [
+                      "The axis is the sketch plane's local v axis through the sketch origin (u = 0); keep the whole profile at u >= 0 or at u <= 0",
+                    ],
+                    details: { reason: "profile-crosses-axis", ...axisCrossing },
+                  },
+                ),
+              );
+            }
             result = ownShape(
               this.kernel.revolve!(profile.profile, {
                 angle: effectiveAngle,
