@@ -32,7 +32,9 @@ interface Diagnostic {
 
 Branch on `code`, not message text. Messages are written for people and can be
 clarified without a protocol change. `path` uses document-oriented paths when a
-specific authored field is responsible. `related` identifies other document
+specific authored field is responsible. Document paths are JSON Pointers: an
+ID segment that contains `~` or `/` is escaped as `~0` or `~1`, so a node named
+`a/b` is reported under `/nodes/a~1b`. `related` identifies other document
 locations involved in the same failure, such as the other end of a conflicting
 reference.
 
@@ -124,7 +126,7 @@ Do not catch and ignore them inside a model definition.
 
 For the unreleased public imported-body workflow, invalid caller definitions
 and unsafe source descriptors return `IMPORT_SOURCE_INVALID`; invalid
-evaluation options return `IR_INVALID`. Resource failures identify the
+evaluation options return `IR_INVALID` with a path under `/options`. Resource failures identify the
 resolution, commitment, or resource-limit phase without exposing bytes. The
 resolver is not invoked when the selected kernel lacks the strong exact
 single-solid capability or the operation is already aborted.
