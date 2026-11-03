@@ -19,12 +19,17 @@ export type Mat4 = readonly [
   number,
 ];
 
-export const IDENTITY_MATRIX: Mat4 = [
+/**
+ * The shared 4x4 identity matrix. It is frozen because placement helpers return
+ * it unchanged for an empty operation list, so a caller that wrote into it
+ * would otherwise corrupt every later placement in the process.
+ */
+export const IDENTITY_MATRIX: Mat4 = Object.freeze([
   1, 0, 0, 0,
   0, 1, 0, 0,
   0, 0, 1, 0,
   0, 0, 0, 1,
-];
+] as const);
 
 /**
  * Returns the unit vector in the direction of `value`, or `undefined` when any

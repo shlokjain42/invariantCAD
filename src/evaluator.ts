@@ -2632,8 +2632,15 @@ export class EvaluatedAssembly {
   ) {
     this.name = name;
     this.owner = owner;
-    this.occurrences = occurrences;
-    this.instances = occurrences.map((occurrence) => ({
+    // Detach every occurrence transform into a frozen copy shared by the public
+    // instances and the internal mesh, measure, and BOM paths, so no caller can
+    // write through a public transform into this result or into shared
+    // evaluator matrices.
+    this.occurrences = occurrences.map((occurrence) => ({
+      ...occurrence,
+      transform: Object.freeze([...occurrence.transform]) as unknown as Mat4,
+    }));
+    this.instances = this.occurrences.map((occurrence) => ({
       id: occurrence.id,
       partNode: occurrence.part.node,
       ...(occurrence.part.definition.partNumber === undefined
