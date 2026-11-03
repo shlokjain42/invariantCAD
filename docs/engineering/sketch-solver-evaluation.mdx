@@ -84,6 +84,14 @@ constraints that freeze its start and end angles. Without those constraints,
 PlaneGCS introduces two degrees of freedom that do not exist in the current
 InvariantCAD IR.
 
+Freezing the angles preserves the current reference-solver semantics: an arc's
+endpoints follow its center, radius, and authored angles, and no constraint
+joins them to line endpoints, so a constraint that changes a loop arc's radius
+or moves its center opens the loop (see
+[Arcs in constrained loops](/modeling/sketches-and-constraints#arcs-in-constrained-loops)).
+Letting arc endpoints move with adjacent lines needs new document IR, such as
+arc endpoint references for `coincident` and line-arc tangency.
+
 The production adapter must emit authored IDs in lexical order, then points,
 higher geometries, hidden arc helpers, and constraints in a fixed topological
 order. Synthetic numeric tags must map back to authored IDs, with hidden

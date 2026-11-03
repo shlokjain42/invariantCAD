@@ -107,6 +107,60 @@ The built-in solver is a permissively licensed reference implementation for
 isolation, redundant-constraint explanations, drag solving, and large sparse
 systems remain roadmap items.
 
+## Arcs in constrained loops
+
+The reference solver solves an arc's center and radius, but not its endpoints.
+Each endpoint is derived from the solved center, the solved radius, and the
+authored `startAngle` or `endAngle`, and no constraint can join an arc endpoint
+to a line endpoint. Line endpoints are separate points. A `radius`, `diameter`,
+or `equalRadius` constraint that changes a loop arc's radius, or a distance
+constraint that moves its center, therefore moves the arc away from the
+neighbouring lines while their endpoints stay where they were. The loop opens
+and evaluation fails with `SKETCH_NO_CLOSED_REGION` at
+`/nodes/<sketch>/profile`. The diagnostic's `details` give the resolved curve
+indices on either side of the first gap and the gap size, and `related` names
+those entities when solver provenance matches the authored loop.
+
+Arc constraints are safe when they keep the authored radius and center. To
+drive a loop arc, drive the adjacent line endpoints with it. Either author both
+from the same expression:
+
+```ts
+const slot = cad.sketch("slot", plane.xy(), (sketch) => {
+  const radius = mm(6);
+  const a = sketch.point("a", vec2(mm(0), radius.neg()));
+  const b = sketch.point("b", vec2(mm(20), radius.neg()));
+  const c = sketch.point("c", vec2(mm(20), radius));
+  const d = sketch.point("d", vec2(mm(0), radius));
+  const right = sketch.arc("right", {
+    center: vec2(mm(20), mm(0)),
+    radius,
+    startAngle: deg(-90),
+    endAngle: deg(90),
+  });
+  const left = sketch.arc("left", {
+    center: vec2(mm(0), mm(0)),
+    radius,
+    startAngle: deg(90),
+    endAngle: deg(270),
+  });
+  return sketch.profile(
+    sketch.loop([
+      sketch.line("bottom", a, b),
+      right,
+      sketch.line("top", c, d),
+      left,
+    ]),
+  );
+});
+```
+
+or constrain each adjacent line endpoint to its arc center with `distanceX` and
+`distanceY` values built from the same radius, for example
+`sketch.distanceY("b-follows-right", right.center, b, mm(-6))`. Joining arc
+endpoints to lines inside the solver is future work; see
+[Sketch solver evaluation](/engineering/sketch-solver-evaluation).
+
 ## Tolerance and validity
 
 ```ts
