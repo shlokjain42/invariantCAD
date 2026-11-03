@@ -18,6 +18,8 @@ describe("documentation page frontmatter", () => {
     ["title: Plain words", "Plain words"],
     ['title:   "Padded"   ', "Padded"],
     ['title: "Commented" # note', "Commented"],
+    ['title: "Tab\\tseparated"', "Tab\\tseparated"],
+    ['title: "\\u0041 escaped letter"', "\\u0041 escaped letter"],
   ])("reads %s", (line, value) => {
     expect(frontmatterScalar(`${line}\ndescription: "Other"`, "title")).toBe(value);
   });
@@ -32,6 +34,11 @@ describe("documentation page frontmatter", () => {
     ["an empty double-quoted value", 'title: ""\ndescription: "Real"'],
     ["an empty single-quoted value", "title: ''\ndescription: \"Real\""],
     ["a whitespace-only quoted value", 'title: "   "\ndescription: "Real"'],
+    ["an escaped space", 'title: "\\u0020"'],
+    ["escaped tab and line feed", 'title: "\\t\\n"'],
+    ["hex and long escaped spaces", 'title: "\\x20\\U00000020\\ "'],
+    ["escaped YAML line and space separators", 'title: "\\N\\_\\L\\P"'],
+    ["an escape YAML does not define", 'title: "Bad \\q escape"'],
     ["a blank value followed by another key", 'title:\ndescription: "Real"'],
     ["a blank value at the end", 'description: "Real"\ntitle:'],
     ["a blank value followed by an indented line", "title:\n  Continued"],

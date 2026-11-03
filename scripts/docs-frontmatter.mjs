@@ -4,10 +4,53 @@ const frontmatterPattern = /^---\n([\s\S]*?)\n---\n/;
 const doubleQuotedPattern = /^"((?:[^"\\]|\\.)*)"(?:[ \t]+#.*)?$/;
 const singleQuotedPattern = /^'((?:[^']|'')*)'(?:[ \t]+#.*)?$/;
 const nullPattern = /^(?:~|null|Null|NULL)$/;
+const doubleQuotedEscape = /\\(?:x([\da-fA-F]{2})|u([\da-fA-F]{4})|U([\da-fA-F]{8})|(.))/gs;
+// YAML 1.2 double-quoted single-character escapes.
+const simpleEscapes = new Map([
+  ["0", "\0"],
+  ["a", "\x07"],
+  ["b", "\b"],
+  ["t", "\t"],
+  ["\t", "\t"],
+  ["n", "\n"],
+  ["v", "\v"],
+  ["f", "\f"],
+  ["r", "\r"],
+  ["e", "\x1b"],
+  [" ", " "],
+  ['"', '"'],
+  ["/", "/"],
+  ["\\", "\\"],
+  ["N", "\u0085"],
+  ["_", "\u00a0"],
+  ["L", "\u2028"],
+  ["P", "\u2029"],
+]);
 
 /** Returns a page's leading YAML frontmatter block, or undefined. */
 export function pageFrontmatter(pageText) {
   return frontmatterPattern.exec(pageText)?.[1];
+}
+
+// Decodes the escapes of a double-quoted value, or returns undefined when one
+// is not a YAML escape, which makes the whole document invalid YAML.
+function decodeDoubleQuoted(text) {
+  let valid = true;
+  const decoded = text.replace(
+    doubleQuotedEscape,
+    (_escape, byte, unit, codePoint, character) => {
+      const hex = byte ?? unit ?? codePoint;
+      if (hex !== undefined) {
+        const value = Number.parseInt(hex, 16);
+        if (value <= 0x10ffff) return String.fromCodePoint(value);
+      } else if (simpleEscapes.has(character)) {
+        return simpleEscapes.get(character);
+      }
+      valid = false;
+      return "";
+    },
+  );
+  return valid ? decoded : undefined;
 }
 
 function plainScalar(text) {
@@ -41,9 +84,10 @@ function continuesOnNextLine(lines, keyIndex) {
 /**
  * Returns the single-line scalar value of one top-level frontmatter key,
  * with surrounding quotes removed and escapes left as written. Returns
- * undefined when the key is missing or repeated, or when its value is blank,
- * null, a block scalar, continued on another line, or not a plain or quoted
- * single-line string.
+ * undefined when the key is missing or repeated, or when its value is blank
+ * (after decoding double-quoted escapes), null, a block scalar, continued on
+ * another line, not a plain or quoted single-line string, or a double-quoted
+ * string with an escape that YAML does not define.
  */
 export function frontmatterScalar(frontmatter, field) {
   const prefix = `${field}:`;
@@ -58,9 +102,20 @@ export function frontmatterScalar(frontmatter, field) {
   const rest = lines[keyIndex].slice(prefix.length);
   if (rest !== "" && !/^[ \t]/.test(rest)) return undefined;
   const text = rest.trim();
-  const quoted =
-    doubleQuotedPattern.exec(text)?.[1] ?? singleQuotedPattern.exec(text)?.[1];
+  const doubleQuoted = doubleQuotedPattern.exec(text)?.[1];
+  if (doubleQuoted !== undefined) {
+    // Blankness is judged on the decoded text, so "\u0020" and "\t" are
+    // blank, but the value is returned as written.
+    const decoded = decodeDoubleQuoted(doubleQuoted);
+    return decoded === undefined || isBlank(decoded) ? undefined : doubleQuoted;
+  }
   const value =
-    quoted ?? (/^["']/.test(text) ? undefined : plainScalar(text));
-  return value === undefined || value.trim() === "" ? undefined : value;
+    singleQuotedPattern.exec(text)?.[1] ??
+    (/^["']/.test(text) ? undefined : plainScalar(text));
+  return value === undefined || isBlank(value) ? undefined : value;
+}
+
+// JavaScript whitespace plus YAML's next-line character, which trim() keeps.
+function isBlank(value) {
+  return /^[\s\u0085]*$/u.test(value);
 }

@@ -26,6 +26,8 @@
   spans) and fenced or indented code blocks, including those inside lists and
   block quotes, unchanged.
 - The documentation gate now rejects title or description frontmatter values
+  that are blank, including double-quoted values made only of escaped
+  whitespace such as `"\u0020"`, that use an escape YAML does not define, or
   that continue onto an indented line, including after blank or comment lines.
 - `parseDocument(text, options?)` now rejects JSON that repeats an object
   member name, including escape-equivalent spellings such as `"name"` and
