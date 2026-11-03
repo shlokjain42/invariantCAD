@@ -5,6 +5,7 @@ import {
   curveStart,
   createEvaluator,
   createManifoldKernel,
+  deg,
   design,
   mm,
   plane,
@@ -1363,6 +1364,317 @@ describe("resolved sketch profile containment", () => {
       expect(JSON.stringify(item)).not.toContain("payload");
       expect(JSON.stringify(item).length).toBeLessThan(2_000);
       expectNoKernelWork(harness.counters);
+    } finally {
+      evaluator.dispose();
+    }
+  });
+
+  it("counts an arc endpoint at its circle's lowest point with the half-open ray rule", () => {
+    // A rectangle with a semicircular bump on its right side. The bump arc
+    // starts at its circle's lowest point (10, -5) and ends at its highest
+    // point (10, 5), and the straight right side continues away from both.
+    const bump: ResolvedLoop = {
+      curves: [
+        { kind: "line", start: [-20, -20], end: [10, -20], source: source("bump-bottom") },
+        { kind: "line", start: [10, -20], end: [10, -5], source: source("bump-right-lower") },
+        {
+          kind: "arc",
+          center: [10, 0],
+          radius: 5,
+          startAngle: -Math.PI / 2,
+          endAngle: Math.PI / 2,
+          clockwise: false,
+          source: source("bump-arc"),
+        },
+        { kind: "line", start: [10, 5], end: [10, 20], source: source("bump-right-upper") },
+        { kind: "line", start: [10, 20], end: [-20, 20], source: source("bump-top") },
+        { kind: "line", start: [-20, 20], end: [-20, -20], source: source("bump-left") },
+      ],
+    };
+    for (const y of [-5, 5]) {
+      // The hole witness is the circle start, (center x + radius, y).
+      expect(
+        validateResolvedProfileRegion(
+          profile([circleLoop([0, y], 3, "inside-at-tangent")], bump),
+          PROFILE_TOLERANCE,
+        ),
+        `inside hole at y = ${y}`,
+      ).toBeUndefined();
+      expect(
+        validateResolvedProfileRegion(
+          profile([circleLoop([-35, y], 3, "outside-at-tangent")], bump),
+          PROFILE_TOLERANCE,
+        ),
+        `outside hole at y = ${y}`,
+      ).toEqual(
+        expect.objectContaining({ reason: "hole-outside-outer", holeIndex: 0 }),
+      );
+      expect(
+        validateResolvedProfileRegion(
+          profile(
+            [reverseLoop(bump), circleLoop([0, y], 3, "nested-at-tangent")],
+            rectangleLoop(-100, -100, 100, 100, "frame"),
+          ),
+          PROFILE_TOLERANCE,
+        ),
+        `nested hole at y = ${y}`,
+      ).toEqual(
+        expect.objectContaining({
+          reason: "hole-nesting",
+          holeIndex: 1,
+          otherHoleIndex: 0,
+        }),
+      );
+    }
+
+    // An endpoint a hair past the tangent point, where a crossing angle
+    // cannot be told apart from the tangency, is still classified: parity
+    // comes from the sides of the arc's monotone pieces, not crossing angles.
+    const nearTangent: ResolvedLoop = {
+      curves: bump.curves.map((curve) =>
+        curve.kind === "arc"
+          ? { ...curve, startAngle: -Math.PI / 2 + 1e-9 }
+          : curve,
+      ),
+    };
+    expect(
+      validateResolvedProfileRegion(
+        profile([circleLoop([0, -5], 3, "near-tangent")], nearTangent),
+        PROFILE_TOLERANCE,
+      ),
+    ).toBeUndefined();
+    expect(
+      validateResolvedProfileRegion(
+        profile([circleLoop([-35, -5], 3, "outside-near-tangent")], nearTangent),
+        PROFILE_TOLERANCE,
+      ),
+    ).toEqual(
+      expect.objectContaining({ reason: "hole-outside-outer", holeIndex: 0 }),
+    );
+  });
+
+  it("classifies a ray a rounding error off an arc endpoint like the line it meets", () => {
+    // The semicircular bump from the previous test: the arc meets vertical
+    // lines at its circle's lowest (10, -5) and highest (10, 5) points.
+    const bump: ResolvedLoop = {
+      curves: [
+        { kind: "line", start: [-20, -20], end: [10, -20], source: source("bump-bottom") },
+        { kind: "line", start: [10, -20], end: [10, -5], source: source("bump-right-lower") },
+        {
+          kind: "arc",
+          center: [10, 0],
+          radius: 5,
+          startAngle: -Math.PI / 2,
+          endAngle: Math.PI / 2,
+          clockwise: false,
+          source: source("bump-arc"),
+        },
+        { kind: "line", start: [10, 5], end: [10, 20], source: source("bump-right-upper") },
+        { kind: "line", start: [10, 20], end: [-20, 20], source: source("bump-top") },
+        { kind: "line", start: [-20, 20], end: [-20, -20], source: source("bump-left") },
+      ],
+    };
+    // A quarter arc that ends at its circle's rightmost point (10, 0) moving
+    // upward and meets a vertical line there: a transversal crossing.
+    const corner: ResolvedLoop = {
+      curves: [
+        { kind: "line", start: [-20, -20], end: [5, -20], source: source("corner-bottom") },
+        { kind: "line", start: [5, -20], end: [5, -5], source: source("corner-lower") },
+        {
+          kind: "arc",
+          center: [5, 0],
+          radius: 5,
+          startAngle: -Math.PI / 2,
+          endAngle: 0,
+          clockwise: false,
+          source: source("corner-arc"),
+        },
+        { kind: "line", start: [10, 0], end: [10, 20], source: source("corner-right") },
+        { kind: "line", start: [10, 20], end: [-20, 20], source: source("corner-top") },
+        { kind: "line", start: [-20, 20], end: [-20, -20], source: source("corner-left") },
+      ],
+    };
+    const cases = [
+      { name: "bump", outer: bump, levels: [-5, 5] },
+      { name: "corner", outer: corner, levels: [0] },
+    ];
+    for (const { name, outer, levels } of cases) {
+      for (const level of levels) {
+        for (const offset of [-1e-11, -1e-13, -1e-15, 1e-15, 1e-13, 1e-11]) {
+          const y = level + offset;
+          expect(
+            validateResolvedProfileRegion(
+              profile([circleLoop([0, y], 3, "inside-near-junction")], outer),
+              PROFILE_TOLERANCE,
+            ),
+            `${name}: inside hole at ${level} + ${offset}`,
+          ).toBeUndefined();
+          expect(
+            validateResolvedProfileRegion(
+              profile([circleLoop([-35, y], 3, "outside-near-junction")], outer),
+              PROFILE_TOLERANCE,
+            ),
+            `${name}: outside hole at ${level} + ${offset}`,
+          ).toEqual(
+            expect.objectContaining({ reason: "hole-outside-outer", holeIndex: 0 }),
+          );
+        }
+      }
+    }
+  });
+
+  it("tests a straight curve's crossing between the junction points it shares", () => {
+    // An L-shaped outline whose notch edge runs a rounding error from the ray.
+    // The left side and the notch edge meet across a gap far below the
+    // connector guard, on opposite sides of the ray, while the whole notch
+    // edge lies on one side. Its crossing must be placed between the shared
+    // junction points, not extrapolated from its own endpoints.
+    for (const [sideEnd, notchStart, notchEnd] of [
+      [-1e-13, 1e-13, 1e-14],
+      [1e-13, -1e-13, -1e-14],
+    ] as const) {
+      const notched: ResolvedLoop = {
+        curves: [
+          { kind: "line", start: [-10, -20], end: [20, -20], source: source("bottom") },
+          { kind: "line", start: [20, -20], end: [20, 20], source: source("right") },
+          { kind: "line", start: [20, 20], end: [-20, 20], source: source("top") },
+          { kind: "line", start: [-20, 20], end: [-20, sideEnd], source: source("left") },
+          { kind: "line", start: [-20, notchStart], end: [-10, notchEnd], source: source("notch") },
+          { kind: "line", start: [-10, notchEnd], end: [-10, -20], source: source("step") },
+        ],
+      };
+      expect(
+        validateResolvedProfileRegion(
+          profile([circleLoop([0, 0], 1, "inside-notch")], notched),
+          PROFILE_TOLERANCE,
+        ),
+        `inside hole, notch ${notchStart}`,
+      ).toBeUndefined();
+      expect(
+        validateResolvedProfileRegion(
+          profile([circleLoop([-40, 0], 1, "outside-notch")], notched),
+          PROFILE_TOLERANCE,
+        ),
+        `outside hole, notch ${notchStart}`,
+      ).toEqual(
+        expect.objectContaining({ reason: "hole-outside-outer", holeIndex: 0 }),
+      );
+    }
+  });
+
+  it("classifies a junction once when an arc endpoint misses its line by a rounding error", () => {
+    // An L-bracket whose inside fillet starts at its circle's lowest point.
+    // With these decimal radii the evaluated lowest point lands one rounding
+    // error above or below the authored step endpoint that the hole witness
+    // is level with, so the arc alone would put the junction on the other
+    // side of the ray from the step line.
+    for (const radius of [6.1, 6.4]) {
+      const corner = Number((10 + radius).toFixed(1));
+      const filletStartY = corner + radius * Math.sin(Math.PI * 1.5);
+      expect(filletStartY).not.toBe(10);
+      expect(Math.abs(filletStartY - 10)).toBeLessThan(1e-14);
+      const bracket: ResolvedLoop = {
+        curves: [
+          { kind: "line", start: [0, 0], end: [40, 0], source: source("base") },
+          { kind: "line", start: [40, 0], end: [40, 10], source: source("end") },
+          { kind: "line", start: [40, 10], end: [corner, 10], source: source("step") },
+          {
+            kind: "arc",
+            center: [corner, corner],
+            radius,
+            startAngle: Math.PI * 1.5,
+            endAngle: Math.PI,
+            clockwise: true,
+            source: source("fillet"),
+          },
+          { kind: "line", start: [10, corner], end: [10, 40], source: source("inner") },
+          { kind: "line", start: [10, 40], end: [0, 40], source: source("top") },
+          { kind: "line", start: [0, 40], end: [0, 0], source: source("back") },
+        ],
+      };
+      expect(
+        validateResolvedProfileRegion(
+          profile([circleLoop([3, 10], 2, "inside-level")], bracket),
+          PROFILE_TOLERANCE,
+        ),
+        `inside hole, fillet radius ${radius}`,
+      ).toBeUndefined();
+      expect(
+        validateResolvedProfileRegion(
+          profile([circleLoop([-7, 10], 2, "outside-level")], bracket),
+          PROFILE_TOLERANCE,
+        ),
+        `outside hole, fillet radius ${radius}`,
+      ).toEqual(
+        expect.objectContaining({ reason: "hole-outside-outer", holeIndex: 0 }),
+      );
+    }
+  });
+
+  it("classifies holes level with an L-bracket's inside fillet through the evaluator", async () => {
+    const bracket = (holeCenterX: number): DesignDocument => {
+      const cad = design("filleted-l-bracket");
+      const profile = cad.sketch("profile", plane.xy(), (sketch) => {
+        const p0 = sketch.point("p0", vec2(mm(0), mm(0)));
+        const p1 = sketch.point("p1", vec2(mm(40), mm(0)));
+        const p2 = sketch.point("p2", vec2(mm(40), mm(10)));
+        const p3 = sketch.point("p3", vec2(mm(15), mm(10)));
+        const p4 = sketch.point("p4", vec2(mm(10), mm(15)));
+        const p5 = sketch.point("p5", vec2(mm(10), mm(40)));
+        const p6 = sketch.point("p6", vec2(mm(0), mm(40)));
+        // The inside fillet starts at its circle's lowest point, level with
+        // the step, and the hole witness lies on that horizontal.
+        const fillet = sketch.arc("fillet", {
+          center: vec2(mm(15), mm(15)),
+          radius: mm(5),
+          startAngle: deg(270),
+          endAngle: deg(180),
+          clockwise: true,
+        });
+        const hole = sketch.circle("hole", {
+          center: vec2(mm(holeCenterX), mm(10)),
+          radius: mm(2),
+        });
+        return sketch.profile(
+          sketch.loop([
+            sketch.line("base", p0, p1),
+            sketch.line("end", p1, p2),
+            sketch.line("step", p2, p3),
+            fillet,
+            sketch.line("inner", p4, p5),
+            sketch.line("top", p5, p6),
+            sketch.line("back", p6, p0),
+          ]),
+          { holes: [hole.loop()] },
+        );
+      });
+      cad.output("bracket", cad.extrude("bracket", profile, { distance: mm(2) }));
+      return cad.build();
+    };
+    const evaluator = await createEvaluator();
+    try {
+      const inside = await evaluator.evaluate(bracket(5));
+      expect(inside.ok).toBe(true);
+      if (inside.ok) {
+        try {
+          const area = 40 * 10 + 10 * 30 + (25 - (Math.PI * 25) / 4) - Math.PI * 4;
+          expect(
+            Math.abs(inside.value.output("bracket").measure().volume - area * 2),
+          ).toBeLessThan(0.5);
+        } finally {
+          inside.value.dispose();
+        }
+      }
+
+      const outside = await evaluator.evaluate(bracket(-5));
+      if (outside.ok) outside.value.dispose();
+      expect(outside.ok).toBe(false);
+      expect(diagnosticWithCode(outside, "SKETCH_NO_CLOSED_REGION")).toEqual(
+        expect.objectContaining({
+          node: "profile",
+          details: expect.objectContaining({ reason: "hole-outside-outer" }),
+        }),
+      );
     } finally {
       evaluator.dispose();
     }

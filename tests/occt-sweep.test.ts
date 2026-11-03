@@ -1036,6 +1036,59 @@ describe("OCCT bounded solid sweep", { timeout: 30_000 }, () => {
     }
   });
 
+  it("rejects right-corner miters that exceed a segment or reach a remote segment", async () => {
+    const kernel = await createOcctKernel();
+    const raw = (kernel as any).raw as Record<string, any>;
+    const originalSweep = raw.sweep.bind(raw) as (...arguments_: any[]) => any;
+    let sweepCalls = 0;
+    try {
+      raw.sweep = (...arguments_: any[]) => {
+        sweepCalls += 1;
+        return originalSweep(...arguments_);
+      };
+      // A 2 x 2 square has envelope radius sqrt(2), so a 90 degree corner sets
+      // the inner miter back by sqrt(2) on each side of the vertex.
+      expect(() =>
+        kernel.sweep!(
+          rectangleProfile("short-end-profile", 2, 2),
+          path([
+            [0, 0, 0],
+            [0, 0, 10],
+            [1, 0, 10],
+          ]),
+          SWEEP_OPTIONS,
+          { feature: "short-end-sweep", tolerance: 1e-7 },
+        ),
+      ).toThrow("too short for the right-corner miters");
+
+      // The 160 degree corner at (0, 0, 30) has an outer miter spike about
+      // 8 mm long that passes through the first segment's tube at z = 35,
+      // although every non-adjacent spine distance exceeds 2 * sqrt(2).
+      const turn = (160 * Math.PI) / 180;
+      const spike = path([
+        [-0.5, 0, 35],
+        [-0.5, 20, 35],
+        [0, 10, 0],
+        [0, 10, 30],
+        [30 * Math.sin(turn), 10, 30 + 30 * Math.cos(turn)],
+      ]);
+      const seated = {
+        ...rectangleProfile("spike-profile", 2, 2),
+        plane: { plane: "XZ", origin: [-0.5, 0, 35] },
+      } satisfies ResolvedProfile;
+      expect(() =>
+        kernel.sweep!(seated, spike, SWEEP_OPTIONS, {
+          feature: "spike-sweep",
+          tolerance: 1e-7,
+        }),
+      ).toThrow("Non-adjacent sweep path segments are too close");
+      expect(sweepCalls).toBe(0);
+    } finally {
+      raw.sweep = originalSweep;
+      kernel.dispose();
+    }
+  });
+
   it("releases failed sweeps and remains usable", async () => {
     const kernel = await createOcctKernel();
     try {
@@ -1063,14 +1116,33 @@ describe("OCCT bounded solid sweep", { timeout: 30_000 }, () => {
       ).toThrow("OCCT pipe-shell linear tolerance");
 
       const oversized = circleProfile("oversized-profile", 5);
-      const tightCorner = path([
+      // The right-corner miter setback, 5 * tan(45 deg), exceeds both 2 mm
+      // segments, so admission rejects the corner before native allocation.
+      expect(() =>
+        kernel.sweep!(
+          oversized,
+          path([
+            [0, 0, 0],
+            [0, 0, 2],
+            [2, 0, 2],
+          ]),
+          SWEEP_OPTIONS,
+          { feature: "oversized-corner-sweep", tolerance: 1e-7 },
+        ),
+      ).toThrow("too short for the right-corner miters");
+
+      // A 150 degree corner whose segments exceed the miter setback by only
+      // 1e-6 passes admission, but stock OCCT cannot build the sliver.
+      const turn = (150 * Math.PI) / 180;
+      const sliver = 5 * Math.tan(turn / 2) + 1e-6;
+      const sliverCorner = path([
         [0, 0, 0],
-        [0, 0, 2],
-        [2, 0, 2],
+        [0, 0, sliver],
+        [sliver * Math.sin(turn), 0, sliver + sliver * Math.cos(turn)],
       ]);
       for (let attempt = 0; attempt < 5; attempt += 1) {
         expect(() =>
-          kernel.sweep!(oversized, tightCorner, SWEEP_OPTIONS, {
+          kernel.sweep!(oversized, sliverCorner, SWEEP_OPTIONS, {
             feature: `failed-sweep-${attempt}`,
             tolerance: 1e-7,
           }),

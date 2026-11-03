@@ -29,9 +29,25 @@ const upper = cad.sketch(
 const loft = cad.loft("loft", [lower, upper], { ruled: true });
 ```
 
-The current document grammar requires at least two distinct, ordered,
-hole-free profiles on compatible parallel principal planes. Interpolation is
-ruled; smooth, guided, open, and holed lofts remain future contracts.
+Interpolation is ruled: curve `i` of each section is joined to curve `i` of the
+next. The current document grammar therefore requires:
+
+- at least two hole-free profiles, each one closed outer loop;
+- planes of the same principal-plane family at distinct, strictly monotonic
+  stations (in-plane offsets are allowed);
+- the same loop orientation, clockwise or counterclockwise, in every section;
+- the same number of boundary curves with the same kinds and traversal
+  directions in the same order, so a rectangle can loft to a rectangle and a
+  circle to a circle, but a rectangle-to-circle loft fails with
+  `curve-signature-mismatch`;
+- the authored starting phase between every pair of adjacent sections. If
+  rotating a section's curve order would pair it more closely with its
+  neighbour, the loft fails with `curve-phase-mismatch` instead of letting OCCT
+  re-pair the curves. A gradual twist is fine as long as each adjacent pair
+  stays closest in its authored pairing.
+
+Rejected sections fail with `FEATURE_INVALID` at `/nodes/<id>/profiles/<index>`.
+Mixed-shape, smooth, guided, open, and holed lofts remain future contracts.
 
 ## Polyline path
 
@@ -44,14 +60,16 @@ const path = cad.polylinePath("path", [
 ```
 
 Paths are first-class nodes, not sketch profiles. The polyline must be open and
-simple; repeated points and redundant collinear vertices are rejected.
+simple; repeated points and redundant collinear vertices are rejected, and so is
+a corner that folds a segment back within tolerance of its neighbour
+(`self-intersection`). Composite line-line junctions reject the same fold-back.
 
 ## Three-point circular arc
 
 ```ts
 const arc = cad.circularArcPath("bend", {
   start: vec3(mm(0), mm(0), mm(0)),
-  through: vec3(mm(7.071), mm(2.929), mm(0)),
+  through: vec3(mm(10 / Math.sqrt(2)), mm(10 - 10 / Math.sqrt(2)), mm(0)),
   end: vec3(mm(10), mm(10), mm(0)),
 });
 ```
@@ -68,7 +86,7 @@ const route = cad.compositePath("route", {
     { kind: "line", end: vec3(mm(5), mm(0), mm(0)) },
     {
       kind: "circularArc",
-      through: vec3(mm(8.535), mm(1.465), mm(0)),
+      through: vec3(mm(5 + 5 / Math.sqrt(2)), mm(5 - 5 / Math.sqrt(2)), mm(0)),
       end: vec3(mm(10), mm(5), mm(0)),
     },
     { kind: "line", end: vec3(mm(10), mm(10), mm(0)) },
@@ -79,6 +97,12 @@ const route = cad.compositePath("route", {
 A composite has at least two segments and at least one arc. Segments connect by
 construction because each begins at the previous end. Arc junctions must be
 forward G1 tangent; line-line junctions use right-corner semantics.
+
+Tangency at a junction that touches an arc is checked to a scale-independent
+sine of `1e-8` (`COMPOSITE_PATH_MAX_JUNCTION_SINE`). Write arc points as exact
+expressions, as above. A through point rounded to a few decimals, such as
+`mm(8.535)`, tilts the arc enough to fail with `FEATURE_INVALID` (reason
+`non-tangent-junction`).
 
 ## Sweep a profile
 
@@ -101,6 +125,85 @@ const swept = cad.sweep("swept", section, route, {
 Those option values are currently the only admitted frame and transition
 contracts; omitting them selects the same defaults.
 
+### Complete example
+
+This canonical module combines the route and section above, sweeps them on
+stock OCCT, and is executed in CI:
+
+{/* docs-example:start composite-route-sweep */}
+
+```ts
+import {
+  EvaluatedSolid,
+  createEvaluator,
+  design,
+  mm,
+  plane,
+  vec3,
+} from "invariantcad";
+
+const cad = design("routed-bar");
+
+// Arc points are exact expressions: an arc-bearing junction must be tangent
+// to a scale-independent sine of 1e-8, so hand-rounded coordinates fail.
+const route = cad.compositePath("route", {
+  start: vec3(mm(0), mm(0), mm(0)),
+  segments: [
+    { kind: "line", end: vec3(mm(5), mm(0), mm(0)) },
+    {
+      kind: "circularArc",
+      through: vec3(mm(5 + 5 / Math.sqrt(2)), mm(5 - 5 / Math.sqrt(2)), mm(0)),
+      end: vec3(mm(10), mm(5), mm(0)),
+    },
+    { kind: "line", end: vec3(mm(10), mm(10), mm(0)) },
+  ],
+});
+
+// The YZ section is seated at the route start, normal to its +X tangent.
+const section = cad.sketch("section", plane.yz(), (sketch) =>
+  sketch.profile(
+    sketch.rectangle("section-outline", { width: mm(2), height: mm(2) }),
+  ),
+);
+
+const swept = cad.sweep("swept", section, route, {
+  frame: "corrected-frenet",
+  transition: "right-corner",
+});
+cad.output("swept", swept);
+
+async function evaluateRoutedBar() {
+  // Sweeps are exact features, so evaluate them with stock OCCT.
+  const evaluator = await createEvaluator({ profile: "mechanical-exact" });
+  try {
+    const result = await evaluator.evaluate(cad.build());
+    if (!result.ok) {
+      throw new Error(
+        result.diagnostics
+          .map((item) => `${item.code} ${item.path ?? ""}: ${item.message}`)
+          .join("\n"),
+      );
+    }
+    try {
+      const solid = result.value.output("swept");
+      if (!(solid instanceof EvaluatedSolid)) {
+        throw new Error("Expected the 'swept' output to be a solid");
+      }
+      return { volume: solid.measure().volume };
+    } finally {
+      result.value.dispose();
+    }
+  } finally {
+    evaluator.dispose();
+  }
+}
+
+export const routedBarSummary = await evaluateRoutedBar();
+console.log(routedBarSummary);
+```
+
+{/* docs-example:end composite-route-sweep */}
+
 ## Clearance and conditioning
 
 InvariantCAD validates more than path syntax. It checks the full profile
@@ -112,6 +215,16 @@ The important user-facing rule is simple: the complete cross-section needs
 physical clearance around every bend and between remote path segments.
 Shrinking only a nominal width while leaving an off-center profile can still be
 invalid.
+
+Clearance is measured with the profile envelope radius `r`, the distance from
+the profile origin (the path start) to the farthest point of the section. A
+right corner that turns by `θ`, at a polyline vertex or a composite line-line
+junction, cuts the section on the bisector plane. That miter reaches
+`r · tan(θ / 2)` before the vertex on the inside of the turn and the same
+distance beyond it on the outside. Each straight segment must therefore be
+longer than the miter setbacks at its two ends, and remote segments must clear
+the segments extended by that outer reach by more than `2r`. Short segments
+between sharp corners fail with `FEATURE_INVALID` (reason `path-clearance`).
 
 For exact tolerances, major-arc restrictions, centered-profile stock-runtime
 behavior, and the owned-facade refinements, read the

@@ -831,6 +831,70 @@ describe("OCCT ruled solid loft", { timeout: 30_000 }, () => {
     }
   });
 
+  it("checks curve phase between adjacent sections before native loft construction", async () => {
+    const square = (sketch: string, station: number, degrees: number) => {
+      const profile = rectangleProfile(sketch, station, 2, 2);
+      const angle = (degrees * Math.PI) / 180;
+      const rotate = (
+        point: readonly [number, number],
+      ): readonly [number, number] => [
+        point[0] * Math.cos(angle) - point[1] * Math.sin(angle),
+        point[0] * Math.sin(angle) + point[1] * Math.cos(angle),
+      ];
+      return {
+        ...profile,
+        outer: {
+          curves: profile.outer.curves.map((curve) =>
+            curve.kind === "line"
+              ? { ...curve, start: rotate(curve.start), end: rotate(curve.end) }
+              : curve,
+          ),
+        },
+      } satisfies ResolvedProfile;
+    };
+    // Authored ruled volume of two equal 2 x 2 squares twisted by alpha over
+    // a height h: h * 4 * (2 / 3 + cos(alpha) / 3).
+    const ruledVolume = (height: number, degrees: number) =>
+      height * 4 * (2 / 3 + Math.cos((degrees * Math.PI) / 180) / 3);
+    const kernel = await createOcctKernel();
+    const raw = (kernel as any).raw as Record<string, any>;
+    const originalLoft = raw.loft.bind(raw) as (...arguments_: any[]) => any;
+    let loftCalls = 0;
+    try {
+      raw.loft = (...arguments_: any[]) => {
+        loftCalls += 1;
+        return originalLoft(...arguments_);
+      };
+      expect(() =>
+        kernel.loft!(
+          [square("s0", 0, 0), square("s1", 10, -44), square("s2", 20, 44)],
+          { ruled: true },
+          { feature: "neighbour-phase-loft", tolerance: 1e-7 },
+        ),
+      ).toThrow("preserve the authored boundary curve phase");
+      expect(loftCalls).toBe(0);
+
+      const shape = kernel.loft!(
+        [square("s0", 0, 0), square("s1", 10, 40), square("s2", 20, 80)],
+        { ruled: true },
+        { feature: "gradual-twist-loft", tolerance: 1e-7 },
+      );
+      try {
+        expect(loftCalls).toBeGreaterThan(0);
+        expect(kernel.status(shape)).toEqual({ ok: true, code: "VALID" });
+        expect(kernel.measure(shape).volume).toBeCloseTo(
+          ruledVolume(10, 40) * 2,
+          6,
+        );
+      } finally {
+        kernel.disposeShape(shape);
+      }
+    } finally {
+      raw.loft = originalLoft;
+      kernel.dispose();
+    }
+  });
+
   it("downgrades annotation-only native failures, cleans temporaries, and recovers", async () => {
     const kernel = await createOcctKernel();
     const raw = (kernel as any).raw as Record<string, any>;

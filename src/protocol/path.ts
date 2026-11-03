@@ -313,6 +313,23 @@ export function resolvedPolylineSegmentDistance(
   return Number.isFinite(resolvedDistance) ? resolvedDistance : 0;
 }
 
+/**
+ * Whether two adjacent straight segments `start -> junction -> end` fold back
+ * onto each other: the far endpoint of either lies within tolerance of the
+ * other segment, so they overlap away from their shared vertex.
+ */
+function adjacentLinesFoldBack(
+  start: Vec3,
+  junction: Vec3,
+  end: Vec3,
+  tolerance: number,
+): boolean {
+  return (
+    !(resolvedPolylineSegmentDistance(end, end, start, junction) > tolerance) ||
+    !(resolvedPolylineSegmentDistance(start, start, junction, end) > tolerance)
+  );
+}
+
 /** Checks the current open, explicitly segmented polyline-path contract. */
 export function validateResolvedPolylinePath(
   path: ResolvedPolylinePath,
@@ -394,6 +411,22 @@ export function validateResolvedPolylinePath(
           "Adjacent path segments must form an explicit non-collinear corner",
         pointIndex: index,
         segmentIndex: index,
+      };
+    }
+    if (
+      adjacentLinesFoldBack(
+        path.points[index - 1]!,
+        path.points[index]!,
+        path.points[index + 1]!,
+        tolerance,
+      )
+    ) {
+      return {
+        reason: "self-intersection",
+        message: `Path segments ${index - 1} and ${index} fold back within tolerance`,
+        pointIndex: index + 1,
+        segmentIndex: index,
+        otherSegmentIndex: index - 1,
       };
     }
   }
@@ -1057,6 +1090,16 @@ export function validateResolvedCompositePath(
           reason: "redundant-segments",
           message:
             "Adjacent collinear composite line segments must be represented as one segment",
+          segmentIndex: index,
+          otherSegmentIndex: index - 1,
+        };
+      }
+      if (
+        adjacentLinesFoldBack(prior.start, prior.end, current.end, tolerance)
+      ) {
+        return {
+          reason: "self-intersection",
+          message: `Composite path segments ${index - 1} and ${index} fold back within tolerance`,
           segmentIndex: index,
           otherSegmentIndex: index - 1,
         };

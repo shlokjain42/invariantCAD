@@ -117,6 +117,11 @@ import {
   validateResolvedProfileRegion,
 } from "./internal/resolved-profile-region.js";
 import { resolvedProfileRegionDiagnostic } from "./internal/resolved-profile-region-diagnostic.js";
+import { revolveAxisCrossing } from "./internal/revolve-axis.js";
+import {
+  sketchSolveFailureDiagnostic,
+  sketchSolverCapabilityDiagnostic,
+} from "./internal/sketch-solve-admission.js";
 import {
   combinePhysicalMassProperties,
   physicalMassProperties as scalePhysicalMassProperties,
@@ -203,6 +208,7 @@ import {
   type StagedSolidGraphRootV7,
   type StagedSolidLeafNodeV7,
 } from "./internal/document-v7-solid-graph-evaluation.js";
+import { jsonPointerSegment } from "./core/json-pointer.js";
 
 export type ParameterOverride = EvaluationParameterOverride;
 export type ShapeExportFormat = MeshExportFormat | KernelExchangeFormat;
@@ -14488,16 +14494,37 @@ export class Evaluator {
             );
             break;
           case "sketch": {
+            const unsupported = sketchSolverCapabilityDiagnostic(
+              this.sketchSolver,
+              node,
+              id,
+            );
+            if (unsupported !== undefined) {
+              throw new EvaluationFailure(unsupported);
+            }
             const solved = this.sketchSolver.solve(node, {
               evaluate: expression,
               feature: id,
               ...(options.signal === undefined ? {} : { signal: options.signal }),
             });
-            diagnostics.push(
-              ...solved.diagnostics.map((item) => ({ ...item, node: id })),
+            // A custom solver may omit the path; its errors still point at
+            // the sketch node, as every other modeling failure does.
+            const solverDiagnostics = solved.diagnostics.map((item) => ({
+              ...item,
+              node: id,
+              ...(item.severity === "error" && item.path === undefined
+                ? { path: `/nodes/${jsonPointerSegment(id)}` }
+                : {}),
+            }));
+            diagnostics.push(...solverDiagnostics);
+            const solveFailure = sketchSolveFailureDiagnostic(
+              this.sketchSolver,
+              solved,
+              solverDiagnostics,
+              id,
             );
-            if (hasErrors(solved.diagnostics)) {
-              throw new EvaluationFailure(solved.diagnostics[0]!);
+            if (solveFailure !== undefined) {
+              throw new EvaluationFailure(solveFailure);
             }
             const regionIssue = validateResolvedProfileRegion(
               solved.profile,
@@ -14660,6 +14687,35 @@ export class Evaluator {
               );
             }
             const effectiveAngle = Math.min(angle, Math.PI * 2);
+            const revolveProfileNode = Object.hasOwn(
+              document.nodes,
+              node.profile.node,
+            )
+              ? document.nodes[node.profile.node]
+              : undefined;
+            const axisCrossing = revolveAxisCrossing(
+              profile.profile,
+              revolveProfileNode?.kind === "sketch"
+                ? revolveProfileNode.tolerance
+                : 1e-7,
+            );
+            if (axisCrossing !== undefined) {
+              throw new EvaluationFailure(
+                diagnostic(
+                  "FEATURE_INVALID",
+                  "Revolve profile must lie on one side of the revolve axis",
+                  {
+                    severity: "error",
+                    node: id,
+                    path: `/nodes/${jsonPointerSegment(id)}/profile`,
+                    hints: [
+                      "The axis is the sketch plane's local v axis through the sketch origin (u = 0); keep the whole profile at u >= 0 or at u <= 0",
+                    ],
+                    details: { reason: "profile-crosses-axis", ...axisCrossing },
+                  },
+                ),
+              );
+            }
             result = ownShape(
               this.kernel.revolve!(profile.profile, {
                 angle: effectiveAngle,
@@ -14772,7 +14828,7 @@ export class Evaluator {
                   diagnostic("FEATURE_INVALID", classification.message, {
                     severity: "error",
                     node: id,
-                    path: `/nodes/${id}/profile`,
+                    path: `/nodes/${jsonPointerSegment(id)}/profile`,
                     details: {
                       reason: classification.reason,
                       ...(classification.segmentIndex === undefined

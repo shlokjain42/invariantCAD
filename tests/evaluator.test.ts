@@ -11,6 +11,7 @@ import {
   EvaluatedSolid,
   createEvaluator,
   createManifoldKernel,
+  deg,
   design,
   mm,
   plane,
@@ -25,6 +26,7 @@ import {
   type Evaluator,
   type GeometryKernel,
   type KernelTopologySnapshot,
+  type SketchBuilder,
 } from "../src/index.js";
 
 let evaluator: Evaluator;
@@ -464,6 +466,236 @@ describe("geometry evaluation", () => {
       expect(obj).toContain("f ");
     } finally {
       result.dispose();
+    }
+  });
+});
+
+describe("revolve axis admission", () => {
+  function revolveDocument(
+    build: (sketch: SketchBuilder) => ReturnType<SketchBuilder["profile"]>,
+    angle = deg(270),
+  ): DesignDocument {
+    const cad = design("revolve-axis");
+    const profile = cad.sketch("profile", plane.xy(), build);
+    cad.output(
+      "solid",
+      cad.revolve("revolution", profile, { angle, segments: 96 }),
+    );
+    return cad.build();
+  }
+
+  function rectangleAt(centerX: number, width = 40) {
+    return (sketch: SketchBuilder) =>
+      sketch.profile(
+        sketch.rectangle("outline", {
+          width: mm(width),
+          height: mm(20),
+          center: vec2(mm(centerX), mm(0)),
+        }),
+      );
+  }
+
+  async function revolveCalls(
+    document: DesignDocument,
+  ): Promise<{ readonly result: CadResult<EvaluatedDesign>; readonly calls: number }> {
+    const delegate = await createManifoldKernel();
+    let calls = 0;
+    const kernel = new Proxy(delegate, {
+      get(target, property) {
+        if (property === "revolve") {
+          return (
+            ...arguments_: Parameters<NonNullable<GeometryKernel["revolve"]>>
+          ) => {
+            calls += 1;
+            return target.revolve!(...arguments_);
+          };
+        }
+        const value: unknown = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as GeometryKernel;
+    const localEvaluator = await createEvaluator({ kernel });
+    try {
+      const result = await localEvaluator.evaluate(document);
+      if (result.ok) result.value.dispose();
+      return { result, calls };
+    } finally {
+      localEvaluator.dispose();
+    }
+  }
+
+  it("rejects a profile that straddles the axis before any kernel call", async () => {
+    const { result, calls } = await revolveCalls(revolveDocument(rectangleAt(0)));
+    expect(result.ok).toBe(false);
+    expect(calls).toBe(0);
+    expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([
+      expect.objectContaining({
+        code: "FEATURE_INVALID",
+        node: "revolution",
+        path: "/nodes/revolution/profile",
+        details: {
+          reason: "profile-crosses-axis",
+          minimumU: -20,
+          maximumU: 20,
+        },
+      }),
+    ]);
+  });
+
+  it("rejects an arc that bulges across the axis between on-side endpoints", async () => {
+    const { result, calls } = await revolveCalls(
+      revolveDocument((sketch) => {
+        const a = sketch.point("a", vec2(mm(2), mm(-10)));
+        const b = sketch.point("b", vec2(mm(20), mm(-10)));
+        const c = sketch.point("c", vec2(mm(20), mm(10)));
+        const d = sketch.point("d", vec2(mm(2), mm(10)));
+        const bulge = sketch.arc("bulge", {
+          center: vec2(mm(2), mm(0)),
+          radius: mm(10),
+          startAngle: deg(90),
+          endAngle: deg(270),
+        });
+        return sketch.profile(
+          sketch.loop([
+            sketch.line("bottom", a, b),
+            sketch.line("right", b, c),
+            sketch.line("top", c, d),
+            bulge,
+          ]),
+        );
+      }),
+    );
+    expect(result.ok).toBe(false);
+    expect(calls).toBe(0);
+    const error = result.diagnostics.find((item) => item.severity === "error");
+    expect(error).toEqual(
+      expect.objectContaining({
+        code: "FEATURE_INVALID",
+        path: "/nodes/revolution/profile",
+        details: expect.objectContaining({ reason: "profile-crosses-axis" }),
+      }),
+    );
+    expect(error?.details?.minimumU).toBeCloseTo(-8, 12);
+  });
+
+  it("finds the axis crossing of an arc authored with a large unwrapped angle", async () => {
+    // 1e15 + 1 rad reduces to about 3.1097 rad, just short of pi, so the arc
+    // sweeps through pi to u = -0.001 although both endpoints lie at u > 0.
+    // Subtracting the raw angle from pi rounds that fractional turn away.
+    const startAngle = 1e15 + 1;
+    const endAngle = startAngle + 0.5;
+    const radius = 10;
+    const centerU = 9.999;
+    const at = (angle: number): readonly [number, number] => [
+      centerU + radius * Math.cos(angle),
+      radius * Math.sin(angle),
+    ];
+    const [startU, startV] = at(startAngle);
+    const [endU, endV] = at(endAngle);
+    expect(Math.min(startU, endU)).toBeGreaterThan(0);
+    const { result, calls } = await revolveCalls(
+      revolveDocument((sketch) => {
+        const start = sketch.point("start", vec2(mm(startU), mm(startV)));
+        const end = sketch.point("end", vec2(mm(endU), mm(endV)));
+        const lower = sketch.point("lower", vec2(mm(40), mm(endV)));
+        const upper = sketch.point("upper", vec2(mm(40), mm(startV)));
+        const sweep = sketch.arc("sweep", {
+          center: vec2(mm(centerU), mm(0)),
+          radius: mm(radius),
+          startAngle: rad(startAngle),
+          endAngle: rad(endAngle),
+        });
+        return sketch.profile(
+          sketch.loop([
+            sweep,
+            sketch.line("bottom", end, lower),
+            sketch.line("right", lower, upper),
+            sketch.line("top", upper, start),
+          ]),
+        );
+      }),
+    );
+    expect(result.ok).toBe(false);
+    expect(calls).toBe(0);
+    const error = result.diagnostics.find((item) => item.severity === "error");
+    expect(error).toEqual(
+      expect.objectContaining({
+        code: "FEATURE_INVALID",
+        path: "/nodes/revolution/profile",
+        details: expect.objectContaining({ reason: "profile-crosses-axis" }),
+      }),
+    );
+    expect(error?.details?.minimumU).toBeCloseTo(-0.001, 9);
+  });
+
+  it("rejects a circle that straddles the axis", async () => {
+    const { result, calls } = await revolveCalls(
+      revolveDocument((sketch) =>
+        sketch.profile(
+          sketch
+            .circle("disc", { center: vec2(mm(4), mm(0)), radius: mm(5) })
+            .loop(),
+        ),
+      ),
+    );
+    expect(result.ok).toBe(false);
+    expect(calls).toBe(0);
+    expect(result.diagnostics.find((item) => item.severity === "error")).toEqual(
+      expect.objectContaining({
+        code: "FEATURE_INVALID",
+        details: { reason: "profile-crosses-axis", minimumU: -1, maximumU: 9 },
+      }),
+    );
+  });
+
+  it("admits profiles that touch the axis or lie wholly on one side", async () => {
+    for (const centerX of [20, 30, -20, -30]) {
+      const { result, calls } = await revolveCalls(
+        revolveDocument(rectangleAt(centerX)),
+      );
+      expect(result.ok, `center ${centerX}`).toBe(true);
+      expect(calls).toBe(1);
+    }
+  });
+
+  it("revolves a negative-side profile into the same solid as its mirror image", async () => {
+    for (const angle of [deg(90), deg(270)]) {
+      const positive = await evaluate(revolveDocument(rectangleAt(30), angle));
+      try {
+        const negative = await evaluate(
+          revolveDocument(rectangleAt(-30), angle),
+        );
+        try {
+          const positiveMeasure = positive.output("solid").measure();
+          const negativeMeasure = negative.output("solid").measure();
+          expect(negativeMeasure.volume).toBeCloseTo(
+            positiveMeasure.volume,
+            6,
+          );
+          // Revolving the mirrored profile is the positive revolution turned
+          // half a turn about the axis: (x, y, z) -> (-x, y, -z).
+          expect(negativeMeasure.boundingBox.min[0]).toBeCloseTo(
+            -positiveMeasure.boundingBox.max[0],
+            6,
+          );
+          expect(negativeMeasure.boundingBox.max[0]).toBeCloseTo(
+            -positiveMeasure.boundingBox.min[0],
+            6,
+          );
+          expect(negativeMeasure.boundingBox.min[2]).toBeCloseTo(
+            -positiveMeasure.boundingBox.max[2],
+            6,
+          );
+          expect(negativeMeasure.boundingBox.max[2]).toBeCloseTo(
+            -positiveMeasure.boundingBox.min[2],
+            6,
+          );
+        } finally {
+          negative.dispose();
+        }
+      } finally {
+        positive.dispose();
+      }
     }
   });
 });

@@ -49,6 +49,8 @@ export interface ResolvedProfileRegionValidationIssue {
   readonly curveSource?: ProfileCurveSource;
   readonly otherCurveSource?: ProfileCurveSource;
   readonly loopIssueReason?: string;
+  /** Distance between a curve end and the next curve start in an open loop. */
+  readonly gap?: number;
   readonly workUnits: number;
   readonly maxWorkUnits: number;
 }
@@ -565,7 +567,8 @@ function validateLoopClosure(
         },
       );
     }
-    const next = loop.curves[(curveIndex + 1) % loop.curves.length]!;
+    const nextIndex = (curveIndex + 1) % loop.curves.length;
+    const next = loop.curves[nextIndex]!;
     const gap = distance2(curveEnd(curve), curveStart(next));
     if (!Number.isFinite(gap) || gap > tolerance) {
       return issue(
@@ -576,8 +579,11 @@ function validateLoopClosure(
           loop: role,
           ...(holeIndex === undefined ? {} : { holeIndex }),
           curveIndex,
+          otherCurveIndex: nextIndex,
           ...curveSourceDetails(curve),
+          ...otherCurveSourceDetails(next),
           loopIssueReason: "open-loop",
+          ...(Number.isFinite(gap) ? { gap } : {}),
         },
       );
     }
@@ -821,13 +827,50 @@ function validateLoop(
   };
 }
 
-function lineRayCrossings(
-  curve: Extract<ResolvedCurve, { readonly kind: "line" }>,
+/**
+ * Half-open sides of the horizontal ray for one boundary curve's endpoints:
+ * `true` when the endpoint lies strictly above the ray.
+ */
+interface RayEndpointSides {
+  readonly startAbove: boolean;
+  readonly endAbove: boolean;
+}
+
+/**
+ * The junction after `boundary[index]`, relative to the ray origin `point`.
+ *
+ * Even/odd parity is consistent only when every junction is classified once.
+ * Adjacent curves can disagree by rounding about where a shared junction lies:
+ * an arc endpoint is evaluated from its center, radius and angle, while a
+ * neighbouring line or connector stores the coordinates directly, and loops
+ * may close with a gap below the connector guard. Each junction therefore has
+ * one representative point, used for its ray side by both curves and as the
+ * endpoint of a straight curve's crossing test: a straight curve's stored
+ * endpoint when either neighbour is straight (the preceding one when both
+ * are), otherwise the preceding arc's evaluated endpoint.
+ */
+function junctionRayPoint(
+  boundary: readonly BoundaryCurve[],
+  index: number,
   point: Vec2,
+): Vec2 {
+  const before = boundary[index]!.curve;
+  const after = boundary[(index + 1) % boundary.length]!.curve;
+  return before.kind !== "line" && after.kind === "line"
+    ? curvePoint(after, 0, point)
+    : curvePoint(before, 1, point);
+}
+
+/**
+ * Half-open ray crossings of a straight boundary curve, tested between its
+ * junction points so that its sides and its crossing position agree with the
+ * curves it meets.
+ */
+function lineRayCrossings(
+  start: Vec2,
+  end: Vec2,
   tolerance: number,
 ): number | "uncertain" {
-  const start = curvePoint(curve, 0, point);
-  const end = curvePoint(curve, 1, point);
   const startAbove = start[1] > 0;
   const endAbove = end[1] > 0;
   if (startAbove === endAbove) return 0;
@@ -845,15 +888,115 @@ function lineRayCrossings(
   if (!Number.isFinite(determinant) || Math.abs(determinant) <= guard) {
     return "uncertain";
   }
-  const crosses =
-    end[1] > start[1]
-      ? determinant > 0
-      : determinant < 0;
+  const crosses = endAbove ? determinant > 0 : determinant < 0;
   return crosses ? 1 : 0;
 }
 
-function roundRayCrossings(
-  curve: Extract<ResolvedCurve, { readonly kind: "arc" | "circle" }>,
+/** Reduces an angle to (-pi, pi] from its sine and cosine. */
+function principalAngle(angle: number): number {
+  return Math.atan2(Math.sin(angle), Math.cos(angle));
+}
+
+/**
+ * Ray crossings of an arc, counted on pieces that are monotone in y.
+ *
+ * The arc is split where it passes its circle's highest or lowest point. Each
+ * piece is monotone in y, so it crosses the horizontal ray exactly when its
+ * two ends lie on different half-open sides. The arc's own ends take their
+ * junction sides, shared with the neighbouring curves, and a split point takes
+ * the side of the evaluated extremum. Parity therefore never depends on
+ * locating a crossing angle, which is ill-conditioned near a tangency: a ray
+ * a rounding error above or below an arc endpoint, a tangent point, or both
+ * is classified the same way as the curves that meet there. Only the sign of
+ * a crossing's x is measured, and it fails closed within its error bound.
+ */
+function arcRayCrossings(
+  curve: Extract<ResolvedCurve, { readonly kind: "arc" }>,
+  point: Vec2,
+  tolerance: number,
+  sides: RayEndpointSides,
+): number | "uncertain" {
+  const center = subtractPoint(curve.center, point);
+  const radius = curve.radius;
+  const sweep = resolvedArcSweep(curve);
+  const span = Math.abs(sweep);
+  const direction = sweep < 0 ? -1 : 1;
+  const start = principalAngle(curve.startAngle);
+  const normalizedY = -center[1] / radius;
+  const ratioGuard =
+    scalarNumericGuard(tolerance, ...center, radius, normalizedY) / radius;
+  if (
+    !Number.isFinite(center[0]) ||
+    !Number.isFinite(normalizedY) ||
+    !Number.isFinite(ratioGuard) ||
+    !Number.isFinite(start) ||
+    !(span > 0 && span < FULL_TURN)
+  ) {
+    return "uncertain";
+  }
+  const breaks: { readonly distance: number; readonly above: boolean }[] = [
+    { distance: 0, above: sides.startAbove },
+  ];
+  const extrema = [
+    { angle: QUARTER_TURN, y: center[1] + radius },
+    { angle: -QUARTER_TURN, y: center[1] - radius },
+  ];
+  for (const extremum of extrema) {
+    const distance = normalizedAngle(direction * (extremum.angle - start));
+    if (distance > 0 && distance < span) {
+      breaks.push({ distance, above: extremum.y > 0 });
+    }
+  }
+  breaks.sort((first, second) => first.distance - second.distance);
+  breaks.push({ distance: span, above: sides.endAbove });
+
+  // A ratio error of `ratioGuard` moves asin by at most this much; near a
+  // tangency it grows to about sqrt(2 * ratioGuard).
+  const sine = Math.max(-1, Math.min(1, normalizedY));
+  const cosine = Math.sqrt(Math.max(0, 1 - sine * sine));
+  const angleError = Math.min(
+    2 * Math.sqrt(2 * ratioGuard),
+    ratioGuard / Math.max(cosine, Number.MIN_VALUE),
+  );
+  let crossings = 0;
+  for (let index = 1; index < breaks.length; index += 1) {
+    const from = breaks[index - 1]!;
+    const to = breaks[index]!;
+    if (from.above === to.above) continue;
+    // The piece lies in one half of the circle, where y fixes the angle.
+    const first = principalAngle(start + direction * from.distance);
+    const second = principalAngle(start + direction * to.distance);
+    const middle = start + (direction * (from.distance + to.distance)) / 2;
+    let crossingAngle: number;
+    let low: number;
+    let high: number;
+    if (Math.cos(middle) >= 0) {
+      crossingAngle = Math.asin(sine);
+      low = Math.min(first, second);
+      high = Math.max(first, second);
+    } else {
+      const leftHalf = (angle: number) =>
+        angle < 0 ? angle + FULL_TURN : angle;
+      crossingAngle = Math.PI - Math.asin(sine);
+      low = Math.min(leftHalf(first), leftHalf(second));
+      high = Math.max(leftHalf(first), leftHalf(second));
+    }
+    const clamped = Math.min(Math.max(crossingAngle, low), high);
+    const intersectionX = center[0] + radius * Math.cos(clamped);
+    const xGuard =
+      scalarNumericGuard(tolerance, ...center, radius, intersectionX) +
+      radius * angleError;
+    if (!Number.isFinite(intersectionX) || !Number.isFinite(xGuard)) {
+      return "uncertain";
+    }
+    if (Math.abs(intersectionX) <= xGuard) return "uncertain";
+    if (intersectionX > 0) crossings += 1;
+  }
+  return crossings;
+}
+
+function circleRayCrossings(
+  curve: Extract<ResolvedCurve, { readonly kind: "circle" }>,
   point: Vec2,
   tolerance: number,
 ): number | "uncertain" {
@@ -900,28 +1043,7 @@ function roundRayCrossings(
       curve.radius,
       curveAngularSweep(curve),
     );
-    if (
-      curve.kind === "arc" &&
-      (parameter === 0 || parameter === 1)
-    ) {
-      let interiorAbove: boolean;
-      if (Math.abs(derivative) > derivativeGuard) {
-        interiorAbove =
-          parameter === 0 ? derivative > 0 : derivative < 0;
-      } else {
-        const secondDerivative =
-          -curve.radius *
-          Math.sin(angle) *
-          curveAngularSweep(curve) ** 2;
-        if (
-          Math.abs(secondDerivative) <= derivativeGuard
-        ) {
-          return "uncertain";
-        }
-        interiorAbove = secondDerivative > 0;
-      }
-      if (!interiorAbove) continue;
-    } else if (Math.abs(derivative) <= derivativeGuard) {
+    if (Math.abs(derivative) <= derivativeGuard) {
       // An interior horizontal-ray tangency does not change parity.
       continue;
     }
@@ -949,15 +1071,30 @@ function classifyPointInLoop(
   state: WorkState,
 ): PointClassification {
   let crossings = 0;
-  for (const boundaryCurve of boundary) {
+  for (let index = 0; index < boundary.length; index += 1) {
     const stop = consumeWork(state);
     if (stop !== undefined) {
       return { status: "stopped", reason: stop };
     }
-    const curveCrossings =
-      boundaryCurve.curve.kind === "line"
-        ? lineRayCrossings(boundaryCurve.curve, point, tolerance)
-        : roundRayCrossings(boundaryCurve.curve, point, tolerance);
+    const curve = boundary[index]!.curve;
+    let curveCrossings: number | "uncertain";
+    if (curve.kind === "circle") {
+      curveCrossings = circleRayCrossings(curve, point, tolerance);
+    } else {
+      const start = junctionRayPoint(
+        boundary,
+        (index - 1 + boundary.length) % boundary.length,
+        point,
+      );
+      const end = junctionRayPoint(boundary, index, point);
+      curveCrossings =
+        curve.kind === "line"
+          ? lineRayCrossings(start, end, tolerance)
+          : arcRayCrossings(curve, point, tolerance, {
+              startAbove: start[1] > 0,
+              endAbove: end[1] > 0,
+            });
+    }
     if (curveCrossings === "uncertain") return { status: "uncertain" };
     crossings += curveCrossings;
   }

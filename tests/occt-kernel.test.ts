@@ -230,6 +230,62 @@ describe("OCCT exact-kernel integration", { timeout: 30_000 }, () => {
     }
   });
 
+  it("rejects a revolve profile that straddles the axis with the evaluator diagnostic", async () => {
+    const kernel = await createOcctKernel();
+    const evaluator = await createEvaluator({ kernel });
+    try {
+      const revolved = (centerX: number) => {
+        const cad = design("exact-revolve-axis");
+        const profile = cad.sketch("profile", plane.xy(), (sketch) =>
+          sketch.profile(
+            sketch.rectangle("outline", {
+              width: mm(40),
+              height: mm(20),
+              center: vec2(mm(centerX), mm(0)),
+            }),
+          ),
+        );
+        cad.output(
+          "solid",
+          cad.revolve("revolution", profile, { angle: deg(270) }),
+        );
+        return cad.build();
+      };
+      const straddling = await evaluator.evaluate(revolved(0));
+      if (straddling.ok) straddling.value.dispose();
+      expect(straddling.ok).toBe(false);
+      expect(
+        straddling.diagnostics.filter((item) => item.severity === "error"),
+      ).toEqual([
+        expect.objectContaining({
+          code: "FEATURE_INVALID",
+          node: "revolution",
+          path: "/nodes/revolution/profile",
+          details: {
+            reason: "profile-crosses-axis",
+            minimumU: -20,
+            maximumU: 20,
+          },
+        }),
+      ]);
+
+      const offAxis = await evaluator.evaluate(revolved(30));
+      expect(offAxis.ok).toBe(true);
+      if (!offAxis.ok) return;
+      try {
+        // Pappus: area 40 * 20, centroid radius 30, three quarters of a turn.
+        expect(offAxis.value.output("solid").measure().volume).toBeCloseTo(
+          800 * 30 * Math.PI * 1.5,
+          6,
+        );
+      } finally {
+        offAxis.value.dispose();
+      }
+    } finally {
+      evaluator.dispose();
+    }
+  });
+
   it("round-trips STEP and BREP through native exact exchange", async () => {
     const kernel = await createOcctKernel();
     try {

@@ -26,7 +26,15 @@ import type {
   ResolvedLoop,
   ResolvedProfile,
 } from "./protocol/profile.js";
+import { jsonPointerSegment } from "./core/json-pointer.js";
 
+/**
+ * Outcome of one sketch solve. The evaluator treats it as authoritative: only
+ * `solved` and `underconstrained` (with a finite residual) produce geometry.
+ * `overconstrained` fails with `SKETCH_OVER_CONSTRAINED`; `nonconvergent`,
+ * `invalid`, and any unrecognized value fail with `SKETCH_SOLVE_FAILED`, even
+ * when the solver reports no error diagnostic.
+ */
 export type SketchSolveStatus =
   | "solved"
   | "underconstrained"
@@ -35,20 +43,31 @@ export type SketchSolveStatus =
   | "invalid";
 
 export interface SketchSolverCapabilities {
+  /**
+   * Entity kinds the solver accepts. The evaluator rejects a sketch containing
+   * any other kind with `KERNEL_CAPABILITY_MISSING` before calling `solve`.
+   */
   readonly entities: readonly SketchEntityIR["kind"][];
+  /** Constraint kinds the solver accepts, preflighted like `entities`. */
   readonly constraints: readonly SketchConstraintIR["kind"][];
   readonly reportsDegreesOfFreedom: boolean;
   readonly reportsConflicts: boolean;
 }
 
 export interface SolvedSketch {
+  /** Authoritative solve outcome; see {@link SketchSolveStatus}. */
   readonly status: SketchSolveStatus;
   readonly points: Readonly<Record<EntityId, Vec2>>;
   readonly radii: Readonly<Record<EntityId, number>>;
   readonly profile: ResolvedProfile;
   readonly degreesOfFreedom: number;
   readonly iterations: number;
+  /** Largest constraint residual; a non-finite value fails evaluation. */
   readonly residual: number;
+  /**
+   * Solver diagnostics, reported on the sketch node. The first error-severity
+   * entry becomes the evaluation failure.
+   */
   readonly diagnostics: readonly Diagnostic[];
 }
 
@@ -167,8 +186,28 @@ function lineVector(
   return subtract2(end, start);
 }
 
+/**
+ * Angle magnitude below which 2π subtraction stays exact and needs at most
+ * eight steps. Larger finite values are reduced in constant time.
+ */
+const ANGLE_SUBTRACTION_LIMIT = Math.PI * 16;
+
+/**
+ * Returns an equivalent angle whose magnitude is at most
+ * `ANGLE_SUBTRACTION_LIMIT`. Ordinary values are returned unchanged; huge
+ * values are reduced directly, because repeated 2π subtraction is linear in
+ * the magnitude and never terminates once 2π falls below the value's ULP, and
+ * because subtracting a small measured angle from a huge one discards it.
+ */
+function principalAngle(value: number): number {
+  return Math.abs(value) > ANGLE_SUBTRACTION_LIMIT
+    ? Math.atan2(Math.sin(value), Math.cos(value))
+    : value;
+}
+
 function wrapAngle(value: number): number {
-  let result = value;
+  if (!Number.isFinite(value)) return Number.NaN;
+  let result = principalAngle(value);
   while (result > Math.PI) result -= Math.PI * 2;
   while (result < -Math.PI) result += Math.PI * 2;
   return result;
@@ -257,7 +296,7 @@ function residualTerms(
         const first = lineVector(sketch, variables, values, constraint.first);
         const second = lineVector(sketch, variables, values, constraint.second);
         const actual = Math.atan2(cross2(first, second), dot2(first, second));
-        term(wrapAngle(actual - evaluate(constraint.value)));
+        term(wrapAngle(actual - principalAngle(evaluate(constraint.value))));
         break;
       }
       case "radius":
@@ -559,14 +598,41 @@ export class ReferenceSketchSolver implements SketchSolverBackend {
     const rank = matrixRank(solved.jacobian);
     const degreesOfFreedom = Math.max(0, variables.initial.length - rank);
     const diagnostics: Diagnostic[] = [];
+    // The evaluator passes the sketch node id as `feature`; solve failures
+    // point at it like every other modeling failure.
+    const sketchPath =
+      context.feature === undefined
+      ? undefined
+      : `/nodes/${jsonPointerSegment(context.feature)}`;
     let status: SketchSolveStatus;
-    if (maximumResidual > sketch.tolerance) {
+    if (!Number.isFinite(maximumResidual)) {
+      // NaN compares false against every tolerance, so it must not fall
+      // through to the solved branches below.
+      status = "nonconvergent";
+      diagnostics.push(
+        diagnostic(
+          "SKETCH_SOLVE_FAILED",
+          "Sketch constraints did not converge to a finite residual",
+          {
+            severity: "error",
+            ...(sketchPath === undefined ? {} : { path: sketchPath }),
+            details: { maximumResidual: String(maximumResidual) },
+          },
+        ),
+      );
+    } else if (maximumResidual > sketch.tolerance) {
       status = "overconstrained";
       diagnostics.push(
         diagnostic(
           "SKETCH_OVER_CONSTRAINED",
           `Sketch constraints could not be satisfied; maximum residual is ${maximumResidual}`,
-          { severity: "error", details: { maximumResidual } },
+          {
+            severity: "error",
+            ...(sketchPath === undefined
+              ? {}
+              : { path: `${sketchPath}/constraints` }),
+            details: { maximumResidual },
+          },
         ),
       );
     } else if (degreesOfFreedom > 0) {

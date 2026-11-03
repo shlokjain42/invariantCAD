@@ -5383,9 +5383,7 @@ export interface SketchSolverBackend {
 
 // @public (undocumented)
 export interface SketchSolverCapabilities {
-    // (undocumented)
     readonly constraints: readonly SketchConstraintIR["kind"][];
-    // (undocumented)
     readonly entities: readonly SketchEntityIR["kind"][];
     // (undocumented)
     readonly reportsConflicts: boolean;
@@ -5393,7 +5391,7 @@ export interface SketchSolverCapabilities {
     readonly reportsDegreesOfFreedom: boolean;
 }
 
-// @public (undocumented)
+// @public
 export type SketchSolveStatus = "solved" | "underconstrained" | "overconstrained" | "nonconvergent" | "invalid";
 
 // @public (undocumented)
@@ -5411,7 +5409,6 @@ export class SolidRef extends ModelRef<"solid"> {
 export interface SolvedSketch {
     // (undocumented)
     readonly degreesOfFreedom: number;
-    // (undocumented)
     readonly diagnostics: readonly Diagnostic[];
     // (undocumented)
     readonly iterations: number;
@@ -5421,9 +5418,7 @@ export interface SolvedSketch {
     readonly profile: ResolvedProfile;
     // (undocumented)
     readonly radii: Readonly<Record<EntityId, number>>;
-    // (undocumented)
     readonly residual: number;
-    // (undocumented)
     readonly status: SketchSolveStatus;
 }
 

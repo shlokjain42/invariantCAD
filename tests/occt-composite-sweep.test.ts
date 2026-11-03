@@ -634,6 +634,89 @@ describe("OCCT exact composite solid sweep", { timeout: 30_000 }, () => {
     }
   });
 
+  it("rejects line-line junction miters that exceed a composite line segment", async () => {
+    const kernel = await createOcctKernel();
+    const raw = (kernel as any).raw as InjectableOcctRaw;
+    const originalSweep = raw.sweep.bind(raw);
+    let sweepCalls = 0;
+    raw.sweep = (...args) => {
+      sweepCalls += 1;
+      return originalSweep(...args);
+    };
+    // A 2 x 2 square has envelope radius sqrt(2), so each 90 degree line-line
+    // junction sets the inner miter back by sqrt(2) on both lines. Every
+    // non-adjacent pair stays far apart, so only the miter rule rejects these.
+    const shortFirst: ResolvedCompositePath = {
+      kind: "composite",
+      start: [0, 0, 0],
+      segments: [
+        { kind: "line", end: [0, 0, 1] },
+        { kind: "line", end: [10, 0, 1] },
+        {
+          kind: "circularArc",
+          through: [10 + 5 / Math.sqrt(2), 0, 6 - 5 / Math.sqrt(2)],
+          end: [15, 0, 6],
+        },
+      ],
+      closed: false,
+    };
+    const shortLast: ResolvedCompositePath = {
+      kind: "composite",
+      start: [0, 0, 0],
+      segments: [
+        { kind: "line", end: [0, 0, 5] },
+        {
+          kind: "circularArc",
+          through: [5 - 5 / Math.sqrt(2), 0, 5 + 5 / Math.sqrt(2)],
+          end: [5, 0, 10],
+        },
+        { kind: "line", end: [15, 0, 10] },
+        { kind: "line", end: [15, 0, 9] },
+      ],
+      closed: false,
+    };
+    try {
+      for (const [feature, path] of [
+        ["short-first-line", shortFirst],
+        ["short-last-line", shortLast],
+      ] as const) {
+        expect(() =>
+          kernel.compositeSweep!(
+            rectangleProfile(`${feature}-profile`, 2, 2),
+            path,
+            SWEEP_OPTIONS,
+            { feature, tolerance: 1e-7 },
+          ),
+        ).toThrow("too short for the right-corner miters");
+      }
+      expect(sweepCalls).toBe(0);
+
+      // The same corner with room for both setbacks still sweeps exactly.
+      const roomy: ResolvedCompositePath = {
+        ...shortLast,
+        segments: [...shortLast.segments.slice(0, 3), { kind: "line", end: [15, 0, 5] }],
+      };
+      const shape = kernel.compositeSweep!(
+        rectangleProfile("roomy-corner-profile", 2, 2),
+        roomy,
+        SWEEP_OPTIONS,
+        { feature: "roomy-corner", tolerance: 1e-7 },
+      );
+      try {
+        expect(kernel.status(shape)).toEqual({ ok: true, code: "VALID" });
+        expect(kernel.measure(shape).volume).toBeCloseTo(
+          4 * (5 + 2.5 * Math.PI + 10 + 5),
+          8,
+        );
+      } finally {
+        kernel.disposeShape(shape);
+      }
+    } finally {
+      raw.sweep = originalSweep;
+      kernel.dispose();
+    }
+  });
+
   it("preserves the profile alignment tolerance admitted by the sweep protocol", async () => {
     const kernel = await createOcctKernel();
     try {

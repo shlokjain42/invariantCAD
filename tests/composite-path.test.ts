@@ -1424,6 +1424,37 @@ describe("resolved composite path admission and geometry", () => {
     );
   });
 
+  it("rejects a line-line fold-back that returns within tolerance", () => {
+    // A leading G1 quarter arc ends tangent to the first line. The fold-back
+    // is the final segment, so no later segment is non-adjacent to it and only
+    // the line-line junction can catch the return.
+    const foldBack = (returnEnd: Vec3): ResolvedCompositePath => ({
+      kind: "composite",
+      start: [-5, 5, 0],
+      segments: [
+        {
+          kind: "circularArc",
+          through: [-5 / Math.sqrt(2), 5 - 5 / Math.sqrt(2), 0],
+          end: [0, 0, 0],
+        },
+        { kind: "line", end: [10, 0, 0] },
+        { kind: "line", end: returnEnd },
+      ],
+      closed: false,
+    });
+    expect(
+      validateResolvedCompositePath(foldBack([1, 1e-8, 0]), PATH_TOLERANCE),
+    ).toEqual({
+      reason: "self-intersection",
+      message: "Composite path segments 1 and 2 fold back within tolerance",
+      segmentIndex: 2,
+      otherSegmentIndex: 1,
+    });
+    expect(
+      validateResolvedCompositePath(foldBack([1, 1e-3, 0]), PATH_TOLERANCE),
+    ).toEqual(undefined);
+  });
+
   it("separates adjacent topology from remote profile-envelope returns", () => {
     const rotation = 0.1;
     const remoteReturn: ResolvedCompositePath = {

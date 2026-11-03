@@ -116,6 +116,21 @@
           "style": "mdx"
         }
       ]
+    },
+    {
+      "id": "composite-route-sweep",
+      "source": "composite-route-sweep.ts",
+      "workflows": [
+        "exact composite line/arc path",
+        "seated profile sweep",
+        "exact sweep evaluation"
+      ],
+      "targets": [
+        {
+          "path": "docs/modeling/paths-sweeps-and-lofts.mdx",
+          "style": "mdx"
+        }
+      ]
     }
   ]
 }
