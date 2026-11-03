@@ -196,7 +196,9 @@ describe("semantic topology selections", () => {
   it("limits selector cardinality to the safe integers the schema can reload", () => {
     const vertical = topology.edges.direction(scalarVec3(0, 0, 1));
     for (const unsafe of [2 ** 53, 2 ** 60, 1e300]) {
-      expect(() => vertical.exactly(unsafe)).toThrow(RangeError);
+      expect(() => vertical.exactly(unsafe)).toThrow(
+        new RangeError("Topology selection minimum must be a positive safe integer"),
+      );
       expect(() => vertical.atLeast(unsafe)).toThrow(RangeError);
       expect(() => vertical.between(1, unsafe)).toThrow(RangeError);
     }
