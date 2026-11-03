@@ -695,6 +695,134 @@ describe("OCCT shape-artifact codec candidate", { timeout: 30_000 }, () => {
     }
   }, 30_000);
 
+  it("does not let distance from the origin loosen lengths, areas, or radii", async () => {
+    const producer = await createOcctKernel();
+    const consumer = await createOcctKernel();
+    const sources: KernelShape[] = [];
+    const decoded: KernelShape[] = [];
+    try {
+      if (
+        producer.box === undefined ||
+        producer.cylinder === undefined ||
+        producer.transform === undefined
+      ) {
+        throw new Error("OCCT box, cylinder, or transform support is unavailable");
+      }
+      const transform = producer.transform.bind(producer);
+      // At x = 1e12 a coordinate's unit in the last place is about 1.2e-4,
+      // so 64 of them exceed the 0.01 size of these items. Lengths, areas,
+      // and radii do not depend on position, so that distance must not widen
+      // their checks the way it widens checks on centers and bounds.
+      const farAway = (shape: KernelShape, feature: string): KernelShape => {
+        try {
+          return transform(
+            shape,
+            [{ kind: "translate", value: [1e12, 0, 0] }],
+            { feature },
+          );
+        } finally {
+          producer.disposeShape(shape);
+        }
+      };
+      const farBox = farAway(
+        producer.box([1, 0.01, 0.01], false, { feature: "far-small-box" }),
+        "far-small-box-move",
+      );
+      sources.push(farBox);
+      const farCylinder = farAway(
+        producer.cylinder(1, 0.01, 0.01, false, undefined, {
+          feature: "far-small-cylinder",
+        }),
+        "far-small-cylinder-move",
+      );
+      sources.push(farCylinder);
+      const producerCodec = codec(producer);
+      const boxArtifact = await producerCodec.encodeShapeArtifact(
+        farBox,
+        ARTIFACT_CONTEXT,
+      );
+      const cylinderArtifact = await producerCodec.encodeShapeArtifact(
+        farCylinder,
+        ARTIFACT_CONTEXT,
+      );
+
+      const rewriteEdge = (
+        artifact: Uint8Array,
+        select: (edge: KernelTopologySnapshot["edges"][number]) => boolean,
+        change: (
+          edge: KernelTopologySnapshot["edges"][number],
+        ) => KernelTopologySnapshot["edges"][number],
+      ) =>
+        rewriteSidecarState(artifact, (state) => {
+          const edges = [...state.topology.edges];
+          const index = edges.findIndex(select);
+          const edge = edges[index];
+          if (edge === undefined) {
+            throw new TypeError("Far-away state lacks the selected edge");
+          }
+          edges[index] = change(edge);
+          return { ...state, topology: { ...state.topology, edges } };
+        });
+      const shortEdge = (edge: KernelTopologySnapshot["edges"][number]) =>
+        edge.length < 0.1;
+      const circularEdge = (edge: KernelTopologySnapshot["edges"][number]) =>
+        edge.curve.radius !== undefined;
+      const halvedLength = rewriteEdge(boxArtifact, shortEdge, (edge) => ({
+        ...edge,
+        length: edge.length / 2,
+      }));
+      const halvedArea = rewriteSidecarState(boxArtifact, (state) => {
+        const faces = [...state.topology.faces];
+        const index = faces.findIndex((face) => face.area < 0.001);
+        const face = faces[index];
+        if (face === undefined) {
+          throw new TypeError("Far-away box state lacks a small end face");
+        }
+        faces[index] = { ...face, area: face.area / 2 };
+        return { ...state, topology: { ...state.topology, faces } };
+      });
+      const halvedRadius = rewriteEdge(cylinderArtifact, circularEdge, (edge) => ({
+        ...edge,
+        curve: { ...edge.curve, radius: edge.curve.radius! / 2 },
+      }));
+
+      const consumerCodec = codec(consumer);
+      for (const [label, payload] of [
+        ["halved short-edge length", halvedLength],
+        ["halved end-face area", halvedArea],
+        ["halved circular-edge radius", halvedRadius],
+      ] as const) {
+        const borrowed = payload.slice();
+        const error = await expectRejected(() =>
+          consumerCodec.decodeShapeArtifact(payload, ARTIFACT_CONTEXT),
+        );
+        expect(String(error), label).toMatch(/changed identified (face|edge)/u);
+        expect(payload, `${label} input mutation`).toEqual(borrowed);
+        expect(liveShapeCount(consumer), `${label} leaked a shape`).toBe(0);
+      }
+
+      // Unchanged artifacts, and a sidecar rewritten within its own scale,
+      // still decode, so the rejections above come from the size checks.
+      const nudgedLength = rewriteEdge(boxArtifact, shortEdge, (edge) => ({
+        ...edge,
+        length: edge.length + 4 * Number.EPSILON * edge.length,
+      }));
+      for (const payload of [boxArtifact, cylinderArtifact, nudgedLength]) {
+        const shape = await consumerCodec.decodeShapeArtifact(
+          payload,
+          ARTIFACT_CONTEXT,
+        );
+        decoded.push(shape);
+        expect(consumer.status(shape)).toEqual({ ok: true, code: "VALID" });
+      }
+    } finally {
+      for (const shape of decoded) consumer.disposeShape(shape);
+      for (const shape of sources) producer.disposeShape(shape);
+      consumer.dispose();
+      producer.dispose();
+    }
+  }, 30_000);
+
   it("emits identical bytes and remaps a symmetric solid when TopExp enumeration reverses", async () => {
     const normalProducer = await createOcctKernel();
     const reversedProducer = await createOcctKernel();

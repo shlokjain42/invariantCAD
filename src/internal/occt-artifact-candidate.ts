@@ -350,9 +350,12 @@ function sameVector(first: readonly number[], second: readonly number[]): boolea
  * Units in the last place that a derived descriptor value may move across a
  * stock binary-BREP reload. Vertex points, kinds, incidence, and orientation
  * stay exact. OCCT recomputes areas, lengths, centers, bounding boxes, and
- * directions/normals/axes/radii from the reloaded representation, and those
- * were observed to move by up to two units of the native scale below.
- * This only verifies that the BREP section still matches the stored
+ * directions/normals/axes/radii from the reloaded representation. Across
+ * prisms, cylinders, cones, spheres, booleans, fillets, and boxes rotated and
+ * moved up to 1e12 from the origin, centers and bounds moved by up to two
+ * units of their coordinate scale, unit vectors by under one unit of 1, and
+ * areas by up to four units of their own magnitude; lengths and radii did not
+ * move. This only verifies that the BREP section still matches the stored
  * descriptors; the stored values, not the recomputed ones, are restored.
  */
 const DERIVED_VALUE_ULPS = 64;
@@ -429,34 +432,38 @@ function derivedOptionalNumber(
 function sameSurface(
   stored: KernelSurfaceDescriptor,
   native: KernelSurfaceDescriptor,
-  extent: number,
+  span: number,
 ): boolean {
   return (
     stored.kind === native.kind &&
     derivedOptionalVector(stored.normal, native.normal, 1) &&
     derivedOptionalVector(stored.axis, native.axis, 1) &&
-    derivedOptionalNumber(stored.radius, native.radius, extent)
+    derivedOptionalNumber(stored.radius, native.radius, span)
   );
 }
 
 function sameCurve(
   stored: KernelCurveDescriptor,
   native: KernelCurveDescriptor,
-  extent: number,
+  span: number,
 ): boolean {
   return (
     stored.kind === native.kind &&
     derivedOptionalVector(stored.direction, native.direction, 1) &&
     derivedOptionalVector(stored.axis, native.axis, 1) &&
-    derivedOptionalNumber(stored.radius, native.radius, extent)
+    derivedOptionalNumber(stored.radius, native.radius, span)
   );
 }
 
 /**
  * Native scale of one restored face or edge, read from the bounds OCCT
  * derives for it: `extent` is its largest coordinate magnitude and `span` its
- * largest bounds side. Per-item scales keep a distant or large item from
- * loosening the comparison of a small one elsewhere in the same shape.
+ * largest bounds side. Only positions (centers and bounds) are compared on
+ * `extent`, because their rounding grows with distance from the origin.
+ * Lengths, radii (on `span`), and areas (on `span` squared) do not depend on
+ * position, so a far-away item never loosens them. Per-item scales also keep
+ * a distant or large item from loosening the comparison of a small one
+ * elsewhere in the same shape.
  */
 function nativeScale(bounds: KernelTopologyBounds): {
   readonly extent: number;
@@ -1101,11 +1108,11 @@ export function remapOcctShapeArtifactTopology(
     const actual = fresh.faces[faceMapping[index]!]!;
     const { extent, span } = nativeScale(actual.bounds);
     if (
-      !derivedNumber(expected.area, actual.area, extent * span) ||
+      !derivedNumber(expected.area, actual.area, span * span) ||
       !derivedVector(expected.center, actual.center, extent) ||
       !derivedVector(expected.bounds.min, actual.bounds.min, extent) ||
       !derivedVector(expected.bounds.max, actual.bounds.max, extent) ||
-      !sameSurface(expected.surface, actual.surface, extent) ||
+      !sameSurface(expected.surface, actual.surface, span) ||
       !sameIndices(
         mappedIndices(
           expected.edges,
@@ -1129,13 +1136,13 @@ export function remapOcctShapeArtifactTopology(
     if ((index & 0xff) === 0) checkAbort(signal);
     const expected = stored.edges[index]!;
     const actual = fresh.edges[edgeMapping[index]!]!;
-    const { extent } = nativeScale(actual.bounds);
+    const { extent, span } = nativeScale(actual.bounds);
     if (
-      !derivedNumber(expected.length, actual.length, extent) ||
+      !derivedNumber(expected.length, actual.length, span) ||
       !derivedVector(expected.center, actual.center, extent) ||
       !derivedVector(expected.bounds.min, actual.bounds.min, extent) ||
       !derivedVector(expected.bounds.max, actual.bounds.max, extent) ||
-      !sameCurve(expected.curve, actual.curve, extent) ||
+      !sameCurve(expected.curve, actual.curve, span) ||
       !sameIndices(
         mappedIndices(
           expected.faces,
