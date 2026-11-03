@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   DOCUMENT_SCHEMA_V6,
+  NodeV1Schema,
+  NodeV6Schema,
   createEvaluator,
   design,
   mm,
@@ -503,6 +505,42 @@ describe("REFERENCE_KIND_MISMATCH messages", () => {
         message: "Node 'b' produces solid, but the reference declares part",
         details: { expected: ["solid"], actual: "solid", declared: "part" },
       }),
+    );
+  });
+});
+
+describe("structural node schemas", () => {
+  it("leave reference and topology kind agreement to document validation", () => {
+    const fillet = {
+      kind: "fillet",
+      input: { node: "b", kind: "assembly" },
+      edges: {
+        topology: "vertex",
+        query: { op: "all" },
+        cardinality: { min: 1 },
+      },
+      radius: lengthLiteral(1),
+    };
+    // Documented: the frozen node grammars are structural.
+    expect(NodeV6Schema.safeParse(fillet).success).toBe(true);
+    expect(
+      NodeV1Schema.safeParse({
+        kind: "part",
+        solid: { node: "b", kind: "profile" },
+      }).success,
+    ).toBe(true);
+
+    const result = parseDocument(
+      v6Json({
+        nodes: { b: plainBox, f: fillet },
+        outputs: { out: { node: "f", kind: "solid" } },
+      }),
+    );
+    expect(codesAndPaths(result)).toEqual(
+      expect.arrayContaining([
+        ["REFERENCE_KIND_MISMATCH", "/nodes/f/input"],
+        ["TOPOLOGY_SELECTOR_INVALID", "/nodes/f/edges/topology"],
+      ]),
     );
   });
 });

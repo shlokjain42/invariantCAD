@@ -2053,26 +2053,62 @@ function createNodeSchema(
   );
 }
 
+/**
+ * Structural Document v1 node schema. Node references accept any reference
+ * kind and selections any topology kind admitted by v1, so a parsed node can
+ * disagree with its static type until validateDocument, parseDocument, or
+ * parseDocumentValue checks the whole document.
+ */
 export const NodeV1Schema = createNodeSchema(
   TopologySelectionV1Schema,
   NODE_KINDS_V1,
 ) as unknown as z.ZodType<NodeIRV1>;
+/**
+ * Structural Document v2 node schema. Node references accept any reference
+ * kind and selections any topology kind admitted by v2, so a parsed node can
+ * disagree with its static type until validateDocument, parseDocument, or
+ * parseDocumentValue checks the whole document.
+ */
 export const NodeV2Schema = createNodeSchema(
   TopologySelectionV2Schema,
   NODE_KINDS_V2,
 ) as unknown as z.ZodType<NodeIRV2>;
+/**
+ * Structural Document v3 node schema. Node references accept any reference
+ * kind and selections any topology kind admitted by v3, so a parsed node can
+ * disagree with its static type until validateDocument, parseDocument, or
+ * parseDocumentValue checks the whole document.
+ */
 export const NodeV3Schema = createNodeSchema(
   TopologySelectionV3Schema,
   NODE_KINDS_V3,
 ) as unknown as z.ZodType<NodeIRV3>;
+/**
+ * Structural Document v4 node schema. Node references accept any reference
+ * kind and selections any topology kind admitted by v4, so a parsed node can
+ * disagree with its static type until validateDocument, parseDocument, or
+ * parseDocumentValue checks the whole document.
+ */
 export const NodeV4Schema = createNodeSchema(
   TopologySelectionV4Schema,
   NODE_KINDS_V4,
 ) as unknown as z.ZodType<NodeIRV4>;
+/**
+ * Structural Document v5 node schema. Node references accept any reference
+ * kind and selections any topology kind admitted by v5, so a parsed node can
+ * disagree with its static type until validateDocument, parseDocument, or
+ * parseDocumentValue checks the whole document.
+ */
 export const NodeV5Schema = createNodeSchema(
   TopologySelectionV5Schema,
   NODE_KINDS_V5,
 ) as unknown as z.ZodType<NodeIRV5>;
+/**
+ * Structural Document v6 node schema. Node references accept any reference
+ * kind and selections any topology kind admitted by v6, so a parsed node can
+ * disagree with its static type until validateDocument, parseDocument, or
+ * parseDocumentValue checks the whole document.
+ */
 export const NodeV6Schema = createNodeSchema(
   TopologySelectionV6Schema,
   NODE_KINDS_V6,
@@ -2484,7 +2520,11 @@ export const NodeV7Schema: V7SchemaBoundary<NodeIRV7> = withV7RawKeyAudit(
   NodeV7BaseSchema,
   "node",
 );
-/** Current document-v6 node schema. */
+/**
+ * Current document-v6 node schema. It is structural like NodeV6Schema:
+ * reference-kind and topology-kind agreement is checked only by document
+ * validation.
+ */
 export const NodeSchema: z.ZodType<NodeIR> = NodeV6Schema;
 
 const ConfigurationSchema = z

@@ -131,6 +131,20 @@ nodes, topology queries/selections, persistent references, and registry entries.
 Use version-specific schemas when implementing a protocol tool that must reject
 newer vocabulary rather than accepting the current union.
 
+These schemas are structural. Every node reference accepts any of the five
+reference kinds (`profile`, `path`, `solid`, `part`, `assembly`), and every
+topology selection accepts any topology kind its version admits. The node
+schemas therefore accept, for example, a fillet whose `input.kind` is
+`assembly` or whose `edges.topology` is `vertex`, even though `NodeV6Schema` is
+typed as returning `NodeIRV6`, whose fillet input is a solid reference and
+whose edges are an edge selection. Agreement between a reference's declared
+kind, its target, and its consumer, and between a selection's topology kind and
+its feature, is enforced only by semantic validation. `parseDocument`,
+`parseDocumentValue`, and `validateDocument` apply it and report
+`REFERENCE_KIND_MISMATCH` or `TOPOLOGY_SELECTOR_INVALID`. Validate a whole
+document with those functions before relying on the static types of a node
+parsed on its own.
+
 ## Migration contract
 
 `migrateDocument` validates the source version and emits v6. It preserves
