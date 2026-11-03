@@ -192,6 +192,56 @@ describe("semantic topology selections", () => {
     );
   });
 
+  it("limits selector cardinality to the safe integers the schema can reload", () => {
+    const vertical = topology.edges.direction(scalarVec3(0, 0, 1));
+    for (const unsafe of [2 ** 53, 2 ** 60, 1e300]) {
+      expect(() => vertical.exactly(unsafe)).toThrow(RangeError);
+      expect(() => vertical.atLeast(unsafe)).toThrow(RangeError);
+      expect(() => vertical.between(1, unsafe)).toThrow(RangeError);
+    }
+
+    const cad = design("safe-cardinality");
+    const box = cad.box("box", { size: vec3(mm(10), mm(20), mm(30)) });
+    const rounded = cad.fillet("rounded", box, {
+      edges: vertical.between(1, Number.MAX_SAFE_INTEGER),
+      radius: mm(1),
+    });
+    cad.output("rounded", rounded);
+    const document = cad.build();
+    expect(validateDocument(document).ok).toBe(true);
+    const reloaded = parseDocumentValue(JSON.parse(stringifyDocument(document)));
+    expect(reloaded.ok).toBe(true);
+
+    const unsafe = structuredClone(document) as any;
+    unsafe.nodes.rounded.edges.cardinality = { min: 1, max: 2 ** 53 };
+    expect(validateDocument(unsafe).diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "TOPOLOGY_SELECTOR_INVALID",
+        path: "/nodes/rounded/edges/cardinality",
+      }),
+    );
+    expect(parseDocumentValue(unsafe).diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "IR_INVALID",
+        path: "/nodes/rounded/edges/cardinality/max",
+      }),
+    );
+
+    const resolved = resolveTopologySelection(
+      {
+        ...vertical.select().ir,
+        cardinality: { min: 2 ** 53 },
+      },
+      snapshot(),
+      { evaluate: (expression) => (expression.op === "literal" ? expression.value : Number.NaN) },
+    );
+    expect(resolved.ok).toBe(false);
+    expect(resolved.diagnostics[0]).toMatchObject({
+      code: "TOPOLOGY_SELECTOR_INVALID",
+      message: "Topology selection cardinality is invalid",
+    });
+  });
+
   it("builds, validates, and canonically serializes a selected-edge chamfer", async () => {
     const cad = design("beveled-box");
     const box = cad.box("box", {

@@ -498,10 +498,10 @@ function analyzeSelectionOrThrow<K extends TopologyKind>(
   persistent: PersistentReferenceResolutionState | undefined,
 ): TopologySelectionAnalysis<K> {
   if (
-    !Number.isInteger(selection.cardinality.min) ||
+    !Number.isSafeInteger(selection.cardinality.min) ||
     selection.cardinality.min < 1 ||
     (selection.cardinality.max !== undefined &&
-      (!Number.isInteger(selection.cardinality.max) ||
+      (!Number.isSafeInteger(selection.cardinality.max) ||
         selection.cardinality.max < selection.cardinality.min))
   ) {
     invalid("Topology selection cardinality is invalid", context, {

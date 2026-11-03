@@ -1114,9 +1114,9 @@ function validateTopologySelection(
   }
   const { min, max } = selection.cardinality;
   if (
-    !Number.isInteger(min) ||
+    !Number.isSafeInteger(min) ||
     min < 1 ||
-    (max !== undefined && (!Number.isInteger(max) || max < min))
+    (max !== undefined && (!Number.isSafeInteger(max) || max < min))
   ) {
     diagnostics.push(
       diagnostic("TOPOLOGY_SELECTOR_INVALID", "Invalid topology selection cardinality", {
