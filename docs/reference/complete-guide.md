@@ -197,15 +197,30 @@ document/output/part identity defaults and a fixed
 64 KiB UTF-8 budget. The timestamp retains its exact calendar syntax; the four
 identity/description fields support Unicode scalars. Apostrophes use STEP
 doubling; literal backslashes and non-ASCII Unicode scalars use Part 21
-`\X2\...\X0\`/`\X4\...\X0\` directives; control characters and unpaired
-surrogates are rejected. Metadata is validated and encoded before the native
-writer starts. Encoding expansion counts
-toward the 64 MiB default transformed-output ceiling, and structural post-write
-scanning is bounded and cancellable. `maxOutputBytes` does not bound peak native
-allocation: the synchronous stock writer cannot be interrupted or bounded
-before it materializes its original full string. Material, configuration,
-arbitrary document/part metadata, and aggregate assembly/body-set STEP are not
-mapped.
+`\X2\...\X0\`/`\X4\...\X0\` directives. Explicit `metadata` values that contain
+control characters or unpaired surrogates are rejected with
+`EXPORT_OPTIONS_INVALID`. Defaults derived from the document never make a valid
+document fail to export: control characters become spaces, unpaired surrogates
+become U+FFFD, an empty required default becomes `InvariantCAD Shape`, and the
+longest defaults are truncated at Unicode scalar boundaries to fit the budget,
+as described in [deterministic single-product STEP](/interchange/import-export#deterministic-single-product-step).
+Metadata is validated and encoded before the native writer starts. Encoding
+expansion counts toward the 64 MiB default transformed-output ceiling, and
+structural post-write scanning is bounded and cancellable. Exceeding
+`maxOutputBytes`, the default output ceiling, or a fixed input, scan, or entity
+ceiling throws `CadError` with `RESOURCE_LIMIT_EXCEEDED` and
+`details.resource`, `details.limit`, and, when known, `details.actual`.
+`maxOutputBytes` does not bound peak native allocation: the synchronous stock
+writer cannot be interrupted or bounded before it materializes its original
+full string.
+
+The contract covers one STEP product. The stock writer writes an output that
+holds several disjoint solids, such as a union of separated boxes, as several
+products. A plain `output.export("step")` of such an output falls back to the
+weak native STEP bytes, while passing any options object requests the strong
+contract and throws `CadError` with `EXPORT_UNSUPPORTED` and
+`details.reason === "multiple-products"`. Material, configuration, arbitrary
+document/part metadata, and aggregate assembly/body-set STEP are not mapped.
 
 Explicit `wasm`, `moduleFactory`, and `attestedRuntime` initialization retains
 weak raw STEP export and omits this strong envelope until that exact writer
