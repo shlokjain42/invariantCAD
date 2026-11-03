@@ -1232,6 +1232,53 @@ describe("part options", () => {
     if (!reparsed.ok) return;
     expect(await hashDocument(reparsed.value)).toBe(await hashDocument(document));
   });
+
+  it("reads each part and material option once", () => {
+    const { cad, housing, steel } = setup();
+    const foreign = design("foreign").material("forged", {
+      name: "Forged",
+      massDensity: gramsPerCubicCentimeter(1),
+    });
+    // Each getter returns a valid value first and an invalid one afterward.
+    const flipping = <T,>(first: T, later: unknown) => {
+      let reads = 0;
+      return {
+        enumerable: true,
+        get: () => {
+          reads += 1;
+          return reads === 1 ? first : later;
+        },
+      };
+    };
+    const partOptions = Object.defineProperties(
+      {},
+      {
+        material: flipping(undefined, "Aluminium 6061"),
+        materialRef: flipping(steel, foreign),
+        partNumber: flipping("HSG-1", 7),
+      },
+    );
+    cad.part("part", housing, partOptions as never);
+    expect(cad.build().nodes).toHaveProperty("part", {
+      kind: "part",
+      solid: { node: "housing", kind: "solid" },
+      partNumber: "HSG-1",
+      materialId: "steel",
+    });
+
+    const materialOptions = Object.defineProperties(
+      {},
+      {
+        name: flipping("Brass", ""),
+        massDensity: flipping(gramsPerCubicCentimeter(8.5), mm(1)),
+      },
+    );
+    cad.material("brass", materialOptions as never);
+    expect(cad.build().materials).toHaveProperty("brass", {
+      name: "Brass",
+      massDensity: gramsPerCubicCentimeter(8.5).ir,
+    });
+  });
 });
 
 describe("builder ownership boundary", () => {

@@ -1237,29 +1237,37 @@ export class DesignBuilder {
     if (Object.hasOwn(this.materialRecords, key)) {
       throw new TypeError(`Duplicate material '${id}'`);
     }
-    if (typeof options.name !== "string" || options.name.trim().length === 0) {
+    // Read each option once, so an accessor cannot pass a check with one
+    // value and supply another to the stored record.
+    const {
+      name,
+      description: rawDescription,
+      massDensity: rawMassDensity,
+      metadata: rawMetadata,
+    } = options;
+    if (typeof name !== "string" || name.trim().length === 0) {
       throw new TypeError(`Material '${id}' requires a non-empty name`);
     }
     const description = optionalString(
-      options.description,
+      rawDescription,
       `Material '${id}' description`,
     );
-    if (options.massDensity?.dimension !== "massDensity") {
+    if (rawMassDensity?.dimension !== "massDensity") {
       throw new TypeError("Material massDensity must be a mass-density expression");
     }
     const massDensity = ownedExpressionIR(
       this,
-      options.massDensity,
+      rawMassDensity,
       "massDensity",
       `Material '${id}' massDensity`,
     );
     this.materialRecords[key] = deepFreeze({
-      name: options.name,
+      name,
       massDensity,
       ...(description === undefined ? {} : { description }),
-      ...(options.metadata === undefined
+      ...(rawMetadata === undefined
         ? {}
-        : { metadata: detachMetadata(options.metadata, `Material '${id}' metadata`) }),
+        : { metadata: detachMetadata(rawMetadata, `Material '${id}' metadata`) }),
     });
     this.usesMassDensity = true;
     return issued(new MaterialRef(this, key));
@@ -2049,39 +2057,49 @@ export class DesignBuilder {
         );
       }
     }
-    if (options.material !== undefined && options.materialRef !== undefined) {
+    // Read each option once, so an accessor cannot pass a check with one
+    // value and supply another to the stored node.
+    const {
+      partNumber: rawPartNumber,
+      description: rawDescription,
+      material: rawMaterial,
+      materialRef,
+      massDensity: rawMassDensity,
+      metadata: rawMetadata,
+    } = options;
+    if (rawMaterial !== undefined && materialRef !== undefined) {
       throw new TypeError("A part cannot use both material and materialRef");
     }
-    if (options.materialRef !== undefined) this.assertOwned(options.materialRef);
+    if (materialRef !== undefined) this.assertOwned(materialRef);
     if (
-      options.massDensity !== undefined &&
-      options.massDensity?.dimension !== "massDensity"
+      rawMassDensity !== undefined &&
+      rawMassDensity?.dimension !== "massDensity"
     ) {
       throw new TypeError("Part massDensity must be a mass-density expression");
     }
     const partNumber = optionalString(
-      options.partNumber,
+      rawPartNumber,
       `Part '${id}' partNumber`,
     );
     const description = optionalString(
-      options.description,
+      rawDescription,
       `Part '${id}' description`,
     );
-    const material = optionalString(options.material, `Part '${id}' material`);
+    const material = optionalString(rawMaterial, `Part '${id}' material`);
     const metadata =
-      options.metadata === undefined
+      rawMetadata === undefined
         ? undefined
-        : detachMetadata(options.metadata, `Part '${id}' metadata`);
+        : detachMetadata(rawMetadata, `Part '${id}' metadata`);
     const massDensity =
-      options.massDensity === undefined
+      rawMassDensity === undefined
         ? undefined
         : ownedExpressionIR(
             this,
-            options.massDensity,
+            rawMassDensity,
             "massDensity",
             `Part '${id}' massDensity`,
           );
-    const materialId = options.materialRef?.id;
+    const materialId = materialRef?.id;
     const key = this.addNode(id, {
       kind: "part",
       solid: solid.toIR(),
