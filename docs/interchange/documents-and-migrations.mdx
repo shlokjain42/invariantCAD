@@ -95,8 +95,9 @@ does not otherwise validate its input, so the ceiling assumes plain data whose
 property reads are stable, such as builder output or a parsed document. It does
 reject values JSON cannot preserve: non-finite numbers, `undefined` array
 items, functions, symbols, and BigInts, and any object that is not an array, a
-plain object, or a null-prototype object, such as a `Map`, `Set`, `Date`, typed
-array, or class instance, throw `TypeError` instead of being written as `{}`.
+plain object (from any realm), or a null-prototype object, such as a `Map`,
+`Set`, `Date`, typed array, or class instance, throw `TypeError` instead of
+being written as `{}`.
 `hashDocument` and `cloneDocument` share this writer.
 
 ## Parse untrusted text

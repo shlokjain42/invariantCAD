@@ -1,3 +1,4 @@
+import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import {
   canonicalLegacyByteLengthWithin,
@@ -166,6 +167,23 @@ describe("canonical JSON", () => {
       expect(writer.write(Object.assign(Object.create(null), { a: 1 }), 1_000)).toBe(
         '{"a":1}',
       );
+    }
+  });
+
+  it("writes plain records from another realm exactly like local ones", () => {
+    const foreign = runInNewContext('({ b: [1, { c: "x" }], a: null })') as unknown;
+    expect(Object.getPrototypeOf(foreign)).not.toBe(Object.prototype);
+    const local = { b: [1, { c: "x" }], a: null };
+    for (const writer of boundedWriters) {
+      expect(writer.write(foreign, 1_000), writer.name).toBe(
+        writer.write(local, 1_000),
+      );
+      expect(writer.count(foreign, 1_000), writer.name).toBe(
+        writer.count(local, 1_000),
+      );
+      expect(() =>
+        writer.write({ value: runInNewContext("new Map()") }, 1_000),
+      ).toThrow("CAD documents can contain only plain JSON objects and arrays");
     }
   });
 
