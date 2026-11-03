@@ -1,0 +1,79 @@
+{
+  "statusCheck": true,
+  "autoReview": ["open", "push", "rebase"],
+  "ignorePatterns": "pnpm-lock.yaml\nsrc/vendor/**\netc/api/**\ndocs/reference/export-index.mdx",
+  "rules": [
+    {
+      "id": "frozen-document-grammars",
+      "severity": "high",
+      "scope": ["src/**", "tests/**"],
+      "rule": "Never widen, narrow, or reinterpret an existing document version. Document v1-v6 grammars, canonical bytes, semantic hashes, and pinned fixture bytes are frozen. A grammar change needs a new document version, version-specific TypeScript and Zod boundaries, and an explicit migration. Flag any edit that changes frozen bytes, hashes, or expected fixtures for an existing version."
+    },
+    {
+      "id": "staged-v7-boundary",
+      "severity": "high",
+      "scope": ["src/**", "package.json"],
+      "rule": "Document v7 is repository-staged, not public. Flag any change that exports v7 functions or types from src/index.ts, src/conformance.ts, a package subpath, or the CLI, or that makes a public API accept or emit additional v7 documents, unless the pull request explicitly promotes v7 with docs and changelog."
+    },
+    {
+      "id": "plain-data-documents",
+      "severity": "high",
+      "scope": ["src/**"],
+      "rule": "DesignDocument values must remain plain JSON data: no class instances, Maps, Sets, BigInts, functions, WASM handles, or native pointers. Kernel objects must never enter serialized design state."
+    },
+    {
+      "id": "no-topology-indices",
+      "severity": "high",
+      "scope": ["src/**"],
+      "rule": "Never expose face, edge, or vertex array indices or evaluation-scoped kernel keys as durable references. Persistent topology uses semantic selectors or bounded evidence with explicit cardinality, and ambiguity must be reported, never broken by taking the first kernel result."
+    },
+    {
+      "id": "explicit-native-ownership",
+      "severity": "high",
+      "scope": ["src/**", "tests/**", "examples/**", "scripts/**"],
+      "rule": "Every kernel shape, evaluated result, and evaluator must be released exactly once on success, failure, and cancellation paths. Native transfers must roll back transactionally on failure. Flag leaks, double releases, missing finally blocks, and tests that skip disposal on failure paths."
+    },
+    {
+      "id": "structured-diagnostics",
+      "severity": "medium",
+      "scope": ["src/**"],
+      "rule": "Expected modeling and input failures must return CadResult diagnostics with a stable code and JSON Pointer path. Do not throw for them, and do not let an internal TypeError surface as a generic KERNEL_ERROR. Programmer misuse of builders may throw immediately."
+    },
+    {
+      "id": "bounded-untrusted-input",
+      "severity": "high",
+      "scope": ["src/**"],
+      "rule": "Untrusted inputs (document text, parsed values, resolver bytes, native archives, options objects) must be bounded before allocation, honor cancellation signals, and read only own data properties so accessors and caller-defined prototypes cannot change behavior mid-operation."
+    },
+    {
+      "id": "honest-capabilities",
+      "severity": "medium",
+      "scope": ["src/**", "docs/**", "README.md"],
+      "rule": "Never make a lossy representation conversion implicit or claim backend parity. Manifold is approximate mesh; OCCT is exact B-Rep; owned-facade-only behavior must stay capability-gated. Documentation must keep published 0.1.x, unreleased main, and roadmap behavior distinct, with the support matrix as the canonical boundary."
+    },
+    {
+      "id": "public-surface-sync",
+      "severity": "medium",
+      "scope": ["src/**", "package.json"],
+      "rule": "A change to a public export or signature must update the etc/api reports (pnpm api:generate), the generated docs export index (pnpm docs:generate), and CHANGELOG.md under Unreleased."
+    },
+    {
+      "id": "changelog-and-releases",
+      "severity": "medium",
+      "scope": ["CHANGELOG.md", "package.json", "docs/releases/**", "docs/docs.json"],
+      "rule": "Ordinary pull requests add user-visible entries under '## [Unreleased]' only. Only a release/vX.Y.Z pull request prepared by scripts/release.ts may change the package version, add a dated changelog section, or add a docs/releases page."
+    },
+    {
+      "id": "generated-doc-examples",
+      "severity": "low",
+      "scope": ["docs/**", "README.md"],
+      "rule": "Do not hand-edit content between docs-example markers. Edit the canonical source in examples/docs and run pnpm docs:generate."
+    },
+    {
+      "id": "pinned-workflow-actions",
+      "severity": "medium",
+      "scope": [".github/**"],
+      "rule": "Pin every third-party GitHub Action to a full commit SHA with a version comment, keep workflow permissions minimal per job, and never pass expression values directly into shell scripts; route them through env variables."
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+# Socket Security GitHub App settings for this repository.
+#
+# "Socket Security: Pull Request Alerts" is a required status check on main, so
+# pull request alerts must stay enabled and must keep the default trigger paths
+# (every pull request). Narrowing triggerPaths would leave pull requests without
+# the required check and block merging.
+#
+# Alert policy (which alerts block, warn, or are ignored) is managed by the
+# Socket organization security policy, not by the deprecated issueRules key.
+version: 2
+
+githubApp:
+  enabled: true
+  pullRequestAlertsEnabled: true
+  dependencyOverviewEnabled: true
+  projectReportsEnabled: true
