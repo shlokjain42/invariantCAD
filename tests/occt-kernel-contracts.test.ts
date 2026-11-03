@@ -191,3 +191,77 @@ describe("OCCT kernel instance contracts", () => {
     }
   });
 });
+
+describe("OCCT transform of shapes with degenerate edges", () => {
+  const operations = [
+    ["translate", [{ kind: "translate", value: [5, -3, 2] }]],
+    ["rotate", [{ kind: "rotate", value: [0.3, 0.4, 0.5] }]],
+    ["uniform scale", [{ kind: "scale", value: [2, 2, 2] }]],
+    ["nonuniform scale", [{ kind: "scale", value: [2, 1, 1] }]],
+    ["mirror", [{ kind: "mirror", normal: [1, 0, 0] }]],
+  ] as const;
+
+  it("transforms spheres and cones without failing on pole or apex edges", async () => {
+    const kernel = await createOcctKernel();
+    const sphere = kernel.sphere!(10, undefined, { feature: "ball" });
+    const cone = kernel.cylinder!(10, 5, 0, false, 32, { feature: "tip" });
+    const sources = [
+      ["sphere", sphere, (4 / 3) * Math.PI * 1000],
+      ["cone", cone, (Math.PI * 25 * 10) / 3],
+    ] as const;
+    try {
+      expect(kernel.topology!(sphere).history).toBe("complete");
+      expect(kernel.topology!(cone).history).toBe("complete");
+      for (const [sourceName, source, volume] of sources) {
+        for (const [operationName, ops] of operations) {
+          const label = `${sourceName} ${operationName}`;
+          const transformed = kernel.transform!(source, ops, {
+            feature: "moved",
+          });
+          try {
+            const factor =
+              ops[0].kind === "scale"
+                ? ops[0].value[0] * ops[0].value[1] * ops[0].value[2]
+                : 1;
+            const rigidOrUniform =
+              ops[0].kind !== "scale" || ops[0].value[1] === 2;
+            const measured = kernel.measure(transformed).volume;
+            // A nonuniform scale goes through BRepBuilderAPI_GTransform, which
+            // approximates curved surfaces, so its measured volume is only
+            // approximate; the regression here is that it no longer throws.
+            expect(
+              Math.abs(measured - volume * factor) / (volume * factor),
+              label,
+            ).toBeLessThan(rigidOrUniform ? 1e-9 : 2e-2);
+            expect(kernel.status(transformed), label).toEqual({
+              ok: true,
+              code: "VALID",
+            });
+            const snapshot = kernel.topology!(transformed);
+            if (rigidOrUniform) {
+              // Rigid motions and uniform scale keep complete history: the
+              // degenerate edge is seeded through its adjacent face.
+              expect(snapshot.history, label).toBe("complete");
+              for (const edge of snapshot.edges) {
+                expect(
+                  edge.lineage.some(
+                    (entry) =>
+                      entry.feature === "moved" &&
+                      entry.relation === "modified",
+                  ),
+                  label,
+                ).toBe(true);
+              }
+            }
+          } finally {
+            kernel.disposeShape(transformed);
+          }
+        }
+      }
+    } finally {
+      kernel.disposeShape(cone);
+      kernel.disposeShape(sphere);
+      kernel.dispose();
+    }
+  });
+});

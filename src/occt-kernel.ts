@@ -4698,6 +4698,57 @@ class OcctKernel implements GeometryKernel {
       : uniformFactor ** 3;
   }
 
+  /**
+   * Seeds one edge by transforming an adjacent face instead of the bare edge.
+   * The face keeps the edge's pcurve, so a degenerate edge stays measurable.
+   * The transforms preserve subshape structure, so the edge keeps its index
+   * within the face. Returns undefined when no adjacent face yields a seed.
+   */
+  private transformedEdgeSeedInFace(
+    inputShape: OcctShape,
+    descriptor: KernelEdgeDescriptor,
+    edge: ShapeHandle,
+    operations: readonly ResolvedTransformOperation[],
+    lineage: readonly KernelTopologyLineage[],
+    context?: KernelFeatureContext,
+  ): TopologyLineageSeed | undefined {
+    for (const faceKey of descriptor.faces) {
+      const face = inputShape.topologyHandles.get(faceKey);
+      if (face?.topology !== "face") continue;
+      const faceEdges = this.raw.getSubShapes(face.handle, "edge");
+      let index: number;
+      try {
+        index = faceEdges.findIndex((candidate) =>
+          this.raw.isSame(candidate, edge),
+        );
+      } finally {
+        this.releaseHandles(faceEdges);
+      }
+      if (index < 0) continue;
+      const transformedFace = this.applyTransformOperations(
+        face.handle,
+        operations,
+        context,
+      );
+      try {
+        const transformedEdges = this.raw.getSubShapes(transformedFace, "edge");
+        try {
+          const transformedEdge = transformedEdges[index];
+          if (transformedEdges.length !== faceEdges.length) continue;
+          if (transformedEdge === undefined) continue;
+          return this.topologySeedFromHandle(transformedEdge, "edge", lineage);
+        } catch {
+          continue;
+        } finally {
+          this.releaseHandles(transformedEdges);
+        }
+      } finally {
+        this.raw.release(transformedFace);
+      }
+    }
+    return undefined;
+  }
+
   transform(
     shape: KernelShape,
     operations: readonly ResolvedTransformOperation[],
@@ -4728,22 +4779,38 @@ class OcctKernel implements GeometryKernel {
           if (retained === undefined) {
             throw new Error("OCCT topology snapshot lost a retained subshape handle");
           }
+          const lineage = uniqueLineage([...descriptor.lineage, ...modified]);
           const transformed = this.applyTransformOperations(
             retained.handle,
             operations,
             context,
           );
+          let seed: TopologyLineageSeed | undefined;
           try {
-            seeds.push(
-              this.topologySeedFromHandle(
-                transformed,
-                descriptor.topology,
-                uniqueLineage([...descriptor.lineage, ...modified]),
-              ),
+            seed = this.topologySeedFromHandle(
+              transformed,
+              descriptor.topology,
+              lineage,
             );
+          } catch {
+            // A degenerate pole or apex edge transformed on its own loses
+            // the pcurve that carries its geometry, so native queries throw.
           } finally {
             this.raw.release(transformed);
           }
+          if (seed === undefined && descriptor.topology === "edge") {
+            seed = this.transformedEdgeSeedInFace(
+              inputShape,
+              descriptor,
+              retained.handle,
+              operations,
+              lineage,
+              context,
+            );
+          }
+          // An unseeded subshape fails seed coverage, so the result honestly
+          // reports partial history instead of failing the whole transform.
+          if (seed !== undefined) seeds.push(seed);
         }
         annotation = { seeds, requireSeedCoverage: true };
       }
