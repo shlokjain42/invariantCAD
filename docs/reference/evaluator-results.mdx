@@ -463,12 +463,17 @@ root-relative transforms are detached, frozen snapshots. Embedded
 `EvaluatedPartV7` values remain owner-bound and their operations fail after the
 containing evaluated design is disposed. A local leaf part, its solid or body
 set, and its mesh export headers are named by the part node, never by a
-selected output name or an internal planner selector. Its deferred diagnostics
-(for example an unsupported exact export) report `partNode` and point at
-`/nodes/<part>/geometry`; they carry no `output`, because a leaf is not a
-document output. A fixed external-subassembly leaf is likewise named by its
-child part node and reports the parent-selected external `output`,
-`outputKind: "assembly"`, and `childPartNode`.
+selected output name or an internal planner selector. Geometry diagnostics
+raised through that leaf, namely an unsupported exact export of the part or of
+its body set and a failure while meshing its body set, report `partNode` and
+point at `/nodes/<part>/geometry`; they carry no `output`, because a leaf is
+not a document output. A fixed external-subassembly leaf is likewise named by
+its child part node, and the same geometry diagnostics report the
+parent-selected external `output`, `outputKind: "assembly"`, and
+`childPartNode`. Part-level checks keep their usual location: for example,
+`physicalMassProperties()` on a leaf without a density returns
+`MASS_DENSITY_MISSING` at the part's or material's `massDensity` path, with
+no `details.partNode`.
 
 An explicit `false` suppression override can activate an instance authored as
 suppressed. Suppression is resolved before descendant admission, so a
