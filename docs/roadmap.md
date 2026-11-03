@@ -108,9 +108,11 @@ The repository does not silently download or distribute that bundle.
   caller cancellation and output ceilings, authored-metadata and structural
   scan limits, repeatable bytes for the same exact runtime inputs, and
   structured high-level option diagnostics. Explicit runtime overrides retain
-  weak native STEP until separately qualified. This does not claim geometric
-  canonicalization, imported-file canonicalization, exact aggregate STEP,
-  bounded native peak allocation, or a portable artifact/cache format.
+  weak native STEP until separately qualified, and an output that OCCT writes
+  as several STEP products keeps weak native bytes under a plain export. This
+  does not claim geometric canonicalization, imported-file canonicalization,
+  exact aggregate STEP, bounded native peak allocation, or a portable
+  artifact/cache format.
 - A public opaque single-imported-body workflow now captures a caller-supplied
   SHA-256 and byte-length commitment, canonically persists only the strict
   one-resource/one-imported-body/one-output subset, resolves bytes through a
@@ -144,8 +146,8 @@ The repository does not silently download or distribute that bundle.
 
 ### Repository-only research and staged work
 
-The repository contains a private owned-OCCT shape-artifact candidate and a
-direct-box evaluator-cache experiment. No public backend advertises
+The repository contains a private OCCT shape-artifact candidate, for the stock
+and owned runtimes, and a direct-box evaluator-cache experiment. No public backend advertises
 `shapeArtifacts`, no public evaluator option enables the experiment, and
 ordinary package consumers cannot bind it.
 
