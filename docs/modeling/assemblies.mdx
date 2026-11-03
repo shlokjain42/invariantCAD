@@ -80,7 +80,7 @@ by fixed ceilings that are charged before records are allocated:
 | Resource | Ceiling | What is counted |
 | --- | ---: | --- |
 | `maxActiveOccurrences` | 100,000 | Occurrence records materialized across the evaluation. Every evaluated assembly, including an intermediate subassembly, counts each of its flattened occurrences, and a nested subassembly counts again for every unsuppressed placement of it. |
-| `maxAssemblyDepth` | 64 | Assembly nesting depth. An assembly of parts only has depth 1. |
+| `maxAssemblyDepth` | 64 | Assembly nesting depth, counted from the outermost assembly being evaluated. An assembly of parts only has depth 1. The check runs before a deeper component is evaluated. |
 | `maxOccurrencePathSegments` | 1,000,000 | Instance-path segments stored across those records. An occurrence at depth 3, such as `front-pair/right/bolt`, stores 3. |
 
 Exceeding a ceiling fails the evaluation with `RESOURCE_LIMIT_EXCEEDED` at the

@@ -13686,6 +13686,7 @@ export class Evaluator {
     const createdShapes = new Set<KernelShape>();
     let flattenedOccurrences = 0;
     let flattenedPathSegments = 0;
+    let activeAssemblies = 0;
     const ensureLive = (): void => {
       if (options.signal?.aborted) {
         throw new EvaluationFailure(
@@ -15403,6 +15404,7 @@ export class Evaluator {
           }
           case "assembly": {
             const occurrences: AssemblyOccurrence[] = [];
+            const maxDepth = PUBLIC_ASSEMBLY_EVALUATION_LIMITS.maxAssemblyDepth;
             let depth = 1;
             let pathSegments = 0;
             // Charge flattened records before allocating them.
@@ -15435,62 +15437,84 @@ export class Evaluator {
               flattenedPathSegments += segments;
               pathSegments += segments;
             };
-            for (const [instanceIndex, instance] of node.instances.entries()) {
-              const suppressed =
-                configuredInstanceSuppression(id, instance.id) ??
-                instance.suppressed;
-              if (suppressed) continue;
-              const instancePath = `/nodes/${id}/instances/${instanceIndex}`;
-              const component = evaluateNode(instance.component.node);
-              const placement = operationsMatrix(
-                instance.placement.map((operation, operationIndex) =>
-                  resolvedTransform(
-                    operation,
-                    id,
-                    `${instancePath}/placement/${operationIndex}`,
-                  ),
-                ),
-              );
-              if (component.kind === "part") {
-                chargeOccurrences(1, 1, instancePath);
-                occurrences.push({
-                  id: instance.id,
-                  part: component,
-                  transform: placement,
-                });
-              } else if (component.kind === "assembly") {
+            // Depth counts nesting from the outermost assembly on the current
+            // evaluation stack, so a deep chain fails before it can exhaust the
+            // call stack.
+            activeAssemblies += 1;
+            try {
+              for (const [instanceIndex, instance] of node.instances.entries()) {
+                const suppressed =
+                  configuredInstanceSuppression(id, instance.id) ??
+                  instance.suppressed;
+                if (suppressed) continue;
+                const instancePath = `/nodes/${id}/instances/${instanceIndex}`;
                 if (
-                  component.depth + 1 >
-                  PUBLIC_ASSEMBLY_EVALUATION_LIMITS.maxAssemblyDepth
+                  instance.component.kind === "assembly" &&
+                  activeAssemblies + 1 > maxDepth
                 ) {
                   throw assemblyLimitFailure(
                     "maxAssemblyDepth",
-                    component.depth + 1,
+                    activeAssemblies + 1,
                     id,
                     `${instancePath}/component`,
                   );
                 }
-                if (component.depth + 1 > depth) depth = component.depth + 1;
-                const nested = component.occurrences;
-                chargeOccurrences(
-                  nested.length,
-                  component.pathSegments + nested.length,
-                  instancePath,
+                const component = evaluateNode(instance.component.node);
+                const placement = operationsMatrix(
+                  instance.placement.map((operation, operationIndex) =>
+                    resolvedTransform(
+                      operation,
+                      id,
+                      `${instancePath}/placement/${operationIndex}`,
+                    ),
+                  ),
                 );
-                // Append one record at a time; spreading a large array into
-                // push() overflows the call stack.
-                for (let index = 0; index < nested.length; index += 1) {
-                  if (index % 1024 === 0) ensureLive();
-                  const occurrence = nested[index]!;
+                if (component.kind === "part") {
+                  chargeOccurrences(1, 1, instancePath);
                   occurrences.push({
-                    id: `${instance.id}/${occurrence.id}`,
-                    part: occurrence.part,
-                    transform: multiplyMatrices(placement, occurrence.transform),
+                    id: instance.id,
+                    part: component,
+                    transform: placement,
                   });
+                } else if (component.kind === "assembly") {
+                  // A cached subassembly can be deeper than this stack shows.
+                  if (activeAssemblies + component.depth > maxDepth) {
+                    throw assemblyLimitFailure(
+                      "maxAssemblyDepth",
+                      activeAssemblies + component.depth,
+                      id,
+                      `${instancePath}/component`,
+                    );
+                  }
+                  if (component.depth + 1 > depth) depth = component.depth + 1;
+                  const nested = component.occurrences;
+                  chargeOccurrences(
+                    nested.length,
+                    component.pathSegments + nested.length,
+                    instancePath,
+                  );
+                  // Append one record at a time; spreading a large array into
+                  // push() overflows the call stack.
+                  for (let index = 0; index < nested.length; index += 1) {
+                    if (index % 1024 === 0) ensureLive();
+                    const occurrence = nested[index]!;
+                    occurrences.push({
+                      id: `${instance.id}/${occurrence.id}`,
+                      part: occurrence.part,
+                      transform: multiplyMatrices(
+                        placement,
+                        occurrence.transform,
+                      ),
+                    });
+                  }
+                } else {
+                  throw new Error(
+                    "Assembly component did not evaluate to a part",
+                  );
                 }
-              } else {
-                throw new Error("Assembly component did not evaluate to a part");
               }
+            } finally {
+              activeAssemblies -= 1;
             }
             result = { kind: "assembly", occurrences, depth, pathSegments };
             break;

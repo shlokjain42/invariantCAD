@@ -210,18 +210,49 @@ describe("public assembly evaluation ceilings", () => {
       accepted.value.dispose();
     }
 
-    const rejected = await evaluator.evaluate(nestedChainDocument(65));
-    expect(rejected.ok).toBe(false);
-    expect(rejected.diagnostics).toEqual([
+    // The 65th nested assembly is reached from a1 when evaluation descends
+    // from a64, so the reference that would exceed the ceiling is a1's.
+    for (const levels of [65, 5_000]) {
+      const rejected = await evaluator.evaluate(nestedChainDocument(levels));
+      expect(rejected.ok).toBe(false);
+      const deepest = levels - 64;
+      expect(rejected.diagnostics).toEqual([
+        expect.objectContaining({
+          code: "RESOURCE_LIMIT_EXCEEDED",
+          node: `a${deepest}`,
+          path: `/nodes/a${deepest}/instances/0/component`,
+          details: {
+            resource: "maxAssemblyDepth",
+            limit: 64,
+            actual: 65,
+          },
+        }),
+      ]);
+    }
+  });
+
+  it("counts the depth of an already evaluated subassembly", async () => {
+    // Selecting a63 first caches the 64-deep chain; a64 then reuses it.
+    const document = nestedChainDocument(65);
+    const cad = structuredClone(document) as DesignDocument;
+    (cad.outputs as Record<string, unknown>).inner = {
+      node: "a63",
+      kind: "assembly",
+    };
+    const result = await evaluator.evaluate(cad, {
+      outputs: ["inner", "top"],
+    });
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics).toEqual([
       expect.objectContaining({
         code: "RESOURCE_LIMIT_EXCEEDED",
         node: "a64",
         path: "/nodes/a64/instances/0/component",
-        details: expect.objectContaining({
+        details: {
           resource: "maxAssemblyDepth",
           limit: 64,
           actual: 65,
-        }),
+        },
       }),
     ]);
   });
