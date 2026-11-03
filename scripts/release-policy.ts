@@ -175,11 +175,13 @@ export function releaseNotesBody(page: string): string {
 
 const RELEASE_NOTES_DIRECTORY = "releases";
 // One left-to-right scan of a prose run. An inline code span comes first so
-// that it is skipped whole; it may wrap onto later lines of its paragraph but
-// never crosses a blank line.
+// that it is skipped whole. As in CommonMark, it opens with a complete run of
+// backticks and closes at the next run of the same length; shorter or longer
+// runs inside it are content. It may wrap onto later lines of its paragraph
+// but never crosses a blank line.
 const MARKDOWN_TARGET = new RegExp(
   [
-    "(`+)(?:[^`\\n]|\\n(?![ \\t]*(?:\\n|$)))*?\\1",
+    "(?<!`)(`+)(?!`)(?:[^`\\n]|\\n(?![ \\t]*(?:\\n|$))|`+(?!`))*?(?<!`)\\1(?!`)",
     "^( {0,3}\\[[^\\]\\n]+\\]:[ \\t]*)(<[^<>\\n]*>|\\S+)",
     "(\\]\\(\\s*)(<[^<>\\n]*>|[^)\\s]+)",
     "(\\b(?:href|src)=[\"'])([^\"']+)",
