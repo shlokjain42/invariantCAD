@@ -91,11 +91,13 @@ const result = await evaluator.evaluate(document, {
 | `parameters` | Finite overrides in document base units |
 | `outputs` | Evaluate only the named output closure instead of every output |
 | `signal` | Cooperative cancellation signal |
-| `allowEmpty` | Permit an evaluation request with no selected outputs |
+| `allowEmpty` | Accept zero-volume feature results: `EMPTY_RESULT` becomes a warning instead of an error, and an empty solid can be returned as an output |
 | `topologySignatureLimits` | Bound persistent-reference matching work |
 
 Unknown output, parameter, or configuration IDs produce diagnostics. Duplicate
-output names in the option array are normalized rather than evaluated twice.
+output names in the option array are normalized rather than evaluated twice. An
+explicitly empty `outputs` array always fails with `OUTPUT_MISSING`, whatever
+`allowEmpty` is set to.
 
 ## Result handling
 

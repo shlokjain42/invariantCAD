@@ -288,6 +288,12 @@ export interface EvaluationOptions {
   readonly parameters?: Readonly<Record<string, ParameterOverride>>;
   readonly outputs?: readonly string[];
   readonly signal?: AbortSignal;
+  /**
+   * Accept zero-volume feature results. Each one then produces an
+   * `EMPTY_RESULT` warning instead of failing the evaluation, and an empty
+   * solid can be returned as an output. It does not permit an empty output
+   * selection, which always fails with `OUTPUT_MISSING`.
+   */
   readonly allowEmpty?: boolean;
   /** Operational work limits for resolving stored topology evidence. */
   readonly topologySignatureLimits?: Partial<TopologySignatureLimits>;
@@ -15529,10 +15535,16 @@ export class Evaluator {
       const requested = options.outputs ?? Object.keys(document.outputs);
       if (requested.length === 0) {
         throw new EvaluationFailure(
-          diagnostic("OUTPUT_MISSING", "The document has no outputs", {
-            severity: "error",
-            path: "/outputs",
-          }),
+          diagnostic(
+            "OUTPUT_MISSING",
+            options.outputs === undefined
+              ? "The document has no outputs"
+              : "No outputs were selected",
+            {
+              severity: "error",
+              path: "/outputs",
+            },
+          ),
         );
       }
       const rawOutputs = new Map<string, NodeValue>();
