@@ -283,6 +283,36 @@ describe("OCCT STEP export contract", () => {
         limit: 1000,
       });
       expect(exceeded.details?.actual).toBeGreaterThan(1000);
+
+      // The low-level kernel boundary reports the same structured ceiling.
+      const box = kernel.box!([2, 3, 5], false);
+      try {
+        const lowLevel = cadErrorDiagnostic(() =>
+          kernel.exportShape!(box, "step", {
+            stepExport: {
+              protocolVersion: 1,
+              maxOutputBytes: 1000,
+              metadata: {
+                fileName: "ceiling",
+                timestamp: "1970-01-01T00:00:00",
+                productId: "body",
+                productName: "body",
+                productDescription: "",
+              },
+            },
+          }),
+        );
+        expect(lowLevel.code).toBe("RESOURCE_LIMIT_EXCEEDED");
+        expect(lowLevel.details).toMatchObject({
+          kernel: "occt",
+          operation: "export",
+          format: "step",
+          resource: "maxOutputBytes",
+          limit: 1000,
+        });
+      } finally {
+        kernel.disposeShape(box);
+      }
     } finally {
       result.value.dispose();
       evaluator.dispose();
