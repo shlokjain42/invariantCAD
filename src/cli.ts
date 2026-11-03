@@ -18,7 +18,7 @@ import {
 import { parseDocument } from "./serialization.js";
 import { DEFAULT_DESIGN_DOCUMENT_LIMITS } from "./document-limits.js";
 import { auditJsonMemberNames } from "./internal/json-member-audit.js";
-import type { Diagnostic } from "./core/result.js";
+import { CadError, type Diagnostic } from "./core/result.js";
 
 type CliCommand = "validate" | "inspect" | "bom" | "export";
 type CliValueOption =
@@ -267,6 +267,14 @@ function formatDiagnostics(diagnostics: readonly Diagnostic[]): string {
     .join("\n");
 }
 
+function failureReason(error: unknown, label: string): string {
+  if (error instanceof CadError && error.diagnostics.length > 0) {
+    return formatDiagnostics(error.diagnostics);
+  }
+  return terminalSafe(
+    `${label}: ${error instanceof Error ? error.message : String(error)}`,
+  );
+}
 
 type InlineParametersResult =
   | {
@@ -675,10 +683,23 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
           ? requestedOutput
           : evaluated.value.outputNames[0];
       if (outputName === undefined) throw new Error("No output is available to export");
-      const data = evaluated.value.output(outputName).export(
-        exportFormat ?? inferFormat(destination, requestedFormat),
-      );
-      await writeFile(destination, data);
+      let data: Uint8Array | string;
+      try {
+        data = evaluated.value.output(outputName).export(
+          exportFormat ?? inferFormat(destination, requestedFormat),
+        );
+      } catch (error: unknown) {
+        process.stderr.write(`${failureReason(error, "Export failed")}\n`);
+        return 1;
+      }
+      try {
+        await writeFile(destination, data);
+      } catch (error: unknown) {
+        process.stderr.write(
+          `${failureReason(error, "Output file could not be written")}\n`,
+        );
+        return 1;
+      }
       process.stdout.write(`Wrote ${destination}\n`);
       return 0;
     } finally {
@@ -694,7 +715,16 @@ runCli().then(
     process.exitCode = code;
   },
   (error: unknown) => {
-    process.stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`);
+    // Structured failures keep their diagnostics; only defects show a stack.
+    process.stderr.write(
+      `${
+        error instanceof CadError && error.diagnostics.length > 0
+          ? formatDiagnostics(error.diagnostics)
+          : error instanceof Error
+            ? error.stack
+            : String(error)
+      }\n`,
+    );
     process.exitCode = 1;
   },
 );

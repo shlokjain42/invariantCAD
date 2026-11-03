@@ -1199,4 +1199,73 @@ describe("CLI", () => {
       await rm(directory, { recursive: true, force: true });
     }
   }, 30_000);
+
+  it("reports export and write failures as diagnostics instead of stack traces", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "invariantcad-cli-"));
+    try {
+      const cad = design("cli-export-failures");
+      const solid = cad.box("solid", { size: vec3(mm(1), mm(2), mm(3)) });
+      const part = cad.part("part", solid);
+      const product = cad.assembly("product", (assembly) => {
+        assembly.instance("left", part);
+        assembly.instance("right", part, {
+          placement: [tf.translate(vec3(mm(5), mm(0), mm(0)))],
+        });
+      });
+      cad.output("solid", solid).output("product", product);
+      const documentPath = join(directory, "model.json");
+      await writeFile(documentPath, stringifyDocument(cad.build()));
+
+      const cases = [
+        {
+          label: "assembly to an exact format",
+          arguments: ["--output", "product", "--to", "product.step"],
+          message:
+            "ERROR EXPORT_UNSUPPORTED: Assembly 'product' cannot be exported as step yet",
+        },
+        {
+          label: "exact format from the mesh kernel",
+          arguments: [
+            "--output",
+            "solid",
+            "--to",
+            "solid.step",
+            "--kernel",
+            "manifold",
+          ],
+          message: "ERROR EXPORT_UNSUPPORTED",
+        },
+        {
+          label: "unwritable destination",
+          arguments: [
+            "--output",
+            "solid",
+            "--to",
+            join("missing-directory", "solid.stl"),
+          ],
+          message: "Output file could not be written: ENOENT",
+        },
+      ] as const;
+      for (const testCase of cases) {
+        const result = invokeCli([
+          "export",
+          documentPath,
+          ...testCase.arguments.map((argument) =>
+            argument.includes(".") ? join(directory, argument) : argument,
+          ),
+        ]);
+        expect(result.status, testCase.label).toBe(1);
+        expect(result.stdout, testCase.label).toBe("");
+        expect(result.stderr, testCase.label).toContain(testCase.message);
+        expect(result.stderr, testCase.label).not.toContain("    at ");
+        expect(result.stderr.trim().split("\n"), testCase.label).toHaveLength(
+          1,
+        );
+      }
+      await expect(stat(join(directory, "product.step"))).rejects.toThrow();
+      await expect(stat(join(directory, "solid.step"))).rejects.toThrow();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, 60_000);
 });
