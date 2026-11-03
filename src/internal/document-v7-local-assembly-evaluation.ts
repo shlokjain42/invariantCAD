@@ -2671,6 +2671,38 @@ function captureMeshData(value: unknown): CapturedMeshData {
   }
 }
 
+/**
+ * Assembly mesh failures created by this module. Product meshing rethrows
+ * exactly these unchanged, so their occurrence provenance is never flattened
+ * into a cause string; arbitrary thrown values are still wrapped.
+ */
+const localAssemblyMeshCadErrors = new LocalAssemblyWeakMap<
+  object,
+  true
+>();
+
+/**
+ * Top-level component provenance for a deferred external-occurrence failure,
+ * matching productOccurrenceDiagnostics: `output` names the external
+ * component output selected by the parent.
+ */
+function externalOccurrenceDetails(
+  occurrence: EvaluatedLocalOccurrenceV7,
+): Readonly<Record<string, unknown>> {
+  const component = occurrence.component;
+  return component.source === "external"
+    ? {
+        resource: component.resource,
+        componentResource: component.resource,
+        digest: component.digest,
+        byteLength: component.byteLength,
+        output: component.output,
+        outputKind: component.outputKind,
+        sourceVersion: component.sourceVersion,
+      }
+    : {};
+}
+
 function meshCadError(
   output: string,
   assemblyNode: NodeId,
@@ -2683,6 +2715,7 @@ function meshCadError(
     occurrence === undefined
       ? undefined
       : evaluatedOccurrenceProvenance(occurrence);
+  const external = occurrence?.component.source === "external";
   const value = diagnostic("KERNEL_ERROR", message, {
     severity: "error",
     node:
@@ -2694,7 +2727,14 @@ function meshCadError(
       `/nodes/${jsonPointerSegment(assemblyNode)}`,
     details: {
       phase: LOCAL_ASSEMBLY_EVALUATION_PHASE,
-      output,
+      // An external occurrence reports the component output selected by the
+      // parent, like every other occurrence-specific external diagnostic.
+      ...(external
+        ? {
+            ...externalOccurrenceDetails(occurrence!),
+            assemblyOutput: output,
+          }
+        : { output }),
       reason,
       protocolViolation: true,
       ...(occurrence === undefined
@@ -2723,7 +2763,9 @@ function meshCadError(
       ...(cause === undefined ? {} : { cause }),
     },
   });
-  return new CadError(value.message, [value]);
+  const error = new CadError(value.message, [value]);
+  localAssemblyWeakMapInsert(localAssemblyMeshCadErrors, error, true);
+  return error;
 }
 
 function affineVolumeScale(matrix: Mat4): number {
@@ -3079,6 +3121,7 @@ export class EvaluatedLocalAssemblyV7 {
                 `/nodes/${jsonPointerSegment(this.node)}`,
               details: {
                 phase: LOCAL_ASSEMBLY_EVALUATION_PHASE,
+                ...externalOccurrenceDetails(occurrence),
                 occurrencePath: occurrence.path,
                 component: occurrence.component,
                 ...(provenance === undefined
@@ -3562,6 +3605,16 @@ export class EvaluatedProductDocumentV7 {
       } catch (error) {
         if (!documentV7RuntimeIntrinsicsAreIntact()) {
           throw productRuntimeCadError();
+        }
+        if (
+          output.kind === "assembly" &&
+          typeof error === "object" &&
+          error !== null &&
+          localAssemblyWeakMapValue(localAssemblyMeshCadErrors, error) ===
+            true
+        ) {
+          // Keep the assembly's structured occurrence provenance intact.
+          throw error;
         }
         throw productMeshCadError(
           output,

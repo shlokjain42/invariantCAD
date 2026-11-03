@@ -32,6 +32,7 @@ import {
   EvaluatedLocalAssemblyV7,
   evaluateProductAssemblyOutputsV7,
 } from "../src/internal/document-v7-local-assembly-evaluation.js";
+import { evaluateProductDocument } from "../src/internal/document-v7-product-evaluation.js";
 
 const DOCUMENT_MEDIA_TYPE =
   "application/vnd.invariantcad.document+json";
@@ -56,6 +57,16 @@ interface TrackedManifold {
 interface LinearCarriageFixture {
   readonly document: DesignDocumentV7;
   readonly child: CommittedDocument;
+}
+
+function capturedCadError(action: () => unknown): CadError {
+  try {
+    action();
+  } catch (error) {
+    if (error instanceof CadError) return error;
+    throw error;
+  }
+  throw new Error("Expected a CadError");
 }
 
 async function digestBytes(
@@ -1393,6 +1404,71 @@ describe("external fixed-subassembly evaluation", () => {
         },
       });
       expect(meshCalls).toHaveBeenCalledTimes(1);
+    } finally {
+      result.value.dispose();
+      expect(harness.liveShapes.size).toBe(0);
+      harness.disposeBase();
+    }
+  });
+
+  it("reports external component provenance for deferred mesh failures through product meshing", async () => {
+    const fixture = await singleExternalAssemblyProduct(
+      childModule(),
+      "mesh-module",
+    );
+    const resolved = resolverFor(fixture.child);
+    const harness = await trackedManifold();
+    const kernel: GeometryKernel = {
+      ...harness.kernel,
+      mesh: () => {
+        throw new Error("child tessellation failed");
+      },
+    };
+    const expected = {
+      code: "KERNEL_ERROR",
+      node: "product",
+      path: "/nodes/product/instances/0/component",
+      details: {
+        phase: "documentV7LocalAssemblyEvaluation",
+        resource: "carriageModule",
+        componentResource: "carriageModule",
+        digest: fixture.child.digest,
+        byteLength: fixture.child.bytes.byteLength,
+        output: "module",
+        outputKind: "assembly",
+        sourceVersion: 7,
+        assemblyOutput: "product",
+        reason: "mesh-callback-threw",
+        occurrencePath: ["mesh-module", "core-instance", "carriage-leaf"],
+        childNode: "carriage",
+        childAssemblyNode: "core",
+        childPath: "/nodes/core/instances/0/component",
+        cause: "child tessellation failed",
+      },
+    };
+    const result = await evaluateProductDocument(
+      kernel,
+      fixture.document,
+      { resolver: resolved.resolver },
+    );
+    expect(result.ok, JSON.stringify(result.diagnostics)).toBe(true);
+    if (!result.ok) {
+      harness.disposeBase();
+      return;
+    }
+    try {
+      const assemblyError = capturedCadError(() =>
+        result.value.assembly("product").mesh(),
+      );
+      expect(assemblyError.diagnostics).toHaveLength(1);
+      expect(assemblyError.diagnostics[0]).toMatchObject(expected);
+
+      const productError = capturedCadError(() => result.value.mesh());
+      expect(productError.diagnostics).toEqual(assemblyError.diagnostics);
+      const exportError = capturedCadError(() =>
+        result.value.export("stl"),
+      );
+      expect(exportError.diagnostics).toEqual(assemblyError.diagnostics);
     } finally {
       result.value.dispose();
       expect(harness.liveShapes.size).toBe(0);
