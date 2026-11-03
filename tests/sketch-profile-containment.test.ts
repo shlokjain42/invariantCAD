@@ -1523,6 +1523,45 @@ describe("resolved sketch profile containment", () => {
     }
   });
 
+  it("tests a straight curve's crossing between the junction points it shares", () => {
+    // An L-shaped outline whose notch edge runs a rounding error from the ray.
+    // The left side and the notch edge meet across a gap far below the
+    // connector guard, on opposite sides of the ray, while the whole notch
+    // edge lies on one side. Its crossing must be placed between the shared
+    // junction points, not extrapolated from its own endpoints.
+    for (const [sideEnd, notchStart, notchEnd] of [
+      [-1e-13, 1e-13, 1e-14],
+      [1e-13, -1e-13, -1e-14],
+    ] as const) {
+      const notched: ResolvedLoop = {
+        curves: [
+          { kind: "line", start: [-10, -20], end: [20, -20], source: source("bottom") },
+          { kind: "line", start: [20, -20], end: [20, 20], source: source("right") },
+          { kind: "line", start: [20, 20], end: [-20, 20], source: source("top") },
+          { kind: "line", start: [-20, 20], end: [-20, sideEnd], source: source("left") },
+          { kind: "line", start: [-20, notchStart], end: [-10, notchEnd], source: source("notch") },
+          { kind: "line", start: [-10, notchEnd], end: [-10, -20], source: source("step") },
+        ],
+      };
+      expect(
+        validateResolvedProfileRegion(
+          profile([circleLoop([0, 0], 1, "inside-notch")], notched),
+          PROFILE_TOLERANCE,
+        ),
+        `inside hole, notch ${notchStart}`,
+      ).toBeUndefined();
+      expect(
+        validateResolvedProfileRegion(
+          profile([circleLoop([-40, 0], 1, "outside-notch")], notched),
+          PROFILE_TOLERANCE,
+        ),
+        `outside hole, notch ${notchStart}`,
+      ).toEqual(
+        expect.objectContaining({ reason: "hole-outside-outer", holeIndex: 0 }),
+      );
+    }
+  });
+
   it("classifies a junction once when an arc endpoint misses its line by a rounding error", () => {
     // An L-bracket whose inside fillet starts at its circle's lowest point.
     // With these decimal radii the evaluated lowest point lands one rounding

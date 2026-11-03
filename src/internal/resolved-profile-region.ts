@@ -837,40 +837,43 @@ interface RayEndpointSides {
 }
 
 /**
- * Half-open ray side of the junction after `boundary[index]`.
+ * The junction after `boundary[index]`, relative to the ray origin `point`.
  *
  * Even/odd parity is consistent only when every junction is classified once.
- * Adjacent curves can disagree by rounding about which side a shared
- * junction lies on: an arc endpoint is evaluated from its center, radius and
- * angle, while a neighbouring line or connector stores the coordinates
- * directly, and loops may close with a gap below the connector guard. Each
- * junction therefore takes the side of one representative point: a straight
- * curve's stored endpoint when either neighbour is straight, otherwise the
- * preceding arc's evaluated endpoint.
+ * Adjacent curves can disagree by rounding about where a shared junction lies:
+ * an arc endpoint is evaluated from its center, radius and angle, while a
+ * neighbouring line or connector stores the coordinates directly, and loops
+ * may close with a gap below the connector guard. Each junction therefore has
+ * one representative point, used for its ray side by both curves and as the
+ * endpoint of a straight curve's crossing test: a straight curve's stored
+ * endpoint when either neighbour is straight (the preceding one when both
+ * are), otherwise the preceding arc's evaluated endpoint.
  */
-function junctionRayAbove(
+function junctionRayPoint(
   boundary: readonly BoundaryCurve[],
   index: number,
   point: Vec2,
-): boolean {
+): Vec2 {
   const before = boundary[index]!.curve;
   const after = boundary[(index + 1) % boundary.length]!.curve;
-  const representative =
-    before.kind !== "line" && after.kind === "line"
-      ? curvePoint(after, 0, point)
-      : curvePoint(before, 1, point);
-  return representative[1] > 0;
+  return before.kind !== "line" && after.kind === "line"
+    ? curvePoint(after, 0, point)
+    : curvePoint(before, 1, point);
 }
 
+/**
+ * Half-open ray crossings of a straight boundary curve, tested between its
+ * junction points so that its sides and its crossing position agree with the
+ * curves it meets.
+ */
 function lineRayCrossings(
-  curve: Extract<ResolvedCurve, { readonly kind: "line" }>,
-  point: Vec2,
+  start: Vec2,
+  end: Vec2,
   tolerance: number,
-  sides: RayEndpointSides,
 ): number | "uncertain" {
-  if (sides.startAbove === sides.endAbove) return 0;
-  const start = curvePoint(curve, 0, point);
-  const end = curvePoint(curve, 1, point);
+  const startAbove = start[1] > 0;
+  const endAbove = end[1] > 0;
+  if (startAbove === endAbove) return 0;
   const determinant =
     start[0] * end[1] - start[1] * end[0];
   const guard =
@@ -885,7 +888,7 @@ function lineRayCrossings(
   if (!Number.isFinite(determinant) || Math.abs(determinant) <= guard) {
     return "uncertain";
   }
-  const crosses = sides.endAbove ? determinant > 0 : determinant < 0;
+  const crosses = endAbove ? determinant > 0 : determinant < 0;
   return crosses ? 1 : 0;
 }
 
@@ -1074,20 +1077,24 @@ function classifyPointInLoop(
       return { status: "stopped", reason: stop };
     }
     const curve = boundary[index]!.curve;
-    const sides: RayEndpointSides = {
-      startAbove: junctionRayAbove(
+    let curveCrossings: number | "uncertain";
+    if (curve.kind === "circle") {
+      curveCrossings = circleRayCrossings(curve, point, tolerance);
+    } else {
+      const start = junctionRayPoint(
         boundary,
         (index - 1 + boundary.length) % boundary.length,
         point,
-      ),
-      endAbove: junctionRayAbove(boundary, index, point),
-    };
-    const curveCrossings =
-      curve.kind === "line"
-        ? lineRayCrossings(curve, point, tolerance, sides)
-        : curve.kind === "arc"
-          ? arcRayCrossings(curve, point, tolerance, sides)
-          : circleRayCrossings(curve, point, tolerance);
+      );
+      const end = junctionRayPoint(boundary, index, point);
+      curveCrossings =
+        curve.kind === "line"
+          ? lineRayCrossings(start, end, tolerance)
+          : arcRayCrossings(curve, point, tolerance, {
+              startAbove: start[1] > 0,
+              endAbove: end[1] > 0,
+            });
+    }
     if (curveCrossings === "uncertain") return { status: "uncertain" };
     crossings += curveCrossings;
   }
