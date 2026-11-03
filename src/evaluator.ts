@@ -524,8 +524,9 @@ function snapshotPrivateEvaluationOptions(
 
 /**
  * Detaches a public evaluation request that will yield to the host. The
- * document is structured-cloned, so validation and every node read after a
- * yield see the same values; the options keep the caller's signal.
+ * document is admitted through the bounded `parseDocumentValue` snapshot, so
+ * it is size-checked before it is copied and every node read after a yield
+ * sees the validated values; the options keep the caller's signal.
  */
 function captureYieldingEvaluationRequest(
   document: DesignDocument,
@@ -534,21 +535,11 @@ function captureYieldingEvaluationRequest(
   readonly document: DesignDocument;
   readonly options: EvaluationOptions;
 }> {
+  const parsed = parseDocumentValue(document);
+  if (!parsed.ok) return parsed;
   const capturedOptions = snapshotPrivateEvaluationOptions(options);
   if (!capturedOptions.ok) return capturedOptions;
-  let capturedDocument: DesignDocument;
-  try {
-    capturedDocument = structuredClone(document);
-  } catch (error) {
-    return failure(
-      diagnostic(
-        "IR_INVALID",
-        safeErrorMessage(error, "The document could not be captured"),
-        { severity: "error", path: "/" },
-      ),
-    );
-  }
-  return success({ document: capturedDocument, options: capturedOptions.value });
+  return success({ document: parsed.value, options: capturedOptions.value });
 }
 
 type SignatureCapabilityInspection =

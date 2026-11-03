@@ -183,25 +183,28 @@ describe("evaluation cancellation", () => {
     }
   });
 
-  it("rejects a document it cannot capture only when a signal is supplied", async () => {
+  it("bounds a signal-bearing document before capturing it", async () => {
     const harness = await recordingKernel();
     const evaluator = await createEvaluator({ kernel: harness.kernel });
     try {
-      const proxied = new Proxy(twoBoxes(), {});
-      const captured = await evaluator.evaluate(proxied, {
+      let deep: unknown = 1;
+      for (let depth = 0; depth < 200; depth += 1) deep = [deep];
+      const document = {
+        ...twoBoxes(),
+        metadata: { deep },
+      } as unknown as DesignDocument;
+      const result = await evaluator.evaluate(document, {
         signal: new AbortController().signal,
       });
-      expect(captured.ok).toBe(false);
-      expect(captured.diagnostics).toEqual([
-        expect.objectContaining({ code: "IR_INVALID", path: "/" }),
+      if (result.ok) result.value.dispose();
+      expect(result.ok).toBe(false);
+      expect(result.diagnostics).toEqual([
+        expect.objectContaining({
+          code: "IR_INVALID",
+          details: { resource: "maxNestingDepth", limit: 128, actual: 129 },
+        }),
       ]);
       expect(harness.calls).toEqual([]);
-
-      const synchronous = await evaluator.evaluate(proxied);
-      expect(synchronous.ok, JSON.stringify(synchronous.diagnostics)).toBe(
-        true,
-      );
-      if (synchronous.ok) synchronous.value.dispose();
     } finally {
       evaluator.dispose();
     }
