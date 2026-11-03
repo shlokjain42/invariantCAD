@@ -38,6 +38,8 @@ describe("documentation page frontmatter", () => {
     ["a plain value continued on an indented line", 'title: First\n  second\ndescription: "Real"'],
     ["a plain value continued after a blank line", "title: First\n\n\tsecond"],
     ["a quoted value followed by an indented line", 'title: "First"\n  second'],
+    ["an indented line after an indented comment", "title: First\n  # note\n  second"],
+    ["an indented line after a top-level comment", "title: First\n# note\n  second"],
     ["a YAML null", 'title: null\ndescription: "Real"'],
     ["a YAML tilde null", 'title: ~\ndescription: "Real"'],
     ["a block scalar", "title: >-\n  Folded title"],

@@ -25,12 +25,15 @@ function plainScalar(text) {
 }
 
 // YAML continues a key's value on following more-indented lines, so a value
-// is single-line only when no indented line other than a comment follows it
-// before the next top-level line.
+// is single-line only when the next line that is neither blank nor a comment
+// starts a new top-level entry. Comment lines are skipped rather than ending
+// the search, because indented content after one still belongs to no other
+// key.
 function continuesOnNextLine(lines, keyIndex) {
   for (const line of lines.slice(keyIndex + 1)) {
-    if (line.trim() === "") continue;
-    return /^[ \t]+[^ \t#]/.test(line);
+    const content = line.trim();
+    if (content === "" || content.startsWith("#")) continue;
+    return /^[ \t]/.test(line);
   }
   return false;
 }
