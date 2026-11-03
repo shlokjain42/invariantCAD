@@ -2175,7 +2175,8 @@ describe("builder option records", () => {
     const options = { size: vec3(mm(1), mm(2), mm(3)) };
     Object.defineProperty(options, "center", { value: true, enumerable: false });
     cad.output("body", cad.box("body", options));
-    const node = cad.build().nodes.body as { readonly center?: boolean };
+    const nodes = cad.build().nodes as Readonly<Record<string, unknown>>;
+    const node = nodes["body"] as { readonly center?: boolean };
     expect(node.center).toBe(true);
   });
 
