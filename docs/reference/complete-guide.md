@@ -1082,6 +1082,15 @@ InvariantCAD accepts a normal URL and does not couple its API to Vite. The
 standalone runtime is part of `invariantcad`; applications do not install
 `manifold-3d` separately.
 
+The Manifold runtime is initialized once per JavaScript realm: each page,
+worker, or process. Supply `wasmUrl` on the first initialization in that realm.
+After a successful initialization, an explicit URL that differs from the one
+used, including any URL after a default initialization, fails with "already
+initialized with a different WASM URL". In the unreleased 0.2 line, a failed
+initialization, such as a wrong URL or a network error, is not cached, so a
+later `createEvaluator()` or `createManifoldKernel()` can retry with the same
+or a corrected URL; 0.1.1 caches the failure for the life of the realm.
+
 The exact backend likewise accepts an explicit OCCT WASM location:
 
 ```ts
@@ -1132,6 +1141,21 @@ fallback, for which the Permission Model must allow workers. Neither path
 writes a temporary executable file. See
 [OCCT runtime attestation](/evaluation/occt-runtime-attestation) for complete
 acquisition examples and lifecycle/security boundaries.
+
+`blob:` is not the only browser CSP requirement. Every realm that initializes a
+bundled runtime, including module workers, also needs `'wasm-unsafe-eval'` and
+`'unsafe-eval'` in `script-src`. The Manifold runtime and the stock `occt-wasm`
+glue are Emscripten Embind builds that generate their binding invokers with
+`new Function`, and the owned facade is built from the same glue, so expect it
+to need the same allowance. The Chromium release gate serves its production
+bundle and workers with:
+
+```http
+Content-Security-Policy: script-src 'self' blob: 'wasm-unsafe-eval' 'unsafe-eval'
+```
+
+Omit `blob:` when the application never uses the attested loader. See
+[Content Security Policy](/evaluation/browser-and-workers#content-security-policy).
 
 An intentionally trusted custom or rebuilt runtime can still use the direct
 generated JavaScript factory. A factory may locate its matched sibling WASM
