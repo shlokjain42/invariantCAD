@@ -69,6 +69,13 @@ finite and positive, and `relative` must be a boolean. The kernel checks the
 creation-time defaults and every per-call `mesh()` override before native
 meshing starts.
 
+The tolerance applies only to lengths. It never relaxes dimensionless values:
+a transform scale is treated as uniform only when its three factors agree to
+within floating-point rounding, and any other factors use the exact affine
+map. Exact extrusion requires a twist of exactly `0` and a top scale of exactly
+`[1, 1]`; any other value fails with `KERNEL_ERROR` instead of producing a
+straight prism.
+
 Tessellation options affect `mesh()` and mesh exports, not the underlying B-Rep.
 Do not change tolerances merely to force an invalid model through a check.
 

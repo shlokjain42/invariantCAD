@@ -3451,10 +3451,12 @@ class OcctKernel implements GeometryKernel {
     context?: KernelFeatureContext,
   ): KernelShape {
     checkContext(context);
+    // Twist (radians) and top scale (unitless) are not lengths; any nonzero
+    // value would be silently dropped by the straight prism below.
     if (
-      Math.abs(options.twist) > this.modelingTolerance ||
-      Math.abs(options.scaleTop[0] - 1) > this.modelingTolerance ||
-      Math.abs(options.scaleTop[1] - 1) > this.modelingTolerance ||
+      options.twist !== 0 ||
+      options.scaleTop[0] !== 1 ||
+      options.scaleTop[1] !== 1 ||
       options.divisions !== 0
     ) {
       throw new RangeError(
@@ -4675,9 +4677,16 @@ class OcctKernel implements GeometryKernel {
     }
   }
 
+  /**
+   * Scale factors are dimensionless, so uniformity is decided relative to the
+   * factors themselves (a few ULPs of floating-point noise), never against the
+   * length-valued modeling tolerance.
+   */
   private uniformScaleFactor(value: Vec3): number | undefined {
-    return Math.abs(value[0] - value[1]) <= this.modelingTolerance &&
-      Math.abs(value[1] - value[2]) <= this.modelingTolerance
+    const nearlyEqual = (first: number, second: number): boolean =>
+      Math.abs(first - second) <=
+      4 * Number.EPSILON * Math.max(Math.abs(first), Math.abs(second));
+    return nearlyEqual(value[0], value[1]) && nearlyEqual(value[1], value[2])
       ? value[0]
       : undefined;
   }

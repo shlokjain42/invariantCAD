@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { MeshOptions } from "../src/index.js";
+import type { MeshOptions, ResolvedProfile } from "../src/index.js";
 import { createOcctKernel } from "../src/occt-kernel.js";
 
 describe("OCCT kernel instance contracts", () => {
@@ -118,6 +118,75 @@ describe("OCCT kernel instance contracts", () => {
       expect(kernel.mesh(sphere).indices.length).toBeGreaterThan(0);
     } finally {
       kernel.disposeShape(sphere);
+      kernel.dispose();
+    }
+  });
+
+  it("applies anisotropic scale factors independently of the length tolerance", async () => {
+    // modelingTolerance is a length; a 0.9 % anisotropy on a 100 mm box moves
+    // a face by 0.9 mm, ninety times this tolerance.
+    const kernel = await createOcctKernel({ modelingTolerance: 0.01 });
+    const box = kernel.box!([100, 100, 100], false);
+    const scaled = kernel.transform!(box, [
+      { kind: "scale", value: [1, 1.009, 1] },
+    ]);
+    const uniform = kernel.transform!(box, [
+      { kind: "scale", value: [2, 2, 2] },
+    ]);
+    try {
+      const measured = kernel.measure(scaled);
+      expect(measured.boundingBox.max[1]).toBeCloseTo(100.9, 6);
+      expect(measured.boundingBox.max[0]).toBeCloseTo(100, 6);
+      expect(measured.volume).toBeCloseTo(1_009_000, 3);
+      expect(kernel.measure(uniform).volume).toBeCloseTo(8_000_000, 3);
+    } finally {
+      kernel.disposeShape(uniform);
+      kernel.disposeShape(scaled);
+      kernel.disposeShape(box);
+      kernel.dispose();
+    }
+  });
+
+  it("rejects every nonzero twist and non-unit top scale regardless of tolerance", async () => {
+    const kernel = await createOcctKernel({ modelingTolerance: 0.01 });
+    const square: ResolvedProfile = {
+      plane: { plane: "XY", origin: [0, 0, 0] },
+      outer: {
+        curves: [
+          { kind: "line", start: [-50, -50], end: [50, -50] },
+          { kind: "line", start: [50, -50], end: [50, 50] },
+          { kind: "line", start: [50, 50], end: [-50, 50] },
+          { kind: "line", start: [-50, 50], end: [-50, -50] },
+        ],
+      },
+      holes: [],
+    };
+    const base = {
+      distance: 10,
+      symmetric: false,
+      twist: 0,
+      scaleTop: [1, 1] as const,
+      divisions: 0,
+    };
+    try {
+      for (const options of [
+        { ...base, twist: (0.5 * Math.PI) / 180 },
+        { ...base, twist: -1e-9 },
+        { ...base, scaleTop: [0.995, 0.995] as const },
+        { ...base, scaleTop: [1, 1 + 1e-9] as const },
+      ]) {
+        expect(
+          () => kernel.extrude!(square, options),
+          JSON.stringify(options),
+        ).toThrow(/zero twist, unit top scale/u);
+      }
+      const prism = kernel.extrude!(square, base);
+      try {
+        expect(kernel.measure(prism).volume).toBeCloseTo(100_000, 3);
+      } finally {
+        kernel.disposeShape(prism);
+      }
+    } finally {
       kernel.dispose();
     }
   });
