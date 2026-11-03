@@ -517,6 +517,11 @@
 - Updated the documentation toolchain to Mint 4.2.742 and selected patched
   PostCSS 8.5.23 and brace-expansion 5.0.8 transitive resolutions after new
   upstream advisories, preserving the repository's zero-advisory release gate.
+- Selected patched qs 6.16.2, follow-redirects 1.16.2, and API Extractor's
+  minimatch 11.0.3 after advisories published in late October 2026. The
+  documentation-only minimatch 3.1.5 inside Mint has no patched 3.x release and
+  is a documented dev-only audit exception. None of these packages ships in
+  `invariantcad`.
 
 ## [0.1.1] - 2026-07-24
 
