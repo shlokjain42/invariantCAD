@@ -170,7 +170,10 @@ trust anchor.
 The Node loader transfers verified JavaScript through one process-global module
 hook without writing a temporary executable file; Node's Permission Model must
 allow the hook worker. The browser loader uses a short-lived Blob module URL and
-requires `blob:` in the applicable CSP. Executable pair authority remains
+requires `blob:` in the applicable CSP. Like the stock `occt-wasm` Embind glue,
+the facade glue is built without disabling dynamic execution, so the realm that
+initializes it should also expect to need `'wasm-unsafe-eval'` and
+`'unsafe-eval'` in `script-src`. Executable pair authority remains
 private to the evaluated InvariantCAD internal module instance that created it;
 cloning the visible report does not reproduce that authority. Direct
 `moduleFactory` plus `wasm` remains available for an intentionally trusted

@@ -118,18 +118,22 @@ verified WASM copy through `wasmBinary`. It also installs a fail-closed
 `locateFile` sentinel so the glue cannot fetch an adjacent, unverified WASM
 file.
 
-The page's Content Security Policy must permit Blob module scripts:
+The page's Content Security Policy must permit Blob module scripts, and the
+realm that initializes the runtime must also permit WebAssembly compilation and
+Embind's generated invokers:
 
 ```http
-Content-Security-Policy: script-src 'self' blob:
+Content-Security-Policy: script-src 'self' blob: 'wasm-unsafe-eval' 'unsafe-eval'
 ```
 
 Adapt the rest of that policy to the application. `script-src 'self'` without
-`blob:` blocks this loader. Depending on the browser and policy version,
-WebAssembly compilation may also require the narrowly scoped
-`'wasm-unsafe-eval'` source expression. URL revocation releases the object URL,
-not the realm's evaluated module cache. Terminate a Worker to reclaim that
-realm reliably.
+`blob:` blocks this loader. The stock `occt-wasm` Embind glue creates binding
+invokers with `new Function`, and the owned facade is built from that glue
+without disabling dynamic execution, so expect a policy without
+`'unsafe-eval'` to fail during initialization; see
+[Browser and worker deployment](/evaluation/browser-and-workers#content-security-policy).
+URL revocation releases the object URL, not the realm's evaluated module cache.
+Terminate a Worker to reclaim that realm reliably.
 
 The loader accepts already acquired `ArrayBuffer` or `Uint8Array` values rather
 than fetching URLs itself. It copies the exact view of every caller-owned input
