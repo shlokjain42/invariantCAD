@@ -44,6 +44,7 @@ import {
   DesignDocumentV5Schema,
   DesignDocumentV6Schema,
   DesignDocumentV7Schema,
+  safeParseDesignDocumentV7WithLimits,
 } from "./schema.js";
 import {
   canonicalizeTopologySelectionIR,
@@ -724,13 +725,16 @@ function preflightDocumentValueV7WithLimits(
 
 function validateDocumentV7Snapshot(
   snapshot: unknown,
+  limits: DesignDocumentLimits,
 ): CadResult<DesignDocumentV7> {
   if (!documentV7RuntimeIntrinsicsAreIntact()) {
     return serializationIntegrityFailure();
   }
   let parsed: ReturnType<typeof DesignDocumentV7Schema.safeParse>;
   try {
-    parsed = DesignDocumentV7Schema.safeParse(snapshot);
+    // The caller's limits already admitted this snapshot; the boundary must not
+    // cap them back to the defaults.
+    parsed = safeParseDesignDocumentV7WithLimits(snapshot, limits);
   } catch {
     if (!documentV7RuntimeIntrinsicsAreIntact()) {
       return serializationIntegrityFailure();
@@ -784,7 +788,7 @@ function parseDocumentValueV7WithLimits(
 ): CadResult<DesignDocumentV7> {
   const preflight = preflightDocumentValueV7WithLimits(value, limits);
   return preflight.ok
-    ? validateDocumentV7Snapshot(preflight.value)
+    ? validateDocumentV7Snapshot(preflight.value, limits)
     : preflight;
 }
 
@@ -1092,7 +1096,10 @@ export function parseDocumentV7(
     return serializationIntegrityFailure();
   }
   return captured.ok
-    ? validateDocumentV7Snapshot(captured.value.snapshot)
+    ? validateDocumentV7Snapshot(
+        captured.value.snapshot,
+        captured.value.limits,
+      )
     : captured;
 }
 
@@ -1816,7 +1823,7 @@ function migrateTrustedDocumentSnapshotToV7(
     if (!earlyBytes.ok && isDocumentByteLimitFailure(earlyBytes)) {
       return earlyBytes;
     }
-    const parsedV7 = validateDocumentV7Snapshot(snapshot);
+    const parsedV7 = validateDocumentV7Snapshot(snapshot, limits);
     if (!documentV7RuntimeIntrinsicsAreIntact()) {
       return serializationIntegrityFailure();
     }
@@ -1907,7 +1914,7 @@ function migrateValidatedLegacyDocumentToV7(
     };
   }
 
-  const migrated = validateDocumentV7Snapshot(candidate);
+  const migrated = validateDocumentV7Snapshot(candidate, limits);
   if (!documentV7RuntimeIntrinsicsAreIntact()) {
     return serializationIntegrityFailure();
   }

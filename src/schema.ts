@@ -3,6 +3,7 @@ import type { JsonValue } from "./core/json.js";
 import {
   DEFAULT_DESIGN_DOCUMENT_LIMITS,
   preflightDesignDocumentValue,
+  type DesignDocumentLimits,
 } from "./document-limits.js";
 import { stripLegacyOwnProtoKeys } from "./internal/legacy-proto-key-compat.js";
 import {
@@ -258,8 +259,13 @@ interface V7RawAuditIssue {
   readonly path: readonly (string | number)[];
 }
 
-const V7_RAW_AUDIT_MAX_VALUES = 1_000_000;
-const V7_RAW_AUDIT_MAX_DEPTH = 128;
+/**
+ * Limits for the strict-v7 boundary preflight and raw-key audit. Direct schema
+ * parses use the frozen defaults; serialization substitutes the caller's
+ * normalized limits for one synchronous parse through
+ * safeParseDesignDocumentV7WithLimits.
+ */
+let v7BoundaryLimits: DesignDocumentLimits = DEFAULT_DESIGN_DOCUMENT_LIMITS;
 
 function v7RawArrayIndex(
   key: string,
@@ -354,7 +360,10 @@ function v7ChildAuditLocation(
 function auditV7RawKeys(
   value: unknown,
   contract: V7RawAuditContract,
+  limits: DesignDocumentLimits,
 ): V7RawAuditIssue | undefined {
+  const maxDepth = limits.maxNestingDepth;
+  const maxValues = limits.maxStructuralValues;
   try {
     const seenOutsideMetadata = new V7IntrinsicWeakSet<object>();
     const seenInsideMetadata = new V7IntrinsicWeakSet<object>();
@@ -369,9 +378,9 @@ function auditV7RawKeys(
     while (stack.length > 0) {
       const frame = stack[stack.length - 1]!;
       stack.length -= 1;
-      if (frame.depth > V7_RAW_AUDIT_MAX_DEPTH) {
+      if (frame.depth > maxDepth) {
         return {
-          message: `Document-v7 raw key audit exceeded nesting depth ${V7_RAW_AUDIT_MAX_DEPTH}`,
+          message: `Document-v7 raw key audit exceeded nesting depth ${maxDepth}`,
           path: v7AuditPath(frame.path),
         };
       }
@@ -466,9 +475,9 @@ function auditV7RawKeys(
             };
           }
           scheduled += 1;
-          if (scheduled > V7_RAW_AUDIT_MAX_VALUES) {
+          if (scheduled > maxValues) {
             return {
-              message: `Document-v7 raw key audit exceeded ${V7_RAW_AUDIT_MAX_VALUES} structural values`,
+              message: `Document-v7 raw key audit exceeded ${maxValues} structural values`,
               path: v7AuditPath(frame.path, index),
             };
           }
@@ -516,9 +525,9 @@ function auditV7RawKeys(
           };
         }
         scheduled += 1;
-        if (scheduled > V7_RAW_AUDIT_MAX_VALUES) {
+        if (scheduled > maxValues) {
           return {
-            message: `Document-v7 raw key audit exceeded ${V7_RAW_AUDIT_MAX_VALUES} structural values`,
+            message: `Document-v7 raw key audit exceeded ${maxValues} structural values`,
             path: v7AuditPath(frame.path, key),
           };
         }
@@ -791,11 +800,10 @@ function withV7RawKeyAudit<T>(
       .unknown()
       .transform((value, context) => {
         assertV7RuntimeIntegrity();
-        const captured = preflightDesignDocumentValue(
-          value,
-          DEFAULT_DESIGN_DOCUMENT_LIMITS,
-          { strictV7Snapshot: true },
-        );
+        const limits = v7BoundaryLimits;
+        const captured = preflightDesignDocumentValue(value, limits, {
+          strictV7Snapshot: true,
+        });
         assertV7RuntimeIntegrity();
         if (!captured.ok) {
           for (const item of captured.diagnostics) {
@@ -806,7 +814,7 @@ function withV7RawKeyAudit<T>(
           }
           return z.NEVER;
         }
-        const issue = auditV7RawKeys(captured.value, contract);
+        const issue = auditV7RawKeys(captured.value, contract, limits);
         if (issue === undefined) {
           assertV7RuntimeIntegrity();
           return captured.value;
@@ -2892,6 +2900,24 @@ const DesignDocumentV7BaseSchema: z.ZodType<DesignDocumentV7> = z
   .strict() as unknown as z.ZodType<DesignDocumentV7>;
 export const DesignDocumentV7Schema: V7SchemaBoundary<DesignDocumentV7> =
   withV7RawKeyAudit(DesignDocumentV7BaseSchema, "document");
+
+/**
+ * Internal to serialization: parses one staged v7 document under the caller's
+ * normalized limits instead of the defaults, so raised limits are not capped
+ * again at the schema boundary. Not re-exported from the package root.
+ */
+export function safeParseDesignDocumentV7WithLimits(
+  value: unknown,
+  limits: DesignDocumentLimits,
+): ReturnType<typeof DesignDocumentV7Schema.safeParse> {
+  const previous = v7BoundaryLimits;
+  v7BoundaryLimits = limits;
+  try {
+    return DesignDocumentV7Schema.safeParse(value);
+  } finally {
+    v7BoundaryLimits = previous;
+  }
+}
 
 export const DesignDocumentSchema: z.ZodType<DesignDocument> = z.union([
   DesignDocumentV1Schema,
