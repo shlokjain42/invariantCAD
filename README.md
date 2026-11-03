@@ -13,15 +13,16 @@ for deterministic builds.
 
 > **Status:** `0.1.1` is the current public foundation release. Parametric
 > modeling, sketches, assemblies, configurations, topology-aware features,
-> analysis, and interchange are usable today. Some complete exact
-> topology-history guarantees require the separately built owned OCCT facade.
-> Drawings, GD&T, sheet metal, mates, CAM, and CAE remain
+> analysis, and interchange are usable today. Draft geometry and some complete
+> exact topology-history guarantees require the separately built owned OCCT
+> facade. Drawings, GD&T, sheet metal, mates, CAM, and CAE remain
 > [roadmap work](docs/roadmap.md).
 
 ## Why InvariantCAD
 
 - Native TypeScript authoring with dimension-aware expressions
-- Immutable, validated, versioned JSON design documents
+- Immutable, versioned JSON design documents, grammar-checked while authored
+  and validated when parsed or evaluated
 - Replaceable geometry kernels: Manifold mesh and OpenCascade B-Rep
 - Parametric sketches, primitives, features, transforms, and Booleans
 - Semantic topology queries and persistent face, edge, and vertex references
@@ -37,7 +38,7 @@ pnpm add invariantcad
 ```
 
 InvariantCAD is ESM-only and requires Node.js 22.13 or newer. npm, Yarn, and
-Bun can consume the package as well; pnpm is used for repository development.
+Bun can install the package as well; pnpm is used for repository development.
 
 ## Quick start
 
@@ -99,7 +100,7 @@ evaluator owns native resources, so use the `finally` boundaries shown above.
 | Backend | Representation | Best for | Exchange |
 | --- | --- | --- | --- |
 | Manifold | Watertight triangle mesh | Fast default modeling and STL/OBJ workflows | STL, ASCII STL, OBJ |
-| OpenCascade | Exact B-Rep | Analytic geometry, topology, STEP, and BREP workflows | STL, OBJ, STEP, BREP |
+| OpenCascade | Exact B-Rep | Analytic geometry, topology, STEP, and BREP workflows | STL, ASCII STL, OBJ, STEP, BREP |
 
 > **Unreleased 0.2:** The strong deterministic STEP contract described below
 > is implemented and release-gated in this source tree, but is not part of the
@@ -110,8 +111,11 @@ optional versioned deterministic STEP contract
 `KERNEL_STEP_EXPORT_PROTOCOL_VERSION === 1`, separately from the weaker
 `nativeExports` availability list. Its AP214IS single-product bytes are stable
 for the same backend shape representation, export options, metadata, and exact
-runtime artifact. This is not geometric canonicalization, a portable cache
-identity, or canonicalization of imported or third-party STEP files. See
+runtime artifact. An output that OCCT writes as several STEP products, such as
+a disjoint union, returns weak native bytes from a plain `export("step")` and
+fails with `EXPORT_UNSUPPORTED` when STEP options are passed. This is not
+geometric canonicalization, a portable cache identity, or canonicalization of
+imported or third-party STEP files. See
 [Import and export](docs/interchange/import-export.mdx) for metadata defaults,
 Unicode encoding, and the distinction between the returned-output ceiling and
 the synchronous native writer's peak allocation.
@@ -141,12 +145,21 @@ InvariantCAD 0.1 includes:
 - Length, angle, scalar, vector, and density expressions with dependency checks
 - Boxes, cylinders/cones, spheres, sketches, extrudes, revolves, and transforms
 - Exact bounded lofts and line/arc path sweeps through OCCT
-- Union, subtraction, intersection, fillet, chamfer, shell, offset, and draft
-- Constraint-based sketches with lines, arcs, circles, rectangles, and polygons
+- Union, subtraction, intersection, fillet, chamfer, shell, and offset, plus
+  draft with the owned OCCT facade only
+- Constraint-based sketches with lines, arcs, circles, rectangles, and closed
+  polylines; `regularPolygon` always throws in 0.1.1 and works in unreleased 0.2
 - Semantic topology set queries plus persistent topology evidence
 - Materials, parts, nested assemblies, configurations, suppression, and BOMs
 - Volume, area, center of mass, inertia, density-aware mass, and gyration analysis
 - Document migration, deterministic serialization, feature hashes, and impact reports
+
+With the reference solver, a `radius`, `diameter`, or `equalRadius` constraint
+that changes a loop arc's radius, or a constraint that moves its center, does
+not move the adjacent line endpoints, so the loop opens; see
+[arcs in constrained loops](docs/modeling/sketches-and-constraints.mdx#arcs-in-constrained-loops).
+In unreleased 0.2, evaluation then fails with `SKETCH_NO_CLOSED_REGION`, whose
+details give the gap and the curves on either side of it.
 
 The [support matrix](docs/reference/support-matrix.mdx) distinguishes authoring,
 Manifold, stock OCCT, and owned-facade support feature by feature.
@@ -181,8 +194,8 @@ its versioned source under [`docs/`](docs/README.md):
 - [Complete 0.1 guide](docs/reference/complete-guide.md)
 - [Architecture](docs/architecture.md) and [roadmap](docs/roadmap.md)
 
-Type declarations, declaration maps, and source JSDoc ship with the npm package
-for editor-level API documentation.
+Type declarations with their source JSDoc ship with the npm package for
+editor-level API documentation.
 
 ## Architecture
 
@@ -218,6 +231,11 @@ into a clean consumer, measures checked coverage, executes all six kernel/model
 reference benchmarks, validates the Mintlify site and links, audits production
 and development dependencies, and executes the production browser bundle in
 Chromium.
+
+`pnpm release:check`, `pnpm docs:dev`, `pnpm docs:validate`, and
+`pnpm docs:links` use the pinned Mint CLI, which supports Node.js 20.17 through
+24 and exits on Node.js 25 and newer. Run them with Node.js 24, as CI and the
+release workflow do.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) before submitting a change. Project
 support and decision-making are documented in [SUPPORT.md](SUPPORT.md) and
