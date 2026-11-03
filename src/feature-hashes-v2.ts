@@ -886,7 +886,6 @@ function consumeTopologyWork(
   amount: number,
   signal: AbortSignal | undefined,
 ): void {
-  throwIfAborted(signal);
   if (amount > meter.limit - meter.work) {
     throw limitFailure(
       "maxTopologyWork",
@@ -900,6 +899,11 @@ function consumeTopologyWork(
     TOPOLOGY_WORK_REALM_CHECK_INTERVAL
   ) {
     meter.realmCheckedAt = meter.work;
+    // Reading the signal can run caller code: Node's AbortSignal brand check
+    // reads an internal property, which a Proxy-wrapped signal intercepts. Read
+    // it only here, immediately before the realm scan, so nothing that code
+    // leaves behind can affect selector work without being detected.
+    throwIfAborted(signal);
     throwIfRealmCompromised();
   }
 }
@@ -1396,8 +1400,8 @@ async function digestEnvelope(
   meter: HashMeterV2,
   signal: AbortSignal | undefined,
 ): Promise<string> {
-  throwIfRealmCompromised();
   throwIfAborted(signal);
+  throwIfRealmCompromised();
   const envelope = {
     algorithm: FEATURE_HASH_ALGORITHM_V2,
     domain,
@@ -1437,8 +1441,8 @@ async function digestEnvelope(
     capturedCryptoDigest.target,
     ["SHA-256", bytes],
   ) as PromiseLike<ArrayBuffer>);
-  throwIfRealmCompromised();
   throwIfAborted(signal);
+  throwIfRealmCompromised();
   const digestBytes = new IntrinsicUint8Array(digest);
   const digestByteLength =
     typedArrayByteLengthGetter === undefined

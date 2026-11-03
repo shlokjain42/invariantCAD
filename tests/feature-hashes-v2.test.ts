@@ -1111,6 +1111,88 @@ describe("document-v7 feature hashes protocol v2", () => {
     expect(exact.ok, JSON.stringify(exact.diagnostics)).toBe(true);
   });
 
+  it("keeps a proxied signal from changing selector work between realm scans", async () => {
+    const legacy = {
+      schema: DOCUMENT_SCHEMA_V6,
+      version: 6,
+      name: "feature-hash-v2-proxied-signal",
+      units: { length: "mm", angle: "rad" },
+      parameters: {},
+      nodes: {
+        body: {
+          kind: "box",
+          size: [length(10), length(10), length(10)],
+          center: false,
+        },
+        treated: {
+          kind: "fillet",
+          input: { node: "body", kind: "solid" },
+          edges: {
+            topology: "edge",
+            query: {
+              op: "or",
+              queries: Array.from({ length: 4 }, (_, index) => ({
+                op: "radius",
+                value: length(1 + index),
+                tolerance: length(1e-6),
+              })),
+            },
+            cardinality: { min: 1, max: 1 },
+          },
+          radius: length(0.1),
+        },
+      },
+      outputs: { treated: { node: "treated", kind: "solid" } },
+    } as unknown as DesignDocument;
+    const migrated = migrateDocumentToV7(legacy);
+    if (!migrated.ok) throw new Error("Expected v7 migration");
+    const baseline = await reportValue(hashDesignFeaturesV2(migrated.value));
+
+    // Node's AbortSignal brand check reads internal properties through the
+    // Proxy, so this trap runs (several times) on every signal read. A trap
+    // that swaps in a map() dropping one branch at the end of a read inside
+    // selector canonicalization, and restores it on the next read, used to
+    // change the hash silently: the `or` node's own map() ran tampered and
+    // every later realm scan saw an intact realm.
+    const original = Object.getOwnPropertyDescriptor(Array.prototype, "map")!;
+    const dropLast = function (this: unknown[], ...rest: unknown[]) {
+      return Reflect.apply(original.value, this.slice(0, -1), rest);
+    };
+    const stackLimit = Error.stackTraceLimit;
+    let readsDuringSelectorWork = 0;
+    const controller = new AbortController();
+    const signal = new Proxy(controller.signal, {
+      get(target, key) {
+        const duringSelectorWork = (new Error().stack ?? "").includes(
+          "canonicalizeFeatureTopologyQuery",
+        );
+        if (duringSelectorWork) readsDuringSelectorWork += 1;
+        Object.defineProperty(Array.prototype, "map", {
+          ...original,
+          value:
+            duringSelectorWork && readsDuringSelectorWork === 3
+              ? dropLast
+              : original.value,
+        });
+        return Reflect.get(target, key, target);
+      },
+    });
+    let result: CadResult<DesignFeatureHashReportV2>;
+    try {
+      Error.stackTraceLimit = 100;
+      result = await hashDesignFeaturesV2(migrated.value, { signal });
+    } finally {
+      Error.stackTraceLimit = stackLimit;
+      Object.defineProperty(Array.prototype, "map", original);
+    }
+    // Below the realm-check interval, selector work never reads the signal,
+    // so caller code cannot run between two realm scans.
+    expect(readsDuringSelectorWork).toBe(0);
+    // A different successful hash would be a silent corruption.
+    if (result.ok) expect(result.value).toEqual(baseline);
+    else expectRealmFailure(result);
+  });
+
   it("meters selector work without a realm scan per topology-work unit", async () => {
     const atoms = 5_000;
     const legacy = {
