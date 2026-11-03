@@ -6,8 +6,9 @@ import type {
 import { inspectKernelShapeArtifactSupport } from "../src/artifact-cache.js";
 import type { KernelShapeArtifactCodecCandidate } from "../src/conformance.js";
 import {
-  OCCT_SHAPE_ARTIFACT_CANDIDATE_ACCESS,
+  getOcctShapeArtifactCandidateHost,
   getOcctShapeArtifactCodecCandidate,
+  registerOcctShapeArtifactCandidateHost,
   type OcctShapeArtifactCandidateHost,
   type OcctShapeArtifactCapturedSidecarState,
   type OcctShapeArtifactCapturedState,
@@ -63,12 +64,7 @@ function codecWithRuntimePairIdentity(
   readonly codec: KernelShapeArtifactCodecCandidate;
   readonly restoreCalls: () => number;
 } {
-  const host = (
-    kernel as GeometryKernel & {
-      readonly [OCCT_SHAPE_ARTIFACT_CANDIDATE_ACCESS]?:
-        OcctShapeArtifactCandidateHost;
-    }
-  )[OCCT_SHAPE_ARTIFACT_CANDIDATE_ACCESS];
+  const host = getOcctShapeArtifactCandidateHost(kernel);
   if (host === undefined) {
     throw new Error("The stock OCCT runtime did not expose its candidate host");
   }
@@ -92,13 +88,8 @@ function codecWithRuntimePairIdentity(
       return host.restore(state, signal);
     },
   });
-  const wrappedKernel = new Proxy(kernel, {
-    get(target, property, receiver) {
-      return property === OCCT_SHAPE_ARTIFACT_CANDIDATE_ACCESS
-        ? wrappedHost
-        : Reflect.get(target, property, receiver);
-    },
-  });
+  const wrappedKernel = new Proxy(kernel, {});
+  registerOcctShapeArtifactCandidateHost(wrappedKernel, wrappedHost);
   const candidate = getOcctShapeArtifactCodecCandidate(wrappedKernel);
   if (candidate === undefined) {
     throw new Error("The runtime-pair candidate codec was unavailable");
@@ -403,26 +394,56 @@ describe("OCCT shape-artifact codec candidate", { timeout: 30_000 }, () => {
       expect(inspectKernelShapeArtifactSupport(kernel)).toEqual({
         status: "absent",
       });
-      const host = (
-        kernel as GeometryKernel & {
-          readonly [OCCT_SHAPE_ARTIFACT_CANDIDATE_ACCESS]?:
-            OcctShapeArtifactCandidateHost;
-        }
-      )[OCCT_SHAPE_ARTIFACT_CANDIDATE_ACCESS];
+      const host = getOcctShapeArtifactCandidateHost(kernel);
       expect(host).toBeDefined();
       if (host === undefined) throw new Error("Expected candidate host");
       const malformedHost = Object.freeze({
         ...host,
         compatibilityFingerprint: `unpaired-\ud800`,
       });
-      const malformedKernel = new Proxy(kernel, {
-        get(target, property, receiver) {
-          return property === OCCT_SHAPE_ARTIFACT_CANDIDATE_ACCESS
-            ? malformedHost
-            : Reflect.get(target, property, receiver);
-        },
-      });
+      const malformedKernel = new Proxy(kernel, {});
+      registerOcctShapeArtifactCandidateHost(malformedKernel, malformedHost);
       expect(getOcctShapeArtifactCodecCandidate(malformedKernel)).toBeUndefined();
+    } finally {
+      kernel.dispose();
+    }
+  });
+
+  it("keeps the candidate host unreachable by reflection on the kernel", async () => {
+    const kernel = await createOcctKernel();
+    try {
+      const host = getOcctShapeArtifactCandidateHost(kernel);
+      expect(host).toBeDefined();
+      if (host === undefined) throw new Error("Expected candidate host");
+      const reachable = new Set<unknown>();
+      for (
+        let target: object | null = kernel;
+        target !== null && target !== Object.prototype;
+        target = Object.getPrototypeOf(target) as object | null
+      ) {
+        for (const key of Reflect.ownKeys(target)) {
+          // Package consumers can enumerate every own key; none may be a
+          // symbol, and no member may name the candidate operations.
+          expect(typeof key).toBe("string");
+          expect(String(key)).not.toMatch(/shapeartifactcandidate/iu);
+          const descriptor = Reflect.getOwnPropertyDescriptor(target, key);
+          if (descriptor !== undefined && "value" in descriptor) {
+            reachable.add(descriptor.value);
+          }
+        }
+      }
+      expect(reachable.has(host)).toBe(false);
+      expect(reachable.has(host.capture)).toBe(false);
+      expect(reachable.has(host.encodeNative)).toBe(false);
+      expect(reachable.has(host.restore)).toBe(false);
+
+      // The registry is keyed by object identity: an unregistered wrapper
+      // gets no candidate, and an existing registration cannot be replaced.
+      expect(getOcctShapeArtifactCodecCandidate(new Proxy(kernel, {})))
+        .toBeUndefined();
+      expect(() => registerOcctShapeArtifactCandidateHost(kernel, host))
+        .toThrow(/already registered/u);
+      expect(getOcctShapeArtifactCandidateHost(kernel)).toBe(host);
     } finally {
       kernel.dispose();
     }

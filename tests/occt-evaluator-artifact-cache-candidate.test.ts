@@ -19,9 +19,23 @@ import {
 } from "../src/index.js";
 import { bindOcctEvaluatorArtifactCacheCandidate } from "../src/internal/evaluator-artifact-cache-candidate.js";
 import {
+  getOcctShapeArtifactCandidateHost,
+  registerOcctShapeArtifactCandidateHost,
+} from "../src/internal/occt-artifact-candidate.js";
+import {
   createOcctKernel,
   type OcctKernelOptions,
 } from "../src/occt-kernel.js";
+
+/**
+ * The candidate host is registered by kernel identity, so a test wrapper must
+ * explicitly share its delegate's host to stay bindable.
+ */
+function shareCandidateHost<T extends object>(wrapper: T, delegate: object): T {
+  const host = getOcctShapeArtifactCandidateHost(delegate);
+  if (host !== undefined) registerOcctShapeArtifactCandidateHost(wrapper, host);
+  return wrapper;
+}
 
 function artifactCompatibleSolver(
   fingerprint = "invariantcad.reference-sketch-solver.test@1",
@@ -68,6 +82,7 @@ async function observedOcctKernel(
       return typeof value === "function" ? value.bind(target) : value;
     },
   }) as GeometryKernel;
+  shareCandidateHost(kernel, delegate);
   return {
     kernel,
     boxCalls: () => boxes,
@@ -360,6 +375,7 @@ describe("private OCCT evaluator artifact-cache candidate", { timeout: 30_000 },
         return Reflect.get(target, property, target);
       },
     }) as GeometryKernel;
+    shareCandidateHost(limitedKernel, limitedObserved.kernel);
     const limitedEvaluator = await createEvaluator({
       kernel: limitedKernel,
       sketchSolver: artifactCompatibleSolver(),

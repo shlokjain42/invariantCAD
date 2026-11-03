@@ -1,4 +1,8 @@
-import { getOcctShapeArtifactCodecCandidate } from "../../src/internal/occt-artifact-candidate.js";
+import {
+  getOcctShapeArtifactCandidateHost,
+  getOcctShapeArtifactCodecCandidate,
+  registerOcctShapeArtifactCandidateHost,
+} from "../../src/internal/occt-artifact-candidate.js";
 import { bindOcctEvaluatorArtifactCacheCandidate } from "../../src/internal/evaluator-artifact-cache-candidate.js";
 import {
   MemoryArtifactCacheStore,
@@ -239,7 +243,7 @@ function countBoxOperations(
   delegate: GeometryKernel,
   observed: { boxCalls: number },
 ): GeometryKernel {
-  return new Proxy(delegate, {
+  const wrapped = new Proxy(delegate, {
     get(target, property) {
       if (property === "box") {
         return (
@@ -259,6 +263,11 @@ function countBoxOperations(
       return typeof value === "function" ? value.bind(target) : value;
     },
   });
+  // The private candidate host is registered by kernel identity, so the
+  // counting wrapper shares its delegate's host to stay cache-bindable.
+  const host = getOcctShapeArtifactCandidateHost(delegate);
+  if (host !== undefined) registerOcctShapeArtifactCandidateHost(wrapped, host);
+  return wrapped;
 }
 
 function evaluatorEvidence(

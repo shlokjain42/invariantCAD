@@ -5,7 +5,7 @@ import type {
 } from "occt-wasm";
 import type { KernelShapeArtifactCodecCandidate } from "../src/conformance.js";
 import {
-  OCCT_SHAPE_ARTIFACT_CANDIDATE_ACCESS,
+  getOcctShapeArtifactCandidateHost,
   getOcctShapeArtifactCodecCandidate,
   type OcctShapeArtifactCandidateHost,
   type OcctShapeArtifactCapturedCandidateState,
@@ -50,12 +50,7 @@ function codec(kernel: GeometryKernel): KernelShapeArtifactCodecCandidate {
 function candidateHost(
   kernel: GeometryKernel,
 ): OcctShapeArtifactCandidateHost {
-  const host = (
-    kernel as GeometryKernel & {
-      readonly [OCCT_SHAPE_ARTIFACT_CANDIDATE_ACCESS]?:
-        OcctShapeArtifactCandidateHost;
-    }
-  )[OCCT_SHAPE_ARTIFACT_CANDIDATE_ACCESS];
+  const host = getOcctShapeArtifactCandidateHost(kernel);
   if (host === undefined) {
     throw new Error("OCCT did not expose its private artifact host");
   }

@@ -582,6 +582,7 @@ try {
       "const exactKernel = await createOcctKernel();",
       "try {",
       '  if (inspectKernelShapeArtifactSupport(exactKernel).status !== "absent") throw new Error("Shipped OCCT kernel claimed unsupported shape-artifact codec support");',
+      '  for (let target = exactKernel; target !== null && target !== Object.prototype; target = Object.getPrototypeOf(target)) { for (const key of Reflect.ownKeys(target)) { if (typeof key === "symbol" || /shapeartifactcandidate/iu.test(key)) throw new Error("Private OCCT artifact candidate access leaked through the kernel object: " + String(key)); } }',
       '  assertPackedBodyClassification(exactKernel, "Packed stock OCCT", "brep", true);',
       "  const exactStepInspection = inspectKernelStepExportCapabilities(exactKernel.capabilities);",
       '  if (exactStepInspection.status !== "valid" || exactStepInspection.capabilities.protocolVersion !== KERNEL_STEP_EXPORT_PROTOCOL_VERSION || exactStepInspection.capabilities.schema !== "AP214IS" || exactStepInspection.capabilities.byteDeterminism !== "same-shape-representation-and-metadata") throw new Error("Shipped OCCT kernel lacked the deterministic STEP capability");',

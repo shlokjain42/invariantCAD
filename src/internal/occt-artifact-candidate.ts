@@ -39,10 +39,6 @@ import {
   throwOcctArtifactLimitRefusal,
 } from "./occt-artifact-limit.js";
 
-export const OCCT_SHAPE_ARTIFACT_CANDIDATE_ACCESS = Symbol(
-  "InvariantCAD.OcctShapeArtifactCandidateAccess",
-);
-
 export const OCCT_SHAPE_ARTIFACT_CANDIDATE_FORMAT =
   "org.invariantcad.occt-shape-candidate" as const;
 export const OCCT_SHAPE_ARTIFACT_CANDIDATE_FORMAT_VERSION = 3 as const;
@@ -103,6 +99,37 @@ export interface OcctShapeArtifactCandidateHost {
     state: OcctShapeArtifactCapturedState,
     signal?: AbortSignal,
   ): KernelShape;
+}
+
+/**
+ * Module-private host registry. A WeakMap keeps the candidate operations off
+ * every kernel object and prototype, so package consumers cannot reach them
+ * by reflection; only repository modules that import this module can.
+ */
+const candidateHostByKernel = new WeakMap<object, OcctShapeArtifactCandidateHost>();
+
+/**
+ * Registers the package-private candidate host for one kernel object.
+ *
+ * The OCCT kernel registers itself once from its constructor. Repository
+ * tests may register a host for a wrapping proxy. A second registration for
+ * the same object is refused instead of silently replacing the host.
+ */
+export function registerOcctShapeArtifactCandidateHost(
+  kernel: object,
+  host: OcctShapeArtifactCandidateHost,
+): void {
+  if (candidateHostByKernel.has(kernel)) {
+    throw new TypeError("OCCT artifact candidate host is already registered");
+  }
+  candidateHostByKernel.set(kernel, host);
+}
+
+/** Returns the registered package-private host, if this object has one. */
+export function getOcctShapeArtifactCandidateHost(
+  kernel: object,
+): OcctShapeArtifactCandidateHost | undefined {
+  return candidateHostByKernel.get(kernel);
 }
 
 /** Structurally compatible with the public conformance candidate interface. */
@@ -1406,11 +1433,7 @@ function candidateHost(kernel: GeometryKernel): OcctShapeArtifactCandidateHost |
     ) {
       return undefined;
     }
-    const host: unknown = (
-      kernel as GeometryKernel & {
-        readonly [OCCT_SHAPE_ARTIFACT_CANDIDATE_ACCESS]?: unknown;
-      }
-    )[OCCT_SHAPE_ARTIFACT_CANDIDATE_ACCESS];
+    const host: unknown = getOcctShapeArtifactCandidateHost(kernel);
     if (
       typeof host !== "object" ||
       host === null ||
