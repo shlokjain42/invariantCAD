@@ -333,6 +333,63 @@ describe("evaluation cancellation", () => {
     }
   });
 
+  it("bounds the output selection scan before reading entries", async () => {
+    const harness = await recordingKernel();
+    const evaluator = await createEvaluator({ kernel: harness.kernel });
+    try {
+      const result = await evaluator.evaluate(twoBoxes(), {
+        outputs: new Array<string>(1_000_001).fill("a"),
+        signal: new AbortController().signal,
+      });
+      if (result.ok) result.value.dispose();
+      expect(result.ok).toBe(false);
+      expect(result.diagnostics).toEqual([
+        expect.objectContaining({
+          code: "IR_INVALID",
+          path: "/options/outputs",
+          details: {
+            resource: "maxOutputSelectionEntries",
+            limit: 1_000_000,
+            actual: 1_000_001,
+          },
+        }),
+      ]);
+      expect(harness.calls).toEqual([]);
+    } finally {
+      evaluator.dispose();
+    }
+  });
+
+  it("stops a long output selection scan once the signal is aborted", async () => {
+    const harness = await recordingKernel();
+    const evaluator = await createEvaluator({ kernel: harness.kernel });
+    try {
+      const controller = new AbortController();
+      controller.abort();
+      let inspected = 0;
+      const outputs = new Proxy(new Array<string>(10_000).fill("a"), {
+        getOwnPropertyDescriptor(target, property) {
+          inspected += 1;
+          return Reflect.getOwnPropertyDescriptor(target, property);
+        },
+      });
+      const result = await evaluator.evaluate(twoBoxes(), {
+        outputs,
+        signal: controller.signal,
+      });
+      if (result.ok) result.value.dispose();
+      expect(result.ok).toBe(false);
+      expect(result.diagnostics).toEqual([
+        expect.objectContaining({ code: "EVALUATION_ABORTED" }),
+      ]);
+      // `length` plus the first 1,024 entries; the other 8,976 are never read.
+      expect(inspected).toBe(1_025);
+      expect(harness.calls).toEqual([]);
+    } finally {
+      evaluator.dispose();
+    }
+  });
+
   it("reads the output selection only up to the first undeclared name", async () => {
     const harness = await recordingKernel();
     const evaluator = await createEvaluator({ kernel: harness.kernel });

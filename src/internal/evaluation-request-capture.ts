@@ -6,6 +6,7 @@ import {
   type CadResult,
 } from "../core/result.js";
 import type { EvaluationOptions } from "../evaluator.js";
+import { DEFAULT_DESIGN_DOCUMENT_LIMITS } from "../document-limits.js";
 import type { DesignDocument } from "../ir.js";
 import type { TopologySignatureLimits } from "../topology-signatures.js";
 import { parseDocumentValue } from "../serialization.js";
@@ -20,8 +21,25 @@ class CaptureFailure {
   constructor(
     readonly message: string,
     readonly path: string,
+    readonly details?: Readonly<Record<string, unknown>>,
   ) {}
 }
+
+/** Raised when the request's signal is found aborted during capture. */
+class CaptureAborted {}
+
+/**
+ * Most `outputs` entries a captured request inspects. Duplicates make a longer
+ * selection legal but never useful, and a proxied array can report any length
+ * without allocating entries, so the scan needs its own ceiling. It reuses the
+ * default document `maxStructuralValues`, the bound the document admitted with
+ * the request is held to.
+ */
+const MAX_OUTPUT_SELECTION_ENTRIES =
+  DEFAULT_DESIGN_DOCUMENT_LIMITS.maxStructuralValues;
+
+/** Entries inspected between checks of the request's signal. */
+const OUTPUT_SELECTION_ABORT_INTERVAL = 1024;
 
 /**
  * Reads one own property of a caller object exactly once. An absent own
@@ -51,11 +69,14 @@ function ownDataValue(
  * Copies the output selection without iterating caller code. Allocation is
  * bounded by the document's declared outputs: duplicates are dropped, and
  * reading stops after the first name the document does not declare, because
- * evaluation fails there with `OUTPUT_MISSING` and never reads further.
+ * evaluation fails there with `OUTPUT_MISSING` and never reads further. Work
+ * is bounded by `MAX_OUTPUT_SELECTION_ENTRIES`, checked before the scan, and a
+ * long scan stops when `signal` is aborted.
  */
 function captureOutputSelection(
   value: unknown,
   document: DesignDocument,
+  signal: unknown,
 ): readonly unknown[] {
   if (!Array.isArray(value)) {
     throw new CaptureFailure(
@@ -68,10 +89,38 @@ function captureOutputSelection(
     "length",
     "Evaluation options.outputs.length",
     "/options/outputs",
-  ) as number;
+  );
+  if (
+    typeof length !== "number" ||
+    !Number.isSafeInteger(length) ||
+    length < 0
+  ) {
+    throw new CaptureFailure(
+      "Evaluation options.outputs must have a valid length",
+      "/options/outputs",
+    );
+  }
+  if (length > MAX_OUTPUT_SELECTION_ENTRIES) {
+    throw new CaptureFailure(
+      `Evaluation options.outputs has more than ${MAX_OUTPUT_SELECTION_ENTRIES} entries`,
+      "/options/outputs",
+      {
+        resource: "maxOutputSelectionEntries",
+        limit: MAX_OUTPUT_SELECTION_ENTRIES,
+        actual: length,
+      },
+    );
+  }
   const selected: unknown[] = [];
   const seen = new Set<unknown>();
   for (let index = 0; index < length; index += 1) {
+    if (
+      index !== 0 &&
+      index % OUTPUT_SELECTION_ABORT_INTERVAL === 0 &&
+      (signal as { readonly aborted?: unknown } | null | undefined)?.aborted
+    ) {
+      throw new CaptureAborted();
+    }
     const path = `/options/outputs/${index}`;
     const label = `Evaluation options.outputs[${index}]`;
     let descriptor: PropertyDescriptor | undefined;
@@ -156,6 +205,8 @@ function captureTopologySignatureLimits(value: unknown): unknown {
       );
     }
   }
+  // Define, rather than assign, each field so a setter on Object.prototype
+  // cannot intercept a copied limit.
   const copy: Record<string, unknown> = {};
   for (const key of TOPOLOGY_SIGNATURE_LIMIT_KEYS) {
     let descriptor: PropertyDescriptor | undefined;
@@ -174,7 +225,12 @@ function captureTopologySignatureLimits(value: unknown): unknown {
         `${path}/${key}`,
       );
     }
-    copy[key] = descriptor.value as unknown;
+    Object.defineProperty(copy, key, {
+      configurable: true,
+      enumerable: true,
+      writable: true,
+      value: descriptor.value as unknown,
+    });
   }
   return Object.freeze(copy);
 }
@@ -246,7 +302,7 @@ export function captureYieldingEvaluationRequest(
     const outputs =
       rawOutputs === undefined
         ? undefined
-        : captureOutputSelection(rawOutputs, parsed.value);
+        : captureOutputSelection(rawOutputs, parsed.value, signal);
     const topologySignatureLimits = captureTopologySignatureLimits(rawLimits);
     return success({
       document: parsed.value,
@@ -262,6 +318,13 @@ export function captureYieldingEvaluationRequest(
       }) as EvaluationOptions,
     });
   } catch (error) {
+    if (error instanceof CaptureAborted) {
+      return failure(
+        diagnostic("EVALUATION_ABORTED", "CAD evaluation was aborted", {
+          severity: "error",
+        }),
+      );
+    }
     return failure(
       diagnostic(
         "IR_INVALID",
@@ -271,6 +334,9 @@ export function captureYieldingEvaluationRequest(
         {
           severity: "error",
           path: error instanceof CaptureFailure ? error.path : "/options",
+          ...(error instanceof CaptureFailure && error.details !== undefined
+            ? { details: error.details }
+            : {}),
         },
       ),
     );

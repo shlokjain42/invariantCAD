@@ -211,9 +211,10 @@ Because other code can run at those yields, an evaluation that receives a
 bounded snapshot as `parseDocumentValue(document)`, using the default
 [document preflight limits](/evaluation/diagnostics-and-limits#document-preflight-limits).
 It reads each option once as an own data property, ignores inherited option
-values, and keeps the same `signal`. `outputs` must be an array; duplicates are
-dropped and entries after the first name the document does not declare are
-never read. A `topologySignatureLimits` object is copied field by field: only
+values, and keeps the same `signal`. `outputs` must be an array of at most
+1,000,000 entries; duplicates are dropped, entries after the first name the
+document does not declare are never read, and a long scan checks the signal
+every 1,024 entries and stops with `EVALUATION_ABORTED` once it is aborted. A `topologySignatureLimits` object is copied field by field: only
 the six supported limits (`maxTopologyItems`, `maxAdjacencyLinks`,
 `maxEvidenceRecords`, `maxReferenceVariants`, `maxCandidatePairs`, and
 `maxMatchingSteps`) are kept, each read as an own data property whether or not
@@ -222,7 +223,8 @@ resolved, as without a signal. Changing the caller's
 document, `outputs` array, or other options after `evaluate(...)` returns its
 promise does not affect that evaluation. A document that exceeds a limit or
 does not match its version's schema, an option defined by a getter, a
-non-array `outputs`, an `outputs` array with a hole, or a
+non-array `outputs`, an `outputs` array with a hole or more than 1,000,000
+entries (`details.resource` is `maxOutputSelectionEntries`), or a
 `topologySignatureLimits` object with any other enumerable own field fails
 with `IR_INVALID` before any geometry work. Without a signal, such a limits
 object fails only when the evaluation resolves a topology reference.
