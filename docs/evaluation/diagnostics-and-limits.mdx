@@ -145,9 +145,18 @@ Default validation bounds include:
 | Topology query nodes | 100,000 |
 
 Parsing captures an untrusted JSON-shaped input into a bounded plain copy while
-reading each source property at most once. Cycles, sparse arrays, exotic
-prototypes, stateful accessors, and work beyond the configured bounds fail
-before schema traversal.
+reading each source property at most once, so later reads cannot change what
+was validated. Cycles, sparse arrays, non-array objects whose prototype is
+neither `Object.prototype` nor `null`, and work beyond the configured bounds
+fail before schema traversal.
+
+For Documents v1–v6 the copy neutralizes rather than rejects the remaining
+JavaScript-only shapes: an accessor property is read once and its value is
+captured, only enumerable own string keys are copied, and an instance of an
+`Array` subclass is copied into a plain array. Only the staged Document v7
+snapshot is stricter. It never invokes a getter and rejects accessor,
+non-enumerable, and symbol properties, as well as arrays that do not use the
+intrinsic array prototype.
 
 ## Why limits are part of correctness
 
