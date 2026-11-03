@@ -347,6 +347,92 @@ function hubToolReadsDuringValidation(
   return { ok: result.ok, toolReads };
 }
 
+/**
+ * `origins` unions over a shared pool of `tools` boxes, each with its own base
+ * box as target. Every union has `queries` transform-and-fillet consumers whose
+ * fillet selects edges created by that union's base box, so each check walks
+ * through the wide union. `layer` unions of every hub, then `layer` unions of
+ * that whole layer, sit downstream of the hubs where no query walks. Returns
+ * how many Set membership checks validation made: a reverse collection of an
+ * ancestor's descendants makes one per reverse link it scans.
+ */
+function setChecksDuringWideOriginValidation(
+  origins: number,
+  tools: number,
+  queries: number,
+  layer: number,
+): { readonly ok: boolean; readonly setChecks: number } {
+  const literal = (value: number) => ({
+    op: "literal",
+    dimension: "length",
+    value,
+  });
+  const box = () => ({
+    kind: "box",
+    size: [literal(1), literal(1), literal(1)],
+    center: false,
+  });
+  const solid = (node: string) => ({ node, kind: "solid" });
+  const union = (target: string, inputs: readonly string[]) => ({
+    kind: "boolean",
+    operation: "union",
+    target: solid(target),
+    tools: inputs.map(solid),
+  });
+  const nodes: Record<string, Record<string, unknown>> = {};
+  const pool = Array.from({ length: tools }, (_, index) => `t${index}`);
+  for (const id of pool) nodes[id] = box();
+  const hubs = Array.from({ length: origins }, (_, index) => `h${index}`);
+  hubs.forEach((hub, index) => {
+    nodes[`b${index}`] = box();
+    nodes[hub] = union(`b${index}`, pool);
+    for (let query = 0; query < queries; query += 1) {
+      nodes[`m${index}_${query}`] = {
+        kind: "transform",
+        input: solid(hub),
+        operations: [
+          { kind: "translate", value: [literal(0), literal(0), literal(0)] },
+        ],
+      };
+      nodes[`f${index}_${query}`] = {
+        kind: "fillet",
+        input: solid(`m${index}_${query}`),
+        edges: {
+          topology: "edge",
+          query: { op: "origin", feature: `b${index}`, relation: "created" },
+          cardinality: { min: 1 },
+        },
+        radius: literal(0.1),
+      };
+    }
+  });
+  const first = Array.from({ length: layer }, (_, index) => `p${index}`);
+  for (const id of first) nodes[id] = union("h0", hubs);
+  for (let index = 0; index < layer; index += 1) {
+    nodes[`r${index}`] = union("p0", first);
+  }
+  const document = asDocument({
+    schema: DOCUMENT_SCHEMA_V6,
+    version: 6,
+    name: "wide-origin-layers",
+    units: { length: "mm", angle: "rad" },
+    parameters: {},
+    nodes,
+    outputs: { out: solid("f0_0") },
+  });
+  let setChecks = 0;
+  const has = Set.prototype.has;
+  Set.prototype.has = function (this: Set<unknown>, value: unknown) {
+    setChecks += 1;
+    return has.call(this, value);
+  };
+  try {
+    return { ok: validateDocument(document).ok, setChecks };
+  } finally {
+    Set.prototype.has = has;
+  }
+}
+
 describe("bounded topology-origin validation", () => {
   it("walks each consuming feature's ancestors once, not once per query", () => {
     const single = nodeReadsDuringValidation(originQueryChain(300, 1));
@@ -410,6 +496,18 @@ describe("bounded topology-origin validation", () => {
     expect(many.ok).toBe(true);
     expect(many.toolReads).toBeLessThanOrEqual(few.toolReads + 2 * 400);
     expect(many.toolReads).toBeLessThanOrEqual(12 * 400);
+  });
+
+  it("does not trade short wide walks for scans of unvisited downstream layers", () => {
+    // Each of the 20 base boxes is checked 10 times through a 200-input union.
+    // Those walks cost less than one reverse collection, which would also scan
+    // the 12,200 links of the two downstream layers (about 200,000 checks for
+    // 20 collections).
+    const plain = setChecksDuringWideOriginValidation(20, 200, 10, 0);
+    const layered = setChecksDuringWideOriginValidation(20, 200, 10, 100);
+    expect(plain.ok).toBe(true);
+    expect(layered.ok).toBe(true);
+    expect(layered.setChecks).toBeLessThanOrEqual(plain.setChecks + 2 * 200);
   });
 
   it("still rejects an origin that is not an ancestor of the input", () => {

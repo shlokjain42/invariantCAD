@@ -786,11 +786,13 @@ function validateSketch(
  * later check needs to walk past it, so a nearby origin costs a few steps even
  * when it has many inputs, and many checks about one input walk its ancestors
  * at most once. A walk's steps count the nodes it pops and the inputs it
- * queues. Once the walks toward one possible ancestor have cost as many steps
- * as the graph has nodes, that ancestor's descendants are collected once
- * through the reverse edges, so many distant consumers of one base feature
- * stay linear as well, even when the path to it crosses a feature with many
- * inputs.
+ * queues. One reverse collection of an ancestor's descendants visits at most
+ * every node and scans at most every dependency link. Once the walks toward
+ * one possible ancestor have cost that much, its descendants are collected
+ * once through the reverse edges, so many distant consumers of one base
+ * feature stay linear as well, even when the path to it crosses a feature with
+ * many inputs. Switching no earlier keeps a collection from costing more than
+ * the walks it replaces, even when wide shared layers lie downstream.
  */
 interface AncestorWalk {
   readonly visited: Set<NodeId>;
@@ -806,6 +808,8 @@ interface AncestorQueryCache {
   readonly descendants: Map<NodeId, ReadonlySet<NodeId>>;
   consumers: ReadonlyMap<NodeId, readonly NodeId[]> | undefined;
   nodeCount: number | undefined;
+  /** Nodes plus dependency links, known once the reverse edges are built. */
+  collectionBound: number | undefined;
   entries: number;
 }
 
@@ -824,6 +828,7 @@ function newAncestorQueryCache(): AncestorQueryCache {
     descendants: new Map(),
     consumers: undefined,
     nodeCount: undefined,
+    collectionBound: undefined,
     entries: 0,
   };
 }
@@ -883,17 +888,30 @@ function ancestorConsumers(
 ): ReadonlyMap<NodeId, readonly NodeId[]> {
   if (cache.consumers !== undefined) return cache.consumers;
   const consumers = new Map<NodeId, NodeId[]>();
-  for (const id of Object.keys(document.nodes) as NodeId[]) {
+  const ids = Object.keys(document.nodes) as NodeId[];
+  let links = 0;
+  for (const id of ids) {
     const node = document.nodes[id];
     if (node === undefined) continue;
     for (const dependency of nodeDependenciesForDocument(node, document)) {
+      links += 1;
       const list = consumers.get(dependency.node);
       if (list === undefined) consumers.set(dependency.node, [id]);
       else list.push(id);
     }
   }
   cache.consumers = consumers;
+  cache.collectionBound = ids.length + links;
   return consumers;
+}
+
+/** Nodes plus dependency links: the most one reverse collection can cost. */
+function reverseCollectionBound(
+  document: ValidatableDocument,
+  cache: AncestorQueryCache,
+): number {
+  ancestorConsumers(document, cache);
+  return cache.collectionBound!;
 }
 
 /** The ancestor itself plus every node that depends on it. */
@@ -957,7 +975,12 @@ function nodeIsAncestor(
   }
   const spent = cache.walkSteps.get(possibleAncestor) ?? 0;
   cache.nodeCount ??= Object.keys(document.nodes).length;
-  if (spent >= cache.nodeCount) {
+  // The node count is a cheap lower bound; the exact bound, which also counts
+  // every dependency link, needs the reverse edges.
+  if (
+    spent >= cache.nodeCount &&
+    spent >= reverseCollectionBound(document, cache)
+  ) {
     const collected = collectDescendants(document, cache, possibleAncestor);
     cache.descendants.set(possibleAncestor, collected);
     retainAncestorEntries(cache, collected.size);
