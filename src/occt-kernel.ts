@@ -1098,16 +1098,50 @@ function checkOcctSignal(signal: unknown): void {
   }
 }
 
-function checkContext(context?: KernelFeatureContext): void {
-  if (context === undefined) return;
+/**
+ * Validates one feature context and returns a frozen snapshot of its own
+ * data `signal`, `feature`, and `tolerance` fields. Operations rebind their
+ * `context` to the snapshot on entry, so lineage annotations that run later
+ * from topology() see the values captured at the call, never accessors,
+ * caller prototypes, or Object.prototype pollution. Every field is defined
+ * on the snapshot, so a missing field can never be read from a prototype.
+ */
+function checkContext(
+  context?: KernelFeatureContext,
+): KernelFeatureContext | undefined {
+  if (context === undefined) return undefined;
   const captured = occtKernelRecord(context, "CAD kernel context");
-  checkOcctSignal(
-    occtKernelOwnDataValue(
-      captured,
-      "signal",
-      "CAD kernel context.signal",
-    ),
+  const signal = occtKernelOwnDataValue(
+    captured,
+    "signal",
+    "CAD kernel context.signal",
   );
+  checkOcctSignal(signal);
+  const feature = occtKernelOwnDataValue(
+    captured,
+    "feature",
+    "CAD kernel context.feature",
+  );
+  if (feature !== undefined && typeof feature !== "string") {
+    throw new OcctKernelBoundaryTypeError(
+      "CAD kernel context.feature must be a string",
+    );
+  }
+  const tolerance = occtKernelOwnDataValue(
+    captured,
+    "tolerance",
+    "CAD kernel context.tolerance",
+  );
+  if (tolerance !== undefined && typeof tolerance !== "number") {
+    throw new OcctKernelBoundaryTypeError(
+      "CAD kernel context.tolerance must be a number",
+    );
+  }
+  return Object.freeze({
+    signal,
+    feature,
+    tolerance,
+  }) as KernelFeatureContext;
 }
 
 interface CapturedOcctShapeExportContext {
@@ -3455,7 +3489,7 @@ class OcctKernel implements GeometryKernel {
     center: boolean,
     context?: KernelFeatureContext,
   ): KernelShape {
-    checkContext(context);
+    context = checkContext(context);
     const box = this.raw.makeBox(size[0], size[1], size[2]);
     const min: Vec3 = center
       ? [-size[0] / 2, -size[1] / 2, -size[2] / 2]
@@ -3486,7 +3520,7 @@ class OcctKernel implements GeometryKernel {
     _segments?: number,
     context?: KernelFeatureContext,
   ): KernelShape {
-    checkContext(context);
+    context = checkContext(context);
     const cylinder =
       Math.abs(radiusBottom - radiusTop) <= this.modelingTolerance
         ? this.raw.makeCylinder(radiusBottom, height)
@@ -3515,7 +3549,7 @@ class OcctKernel implements GeometryKernel {
     _segments?: number,
     context?: KernelFeatureContext,
   ): KernelShape {
-    checkContext(context);
+    context = checkContext(context);
     return this.own(this.raw.makeSphere(radius), context, {
       annotation: this.sphereTopologyAnnotation(context),
     });
@@ -3532,7 +3566,7 @@ class OcctKernel implements GeometryKernel {
     },
     context?: KernelFeatureContext,
   ): KernelShape {
-    checkContext(context);
+    context = checkContext(context);
     // Twist (radians) and top scale (unitless) are not lengths; any nonzero
     // value would be silently dropped by the straight prism below.
     if (
@@ -3586,7 +3620,7 @@ class OcctKernel implements GeometryKernel {
     options: { readonly angle: number; readonly segments?: number },
     context?: KernelFeatureContext,
   ): KernelShape {
-    checkContext(context);
+    context = checkContext(context);
     const built = this.profileFace(profile);
     const axis = numericPlaneBasis(profile.plane).v;
     let result: ShapeHandle | undefined;
@@ -3625,7 +3659,7 @@ class OcctKernel implements GeometryKernel {
     options: ResolvedLoftOptions,
     context?: KernelFeatureContext,
   ): KernelShape {
-    checkContext(context);
+    context = checkContext(context);
     if (typeof options !== "object" || options === null || options.ruled !== true) {
       throw new TypeError("Document lofts must use ruled interpolation");
     }
@@ -3807,7 +3841,7 @@ class OcctKernel implements GeometryKernel {
     options: ResolvedSweepOptions,
     context?: KernelFeatureContext,
   ): KernelShape {
-    checkContext(context);
+    context = checkContext(context);
     if (
       typeof options !== "object" ||
       options === null ||
@@ -4535,7 +4569,7 @@ class OcctKernel implements GeometryKernel {
     tools: readonly KernelShape[],
     context?: KernelFeatureContext,
   ): KernelShape {
-    checkContext(context);
+    context = checkContext(context);
     if (tools.length === 0) {
       throw new RangeError("Boolean operations require at least one tool shape");
     }
@@ -4836,7 +4870,7 @@ class OcctKernel implements GeometryKernel {
     operations: readonly ResolvedTransformOperation[],
     context?: KernelFeatureContext,
   ): KernelShape {
-    checkContext(context);
+    context = checkContext(context);
     const inputShape = this.shape(shape);
     const current = this.applyTransformOperations(
       inputShape[OCCT_SHAPE],
@@ -4925,7 +4959,7 @@ class OcctKernel implements GeometryKernel {
     format: KernelExchangeFormat,
     context?: KernelFeatureContext,
   ): KernelShape {
-    checkContext(context);
+    context = checkContext(context);
     let imported: ShapeHandle;
     switch (format) {
       case "step":
@@ -4963,7 +4997,7 @@ class OcctKernel implements GeometryKernel {
     context?: KernelFeatureContext,
   ): KernelShape {
     this.assertKernelLive();
-    checkContext(context);
+    context = checkContext(context);
     const bytes = snapshotDocumentBodyBytes(data);
     const capturedOptions = captureDocumentBodyImportOptions(options);
     checkContext(context);
@@ -5719,7 +5753,7 @@ class OcctKernel implements GeometryKernel {
     options: ResolvedDraftOptions,
     context?: KernelFeatureContext,
   ): KernelShape {
-    checkContext(context);
+    context = checkContext(context);
     validateDraftOptions(options);
     if (!Array.isArray(faces)) {
       throw new TypeError("Draft faces must be an array");
@@ -5937,7 +5971,7 @@ class OcctKernel implements GeometryKernel {
     options: { readonly radius: number },
     context?: KernelFeatureContext,
   ): KernelShape {
-    checkContext(context);
+    context = checkContext(context);
     if (!Number.isFinite(options.radius) || !(options.radius > 0)) {
       throw new RangeError("Fillet radius must be finite and positive");
     }
@@ -5993,7 +6027,7 @@ class OcctKernel implements GeometryKernel {
     options: { readonly distance: number },
     context?: KernelFeatureContext,
   ): KernelShape {
-    checkContext(context);
+    context = checkContext(context);
     if (!Number.isFinite(options.distance) || !(options.distance > 0)) {
       throw new RangeError("Chamfer distance must be finite and positive");
     }
@@ -6241,7 +6275,7 @@ class OcctKernel implements GeometryKernel {
     options: ResolvedShellOptions,
     context?: KernelFeatureContext,
   ): KernelShape {
-    checkContext(context);
+    context = checkContext(context);
     if (!Number.isFinite(options.thickness) || !(options.thickness > 0)) {
       throw new RangeError("Shell thickness must be finite and positive");
     }
@@ -6420,7 +6454,7 @@ class OcctKernel implements GeometryKernel {
     options: ResolvedOffsetOptions,
     context?: KernelFeatureContext,
   ): KernelShape {
-    checkContext(context);
+    context = checkContext(context);
     if (!Number.isFinite(options.distance) || !(options.distance > 0)) {
       throw new RangeError("Offset distance must be finite and positive");
     }

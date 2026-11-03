@@ -417,3 +417,91 @@ describe("OCCT stock edge-treatment failures", () => {
     }
   });
 });
+
+describe("OCCT feature context capture", () => {
+  it("captures feature and tolerance once from own data properties", async () => {
+    const kernel = await createOcctKernel();
+    const created: ReturnType<NonNullable<typeof kernel.box>>[] = [];
+    const prototype = Object.prototype as { feature?: unknown };
+    try {
+      // A later change to a reused context must not relabel earlier shapes.
+      const context: { feature: string } = { feature: "boxA" };
+      const first = kernel.box!([1, 1, 1], false, context);
+      created.push(first);
+      context.feature = "boxB";
+      created.push(kernel.box!([1, 1, 1], false, context));
+      const snapshot = kernel.topology!(first);
+      expect(snapshot.history).toBe("complete");
+      for (const descriptor of [...snapshot.faces, ...snapshot.edges]) {
+        for (const entry of descriptor.lineage) {
+          expect(entry.feature).toBe("boxA");
+        }
+      }
+
+      const cone = kernel.cylinder!(2, 1, 0, false, 32, context);
+      created.push(cone);
+      delete (context as { feature?: string }).feature;
+      const coneSnapshot = kernel.topology!(cone);
+      expect(coneSnapshot.history).toBe("complete");
+      expect(
+        coneSnapshot.faces.every((face) =>
+          face.lineage.some((entry) => entry.role !== undefined),
+        ),
+      ).toBe(true);
+
+      // Accessors and caller prototypes fail like context.signal does.
+      let reads = 0;
+      const accessor = {
+        get feature() {
+          reads += 1;
+          return "getter";
+        },
+      };
+      expect(() => kernel.box!([1, 1, 1], false, accessor)).toThrow(TypeError);
+      class InheritedFeature {
+        get feature(): string {
+          return "fromClass";
+        }
+      }
+      expect(() =>
+        kernel.box!([1, 1, 1], false, new InheritedFeature()),
+      ).toThrow(TypeError);
+      expect(reads).toBe(0);
+      expect(() =>
+        kernel.box!([1, 1, 1], false, {
+          feature: 42 as unknown as string,
+        }),
+      ).toThrow(TypeError);
+      expect(() =>
+        kernel.box!([1, 1, 1], false, {
+          tolerance: "0.1" as unknown as number,
+        }),
+      ).toThrow(TypeError);
+
+      // A polluted Object.prototype field is ignored. (Embind itself breaks
+      // under this pollution, so topology is read after it is removed; the
+      // feature was captured at the call.)
+      let plain: (typeof created)[number] | undefined;
+      prototype.feature = "POLLUTED";
+      try {
+        plain = kernel.box!([1, 1, 1], false, {});
+      } finally {
+        delete prototype.feature;
+      }
+      created.push(plain);
+      expect(
+        (plain as unknown as { lineage: readonly { feature: string }[] })
+          .lineage,
+      ).toEqual([]);
+      const plainSnapshot = kernel.topology!(plain);
+      expect(
+        [...plainSnapshot.faces, ...plainSnapshot.edges].every(
+          (item) => item.lineage.length === 0,
+        ),
+      ).toBe(true);
+    } finally {
+      for (const shape of created.reverse()) kernel.disposeShape(shape);
+      kernel.dispose();
+    }
+  });
+});
