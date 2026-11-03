@@ -725,6 +725,12 @@ type PendingProductPartBatchV7 =
       readonly scope: DocumentV7ResourceScope;
       readonly configurationId: ConfigurationId | null;
       readonly outputs: readonly string[];
+      /**
+       * Document pointer of the first selection: `/outputs/<name>` for a
+       * direct output or `/nodes/<part>/geometry` for a part leaf. Selection
+       * names are never pointer segments because they may be internal.
+       */
+      readonly selectionPath: string;
       readonly prepared: PreparedProductGeometryOutputsV7;
     }
   | {
@@ -5874,6 +5880,7 @@ async function evaluateProductDocumentCoreV7(
       scope: rootScope,
       configurationId,
       outputs: localAssemblyFreeze(selectionNames),
+      selectionPath: selections[0]?.path ?? "/nodes",
       prepared: prepared.value,
     };
   }
@@ -5983,9 +5990,7 @@ async function evaluateProductDocumentCoreV7(
     const metrics = batch.prepared.metrics;
     const metricPath =
       batch.source === "local"
-        ? batch.outputs.length === 0
-          ? "/nodes"
-          : `/nodes/${jsonPointerSegment(batch.outputs[0]!)}/geometry`
+        ? batch.selectionPath
         : `/outputs/${jsonPointerSegment(
             batch.firstOccurrence.output,
           )}`;
@@ -6087,9 +6092,7 @@ async function evaluateProductDocumentCoreV7(
       documentScope: batch.scope,
       selectionPath:
         batch.source === "local"
-          ? batch.outputs.length === 0
-            ? "/nodes"
-            : `/nodes/${jsonPointerSegment(batch.outputs[0]!)}`
+          ? batch.selectionPath
           : `/outputs/${jsonPointerSegment(
               batch.firstOccurrence.output,
             )}`,

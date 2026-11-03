@@ -2485,6 +2485,112 @@ describe("staged Document v7 local assembly evaluation", () => {
     }
   });
 
+  it("points batch limit and preflight provenance at the selection, not at a node named like it", async () => {
+    // Output "alpha" selects node "shared"; no node is named "alpha".
+    const document = {
+      schema: DOCUMENT_SCHEMA_V7,
+      version: DOCUMENT_VERSION_V7,
+      name: "batch-provenance-paths",
+      units: { length: "mm", angle: "rad", mass: "kg" },
+      parameters: {
+        w: { dimension: "length", default: literal("length", 4) },
+      },
+      configurations: {
+        a: { parameterOverrides: { w: literal("length", 5) } },
+        z: { parameterOverrides: { w: literal("length", 6) } },
+      },
+      nodes: {
+        shared: {
+          kind: "box",
+          size: [
+            literal("length", 4),
+            literal("length", 2),
+            literal("length", 3),
+          ],
+          center: false,
+        },
+        part: {
+          kind: "part",
+          geometry: { node: "shared", kind: "solid" },
+          massDensity: literal("massDensity", 1e-6),
+        },
+        asm: {
+          kind: "assembly",
+          instances: [
+            localPartInstance("leaf", {
+              mode: "named",
+              id: "a" as ConfigurationId,
+            }),
+          ],
+        },
+      },
+      outputs: {
+        alpha: { node: "shared", kind: "solid" },
+        product: { node: "asm", kind: "assembly" },
+      },
+    } as unknown as DesignDocumentV7;
+    const base = await createManifoldKernel();
+    try {
+      const limited = await evaluateProductDocument(base, document, {
+        configuration: "z",
+        evaluationLimits: { maxSolidGraphNodes: 1 },
+      });
+      expect(limited.ok).toBe(false);
+      if (limited.ok) {
+        limited.value.dispose();
+      } else {
+        expect(limited.diagnostics[0]).toMatchObject({
+          code: "RESOURCE_LIMIT_EXCEEDED",
+          path: "/outputs/alpha",
+          details: { resource: "maxSolidGraphNodes", limit: 1, actual: 2 },
+        });
+      }
+
+      const leafLimited = await evaluateProductDocument(base, document, {
+        outputs: ["product"],
+        evaluationLimits: { maxSolidGraphNodes: 0 },
+      });
+      expect(leafLimited.ok).toBe(false);
+      if (leafLimited.ok) {
+        leafLimited.value.dispose();
+      } else {
+        expect(leafLimited.diagnostics[0]).toMatchObject({
+          code: "RESOURCE_LIMIT_EXCEEDED",
+          path: "/nodes/part/geometry",
+        });
+      }
+
+      // The kernel advertises box but does not implement it.
+      const kernel = {
+        id: base.id,
+        capabilities: base.capabilities,
+        status: base.status.bind(base),
+        measure: base.measure.bind(base),
+        mesh: base.mesh.bind(base),
+        disposeShape: base.disposeShape.bind(base),
+        dispose() {},
+      } as unknown as GeometryKernel;
+      const preflight = await evaluateProductDocument(kernel, document, {
+        outputs: ["alpha"],
+      });
+      expect(preflight.ok).toBe(false);
+      if (preflight.ok) {
+        preflight.value.dispose();
+      } else {
+        expect(preflight.diagnostics[0]).toMatchObject({
+          code: "KERNEL_CAPABILITY_MISSING",
+          details: {
+            productBatchIndex: 0,
+            documentScope: { source: "root" },
+            selectionPath: "/outputs/alpha",
+          },
+        });
+      }
+    } finally {
+      base.dispose();
+    }
+  });
+
   it("rolls back every acquired child shape when a kernel callback aborts evaluation", async () => {
     const controller = new AbortController();
     const harness = await instrumentedManifold(
