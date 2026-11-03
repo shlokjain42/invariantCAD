@@ -871,6 +871,43 @@ export function geometryKernelConformance(
       }
     });
 
+    it("rejects shapes owned by another kernel instance", async () => {
+      if (!kernelSupports(kernel.capabilities, "primitive", "box")) return;
+      const other = await options.create();
+      const shape = kernel.box!([1, 2, 3], false);
+      try {
+        expect(() => other.measure(shape)).toThrow(TypeError);
+        expect(() => other.mesh(shape)).toThrow(TypeError);
+        let foreignStatus: { readonly ok: boolean } | undefined;
+        try {
+          foreignStatus = other.status(shape);
+        } catch (error) {
+          expect(error).toBeInstanceOf(TypeError);
+        }
+        if (foreignStatus !== undefined) expect(foreignStatus.ok).toBe(false);
+        expect(() => other.disposeShape(shape)).toThrow(TypeError);
+        if (kernelSupports(other.capabilities, "feature", "transform")) {
+          expect(() =>
+            other.transform!(shape, [{ kind: "translate", value: [1, 0, 0] }]),
+          ).toThrow(TypeError);
+        }
+        if (kernelSupports(other.capabilities, "feature", "boolean")) {
+          const own = other.box!([1, 1, 1], false);
+          try {
+            expect(() => other.boolean!("union", own, [shape])).toThrow(TypeError);
+            expect(() => other.boolean!("union", shape, [own])).toThrow(TypeError);
+          } finally {
+            other.disposeShape(own);
+          }
+        }
+        other.dispose();
+        expectMeasurement(expectLiveShape(shape), "volume", 6, relativeTolerance);
+      } finally {
+        other.dispose();
+        kernel.disposeShape(shape);
+      }
+    });
+
     it("classifies one-body, multibody, and cavity Boolean results when declared", () => {
       if (
         inspectKernelBodyResultClassificationCapabilities(kernel.capabilities)

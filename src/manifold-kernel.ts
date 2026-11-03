@@ -62,13 +62,6 @@ async function loadManifold(wasmUrl?: string): Promise<ManifoldToplevel> {
   return modulePromise;
 }
 
-function asManifoldShape(shape: KernelShape): ManifoldShape {
-  if (!(shape instanceof ManifoldShape) || shape.disposed) {
-    throw new TypeError("Expected a live Manifold kernel shape");
-  }
-  return shape;
-}
-
 function exactPerConnectedComponentGenus(
   manifold: ManifoldSolid,
 ): number {
@@ -323,6 +316,8 @@ export class ManifoldKernel implements GeometryKernel {
   };
   private readonly module: ManifoldToplevel;
   private readonly liveShapes = new Set<ManifoldShape>();
+  /** Every shape this instance created, including disposed ones. */
+  private readonly ownedShapes = new WeakSet<ManifoldShape>();
 
   constructor(module: ManifoldToplevel) {
     this.module = module;
@@ -330,8 +325,17 @@ export class ManifoldKernel implements GeometryKernel {
 
   private own(shape: ManifoldSolid): ManifoldShape {
     const wrapped = new ManifoldShape(shape);
+    this.ownedShapes.add(wrapped);
     this.liveShapes.add(wrapped);
     return wrapped;
+  }
+
+  /** Returns the native solid of a live shape created by this instance. */
+  private native(shape: KernelShape): ManifoldSolid {
+    if (!(shape instanceof ManifoldShape) || !this.liveShapes.has(shape)) {
+      throw new TypeError("Expected a live Manifold kernel shape");
+    }
+    return shape[MANIFOLD_SHAPE];
   }
 
   box(size: Vec3, center: boolean): KernelShape {
@@ -420,8 +424,8 @@ export class ManifoldKernel implements GeometryKernel {
     tools: readonly KernelShape[],
   ): KernelShape {
     const shapes = [
-      asManifoldShape(target)[MANIFOLD_SHAPE],
-      ...tools.map((tool) => asManifoldShape(tool)[MANIFOLD_SHAPE]),
+      this.native(target),
+      ...tools.map((tool) => this.native(tool)),
     ];
     const result =
       operation === "union"
@@ -436,7 +440,7 @@ export class ManifoldKernel implements GeometryKernel {
     shape: KernelShape,
     operations: readonly ResolvedTransformOperation[],
   ): KernelShape {
-    let current = asManifoldShape(shape)[MANIFOLD_SHAPE];
+    let current = this.native(shape);
     let ownsCurrent = false;
     for (const operation of operations) {
       const next =
@@ -467,13 +471,13 @@ export class ManifoldKernel implements GeometryKernel {
     const signal = manifoldContextSignal(context);
     checkManifoldSignal(signal);
     return connectedMeshBodyClassification(
-      asManifoldShape(shape)[MANIFOLD_SHAPE],
+      this.native(shape),
       signal,
     );
   }
 
   mesh(shape: KernelShape): MeshData {
-    const mesh = asManifoldShape(shape)[MANIFOLD_SHAPE].getMesh();
+    const mesh = this.native(shape).getMesh();
     const positions = new Float32Array(mesh.numVert * 3);
     for (let vertex = 0; vertex < mesh.numVert; vertex += 1) {
       positions[vertex * 3] = mesh.vertProperties[vertex * mesh.numProp]!;
@@ -484,7 +488,7 @@ export class ManifoldKernel implements GeometryKernel {
   }
 
   measure(shape: KernelShape): ShapeMeasurements {
-    const manifold = asManifoldShape(shape)[MANIFOLD_SHAPE];
+    const manifold = this.native(shape);
     if (manifold.isEmpty()) {
       // Native Manifold reports inverted infinite bounds and tolerance -1 for
       // an empty shape. Use the zero convention shared with the OCCT kernel;
@@ -561,7 +565,7 @@ export class ManifoldKernel implements GeometryKernel {
   }
 
   status(shape: KernelShape) {
-    const code = asManifoldShape(shape)[MANIFOLD_SHAPE].status();
+    const code = this.native(shape).status();
     return {
       ok: code === "NoError",
       code,
@@ -570,8 +574,10 @@ export class ManifoldKernel implements GeometryKernel {
   }
 
   disposeShape(shape: KernelShape): void {
-    if (!(shape instanceof ManifoldShape)) {
-      throw new TypeError("Expected a Manifold kernel shape");
+    if (!(shape instanceof ManifoldShape) || !this.ownedShapes.has(shape)) {
+      throw new TypeError(
+        "Expected a Manifold kernel shape owned by this kernel",
+      );
     }
     const wrapped = shape;
     if (wrapped.disposed) return;
