@@ -7,6 +7,7 @@ import {
 } from "../core/result.js";
 import type { EvaluationOptions } from "../evaluator.js";
 import type { DesignDocument } from "../ir.js";
+import type { TopologySignatureLimits } from "../topology-signatures.js";
 import { parseDocumentValue } from "../serialization.js";
 
 /** A public evaluation request detached from the caller's objects. */
@@ -94,37 +95,86 @@ function captureOutputSelection(
 }
 
 /**
+ * The fields `topologySignatureLimits` may carry. Topology resolution rejects
+ * any other enumerable own field. Typed as a record so this list cannot drift
+ * from `TopologySignatureLimits`.
+ */
+const TOPOLOGY_SIGNATURE_LIMIT_FIELDS: Readonly<
+  Record<keyof TopologySignatureLimits, true>
+> = Object.freeze({
+  maxTopologyItems: true,
+  maxAdjacencyLinks: true,
+  maxEvidenceRecords: true,
+  maxReferenceVariants: true,
+  maxCandidatePairs: true,
+  maxMatchingSteps: true,
+});
+
+const TOPOLOGY_SIGNATURE_LIMIT_KEYS = Object.freeze(
+  Object.keys(TOPOLOGY_SIGNATURE_LIMIT_FIELDS),
+) as readonly (keyof TopologySignatureLimits)[];
+
+function jsonPointerSegment(value: string): string {
+  return value.replaceAll("~", "~0").replaceAll("/", "~1");
+}
+
+/**
  * Copies topology-signature limits as plain data so later caller writes
- * cannot change the limits applied to outputs evaluated after a yield. The
- * evaluator still validates the copied fields as before.
+ * cannot change the limits applied to outputs evaluated after a yield.
+ *
+ * An enumerable own field other than the six supported limits is rejected
+ * before anything is copied, so the copy never holds more than six fields
+ * however large the caller's object is. Topology resolution would reject
+ * such an object anyway as soon as it used the limits. Each supported field is
+ * read once by descriptor whether or not it is enumerable, matching how
+ * topology resolution reads it, and the evaluator still validates the copied
+ * values as before.
  */
 function captureTopologySignatureLimits(value: unknown): unknown {
   // Non-records are rejected later whatever their contents.
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return value;
   }
+  const path = "/options/topologySignatureLimits";
   let keys: string[];
   try {
+    // Lists only names the caller already allocated; nothing proportional to
+    // them is copied, and the scan stops at the first unsupported one.
     keys = Object.keys(value);
   } catch {
     throw new CaptureFailure(
       "Evaluation options.topologySignatureLimits could not be inspected safely",
-      "/options/topologySignatureLimits",
+      path,
     );
   }
+  for (let index = 0; index < keys.length; index += 1) {
+    const key = keys[index]!;
+    if (!Object.hasOwn(TOPOLOGY_SIGNATURE_LIMIT_FIELDS, key)) {
+      throw new CaptureFailure(
+        "Evaluation options.topologySignatureLimits contains an unsupported field",
+        `${path}/${jsonPointerSegment(key)}`,
+      );
+    }
+  }
   const copy: Record<string, unknown> = {};
-  for (const key of keys) {
-    Object.defineProperty(copy, key, {
-      configurable: true,
-      enumerable: true,
-      writable: true,
-      value: ownDataValue(
-        value,
-        key,
-        `Evaluation options.topologySignatureLimits.${key}`,
-        `/options/topologySignatureLimits/${key}`,
-      ),
-    });
+  for (const key of TOPOLOGY_SIGNATURE_LIMIT_KEYS) {
+    let descriptor: PropertyDescriptor | undefined;
+    try {
+      descriptor = Object.getOwnPropertyDescriptor(value, key);
+    } catch {
+      throw new CaptureFailure(
+        `Evaluation options.topologySignatureLimits.${key} could not be inspected safely`,
+        `${path}/${key}`,
+      );
+    }
+    if (descriptor === undefined) continue;
+    if (!Object.hasOwn(descriptor, "value")) {
+      throw new CaptureFailure(
+        `Evaluation options.topologySignatureLimits.${key} must be a data property`,
+        `${path}/${key}`,
+      );
+    }
+    copy[key] = descriptor.value as unknown;
   }
   return Object.freeze(copy);
 }

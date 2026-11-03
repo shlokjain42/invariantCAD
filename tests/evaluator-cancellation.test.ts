@@ -270,6 +270,69 @@ describe("evaluation cancellation", () => {
     }
   });
 
+  it("rejects an unsupported topology limit field before copying the limits", async () => {
+    const harness = await recordingKernel();
+    const evaluator = await createEvaluator({ kernel: harness.kernel });
+    try {
+      const signal = new AbortController().signal;
+      let getterReads = 0;
+      const large: Record<string, number> = { maxCandidatePairs: 3 };
+      for (let index = 0; index < 100_000; index += 1) {
+        large[`extra${index}`] = index;
+      }
+      const cases: readonly {
+        readonly limits: object;
+        readonly path: string;
+      }[] = [
+        {
+          limits: { maxCandidatePairs: 3, "a/b~c": 1 },
+          path: "/options/topologySignatureLimits/a~1b~0c",
+        },
+        {
+          limits: large,
+          path: "/options/topologySignatureLimits/extra0",
+        },
+        {
+          limits: {
+            maxCandidatePairs: 3,
+            get extra() {
+              getterReads += 1;
+              return 1;
+            },
+          },
+          path: "/options/topologySignatureLimits/extra",
+        },
+      ];
+      for (const { limits, path } of cases) {
+        // A box-only document never uses the limits, so only capture rejects them.
+        const result = await evaluator.evaluate(twoBoxes(), {
+          signal,
+          topologySignatureLimits: limits,
+        });
+        if (result.ok) result.value.dispose();
+        expect(result.ok).toBe(false);
+        expect(result.diagnostics).toEqual([
+          expect.objectContaining({ code: "IR_INVALID", path }),
+        ]);
+      }
+      expect(getterReads).toBe(0);
+      expect(harness.calls).toEqual([]);
+
+      // Supported fields are still captured, so the evaluation proceeds.
+      const accepted = await evaluator.evaluate(twoBoxes(), {
+        signal,
+        topologySignatureLimits: { maxCandidatePairs: 3 },
+      });
+      try {
+        expect(accepted.ok, JSON.stringify(accepted.diagnostics)).toBe(true);
+      } finally {
+        if (accepted.ok) accepted.value.dispose();
+      }
+    } finally {
+      evaluator.dispose();
+    }
+  });
+
   it("reads the output selection only up to the first undeclared name", async () => {
     const harness = await recordingKernel();
     const evaluator = await createEvaluator({ kernel: harness.kernel });

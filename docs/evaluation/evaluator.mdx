@@ -213,12 +213,19 @@ bounded snapshot as `parseDocumentValue(document)`, using the default
 It reads each option once as an own data property, ignores inherited option
 values, and keeps the same `signal`. `outputs` must be an array; duplicates are
 dropped and entries after the first name the document does not declare are
-never read. Changing the caller's
+never read. A `topologySignatureLimits` object is copied field by field: only
+the six supported limits (`maxTopologyItems`, `maxAdjacencyLinks`,
+`maxEvidenceRecords`, `maxReferenceVariants`, `maxCandidatePairs`, and
+`maxMatchingSteps`) are kept, each read as an own data property whether or not
+it is enumerable, and their values are validated when topology references are
+resolved, as without a signal. Changing the caller's
 document, `outputs` array, or other options after `evaluate(...)` returns its
 promise does not affect that evaluation. A document that exceeds a limit or
 does not match its version's schema, an option defined by a getter, a
-non-array `outputs`, or an `outputs` array with a hole fails with `IR_INVALID`
-before any geometry work.
+non-array `outputs`, an `outputs` array with a hole, or a
+`topologySignatureLimits` object with any other enumerable own field fails
+with `IR_INVALID` before any geometry work. Without a signal, such a limits
+object fails only when the evaluation resolves a topology reference.
 
 These yields and checks apply when `signal` is an own data property of the
 options object, as in `{ signal }`. Without one, evaluation never yields and
