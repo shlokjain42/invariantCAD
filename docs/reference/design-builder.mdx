@@ -547,6 +547,9 @@ Methods throw `TypeError` or `RangeError` for invalid direct calls, including:
 - transform operations, plane IR, path segments, raw loop edge uses, and
   topology selections whose fields are accessors, inherited, or not held by a
   plain record
+- cyclic topology selections, and selections with more query nodes than the
+  default `maxTopologyQueryNodes` limit of 100,000, counting each aliased
+  occurrence as the parser does
 - references targeting the wrong direct solid
 
 These failures indicate an invalid model definition or unvalidated UI input,

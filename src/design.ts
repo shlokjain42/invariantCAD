@@ -329,6 +329,9 @@ function ownedPlaneIR(
   };
 }
 
+const QUERY_ACTIVE = 1;
+const QUERY_COMPLETE = 2;
+
 /**
  * Checks parameter owners in every expression a topology selection holds and
  * returns the selection IR that was checked, so the node stores exactly that
@@ -356,7 +359,6 @@ function ownedTopologySelectionIR<K extends TopologyKind>(
   if (field(selectionIR, "topology") !== topology) {
     throw new TypeError(`${label} must select ${topology} topology`);
   }
-  const pending: unknown[] = [field(selectionIR, "query")];
   const expression = (value: unknown): void => {
     assertExpressionParametersOwned(
       owner,
@@ -364,36 +366,82 @@ function ownedTopologySelectionIR<K extends TopologyKind>(
       label,
     );
   };
-  while (pending.length > 0) {
-    const node = pending.pop();
-    if (typeof node !== "object" || node === null) continue;
+  // Like the parser, count every scheduled query occurrence, aliases
+  // included, against the query-node limit before queueing it, so a wide or
+  // aliased selection cannot schedule unbounded work.
+  const limit = DEFAULT_DESIGN_DOCUMENT_LIMITS.maxTopologyQueryNodes;
+  let scheduled = 0;
+  const reserve = (count: number): void => {
+    scheduled += count;
+    if (scheduled > limit) {
+      throw new RangeError(
+        `${label} exceeds the authoring limit of ${limit} topology query nodes`,
+      );
+    }
+  };
+  // Query nodes on the current walk path are active, so meeting one again
+  // is a cycle; finished nodes are complete, so a shared subtree is walked
+  // once.
+  const states = new WeakMap<object, typeof QUERY_ACTIVE | typeof QUERY_COMPLETE>();
+  const nodes: object[] = [];
+  const exits: boolean[] = [];
+  const enqueue = (value: unknown): void => {
+    if (typeof value !== "object" || value === null) return;
+    const state = states.get(value);
+    if (state === QUERY_ACTIVE) {
+      throw new TypeError(`${label} cannot contain cyclic topology queries`);
+    }
+    if (state === QUERY_COMPLETE) return;
+    nodes.push(value);
+    exits.push(false);
+  };
+  reserve(1);
+  enqueue(field(selectionIR, "query"));
+  while (nodes.length > 0) {
+    const node = nodes.pop()!;
+    if (exits.pop()!) {
+      states.set(node, QUERY_COMPLETE);
+      continue;
+    }
+    if (states.has(node)) continue;
+    states.set(node, QUERY_ACTIVE);
+    nodes.push(node);
+    exits.push(true);
     switch (field(node, "op")) {
       case "and":
       case "or": {
         const queries = field(node, "queries");
         if (Array.isArray(queries)) {
-          // Push one at a time: spreading a large operand list could exceed
+          const length = field(queries, "length");
+          if (typeof length !== "number" || !Number.isSafeInteger(length)) {
+            throw new TypeError(`${label} must contain dense query lists`);
+          }
+          reserve(length);
+          // Queue one at a time: spreading a large operand list could exceed
           // the engine's argument limit.
-          for (let index = 0; index < queries.length; index += 1) {
-            pending.push(field(queries, index));
+          for (let index = 0; index < length; index += 1) {
+            enqueue(field(queries, index));
           }
         }
         break;
       }
       case "not":
-        pending.push(field(node, "query"));
+        reserve(1);
+        enqueue(field(node, "query"));
         break;
       case "adjacentTo":
-        pending.push(field(field(node, "selection"), "query"));
+        reserve(1);
+        enqueue(field(field(node, "selection"), "query"));
         break;
       case "direction":
       case "normal":
       case "position": {
         const vector = field(node, "value");
-        if (Array.isArray(vector)) {
-          for (let index = 0; index < vector.length; index += 1) {
-            expression(field(vector, index));
-          }
+        if (!Array.isArray(vector) || field(vector, "length") !== 3) {
+          throw new TypeError(`${label} must contain three-component vectors`);
+        }
+        for (let index = 0; index < 3; index += 1) {
+          expression(field(vector, index));
         }
         expression(field(node, "tolerance"));
         break;

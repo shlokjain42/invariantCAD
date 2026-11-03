@@ -543,7 +543,7 @@ describe("builder expression inputs", () => {
     }
   });
 
-  it("checks topology selections with very many operands", () => {
+  it("bounds wide topology selections and rejects cyclic ones", () => {
     const cad = design("wide-selection");
     const width = cad.parameter.length("width", mm(1));
     const base = cad.box("base", { size: vec3(mm(10), mm(10), mm(10)) });
@@ -552,15 +552,43 @@ describe("builder expression inputs", () => {
       ...args: readonly unknown[]
     ) => typeof template;
     const operand = template.ir.query;
-    // More operands than a spread call can pass as arguments.
-    const wide = new Selection(
-      "edge",
-      { op: "or", queries: Array.from({ length: 300_000 }, () => operand) },
-      template.ir.cardinality,
-    );
+    const wide = (length: number) =>
+      new Selection(
+        "edge",
+        { op: "or", queries: Array.from({ length }, () => operand) },
+        template.ir.cardinality,
+      );
+    // The root and its aliased operands count toward the query-node limit,
+    // exactly as the parser counts them.
+    const limit = 100_000;
     expect(() =>
-      cad.fillet("wide", base, { edges: wide, radius: mm(1) }),
+      cad.fillet("widest", base, { edges: wide(limit - 1), radius: mm(1) }),
     ).not.toThrow();
+    expect(() =>
+      cad.fillet("too-wide", base, { edges: wide(300_000), radius: mm(1) }),
+    ).toThrow(/authoring limit of 100000 topology query nodes/);
+
+    const cyclic: { op: "or"; queries: unknown[] } = { op: "or", queries: [] };
+    cyclic.queries.push(operand, cyclic);
+    Object.freeze(cyclic.queries);
+    Object.freeze(cyclic);
+    expect(() =>
+      cad.fillet("cyclic", base, {
+        edges: new Selection("edge", cyclic, template.ir.cardinality),
+        radius: mm(1),
+      }),
+    ).toThrow(/cannot contain cyclic topology queries/);
+    const notCycle: { op: "not"; query: unknown } = { op: "not", query: undefined };
+    notCycle.query = { op: "and", queries: Object.freeze([operand, notCycle]) };
+    Object.freeze(notCycle.query);
+    Object.freeze(notCycle);
+    expect(() =>
+      cad.chamfer("indirect", base, {
+        edges: new Selection("edge", notCycle, template.ir.cardinality),
+        distance: mm(1),
+      }),
+    ).toThrow(/cannot contain cyclic topology queries/);
+    expect(cad.build().nodes).not.toHaveProperty("cyclic");
   });
 
   it("binds raw IR by ID only to an existing parameter of the same dimension", () => {
