@@ -170,9 +170,12 @@ cad.sketch("precision-profile", plane.xy(), buildProfile, {
 });
 ```
 
-Tolerance is a positive finite number in millimetres. It affects sketch
+Tolerance is a positive finite number in millimetres; `cad.sketch(...)` throws
+`RangeError` for any other value, and `validateDocument` reports
+`FEATURE_INVALID` for one in a document built by hand. It affects sketch
 solution and profile validity checks; it is not permission to accept arbitrary
-gaps.
+gaps. Circle `segments` must be an integer of at least 3 and arc `segments` an
+integer of at least 2.
 
 After the final call-time parameter and named-configuration values are
 resolved, the evaluator validates the solved profile before handing it to a

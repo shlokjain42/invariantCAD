@@ -661,3 +661,236 @@ describe("builder expression inputs", () => {
     }
   });
 });
+
+describe("builder option values", () => {
+  function profile(cad: DesignBuilder, options?: { readonly tolerance?: number }) {
+    return cad.sketch(
+      "profile",
+      plane.xy(),
+      (sketch) =>
+        sketch.profile(
+          sketch.rectangle("rectangle", { width: mm(4), height: mm(4) }),
+        ),
+      options,
+    );
+  }
+
+  it("rejects option values the document grammar cannot store", () => {
+    const cases: readonly (readonly [
+      string,
+      (cad: DesignBuilder) => unknown,
+      ErrorConstructor,
+    ])[] = [
+      ["box center", (cad) => cad.box("b", { size: vec3(mm(1), mm(1), mm(1)), center: "yes" as never }), TypeError],
+      ["cylinder center", (cad) => cad.cylinder("c", { height: mm(1), radius: mm(1), center: 1 as never }), TypeError],
+      ["cylinder segments 2", (cad) => cad.cylinder("c", { height: mm(1), radius: mm(1), segments: 2 }), RangeError],
+      ["cylinder segments 7.5", (cad) => cad.cylinder("c", { height: mm(1), radius: mm(1), segments: 7.5 }), RangeError],
+      ["cylinder segments string", (cad) => cad.cylinder("c", { height: mm(1), radius: mm(1), segments: "8" as never }), TypeError],
+      ["sphere segments 3", (cad) => cad.sphere("s", { radius: mm(1), segments: 3 }), RangeError],
+      ["sphere segments NaN", (cad) => cad.sphere("s", { radius: mm(1), segments: Number.NaN }), RangeError],
+      ["sketch tolerance 0", (cad) => profile(cad, { tolerance: 0 }), RangeError],
+      ["sketch tolerance -1", (cad) => profile(cad, { tolerance: -1 }), RangeError],
+      ["sketch tolerance NaN", (cad) => profile(cad, { tolerance: Number.NaN }), RangeError],
+      ["sketch tolerance Infinity", (cad) => profile(cad, { tolerance: Number.POSITIVE_INFINITY }), RangeError],
+      [
+        "circle segments",
+        (cad) =>
+          cad.sketch("s", plane.xy(), (sketch) =>
+            sketch.profile(sketch.circle("c", { radius: mm(1), segments: 2 }).loop()),
+          ),
+        RangeError,
+      ],
+      [
+        "arc segments",
+        (cad) =>
+          cad.sketch("s", plane.xy(), (sketch) => {
+            sketch.arc("a", { radius: mm(1), startAngle: deg(0), endAngle: deg(90), segments: 1 });
+            return sketch.profile(sketch.circle("c", { radius: mm(1) }).loop());
+          }),
+        RangeError,
+      ],
+      [
+        "arc clockwise",
+        (cad) =>
+          cad.sketch("s", plane.xy(), (sketch) => {
+            sketch.arc("a", { radius: mm(1), startAngle: deg(0), endAngle: deg(90), clockwise: "no" as never });
+            return sketch.profile(sketch.circle("c", { radius: mm(1) }).loop());
+          }),
+        TypeError,
+      ],
+      [
+        "loop reversed",
+        (cad) =>
+          cad.sketch("s", plane.xy(), (sketch) =>
+            sketch.profile(sketch.circle("c", { radius: mm(1) }).loop({ reversed: 1 as never })),
+          ),
+        TypeError,
+      ],
+      ["extrude divisions -1", (cad) => cad.extrude("e", profile(cad), { distance: mm(1), divisions: -1 }), RangeError],
+      ["extrude divisions 1.5", (cad) => cad.extrude("e", profile(cad), { distance: mm(1), divisions: 1.5 }), RangeError],
+      ["extrude symmetric", (cad) => cad.extrude("e", profile(cad), { distance: mm(1), symmetric: "true" as never }), TypeError],
+      ["revolve segments", (cad) => cad.revolve("r", profile(cad), { segments: 2 }), RangeError],
+      [
+        "assembly suppressed",
+        (cad) => {
+          const part = cad.part("p", cad.box("b", { size: vec3(mm(1), mm(1), mm(1)) }));
+          return cad.assembly("a", (assembly) =>
+            assembly.instance("i", part, { suppressed: "no" as never }),
+          );
+        },
+        TypeError,
+      ],
+      ["parameter label", (cad) => cad.parameter.length("p", mm(1), { label: 1 as never }), TypeError],
+      ["parameter description", (cad) => cad.parameter.length("p", mm(1), { description: {} as never }), TypeError],
+      [
+        "material description",
+        (cad) => cad.material("m", { name: "M", massDensity: gramsPerCubicCentimeter(1), description: 1 as never }),
+        TypeError,
+      ],
+      [
+        "configuration description",
+        (cad) => {
+          const width = cad.parameter.length("w", mm(1));
+          return cad.configuration("c", (configuration) => configuration.parameter(width, mm(2)), {
+            description: 2 as never,
+          });
+        },
+        TypeError,
+      ],
+    ];
+    for (const [label, use, errorType] of cases) {
+      const cad = design(`invalid-option-${label.replaceAll(" ", "-")}`);
+      expect(() => use(cad), label).toThrow(errorType);
+    }
+  });
+
+  it("emits builder output that strict parsing reloads unchanged", async () => {
+    const cad = design("round-trip-options", { metadata: { revision: 3 } });
+    const width = cad.parameter.length("width", mm(20), {
+      min: mm(1),
+      max: mm(100),
+      label: "Width",
+      description: "Overall width",
+    });
+    const box = cad.box("box", { size: vec3(width, mm(10), mm(5)), center: true });
+    const cylinder = cad.cylinder("cylinder", {
+      height: mm(4),
+      radius: mm(2),
+      radiusTop: mm(1),
+      center: false,
+      segments: 3,
+    });
+    const sphere = cad.sphere("sphere", { radius: mm(2), segments: 4 });
+    const sketch = cad.sketch(
+      "sketch",
+      plane.xz(vec3(mm(0), mm(1), mm(0))),
+      (builder) => {
+        builder.arc("arc", {
+          radius: mm(1),
+          startAngle: deg(0),
+          endAngle: deg(45),
+          clockwise: true,
+          segments: 2,
+        });
+        return builder.profile(
+          builder.circle("circle", { radius: mm(3), segments: 3 }).loop({ reversed: true }),
+        );
+      },
+      { tolerance: 1e-5 },
+    );
+    const extruded = cad.extrude("extruded", sketch, {
+      distance: mm(2),
+      symmetric: true,
+      divisions: 3,
+    });
+    const revolved = cad.revolve("revolved", sketch, { angle: deg(90), segments: 3 });
+    const union = cad.union("union", box, [cylinder, sphere, extruded, revolved]);
+    const steel = cad.material("steel", {
+      name: "Steel",
+      massDensity: gramsPerCubicCentimeter(7.85),
+      description: "Structural steel",
+      metadata: { grade: "S355" },
+    });
+    const part = cad.part("part", union, {
+      partNumber: "P-1",
+      description: "Bracket",
+      materialRef: steel,
+      metadata: { finish: "painted" },
+    });
+    const assembly = cad.assembly("assembly", (builder) =>
+      builder.instance("first", part, {
+        placement: [tf.translate(vec3(mm(1), mm(0), mm(0)))],
+        suppressed: true,
+      }),
+    );
+    cad.configuration(
+      "large",
+      (configuration) =>
+        configuration
+          .parameter(width, mm(50))
+          .instanceSuppressed(assembly, "first", false),
+      { description: "Large variant", metadata: { tier: "pro" } },
+    );
+    cad.output("assembly", assembly);
+    const document = cad.build();
+    expect(validateDocument(document).ok).toBe(true);
+    const text = stringifyDocument(document);
+    const reparsed = parseDocument(text);
+    expect(reparsed.ok, JSON.stringify(reparsed.diagnostics)).toBe(true);
+    if (!reparsed.ok) return;
+    expect(stringifyDocument(reparsed.value)).toBe(text);
+    expect(await hashDocument(reparsed.value, { includeMetadata: true })).toBe(
+      await hashDocument(document, { includeMetadata: true }),
+    );
+  });
+
+  it("reports grammar-invalid feature options in in-memory documents", () => {
+    const cad = design("invalid-in-memory");
+    const profile = cad.sketch("sketch", plane.xy(), (builder) =>
+      builder.profile(builder.circle("circle", { radius: mm(3) }).loop()),
+    );
+    const cylinder = cad.cylinder("cylinder", { height: mm(1), radius: mm(1) });
+    const sphere = cad.sphere("sphere", { radius: mm(1) });
+    const extruded = cad.extrude("extruded", profile, { distance: mm(1) });
+    const revolved = cad.revolve("revolved", profile);
+    cad.output("result", cad.union("result", cylinder, [sphere, extruded, revolved]));
+    const source = JSON.parse(stringifyDocument(cad.build())) as any;
+    const cases: readonly (readonly [string, (value: any) => void])[] = [
+      ["/nodes/sketch/tolerance", (value) => (value.nodes.sketch.tolerance = -1)],
+      ["/nodes/sketch/tolerance", (value) => (value.nodes.sketch.tolerance = 0)],
+      [
+        "/nodes/sketch/entities/circle/segments",
+        (value) => (value.nodes.sketch.entities.circle.segments = 2),
+      ],
+      ["/nodes/cylinder/segments", (value) => (value.nodes.cylinder.segments = 2.5)],
+      ["/nodes/sphere/segments", (value) => (value.nodes.sphere.segments = 3)],
+      ["/nodes/extruded/divisions", (value) => (value.nodes.extruded.divisions = -1)],
+      ["/nodes/revolved/segments", (value) => (value.nodes.revolved.segments = 0)],
+    ];
+    for (const [path, mutate] of cases) {
+      const invalid = structuredClone(source);
+      mutate(invalid);
+      expect(validateDocument(invalid).diagnostics, path).toContainEqual(
+        expect.objectContaining({ code: "FEATURE_INVALID", path }),
+      );
+      expect(parseDocumentValue(invalid).ok, path).toBe(false);
+    }
+    const arc = structuredClone(source);
+    arc.nodes.sketch.entities.arc = {
+      kind: "arc",
+      center: "circle.center",
+      radius: mm(1).ir,
+      startAngle: deg(0).ir,
+      endAngle: deg(90).ir,
+      clockwise: false,
+      segments: 1,
+    };
+    expect(validateDocument(arc).diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "FEATURE_INVALID",
+        path: "/nodes/sketch/entities/arc/segments",
+      }),
+    );
+    expect(validateDocument(source).ok).toBe(true);
+  });
+});

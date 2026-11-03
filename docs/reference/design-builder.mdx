@@ -63,7 +63,7 @@ valid while a selected kernel lacks one of its features.
 | `assembly` | `AssemblyRef` | Define fixed instances of parts or assemblies |
 | `configuration` | configuration ID | Define parameter, suppression, and material overrides |
 | `output` | builder | Publish a solid, part, or assembly by output name |
-| `build` | current `DesignDocument` | Validate authoring closure and emit frozen JSON data |
+| `build` | current `DesignDocument` | Emit detached, deeply frozen JSON data from inputs checked as each method ran |
 
 ## Repository-only staged product authoring
 
@@ -504,13 +504,30 @@ IDs such as `housing-side-a`, `left-bearing-seat`, and `manufacturing-assembly`.
 Methods throw `TypeError` or `RangeError` for invalid direct calls, including:
 
 - duplicate or malformed IDs
-- references from another builder
+- references from another builder, including a parameter used anywhere inside
+  an expression, transform operation, placement, or topology predicate
 - wrong-dimensional expressions
 - wrong topology kind
-- invalid option enum/literal values
+- invalid option enum/literal values, non-boolean flags, and non-string
+  labels or descriptions
+- `segments` or `divisions` values that are not integers within the document
+  grammar's bounds
 - empty required lists
-- non-positive tolerances
+- non-positive or non-finite numeric sketch and path tolerances
 - references targeting the wrong direct solid
 
 These failures indicate an invalid model definition or unvalidated UI input,
 not a geometry-kernel failure.
+
+Because every input is checked when its method is called, `build()` output
+satisfies the strict document grammar, and `parseDocument` accepts the text
+`stringifyDocument` writes for it unless semantic validation finds a modeling
+problem. `build()` itself does not run semantic validation or apply document
+size limits. Unresolvable topology selections, unclosed sketch loops, and
+similar model errors are reported as diagnostics by `validateDocument`,
+`parseDocument`, and evaluation.
+
+Expression values are resolved only during evaluation. An expression-valued
+tolerance (shell, offset, or topology predicate), a zero direction vector, or a
+negative radius is therefore reported as an evaluation diagnostic, such as
+`TOPOLOGY_SELECTOR_INVALID`, rather than thrown while authoring.

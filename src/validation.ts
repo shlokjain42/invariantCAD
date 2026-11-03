@@ -582,12 +582,54 @@ function validateTransform(
   );
 }
 
+/**
+ * Mirrors the strict schema's integer bounds so in-memory documents, which
+ * skip schema parsing, cannot reach a kernel with a count the parser rejects.
+ */
+function validateOptionalCount(
+  value: unknown,
+  minimum: number,
+  label: string,
+  node: NodeId,
+  path: string,
+  diagnostics: Diagnostic[],
+): void {
+  if (
+    value !== undefined &&
+    (typeof value !== "number" ||
+      !Number.isSafeInteger(value) ||
+      value < minimum)
+  ) {
+    diagnostics.push(
+      diagnostic(
+        "FEATURE_INVALID",
+        `${label} must be an integer of at least ${minimum}`,
+        { severity: "error", node, path },
+      ),
+    );
+  }
+}
+
 function validateSketch(
   node: SketchNodeIR | SketchNodeIRV7,
   document: ValidatableDocument,
   path: string,
   diagnostics: Diagnostic[],
+  sketchId: NodeId,
 ): void {
+  if (
+    typeof node.tolerance !== "number" ||
+    !Number.isFinite(node.tolerance) ||
+    !(node.tolerance > 0)
+  ) {
+    diagnostics.push(
+      diagnostic(
+        "FEATURE_INVALID",
+        "Sketch tolerance must be finite and positive",
+        { severity: "error", node: sketchId, path: `${path}/tolerance` },
+      ),
+    );
+  }
   if (node.plane.type === "principal") {
     node.plane.origin.forEach((value, index) =>
       validateExpression(
@@ -644,6 +686,14 @@ function validateSketch(
           `${entityPath}/radius`,
           diagnostics,
         );
+        validateOptionalCount(
+          entity.segments,
+          3,
+          "Circle segments",
+          sketchId,
+          `${entityPath}/segments`,
+          diagnostics,
+        );
         break;
       case "arc":
         if (node.entities[entity.center]?.kind !== "point") {
@@ -674,6 +724,14 @@ function validateSketch(
           "angle",
           document,
           `${entityPath}/endAngle`,
+          diagnostics,
+        );
+        validateOptionalCount(
+          entity.segments,
+          2,
+          "Arc segments",
+          sketchId,
+          `${entityPath}/segments`,
           diagnostics,
         );
         break;
@@ -1548,12 +1606,28 @@ function validateNode(
       expression(node.height, "length", "height");
       expression(node.radiusBottom, "length", "radiusBottom");
       expression(node.radiusTop, "length", "radiusTop");
+      validateOptionalCount(
+        node.segments,
+        3,
+        "Cylinder segments",
+        id,
+        `${path}/segments`,
+        diagnostics,
+      );
       break;
     case "sphere":
       expression(node.radius, "length", "radius");
+      validateOptionalCount(
+        node.segments,
+        4,
+        "Sphere segments",
+        id,
+        `${path}/segments`,
+        diagnostics,
+      );
       break;
     case "sketch":
-      validateSketch(node, document, path, diagnostics);
+      validateSketch(node, document, path, diagnostics, id);
       break;
     case "datumPoint":
       node.position.forEach((value, index) =>
@@ -1723,10 +1797,31 @@ function validateNode(
       node.scaleTop.forEach((value, index) =>
         expression(value, "scalar", `scaleTop/${index}`),
       );
+      if (
+        typeof node.divisions !== "number" ||
+        !Number.isSafeInteger(node.divisions) ||
+        node.divisions < 0
+      ) {
+        diagnostics.push(
+          diagnostic(
+            "FEATURE_INVALID",
+            "Extrude divisions must be a nonnegative integer",
+            { severity: "error", node: id, path: `${path}/divisions` },
+          ),
+        );
+      }
       break;
     case "revolve":
       validateRef(node.profile, "profile", document, `${path}/profile`, diagnostics);
       expression(node.angle, "angle", "angle");
+      validateOptionalCount(
+        node.segments,
+        3,
+        "Revolve segments",
+        id,
+        `${path}/segments`,
+        diagnostics,
+      );
       break;
     case "loft": {
       if (node.profiles.length < 2) {

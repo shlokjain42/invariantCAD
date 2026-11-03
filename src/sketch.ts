@@ -71,9 +71,7 @@ export class CircleRef implements OwnedSketchReference {
     return new LoopRef(this[SKETCH_OWNER], {
       kind: "circle",
       entity: this.id,
-      ...(options.reversed === undefined
-        ? {}
-        : { reversed: options.reversed }),
+      ...optionalReversed(options.reversed, `Circle loop '${this.id}'`),
     });
   }
 }
@@ -111,6 +109,42 @@ export class ProfileDefinition implements OwnedSketchReference {
     this.ir = deepFreeze(ir);
     Object.freeze(this);
   }
+}
+
+function optionalReversed(
+  value: unknown,
+  label: string,
+): { readonly reversed?: boolean } {
+  if (value === undefined) return {};
+  if (typeof value !== "boolean") {
+    throw new TypeError(`${label} reversed must be a boolean`);
+  }
+  return { reversed: value };
+}
+
+function optionalClockwise(value: unknown, id: string): boolean {
+  if (value === undefined) return false;
+  if (typeof value !== "boolean") {
+    throw new TypeError(`Sketch arc '${id}' clockwise must be a boolean`);
+  }
+  return value;
+}
+
+function optionalSegments(
+  value: unknown,
+  minimum: number,
+  label: string,
+): { readonly segments?: number } {
+  if (value === undefined) return {};
+  if (typeof value !== "number") {
+    throw new TypeError(`${label} segments must be a number`);
+  }
+  if (!Number.isSafeInteger(value) || value < minimum) {
+    throw new RangeError(
+      `${label} segments must be an integer of at least ${minimum}`,
+    );
+  }
+  return { segments: value };
 }
 
 export interface RectangleOptions {
@@ -187,7 +221,7 @@ export class SketchBuilder {
       kind: "circle",
       center: center.id,
       radius: expressionIROf(options.radius, "length", `Sketch circle '${id}' radius`),
-      ...(options.segments === undefined ? {} : { segments: options.segments }),
+      ...optionalSegments(options.segments, 3, `Sketch circle '${id}'`),
     });
     return new CircleRef(this, key, center);
   }
@@ -208,8 +242,8 @@ export class SketchBuilder {
         "angle",
         `Sketch arc '${id}' endAngle`,
       ),
-      clockwise: options.clockwise ?? false,
-      ...(options.segments === undefined ? {} : { segments: options.segments }),
+      clockwise: optionalClockwise(options.clockwise, id),
+      ...optionalSegments(options.segments, 2, `Sketch arc '${id}'`),
     });
     return new ArcRef(this, key, center);
   }
@@ -260,12 +294,18 @@ export class SketchBuilder {
 
   loop(edges: readonly (LineRef | ArcRef | EdgeUseIR)[]): LoopRef {
     if (edges.length === 0) throw new TypeError("A loop cannot be empty");
-    const uses = edges.map((edge): EdgeUseIR => {
+    const uses = edges.map((edge, index): EdgeUseIR => {
       if (edge instanceof LineRef || edge instanceof ArcRef) {
         this.assertOwned(edge);
         return { entity: edge.id };
       }
-      return edge;
+      if (typeof edge !== "object" || edge === null) {
+        throw new TypeError(`Loop edge ${index} must be a line, arc, or edge use`);
+      }
+      return {
+        entity: entityId(edge.entity),
+        ...optionalReversed(edge.reversed, `Loop edge ${index}`),
+      };
     });
     return new LoopRef(this, { kind: "edges", edges: uses });
   }

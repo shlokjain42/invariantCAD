@@ -342,6 +342,60 @@ function assertTopologySelectionParametersOwned(
   }
 }
 
+function optionalBoolean(
+  value: unknown,
+  fallback: boolean,
+  label: string,
+): boolean {
+  if (value === undefined) return fallback;
+  if (typeof value !== "boolean") {
+    throw new TypeError(`${label} must be a boolean`);
+  }
+  return value;
+}
+
+function optionalString(value: unknown, label: string): string | undefined {
+  if (value !== undefined && typeof value !== "string") {
+    throw new TypeError(`${label} must be a string`);
+  }
+  return value;
+}
+
+/** Checks an integer option against the document grammar's lower bound. */
+function optionalInteger(
+  value: unknown,
+  minimum: number,
+  label: string,
+): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "number") {
+    throw new TypeError(`${label} must be a number`);
+  }
+  if (!Number.isSafeInteger(value) || value < minimum) {
+    throw new RangeError(`${label} must be an integer of at least ${minimum}`);
+  }
+  return value;
+}
+
+function optionalSegments(
+  value: unknown,
+  minimum: number,
+  label: string,
+): { readonly segments?: number } {
+  const segments = optionalInteger(value, minimum, label);
+  return segments === undefined ? {} : { segments };
+}
+
+function positiveTolerance(value: unknown, label: string): number {
+  if (typeof value !== "number") {
+    throw new TypeError(`${label} must be a number`);
+  }
+  if (!Number.isFinite(value) || !(value > 0)) {
+    throw new RangeError(`${label} must be finite and positive`);
+  }
+  return value;
+}
+
 /** Checks parameter owners in every expression a sketch callback authored. */
 function assertSketchParametersOwned(
   owner: DesignBuilder,
@@ -646,12 +700,17 @@ export class AssemblyBuilder {
       options.placement ?? [],
       `Assembly instance '${id}' placement`,
     );
+    const suppressed = optionalBoolean(
+      options.suppressed,
+      false,
+      `Assembly instance '${id}' suppressed`,
+    );
     this.instances.push(
       deepFreeze({
         id: stableId,
         component: component.toIR(),
         placement,
-        suppressed: options.suppressed ?? false,
+        suppressed,
       }),
     );
     return this;
@@ -751,10 +810,12 @@ export class ConfigurationBuilder {
     ) {
       throw new TypeError("A configuration requires at least one override");
     }
+    const description = optionalString(
+      options.description,
+      "Configuration description",
+    );
     return deepFreeze({
-      ...(options.description === undefined
-        ? {}
-        : { description: options.description }),
+      ...(description === undefined ? {} : { description }),
       ...(Object.keys(this.parameterRecords).length === 0
         ? {}
         : { parameterOverrides: { ...this.parameterRecords } }),
@@ -840,7 +901,9 @@ export class DesignBuilder {
   private usesMassDensity = false;
 
   constructor(name: string, options: DesignOptions = {}) {
-    if (name.trim().length === 0) throw new TypeError("A design requires a name");
+    if (typeof name !== "string" || name.trim().length === 0) {
+      throw new TypeError("A design requires a name");
+    }
     this.name = name;
     this.metadata = options.metadata;
     DESIGN_PARAMETER_RECORDS.set(this, this.parameterRecords);
@@ -937,15 +1000,18 @@ export class DesignBuilder {
       options.max === undefined
         ? undefined
         : ownedExpressionIR(this, options.max, dimension, `Parameter '${id}' max`);
+    const label = optionalString(options.label, `Parameter '${id}' label`);
+    const description = optionalString(
+      options.description,
+      `Parameter '${id}' description`,
+    );
     this.parameterRecords[key] = deepFreeze({
       dimension,
       default: defaultIR,
       ...(min === undefined ? {} : { min }),
       ...(max === undefined ? {} : { max }),
-      ...(options.label === undefined ? {} : { label: options.label }),
-      ...(options.description === undefined
-        ? {}
-        : { description: options.description }),
+      ...(label === undefined ? {} : { label }),
+      ...(description === undefined ? {} : { description }),
     });
     if (dimension === "massDensity") this.usesMassDensity = true;
     const parameter = new ParameterClass(key, dimension);
@@ -986,9 +1052,13 @@ export class DesignBuilder {
     if (Object.hasOwn(this.materialRecords, key)) {
       throw new TypeError(`Duplicate material '${id}'`);
     }
-    if (options.name.trim().length === 0) {
+    if (typeof options.name !== "string" || options.name.trim().length === 0) {
       throw new TypeError(`Material '${id}' requires a non-empty name`);
     }
+    const description = optionalString(
+      options.description,
+      `Material '${id}' description`,
+    );
     if (options.massDensity?.dimension !== "massDensity") {
       throw new TypeError("Material massDensity must be a mass-density expression");
     }
@@ -1001,9 +1071,7 @@ export class DesignBuilder {
     this.materialRecords[key] = deepFreeze({
       name: options.name,
       massDensity,
-      ...(options.description === undefined
-        ? {}
-        : { description: options.description }),
+      ...(description === undefined ? {} : { description }),
       ...(options.metadata === undefined ? {} : { metadata: options.metadata }),
     });
     this.usesMassDensity = true;
@@ -1147,7 +1215,7 @@ export class DesignBuilder {
     const key = this.addNode(id, {
       kind: "box",
       size: ownedVec3IR(this, options.size, "length", `Box '${id}' size`),
-      center: options.center ?? false,
+      center: optionalBoolean(options.center, false, `Box '${id}' center`),
     });
     return new SolidRef(this, key);
   }
@@ -1182,8 +1250,8 @@ export class DesignBuilder {
         "length",
         `Cylinder '${id}' radiusTop`,
       ),
-      center: options.center ?? false,
-      ...(options.segments === undefined ? {} : { segments: options.segments }),
+      center: optionalBoolean(options.center, false, `Cylinder '${id}' center`),
+      ...optionalSegments(options.segments, 3, `Cylinder '${id}' segments`),
     });
     return new SolidRef(this, key);
   }
@@ -1200,7 +1268,7 @@ export class DesignBuilder {
         "length",
         `Sphere '${id}' radius`,
       ),
-      ...(options.segments === undefined ? {} : { segments: options.segments }),
+      ...optionalSegments(options.segments, 4, `Sphere '${id}' segments`),
     });
     return new SolidRef(this, key);
   }
@@ -1212,6 +1280,10 @@ export class DesignBuilder {
     options: { readonly tolerance?: number } = {},
   ): ProfileRef {
     const planeIR = ownedPlaneIR(this, sketchPlane, `Sketch '${id}' plane`);
+    const tolerance = positiveTolerance(
+      options.tolerance ?? 1e-7,
+      `Sketch '${id}' tolerance`,
+    );
     const sketch = new SketchBuilder();
     const profile = build(sketch);
     if (!(profile instanceof ProfileDefinition)) {
@@ -1224,7 +1296,7 @@ export class DesignBuilder {
       entities: sketch.entities,
       constraints: sketch.constraints,
       profile: profile.ir,
-      tolerance: options.tolerance ?? 1e-7,
+      tolerance,
     });
     return new ProfileRef(this, key);
   }
@@ -1349,7 +1421,11 @@ export class DesignBuilder {
         "length",
         `Extrude '${id}' distance`,
       ),
-      symmetric: options.symmetric ?? false,
+      symmetric: optionalBoolean(
+        options.symmetric,
+        false,
+        `Extrude '${id}' symmetric`,
+      ),
       twist: ownedExpressionIR(
         this,
         options.twist ?? deg(0),
@@ -1360,7 +1436,8 @@ export class DesignBuilder {
         ownedExpressionIR(this, scaleTop[0], "scalar", `Extrude '${id}' scaleTop[0]`),
         ownedExpressionIR(this, scaleTop[1], "scalar", `Extrude '${id}' scaleTop[1]`),
       ],
-      divisions: options.divisions ?? 0,
+      divisions:
+        optionalInteger(options.divisions, 0, `Extrude '${id}' divisions`) ?? 0,
     });
     return new SolidRef(this, key);
   }
@@ -1383,7 +1460,7 @@ export class DesignBuilder {
         "angle",
         `Revolve '${id}' angle`,
       ),
-      ...(options.segments === undefined ? {} : { segments: options.segments }),
+      ...optionalSegments(options.segments, 3, `Revolve '${id}' segments`),
     });
     return new SolidRef(this, key);
   }
