@@ -345,7 +345,10 @@ function ownedPlaneIR(
  * frozen in place, and checked for parameter owners, like every other builder
  * expression. Like the parser, every query occurrence, aliases included,
  * counts against the query-node limit before it is copied; shared subtrees
- * are copied once, and cycles or excessive nesting throw.
+ * are copied once, but each further occurrence adds the subtree's full query
+ * nodes, structural values, and height at its own depth, so the limits bound
+ * the expanded tree the writer and parser see. Cycles, excessive nesting, and
+ * lists longer than the remaining capacity throw before they are copied.
  */
 function ownedTopologySelectionIR<K extends TopologyKind>(
   owner: DesignBuilder,
@@ -356,26 +359,39 @@ function ownedTopologySelectionIR<K extends TopologyKind>(
   const limits = DEFAULT_DESIGN_DOCUMENT_LIMITS;
   let scheduled = 0;
   const reserve = (count: number): void => {
-    scheduled += count;
-    if (scheduled > limits.maxTopologyQueryNodes) {
+    if (count > limits.maxTopologyQueryNodes - scheduled) {
       throw new RangeError(
         `${label} exceeds the authoring limit of ${limits.maxTopologyQueryNodes} topology query nodes`,
       );
     }
+    scheduled += count;
   };
   let structuralValues = 0;
-  const enter = (depth: number): void => {
-    structuralValues += 1;
-    if (structuralValues > limits.maxStructuralValues) {
+  // The deepest structural value reached so far, so each copied query can
+  // record its height for later occurrences at other depths.
+  let deepest = 0;
+  const ensureValueCapacity = (count: number): void => {
+    if (count > limits.maxStructuralValues - structuralValues) {
       throw new RangeError(
         `${label} exceeds the authoring limit of ${limits.maxStructuralValues} structural values`,
       );
     }
+  };
+  const reserveValues = (count: number): void => {
+    ensureValueCapacity(count);
+    structuralValues += count;
+  };
+  const reach = (depth: number): void => {
     if (depth > limits.maxNestingDepth) {
       throw new RangeError(
         `${label} exceeds the authoring nesting depth of ${limits.maxNestingDepth}`,
       );
     }
+    if (depth > deepest) deepest = depth;
+  };
+  const enter = (depth: number): void => {
+    reserveValues(1);
+    reach(depth);
   };
   // Define rather than assign, so an own "__proto__" key stays data.
   const define = (
@@ -392,8 +408,18 @@ function ownedTopologySelectionIR<K extends TopologyKind>(
   };
   // Containers whose copy is in progress, so meeting one again is a cycle.
   const active = new Set<object>();
-  // Finished query copies, so an aliased query is copied once.
-  const queryCopies = new Map<object, object>();
+  // Finished query copies, so an aliased query is copied once, with the
+  // expanded size of the subtree each further occurrence adds.
+  const queryCopies = new Map<
+    object,
+    {
+      readonly copy: object;
+      /** Query nodes below this one; its parent reserves the query itself. */
+      readonly queryNodes: number;
+      readonly structuralValues: number;
+      readonly height: number;
+    }
+  >();
 
   const expression = (value: unknown): ExpressionIR => {
     const ir = assertExpressionIR(value, label);
@@ -424,7 +450,10 @@ function ownedTopologySelectionIR<K extends TopologyKind>(
     active.add(value);
     let result: JsonValue;
     if (Array.isArray(value)) {
-      result = ownDenseArray(value as readonly unknown[], label).map((item) =>
+      // Every item is at least one structural value, so a longer list cannot
+      // fit and is rejected before it is copied.
+      ensureValueCapacity((value as readonly unknown[]).length);
+      result =ownDenseArray(value as readonly unknown[], label).map((item) =>
         json(item, depth + 1),
       );
     } else {
@@ -448,10 +477,21 @@ function ownedTopologySelectionIR<K extends TopologyKind>(
       throw new TypeError(`${label} queries must be plain records`);
     }
     const copied = queryCopies.get(value);
-    if (copied !== undefined) return copied;
+    if (copied !== undefined) {
+      // The writer and parser expand every alias, so each occurrence counts
+      // its whole subtree at this depth.
+      reserve(copied.queryNodes);
+      reserveValues(copied.structuralValues);
+      reach(depth + copied.height);
+      return copied.copy;
+    }
     if (active.has(value)) {
       throw new TypeError(`${label} cannot contain cyclic topology queries`);
     }
+    const queryNodesBefore = scheduled;
+    const valuesBefore = structuralValues;
+    const deepestBefore = deepest;
+    deepest = depth;
     enter(depth);
     active.add(value);
     const node = ownRecord(value, `${label} query`) as Readonly<
@@ -505,7 +545,13 @@ function ownedTopologySelectionIR<K extends TopologyKind>(
       }
     }
     active.delete(value);
-    queryCopies.set(value, copy);
+    queryCopies.set(value, {
+      copy,
+      queryNodes: scheduled - queryNodesBefore,
+      structuralValues: structuralValues - valuesBefore,
+      height: deepest - depth,
+    });
+    if (deepestBefore > deepest) deepest = deepestBefore;
     return copy;
   };
 
@@ -554,16 +600,47 @@ function ownedTopologySelectionIR<K extends TopologyKind>(
  * Copies caller metadata into builder-owned plain JSON records, so later
  * caller mutation cannot reach a built document and authoring never freezes
  * caller objects. Values JSON cannot preserve are rejected rather than being
- * written as `{}` or failing only when the document is saved.
+ * written as `{}` or failing only when the document is saved. A shared
+ * subtree is copied once, but like the parser, the limits count every
+ * occurrence of it, with its full size and height at that occurrence's depth.
  */
 function detachMetadata(
   value: unknown,
   label: string,
 ): Readonly<Record<string, JsonValue>> {
   const limits = DEFAULT_DESIGN_DOCUMENT_LIMITS;
-  const copies = new Map<object, JsonValue>();
+  const copies = new Map<
+    object,
+    {
+      readonly value: JsonValue;
+      readonly structuralValues: number;
+      readonly height: number;
+    }
+  >();
   const active = new Set<object>();
   let structuralValues = 0;
+  // The deepest value reached so far, so each copied subtree can record its
+  // height for later occurrences at other depths.
+  let deepest = 0;
+  const ensureValueCapacity = (count: number): void => {
+    if (count > limits.maxStructuralValues - structuralValues) {
+      throw new RangeError(
+        `${label} exceeds the authoring limit of ${limits.maxStructuralValues} structural values`,
+      );
+    }
+  };
+  const reserveValues = (count: number): void => {
+    ensureValueCapacity(count);
+    structuralValues += count;
+  };
+  const reach = (depth: number): void => {
+    if (depth > limits.maxNestingDepth) {
+      throw new RangeError(
+        `${label} exceeds the authoring nesting depth of ${limits.maxNestingDepth}`,
+      );
+    }
+    if (depth > deepest) deepest = depth;
+  };
   // Reads own data properties only, so caller accessors never run and an
   // inherited value never reaches the document.
   const ownData = (container: object, key: string, path: string): unknown => {
@@ -577,17 +654,18 @@ function detachMetadata(
     return descriptor.value as unknown;
   };
   const copy = (current: unknown, depth: number, path: string): JsonValue => {
-    structuralValues += 1;
-    if (structuralValues > limits.maxStructuralValues) {
-      throw new RangeError(
-        `${label} exceeds the authoring limit of ${limits.maxStructuralValues} structural values`,
-      );
+    if (typeof current === "object" && current !== null) {
+      const known = copies.get(current);
+      if (known !== undefined) {
+        // The writer and parser expand every alias, so each occurrence
+        // counts its whole subtree at this depth.
+        reserveValues(known.structuralValues);
+        reach(depth + known.height);
+        return known.value;
+      }
     }
-    if (depth > limits.maxNestingDepth) {
-      throw new RangeError(
-        `${label} exceeds the authoring nesting depth of ${limits.maxNestingDepth}`,
-      );
-    }
+    reserveValues(1);
+    reach(depth);
     switch (typeof current) {
       case "string":
       case "boolean":
@@ -605,14 +683,18 @@ function detachMetadata(
         );
     }
     if (current === null) return null;
-    const known = copies.get(current);
-    if (known !== undefined) return known;
     if (active.has(current)) {
       throw new TypeError(`${label} cannot contain object cycles`);
     }
     active.add(current);
+    const valuesBefore = structuralValues - 1;
+    const deepestBefore = deepest;
+    deepest = depth;
     let result: JsonValue;
     if (Array.isArray(current)) {
+      // Every item is at least one structural value, so a longer list cannot
+      // fit and is rejected before its items are read.
+      ensureValueCapacity(current.length);
       const items: JsonValue[] = [];
       for (let index = 0; index < current.length; index += 1) {
         const itemPath = `${path}/${index}`;
@@ -651,7 +733,12 @@ function detachMetadata(
       result = record;
     }
     active.delete(current);
-    copies.set(current, result);
+    copies.set(current, {
+      value: result,
+      structuralValues: structuralValues - valuesBefore,
+      height: deepest - depth,
+    });
+    if (deepestBefore > deepest) deepest = deepestBefore;
     return result;
   };
   if (

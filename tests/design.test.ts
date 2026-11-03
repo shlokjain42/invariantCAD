@@ -600,6 +600,80 @@ describe("builder expression inputs", () => {
     expect(cad.build().nodes).not.toHaveProperty("cyclic");
   });
 
+  it("counts every occurrence of a shared selection query at its own depth", () => {
+    const cad = design("shared-selection");
+    const base = cad.box("base", { size: vec3(mm(10), mm(10), mm(10)) });
+    const template = topology.edges.radius(mm(1)).atLeast(1);
+    const Selection = template.constructor as new (
+      ...args: readonly unknown[]
+    ) => typeof template;
+    const selection = (query: unknown) =>
+      new Selection("edge", query, template.ir.cardinality);
+    const layered = (layers: number): unknown => {
+      let query: unknown = template.ir.query;
+      for (let layer = 0; layer < layers; layer += 1) {
+        query = { op: "and", queries: [query, query] };
+      }
+      return query;
+    };
+
+    // Shared subtrees within the limit are still accepted, and the written
+    // document, which expands every alias, reloads.
+    cad.fillet("ten-layers", base, { edges: selection(layered(10)), radius: mm(1) });
+    const document = cad.build();
+    const reparsed = parseDocument(stringifyDocument(document));
+    expect(reparsed.ok, JSON.stringify(reparsed.diagnostics)).toBe(true);
+
+    // Forty layers that each alias one operand twice hold 41 distinct
+    // queries, but the writer and parser see 2^41 - 1 of them.
+    expect(() =>
+      cad.fillet("forty-layers", base, {
+        edges: selection(layered(40)),
+        radius: mm(1),
+      }),
+    ).toThrow(/authoring limit of 100000 topology query nodes/);
+
+    // A chain first copied near the root counts its whole height again where
+    // it recurs deeper.
+    let chain: unknown = template.ir.query;
+    for (let level = 0; level < 100; level += 1) chain = { op: "not", query: chain };
+    let deeper: unknown = chain;
+    for (let level = 0; level < 40; level += 1) deeper = { op: "not", query: deeper };
+    expect(() =>
+      cad.fillet("chain", base, { edges: selection(chain), radius: mm(1) }),
+    ).not.toThrow();
+    expect(() =>
+      cad.fillet("deep-alias", base, {
+        edges: selection({ op: "and", queries: [chain, deeper] }),
+        radius: mm(1),
+      }),
+    ).toThrow(/authoring nesting depth of 128/);
+
+    // A list longer than the remaining capacity is rejected before any item
+    // is copied, so the accessor on its last item is never reached.
+    const items = new Array<number>(1_000_001).fill(0);
+    Object.defineProperty(items, 1_000_000, {
+      get: () => {
+        throw new Error("read the last item");
+      },
+      enumerable: true,
+      configurable: true,
+    });
+    // Frozen first, so the selection constructor's deepFreeze skips it.
+    Object.freeze(items);
+    expect(() =>
+      cad.chamfer("long-list", base, {
+        edges: selection({
+          op: "origin",
+          feature: "base",
+          relation: "created",
+          source: { kind: "sketch-entity", items },
+        }),
+        distance: mm(1),
+      }),
+    ).toThrow(/authoring limit of 1000000 structural values/);
+  });
+
   it("binds raw IR by ID only to an existing parameter of the same dimension", () => {
     const cad = design("raw-parameter-ir");
     cad.parameter.length("width", mm(10));
@@ -1156,6 +1230,34 @@ describe("builder input detachment", () => {
     expect(Object.getPrototypeOf(accepted.metadata!.own)).toBe(Object.prototype);
     const reparsed = parseDocument(stringifyDocument(accepted));
     expect(reparsed.ok, JSON.stringify(reparsed.diagnostics)).toBe(true);
+  });
+
+  it("counts every occurrence of shared metadata at its own depth", () => {
+    // Thirty layers that each alias one record twice hold 31 distinct
+    // records, but the writer and parser see more than a billion values.
+    let layered: unknown = { leaf: 1 };
+    for (let layer = 0; layer < 30; layer += 1) {
+      layered = { left: layered, right: layered };
+    }
+    expect(() => design("layered", { metadata: layered as never })).toThrow(
+      /authoring limit of 1000000 structural values/,
+    );
+    const cad = design("layered-part");
+    const box = cad.box("box", { size: vec3(mm(1), mm(1), mm(1)) });
+    expect(() =>
+      cad.part("part", box, { metadata: { layered } as never }),
+    ).toThrow(RangeError);
+
+    // A chain first copied near the root counts its whole height again where
+    // it recurs deeper.
+    let chain: unknown = 1;
+    for (let level = 0; level < 100; level += 1) chain = [chain];
+    let deeper: unknown = chain;
+    for (let level = 0; level < 40; level += 1) deeper = { nested: deeper };
+    expect(() => design("chain", { metadata: { chain } as never })).not.toThrow();
+    expect(() =>
+      design("deep-alias", { metadata: { chain, deeper } as never }),
+    ).toThrow(/authoring nesting depth of 128/);
   });
 
   it("copies metadata through own data properties without running accessors", () => {
