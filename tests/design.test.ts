@@ -1510,6 +1510,20 @@ describe("builder own-data reads", () => {
         return sketch.profile(sketch.loop([use as never]));
       }),
     ).toThrow("must be a data property, not an accessor");
+    expect(() =>
+      cad.sketch("object-edge", plane.xy(), (sketch) => {
+        const a = sketch.point("a", vec2(mm(0), mm(0)));
+        const b = sketch.point("b", vec2(mm(1), mm(0)));
+        sketch.line("ab", a, b);
+        const entity = {
+          toString: () => {
+            counter.reads += 1;
+            return "ab";
+          },
+        };
+        return sketch.profile(sketch.loop([{ entity } as never]));
+      }),
+    ).toThrow("Loop edge 0 entity must be a string ID");
     expect(counter.reads).toBe(0);
 
     // A getter that could change the holes after the ownership check never runs.

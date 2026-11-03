@@ -381,6 +381,9 @@ export class SketchBuilder {
       }
       // Raw edge uses are read through own data fields, exactly once.
       const use = ownRecord(edge, `Loop edge ${index}`);
+      if (typeof use.entity !== "string") {
+        throw new TypeError(`Loop edge ${index} entity must be a string ID`);
+      }
       return {
         entity: entityId(use.entity),
         ...optionalReversed(use.reversed, `Loop edge ${index}`),

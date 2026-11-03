@@ -180,8 +180,13 @@ function expressionNodeOperands(
     throw malformedExpression(label, "expression nodes must be plain records");
   }
   const op = expressionField(node, "op", label);
-  if (typeof op !== "string" || !objectHasOwn(EXPRESSION_IR_FIELDS, op)) {
-    throw malformedExpression(label, `unsupported operation '${String(op)}'`);
+  // Check the type before formatting, so converting a caller object to a
+  // string never runs its methods.
+  if (typeof op !== "string") {
+    throw malformedExpression(label, "operation must be a string");
+  }
+  if (!objectHasOwn(EXPRESSION_IR_FIELDS, op)) {
+    throw malformedExpression(label, `unsupported operation '${op}'`);
   }
   const dimension = expressionField(node, "dimension", label);
   if (!isDimension(dimension)) {
@@ -496,7 +501,11 @@ export class Expression<D extends Dimension> {
 
   constructor(dimension: D, ir: ExpressionIR) {
     if (!isDimension(dimension)) {
-      throw new TypeError(`Unsupported expression dimension '${String(dimension)}'`);
+      throw new TypeError(
+        typeof dimension === "string"
+          ? `Unsupported expression dimension '${dimension}'`
+          : "Expression dimension must be a string",
+      );
     }
     if (typeof ir !== "object" || ir === null) {
       throw new TypeError(

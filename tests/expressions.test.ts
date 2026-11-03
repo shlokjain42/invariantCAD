@@ -367,6 +367,43 @@ describe("runtime expression dimensions", () => {
     expect(reads).toBe(0);
   });
 
+  it("rejects non-string operations and dimensions without converting them", () => {
+    let conversions = 0;
+    const convertible = {
+      toString: () => {
+        conversions += 1;
+        return "literal";
+      },
+      valueOf: () => {
+        conversions += 1;
+        return "literal";
+      },
+      [Symbol.toPrimitive]: () => {
+        conversions += 1;
+        return "literal";
+      },
+    };
+    expect(() =>
+      fromExpressionIR(
+        { op: convertible, dimension: "length", value: 1 } as never,
+        "length",
+      ),
+    ).toThrow("operation must be a string");
+    expect(() =>
+      fromExpressionIR(
+        { op: "sum", dimension: "length", value: 1 } as never,
+        "length",
+      ),
+    ).toThrow("unsupported operation 'sum'");
+    expect(() => new Expression(convertible as never, mm(1).ir)).toThrow(
+      "Expression dimension must be a string",
+    );
+    expect(() => new Expression("volume" as never, mm(1).ir)).toThrow(
+      "Unsupported expression dimension 'volume'",
+    );
+    expect(conversions).toBe(0);
+  });
+
   it("leaves rejected non-plain IR roots unfrozen", () => {
     class LiteralNode {
       op = "literal";
