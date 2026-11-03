@@ -31,7 +31,7 @@ import type {
 } from "./kernel.js";
 import type { KernelTopologySnapshot } from "./protocol/topology.js";
 import {
-  parseDocumentV7,
+  parseDocumentV7WithAdmittedLimits,
   stringifyDocumentV7,
   type ParseDocumentOptions,
 } from "./serialization.js";
@@ -469,6 +469,7 @@ function captureOwnDataRecord(
 function captureLocations(
   value: unknown,
   path: string,
+  maxLocations: number,
 ): readonly string[] | undefined {
   if (value === undefined) return undefined;
   if (
@@ -508,12 +509,9 @@ function captureLocations(
   if (length === 0) {
     sourceFailure("Resource locations must not be empty", path);
   }
-  if (
-    length >
-    DEFAULT_DESIGN_DOCUMENT_LIMITS.maxResourceLocations
-  ) {
+  if (length > maxLocations) {
     sourceFailure(
-      `Resource locations exceed the limit of ${DEFAULT_DESIGN_DOCUMENT_LIMITS.maxResourceLocations}`,
+      `Resource locations exceed the limit of ${maxLocations}`,
       path,
     );
   }
@@ -629,6 +627,7 @@ interface CapturedImportedBodyDefinition {
 
 function captureImportedBodyDefinition(
   value: unknown,
+  limits: DesignDocumentLimits,
 ): CapturedImportedBodyDefinition {
   const definition = captureOwnDataRecord(
     value,
@@ -714,6 +713,7 @@ function captureImportedBodyDefinition(
   const locations = captureLocations(
     resource.locations,
     "/definition/resource/locations",
+    limits.maxResourceLocations,
   );
   const units = captureOwnDataRecord(
     definition.units,
@@ -805,6 +805,22 @@ export function createImportedBodyDocument(
   name: string,
   definition: ImportedBodyDefinition,
 ): CadResult<ImportedBodyDocument> {
+  return createImportedBodyDocumentWithin(
+    name,
+    definition,
+    DEFAULT_DESIGN_DOCUMENT_LIMITS,
+  );
+}
+
+/**
+ * Creates the document under normalized limits: the defaults for authoring,
+ * or the limits that admitted a parsed document while it is narrowed.
+ */
+function createImportedBodyDocumentWithin(
+  name: string,
+  definition: ImportedBodyDefinition,
+  limits: DesignDocumentLimits,
+): CadResult<ImportedBodyDocument> {
   try {
     if (typeof name !== "string") {
       sourceFailure(
@@ -812,10 +828,10 @@ export function createImportedBodyDocument(
         "/name",
       );
     }
-    const captured = captureImportedBodyDefinition(definition);
+    const captured = captureImportedBodyDefinition(definition, limits);
     let builder: ReturnType<typeof stagedBodySetDesignV7>;
     try {
-      builder = stagedBodySetDesignV7(name);
+      builder = stagedBodySetDesignV7(name, undefined, limits);
     } catch (error) {
       // The design builder validates only the document name.
       sourceFailure(
@@ -856,7 +872,7 @@ export function createImportedBodyDocument(
       authoringOptions,
     );
     builder.output(captured.definition.id, body);
-    const document = builder.build();
+    const document = builder.build({ limits });
     return success(
       retainImportedBodyDocument(
         document,
@@ -928,6 +944,7 @@ function importedBodyDocumentPath(
 
 function narrowImportedBodyDocument(
   document: DesignDocumentV7,
+  limits: DesignDocumentLimits,
 ): CadResult<ImportedBodyDocument> {
   const resourceIds = importedBodyKeys(document.resources ?? {});
   const nodeIds = importedBodyKeys(document.nodes);
@@ -973,7 +990,11 @@ function narrowImportedBodyDocument(
     format: node.format,
     units: node.units,
   } as ImportedBodyDefinition;
-  const recreated = createImportedBodyDocument(document.name, definition);
+  const recreated = createImportedBodyDocumentWithin(
+    document.name,
+    definition,
+    limits,
+  );
   if (!recreated.ok) {
     return importedBodySubsetFailure(
       recreated.diagnostics[0]?.message ??
@@ -993,8 +1014,8 @@ function narrowImportedBodyDocument(
   }
   try {
     if (
-      stringifyDocumentV7(document) !==
-      stringifyDocumentV7(recreatedState.document)
+      stringifyDocumentV7(document, { limits }) !==
+      stringifyDocumentV7(recreatedState.document, { limits })
     ) {
       return importedBodySubsetFailure(
         "The document contains fields outside the public imported-body workflow",
@@ -1016,16 +1037,20 @@ function narrowImportedBodyDocument(
  *
  * The underlying raw boundary rejects duplicate JSON member names and applies
  * the existing bounded document parser before this narrower policy check.
+ * The policy check applies the same `options.limits` as the parser.
  */
 export function parseImportedBodyDocument(
   text: string,
   options: ParseDocumentOptions = {},
 ): CadResult<ImportedBodyDocument> {
   const parsed = publicImportedBodyResult(
-    parseDocumentV7(text, options),
+    parseDocumentV7WithAdmittedLimits(text, options),
   );
   if (!parsed.ok) return parsed;
-  const narrowed = narrowImportedBodyDocument(parsed.value);
+  const narrowed = narrowImportedBodyDocument(
+    parsed.value.document,
+    parsed.value.limits,
+  );
   return narrowed.ok
     ? success(narrowed.value, parsed.diagnostics)
     : narrowed;

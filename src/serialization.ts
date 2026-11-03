@@ -1105,6 +1105,27 @@ export function parseDocumentV7(
   text: string,
   options: ParseDocumentOptions = {},
 ): CadResult<DesignDocumentV7> {
+  const parsed = parseDocumentV7WithAdmittedLimits(text, options);
+  return parsed.ok
+    ? success(parsed.value.document, parsed.diagnostics)
+    : parsed;
+}
+
+/** A staged document-v7 parse together with the limits that admitted it. */
+export interface DocumentV7WithAdmittedLimits {
+  readonly document: DesignDocumentV7;
+  readonly limits: DesignDocumentLimits;
+}
+
+/**
+ * Parses like parseDocumentV7 and also returns the caller's normalized limits,
+ * read once, so a narrower reader can apply the same ceilings to its own
+ * checks. Not re-exported from the package root.
+ */
+export function parseDocumentV7WithAdmittedLimits(
+  text: string,
+  options: ParseDocumentOptions = {},
+): CadResult<DocumentV7WithAdmittedLimits> {
   const captured = captureDocumentTextV7Boundary(
     text,
     options,
@@ -1113,12 +1134,12 @@ export function parseDocumentV7(
   if (!documentV7RuntimeIntrinsicsAreIntact()) {
     return serializationIntegrityFailure();
   }
-  return captured.ok
-    ? validateDocumentV7Snapshot(
-        captured.value.snapshot,
-        captured.value.limits,
-      )
-    : captured;
+  if (!captured.ok) return captured;
+  const { limits } = captured.value;
+  const parsed = validateDocumentV7Snapshot(captured.value.snapshot, limits);
+  return parsed.ok
+    ? success({ document: parsed.value, limits }, parsed.diagnostics)
+    : parsed;
 }
 
 function capturedDocumentSourceVersion(

@@ -706,6 +706,47 @@ describe("public imported-body document workflow", () => {
     );
   });
 
+  it("applies raised parse limits to the imported-body policy check", async () => {
+    const bytes = encoder.encode("raised-location-limit");
+    const document = valueOf(
+      createImportedBodyDocument(
+        "Many locations",
+        await stepDefinition(bytes, {
+          bodyId: "housing",
+          resourceId: "housingStep",
+          locations: ["memory:0"],
+        }),
+      ),
+    );
+    const raw = JSON.parse(stringifyImportedBodyDocument(document)) as {
+      resources: Record<string, Record<string, unknown>>;
+    };
+    // One location over the default maxResourceLocations of 100,000.
+    raw.resources.housingStep!.locations = Array.from(
+      { length: 100_001 },
+      (_, index) => `memory:${index}`,
+    );
+    const text = JSON.stringify(raw);
+    expect(parseImportedBodyDocument(text)).toMatchObject({
+      ok: false,
+      diagnostics: [
+        {
+          code: "IR_INVALID",
+          details: { resource: "maxResourceLocations", limit: 100_000 },
+        },
+      ],
+    });
+
+    // The parser and the policy check that recreates the document both apply
+    // the raised limit, so the document parses and round-trips unchanged.
+    const limits = { maxResourceLocations: 200_000 };
+    const parsed = parseImportedBodyDocument(text, { limits });
+    expect(parsed.diagnostics).toEqual([]);
+    const imported = valueOf(parsed);
+    expect(imported.provenance.resource.locations).toHaveLength(100_001);
+    expect(stringifyImportedBodyDocument(imported, { limits })).toBe(text);
+  }, 60_000);
+
   it("roots every evaluation-option diagnostic at /options", async () => {
     const bytes = encoder.encode("precise-option-paths");
     const document = valueOf(

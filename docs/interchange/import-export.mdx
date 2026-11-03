@@ -255,6 +255,10 @@ const parsed = parseImportedBodyDocument(json, {
 Parsing uses the bounded, duplicate-member-rejecting document boundary and
 then admits only one resource, one imported-body node, and one direct solid
 output. It does not publish or accept the broader product Document v7 grammar.
+`options.limits` applies to the whole parse, including that subset check. A
+document admitted only under raised limits, such as one with more than the
+default 100,000 resource `locations`, needs the same limits when it is
+serialized again and as `documentLimits` when it is evaluated.
 
 ### Imported-body document format
 
