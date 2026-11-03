@@ -32,7 +32,12 @@ interface Diagnostic {
 
 Branch on `code`, not message text. Messages are written for people and can be
 clarified without a protocol change. `path` uses document-oriented paths when a
-specific authored field is responsible. `related` identifies other document
+specific authored field is responsible. Paths from parsing and
+`validateDocument` are JSON Pointers: an ID segment that contains `~` or `/` is
+escaped as `~0` or `~1`, so a node named `a/b` is reported under
+`/nodes/a~1b`. Some diagnostics raised later, during evaluation or feature
+hashing, still place such IDs unescaped, so prefer IDs without `~` or `/`.
+`related` identifies other document
 locations involved in the same failure, such as the other end of a conflicting
 reference.
 
@@ -99,7 +104,7 @@ input, not its total size.
 | Document | `IR_INVALID`, migration/validation errors | Reject or migrate the input before evaluation |
 | Parameters | unknown override, dependency cycle, bounds | Correct IDs/formulas or override values |
 | Kernel | `KERNEL_CAPABILITY_MISSING`, `KERNEL_ERROR` | Choose a compatible backend or inspect native failure details |
-| Imported source | `IMPORT_SOURCE_INVALID` | Correct the one-body definition, format/media pairing, units, or unsafe source descriptor |
+| Imported source | `IMPORT_SOURCE_INVALID` (unreleased 0.2) | Correct the one-body definition, format/media pairing, units, or unsafe source descriptor |
 | Resource resolution | `RESOURCE_RESOLVER_MISSING`, `RESOURCE_RESOLUTION_FAILED`, `RESOURCE_INTEGRITY_MISMATCH`, `RESOURCE_LIMIT_EXCEEDED` | Supply committed bytes, correct the resolver/digest/length, or review the byte ceiling |
 | Topology | missing, ambiguous, fingerprint mismatch, limit exceeded | Refine selector/reference, recapture, or review limits |
 | Export | `EXPORT_OPTIONS_INVALID` (unreleased 0.2), `EXPORT_UNSUPPORTED` | Correct option-relative paths or use a supported format/kernel |
@@ -124,7 +129,7 @@ Do not catch and ignore them inside a model definition.
 
 For the unreleased public imported-body workflow, invalid caller definitions
 and unsafe source descriptors return `IMPORT_SOURCE_INVALID`; invalid
-evaluation options return `IR_INVALID`. Resource failures identify the
+evaluation options return `IR_INVALID` with a path under `/options`. Resource failures identify the
 resolution, commitment, or resource-limit phase without exposing bytes. The
 resolver is not invoked when the selected kernel lacks the strong exact
 single-solid capability or the operation is already aborted.
@@ -145,9 +150,18 @@ Default validation bounds include:
 | Topology query nodes | 100,000 |
 
 Parsing captures an untrusted JSON-shaped input into a bounded plain copy while
-reading each source property at most once. Cycles, sparse arrays, exotic
-prototypes, stateful accessors, and work beyond the configured bounds fail
-before schema traversal.
+reading each source property at most once, so later reads cannot change what
+was validated. Cycles, sparse arrays, non-array objects whose prototype is
+neither `Object.prototype` nor `null`, and work beyond the configured bounds
+fail before schema traversal.
+
+For Documents v1–v6 the copy neutralizes rather than rejects the remaining
+JavaScript-only shapes: an accessor property is read once and its value is
+captured, only enumerable own string keys are copied, and an instance of an
+`Array` subclass is copied into a plain array. Only the staged Document v7
+snapshot is stricter. It never invokes a getter and rejects accessor,
+non-enumerable, and symbol properties, as well as arrays that do not use the
+intrinsic array prototype.
 
 ## Why limits are part of correctness
 

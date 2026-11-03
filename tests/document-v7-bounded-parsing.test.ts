@@ -1,4 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
+import { parseDocumentValue } from "../src/index.js";
+import {
+  admitDocumentToV7,
+  cloneDocumentV7,
+  migrateDocumentToV7,
+  parseDocumentV7,
+  parseDocumentValueV7,
+} from "../src/serialization.js";
 
 describe("bounded document-v7 raw parsing", () => {
   it("rejects oversized text before scanning or materializing all UTF-8 bytes", async () => {
@@ -138,5 +146,99 @@ describe("bounded document-v7 raw parsing", () => {
       );
       vi.resetModules();
     }
+  });
+});
+
+describe("caller limits at the document-v7 schema boundary", () => {
+  const literal = (value: number) => ({
+    op: "literal",
+    dimension: "length",
+    value,
+  });
+  /** A valid box whose first size expression is `levels` nested negations. */
+  function deepDocument(version: 6 | 7, levels: number): unknown {
+    let expression: unknown = literal(1);
+    for (let index = 0; index < levels; index += 1) {
+      expression = { op: "neg", dimension: "length", value: expression };
+    }
+    return {
+      schema: `https://invariantcad.dev/schema/document/v${version}`,
+      version,
+      name: "deep",
+      units: { length: "mm", angle: "rad" },
+      parameters: {},
+      nodes: {
+        b: {
+          kind: "box",
+          size: [expression, literal(1), literal(1)],
+          center: false,
+        },
+      },
+      outputs: { o: { node: "b", kind: "solid" } },
+    };
+  }
+
+  it("honors a raised maxNestingDepth in every staged v7 entry point", () => {
+    const raised = { limits: { maxNestingDepth: 1_000 } };
+    // About 147 levels deep: over the default 128, under the raised limit.
+    const v6 = deepDocument(6, 140);
+    const v7 = deepDocument(7, 140);
+    expect(parseDocumentValue(v6).ok).toBe(false);
+    expect(parseDocumentValue(v6, raised).ok).toBe(true);
+    expect(parseDocumentValueV7(v7)).toMatchObject({
+      ok: false,
+      diagnostics: [{ details: { resource: "maxNestingDepth" } }],
+    });
+
+    const parsedValue = parseDocumentValueV7(v7, raised);
+    expect(parsedValue.diagnostics).toEqual([]);
+    expect(parsedValue.ok).toBe(true);
+    expect(parseDocumentV7(JSON.stringify(v7), raised).ok).toBe(true);
+    expect(admitDocumentToV7(JSON.stringify(v7), raised).ok).toBe(true);
+    expect(admitDocumentToV7(JSON.stringify(v6), raised).ok).toBe(true);
+    const migrated = migrateDocumentToV7(v6, raised);
+    expect(migrated.diagnostics).toEqual([]);
+    expect(migrated.ok).toBe(true);
+    if (parsedValue.ok) {
+      expect(() => cloneDocumentV7(parsedValue.value, raised)).not.toThrow();
+    }
+
+    // Lowered limits are still enforced with structured details.
+    expect(
+      parseDocumentValueV7(deepDocument(7, 1), {
+        limits: { maxNestingDepth: 4 },
+      }),
+    ).toMatchObject({
+      ok: false,
+      diagnostics: [{ details: { resource: "maxNestingDepth", limit: 4 } }],
+    });
+  });
+
+  it("honors a raised resource limit in the staged v7 parser", () => {
+    const document = deepDocument(7, 0) as Record<string, unknown>;
+    const resources: Record<string, unknown> = {};
+    for (let index = 0; index <= 10_000; index += 1) {
+      resources[`r${index}`] = {
+        byteLength: index,
+        digest: `sha256:${index.toString(16).padStart(64, "0")}`,
+        mediaType: "model/step",
+      };
+    }
+    const many = { ...document, resources };
+    // 10,001 definitions: one over the default maxResourceDefinitions.
+    expect(parseDocumentValueV7(many)).toMatchObject({
+      ok: false,
+      diagnostics: [{ details: { resource: "maxResourceDefinitions" } }],
+    });
+    const raised = parseDocumentValueV7(many, {
+      limits: { maxResourceDefinitions: 20_000 },
+    });
+    expect(raised.diagnostics).toEqual([]);
+    expect(raised.ok).toBe(true);
+    expect(
+      parseDocumentV7(JSON.stringify(many), {
+        limits: { maxResourceDefinitions: 20_000 },
+      }).ok,
+    ).toBe(true);
   });
 });

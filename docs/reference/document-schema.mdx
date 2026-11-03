@@ -34,10 +34,16 @@ the stable top-level organization.
 | ---: | --- |
 | 1 | Initial executable document grammar |
 | 2 | Document-owned persistent face/edge topology references |
-| 3 | Ruled-loft nodes and loft topology roles |
-| 4 | Path/sweep nodes and sweep topology roles |
+| 3 | Ruled-loft topology roles, and lofts as sketch-entity topology sources |
+| 4 | Bounded-sweep topology roles, and sweeps as sketch-entity topology sources |
 | 5 | Exact fillet/chamfer generated-face roles |
 | 6 | Persistent vertices, vertex position queries, and edge↔vertex adjacency |
+
+The node-kind vocabulary is the same in every frozen version: Documents v1
+through v6 all admit the same 20 node kinds, including `loft`, `sweep`,
+`polylinePath`, `circularArcPath`, and `compositePath`. Versions 3 and 4 added
+topology vocabulary for those nodes, not the nodes themselves, so a v1 or v2
+document that contains a loft, sweep, or path node is valid.
 
 Each version freezes its admitted node kinds, role vocabulary, query grammar,
 wire representation, and schema URI. New parser code may validate an older
@@ -124,6 +130,20 @@ The root entry exports current and version-specific Zod schemas for documents,
 nodes, topology queries/selections, persistent references, and registry entries.
 Use version-specific schemas when implementing a protocol tool that must reject
 newer vocabulary rather than accepting the current union.
+
+These schemas are structural. Every node reference accepts any of the five
+reference kinds (`profile`, `path`, `solid`, `part`, `assembly`), and every
+topology selection accepts any topology kind its version admits. The node
+schemas therefore accept, for example, a fillet whose `input.kind` is
+`assembly` or whose `edges.topology` is `vertex`, even though `NodeV6Schema` is
+typed as returning `NodeIRV6`, whose fillet input is a solid reference and
+whose edges are an edge selection. Agreement between a reference's declared
+kind, its target, and its consumer, and between a selection's topology kind and
+its feature, is enforced only by semantic validation. `parseDocument`,
+`parseDocumentValue`, and `validateDocument` apply it and report
+`REFERENCE_KIND_MISMATCH` or `TOPOLOGY_SELECTOR_INVALID`. Validate a whole
+document with those functions before relying on the static types of a node
+parsed on its own.
 
 ## Migration contract
 

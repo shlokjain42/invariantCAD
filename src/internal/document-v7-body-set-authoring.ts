@@ -67,6 +67,7 @@ import {
 import {
   DEFAULT_DESIGN_DOCUMENT_LIMITS,
   preflightDesignDocumentValue,
+  type DesignDocumentLimits,
 } from "../document-limits.js";
 import {
   parseDocumentValueV7,
@@ -92,7 +93,6 @@ const STAGED_EXTERNAL_ASSEMBLY_REFERENCE_CONSTRUCTION = Symbol(
   "InvariantCAD.StagedExternalAssemblyReferenceConstructionV7",
 );
 const RESOURCE_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
-const RESOURCE_LOCATION_LIMIT_MESSAGE = `Resource locations exceed the authoring limit of ${DEFAULT_DESIGN_DOCUMENT_LIMITS.maxResourceLocations}`;
 const RESOURCE_MEDIA_TYPE_PATTERN =
   /^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+(?:\s*;.*)?$/;
 const INVARIANT_CAD_DOCUMENT_MEDIA_TYPE =
@@ -1633,8 +1633,18 @@ export class StagedBodySetDesignBuilderV7 {
   #resourceLocationCount = 0;
   #resourceLocationBytes = 0;
   #usesMassDensity = false;
+  readonly #resourceLimits: DesignDocumentLimits;
 
-  constructor(name: string, options: DesignOptions = {}) {
+  /**
+   * `resourceLimits` must be normalized; it sets the resource definition,
+   * location, and location-byte ceilings that resource() enforces.
+   */
+  constructor(
+    name: string,
+    options: DesignOptions = {},
+    resourceLimits: DesignDocumentLimits = DEFAULT_DESIGN_DOCUMENT_LIMITS,
+  ) {
+    this.#resourceLimits = resourceLimits;
     this.#base = new DesignBuilder(name, {
       ...(options.metadata === undefined
         ? {}
@@ -2439,12 +2449,9 @@ export class StagedBodySetDesignBuilderV7 {
     if (authoringHasOwn(this.#resourceRecords, key)) {
       throw new TypeError(`Duplicate resource '${id}'`);
     }
-    if (
-      this.#resourceCount >=
-      DEFAULT_DESIGN_DOCUMENT_LIMITS.maxResourceDefinitions
-    ) {
+    if (this.#resourceCount >= this.#resourceLimits.maxResourceDefinitions) {
       throw new RangeError(
-        `Resource definition count exceeds the authoring limit of ${DEFAULT_DESIGN_DOCUMENT_LIMITS.maxResourceDefinitions}`,
+        `Resource definition count exceeds the authoring limit of ${this.#resourceLimits.maxResourceDefinitions}`,
       );
     }
     if (
@@ -2479,9 +2486,9 @@ export class StagedBodySetDesignBuilderV7 {
         "Resource locations",
         {
           maximumLength:
-            DEFAULT_DESIGN_DOCUMENT_LIMITS.maxResourceLocations -
+            this.#resourceLimits.maxResourceLocations -
             this.#resourceLocationCount,
-          maximumLengthMessage: RESOURCE_LOCATION_LIMIT_MESSAGE,
+          maximumLengthMessage: `Resource locations exceed the authoring limit of ${this.#resourceLimits.maxResourceLocations}`,
         },
       );
       if (capturedLocations.length === 0) {
@@ -2503,13 +2510,13 @@ export class StagedBodySetDesignBuilderV7 {
         }
         authoringSetInsert(seen, location);
         const remaining =
-          DEFAULT_DESIGN_DOCUMENT_LIMITS.maxResourceLocationBytes -
+          this.#resourceLimits.maxResourceLocationBytes -
           this.#resourceLocationBytes -
           addedLocationBytes;
         const byteLength = utf8ByteLengthWithin(location, remaining);
         if (byteLength === undefined) {
           throw new RangeError(
-            `Resource location bytes exceed the authoring limit of ${DEFAULT_DESIGN_DOCUMENT_LIMITS.maxResourceLocationBytes}`,
+            `Resource location bytes exceed the authoring limit of ${this.#resourceLimits.maxResourceLocationBytes}`,
           );
         }
         addedLocationBytes += byteLength;
@@ -2539,25 +2546,26 @@ export class StagedBodySetDesignBuilderV7 {
       throw new TypeError(`Duplicate resource '${id}'`);
     }
     if (
-      this.#resourceCount >=
-      DEFAULT_DESIGN_DOCUMENT_LIMITS.maxResourceDefinitions
+      this.#resourceCount >= this.#resourceLimits.maxResourceDefinitions
     ) {
       throw new RangeError(
-        `Resource definition count exceeds the authoring limit of ${DEFAULT_DESIGN_DOCUMENT_LIMITS.maxResourceDefinitions}`,
+        `Resource definition count exceeds the authoring limit of ${this.#resourceLimits.maxResourceDefinitions}`,
       );
     }
     if (
       this.#resourceLocationCount + (locations?.length ?? 0) >
-      DEFAULT_DESIGN_DOCUMENT_LIMITS.maxResourceLocations
+      this.#resourceLimits.maxResourceLocations
     ) {
-      throw new RangeError(RESOURCE_LOCATION_LIMIT_MESSAGE);
+      throw new RangeError(
+        `Resource locations exceed the authoring limit of ${this.#resourceLimits.maxResourceLocations}`,
+      );
     }
     if (
       this.#resourceLocationBytes + addedLocationBytes >
-      DEFAULT_DESIGN_DOCUMENT_LIMITS.maxResourceLocationBytes
+      this.#resourceLimits.maxResourceLocationBytes
     ) {
       throw new RangeError(
-        `Resource location bytes exceed the authoring limit of ${DEFAULT_DESIGN_DOCUMENT_LIMITS.maxResourceLocationBytes}`,
+        `Resource location bytes exceed the authoring limit of ${this.#resourceLimits.maxResourceLocationBytes}`,
       );
     }
     const reference = new StagedResourceRefV7(this, key);
@@ -2919,13 +2927,15 @@ export class StagedBodySetDesignBuilderV7 {
 
 /**
  * Creates the repository-only authoring facade for executable direct v7 body
- * imports, body sets, parts, and material intent.
+ * imports, body sets, parts, and material intent. `resourceLimits`, already
+ * normalized, replaces the default resource authoring ceilings.
  *
  * @internal
  */
 export function stagedBodySetDesignV7(
   name: string,
   options?: DesignOptions,
+  resourceLimits?: DesignDocumentLimits,
 ): StagedBodySetDesignBuilderV7 {
-  return new StagedBodySetDesignBuilderV7(name, options);
+  return new StagedBodySetDesignBuilderV7(name, options, resourceLimits);
 }

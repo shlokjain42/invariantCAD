@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { utf8ByteLengthWithin } from "../src/core/utf8.js";
+import {
+  decodeUtf8Fatal,
+  isCanonicalUtf8StringWithin,
+  utf8ByteLengthWithin,
+} from "../src/core/utf8.js";
 
 describe("bounded UTF-8 byte counting", () => {
   it("matches TextEncoder across Unicode and surrogate boundaries", () => {
@@ -49,5 +53,36 @@ describe("bounded UTF-8 byte counting", () => {
         "maximumBytes must be a nonnegative safe integer",
       );
     }
+  });
+});
+
+describe("fatal UTF-8 decoding and canonical strings", () => {
+  it("keeps a leading byte-order mark instead of stripping it", () => {
+    const bytes = Uint8Array.of(0xef, 0xbb, 0xbf, 0x7b, 0x7d);
+    expect(decodeUtf8Fatal(bytes)).toBe("\ufeff{}");
+    expect(decodeUtf8Fatal(Uint8Array.of(0x7b, 0x7d))).toBe("{}");
+    expect(() => decodeUtf8Fatal(Uint8Array.of(0xc3, 0x28))).toThrow(
+      TypeError,
+    );
+  });
+
+  it("rejects a leading U+FEFF but accepts it later in a canonical string", () => {
+    // A leading U+FEFF is the published artifact-cache identity rule: such a
+    // string is not canonical even though the decoder now keeps the mark.
+    for (const value of ["\ufeffkernel", "\ufeff"]) {
+      expect(
+        isCanonicalUtf8StringWithin(value, 64),
+        JSON.stringify(value),
+      ).toBe(false);
+    }
+    for (const value of ["ker\ufeffnel", "kernel\ufeff"]) {
+      expect(
+        isCanonicalUtf8StringWithin(value, 64),
+        JSON.stringify(value),
+      ).toBe(true);
+    }
+    expect(isCanonicalUtf8StringWithin("kernel\ufeff", 8)).toBe(false);
+    expect(isCanonicalUtf8StringWithin("\ud800", 64)).toBe(false);
+    expect(isCanonicalUtf8StringWithin("", 64)).toBe(false);
   });
 });

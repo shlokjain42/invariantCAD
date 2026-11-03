@@ -512,6 +512,318 @@ describe("public imported-body document workflow", () => {
     }
   });
 
+  it("keeps user IDs, locations, and kernel IDs that contain v7 or staged verbatim", async () => {
+    const bytes = encoder.encode("user-authored-v7-names");
+    const quotedValues = (message: string): string[] =>
+      [...message.matchAll(/'([^']*)'/gu)].map((match) => match[1]!);
+    /** Wording outside the quoted user values stays public. */
+    const expectPublicWording = (result: CadResult<unknown>): void => {
+      for (const item of result.diagnostics) {
+        let wording = item.message;
+        for (const value of quotedValues(item.message)) {
+          wording = wording.replaceAll(`'${value}'`, "''");
+        }
+        expect(wording).not.toMatch(/v7|staged/i);
+      }
+    };
+
+    const duplicate = createImportedBodyDocument(
+      "Versioned bracket",
+      await stepDefinition(bytes, {
+        bodyId: "bracket_v7",
+        resourceId: "bracket_v7_step",
+        locations: ["parts/bracket_v7.step", "parts/bracket_v7.step"],
+      }),
+    );
+    expectFailure(duplicate, "IMPORT_SOURCE_INVALID");
+    expect(duplicate.diagnostics[0]?.message).toBe(
+      "Resource location 'parts/bracket_v7.step' is duplicated",
+    );
+    expectPublicWording(duplicate);
+
+    const invalidId = createImportedBodyDocument(
+      "Staged body",
+      await stepDefinition(bytes, { bodyId: "staged V7 body" }),
+    );
+    expectFailure(invalidId, "IMPORT_SOURCE_INVALID");
+    expect(quotedValues(invalidId.diagnostics[0]!.message)).toContain(
+      "staged V7 body",
+    );
+    expectPublicWording(invalidId);
+
+    const document = valueOf(
+      createImportedBodyDocument(
+        "Versioned bracket",
+        await stepDefinition(bytes, {
+          bodyId: "housingV7",
+          resourceId: "v7Mount",
+        }),
+      ),
+    );
+    const evaluator = await createEvaluator({
+      kernel: exactImportKernel({ id: "occtV7-custom" }),
+    });
+    try {
+      const corrupt = await evaluator.evaluateImportedBody(document, {
+        resolver: () => new Uint8Array(bytes.byteLength),
+      });
+      expectFailure(corrupt, "RESOURCE_INTEGRITY_MISMATCH");
+      expect(corrupt.diagnostics[0]?.message).toBe(
+        "Resource 'v7Mount' digest does not match its commitment",
+      );
+      expectPublicWording(corrupt);
+    } finally {
+      evaluator.dispose();
+    }
+
+    const { documentBodyImport: _strongImport, ...weakCapabilities } =
+      exactImportKernel().capabilities;
+    const missingCapability = await createEvaluator({
+      kernel: exactImportKernel({
+        id: "occtV7-custom",
+        capabilities: weakCapabilities,
+      }),
+    });
+    try {
+      const result = await missingCapability.evaluateImportedBody(document, {
+        resolver: () => bytes,
+      });
+      expectFailure(result, "KERNEL_CAPABILITY_MISSING");
+      expect(quotedValues(result.diagnostics[0]!.message)).toContain(
+        "occtV7-custom",
+      );
+      expectPublicWording(result);
+    } finally {
+      missingCapability.dispose();
+    }
+  });
+
+  it("locates the offending authored field in creation diagnostics", async () => {
+    const bytes = encoder.encode("precise-creation-paths");
+    const definition = await stepDefinition(bytes, {
+      bodyId: "housing",
+      resourceId: "housingStep",
+    });
+    const expectSourcePath = (
+      result: CadResult<ImportedBodyDocument>,
+      path: string,
+      message: string | RegExp,
+    ): void => {
+      expectFailure(result, "IMPORT_SOURCE_INVALID");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.path).toBe(path);
+      expect(result.diagnostics[0]?.message).toMatch(message);
+    };
+    const withResource = (
+      resource: Record<string, unknown>,
+    ): ImportedBodyDefinition =>
+      ({
+        ...definition,
+        resource: { ...definition.resource, ...resource },
+      }) as unknown as ImportedBodyDefinition;
+
+    expectSourcePath(
+      createImportedBodyDocument("   ", definition),
+      "/name",
+      "A design requires a name",
+    );
+    expectSourcePath(
+      createImportedBodyDocument("Paths", {
+        ...definition,
+        id: "1 housing",
+      }),
+      "/definition/id",
+      /^Node ID '1 housing' is invalid/u,
+    );
+    expectSourcePath(
+      createImportedBodyDocument("Paths", withResource({ id: "bad id" })),
+      "/definition/resource/id",
+      /^Resource ID 'bad id' is invalid/u,
+    );
+    expectSourcePath(
+      createImportedBodyDocument(
+        "Paths",
+        withResource({ digest: definition.resource.digest.toUpperCase() }),
+      ),
+      "/definition/resource/digest",
+      "Resource digest must be a lowercase sha256 commitment",
+    );
+    for (const byteLength of [-1, 1.5, Number.NaN]) {
+      expectSourcePath(
+        createImportedBodyDocument("Paths", withResource({ byteLength })),
+        "/definition/resource/byteLength",
+        "Resource byteLength must be a non-negative safe integer",
+      );
+    }
+    expectSourcePath(
+      createImportedBodyDocument(
+        "Paths",
+        withResource({ locations: ["memory:a", "memory:b", "memory:a"] }),
+      ),
+      "/definition/resource/locations/2",
+      "Resource location 'memory:a' is duplicated",
+    );
+    expect(
+      createImportedBodyDocument("Paths", withResource({ byteLength: 0 })).ok,
+    ).toBe(true);
+  });
+
+  it("maps parse-time policy failures to document paths", async () => {
+    const bytes = encoder.encode("precise-parse-paths");
+    const document = valueOf(
+      createImportedBodyDocument(
+        "Parse paths",
+        await stepDefinition(bytes, {
+          bodyId: "housing",
+          resourceId: "housingStep",
+        }),
+      ),
+    );
+    const raw = JSON.parse(stringifyImportedBodyDocument(document)) as {
+      resources: Record<string, Record<string, unknown>>;
+      nodes: Record<string, Record<string, unknown>>;
+    };
+
+    const wrongMedia = structuredClone(raw);
+    wrongMedia.resources.housingStep!.mediaType = "text/plain";
+    const media = parseImportedBodyDocument(JSON.stringify(wrongMedia));
+    expectFailure(media, "IR_INVALID");
+    expect(media.diagnostics[0]).toMatchObject({
+      message: "Imported-body step requires mediaType 'model/step'",
+      path: "/resources/housingStep/mediaType",
+    });
+
+    const brepNode = structuredClone(raw);
+    brepNode.nodes.housing = {
+      ...brepNode.nodes.housing,
+      format: "brep",
+      units: { mode: "declared", length: "mm" },
+    };
+    const brep = parseImportedBodyDocument(JSON.stringify(brepNode));
+    expectFailure(brep, "IR_INVALID");
+    expect(brep.diagnostics[0]?.path).toBe(
+      "/resources/housingStep/mediaType",
+    );
+  });
+
+  it("applies raised parse limits to the imported-body policy check", async () => {
+    const bytes = encoder.encode("raised-location-limit");
+    const document = valueOf(
+      createImportedBodyDocument(
+        "Many locations",
+        await stepDefinition(bytes, {
+          bodyId: "housing",
+          resourceId: "housingStep",
+          locations: ["memory:0"],
+        }),
+      ),
+    );
+    const raw = JSON.parse(stringifyImportedBodyDocument(document)) as {
+      resources: Record<string, Record<string, unknown>>;
+    };
+    // One location over the default maxResourceLocations of 100,000.
+    raw.resources.housingStep!.locations = Array.from(
+      { length: 100_001 },
+      (_, index) => `memory:${index}`,
+    );
+    const text = JSON.stringify(raw);
+    expect(parseImportedBodyDocument(text)).toMatchObject({
+      ok: false,
+      diagnostics: [
+        {
+          code: "IR_INVALID",
+          details: { resource: "maxResourceLocations", limit: 100_000 },
+        },
+      ],
+    });
+
+    // The parser and the policy check that recreates the document both apply
+    // the raised limit, so the document parses and round-trips unchanged.
+    const limits = { maxResourceLocations: 200_000 };
+    const parsed = parseImportedBodyDocument(text, { limits });
+    expect(parsed.diagnostics).toEqual([]);
+    const imported = valueOf(parsed);
+    expect(imported.provenance.resource.locations).toHaveLength(100_001);
+    expect(stringifyImportedBodyDocument(imported, { limits })).toBe(text);
+  }, 60_000);
+
+  it("roots every evaluation-option diagnostic at /options", async () => {
+    const bytes = encoder.encode("precise-option-paths");
+    const document = valueOf(
+      createImportedBodyDocument("Option paths", await stepDefinition(bytes)),
+    );
+    const nativeImport = vi.fn((): KernelShape => ({
+      kernel: "option-paths-must-not-import",
+    }));
+    const resolver = vi.fn(() => bytes);
+    const evaluator = await createEvaluator({
+      kernel: exactImportKernel({ importDocumentBody: nativeImport }),
+    });
+    const accessorLimits = Object.defineProperty({}, "maxDocumentBytes", {
+      enumerable: true,
+      get: () => 1_000_000,
+    });
+    try {
+      for (const [options, path] of [
+        [
+          { resolver, resourceLimits: { maxResourceBytes: Number.NaN } },
+          "/options/resourceLimits/maxResourceBytes",
+        ],
+        [
+          { resolver, resourceLimits: { maxResourceBytes: -1 } },
+          "/options/resourceLimits/maxResourceBytes",
+        ],
+        [
+          { resolver, resourceLimits: { maxResourceBytes: null } },
+          "/options/resourceLimits/maxResourceBytes",
+        ],
+        [
+          { resolver, resourceLimits: { maxTotalResourceBytes: 1 } },
+          "/options/resourceLimits",
+        ],
+        [{ resolver, signal: {} }, "/options/signal"],
+        [
+          { resolver, documentLimits: { maxDocumentBytes: -5 } },
+          "/options/documentLimits/maxDocumentBytes",
+        ],
+        [
+          { resolver, documentLimits: { bogus: 1 } },
+          "/options/documentLimits",
+        ],
+        [
+          { resolver, documentLimits: accessorLimits },
+          "/options/documentLimits/maxDocumentBytes",
+        ],
+        [{ resolver, documentLimits: 3 }, "/options/documentLimits"],
+      ] as const) {
+        const result = await evaluator.evaluateImportedBody(
+          document,
+          options as unknown as EvaluateImportedBodyOptions,
+        );
+        expectFailure(result, "IR_INVALID");
+        expect(result.diagnostics, JSON.stringify(options)).toHaveLength(1);
+        expect(result.diagnostics[0]?.path, JSON.stringify(options)).toBe(
+          path,
+        );
+        expectPublicDiagnostics(result);
+      }
+      expect(resolver).not.toHaveBeenCalled();
+      expect(nativeImport).not.toHaveBeenCalled();
+
+      const controller = new AbortController();
+      const accepted = await evaluator.evaluateImportedBody(document, {
+        resolver,
+        resourceLimits: { maxResourceBytes: bytes.byteLength },
+        documentLimits: { maxDocumentBytes: 1_000_000 },
+        signal: controller.signal,
+      });
+      const value = valueOf(accepted);
+      value.dispose();
+    } finally {
+      evaluator.dispose();
+    }
+  });
+
   it("does not expose staged document-v7 implementation names", () => {
     const leakedNames = Object.keys(publicApi).filter(
       (name) =>

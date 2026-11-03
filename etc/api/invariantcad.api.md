@@ -3922,22 +3922,22 @@ export function nodeParameterDependencies(node: NodeIR): readonly ParameterId[];
 // @public
 export const NodeSchema: z.ZodType<NodeIR>;
 
-// @public (undocumented)
+// @public
 export const NodeV1Schema: z.ZodType<NodeIRV1>;
 
-// @public (undocumented)
+// @public
 export const NodeV2Schema: z.ZodType<NodeIRV2>;
 
-// @public (undocumented)
+// @public
 export const NodeV3Schema: z.ZodType<NodeIRV3>;
 
-// @public (undocumented)
+// @public
 export const NodeV4Schema: z.ZodType<NodeIRV4>;
 
-// @public (undocumented)
+// @public
 export const NodeV5Schema: z.ZodType<NodeIRV5>;
 
-// @public (undocumented)
+// @public
 export const NodeV6Schema: z.ZodType<NodeIRV6>;
 
 // @public (undocumented)

@@ -2,7 +2,11 @@ import {
   DEFAULT_DESIGN_DOCUMENT_LIMITS,
   type DesignDocumentLimits,
 } from "./document-limits.js";
-import type { NodeId, ResourceId } from "./core/ids.js";
+import {
+  assertValidId,
+  type NodeId,
+  type ResourceId,
+} from "./core/ids.js";
 import {
   CadError,
   diagnostic,
@@ -27,7 +31,7 @@ import type {
 } from "./kernel.js";
 import type { KernelTopologySnapshot } from "./protocol/topology.js";
 import {
-  parseDocumentV7,
+  parseDocumentV7WithAdmittedLimits,
   stringifyDocumentV7,
   type ParseDocumentOptions,
 } from "./serialization.js";
@@ -254,6 +258,7 @@ const ImportedBodyArray = Array;
 const ImportedBodyNumber = Number;
 const ImportedBodyObject = Object;
 const ImportedBodyReflect = Reflect;
+const ImportedBodySet = Set;
 const ImportedBodyWeakSet = WeakSet;
 const importedBodyArrayIsArray = Array.isArray;
 const importedBodyObjectCreate = Object.create;
@@ -268,6 +273,9 @@ const importedBodyObjectPrototype = Object.prototype;
 const importedBodyNumberIsSafeInteger = Number.isSafeInteger;
 const importedBodyReflectApply = Reflect.apply;
 const importedBodyReflectOwnKeys = Reflect.ownKeys;
+const importedBodySetAdd = Set.prototype.add;
+const importedBodySetHas = Set.prototype.has;
+const importedBodyStringSlice = String.prototype.slice;
 const importedBodyWeakSetAdd = WeakSet.prototype.add;
 const importedBodyWeakSetHas = WeakSet.prototype.has;
 
@@ -461,6 +469,7 @@ function captureOwnDataRecord(
 function captureLocations(
   value: unknown,
   path: string,
+  maxLocations: number,
 ): readonly string[] | undefined {
   if (value === undefined) return undefined;
   if (
@@ -500,12 +509,9 @@ function captureLocations(
   if (length === 0) {
     sourceFailure("Resource locations must not be empty", path);
   }
-  if (
-    length >
-    DEFAULT_DESIGN_DOCUMENT_LIMITS.maxResourceLocations
-  ) {
+  if (length > maxLocations) {
     sourceFailure(
-      `Resource locations exceed the limit of ${DEFAULT_DESIGN_DOCUMENT_LIMITS.maxResourceLocations}`,
+      `Resource locations exceed the limit of ${maxLocations}`,
       path,
     );
   }
@@ -526,6 +532,7 @@ function captureLocations(
     );
   }
   const copied = new ImportedBodyArray<string>(length);
+  const seen = new ImportedBodySet<string>();
   for (let index = 0; index < length; index += 1) {
     let descriptor: PropertyDescriptor | undefined;
     try {
@@ -551,7 +558,17 @@ function captureLocations(
         `${path}/${index}`,
       );
     }
-    defineImportedBodyValue(copied, index, descriptor.value);
+    const location = descriptor.value as string;
+    if (
+      applyImportedBody<boolean>(importedBodySetHas, seen, [location])
+    ) {
+      sourceFailure(
+        `Resource location '${location}' is duplicated`,
+        `${path}/${index}`,
+      );
+    }
+    applyImportedBody<Set<string>>(importedBodySetAdd, seen, [location]);
+    defineImportedBodyValue(copied, index, location);
   }
   return freezeImportedBody(copied);
 }
@@ -567,6 +584,42 @@ function expectedMediaType(format: ImportedBodyFormat): ImportedBodyMediaType {
   }
 }
 
+/** Applies the document ID grammar with the field's own diagnostic path. */
+function captureImportedBodyId(
+  id: string,
+  label: string,
+  path: string,
+): void {
+  try {
+    assertValidId(id, label);
+  } catch (error) {
+    sourceFailure(
+      publicImportedBodyErrorMessage(error, `${label} is invalid`),
+      path,
+    );
+  }
+}
+
+function isImportedBodyDigest(value: string): boolean {
+  if (
+    value.length !== 71 ||
+    applyImportedBody<string>(importedBodyStringSlice, value, [0, 7]) !==
+      "sha256:"
+  ) {
+    return false;
+  }
+  for (let index = 7; index < value.length; index += 1) {
+    const character = value[index]!;
+    if (
+      !(character >= "0" && character <= "9") &&
+      !(character >= "a" && character <= "f")
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 interface CapturedImportedBodyDefinition {
   readonly definition: ImportedBodyDefinition;
   readonly provenance: ImportedBodyProvenance;
@@ -574,6 +627,7 @@ interface CapturedImportedBodyDefinition {
 
 function captureImportedBodyDefinition(
   value: unknown,
+  limits: DesignDocumentLimits,
 ): CapturedImportedBodyDefinition {
   const definition = captureOwnDataRecord(
     value,
@@ -590,6 +644,7 @@ function captureImportedBodyDefinition(
       "/definition/id",
     );
   }
+  captureImportedBodyId(id, "Node ID", "/definition/id");
   if (
     format !== "step" &&
     format !== "brep" &&
@@ -617,15 +672,35 @@ function captureImportedBodyDefinition(
       "/definition/resource/id",
     );
   }
+  captureImportedBodyId(resourceId, "Resource ID", "/definition/resource/id");
   if (typeof digest !== "string") {
     sourceFailure(
       "Imported-body resource.digest must be a string",
       "/definition/resource/digest",
     );
   }
+  if (!isImportedBodyDigest(digest)) {
+    sourceFailure(
+      "Resource digest must be a lowercase sha256 commitment",
+      "/definition/resource/digest",
+    );
+  }
   if (typeof byteLength !== "number") {
     sourceFailure(
       "Imported-body resource.byteLength must be a number",
+      "/definition/resource/byteLength",
+    );
+  }
+  if (
+    !applyImportedBody<boolean>(
+      importedBodyNumberIsSafeInteger,
+      ImportedBodyNumber,
+      [byteLength],
+    ) ||
+    byteLength < 0
+  ) {
+    sourceFailure(
+      "Resource byteLength must be a non-negative safe integer",
       "/definition/resource/byteLength",
     );
   }
@@ -638,6 +713,7 @@ function captureImportedBodyDefinition(
   const locations = captureLocations(
     resource.locations,
     "/definition/resource/locations",
+    limits.maxResourceLocations,
   );
   const units = captureOwnDataRecord(
     definition.units,
@@ -729,6 +805,22 @@ export function createImportedBodyDocument(
   name: string,
   definition: ImportedBodyDefinition,
 ): CadResult<ImportedBodyDocument> {
+  return createImportedBodyDocumentWithin(
+    name,
+    definition,
+    DEFAULT_DESIGN_DOCUMENT_LIMITS,
+  );
+}
+
+/**
+ * Creates the document under normalized limits: the defaults for authoring,
+ * or the limits that admitted a parsed document while it is narrowed.
+ */
+function createImportedBodyDocumentWithin(
+  name: string,
+  definition: ImportedBodyDefinition,
+  limits: DesignDocumentLimits,
+): CadResult<ImportedBodyDocument> {
   try {
     if (typeof name !== "string") {
       sourceFailure(
@@ -736,8 +828,20 @@ export function createImportedBodyDocument(
         "/name",
       );
     }
-    const captured = captureImportedBodyDefinition(definition);
-    const builder = stagedBodySetDesignV7(name);
+    const captured = captureImportedBodyDefinition(definition, limits);
+    let builder: ReturnType<typeof stagedBodySetDesignV7>;
+    try {
+      builder = stagedBodySetDesignV7(name, undefined, limits);
+    } catch (error) {
+      // The design builder validates only the document name.
+      sourceFailure(
+        publicImportedBodyErrorMessage(
+          error,
+          "Imported-body document name is invalid",
+        ),
+        "/name",
+      );
+    }
     const resource = builder.resource(
       captured.definition.resource.id,
       {
@@ -768,7 +872,7 @@ export function createImportedBodyDocument(
       authoringOptions,
     );
     builder.output(captured.definition.id, body);
-    const document = builder.build();
+    const document = builder.build({ limits });
     return success(
       retainImportedBodyDocument(
         document,
@@ -798,8 +902,49 @@ function importedBodySubsetFailure(
   );
 }
 
+/**
+ * Maps a creation-time definition path to the parsed document field that
+ * holds the same authored value. Document-v7 IDs cannot contain `~` or `/`,
+ * so they need no JSON Pointer escaping.
+ */
+function importedBodyDocumentPath(
+  definitionPath: string | undefined,
+  nodeId: string,
+  resourceId: string,
+): string {
+  const resourcePrefix = "/definition/resource";
+  const nodePath = `/nodes/${nodeId}`;
+  const resourcePath = `/resources/${resourceId}`;
+  const startsWith = (prefix: string): boolean =>
+    definitionPath !== undefined &&
+    applyImportedBody<string>(importedBodyStringSlice, definitionPath, [
+      0,
+      prefix.length,
+    ]) === prefix;
+  const suffix = (prefix: string): string =>
+    applyImportedBody<string>(importedBodyStringSlice, definitionPath, [
+      prefix.length,
+    ]);
+  if (definitionPath === "/name") return "/name";
+  if (
+    definitionPath === resourcePrefix ||
+    definitionPath === `${resourcePrefix}/id`
+  ) {
+    return resourcePath;
+  }
+  if (startsWith(`${resourcePrefix}/`)) {
+    return `${resourcePath}${suffix(resourcePrefix)}`;
+  }
+  if (definitionPath === "/definition/id") return nodePath;
+  if (startsWith("/definition/")) {
+    return `${nodePath}${suffix("/definition")}`;
+  }
+  return "/";
+}
+
 function narrowImportedBodyDocument(
   document: DesignDocumentV7,
+  limits: DesignDocumentLimits,
 ): CadResult<ImportedBodyDocument> {
   const resourceIds = importedBodyKeys(document.resources ?? {});
   const nodeIds = importedBodyKeys(document.nodes);
@@ -845,12 +990,20 @@ function narrowImportedBodyDocument(
     format: node.format,
     units: node.units,
   } as ImportedBodyDefinition;
-  const recreated = createImportedBodyDocument(document.name, definition);
+  const recreated = createImportedBodyDocumentWithin(
+    document.name,
+    definition,
+    limits,
+  );
   if (!recreated.ok) {
     return importedBodySubsetFailure(
       recreated.diagnostics[0]?.message ??
         "The imported-body document violates the public workflow policy",
-      recreated.diagnostics[0]?.path,
+      importedBodyDocumentPath(
+        recreated.diagnostics[0]?.path,
+        nodeId,
+        resourceId,
+      ),
     );
   }
   const recreatedState = capturedImportedBodyDocument(recreated.value);
@@ -861,8 +1014,8 @@ function narrowImportedBodyDocument(
   }
   try {
     if (
-      stringifyDocumentV7(document) !==
-      stringifyDocumentV7(recreatedState.document)
+      stringifyDocumentV7(document, { limits }) !==
+      stringifyDocumentV7(recreatedState.document, { limits })
     ) {
       return importedBodySubsetFailure(
         "The document contains fields outside the public imported-body workflow",
@@ -884,16 +1037,20 @@ function narrowImportedBodyDocument(
  *
  * The underlying raw boundary rejects duplicate JSON member names and applies
  * the existing bounded document parser before this narrower policy check.
+ * The policy check applies the same `options.limits` as the parser.
  */
 export function parseImportedBodyDocument(
   text: string,
   options: ParseDocumentOptions = {},
 ): CadResult<ImportedBodyDocument> {
   const parsed = publicImportedBodyResult(
-    parseDocumentV7(text, options),
+    parseDocumentV7WithAdmittedLimits(text, options),
   );
   if (!parsed.ok) return parsed;
-  const narrowed = narrowImportedBodyDocument(parsed.value);
+  const narrowed = narrowImportedBodyDocument(
+    parsed.value.document,
+    parsed.value.limits,
+  );
   return narrowed.ok
     ? success(narrowed.value, parsed.diagnostics)
     : narrowed;

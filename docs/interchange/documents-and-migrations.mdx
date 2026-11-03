@@ -178,6 +178,22 @@ The `schema` URI and integer `version` are protocol identifiers. Parsers do not
 dereference the URI over the network. Treat both as exact values, not as a URL
 from which runtime code should be downloaded.
 
+## Imported-body documents are not v1–v6 documents
+
+The functions on this page read, write, hash, migrate, and evaluate Documents
+v1 through v6. The public imported-body workflow writes a fixed, minimal
+Document v7 subset instead (see
+[Imported-body document format](/interchange/import-export#imported-body-document-format)),
+and those bytes have their own entry points: `parseImportedBodyDocument`,
+`stringifyImportedBodyDocument`, and `Evaluator.evaluateImportedBody`.
+
+Passing Document v7 JSON, including a parsed imported-body document, to
+`parseDocument`, `parseDocumentValue`, `validateDocument`, `migrateDocument`,
+or `Evaluator.evaluate` returns one `IR_INVALID` diagnostic at `/` instead of
+reinterpreting it. `stringifyDocument`, `hashDocument`, and `cloneDocument`
+throw a `TypeError` with the same message. `migrateDocument` never produces
+v7.
+
 ## Editing strategy
 
 InvariantCAD 0.1 exposes a builder for authoring and parsers for validated

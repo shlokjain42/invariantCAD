@@ -9,6 +9,7 @@ import type {
 } from "./core/ids.js";
 import {
   diagnostic,
+  failure,
   hasErrors,
   success,
   type CadResult,
@@ -32,6 +33,13 @@ import {
   DOCUMENT_VERSION_V5,
   DOCUMENT_VERSION_V6,
   DOCUMENT_VERSION_V7,
+  NODE_KINDS_V1,
+  NODE_KINDS_V2,
+  NODE_KINDS_V3,
+  NODE_KINDS_V4,
+  NODE_KINDS_V5,
+  NODE_KINDS_V6,
+  NODE_KINDS_V7,
   nodeDependencies,
   nodeDependenciesV7,
   outputKindForNode,
@@ -71,13 +79,25 @@ type ValidatableDocument = DesignDocument | DesignDocumentV7;
 type ValidatableNode = NodeIR | NodeIRV7;
 type ValidatableRef = RefIR | RefIRV7;
 
+/**
+ * Escapes one ID-derived JSON Pointer segment (RFC 6901). Documents v1-v6
+ * accept any string as an ID, including `/` and `~`.
+ */
+function pointerSegment(value: string): string {
+  return String(value).replaceAll("~", "~0").replaceAll("/", "~1");
+}
+
 function nodeDependenciesForDocument(
   node: ValidatableNode,
   document: ValidatableDocument,
 ): readonly ValidatableRef[] {
-  return document.version === DOCUMENT_VERSION_V7
-    ? nodeDependenciesV7(node as NodeIRV7)
-    : nodeDependencies(node as NodeIR);
+  const dependencies: readonly ValidatableRef[] | undefined =
+    document.version === DOCUMENT_VERSION_V7
+      ? nodeDependenciesV7(node as NodeIRV7)
+      : nodeDependencies(node as NodeIR);
+  // validateNode reports a node kind outside the grammar; graph walks treat it
+  // as a leaf instead of failing on its missing dependency list.
+  return Array.isArray(dependencies) ? dependencies : [];
 }
 
 function outputKindForDocumentNode(
@@ -87,6 +107,29 @@ function outputKindForDocumentNode(
   return document.version === DOCUMENT_VERSION_V7
     ? outputKindForNodeV7(node as NodeIRV7)
     : outputKindForNode(node as NodeIR);
+}
+
+function nodeKindsForDocumentVersion(
+  version: ValidatableDocument["version"],
+): readonly string[] {
+  switch (version) {
+    case DOCUMENT_VERSION_V1:
+      return NODE_KINDS_V1;
+    case DOCUMENT_VERSION_V2:
+      return NODE_KINDS_V2;
+    case DOCUMENT_VERSION_V3:
+      return NODE_KINDS_V3;
+    case DOCUMENT_VERSION_V4:
+      return NODE_KINDS_V4;
+    case DOCUMENT_VERSION_V5:
+      return NODE_KINDS_V5;
+    case DOCUMENT_VERSION_V6:
+      return NODE_KINDS_V6;
+    case DOCUMENT_VERSION_V7:
+      return NODE_KINDS_V7;
+    default:
+      return [];
+  }
 }
 
 function topologyRolesForDocumentVersion(
@@ -106,6 +149,8 @@ function topologyRolesForDocumentVersion(
     case DOCUMENT_VERSION_V6:
     case DOCUMENT_VERSION_V7:
       return TOPOLOGY_ROLES_V6;
+    default:
+      return [];
   }
 }
 
@@ -264,14 +309,14 @@ function validateConfiguration(
   document: ValidatableDocument,
   diagnostics: Diagnostic[],
 ): void {
-  const path = `/configurations/${id}`;
+  const path = `/configurations/${pointerSegment(id)}`;
   for (const [parameterId, value] of Object.entries(
     configuration.parameterOverrides ?? {},
   ) as [ParameterId, ExpressionIR][]) {
     const definition = Object.hasOwn(document.parameters, parameterId)
       ? document.parameters[parameterId]
       : undefined;
-    const valuePath = `${path}/parameterOverrides/${parameterId}`;
+    const valuePath = `${path}/parameterOverrides/${pointerSegment(parameterId)}`;
     if (definition === undefined) {
       diagnostics.push(
         diagnostic(
@@ -297,7 +342,7 @@ function validateConfiguration(
     NodeId,
     NonNullable<DesignConfigurationIR["instanceSuppressions"]>[NodeId],
   ][]) {
-    const assemblyPath = `${path}/instanceSuppressions/${assemblyId}`;
+    const assemblyPath = `${path}/instanceSuppressions/${pointerSegment(assemblyId)}`;
     const node = Object.hasOwn(document.nodes, assemblyId)
       ? document.nodes[assemblyId]
       : undefined;
@@ -330,7 +375,7 @@ function validateConfiguration(
             {
               severity: "error",
               node: assemblyId,
-              path: `${assemblyPath}/${instanceId}`,
+              path: `${assemblyPath}/${pointerSegment(instanceId)}`,
             },
           ),
         );
@@ -341,7 +386,7 @@ function validateConfiguration(
   for (const [partId, materialId] of Object.entries(
     configuration.partMaterialOverrides ?? {},
   ) as [NodeId, MaterialId][]) {
-    const materialPath = `${path}/partMaterialOverrides/${partId}`;
+    const materialPath = `${path}/partMaterialOverrides/${pointerSegment(partId)}`;
     const node = Object.hasOwn(document.nodes, partId)
       ? document.nodes[partId]
       : undefined;
@@ -404,8 +449,20 @@ function validateRef(
     diagnostics.push(
       diagnostic(
         "REFERENCE_KIND_MISMATCH",
-        `Node '${reference.node}' produces ${actual}, but the reference declares ${reference.kind}`,
-        { severity: "error", path },
+        // A declaration that matches its target can still name a kind this
+        // consumer does not accept; name the required kinds in that case.
+        reference.kind === actual
+          ? `Reference requires ${expectedKinds.join(" or ")}, but node '${reference.node}' produces ${actual}`
+          : `Node '${reference.node}' produces ${actual}, but the reference declares ${reference.kind}`,
+        {
+          severity: "error",
+          path,
+          details: {
+            expected: [...expectedKinds],
+            actual: actual ?? null,
+            declared: reference.kind,
+          },
+        },
       ),
     );
   }
@@ -551,7 +608,7 @@ function validateSketch(
     );
   }
   for (const [id, entity] of Object.entries(node.entities)) {
-    const entityPath = `${path}/entities/${id}`;
+    const entityPath = `${path}/entities/${pointerSegment(id)}`;
     switch (entity.kind) {
       case "point":
         validateExpression(entity.x, "length", document, `${entityPath}/x`, diagnostics);
@@ -623,7 +680,7 @@ function validateSketch(
     }
   }
   for (const [id, constraint] of Object.entries(node.constraints)) {
-    const constraintPath = `${path}/constraints/${id}`;
+    const constraintPath = `${path}/constraints/${pointerSegment(id)}`;
     const checkEntity = (value: EntityId, kinds: readonly string[]): void => {
       const entity = node.entities[value];
       if (entity === undefined || !kinds.includes(entity.kind)) {
@@ -718,28 +775,244 @@ function validateSketch(
   );
 }
 
+/**
+ * Ancestor checks made during one validation pass, keyed by the document under
+ * validation. The cache lives only for one validateDocumentInternal call, so a
+ * later edit to an in-memory document can never see stale answers.
+ *
+ * A check walks up from the descendant. Walks are resumable: a walk stops at
+ * the possible ancestor, and a later check about the same descendant continues
+ * where it stopped. A matched ancestor's own inputs are queued only when a
+ * later check needs to walk past it, so a nearby origin costs a few steps even
+ * when it has many inputs, and many checks about one input walk its ancestors
+ * at most once. A walk's steps count the nodes it pops and the inputs it
+ * queues.
+ *
+ * Once the walks toward one possible ancestor have cost as many steps as the
+ * graph has nodes, its descendants are collected through the reverse edges,
+ * with the steps already spent as the budget. The reverse edges cost one pass
+ * over the document and are built at most once, for the first collection. A collection that would exceed
+ * its budget is abandoned and tried again only after the walks toward that
+ * ancestor have doubled their cost. Collections therefore never cost more than
+ * the walks they replace, even when wide shared layers lie downstream, and
+ * they succeed as soon as the walks have cost as much as the ancestor's own
+ * descendants, however large unrelated branches are. Many distant consumers of
+ * one base feature stay linear as well, even when the path to it crosses a
+ * feature with many inputs.
+ */
+interface AncestorWalk {
+  readonly visited: Set<NodeId>;
+  readonly pending: NodeId[];
+  /** A visited node, the last match, whose inputs are not yet queued. */
+  unexpanded: NodeId | undefined;
+  steps: number;
+}
+
+interface AncestorQueryCache {
+  readonly walks: Map<NodeId, AncestorWalk>;
+  readonly walkSteps: Map<NodeId, number>;
+  /** The budget of each ancestor's last abandoned collection. */
+  readonly abandonedCollections: Map<NodeId, number>;
+  readonly descendants: Map<NodeId, ReadonlySet<NodeId>>;
+  consumers: ReadonlyMap<NodeId, readonly NodeId[]> | undefined;
+  nodeCount: number | undefined;
+  entries: number;
+}
+
+const ancestorQueryCaches = new WeakMap<
+  ValidatableDocument,
+  AncestorQueryCache
+>();
+
+/** Total retained walk and descendant entries before they are dropped. */
+const MAX_CACHED_ANCESTOR_ENTRIES = 1_000_000;
+
+function newAncestorQueryCache(): AncestorQueryCache {
+  return {
+    walks: new Map(),
+    walkSteps: new Map(),
+    abandonedCollections: new Map(),
+    descendants: new Map(),
+    consumers: undefined,
+    nodeCount: undefined,
+    entries: 0,
+  };
+}
+
+/**
+ * Expands a walk over the descendant and every node reachable through its
+ * dependencies until `possibleAncestor` is visited or the walk is exhausted.
+ */
+function advanceAncestorWalk(
+  document: ValidatableDocument,
+  walk: AncestorWalk,
+  possibleAncestor: NodeId,
+): boolean {
+  const { visited, pending } = walk;
+  if (walk.unexpanded !== undefined) {
+    walk.steps += queueAncestorInputs(document, pending, walk.unexpanded);
+    walk.unexpanded = undefined;
+  }
+  while (pending.length > 0) {
+    const id = pending.pop()!;
+    walk.steps += 1;
+    if (visited.has(id)) continue;
+    visited.add(id);
+    if (id === possibleAncestor) {
+      walk.unexpanded = id;
+      return true;
+    }
+    walk.steps += queueAncestorInputs(document, pending, id);
+  }
+  return false;
+}
+
+/**
+ * Queues a node's direct inputs so the first input is walked first, and
+ * returns how many were queued.
+ */
+function queueAncestorInputs(
+  document: ValidatableDocument,
+  pending: NodeId[],
+  id: NodeId,
+): number {
+  const node = Object.hasOwn(document.nodes, id)
+    ? document.nodes[id]
+    : undefined;
+  if (node === undefined) return 0;
+  const dependencies = nodeDependenciesForDocument(node, document);
+  for (let index = dependencies.length - 1; index >= 0; index -= 1) {
+    pending.push(dependencies[index]!.node);
+  }
+  return dependencies.length;
+}
+
+/** Reverse dependency edges, built once per validation pass on demand. */
+function ancestorConsumers(
+  document: ValidatableDocument,
+  cache: AncestorQueryCache,
+): ReadonlyMap<NodeId, readonly NodeId[]> {
+  if (cache.consumers !== undefined) return cache.consumers;
+  const consumers = new Map<NodeId, NodeId[]>();
+  for (const id of Object.keys(document.nodes) as NodeId[]) {
+    const node = document.nodes[id];
+    if (node === undefined) continue;
+    for (const dependency of nodeDependenciesForDocument(node, document)) {
+      const list = consumers.get(dependency.node);
+      if (list === undefined) consumers.set(dependency.node, [id]);
+      else list.push(id);
+    }
+  }
+  cache.consumers = consumers;
+  return consumers;
+}
+
+/**
+ * The ancestor itself plus every node that depends on it, or undefined once
+ * the nodes reached and reverse links scanned would exceed `budget`.
+ */
+function collectDescendants(
+  document: ValidatableDocument,
+  cache: AncestorQueryCache,
+  ancestor: NodeId,
+  budget: number,
+): ReadonlySet<NodeId> | undefined {
+  const consumers = ancestorConsumers(document, cache);
+  const reached = new Set<NodeId>([ancestor]);
+  const pending: NodeId[] = [ancestor];
+  let work = 1;
+  while (pending.length > 0) {
+    work += 1;
+    const next = consumers.get(pending.pop()!);
+    if (next === undefined) continue;
+    work += next.length;
+    if (work > budget) return undefined;
+    for (const consumer of next) {
+      if (reached.has(consumer)) continue;
+      reached.add(consumer);
+      pending.push(consumer);
+    }
+  }
+  return reached;
+}
+
+/** Bounds memory on graphs with many deep consumers; dropped work is redone. */
+function retainAncestorEntries(cache: AncestorQueryCache, added: number): void {
+  cache.entries += added;
+  if (cache.entries > MAX_CACHED_ANCESTOR_ENTRIES) {
+    cache.walks.clear();
+    cache.descendants.clear();
+    cache.entries = 0;
+  }
+}
+
 function nodeIsAncestor(
   document: ValidatableDocument,
   descendant: NodeId,
   possibleAncestor: NodeId,
 ): boolean {
-  const visited = new Set<NodeId>();
-  const pending: NodeId[] = [descendant];
-  while (pending.length > 0) {
-    const id = pending.pop()!;
-    if (id === possibleAncestor) return true;
-    if (visited.has(id)) continue;
-    visited.add(id);
-    const node = Object.hasOwn(document.nodes, id)
-      ? document.nodes[id]
-      : undefined;
-    if (node === undefined) continue;
-    const dependencies = nodeDependenciesForDocument(node, document);
-    for (let index = dependencies.length - 1; index >= 0; index -= 1) {
-      pending.push(dependencies[index]!.node);
+  if (descendant === possibleAncestor) return true;
+  const cache = ancestorQueryCaches.get(document);
+  if (cache === undefined) {
+    return advanceAncestorWalk(
+      document,
+      {
+        visited: new Set(),
+        pending: [descendant],
+        unexpanded: undefined,
+        steps: 0,
+      },
+      possibleAncestor,
+    );
+  }
+  const descendants = cache.descendants.get(possibleAncestor);
+  if (descendants !== undefined) return descendants.has(descendant);
+  let walk = cache.walks.get(descendant);
+  if (walk !== undefined) {
+    if (walk.visited.has(possibleAncestor)) return true;
+    if (walk.pending.length === 0 && walk.unexpanded === undefined) {
+      return false;
     }
   }
-  return false;
+  const spent = cache.walkSteps.get(possibleAncestor) ?? 0;
+  cache.nodeCount ??= Object.keys(document.nodes).length;
+  const abandoned = cache.abandonedCollections.get(possibleAncestor);
+  if (
+    spent >= cache.nodeCount &&
+    (abandoned === undefined || spent >= 2 * abandoned)
+  ) {
+    const collected = collectDescendants(
+      document,
+      cache,
+      possibleAncestor,
+      spent,
+    );
+    if (collected !== undefined) {
+      cache.descendants.set(possibleAncestor, collected);
+      retainAncestorEntries(cache, collected.size);
+      return collected.has(descendant);
+    }
+    cache.abandonedCollections.set(possibleAncestor, spent);
+  }
+  const retained =
+    walk === undefined ? 0 : walk.visited.size + walk.pending.length;
+  if (walk === undefined) {
+    walk = {
+      visited: new Set(),
+      pending: [descendant],
+      unexpanded: undefined,
+      steps: 0,
+    };
+    cache.walks.set(descendant, walk);
+  }
+  const stepsBefore = walk.steps;
+  const found = advanceAncestorWalk(document, walk, possibleAncestor);
+  cache.walkSteps.set(possibleAncestor, spent + walk.steps - stepsBefore);
+  retainAncestorEntries(
+    cache,
+    walk.visited.size + walk.pending.length - retained,
+  );
+  return found;
 }
 
 function validateTopologySelection(
@@ -866,7 +1139,7 @@ function validateTopologySelection(
                 related: [
                   {
                     message: "Persistent topology reference is declared here",
-                    path: `/topologyReferences/${query.reference}/topology`,
+                    path: `/topologyReferences/${pointerSegment(query.reference)}/topology`,
                   },
                 ],
                 details: {
@@ -889,7 +1162,7 @@ function validateTopologySelection(
                 related: [
                   {
                     message: "Persistent topology reference target is declared here",
-                    path: `/topologyReferences/${query.reference}/target`,
+                    path: `/topologyReferences/${pointerSegment(query.reference)}/target`,
                   },
                 ],
                 details: {
@@ -1251,12 +1524,22 @@ function validateNode(
   document: ValidatableDocument,
   diagnostics: Diagnostic[],
 ): void {
-  const path = `/nodes/${id}`;
+  const path = `/nodes/${pointerSegment(id)}`;
   const expression = (
     value: ExpressionIR,
     dimension: Dimension,
     suffix: string,
   ): void => validateExpression(value, dimension, document, `${path}/${suffix}`, diagnostics);
+  if (!nodeKindsForDocumentVersion(document.version).includes(node.kind)) {
+    diagnostics.push(
+      diagnostic(
+        "IR_INVALID",
+        `Node kind '${String(node.kind)}' is not supported by document version ${document.version}`,
+        { severity: "error", node: id, path: `${path}/kind` },
+      ),
+    );
+    return;
+  }
   switch (node.kind) {
     case "box":
       node.size.forEach((value, index) => expression(value, "length", `size/${index}`));
@@ -1748,6 +2031,101 @@ function validateNode(
   }
 }
 
+function legacyDocumentIdentities(): readonly {
+  readonly schema: string;
+  readonly version: number;
+}[] {
+  return [
+    { schema: DOCUMENT_SCHEMA_V1, version: DOCUMENT_VERSION_V1 },
+    { schema: DOCUMENT_SCHEMA_V2, version: DOCUMENT_VERSION_V2 },
+    { schema: DOCUMENT_SCHEMA_V3, version: DOCUMENT_VERSION_V3 },
+    { schema: DOCUMENT_SCHEMA_V4, version: DOCUMENT_VERSION_V4 },
+    { schema: DOCUMENT_SCHEMA_V5, version: DOCUMENT_VERSION_V5 },
+    { schema: DOCUMENT_SCHEMA_V6, version: DOCUMENT_VERSION_V6 },
+  ];
+}
+
+/**
+ * Rejects Document v7 at a frozen v1-v6 API boundary. The only public v7
+ * documents are imported-body documents, which have their own read, write, and
+ * evaluation entry points. Returns undefined when neither identity field names
+ * v7.
+ */
+export function legacyDocumentApiV7Diagnostic(
+  schema: unknown,
+  version: unknown,
+): Diagnostic | undefined {
+  if (schema !== DOCUMENT_SCHEMA_V7 && version !== DOCUMENT_VERSION_V7) {
+    return undefined;
+  }
+  return diagnostic(
+    "IR_INVALID",
+    "Document v7 is not supported by the v1-v6 design-document APIs",
+    {
+      severity: "error",
+      path: "/",
+      hints: [
+        "Read imported-body documents with parseImportedBodyDocument, write them with stringifyImportedBodyDocument, and evaluate them with Evaluator.evaluateImportedBody",
+      ],
+      details: {
+        schema,
+        version,
+        supported: legacyDocumentIdentities(),
+      },
+    },
+  );
+}
+
+function documentIdentityDiagnostic(
+  document: ValidatableDocument,
+  admitStagedV7: boolean,
+): Diagnostic | undefined {
+  const documentIdentity = document as {
+    readonly schema: unknown;
+    readonly version: unknown;
+  };
+  const schema = documentIdentity.schema;
+  const version = documentIdentity.version;
+  const isLegacy =
+    (schema === DOCUMENT_SCHEMA_V1 && version === DOCUMENT_VERSION_V1) ||
+    (schema === DOCUMENT_SCHEMA_V2 && version === DOCUMENT_VERSION_V2) ||
+    (schema === DOCUMENT_SCHEMA_V3 && version === DOCUMENT_VERSION_V3) ||
+    (schema === DOCUMENT_SCHEMA_V4 && version === DOCUMENT_VERSION_V4) ||
+    (schema === DOCUMENT_SCHEMA_V5 && version === DOCUMENT_VERSION_V5) ||
+    (schema === DOCUMENT_SCHEMA_V6 && version === DOCUMENT_VERSION_V6);
+  const isVersion7 =
+    schema === DOCUMENT_SCHEMA_V7 && version === DOCUMENT_VERSION_V7;
+  if (isLegacy || (admitStagedV7 && isVersion7)) return undefined;
+  if (!admitStagedV7) {
+    const stagedV7 = legacyDocumentApiV7Diagnostic(schema, version);
+    if (stagedV7 !== undefined) return stagedV7;
+  }
+  return diagnostic(
+    "IR_INVALID",
+    "Document schema and version must identify the same supported document grammar",
+    {
+      severity: "error",
+      path: "/",
+      details: {
+        schema,
+        version,
+        supported: [
+          ...legacyDocumentIdentities(),
+          ...(admitStagedV7 &&
+          (schema === DOCUMENT_SCHEMA_V7 || version === DOCUMENT_VERSION_V7)
+            ? [
+                {
+                  schema: DOCUMENT_SCHEMA_V7,
+                  version: DOCUMENT_VERSION_V7,
+                },
+              ]
+            : []),
+        ],
+      },
+    },
+  );
+}
+
 function validateTopologyReferences(
   document: ValidatableDocument,
   diagnostics: Diagnostic[],
@@ -1758,8 +2136,6 @@ function validateTopologyReferences(
   };
   const schema = documentIdentity.schema;
   const version = documentIdentity.version;
-  const isVersion1 =
-    schema === DOCUMENT_SCHEMA_V1 && version === DOCUMENT_VERSION_V1;
   const isVersion2 =
     schema === DOCUMENT_SCHEMA_V2 && version === DOCUMENT_VERSION_V2;
   const isVersion3 =
@@ -1772,47 +2148,6 @@ function validateTopologyReferences(
     schema === DOCUMENT_SCHEMA_V6 && version === DOCUMENT_VERSION_V6;
   const isVersion7 =
     schema === DOCUMENT_SCHEMA_V7 && version === DOCUMENT_VERSION_V7;
-  if (
-    !isVersion1 &&
-    !isVersion2 &&
-    !isVersion3 &&
-    !isVersion4 &&
-    !isVersion5 &&
-    !isVersion6 &&
-    !isVersion7
-  ) {
-    diagnostics.push(
-      diagnostic(
-        "IR_INVALID",
-        "Document schema and version must identify the same supported document grammar",
-        {
-          severity: "error",
-          path: "/",
-          details: {
-            schema,
-            version,
-            supported: [
-              { schema: DOCUMENT_SCHEMA_V1, version: DOCUMENT_VERSION_V1 },
-              { schema: DOCUMENT_SCHEMA_V2, version: DOCUMENT_VERSION_V2 },
-              { schema: DOCUMENT_SCHEMA_V3, version: DOCUMENT_VERSION_V3 },
-              { schema: DOCUMENT_SCHEMA_V4, version: DOCUMENT_VERSION_V4 },
-              { schema: DOCUMENT_SCHEMA_V5, version: DOCUMENT_VERSION_V5 },
-              { schema: DOCUMENT_SCHEMA_V6, version: DOCUMENT_VERSION_V6 },
-              ...(schema === DOCUMENT_SCHEMA_V7 ||
-              version === DOCUMENT_VERSION_V7
-                ? [
-                    {
-                      schema: DOCUMENT_SCHEMA_V7,
-                      version: DOCUMENT_VERSION_V7,
-                    },
-                  ]
-                : []),
-            ],
-          },
-        },
-      ),
-    );
-  }
 
   const topologyReferences = (
     document as ValidatableDocument & {
@@ -1857,7 +2192,7 @@ function validateTopologyReferences(
     );
   }
   for (const [id, entry] of entries) {
-    const path = `/topologyReferences/${id}`;
+    const path = `/topologyReferences/${pointerSegment(id)}`;
     validateRef(entry.target, "solid", document, `${path}/target`, diagnostics);
     if (
       entry.topology !== "face" &&
@@ -2052,7 +2387,7 @@ function detectGraphCycles(
             {
               severity: "error",
               node: dependency,
-              path: `/nodes/${dependency}`,
+              path: `/nodes/${pointerSegment(dependency)}`,
             },
           ),
         );
@@ -2075,6 +2410,22 @@ function detectGraphCycles(
 }
 
 function validateDocumentInternal<T extends ValidatableDocument>(
+  document: T,
+  admitStagedV7: boolean,
+): CadResult<T> {
+  // Every later rule depends on one known grammar, so an unsupported identity
+  // is reported alone instead of running version-specific checks against it.
+  const identity = documentIdentityDiagnostic(document, admitStagedV7);
+  if (identity !== undefined) return failure(identity);
+  ancestorQueryCaches.set(document, newAncestorQueryCache());
+  try {
+    return validateDocumentRules(document);
+  } finally {
+    ancestorQueryCaches.delete(document);
+  }
+}
+
+function validateDocumentRules<T extends ValidatableDocument>(
   document: T,
 ): CadResult<T> {
   const diagnostics: Diagnostic[] = [];
@@ -2100,7 +2451,7 @@ function validateDocumentInternal<T extends ValidatableDocument>(
     ParameterId,
     ValidatableDocument["parameters"][ParameterId],
   ][]) {
-    const path = `/parameters/${id}`;
+    const path = `/parameters/${pointerSegment(id)}`;
     validateExpression(parameter.default, parameter.dimension, document, `${path}/default`, diagnostics);
     if (parameter.min !== undefined) {
       validateExpression(parameter.min, parameter.dimension, document, `${path}/min`, diagnostics);
@@ -2117,7 +2468,7 @@ function validateDocumentInternal<T extends ValidatableDocument>(
       material.massDensity,
       "massDensity",
       document,
-      `/materials/${id}/massDensity`,
+      `/materials/${pointerSegment(id)}/massDensity`,
       diagnostics,
     );
   }
@@ -2141,7 +2492,7 @@ function validateDocumentInternal<T extends ValidatableDocument>(
       output,
       expectedOutputKinds,
       document,
-      `/outputs/${name}`,
+      `/outputs/${pointerSegment(name)}`,
       diagnostics,
     );
   }
@@ -2153,12 +2504,13 @@ function validateDocumentInternal<T extends ValidatableDocument>(
 export function validateDocument(
   document: DesignDocument,
 ): CadResult<DesignDocument> {
-  return validateDocumentInternal(document);
+  // Document v7, including the imported-body subset, is not a v1-v6 grammar.
+  return validateDocumentInternal(document, false);
 }
 
 /** Strict semantic validation for the isolated staged document-v7 grammar. */
 export function validateDocumentV7(
   document: DesignDocumentV7,
 ): CadResult<DesignDocumentV7> {
-  return validateDocumentInternal(document);
+  return validateDocumentInternal(document, true);
 }

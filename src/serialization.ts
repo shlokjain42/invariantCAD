@@ -44,6 +44,7 @@ import {
   DesignDocumentV5Schema,
   DesignDocumentV6Schema,
   DesignDocumentV7Schema,
+  safeParseDesignDocumentV7WithLimits,
 } from "./schema.js";
 import {
   canonicalizeTopologySelectionIR,
@@ -52,7 +53,11 @@ import {
   canonicalizeTopologySelectionIRWithin,
 } from "./topology.js";
 import { normalizePersistentTopologyReference } from "./topology-signatures.js";
-import { validateDocument, validateDocumentV7 } from "./validation.js";
+import {
+  legacyDocumentApiV7Diagnostic,
+  validateDocument,
+  validateDocumentV7,
+} from "./validation.js";
 import {
   checkTrustedDesignDocumentSnapshotLimits,
   DEFAULT_DESIGN_DOCUMENT_LIMITS,
@@ -413,18 +418,42 @@ function canonicalizeDocumentTopology<T extends SerializableDocument>(
  * Writes the frozen v1-v6 canonical JSON. The output bytes are counted before
  * the canonical tree or string is built, and admitted output is unchanged.
  * The ceiling assumes plain data, such as builder or parser output, whose
- * property reads are stable.
+ * property reads are stable. Document v7 values, including imported-body
+ * documents, throw a TypeError instead of being written.
  */
 export function stringifyDocument(
   document: DesignDocument,
   options: StringifyOptions = {},
 ): string {
   const { maxDocumentBytes } = writerLimits(options);
+  rejectDocumentV7AtLegacyWriter(document);
   return canonicalStringifyDocumentWithin(
     canonicalizeDocumentTopology(document, maxDocumentBytes),
     maxDocumentBytes,
     options.pretty ? true : false,
   );
+}
+
+/**
+ * The v1-v6 writers never emit Document v7 bytes. Imported-body documents are
+ * written only by stringifyImportedBodyDocument.
+ */
+function rejectDocumentV7AtLegacyWriter(document: unknown): void {
+  if (typeof document !== "object" || document === null) return;
+  const identity = document as {
+    readonly schema?: unknown;
+    readonly version?: unknown;
+  };
+  const rejected = legacyDocumentApiV7Diagnostic(
+    identity.schema,
+    identity.version,
+  );
+  if (rejected !== undefined) {
+    const hint = rejected.hints?.[0];
+    throw new TypeError(
+      hint === undefined ? rejected.message : `${rejected.message}. ${hint}`,
+    );
+  }
 }
 
 function writerLimits(options: {
@@ -640,7 +669,7 @@ function validateLegacyDocumentSnapshot(
     const diagnostics: Diagnostic[] = parsed.error.issues.map((issue) =>
       diagnostic("IR_INVALID", issue.message, {
         severity: "error",
-        path: `/${issue.path.map(String).join("/")}`,
+        path: schemaIssuePointer(issue.path),
         details: { code: issue.code },
       }),
     );
@@ -650,13 +679,48 @@ function validateLegacyDocumentSnapshot(
   return validateDocument(document);
 }
 
+/**
+ * Renders a schema issue path as a JSON Pointer. Record keys are authored IDs
+ * and may contain `~` or `/`, so each segment is escaped per RFC 6901.
+ */
+function schemaIssuePointer(path: readonly PropertyKey[]): string {
+  return `/${path
+    .map((segment) =>
+      String(segment).replaceAll("~", "~0").replaceAll("/", "~1"),
+    )
+    .join("/")}`;
+}
+
+/**
+ * The public v1-v6 readers refuse a snapshot whose schema or version names
+ * Document v7 with the same diagnostic as validateDocument. Without this the
+ * v1-v6 union reports only opaque structural mismatches.
+ */
+function validatePublicLegacyDocumentSnapshot(
+  snapshot: unknown,
+): CadResult<DesignDocument> {
+  if (
+    typeof snapshot === "object" &&
+    snapshot !== null &&
+    !Array.isArray(snapshot)
+  ) {
+    const record = snapshot as Readonly<Record<string, unknown>>;
+    const rejected = legacyDocumentApiV7Diagnostic(
+      record.schema,
+      record.version,
+    );
+    if (rejected !== undefined) return failure(rejected);
+  }
+  return validateLegacyDocumentSnapshot(snapshot);
+}
+
 function parseDocumentValueWithLimits(
   value: unknown,
   limits: DesignDocumentLimits,
 ): CadResult<DesignDocument> {
   const preflight = preflightDesignDocumentValue(value, limits);
   return preflight.ok
-    ? validateLegacyDocumentSnapshot(preflight.value)
+    ? validatePublicLegacyDocumentSnapshot(preflight.value)
     : preflight;
 }
 
@@ -678,13 +742,16 @@ function preflightDocumentValueV7WithLimits(
 
 function validateDocumentV7Snapshot(
   snapshot: unknown,
+  limits: DesignDocumentLimits,
 ): CadResult<DesignDocumentV7> {
   if (!documentV7RuntimeIntrinsicsAreIntact()) {
     return serializationIntegrityFailure();
   }
   let parsed: ReturnType<typeof DesignDocumentV7Schema.safeParse>;
   try {
-    parsed = DesignDocumentV7Schema.safeParse(snapshot);
+    // The caller's limits already admitted this snapshot; the boundary must not
+    // cap them back to the defaults.
+    parsed = safeParseDesignDocumentV7WithLimits(snapshot, limits);
   } catch {
     if (!documentV7RuntimeIntrinsicsAreIntact()) {
       return serializationIntegrityFailure();
@@ -706,7 +773,7 @@ function validateDocumentV7Snapshot(
       diagnostics: parsed.error.issues.map((issue) =>
         diagnostic("IR_INVALID", issue.message, {
           severity: "error",
-          path: `/${issue.path.map(String).join("/")}`,
+          path: schemaIssuePointer(issue.path),
           details: { code: issue.code },
         }),
       ),
@@ -738,7 +805,7 @@ function parseDocumentValueV7WithLimits(
 ): CadResult<DesignDocumentV7> {
   const preflight = preflightDocumentValueV7WithLimits(value, limits);
   return preflight.ok
-    ? validateDocumentV7Snapshot(preflight.value)
+    ? validateDocumentV7Snapshot(preflight.value, limits)
     : preflight;
 }
 
@@ -800,7 +867,8 @@ export function parseDocument(
     COMPATIBLE_DOCUMENT_TEXT_MESSAGES,
   );
   return (
-    memberAuditFailure ?? validateLegacyDocumentSnapshot(preflight.value)
+    memberAuditFailure ??
+    validatePublicLegacyDocumentSnapshot(preflight.value)
   );
 }
 
@@ -1037,6 +1105,27 @@ export function parseDocumentV7(
   text: string,
   options: ParseDocumentOptions = {},
 ): CadResult<DesignDocumentV7> {
+  const parsed = parseDocumentV7WithAdmittedLimits(text, options);
+  return parsed.ok
+    ? success(parsed.value.document, parsed.diagnostics)
+    : parsed;
+}
+
+/** A staged document-v7 parse together with the limits that admitted it. */
+export interface DocumentV7WithAdmittedLimits {
+  readonly document: DesignDocumentV7;
+  readonly limits: DesignDocumentLimits;
+}
+
+/**
+ * Parses like parseDocumentV7 and also returns the caller's normalized limits,
+ * read once, so a narrower reader can apply the same ceilings to its own
+ * checks. Not re-exported from the package root.
+ */
+export function parseDocumentV7WithAdmittedLimits(
+  text: string,
+  options: ParseDocumentOptions = {},
+): CadResult<DocumentV7WithAdmittedLimits> {
   const captured = captureDocumentTextV7Boundary(
     text,
     options,
@@ -1045,9 +1134,12 @@ export function parseDocumentV7(
   if (!documentV7RuntimeIntrinsicsAreIntact()) {
     return serializationIntegrityFailure();
   }
-  return captured.ok
-    ? validateDocumentV7Snapshot(captured.value.snapshot)
-    : captured;
+  if (!captured.ok) return captured;
+  const { limits } = captured.value;
+  const parsed = validateDocumentV7Snapshot(captured.value.snapshot, limits);
+  return parsed.ok
+    ? success({ document: parsed.value, limits }, parsed.diagnostics)
+    : parsed;
 }
 
 function capturedDocumentSourceVersion(
@@ -1282,6 +1374,8 @@ export async function hashDocument(
   options: HashDocumentOptions = {},
 ): Promise<string> {
   const { maxDocumentBytes } = writerLimits(options);
+  // Like stringifyDocument, hashing covers only the frozen v1-v6 grammars.
+  rejectDocumentV7AtLegacyWriter(document);
   const canonicalDocument = canonicalizeDocumentTopology(
     document,
     maxDocumentBytes,
@@ -1768,7 +1862,7 @@ function migrateTrustedDocumentSnapshotToV7(
     if (!earlyBytes.ok && isDocumentByteLimitFailure(earlyBytes)) {
       return earlyBytes;
     }
-    const parsedV7 = validateDocumentV7Snapshot(snapshot);
+    const parsedV7 = validateDocumentV7Snapshot(snapshot, limits);
     if (!documentV7RuntimeIntrinsicsAreIntact()) {
       return serializationIntegrityFailure();
     }
@@ -1859,7 +1953,7 @@ function migrateValidatedLegacyDocumentToV7(
     };
   }
 
-  const migrated = validateDocumentV7Snapshot(candidate);
+  const migrated = validateDocumentV7Snapshot(candidate, limits);
   if (!documentV7RuntimeIntrinsicsAreIntact()) {
     return serializationIntegrityFailure();
   }

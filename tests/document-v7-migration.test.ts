@@ -441,6 +441,24 @@ describe("staged document-v7 migration boundary", () => {
       ],
     });
 
+    // A leading byte-order mark is kept and rejected as JSON, matching
+    // admitDocumentToV7, parseDocument, and the CLI.
+    const sourceBytes = new TextEncoder().encode(source);
+    const bomPrefixed = new Uint8Array(sourceBytes.byteLength + 3);
+    bomPrefixed.set([0xef, 0xbb, 0xbf]);
+    bomPrefixed.set(sourceBytes, 3);
+    const bomText = admitDocumentToV7(`\ufeff${source}`);
+    expect(bomText.ok).toBe(false);
+    const bomBytes = admitDocumentBytesToV7(bomPrefixed);
+    expect(bomBytes).toEqual(bomText);
+    expect(bomBytes).toMatchObject({
+      ok: false,
+      diagnostics: [
+        { code: "IR_INVALID", message: "The document is not valid JSON" },
+      ],
+    });
+    expect(admitDocumentBytesToV7(sourceBytes).ok).toBe(true);
+
     const bytes = new TextEncoder().encode(source);
     expect(
       admitDocumentBytesToV7(bytes, {

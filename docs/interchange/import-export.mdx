@@ -216,12 +216,18 @@ const created = createImportedBodyDocument("verified-housing", {
   format: "step",
   units: { mode: "from-file" },
 });
+if (!created.ok) {
+  throw new Error(created.diagnostics.map((item) => item.message).join("\n"));
+}
+const importedDocument = created.value;
 ```
 
-`createImportedBodyDocument(...)` captures and validates the commitment but
-does not read, fetch, or hash the bytes. The caller computes the SHA-256 digest
-and exact byte length. `locations` are ordered hints passed to the resolver;
-InvariantCAD never interprets them as files, URLs, or package paths.
+`createImportedBodyDocument(...)` returns a `CadResult`; unwrap it before
+persisting or evaluating the document. It captures and validates the
+commitment but does not read, fetch, or hash the bytes. The caller computes
+the SHA-256 digest and exact byte length. `locations` are ordered hints passed
+to the resolver; InvariantCAD never interprets them as files, URLs, or package
+paths.
 
 The protocol-v1 media and unit policy is closed:
 
@@ -240,7 +246,7 @@ loose topology, approximate conversion, and weak-import fallback are rejected.
 Persist only the opaque document facade:
 
 ```ts
-const json = stringifyImportedBodyDocument(document);
+const json = stringifyImportedBodyDocument(importedDocument);
 const parsed = parseImportedBodyDocument(json, {
   limits: { maxDocumentBytes: 8 * 1024 * 1024 },
 });
@@ -249,12 +255,94 @@ const parsed = parseImportedBodyDocument(json, {
 Parsing uses the bounded, duplicate-member-rejecting document boundary and
 then admits only one resource, one imported-body node, and one direct solid
 output. It does not publish or accept the broader product Document v7 grammar.
+`options.limits` applies to the whole parse, including that subset check. A
+document admitted only under raised limits, such as one with more than the
+default 100,000 resource `locations`, needs the same limits when it is
+serialized again and as `documentLimits` when it is evaluated.
+
+### Imported-body document format
+
+The JSON that `stringifyImportedBodyDocument` writes is a fixed, minimal
+subset of Document v7. It carries schema
+`https://invariantcad.dev/schema/document/v7` and version `7`, and contains
+exactly:
+
+- one resource commitment: `digest`, `byteLength`, `mediaType`, and optional
+  `locations`;
+- one `importedBody` node that references that resource, with its `format`,
+  `units`, `healing: { mode: "none" }`, and `expected: "single-solid"`;
+- one output with the same name as the node, referencing it directly as a
+  `solid`;
+- empty `parameters` and the fixed `units: { length: "mm", angle: "rad" }`.
+
+It has no metadata, materials, configurations, topology references, or other
+nodes. The writer emits canonical bytes with object keys in sorted order, on
+one line by default. With an illustrative digest and a 18,342-byte file, the
+example above serializes with `{ pretty: true }` as:
+
+```json
+{
+  "name": "verified-housing",
+  "nodes": {
+    "housing": {
+      "expected": "single-solid",
+      "format": "step",
+      "healing": {
+        "mode": "none"
+      },
+      "kind": "importedBody",
+      "resource": "housingStep",
+      "units": {
+        "mode": "from-file"
+      }
+    }
+  },
+  "outputs": {
+    "housing": {
+      "kind": "solid",
+      "node": "housing"
+    }
+  },
+  "parameters": {},
+  "resources": {
+    "housingStep": {
+      "byteLength": 18342,
+      "digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "locations": [
+        "memory:housing.step"
+      ],
+      "mediaType": "model/step"
+    }
+  },
+  "schema": "https://invariantcad.dev/schema/document/v7",
+  "units": {
+    "angle": "rad",
+    "length": "mm"
+  },
+  "version": 7
+}
+```
+
+Read these documents only with `parseImportedBodyDocument`, write them only
+with `stringifyImportedBodyDocument`, and evaluate them only with
+`Evaluator.evaluateImportedBody`. General Document v7 stays repository-staged,
+so the general document APIs refuse imported-body JSON instead of
+misinterpreting it: `parseDocument`, `parseDocumentValue`, `validateDocument`,
+`migrateDocument`, `hashDesignFeatures`, `analyzeDesignImpact`, and
+`Evaluator.evaluate` return one `IR_INVALID` diagnostic at `/` whose hint names
+the imported-body functions, and `stringifyDocument`, `hashDocument`, and
+`cloneDocument` throw a `TypeError` with the same message.
+
+The subset is frozen. Repository tests pin its canonical bytes and their
+SHA-256, and a future public Document v7 will keep accepting every document in
+this subset with the same meaning, so imported-body JSON saved by 0.2 stays
+readable.
 
 Evaluation requires an exact B-Rep evaluator with the strong document-body
 import capability and a caller-supplied resolver:
 
 ```ts
-const result = await evaluator.evaluateImportedBody(document, {
+const result = await evaluator.evaluateImportedBody(importedDocument, {
   resolver: async (request) => {
     // Resolve by your own policy, then return bytes. InvariantCAD verifies
     // request.digest and request.byteLength before native parsing.
@@ -264,6 +352,14 @@ const result = await evaluator.evaluateImportedBody(document, {
   signal,
 });
 ```
+
+`maxResourceBytes` must be a non-negative safe integer, `signal` an
+`AbortSignal`, and `documentLimits` a plain record of document limits. An
+invalid option returns `IR_INVALID` with a path rooted at `/options`, such as
+`/options/resourceLimits/maxResourceBytes`, before the resolver runs.
+Creation diagnostics name the definition field at fault, such as `/name`,
+`/definition/id`, or `/definition/resource/digest`, and parse diagnostics
+point into the document JSON, such as `/resources/housingStep/mediaType`.
 
 The resolver receives a frozen request containing the authored ID, digest,
 length, media type, location hints, and optional signal. Resolution,

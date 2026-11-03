@@ -7,11 +7,18 @@ const stringCharCodeAt = Function.prototype.call.bind(
   String.prototype.charCodeAt,
 ) as (value: string, index: number) => number;
 const textEncoder = new TextEncoder();
-const fatalTextDecoder = new TextDecoder("utf-8", { fatal: true });
+// ignoreBOM keeps a leading U+FEFF in the text. The default would strip it,
+// so canonical round trips would fail and BOM-prefixed document bytes would
+// be admitted although every JSON text path and the CLI reject them.
+const fatalTextDecoder = new TextDecoder("utf-8", {
+  fatal: true,
+  ignoreBOM: true,
+});
 const fatalTextDecoderDecode = TextDecoder.prototype.decode;
 
 /**
- * Decodes one complete UTF-8 payload without replacement characters.
+ * Decodes one complete UTF-8 payload without replacement characters. A
+ * leading byte-order mark is kept as U+FEFF rather than stripped.
  *
  * Callers that own protocol byte ceilings must check the encoded byte length
  * before invoking this helper.
@@ -76,6 +83,12 @@ export function utf8ByteLengthWithin(
  * Checks one nonempty, canonically round-trippable UTF-8 string without an
  * unbounded intermediate allocation. A string longer than the byte ceiling in
  * UTF-16 code units cannot fit even when every code unit is ASCII.
+ *
+ * A string that starts with U+FEFF is not canonical. Its UTF-8 form begins with
+ * the byte-order-mark sequence, which BOM-stripping decoders silently drop, so
+ * an identity starting with it could not round-trip through every reader. The
+ * published artifact-cache protocol has always rejected such identities; this
+ * rule states that explicitly instead of relying on decoder defaults.
  */
 export function isCanonicalUtf8StringWithin(
   value: unknown,
@@ -84,7 +97,8 @@ export function isCanonicalUtf8StringWithin(
   if (
     typeof value !== "string" ||
     value.length === 0 ||
-    value.length > maximumBytes
+    value.length > maximumBytes ||
+    stringCharCodeAt(value, 0) === 0xfeff
   ) {
     return false;
   }
