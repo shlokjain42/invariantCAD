@@ -174,57 +174,75 @@ export function releaseNotesBody(page: string): string {
 }
 
 const RELEASE_NOTES_DIRECTORY = "releases";
-const LINK_TARGET =
-  /(`+)[^`]*?\1|(\]\(\s*)(<[^<>\n]*>|[^)\s]+)|(\b(?:href|src)=["'])([^"']+)/gu;
-const REFERENCE_DEFINITION = /^( {0,3}\[[^\]\n]+\]:[ \t]*)(<[^<>\n]*>|\S+)/u;
+// One left-to-right scan of a prose run. An inline code span comes first so
+// that it is skipped whole; it may wrap onto later lines of its paragraph but
+// never crosses a blank line.
+const MARKDOWN_TARGET = new RegExp(
+  [
+    "(`+)(?:[^`\\n]|\\n(?![ \\t]*(?:\\n|$)))*?\\1",
+    "^( {0,3}\\[[^\\]\\n]+\\]:[ \\t]*)(<[^<>\\n]*>|\\S+)",
+    "(\\]\\(\\s*)(<[^<>\\n]*>|[^)\\s]+)",
+    "(\\b(?:href|src)=[\"'])([^\"']+)",
+  ].join("|"),
+  "gmu",
+);
 const FENCE = /^ {0,3}(`{3,}|~{3,})/u;
 
 function absoluteDocumentationLinks(markdown: string): string {
+  const output: string[] = [];
+  let prose: string[] = [];
   let fence: string | undefined;
-  return markdown
-    .split("\n")
-    .map((line) => {
-      const marker = FENCE.exec(line)?.[1];
-      if (fence !== undefined) {
-        if (
-          marker !== undefined &&
-          marker[0] === fence[0] &&
-          marker.length >= fence.length &&
-          line.trim() === marker
-        ) {
-          fence = undefined;
-        }
-        return line;
+  const flushProse = (): void => {
+    if (prose.length > 0) output.push(absoluteProseLinks(prose.join("\n")));
+    prose = [];
+  };
+  for (const line of markdown.split("\n")) {
+    const marker = FENCE.exec(line)?.[1];
+    if (fence !== undefined) {
+      if (
+        marker !== undefined &&
+        marker[0] === fence[0] &&
+        marker.length >= fence.length &&
+        line.trim() === marker
+      ) {
+        fence = undefined;
       }
-      if (marker !== undefined) {
-        fence = marker;
-        return line;
+      output.push(line);
+    } else if (marker !== undefined) {
+      flushProse();
+      fence = marker;
+      output.push(line);
+    } else {
+      prose.push(line);
+    }
+  }
+  flushProse();
+  return output.join("\n");
+}
+
+function absoluteProseLinks(prose: string): string {
+  return prose.replace(
+    MARKDOWN_TARGET,
+    (
+      match: string,
+      code: string | undefined,
+      referencePrefix: string | undefined,
+      referenceTarget: string | undefined,
+      linkPrefix: string | undefined,
+      linkTarget: string | undefined,
+      attributePrefix: string | undefined,
+      attributeTarget: string | undefined,
+    ) => {
+      if (code !== undefined) return match;
+      if (referencePrefix !== undefined && referenceTarget !== undefined) {
+        return `${referencePrefix}${linkDestination(referenceTarget)}`;
       }
-      return line
-        .replace(
-          REFERENCE_DEFINITION,
-          (_match, prefix: string, target: string) =>
-            `${prefix}${linkDestination(target)}`,
-        )
-        .replace(
-          LINK_TARGET,
-          (
-            match: string,
-            code: string | undefined,
-            linkPrefix: string | undefined,
-            linkTarget: string | undefined,
-            hrefPrefix: string | undefined,
-            hrefTarget: string | undefined,
-          ) => {
-            if (code !== undefined) return match;
-            if (linkPrefix !== undefined && linkTarget !== undefined) {
-              return `${linkPrefix}${linkDestination(linkTarget)}`;
-            }
-            return `${hrefPrefix ?? ""}${documentationUrl(hrefTarget ?? "")}`;
-          },
-        );
-    })
-    .join("\n");
+      if (linkPrefix !== undefined && linkTarget !== undefined) {
+        return `${linkPrefix}${linkDestination(linkTarget)}`;
+      }
+      return `${attributePrefix ?? ""}${documentationUrl(attributeTarget ?? "")}`;
+    },
+  );
 }
 
 /** Rewrites a Markdown destination, keeping its optional angle brackets. */
