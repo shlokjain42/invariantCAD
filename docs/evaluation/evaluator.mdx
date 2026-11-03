@@ -194,17 +194,17 @@ of interrupting work:
   kernel work, so an abort raised synchronously by a kernel, solver, or topology
   callback stops evaluation before the next feature reaches the kernel.
 - When a `signal` is supplied, it yields to the host event loop before geometry
-  work starts and between selected outputs. An abort from a timer, a UI
-  handler, `AbortSignal.timeout(...)`, or a worker message can land only at
-  these yields.
+  work starts, between selected outputs, and after the last output. An abort
+  from a timer, a UI handler, `AbortSignal.timeout(...)`, or a worker message
+  can land only at these yields.
 - It forwards the signal to protocols that check it during their own work, such
   as sketch solving and profile-region validation.
 
 Host code cannot run while one output's feature graph is being evaluated, so a
-host abort issued during that time is observed only after the output finishes,
-before the next output starts. A single synchronous native WASM call is never
-interrupted. An aborted evaluation returns `EVALUATION_ABORTED` and releases
-every shape it created.
+host abort issued during that time is observed when that output finishes. A
+single synchronous native WASM call is never interrupted. An aborted evaluation
+returns `EVALUATION_ABORTED` and releases every shape it created, including
+finished outputs.
 
 For hard latency isolation, or to stop one large output mid-run, evaluate in a
 worker or separate process that the host can terminate. See
@@ -215,6 +215,7 @@ worker or separate process that the host can terminate. See
 An evaluator can process multiple documents and variants sequentially. Results
 remain independently owned and must each be disposed. While an evaluation that
 received a `signal` is waiting at one of its event-loop yields,
-`evaluator.dispose()` throws; abort or await the evaluation first. Kernel runtime module
-initialization may be shared internally, but shape ownership is never shared
+`evaluator.dispose()` throws; await the evaluation first, aborting it if you no
+longer need the result. Kernel runtime module initialization may be shared
+internally, but shape ownership is never shared
 implicitly across evaluated designs.

@@ -124,6 +124,28 @@ describe("evaluation cancellation", () => {
     }
   });
 
+  it("observes a timer abort issued while the last output was evaluated", async () => {
+    const controller = new AbortController();
+    const harness = await recordingKernel((method) => {
+      if (method === "box") setTimeout(() => controller.abort(), 0);
+    });
+    const evaluator = await createEvaluator({ kernel: harness.kernel });
+    try {
+      const result = await evaluator.evaluate(twoBoxes(), {
+        outputs: ["a"],
+        signal: controller.signal,
+      });
+      expect(result.ok).toBe(false);
+      expect(result.diagnostics).toEqual([
+        expect.objectContaining({ code: "EVALUATION_ABORTED" }),
+      ]);
+      expect(harness.calls).toEqual(["box"]);
+      expect(harness.live.size).toBe(0);
+    } finally {
+      evaluator.dispose();
+    }
+  });
+
   it("refuses to dispose the evaluator while a cancellable evaluation is pending", async () => {
     const harness = await recordingKernel();
     const evaluator = await createEvaluator({ kernel: harness.kernel });

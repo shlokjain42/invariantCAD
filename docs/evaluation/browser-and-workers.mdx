@@ -173,8 +173,9 @@ InvariantCAD does not cache a failed Manifold initialization.
 ## Cancellation strategy
 
 `Evaluator.evaluate(...)` runs on the worker's thread. When it receives a
-`signal`, it yields to the event loop before geometry work starts and between
-selected outputs, so a `cancel` message can abort it at those points:
+`signal`, it yields to the event loop before geometry work starts, between
+selected outputs, and after the last output, so a `cancel` message can abort it
+at those points:
 
 ```ts
 let controller: AbortController | undefined;
@@ -201,7 +202,8 @@ self.onmessage = async (event) => {
 ```
 
 While one output's feature graph is being evaluated, the worker cannot process
-messages or timers, so a cancel request waits until that output finishes. If the
+messages or timers, so a cancel request takes effect when that output finishes.
+If the
 host needs a hard deadline inside one output or during a synchronous native
 call, terminate the worker and create a new one. Do not reuse objects
 transferred from a terminated realm.

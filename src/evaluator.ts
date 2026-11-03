@@ -15598,6 +15598,11 @@ export class Evaluator {
         }
         rawOutputs.set(name, evaluateNode(reference.node));
       }
+      if (options.signal !== undefined) {
+        // Observe a host abort issued while the last output was evaluated.
+        await this.#yieldToHost();
+        ensureLive();
+      }
       const owner = new EvaluationOwner(
         this.kernel,
         createdShapes,
