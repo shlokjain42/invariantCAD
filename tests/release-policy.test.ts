@@ -198,10 +198,12 @@ describe("release verification", () => {
       "Read the [roadmap](../roadmap.md), [import](../interchange/import-export.mdx),",
       "the [previous notes](0.1.1.md), [this release](./1.3.0), and the [home](/).",
       '![diagram](/assets/flow.svg "Flow") and <a href="/get-started/quickstart">start</a>.',
+      '<img src="/assets/logo.svg" alt="logo"> and [spaced](</guides/first steps.mdx>).',
       "Keep [GitHub](https://github.com/shlokjain42/invariantCAD), [mail](mailto:a@b.c),",
       "and [anchors](#highlights) as written, as well as `[code](/not-a-link)`.",
       "",
       "[reference]: /guides/index",
+      "[bracketed]: <../roadmap.md>",
       "",
       "```md",
       "[fenced](/not-a-link)",
@@ -216,10 +218,12 @@ describe("release verification", () => {
         `Read the [roadmap](${DOCUMENTATION_URL}/roadmap), [import](${DOCUMENTATION_URL}/interchange/import-export),`,
         `the [previous notes](${DOCUMENTATION_URL}/releases/0.1.1), [this release](${DOCUMENTATION_URL}/releases/1.3.0), and the [home](${DOCUMENTATION_URL}/).`,
         `![diagram](${DOCUMENTATION_URL}/assets/flow.svg "Flow") and <a href="${DOCUMENTATION_URL}/get-started/quickstart">start</a>.`,
+        `<img src="${DOCUMENTATION_URL}/assets/logo.svg" alt="logo"> and [spaced](<${DOCUMENTATION_URL}/guides/first steps>).`,
         "Keep [GitHub](https://github.com/shlokjain42/invariantCAD), [mail](mailto:a@b.c),",
         "and [anchors](#highlights) as written, as well as `[code](/not-a-link)`.",
         "",
         `[reference]: ${DOCUMENTATION_URL}/guides`,
+        `[bracketed]: <${DOCUMENTATION_URL}/roadmap>`,
         "",
         "```md",
         "[fenced](/not-a-link)",
@@ -271,11 +275,13 @@ describe("repository release state", () => {
     expect(JSON.parse(sources.packageJson)).toMatchObject({ homepage: DOCUMENTATION_URL });
     const pages = sources.docsJson.match(/releases\/\d+\.\d+\.\d+/gu) ?? [];
     expect(pages).toContain(`releases/${currentVersion}`);
-    for (const page of pages) {
-      const body = releaseNotesBody(repositoryFile(`docs/${page}.md`));
+    const bodies = pages.map((page) => releaseNotesBody(repositoryFile(`docs/${page}.md`)));
+    for (const body of bodies) {
       expect(body).not.toMatch(/\]\((?!https:\/\/|mailto:|#)/u);
-      expect(body).toContain(`](${DOCUMENTATION_URL}/`);
     }
+    // A release page need not link to the site, but the published pages do,
+    // so the check above is not vacuous.
+    expect(bodies.some((body) => body.includes(`](${DOCUMENTATION_URL}/`))).toBe(true);
   });
 
   it("keeps the changelog preparable for the next release", () => {

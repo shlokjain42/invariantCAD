@@ -175,8 +175,8 @@ export function releaseNotesBody(page: string): string {
 
 const RELEASE_NOTES_DIRECTORY = "releases";
 const LINK_TARGET =
-  /(`+)[^`]*?\1|(\]\(\s*)([^)\s]+)|(\bhref=["'])([^"']+)/gu;
-const REFERENCE_DEFINITION = /^( {0,3}\[[^\]\n]+\]:[ \t]*)(\S+)/u;
+  /(`+)[^`]*?\1|(\]\(\s*)(<[^<>\n]*>|[^)\s]+)|(\b(?:href|src)=["'])([^"']+)/gu;
+const REFERENCE_DEFINITION = /^( {0,3}\[[^\]\n]+\]:[ \t]*)(<[^<>\n]*>|\S+)/u;
 const FENCE = /^ {0,3}(`{3,}|~{3,})/u;
 
 function absoluteDocumentationLinks(markdown: string): string {
@@ -204,7 +204,7 @@ function absoluteDocumentationLinks(markdown: string): string {
         .replace(
           REFERENCE_DEFINITION,
           (_match, prefix: string, target: string) =>
-            `${prefix}${documentationUrl(target)}`,
+            `${prefix}${linkDestination(target)}`,
         )
         .replace(
           LINK_TARGET,
@@ -218,13 +218,20 @@ function absoluteDocumentationLinks(markdown: string): string {
           ) => {
             if (code !== undefined) return match;
             if (linkPrefix !== undefined && linkTarget !== undefined) {
-              return `${linkPrefix}${documentationUrl(linkTarget)}`;
+              return `${linkPrefix}${linkDestination(linkTarget)}`;
             }
             return `${hrefPrefix ?? ""}${documentationUrl(hrefTarget ?? "")}`;
           },
         );
     })
     .join("\n");
+}
+
+/** Rewrites a Markdown destination, keeping its optional angle brackets. */
+function linkDestination(target: string): string {
+  return target.startsWith("<") && target.endsWith(">")
+    ? `<${documentationUrl(target.slice(1, -1))}>`
+    : documentationUrl(target);
 }
 
 /** Resolves one link target the way the documentation site does. */
