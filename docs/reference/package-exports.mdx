@@ -41,11 +41,22 @@ without a public API decision.
 ## ESM only
 
 The package defines `"type": "module"` and only an `import` condition. It does
-not ship a CommonJS wrapper. Use dynamic `import()` from a legacy CommonJS host
-if migration cannot happen immediately:
+not ship a CommonJS wrapper, and `require("invariantcad")` is not supported.
+Use dynamic `import()` from a legacy CommonJS host if migration cannot happen
+immediately. CommonJS has no top-level `await`, so call it inside an async
+function:
 
 ```js
-const { design } = await import("invariantcad");
+async function main() {
+  const { design } = await import("invariantcad");
+  const cad = design("legacy-host");
+  // ...
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
 ```
 
 ## Node and browser
