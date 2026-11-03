@@ -13380,6 +13380,7 @@ export class Evaluator {
   #disposed = false;
   #artifactCacheEvaluationActive = false;
   #activeImportedBodyEvaluations = 0;
+  #suspendedEvaluations = 0;
 
   constructor(kernel: GeometryKernel, sketchSolver: SketchSolverBackend) {
     this.kernel = kernel;
@@ -15517,6 +15518,9 @@ export class Evaluator {
           ),
         );
       }
+      // Observe an abort raised during this node's own work before a
+      // dependent feature passes its result to the kernel.
+      ensureLive();
       cache.set(id, result);
       return result;
     };
@@ -15533,6 +15537,12 @@ export class Evaluator {
       }
       const rawOutputs = new Map<string, NodeValue>();
       for (const name of requested) {
+        if (options.signal !== undefined) {
+          // Let timers, UI events, and worker messages run, so a host abort
+          // can land before evaluation starts and between selected outputs.
+          await this.#yieldToHost();
+          ensureLive();
+        }
         const reference = Object.hasOwn(document.outputs, name)
           ? document.outputs[name]
           : undefined;
@@ -15609,12 +15619,26 @@ export class Evaluator {
     }
   }
 
+  async #yieldToHost(): Promise<void> {
+    this.#suspendedEvaluations += 1;
+    try {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+    } finally {
+      this.#suspendedEvaluations -= 1;
+    }
+  }
+
   dispose(): void {
     if (this.#disposed) return;
     if (this.#artifactCacheEvaluationActive) {
       throw new Error(
         "Cannot dispose an evaluator during a private artifact-cache evaluation",
       );
+    }
+    if (this.#suspendedEvaluations > 0) {
+      throw new Error("Cannot dispose an evaluator during an evaluation");
     }
     if (this.#activeImportedBodyEvaluations > 0) {
       throw new Error(

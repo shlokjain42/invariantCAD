@@ -172,9 +172,39 @@ InvariantCAD does not cache a failed Manifold initialization.
 
 ## Cancellation strategy
 
-Use `AbortSignal` for cooperative cancellation. If the host must enforce a hard
-deadline during a synchronous native call, terminate the worker and create a
-new one. Do not reuse objects transferred from a terminated realm.
+`Evaluator.evaluate(...)` runs on the worker's thread. When it receives a
+`signal`, it yields to the event loop before geometry work starts and between
+selected outputs, so a `cancel` message can abort it at those points:
+
+```ts
+let controller: AbortController | undefined;
+
+self.onmessage = async (event) => {
+  if (event.data.type === "cancel") {
+    controller?.abort();
+    return;
+  }
+  const parsed = parseDocumentValue(event.data.document);
+  if (!parsed.ok) {
+    self.postMessage({ ok: false, diagnostics: parsed.diagnostics });
+    return;
+  }
+  controller = new AbortController();
+  const evaluator = await evaluatorPromise;
+  const result = await evaluator.evaluate(parsed.value, {
+    ...event.data.options,
+    signal: controller.signal,
+  });
+  // An aborted run resolves with EVALUATION_ABORTED and has already released
+  // every shape it created; handle a successful result as shown above.
+};
+```
+
+While one output's feature graph is being evaluated, the worker cannot process
+messages or timers, so a cancel request waits until that output finishes. If the
+host needs a hard deadline inside one output or during a synchronous native
+call, terminate the worker and create a new one. Do not reuse objects
+transferred from a terminated realm.
 
 An internal one-shot coordinator used by the release gate rejects pre-abort
 without creating a worker, starts the deadline before worker startup, settles
@@ -296,7 +326,8 @@ are plausible but are not claimed as release-gated until executable coverage is
 added. The private candidate remains unexported, `shapeArtifacts` remains
 absent, and these tests confer no production compatibility or operational
 cancellation certification. Ordinary public `Evaluator.evaluate(...)` remains
-same-thread and cooperatively cancellable; no public isolated evaluator API,
+same-thread and observes its signal only at the boundaries described in
+[cancellation strategy](#cancellation-strategy); no public isolated evaluator API,
 public cache configuration, compatibility certification, public
 compound/compsolid identity class, or cross-platform matrix has been added.
 These workers also do not turn repository-private process/realm termination

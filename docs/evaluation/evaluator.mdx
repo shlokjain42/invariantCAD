@@ -158,17 +158,35 @@ Use `try/finally`; do not rely on garbage collection to release WASM memory.
 
 ## Cancellation
 
-Pass an `AbortSignal` for long operations. The evaluator checks cancellation
-between bounded stages and forwards it to protocols that support asynchronous
-work. Some same-thread synchronous native WASM calls cannot be interrupted in
-the middle of one call; cancellation is observed at the next boundary.
+Pass an `AbortSignal` to stop work you no longer need. Evaluation runs on the
+calling thread, so the evaluator observes the signal at stage boundaries instead
+of interrupting work:
 
-For hard latency isolation, run evaluation in a worker or separate process that
-the host can terminate. See [browser and workers](/evaluation/browser-and-workers).
+- It checks the signal before each feature node and again after that node's own
+  kernel work, so an abort raised synchronously by a kernel, solver, or topology
+  callback stops evaluation before the next feature reaches the kernel.
+- When a `signal` is supplied, it yields to the host event loop before geometry
+  work starts and between selected outputs. An abort from a timer, a UI
+  handler, `AbortSignal.timeout(...)`, or a worker message can land only at
+  these yields.
+- It forwards the signal to protocols that check it during their own work, such
+  as sketch solving and profile-region validation.
+
+Host code cannot run while one output's feature graph is being evaluated, so a
+host abort issued during that time is observed only after the output finishes,
+before the next output starts. A single synchronous native WASM call is never
+interrupted. An aborted evaluation returns `EVALUATION_ABORTED` and releases
+every shape it created.
+
+For hard latency isolation, or to stop one large output mid-run, evaluate in a
+worker or separate process that the host can terminate. See
+[browser and workers](/evaluation/browser-and-workers).
 
 ## Reuse
 
 An evaluator can process multiple documents and variants sequentially. Results
-remain independently owned and must each be disposed. Kernel runtime module
+remain independently owned and must each be disposed. While an evaluation that
+received a `signal` is waiting at one of its event-loop yields,
+`evaluator.dispose()` throws; abort or await the evaluation first. Kernel runtime module
 initialization may be shared internally, but shape ownership is never shared
 implicitly across evaluated designs.
