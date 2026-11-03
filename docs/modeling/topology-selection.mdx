@@ -122,9 +122,11 @@ query.between(2, 8);   // inclusive range
 ```
 
 There is no unbounded "take whatever matched" selection. Cardinality bounds the
-set the selector matches, so a parameter or upstream feature change that adds or
-removes a matching item fails the feature instead of silently changing its
-selected input.
+set the selector matches, so a parameter or upstream feature change that moves
+the match count outside that bound fails the feature instead of silently
+changing its selected input. `select()` and `exactly(n)` fail on any change in
+count. `atLeast(n)` and `between(min, max)` accept every count in their range,
+so an item gained or lost inside that range is not reported.
 
 For shell openings and draft faces, the matched set is exactly the set of faces
 the operation receives. Fillet and chamfer `edges` are different: each selected
