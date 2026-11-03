@@ -75,6 +75,11 @@ does not add an evaluator option or kernel capability.
 
 `exportBinaryStl`, `exportAsciiStl`, `exportObj`, and `exportMesh` can encode any
 compatible `MeshData`, including meshes produced outside an evaluated output.
+Binary STL writes the supplied name, which is the output name for evaluated
+outputs, into the 80-byte header. The UTF-8 bytes are cut on a character
+boundary to fit, and a name that starts with `solid` (ignoring case and leading
+whitespace) is written as `InvariantCAD: <name>` so readers do not mistake the
+file for ASCII STL.
 
 ## `invariantcad/kernels/occt`
 

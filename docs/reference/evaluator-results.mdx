@@ -40,7 +40,7 @@ See the [evaluator guide](/evaluation/evaluator) for option semantics.
 | `mesh(options?)` | `MeshData` | Fresh detached typed arrays |
 | `measure()` | `ShapeMeasurements` | Geometric measurements in document units |
 | `topology()` | `CadResult<KernelTopologySnapshot>` | Requires backend topology support |
-| `export("stl")` | `Uint8Array` | Binary STL |
+| `export("stl")` | `Uint8Array` | Binary STL; the header holds the output name (see [exporters](/reference/public-surface#exporters)) |
 | `export("stl-ascii")` | `string` | ASCII STL |
 | `export("obj")` | `string` | Wavefront OBJ |
 | `export("step", options?)` | `Uint8Array` | No-options weak native export is published; deterministic options are an unreleased 0.2 strong contract |

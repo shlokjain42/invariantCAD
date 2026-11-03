@@ -35,12 +35,37 @@ function validateMesh(mesh: MeshData): void {
   }
 }
 
+const BINARY_STL_HEADER_BYTES = 80;
+
+/**
+ * Encodes `name` as an 80-byte-or-shorter binary STL header.
+ *
+ * Many readers classify a file whose header starts with `solid` as ASCII STL,
+ * so such names are prefixed. The UTF-8 bytes are cut on a character boundary
+ * so the header never spills into the triangle count.
+ */
+function binaryStlHeader(name: string): Uint8Array {
+  const text =
+    name.trimStart().slice(0, 5).toLowerCase() === "solid"
+      ? `InvariantCAD: ${name}`
+      : name;
+  // 80 UTF-16 code units always encode to at least 80 bytes, so slicing first
+  // only bounds the work for very long names.
+  const encoded = new TextEncoder().encode(
+    text.slice(0, BINARY_STL_HEADER_BYTES),
+  );
+  if (encoded.length <= BINARY_STL_HEADER_BYTES) return encoded;
+  let end = BINARY_STL_HEADER_BYTES;
+  // Back up over UTF-8 continuation bytes (0b10xxxxxx).
+  while (end > 0 && (encoded[end]! & 0xc0) === 0x80) end -= 1;
+  return encoded.subarray(0, end);
+}
+
 export function exportBinaryStl(mesh: MeshData, name = "InvariantCAD"): Uint8Array {
   validateMesh(mesh);
   const triangleCount = mesh.indices.length / 3;
   const output = new Uint8Array(84 + triangleCount * 50);
-  const header = new TextEncoder().encode(name.slice(0, 80));
-  output.set(header, 0);
+  output.set(binaryStlHeader(name), 0);
   const view = new DataView(output.buffer);
   view.setUint32(80, triangleCount, true);
   for (let triangle = 0; triangle < triangleCount; triangle += 1) {
