@@ -1277,6 +1277,7 @@ function deterministicStepExportMetadata(
       [feature, feature, feature],
       DEFAULT_OCCT_STEP_METADATA_LIMITS.maxMetadataUtf8Bytes -
         OCCT_STEP_METADATA_TIMESTAMP.length,
+      [true, true, true],
     ) as [string, string, string];
     return {
       metadata: {

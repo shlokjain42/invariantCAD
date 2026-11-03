@@ -114,49 +114,78 @@ function truncateUtf8(value: string, maximum: number): string {
   return slice(value, 0, index);
 }
 
+/** UTF-8 size of the first Unicode scalar, or 0 for an empty string. */
+function firstScalarUtf8Length(value: string): number {
+  if (value.length === 0) return 0;
+  const code = codeUnitAt(value, 0);
+  if (
+    isHighSurrogate(code) &&
+    value.length > 1 &&
+    isLowSurrogate(codeUnitAt(value, 1))
+  ) {
+    return 4;
+  }
+  return code <= 0x7f ? 1 : code <= 0x7ff ? 2 : 3;
+}
+
 /**
  * Fits normalized automatic values into `budget` UTF-8 bytes in total.
  *
- * Values that already fit are returned unchanged. Otherwise the budget is
- * shared fairly: shorter values keep their full text and the remaining bytes
- * are split evenly among the longer values, each truncated at a Unicode scalar
- * boundary. The result depends only on the values and the budget.
+ * Values that already fit are returned unchanged. Otherwise each `required`
+ * value first keeps its first Unicode scalar, so a short budget never
+ * empties a required field that could still fit. The rest of the budget is
+ * shared fairly: values with less remaining text keep it all and the leftover
+ * bytes are split evenly among the longer values, each truncated at a
+ * Unicode scalar boundary. When the reserved scalars alone exceed the budget
+ * the result still exceeds it, so strict validation reports the overflow.
+ * The result depends only on the values, the flags, and the budget.
  */
 export function fitAutomaticStepTexts(
   values: readonly string[],
   budget: number,
+  required: readonly boolean[] = [],
 ): string[] {
   const count = values.length;
   const lengths: number[] = [];
+  const reserved: number[] = [];
   let total = 0;
   for (let index = 0; index < count; index += 1) {
-    const length = stepTextUtf8Length(values[index]!);
+    const value = values[index]!;
+    const length = stepTextUtf8Length(value);
     lengths[index] = length;
+    reserved[index] =
+      required[index] === true ? firstScalarUtf8Length(value) : 0;
     total += length;
   }
   const result: string[] = [];
   for (let index = 0; index < count; index += 1) result[index] = values[index]!;
   if (total <= budget) return result;
 
-  // Insertion sort by size, then index: tiny, and independent of
+  let remaining = budget < 0 ? 0 : budget;
+  for (let index = 0; index < count; index += 1) remaining -= reserved[index]!;
+  if (remaining < 0) remaining = 0;
+
+  // Insertion sort by unreserved size, then index: tiny, and independent of
   // Array.prototype.sort.
   const order: number[] = [];
   for (let index = 0; index < count; index += 1) {
+    const excess = lengths[index]! - reserved[index]!;
     let position = index;
-    while (position > 0 && lengths[order[position - 1]!]! > lengths[index]!) {
-      order[position] = order[position - 1]!;
+    while (position > 0) {
+      const previous = order[position - 1]!;
+      if (lengths[previous]! - reserved[previous]! <= excess) break;
+      order[position] = previous;
       position -= 1;
     }
     order[position] = index;
   }
-  let remaining = budget < 0 ? 0 : budget;
   for (let rank = 0; rank < count; rank += 1) {
     const index = order[rank]!;
     const share = Math.floor(remaining / (count - rank));
-    if (lengths[index]! > share) {
-      result[index] = truncateUtf8(values[index]!, share);
+    if (lengths[index]! - reserved[index]! > share) {
+      result[index] = truncateUtf8(values[index]!, reserved[index]! + share);
     }
-    remaining -= stepTextUtf8Length(result[index]!);
+    remaining -= stepTextUtf8Length(result[index]!) - reserved[index]!;
   }
   return result;
 }
@@ -181,6 +210,8 @@ export function resolveAutomaticStepTexts(
   let remaining = budget;
   const automaticIndices: number[] = [];
   const automaticValues: string[] = [];
+  const automaticRequired: boolean[] = [];
+  let reserved = 0;
   const result: string[] = [];
   for (let index = 0; index < count; index += 1) {
     const explicitValue = explicit[index];
@@ -194,15 +225,17 @@ export function resolveAutomaticStepTexts(
       value = AUTOMATIC_STEP_TEXT_FALLBACK;
     }
     result[index] = value;
+    if (required[index] === true) reserved += firstScalarUtf8Length(value);
     automaticIndices[automaticIndices.length] = index;
     automaticValues[automaticValues.length] = value;
+    automaticRequired[automaticRequired.length] = required[index] === true;
   }
-  if (automaticIndices.length === 0 || remaining < 0) return result;
-  const fitted = fitAutomaticStepTexts(automaticValues, remaining);
-  for (let rank = 0; rank < automaticIndices.length; rank += 1) {
-    const index = automaticIndices[rank]!;
-    if (required[index] === true && fitted[rank]!.length === 0) return result;
-  }
+  if (automaticIndices.length === 0 || reserved > remaining) return result;
+  const fitted = fitAutomaticStepTexts(
+    automaticValues,
+    remaining,
+    automaticRequired,
+  );
   for (let rank = 0; rank < automaticIndices.length; rank += 1) {
     result[automaticIndices[rank]!] = fitted[rank]!;
   }
