@@ -265,3 +265,35 @@ describe("OCCT transform of shapes with degenerate edges", () => {
     }
   });
 });
+
+describe("OCCT mesh call-order independence", () => {
+  it("keeps meshes and exact exports independent of earlier mesh requests", async () => {
+    const kernel = await createOcctKernel();
+    const sphere = kernel.sphere!(10);
+    const fresh = kernel.sphere!(10);
+    try {
+      const brepBefore = kernel.exportShape!(sphere, "brep");
+      const binaryBefore = kernel.exportShape!(sphere, "brep-binary");
+      const coarse = { linearDeflection: 1, angularDeflection: 0.8 };
+      const fine = { linearDeflection: 0.05, angularDeflection: 0.1 };
+      const coarseFirst = kernel.mesh(sphere, coarse);
+      const fineMesh = kernel.mesh(sphere, fine);
+      const coarseAfterFine = kernel.mesh(sphere, coarse);
+
+      expect(fineMesh.indices.length).toBeGreaterThan(
+        coarseFirst.indices.length,
+      );
+      expect(coarseAfterFine.indices).toEqual(coarseFirst.indices);
+      expect(coarseAfterFine.positions).toEqual(coarseFirst.positions);
+      expect(kernel.mesh(fresh, coarse).indices).toEqual(coarseFirst.indices);
+      // Tessellation must not leak into the exact B-Rep serialization.
+      expect(kernel.exportShape!(sphere, "brep")).toEqual(brepBefore);
+      expect(kernel.exportShape!(sphere, "brep-binary")).toEqual(binaryBefore);
+      expect(kernel.measure(sphere)).toEqual(kernel.measure(fresh));
+    } finally {
+      kernel.disposeShape(fresh);
+      kernel.disposeShape(sphere);
+      kernel.dispose();
+    }
+  });
+});

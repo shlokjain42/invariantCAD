@@ -6522,19 +6522,27 @@ class OcctKernel implements GeometryKernel {
       { ...this.tessellation, ...options },
       "OCCT mesh options",
     );
-    const mesh = this.raw.tessellate(handle, {
-      ...(merged.linearDeflection === undefined
-        ? {}
-        : { linearDeflection: merged.linearDeflection }),
-      ...(merged.angularDeflection === undefined
-        ? {}
-        : { angularDeflection: merged.angularDeflection }),
-      ...(merged.relative === undefined ? {} : { relative: merged.relative }),
-    });
-    return {
-      positions: mesh.positions.slice(),
-      indices: mesh.indices.slice(),
-    };
+    // BRepMesh stores its triangulation on the faces it meshes and reuses a
+    // finer stored one for later coarser requests; BREP export would also
+    // serialize it. Mesh a cache-free copy so neither depends on call order.
+    const meshSource = this.raw.copy(handle);
+    try {
+      const mesh = this.raw.tessellate(meshSource, {
+        ...(merged.linearDeflection === undefined
+          ? {}
+          : { linearDeflection: merged.linearDeflection }),
+        ...(merged.angularDeflection === undefined
+          ? {}
+          : { angularDeflection: merged.angularDeflection }),
+        ...(merged.relative === undefined ? {} : { relative: merged.relative }),
+      });
+      return {
+        positions: mesh.positions.slice(),
+        indices: mesh.indices.slice(),
+      };
+    } finally {
+      this.raw.release(meshSource);
+    }
   }
 
   measure(shape: KernelShape): ShapeMeasurements {
