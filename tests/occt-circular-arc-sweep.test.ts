@@ -842,8 +842,10 @@ describe("OCCT exact circular-arc solid sweep", { timeout: 30_000 }, () => {
           ok: true,
           code: "VALID",
         });
+        // Scale factors are dimensionless: a 2.5e-8 relative anisotropy is
+        // applied, not collapsed to uniform by the length tolerance.
         expect(kernel.measure(nearUniformlyTransformed).volume).toBeCloseTo(
-          expectedVolume * 8,
+          expectedVolume * 2 * (2 + 5e-8) * 2,
           13,
         );
       } finally {
