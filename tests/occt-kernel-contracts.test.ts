@@ -341,3 +341,46 @@ describe("OCCT kernel disposal", () => {
     expect(() => kernel.dispose()).not.toThrow();
   });
 });
+
+describe("OCCT measurement multiplicity", () => {
+  it("counts a repeated solid occurrence once per occurrence for every quantity", async () => {
+    const kernel = await createOcctKernel();
+    const raw = (kernel as unknown as {
+      raw: {
+        makeBox(x: number, y: number, z: number): number;
+        makeCompound(shapes: number[]): number;
+        toBREP(shape: number): string;
+        release(shape: number): void;
+      };
+    }).raw;
+    const box = raw.makeBox(1, 2, 3);
+    const compound = raw.makeCompound([box, box]);
+    const brep = raw.toBREP(compound);
+    raw.release(compound);
+    raw.release(box);
+    const repeated = kernel.importShape!(brep, "brep");
+    const single = kernel.box!([1, 2, 3], false);
+    try {
+      expect(kernel.classifyBodyResult!(repeated)).toBe("multiple-bodies");
+      const measured = kernel.measure(repeated);
+      const reference = kernel.measure(single);
+      expect(measured.surfaceArea).toBeCloseTo(2 * reference.surfaceArea, 9);
+      expect(measured.volume).toBeCloseTo(2 * reference.volume, 9);
+      expect(measured.centerOfMass).toEqual([
+        expect.closeTo(0.5, 9),
+        expect.closeTo(1, 9),
+        expect.closeTo(1.5, 9),
+      ]);
+      for (let index = 0; index < 3; index += 1) {
+        expect(measured.inertiaTensor[index]![index]).toBeCloseTo(
+          2 * reference.inertiaTensor[index]![index]!,
+          9,
+        );
+      }
+    } finally {
+      kernel.disposeShape(single);
+      kernel.disposeShape(repeated);
+      kernel.dispose();
+    }
+  });
+});

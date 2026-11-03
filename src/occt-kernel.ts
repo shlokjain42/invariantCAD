@@ -6545,6 +6545,57 @@ class OcctKernel implements GeometryKernel {
     }
   }
 
+  /**
+   * Returns owned handles for the solids that measure() integrates.
+   *
+   * `getSubShapes` lists each distinct solid once, while native surface area,
+   * native volume and classifyBodyResult count every occurrence. When a
+   * compound repeats a solid occurrence, measure every occurrence so volume,
+   * inertia and surface area use one multiplicity. Other shapes keep the
+   * distinct-solid list and its order, so their results are unchanged.
+   */
+  private measuredSolidOccurrences(handle: ShapeHandle): ShapeHandle[] {
+    const rootType = this.raw.getShapeType(handle);
+    const solids = this.raw.getSubShapes(handle, "solid");
+    if (
+      solids.length === 0 ||
+      (rootType !== "compound" && rootType !== "compsolid")
+    ) {
+      return solids;
+    }
+    const occurrences: ShapeHandle[] = [];
+    const pending: ShapeHandle[] = [];
+    try {
+      pending.push(...this.raw.iterShapes(handle));
+      while (pending.length > 0) {
+        const current = pending.pop()!;
+        let retained = false;
+        try {
+          const type = this.raw.getShapeType(current);
+          if (type === "solid") {
+            occurrences.push(current);
+            retained = true;
+          } else if (type === "compound" || type === "compsolid") {
+            pending.push(...this.raw.iterShapes(current));
+          }
+        } finally {
+          if (!retained) this.raw.release(current);
+        }
+      }
+    } catch (error) {
+      this.releaseHandles(pending);
+      this.releaseHandles(occurrences);
+      this.releaseHandles(solids);
+      throw error;
+    }
+    if (occurrences.length === solids.length) {
+      this.releaseHandles(occurrences);
+      return solids;
+    }
+    this.releaseHandles(solids);
+    return occurrences.reverse();
+  }
+
   measure(shape: KernelShape): ShapeMeasurements {
     const owned = this.shape(shape);
     const handle = owned[OCCT_SHAPE];
@@ -6563,7 +6614,7 @@ class OcctKernel implements GeometryKernel {
       };
     }
     const bounds = this.raw.getBoundingBox(handle, false);
-    const solids = this.raw.getSubShapes(handle, "solid");
+    const solids = this.measuredSolidOccurrences(handle);
     let nativeMassProperties = zeroMassProperties();
     try {
       const components: GeometricMassProperties[] = [];
