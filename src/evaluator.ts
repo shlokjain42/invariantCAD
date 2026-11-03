@@ -14170,7 +14170,45 @@ export class Evaluator {
           },
         ),
       );
+    // The direct box runs outside evaluateNode, so mirror its catch: failures
+    // keep the box node and path instead of reaching the unattributed
+    // top-level KERNEL_ERROR.
     const prepareDirectCachedBox = async (
+      id: NodeId,
+      node: Extract<NodeIR, { readonly kind: "box" }>,
+    ): Promise<void> => {
+      try {
+        await prepareUnattributedDirectCachedBox(id, node);
+      } catch (error) {
+        if (error instanceof EvaluationFailure) throw error;
+        if (error instanceof DOMException && error.name === "AbortError") {
+          throw new EvaluationFailure(
+            diagnostic("EVALUATION_ABORTED", "CAD evaluation was aborted", {
+              severity: "error",
+              node: id,
+            }),
+          );
+        }
+        throw new EvaluationFailure(
+          diagnostic(
+            "KERNEL_ERROR",
+            error instanceof Error ? error.message : String(error),
+            {
+              severity: "error",
+              node: id,
+              path: `/nodes/${id}`,
+              details: {
+                kernel: this.kernel.id,
+                ...(error instanceof TopologyEvolutionProtocolError
+                  ? { protocolViolation: true }
+                  : {}),
+              },
+            },
+          ),
+        );
+      }
+    };
+    const prepareUnattributedDirectCachedBox = async (
       id: NodeId,
       node: Extract<NodeIR, { readonly kind: "box" }>,
     ): Promise<void> => {
