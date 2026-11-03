@@ -14506,9 +14506,14 @@ export class Evaluator {
               feature: id,
               ...(options.signal === undefined ? {} : { signal: options.signal }),
             });
+            // A custom solver may omit the path; its errors still point at
+            // the sketch node, as every other modeling failure does.
             const solverDiagnostics = solved.diagnostics.map((item) => ({
               ...item,
               node: id,
+              ...(item.severity === "error" && item.path === undefined
+                ? { path: `/nodes/${id}` }
+                : {}),
             }));
             diagnostics.push(...solverDiagnostics);
             const solveFailure = sketchSolveFailureDiagnostic(

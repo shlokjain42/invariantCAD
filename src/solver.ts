@@ -597,6 +597,10 @@ export class ReferenceSketchSolver implements SketchSolverBackend {
     const rank = matrixRank(solved.jacobian);
     const degreesOfFreedom = Math.max(0, variables.initial.length - rank);
     const diagnostics: Diagnostic[] = [];
+    // The evaluator passes the sketch node id as `feature`; solve failures
+    // point at it like every other modeling failure.
+    const sketchPath =
+      context.feature === undefined ? undefined : `/nodes/${context.feature}`;
     let status: SketchSolveStatus;
     if (!Number.isFinite(maximumResidual)) {
       // NaN compares false against every tolerance, so it must not fall
@@ -608,6 +612,7 @@ export class ReferenceSketchSolver implements SketchSolverBackend {
           "Sketch constraints did not converge to a finite residual",
           {
             severity: "error",
+            ...(sketchPath === undefined ? {} : { path: sketchPath }),
             details: { maximumResidual: String(maximumResidual) },
           },
         ),
@@ -618,7 +623,13 @@ export class ReferenceSketchSolver implements SketchSolverBackend {
         diagnostic(
           "SKETCH_OVER_CONSTRAINED",
           `Sketch constraints could not be satisfied; maximum residual is ${maximumResidual}`,
-          { severity: "error", details: { maximumResidual } },
+          {
+            severity: "error",
+            ...(sketchPath === undefined
+              ? {}
+              : { path: `${sketchPath}/constraints` }),
+            details: { maximumResidual },
+          },
         ),
       );
     } else if (degreesOfFreedom > 0) {

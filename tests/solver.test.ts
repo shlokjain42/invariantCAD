@@ -671,8 +671,72 @@ describe("evaluator sketch-solver status and capability admission", () => {
     );
     expect(solved.status).toBe("nonconvergent");
     expect(solved.diagnostics).toEqual([
-      expect.objectContaining({ code: "SKETCH_SOLVE_FAILED", severity: "error" }),
+      expect.objectContaining({
+        code: "SKETCH_SOLVE_FAILED",
+        severity: "error",
+        path: "/nodes/profile",
+      }),
     ]);
+  });
+
+  it("points a non-finite residual from finite authored input at the sketch node", async () => {
+    // Slanted lines this long overflow the normalized parallel residual to
+    // Infinity / Infinity, so the reference solver reports NaN.
+    const huge = 1e200;
+    const result = await evaluator.evaluate(
+      sketchDocument((sketch) => {
+        const p0 = sketch.point("p0", vec2(mm(0), mm(0)));
+        const p1 = sketch.point("p1", vec2(mm(huge), mm(huge / 10)));
+        const p2 = sketch.point("p2", vec2(mm(huge), mm(2 * huge)));
+        const p3 = sketch.point("p3", vec2(mm(0), mm(huge)));
+        const bottom = sketch.line("bottom", p0, p1);
+        const right = sketch.line("right", p1, p2);
+        const top = sketch.line("top", p2, p3);
+        const left = sketch.line("left", p3, p0);
+        sketch.parallel("parallel", bottom, top);
+        return sketch.profile(sketch.loop([bottom, right, top, left]));
+      }),
+    );
+    if (result.ok) result.value.dispose();
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([
+      expect.objectContaining({
+        code: "SKETCH_SOLVE_FAILED",
+        node: "profile",
+        path: "/nodes/profile",
+        details: { maximumResidual: "NaN" },
+      }),
+    ]);
+  });
+
+  it("points a custom solver error without a path at the sketch node", async () => {
+    const custom = await createEvaluator({
+      sketchSolver: statusSolver("nonconvergent", {
+        diagnostics: [
+          {
+            code: "SKETCH_SOLVE_FAILED",
+            severity: "error",
+            message: "Custom solver gave up",
+          },
+        ],
+      }),
+    });
+    try {
+      const result = await custom.evaluate(conflictingCircleDocument());
+      if (result.ok) result.value.dispose();
+      expect(result.ok).toBe(false);
+      expect(result.diagnostics).toEqual([
+        {
+          code: "SKETCH_SOLVE_FAILED",
+          severity: "error",
+          message: "Custom solver gave up",
+          node: "profile",
+          path: "/nodes/profile",
+        },
+      ]);
+    } finally {
+      custom.dispose();
+    }
   });
 
   it.each([
@@ -756,7 +820,11 @@ describe("evaluator sketch-solver status and capability admission", () => {
     expect(result.ok).toBe(false);
     const errors = result.diagnostics.filter((item) => item.severity === "error");
     expect(errors).toEqual([
-      expect.objectContaining({ code: "SKETCH_OVER_CONSTRAINED", node: "profile" }),
+      expect.objectContaining({
+        code: "SKETCH_OVER_CONSTRAINED",
+        node: "profile",
+        path: "/nodes/profile/constraints",
+      }),
     ]);
   });
 
