@@ -14,7 +14,7 @@ const objectFreeze = Object.freeze;
 const objectGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
 const objectGetPrototypeOf = Object.getPrototypeOf;
 const objectHasOwn = Object.hasOwn;
-const objectKeys = Object.keys;
+const objectGetOwnPropertyNames = Object.getOwnPropertyNames;
 const arrayIsArray = Array.isArray;
 
 function prototypeOf(value: object): object | null {
@@ -78,9 +78,10 @@ function ownDataField(container: object, key: string | number, label: string): u
 
 /**
  * Snapshots a caller record into a frozen null-prototype record of its own
- * enumerable data fields, so each field is read exactly once. Non-plain
- * records, accessors, and, when `allowedKeys` is given, other fields throw
- * TypeError.
+ * string-keyed data fields, enumerable or not, so each field is read exactly
+ * once and a field defined as non-enumerable is honored rather than silently
+ * replaced by its default. Non-plain records, accessors, and, when
+ * `allowedKeys` is given, other fields throw TypeError.
  */
 export function ownRecord<T extends object>(
   value: T,
@@ -94,7 +95,9 @@ export function ownRecord<T extends object>(
     string,
     unknown
   >;
-  const keys = reflectApply(objectKeys, Object, [value]) as string[];
+  const keys = reflectApply(objectGetOwnPropertyNames, Object, [
+    value,
+  ]) as string[];
   for (let index = 0; index < keys.length; index += 1) {
     const key = keys[index]!;
     if (allowedKeys !== undefined) {

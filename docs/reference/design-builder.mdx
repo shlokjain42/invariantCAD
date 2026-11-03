@@ -29,10 +29,10 @@ Option records, and the lists and records that reach a document, including
 path points and segments, loft profiles, Boolean tools, transform operations,
 placements, plane IR, topology selection IR, sketch entity and constraint
 records, raw loop edge uses, and profile holes, are read once through their own
-data properties. Caller accessors never run and inherited fields are never
-used, so every check applies to exactly the value the document stores. Option
-records must be plain objects; fields a method does not use are ignored, except
-in `part(...)`, which rejects them.
+data properties, enumerable or not. Caller accessors never run and inherited
+fields are never used, so every check applies to exactly the value the document
+stores. Option records must be plain objects; fields a method does not use are
+ignored, except in `part(...)`, which rejects them.
 
 ## Document definitions
 

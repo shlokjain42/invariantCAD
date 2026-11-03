@@ -2168,3 +2168,24 @@ describe("configuration builders", () => {
     ).toBe("e");
   });
 });
+
+describe("builder option records", () => {
+  it("honors non-enumerable own option fields instead of using defaults", () => {
+    const cad = design("non-enumerable-options");
+    const options = { size: vec3(mm(1), mm(2), mm(3)) };
+    Object.defineProperty(options, "center", { value: true, enumerable: false });
+    cad.output("body", cad.box("body", options));
+    const node = cad.build().nodes.body as { readonly center?: boolean };
+    expect(node.center).toBe(true);
+  });
+
+  it("rejects a non-enumerable unknown part field like an enumerable one", () => {
+    const cad = design("non-enumerable-unsupported");
+    const body = cad.box("body", { size: vec3(mm(1), mm(1), mm(1)) });
+    const options = { partNumber: "P-1" };
+    Object.defineProperty(options, "solid", { value: "other", enumerable: false });
+    expect(() => cad.part("bracket", body, options)).toThrow(
+      /unsupported field 'solid'/u,
+    );
+  });
+});
