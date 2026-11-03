@@ -11,6 +11,7 @@ import {
   explainTopologySelection,
   hashDocument,
   parseDocumentValue,
+  rad,
   resolveTopologySelection,
   scalarVec3,
   stringifyDocument,
@@ -1445,6 +1446,70 @@ describe("semantic topology selections", () => {
     );
     expect(complement.ok).toBe(true);
     if (complement.ok) expect(complement.value).toEqual([key("fy")]);
+  });
+
+  it("keeps exact non-axis normal and direction matches at tight angular tolerances", () => {
+    const context: TopologyResolutionContext = {
+      evaluate: (expression) =>
+        expression.op === "literal" ? expression.value : Number.NaN,
+    };
+    const diagonalFace: KernelFaceDescriptor = {
+      ...xMinimumFace,
+      surface: { kind: "plane", normal: [Math.SQRT1_2, Math.SQRT1_2, 0] },
+      edges: [],
+    };
+    const diagonalEdge: KernelEdgeDescriptor = {
+      ...verticalEdges[0]!,
+      curve: { kind: "line", direction: [-Math.SQRT1_2, -Math.SQRT1_2, 0] },
+    };
+    const current: KernelTopologySnapshot = {
+      history: "complete",
+      faces: [diagonalFace],
+      edges: [diagonalEdge],
+      vertices: [],
+    };
+    // acos(1 - 1ulp) reported about 2.1e-8 rad for these identical directions.
+    for (const tolerance of [1e-8, 1e-12]) {
+      expect(
+        resolveTopologySelection(
+          topology.faces.normal(scalarVec3(1, 1, 0), rad(tolerance)).select().ir,
+          current,
+          context,
+        ),
+      ).toEqual({ ok: true, value: [diagonalFace.key], diagnostics: [] });
+      expect(
+        resolveTopologySelection(
+          topology.edges.direction(scalarVec3(1, 1, 0), rad(tolerance)).select().ir,
+          current,
+          context,
+        ),
+      ).toEqual({ ok: true, value: [diagonalEdge.key], diagnostics: [] });
+      expect(
+        resolveTopologySelection(
+          topology.faces.normal(scalarVec3(-1, -1, 0), rad(tolerance)).select().ir,
+          current,
+          context,
+        ).diagnostics[0]?.code,
+      ).toBe("TOPOLOGY_SELECTION_MISSING");
+    }
+
+    const tilted = (angle: number) =>
+      resolveTopologySelection(
+        topology.faces
+          .normal(
+            scalarVec3(
+              Math.cos(Math.PI / 4 + angle),
+              Math.sin(Math.PI / 4 + angle),
+              0,
+            ),
+            rad(1e-6),
+          )
+          .select().ir,
+        current,
+        context,
+      ).ok;
+    expect(tilted(0.5e-6)).toBe(true);
+    expect(tilted(2e-6)).toBe(false);
   });
 
   it("preserves evaluator selection diagnostics while attaching explanations", async () => {

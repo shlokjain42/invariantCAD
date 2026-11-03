@@ -272,14 +272,17 @@ function normalized(value: Vec3, context: TopologyResolutionContext): Vec3 {
 }
 
 function angularDistance(first: Vec3, second: Vec3, unoriented: boolean): number {
-  const dot = Math.max(
-    -1,
-    Math.min(
-      1,
-      first[0] * second[0] + first[1] * second[1] + first[2] * second[2],
-    ),
+  // atan2(|a x b|, a . b) stays accurate near 0 and pi, where acos(a . b)
+  // turns a one-ulp dot error into about 2e-8 rad. Both terms scale with
+  // |a||b|, so residual normalization error cancels.
+  const dot =
+    first[0] * second[0] + first[1] * second[1] + first[2] * second[2];
+  const cross = Math.hypot(
+    first[1] * second[2] - first[2] * second[1],
+    first[2] * second[0] - first[0] * second[2],
+    first[0] * second[1] - first[1] * second[0],
   );
-  return Math.acos(unoriented ? Math.abs(dot) : dot);
+  return Math.atan2(cross, unoriented ? Math.abs(dot) : dot);
 }
 
 function selectionPath(context: TopologyResolutionContext, suffix: string): string | undefined {
