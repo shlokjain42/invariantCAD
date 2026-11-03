@@ -167,9 +167,13 @@ and verifies the exact JavaScript/WASM sizes and digests against that trusted
 manifest. A digest obtained beside an untrusted bundle is not an independent
 trust anchor.
 
-The Node loader transfers verified JavaScript through one process-global module
-hook without writing a temporary executable file; Node's Permission Model must
-allow the hook worker. The browser loader uses a short-lived Blob module URL and
+The Node loader transfers verified JavaScript without writing a temporary
+executable file. Node 22.15 and newer use an isolated
+`node:module.registerHooks()` hook per load and deregister it after import, with
+no hook worker. Node 22.13 and 22.14 retain the compatible process-wide
+`node:module.register()` worker-hook fallback, for which Node's Permission Model
+must allow workers. The evaluated module cache remains for the process lifetime
+on either path. The browser loader uses a short-lived Blob module URL and
 requires `blob:` in the applicable CSP. Like the stock `occt-wasm` Embind glue,
 the facade glue is built without disabling dynamic execution, so the realm that
 initializes it should also expect to need `'wasm-unsafe-eval'` and
