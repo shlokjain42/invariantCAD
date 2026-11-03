@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   DOCUMENTED_AUDIT_EXCEPTIONS,
@@ -103,4 +104,22 @@ describe("dependency audit policy", () => {
       DOCUMENTED_AUDIT_EXCEPTIONS,
     );
   });
+
+  it.each(["SECURITY.md", "docs/project/security.mdx"])(
+    "%s states the declared runtime zod range and every documented exception",
+    (path) => {
+      const text = readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
+      const manifest = JSON.parse(
+        readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+      ) as { dependencies: Record<string, string> };
+      const statedRanges = [...text.matchAll(/`zod` `([^`]+)`/gu)].map(
+        (match) => match[1],
+      );
+      expect(statedRanges.length).toBeGreaterThan(0);
+      expect(new Set(statedRanges)).toEqual(new Set([manifest.dependencies.zod]));
+      for (const exception of DOCUMENTED_AUDIT_EXCEPTIONS) {
+        expect(text).toContain(exception.advisory);
+      }
+    },
+  );
 });
