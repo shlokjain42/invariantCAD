@@ -13,6 +13,7 @@ import { detachKernelTopologySnapshot } from "./topology-snapshot.js";
 import type {
   KernelCurveDescriptor,
   KernelSurfaceDescriptor,
+  KernelTopologyBounds,
   KernelTopologyKey,
   KernelTopologyLineage,
   KernelTopologySnapshot,
@@ -350,7 +351,7 @@ function sameVector(first: readonly number[], second: readonly number[]): boolea
  * stock binary-BREP reload. Vertex points, kinds, incidence, and orientation
  * stay exact. OCCT recomputes areas, lengths, centers, bounding boxes, and
  * directions/normals/axes/radii from the reloaded representation, and those
- * were observed to move by up to two units of the reference magnitude below.
+ * were observed to move by up to two units of the native scale below.
  * This only verifies that the BREP section still matches the stored
  * descriptors; the stored values, not the recomputed ones, are restored.
  */
@@ -358,110 +359,121 @@ const DERIVED_VALUE_ULPS = 64;
 const ulpScratch = new Float64Array(1);
 const ulpScratchBits = new BigUint64Array(ulpScratch.buffer);
 
+/**
+ * Spacing of doubles in the binade of a finite nonnegative magnitude. Every
+ * finite binade, including the one holding Number.MAX_VALUE, has a finite
+ * power-of-two spacing, so this never overflows to Infinity.
+ */
 function ulpOf(magnitude: number): number {
   ulpScratch[0] = magnitude;
-  ulpScratchBits[0]! += 1n;
-  return ulpScratch[0]! - magnitude;
+  const exponent = Number((ulpScratchBits[0]! >> 52n) & 0x7ffn);
+  return exponent === 0 ? Number.MIN_VALUE : 2 ** (exponent - 1075);
 }
 
 /**
- * Compares one derived value within DERIVED_VALUE_ULPS units in the last
- * place of the larger of both magnitudes and `reference`. The reference keeps
- * values near zero, such as a bounds component of a slanted face, on the
- * model's scale instead of their own vanishing units in the last place.
+ * Compares one stored derived value with the value OCCT derives from the
+ * restored native shape, within DERIVED_VALUE_ULPS units in the last place of
+ * the larger of the native value's magnitude and `reference`. The magnitude
+ * and the reference both come from the restored native shape, never from the
+ * sidecar, so a stored value cannot widen its own tolerance. The reference
+ * keeps values near zero, such as a bounds component of a slanted face, on
+ * the item's native scale instead of their own vanishing units in the last
+ * place. A tolerance that would not be finite fails closed.
  */
 function derivedNumber(
-  first: number,
-  second: number,
+  stored: number,
+  native: number,
   reference: number,
 ): boolean {
-  if (first === second) return true;
-  if (!Number.isFinite(first) || !Number.isFinite(second)) return false;
-  const magnitude = Math.max(Math.abs(first), Math.abs(second), reference);
-  return Math.abs(first - second) <= DERIVED_VALUE_ULPS * ulpOf(magnitude);
+  if (stored === native) return true;
+  if (!Number.isFinite(stored) || !Number.isFinite(native)) return false;
+  const magnitude = Math.max(Math.abs(native), reference);
+  if (!Number.isFinite(magnitude)) return false;
+  return Math.abs(stored - native) <= DERIVED_VALUE_ULPS * ulpOf(magnitude);
 }
 
 function derivedVector(
-  first: readonly number[],
-  second: readonly number[],
+  stored: readonly number[],
+  native: readonly number[],
   reference: number,
 ): boolean {
   return (
-    first.length === 3 &&
-    second.length === 3 &&
-    derivedNumber(first[0]!, second[0]!, reference) &&
-    derivedNumber(first[1]!, second[1]!, reference) &&
-    derivedNumber(first[2]!, second[2]!, reference)
+    stored.length === 3 &&
+    native.length === 3 &&
+    derivedNumber(stored[0]!, native[0]!, reference) &&
+    derivedNumber(stored[1]!, native[1]!, reference) &&
+    derivedNumber(stored[2]!, native[2]!, reference)
   );
 }
 
 function derivedOptionalVector(
-  first: readonly number[] | undefined,
-  second: readonly number[] | undefined,
+  stored: readonly number[] | undefined,
+  native: readonly number[] | undefined,
   reference: number,
 ): boolean {
-  return first === undefined || second === undefined
-    ? first === second
-    : derivedVector(first, second, reference);
+  return stored === undefined || native === undefined
+    ? stored === native
+    : derivedVector(stored, native, reference);
 }
 
 function derivedOptionalNumber(
-  first: number | undefined,
-  second: number | undefined,
+  stored: number | undefined,
+  native: number | undefined,
   reference: number,
 ): boolean {
-  return first === undefined || second === undefined
-    ? first === second
-    : derivedNumber(first, second, reference);
+  return stored === undefined || native === undefined
+    ? stored === native
+    : derivedNumber(stored, native, reference);
 }
 
 function sameSurface(
-  first: KernelSurfaceDescriptor,
-  second: KernelSurfaceDescriptor,
+  stored: KernelSurfaceDescriptor,
+  native: KernelSurfaceDescriptor,
   extent: number,
 ): boolean {
   return (
-    first.kind === second.kind &&
-    derivedOptionalVector(first.normal, second.normal, 1) &&
-    derivedOptionalVector(first.axis, second.axis, 1) &&
-    derivedOptionalNumber(first.radius, second.radius, extent)
+    stored.kind === native.kind &&
+    derivedOptionalVector(stored.normal, native.normal, 1) &&
+    derivedOptionalVector(stored.axis, native.axis, 1) &&
+    derivedOptionalNumber(stored.radius, native.radius, extent)
   );
 }
 
 function sameCurve(
-  first: KernelCurveDescriptor,
-  second: KernelCurveDescriptor,
+  stored: KernelCurveDescriptor,
+  native: KernelCurveDescriptor,
   extent: number,
 ): boolean {
   return (
-    first.kind === second.kind &&
-    derivedOptionalVector(first.direction, second.direction, 1) &&
-    derivedOptionalVector(first.axis, second.axis, 1) &&
-    derivedOptionalNumber(first.radius, second.radius, extent)
+    stored.kind === native.kind &&
+    derivedOptionalVector(stored.direction, native.direction, 1) &&
+    derivedOptionalVector(stored.axis, native.axis, 1) &&
+    derivedOptionalNumber(stored.radius, native.radius, extent)
   );
 }
 
-/** Largest stored coordinate magnitude: the model scale for derived values. */
-function storedExtent(
-  snapshot: KernelTopologySnapshot,
-  signal?: AbortSignal,
-): number {
-  let extent = 0;
-  const include = (vector: readonly number[]) => {
-    for (const component of vector) {
-      extent = Math.max(extent, Math.abs(component));
-    }
+/**
+ * Native scale of one restored face or edge, read from the bounds OCCT
+ * derives for it: `extent` is its largest coordinate magnitude and `span` its
+ * largest bounds side. Per-item scales keep a distant or large item from
+ * loosening the comparison of a small one elsewhere in the same shape.
+ */
+function nativeScale(bounds: KernelTopologyBounds): {
+  readonly extent: number;
+  readonly span: number;
+} {
+  const { min, max } = bounds;
+  return {
+    extent: Math.max(
+      Math.abs(min[0]),
+      Math.abs(min[1]),
+      Math.abs(min[2]),
+      Math.abs(max[0]),
+      Math.abs(max[1]),
+      Math.abs(max[2]),
+    ),
+    span: Math.max(max[0] - min[0], max[1] - min[1], max[2] - min[2], 0),
   };
-  [...snapshot.faces, ...snapshot.edges].forEach((item, index) => {
-    if ((index & 0x3ff) === 0) checkAbort(signal);
-    include(item.bounds.min);
-    include(item.bounds.max);
-  });
-  snapshot.vertices.forEach((vertex, index) => {
-    if ((index & 0x3ff) === 0) checkAbort(signal);
-    include(vertex.point);
-  });
-  return Number.isFinite(extent) ? extent : 0;
 }
 
 function sortedAdjacencyIndices(
@@ -1080,8 +1092,6 @@ export function remapOcctShapeArtifactTopology(
   }
   const storedIndices = snapshotIndices(stored, signal);
   const freshIndices = snapshotIndices(fresh, signal);
-  const extent = storedExtent(stored, signal);
-  const area = extent * extent;
   const faceMapping = nativeMappings.face;
   const edgeMapping = nativeMappings.edge;
   const vertexMapping = nativeMappings.vertex;
@@ -1089,8 +1099,9 @@ export function remapOcctShapeArtifactTopology(
     if ((index & 0xff) === 0) checkAbort(signal);
     const expected = stored.faces[index]!;
     const actual = fresh.faces[faceMapping[index]!]!;
+    const { extent, span } = nativeScale(actual.bounds);
     if (
-      !derivedNumber(expected.area, actual.area, area) ||
+      !derivedNumber(expected.area, actual.area, extent * span) ||
       !derivedVector(expected.center, actual.center, extent) ||
       !derivedVector(expected.bounds.min, actual.bounds.min, extent) ||
       !derivedVector(expected.bounds.max, actual.bounds.max, extent) ||
@@ -1118,6 +1129,7 @@ export function remapOcctShapeArtifactTopology(
     if ((index & 0xff) === 0) checkAbort(signal);
     const expected = stored.edges[index]!;
     const actual = fresh.edges[edgeMapping[index]!]!;
+    const { extent } = nativeScale(actual.bounds);
     if (
       !derivedNumber(expected.length, actual.length, extent) ||
       !derivedVector(expected.center, actual.center, extent) ||

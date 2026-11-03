@@ -595,6 +595,106 @@ describe("OCCT shape-artifact codec candidate", { timeout: 30_000 }, () => {
     60_000,
   );
 
+  it("derives the descriptor tolerance from each restored native item, not the sidecar", async () => {
+    const producer = await createOcctKernel();
+    const consumer = await createOcctKernel();
+    let roleBox: KernelShape | undefined;
+    let slenderBox: KernelShape | undefined;
+    let decoded: KernelShape | undefined;
+    try {
+      if (producer.box === undefined) {
+        throw new Error("OCCT box support is unavailable");
+      }
+      roleBox = box(producer);
+      // The far end face sits at 1e9 while the near end face stays at unit
+      // scale, so one model-wide scale would loosen the near face's checks.
+      slenderBox = producer.box([1e9, 1, 1], false, { feature: "slender-box" });
+      const producerCodec = codec(producer);
+      const roleArtifact = await producerCodec.encodeShapeArtifact(
+        roleBox,
+        ARTIFACT_CONTEXT,
+      );
+      const slenderArtifact = await producerCodec.encodeShapeArtifact(
+        slenderBox,
+        ARTIFACT_CONTEXT,
+      );
+
+      // A finite but extreme stored bound once became the comparison scale,
+      // whose unit in the last place overflowed to Infinity and admitted any
+      // other stored descriptor.
+      const overflowingBound = rewriteSidecarState(roleArtifact, (state) => {
+        const [face, ...faces] = state.topology.faces;
+        const [edge, ...edges] = state.topology.edges;
+        if (face === undefined || edge === undefined) {
+          throw new TypeError("Candidate state lacks a face or an edge");
+        }
+        const [x, y, z] = edge.center;
+        return {
+          ...state,
+          topology: {
+            ...state.topology,
+            faces: [
+              {
+                ...face,
+                bounds: {
+                  ...face.bounds,
+                  max: [Number.MAX_VALUE, face.bounds.max[1], face.bounds.max[2]],
+                },
+              },
+              ...faces,
+            ],
+            edges: [{ ...edge, center: [x + 0.5, y, z] }, ...edges],
+          },
+        };
+      });
+      // A small shift on the unit-scale end face hides inside 64 units in
+      // the last place of 1e9 but not of the face's own native scale.
+      const nearFaceShift = rewriteSidecarState(slenderArtifact, (state) => {
+        const index = state.topology.faces.findIndex(
+          (face) => face.bounds.max[0] < 1,
+        );
+        const face = state.topology.faces[index];
+        if (face === undefined) {
+          throw new TypeError("Slender box state lacks its near end face");
+        }
+        const [x, y, z] = face.center;
+        const faces = [...state.topology.faces];
+        faces[index] = { ...face, center: [x, y + 1e-6, z] };
+        return { ...state, topology: { ...state.topology, faces } };
+      });
+
+      const consumerCodec = codec(consumer);
+      for (const [label, payload] of [
+        ["overflowing stored bound", overflowingBound],
+        ["near-face shift on a slender box", nearFaceShift],
+      ] as const) {
+        const borrowed = payload.slice();
+        await expectRejected(() =>
+          consumerCodec.decodeShapeArtifact(payload, ARTIFACT_CONTEXT),
+        );
+        expect(payload, `${label} input mutation`).toEqual(borrowed);
+        expect(liveShapeCount(consumer), `${label} leaked a shape`).toBe(0);
+      }
+
+      decoded = await consumerCodec.decodeShapeArtifact(
+        slenderArtifact,
+        ARTIFACT_CONTEXT,
+      );
+      expect(consumer.status(decoded)).toEqual({ ok: true, code: "VALID" });
+      const centers = (snapshot: KernelTopologySnapshot) =>
+        snapshot.faces.map((face) => JSON.stringify(face.center)).sort();
+      expect(centers(topology(consumer, decoded))).toEqual(
+        centers(topology(producer, slenderBox)),
+      );
+    } finally {
+      if (decoded !== undefined) consumer.disposeShape(decoded);
+      if (slenderBox !== undefined) producer.disposeShape(slenderBox);
+      if (roleBox !== undefined) producer.disposeShape(roleBox);
+      consumer.dispose();
+      producer.dispose();
+    }
+  }, 30_000);
+
   it("emits identical bytes and remaps a symmetric solid when TopExp enumeration reverses", async () => {
     const normalProducer = await createOcctKernel();
     const reversedProducer = await createOcctKernel();

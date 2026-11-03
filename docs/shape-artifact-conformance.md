@@ -582,11 +582,16 @@ geometry and incidence. Incidence, surface/curve kinds, and vertex points must
 match exactly. Stock binary BREP is not a bit-exact boundary for values OCCT
 derives from the reloaded representation: areas, lengths, centers, bounding
 boxes, normals, axes, directions, and radii can move by a few units in the last
-place, even for an ordinary extruded polygon. Each such value must match within
-`64` units in the last place of the larger of its own magnitude and the stored
-model scale (the largest stored coordinate magnitude, its square for areas, or
-`1` for unit vectors). The comparison only verifies the BREP section; the
-stored descriptors, not the recomputed values, are what the decoded shape
+place, even for an ordinary extruded polygon. Each such stored value must match
+the value OCCT derives from the restored native shape within `64` units in the
+last place of the larger of that native value's magnitude and the restored
+item's own native scale: the largest coordinate magnitude of that face's or
+edge's native bounds, that times its largest bounds side for areas, or `1` for
+unit vectors. Both come from the restored native shape, never from the
+sidecar, so a stored value cannot widen its own tolerance, a distant item
+cannot loosen the comparison of a small one, and a tolerance that would not be
+finite rejects the artifact. The comparison only verifies the BREP section;
+the stored descriptors, not the recomputed values, are what the decoded shape
 reports. Only then does it attach the stored semantic evidence to fresh
 evaluation-scoped keys. A multiplicity, order, orientation,
 `IsSame`-class membership, shape type, child count, geometry, incidence, or
