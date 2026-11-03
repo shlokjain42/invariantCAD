@@ -348,6 +348,11 @@ export function assertExpressionIR(
     }
     weakMapSet(states, node, EXPRESSION_ACTIVE);
     arrayAppend(visited, node);
+    // Reject non-plain objects before freezing, so a rejected caller object
+    // is left as it was.
+    if (!isPlainRecord(node)) {
+      throw malformedExpression(label, "expression nodes must be plain records");
+    }
     objectFreeze(node);
     const operands = expressionNodeOperands(
       node as Readonly<Record<string, unknown>>,

@@ -367,6 +367,22 @@ describe("runtime expression dimensions", () => {
     expect(reads).toBe(0);
   });
 
+  it("leaves rejected non-plain IR roots unfrozen", () => {
+    class LiteralNode {
+      op = "literal";
+      dimension = "length";
+      value = 1;
+    }
+    const instance = new LiteralNode();
+    const map = new Map([["op", "literal"]]);
+    for (const ir of [instance, map]) {
+      expect(() => fromExpressionIR(ir as never, "length")).toThrow(
+        "expression nodes must be plain records",
+      );
+      expect(Object.isFrozen(ir)).toBe(false);
+    }
+  });
+
   it("accepts plain raw IR records and arrays from another realm", () => {
     const foreign = runInNewContext(`({
       op: "max",
