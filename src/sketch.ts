@@ -33,10 +33,17 @@ const SKETCH_OWNER = Symbol("InvariantCAD.SketchOwner");
  * names an entity or loop its sketch actually authored.
  */
 const ISSUED_SKETCH_REFERENCES = new WeakSet<object>();
-/** Entity and constraint records each builder stored, with their keys. */
+/**
+ * Entity and constraint records each builder stored, with their keys and the
+ * public map each was stored in.
+ */
 const ISSUED_SKETCH_RECORDS = new WeakMap<
   object,
-  { readonly owner: SketchBuilder; readonly key: EntityId }
+  {
+    readonly owner: SketchBuilder;
+    readonly key: EntityId;
+    readonly field: "entities" | "constraints";
+  }
 >();
 const CLOSED_SKETCH_BUILDERS = new WeakSet<SketchBuilder>();
 
@@ -237,7 +244,7 @@ export class SketchBuilder {
       throw new TypeError(`Duplicate sketch ID '${id}'`);
     }
     const record = deepFreeze(entity);
-    ISSUED_SKETCH_RECORDS.set(record, { owner: this, key });
+    ISSUED_SKETCH_RECORDS.set(record, { owner: this, key, field: "entities" });
     this.entities[key] = record;
     return key;
   }
@@ -249,7 +256,11 @@ export class SketchBuilder {
       throw new TypeError(`Duplicate sketch ID '${id}'`);
     }
     const record = deepFreeze(constraint);
-    ISSUED_SKETCH_RECORDS.set(record, { owner: this, key });
+    ISSUED_SKETCH_RECORDS.set(record, {
+      owner: this,
+      key,
+      field: "constraints",
+    });
     this.constraints[key] = record;
   }
 
@@ -698,8 +709,9 @@ export function closeSketchBuilder(sketch: SketchBuilder): void {
 /**
  * Copies one public record map of a closed sketch through own data
  * properties, requiring every entry to be a record a builder method created
- * under the same key. Accessors never run, so the copy holds exactly the
- * records that were checked.
+ * under the same key in the same map, so an entity cannot be stored as a
+ * constraint or the reverse. Accessors never run, so the copy holds exactly
+ * the records that were checked.
  */
 function copyIssuedSketchRecords<T>(
   sketch: SketchBuilder,
@@ -719,7 +731,8 @@ function copyIssuedSketchRecords<T>(
     if (
       record === NOT_OWN_DATA ||
       issuedRecord?.owner !== sketch ||
-      issuedRecord.key !== key
+      issuedRecord.key !== key ||
+      issuedRecord.field !== field
     ) {
       throw new TypeError(
         `Sketch record '${key}' must be created by a SketchBuilder method`,

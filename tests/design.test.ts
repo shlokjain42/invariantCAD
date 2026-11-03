@@ -2059,6 +2059,34 @@ describe("builder ownership boundary", () => {
       }),
     ).toThrow(/SketchBuilder method/);
 
+    // An issued record moved to the other map keeps its key, but would emit
+    // a document that cannot reload, and a constraint stored as an entity
+    // would hide its expression from the parameter ownership check.
+    const foreignGap = design("library").parameter.length("gap", mm(3));
+    cad.parameter.length("gap", mm(5));
+    expect(() =>
+      cad.sketch("constraint-as-entity", plane.xy(), (sketch) => {
+        const a = sketch.point("a", vec2(mm(0), mm(0)));
+        const b = sketch.point("b", vec2(mm(3), mm(0)));
+        sketch.distance("gap", a, b, foreignGap);
+        const entities = sketch.entities as Record<string, unknown>;
+        const constraints = sketch.constraints as Record<string, unknown>;
+        entities.gap = constraints.gap;
+        delete constraints.gap;
+        return sketch.profile(sketch.circle("disk", { radius: mm(2) }).loop());
+      }),
+    ).toThrow("Sketch record 'gap' must be created by a SketchBuilder method");
+    expect(() =>
+      cad.sketch("entity-as-constraint", plane.xy(), (sketch) => {
+        sketch.point("a", vec2(mm(0), mm(0)));
+        const entities = sketch.entities as Record<string, unknown>;
+        const constraints = sketch.constraints as Record<string, unknown>;
+        constraints.a = entities.a;
+        delete entities.a;
+        return sketch.profile(sketch.circle("disk", { radius: mm(2) }).loop());
+      }),
+    ).toThrow("Sketch record 'a' must be created by a SketchBuilder method");
+
     let escaped: SketchBuilder | undefined;
     cad.sketch("escaped", plane.xy(), (sketch) => {
       escaped = sketch;
