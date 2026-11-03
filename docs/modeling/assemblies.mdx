@@ -63,6 +63,24 @@ cad.output("machine", machine);
 Evaluation walks the occurrence tree, composes placement transforms, and
 preserves a stable instance path for each evaluated occurrence.
 
+### Occurrence ceilings
+
+Public evaluation flattens every evaluated assembly into occurrence records
+before it returns, so a small document that nests fan-out assemblies could
+otherwise expand into millions of records. Each evaluation is therefore bounded
+by fixed ceilings that are charged before records are allocated:
+
+| Resource | Ceiling | What is counted |
+| --- | ---: | --- |
+| `maxActiveOccurrences` | 100,000 | Occurrence records materialized across the evaluation. Every evaluated assembly, including an intermediate subassembly, counts each of its flattened occurrences, and a nested subassembly counts again for every unsuppressed placement of it. |
+| `maxAssemblyDepth` | 64 | Assembly nesting depth. An assembly of parts only has depth 1. |
+| `maxOccurrencePathSegments` | 1,000,000 | Instance-path segments stored across those records. An occurrence at depth 3, such as `front-pair/right/bolt`, stores 3. |
+
+Exceeding a ceiling fails the evaluation with `RESOURCE_LIMIT_EXCEEDED` at the
+assembly node and instance that would cross it. `details.resource` names the
+ceiling, and `details.limit` and `details.actual` give the bound and the
+requested total. Suppressed instances are skipped before they are charged.
+
 ## Evaluated occurrences
 
 An evaluated assembly provides occurrence data, aggregate measurements,

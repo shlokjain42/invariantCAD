@@ -178,6 +178,24 @@ matching, exact native evolution reports, conformance witnesses, and artifact
 sizes. Raising a limit changes the accepted workload and should be reviewed
 like a resource-policy change.
 
+## Assembly evaluation limits
+
+Public `Evaluator.evaluate(...)` flattens assemblies into occurrence records.
+Document preflight bounds the document, not that expanded tree, so evaluation
+charges three fixed ceilings before allocating records:
+
+| Resource | Ceiling |
+| --- | ---: |
+| `maxActiveOccurrences`: occurrence records materialized across one evaluation | 100,000 |
+| `maxAssemblyDepth`: assembly nesting depth | 64 |
+| `maxOccurrencePathSegments`: instance-path segments stored across those records | 1,000,000 |
+
+Crossing one fails with `RESOURCE_LIMIT_EXCEEDED` at the assembly node and the
+instance that would exceed it, with `details.resource`, `details.limit`, and
+`details.actual`. See [occurrence ceilings](/modeling/assemblies#occurrence-ceilings)
+for how records are counted. The ceilings are not configurable on the public
+evaluator.
+
 ## Source-only staged external products
 
 The repository-only product evaluator adds a document-scoped resource boundary

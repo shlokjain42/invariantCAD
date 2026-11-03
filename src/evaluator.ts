@@ -679,6 +679,10 @@ interface AssemblyOccurrence {
 interface AssemblyValue {
   readonly kind: "assembly";
   readonly occurrences: readonly AssemblyOccurrence[];
+  /** Assembly nesting depth; an assembly of parts only has depth 1. */
+  readonly depth: number;
+  /** Total instance-path segments across `occurrences`. */
+  readonly pathSegments: number;
 }
 
 type NodeValue = ProfileValue | PathValue | SolidValue | PartValue | AssemblyValue;
@@ -730,6 +734,38 @@ function operationMatrix(operation: ResolvedTransformOperation): Mat4 {
     case "mirror":
       return mirrorMatrix(operation.normal);
   }
+}
+
+/**
+ * Fixed ceilings for flattening public v1-v6 assemblies. Occurrence records and
+ * path segments are charged cumulatively across one evaluation, before they
+ * are allocated, so a small document cannot expand into an unbounded tree.
+ */
+const PUBLIC_ASSEMBLY_EVALUATION_LIMITS = Object.freeze({
+  maxActiveOccurrences: 100_000,
+  maxAssemblyDepth: 64,
+  maxOccurrencePathSegments: 1_000_000,
+});
+
+function assemblyLimitFailure(
+  resource: keyof typeof PUBLIC_ASSEMBLY_EVALUATION_LIMITS,
+  actual: number,
+  node: NodeId,
+  path: string,
+): EvaluationFailure {
+  const limit = PUBLIC_ASSEMBLY_EVALUATION_LIMITS[resource];
+  return new EvaluationFailure(
+    diagnostic(
+      "RESOURCE_LIMIT_EXCEEDED",
+      `Assembly evaluation limit '${resource}' (${limit}) was exceeded`,
+      {
+        severity: "error",
+        node,
+        path,
+        details: { resource, limit, actual },
+      },
+    ),
+  );
 }
 
 function operationsMatrix(operations: readonly ResolvedTransformOperation[]): Mat4 {
@@ -13551,6 +13587,8 @@ export class Evaluator {
     };
     const cache = new Map<NodeId, NodeValue>();
     const createdShapes = new Set<KernelShape>();
+    let flattenedOccurrences = 0;
+    let flattenedPathSegments = 0;
     const ensureLive = (): void => {
       if (options.signal?.aborted) {
         throw new EvaluationFailure(
@@ -15321,40 +15359,96 @@ export class Evaluator {
           }
           case "assembly": {
             const occurrences: AssemblyOccurrence[] = [];
+            let depth = 1;
+            let pathSegments = 0;
+            // Charge flattened records before allocating them.
+            const chargeOccurrences = (
+              count: number,
+              segments: number,
+              path: string,
+            ): void => {
+              const limits = PUBLIC_ASSEMBLY_EVALUATION_LIMITS;
+              if (count > limits.maxActiveOccurrences - flattenedOccurrences) {
+                throw assemblyLimitFailure(
+                  "maxActiveOccurrences",
+                  flattenedOccurrences + count,
+                  id,
+                  path,
+                );
+              }
+              if (
+                segments >
+                limits.maxOccurrencePathSegments - flattenedPathSegments
+              ) {
+                throw assemblyLimitFailure(
+                  "maxOccurrencePathSegments",
+                  flattenedPathSegments + segments,
+                  id,
+                  path,
+                );
+              }
+              flattenedOccurrences += count;
+              flattenedPathSegments += segments;
+              pathSegments += segments;
+            };
             for (const [instanceIndex, instance] of node.instances.entries()) {
               const suppressed =
                 configuredInstanceSuppression(id, instance.id) ??
                 instance.suppressed;
               if (suppressed) continue;
+              const instancePath = `/nodes/${id}/instances/${instanceIndex}`;
               const component = evaluateNode(instance.component.node);
               const placement = operationsMatrix(
                 instance.placement.map((operation, operationIndex) =>
                   resolvedTransform(
                     operation,
                     id,
-                    `/nodes/${id}/instances/${instanceIndex}/placement/${operationIndex}`,
+                    `${instancePath}/placement/${operationIndex}`,
                   ),
                 ),
               );
               if (component.kind === "part") {
+                chargeOccurrences(1, 1, instancePath);
                 occurrences.push({
                   id: instance.id,
                   part: component,
                   transform: placement,
                 });
               } else if (component.kind === "assembly") {
-                occurrences.push(
-                  ...component.occurrences.map((occurrence) => ({
+                if (
+                  component.depth + 1 >
+                  PUBLIC_ASSEMBLY_EVALUATION_LIMITS.maxAssemblyDepth
+                ) {
+                  throw assemblyLimitFailure(
+                    "maxAssemblyDepth",
+                    component.depth + 1,
+                    id,
+                    `${instancePath}/component`,
+                  );
+                }
+                if (component.depth + 1 > depth) depth = component.depth + 1;
+                const nested = component.occurrences;
+                chargeOccurrences(
+                  nested.length,
+                  component.pathSegments + nested.length,
+                  instancePath,
+                );
+                // Append one record at a time; spreading a large array into
+                // push() overflows the call stack.
+                for (let index = 0; index < nested.length; index += 1) {
+                  if (index % 1024 === 0) ensureLive();
+                  const occurrence = nested[index]!;
+                  occurrences.push({
                     id: `${instance.id}/${occurrence.id}`,
                     part: occurrence.part,
                     transform: multiplyMatrices(placement, occurrence.transform),
-                  })),
-                );
+                  });
+                }
               } else {
                 throw new Error("Assembly component did not evaluate to a part");
               }
             }
-            result = { kind: "assembly", occurrences };
+            result = { kind: "assembly", occurrences, depth, pathSegments };
             break;
           }
         }
