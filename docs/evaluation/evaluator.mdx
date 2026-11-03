@@ -170,7 +170,19 @@ result.value.dispose(); // safe no-op
 // body.measure() now throws because its owner is disposed.
 ```
 
+`dispose()` marks the design disposed before it releases anything, then
+attempts every owned shape exactly once. If a kernel release throws, the
+remaining shapes are still released, the first error is rethrown, and the
+design stays disposed, so a retry is a no-op. A failed evaluation releases the
+shapes it created in the same best-effort way and still returns its original
+diagnostics.
+
 Use `try/finally`; do not rely on garbage collection to release WASM memory.
+
+The shapes belong to the evaluator's kernel. `evaluator.dispose()` disposes
+that kernel, which releases or invalidates every shape it still holds, so a
+live `EvaluatedDesign` then fails on `measure()`, `mesh()`, and exports.
+Dispose every evaluated design before the evaluator that produced it.
 
 ## Cancellation
 
