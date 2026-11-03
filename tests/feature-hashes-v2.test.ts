@@ -1111,6 +1111,57 @@ describe("document-v7 feature hashes protocol v2", () => {
     expect(exact.ok, JSON.stringify(exact.diagnostics)).toBe(true);
   });
 
+  it("checks the realm when a digest await resumes", async () => {
+    const document = comprehensiveDocument();
+    const baseline = await reportValue(hashDesignFeaturesV2(document));
+
+    // A trap can queue a microtask while the post-digest signal read runs.
+    // That callback executes after digestEnvelope returns but before its
+    // caller resumes, swapping in a push() that drops evidence; the trap then
+    // restores the original on the next signal read, so only a realm check at
+    // the resumption point can notice before evidence is lost.
+    const original = Object.getOwnPropertyDescriptor(Array.prototype, "push")!;
+    let tamperedPushes = 0;
+    const dropPush = function (this: unknown[]) {
+      tamperedPushes += 1;
+      return this.length;
+    };
+    const stackLimit = Error.stackTraceLimit;
+    let digestReads = 0;
+    const controller = new AbortController();
+    const signal = new Proxy(controller.signal, {
+      get(target, key) {
+        Object.defineProperty(Array.prototype, "push", original);
+        if ((new Error().stack ?? "").includes("digestEnvelope")) {
+          digestReads += 1;
+          if (digestReads === 6) {
+            queueMicrotask(() => {
+              Object.defineProperty(Array.prototype, "push", {
+                ...original,
+                value: dropPush,
+              });
+            });
+          }
+        }
+        return Reflect.get(target, key, target);
+      },
+    });
+    let result: CadResult<DesignFeatureHashReportV2>;
+    try {
+      Error.stackTraceLimit = 100;
+      result = await hashDesignFeaturesV2(document, { signal });
+    } finally {
+      Error.stackTraceLimit = stackLimit;
+      Object.defineProperty(Array.prototype, "push", original);
+    }
+    expect(digestReads).toBeGreaterThanOrEqual(6);
+    // Hashing never ran with the tampered push().
+    expect(tamperedPushes).toBe(0);
+    // A different successful hash would be a silent corruption.
+    if (result.ok) expect(result.value).toEqual(baseline);
+    else expectRealmFailure(result);
+  });
+
   it("keeps a proxied signal from changing selector work between realm scans", async () => {
     const legacy = {
       schema: DOCUMENT_SCHEMA_V6,

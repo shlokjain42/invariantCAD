@@ -1891,6 +1891,9 @@ export async function hashDesignFeaturesV2(
             meter,
             capturedOptions.value.signal,
           );
+          // Code that reading the signal scheduled can run while this await
+          // resumes, so check the realm before using any intrinsic again.
+          throwIfRealmCompromised();
           referenceHashes.set(reference, hash);
         }
         topologyReferencePayload.push({ reference, hash });
@@ -1914,6 +1917,9 @@ export async function hashDesignFeaturesV2(
             meter,
             capturedOptions.value.signal,
           );
+          // Code that reading the signal scheduled can run while this await
+          // resumes, so check the realm before using any intrinsic again.
+          throwIfRealmCompromised();
           resourceHashes.set(resource, hash);
         }
         resourcePayload.push({ resource, hash });
@@ -1937,6 +1943,9 @@ export async function hashDesignFeaturesV2(
         meter,
         capturedOptions.value.signal,
       );
+      // Code that reading the signal scheduled can run while this await
+      // resumes, so check the realm before using any intrinsic again.
+      throwIfRealmCompromised();
       const hash = `${FEATURE_HASH_PREFIX_V2}${digest}` as FeatureHashV2;
       hashes.set(key, hash);
       entries.set(
