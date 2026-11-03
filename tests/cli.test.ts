@@ -1367,6 +1367,79 @@ describe("CLI", () => {
     }
   }, 30_000);
 
+  it("selects an output named by the empty string with --output", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "invariantcad-cli-"));
+    try {
+      const cad = design("cli-empty-output-name");
+      cad.output(
+        "wide",
+        cad.box("wide", { size: vec3(mm(100), mm(1), mm(1)) }),
+      );
+      cad.output(
+        "small",
+        cad.box("small", { size: vec3(mm(1), mm(1), mm(1)) }),
+      );
+      // Frozen v1-v6 output names are arbitrary strings, including "".
+      const document = JSON.parse(stringifyDocument(cad.build())) as {
+        outputs: Record<string, unknown>;
+      };
+      document.outputs = {
+        "": document.outputs.wide,
+        small: document.outputs.small,
+      };
+      const documentPath = join(directory, "model.json");
+      await writeFile(documentPath, JSON.stringify(document));
+
+      const ambiguous = invokeCli([
+        "export",
+        documentPath,
+        "--to",
+        join(directory, "ambiguous.obj"),
+      ]);
+      expect(ambiguous.status).toBe(2);
+      expect(ambiguous.stderr).toContain("export requires --output <name>");
+
+      for (const selection of [["--output", ""], ["--output="]]) {
+        const outputPath = join(directory, "empty-name.obj");
+        await rm(outputPath, { force: true });
+        const result = invokeCli([
+          "export",
+          documentPath,
+          ...selection,
+          "--to",
+          outputPath,
+        ]);
+        expect(result.stderr, selection.join(" ")).toBe("");
+        expect(result.status, selection.join(" ")).toBe(0);
+        const vertexXs = (await readFile(outputPath, "utf8"))
+          .split("\n")
+          .filter((line) => line.startsWith("v "))
+          .map((line) => Number(line.split(/\s+/)[1]));
+        expect(Math.max(...vertexXs), selection.join(" ")).toBeCloseTo(100, 10);
+      }
+
+      const inspected = invokeCli(["inspect", documentPath, "--output="]);
+      expect(inspected.stderr).toBe("");
+      expect(inspected.status).toBe(0);
+      expect(Object.keys(JSON.parse(inspected.stdout) as object)).toEqual([""]);
+
+      const single = design("cli-no-empty-output-name");
+      single.output(
+        "body",
+        single.box("body", { size: vec3(mm(1), mm(1), mm(1)) }),
+      );
+      const singlePath = join(directory, "single.json");
+      await writeFile(singlePath, stringifyDocument(single.build()));
+      const unknown = invokeCli(["inspect", singlePath, "--output", ""]);
+      expect(unknown.status).toBe(1);
+      expect(unknown.stdout).toBe("");
+      expect(unknown.stderr).toContain("ERROR OUTPUT_MISSING");
+      expect(unknown.stderr).not.toContain("Usage:");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, 60_000);
+
   it("infers export formats from case-insensitive extensions and the .brp alias", async () => {
     const directory = await mkdtemp(join(tmpdir(), "invariantcad-cli-"));
     try {

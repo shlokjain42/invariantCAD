@@ -163,7 +163,9 @@ function parseArguments(values: readonly string[]): ParsedArgumentsResult {
       optionValue = next;
       index += 1;
     }
-    if (optionValue.length === 0) {
+    // Frozen v1-v6 output names are arbitrary strings, so `--output ""` and
+    // `--output=` must still select an output named by the empty string.
+    if (optionValue.length === 0 && rawName !== "output") {
       return {
         ok: false,
         message: `Option '--${rawName}' requires a non-empty value`,
