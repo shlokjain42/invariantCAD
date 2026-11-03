@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- The repository-staged `stagedBodySetDesignV7(...)` facade now captures
+  `bodySet(...)` members and `resource(...)` `locations` as dense own-data
   plain arrays. Each array's `length` is read once from its own data property.
   The 1,000,000-member ceiling and the remaining share of the 100,000-location
   aggregate ceiling are checked against that captured length before anything
@@ -12,17 +14,6 @@
   `Expression` or `Parameter` values for `massDensity` and store a detached
   snapshot. Forged or accessor-backed density objects, which were previously
   accepted and kept by reference, now fail with `TypeError`.
-  use, and the direct selection and the leaf selection still each count their
-  bodies toward `maxPartBodies`.
-  failures report `resource`, `componentResource`, `digest`, `byteLength`,
-  `sourceVersion`, and the external component `output`/`outputKind`, and mesh
-  failures name the meshed assembly as `assemblyOutput`.
-  `EvaluatedProductDocumentV7.mesh()` and `export(...)` rethrow those
-  structured assembly failures unchanged instead of reducing them to a message
-  string, so the occurrence path, child node, child paths, and the kernel cause
-  are preserved.
-- The repository-staged `stagedBodySetDesignV7(...)` facade now captures
-  `bodySet(...)` members and `resource(...)` `locations` as dense own-data
 - Staged facade IDs stay unique across re-entrant authoring calls. A callback,
   an option accessor, or a Proxy trap that registers the same node,
   configuration, material, or resource ID while another call is still capturing
@@ -36,6 +27,8 @@
   and charged once against `maxDistinctSolids`, solid-graph, and other
   cumulative limits; previously it was built twice and could exceed limits it
   actually fit. Component, diagnostic, and BOM identity stay separate for each
+  use, and the direct selection and the leaf selection still each count their
+  bodies toward `maxPartBodies`.
 - Staged local assembly leaves are now named by their part node. That name is
   used for `occurrence.part.name`, the part's solid or body set, STL/OBJ
   headers, and diagnostics. An internal NUL-delimited planner selector or an
@@ -45,6 +38,13 @@
   their child part node.
 - Deferred failures on staged external occurrences now carry the documented top-
   level provenance. Assembly mesh failures and occurrence mass-transform
+  failures report `resource`, `componentResource`, `digest`, `byteLength`,
+  `sourceVersion`, and the external component `output`/`outputKind`, and mesh
+  failures name the meshed assembly as `assemblyOutput`.
+  `EvaluatedProductDocumentV7.mesh()` and `export(...)` rethrow those
+  structured assembly failures unchanged instead of reducing them to a message
+  string, so the occurrence path, child node, child paths, and the kernel cause
+  are preserved.
 - Staged product cumulative-limit diagnostics and kernel-preflight
   `selectionPath` provenance for root-document batches now point at the
   selection itself: `/outputs/<name>` for a direct output or
@@ -54,7 +54,6 @@
   capability failures to the batch that owns the Boolean. Previously such a
   failure could be attributed to an earlier document's batch that had a non-
   Boolean node with the same ID.
-  unchanged.
 - GitHub release notes now link to the hosted documentation site. The release
   workflow used to copy each release page verbatim, so site-relative links such
   as `/evaluation/evaluator` and `../roadmap.md` resolved against the repository
