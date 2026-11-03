@@ -32,7 +32,10 @@ inspection helpers create serializable formulas.
 
 `SketchBuilder`, entity reference classes, `ProfileDefinition`, and sketch
 option types describe planar constrained profiles. `ReferenceSketchSolver` and
-the solver protocol support evaluation or backend replacement.
+the solver protocol support evaluation or backend replacement. The evaluator
+checks a replacement solver's advertised entity and constraint capabilities
+before solving and treats its returned `status` as authoritative; see
+[Create an evaluator](/evaluation/evaluator#create-an-evaluator).
 
 ### Documents
 

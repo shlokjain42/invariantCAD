@@ -45,6 +45,22 @@ const evaluator = await createEvaluator({
 If you supply a kernel or solver, the evaluator takes ownership of it and
 disposes it when `evaluator.dispose()` is called.
 
+A custom sketch solver is held to its declared protocol during evaluation:
+
+- Before solving a sketch, the evaluator requires every entity and constraint
+  kind in it to appear in `sketchSolver.capabilities.entities` or
+  `.constraints`. An unadvertised kind fails with `KERNEL_CAPABILITY_MISSING`
+  at `/nodes/<sketch>/entities/<id>` or `/nodes/<sketch>/constraints/<id>`,
+  and `solve` is not called.
+- `SolvedSketch.status` is authoritative. Only `solved` and `underconstrained`
+  with a finite `residual` produce geometry. `overconstrained` fails with
+  `SKETCH_OVER_CONSTRAINED`; `nonconvergent`, `invalid`, a non-finite residual,
+  and any unrecognized status fail with `SKETCH_SOLVE_FAILED`. These failures
+  are scoped to the sketch node even when the solver returned no error
+  diagnostic.
+- When the solver does return an error-severity diagnostic, the first one is
+  reported, scoped to the sketch node, instead.
+
 If a supplied kernel fails profile preflight, no evaluator takes ownership and
 the caller remains responsible for disposing that kernel. A profile-created
 kernel is disposed automatically if creation fails.

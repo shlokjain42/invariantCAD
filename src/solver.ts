@@ -27,6 +27,13 @@ import type {
   ResolvedProfile,
 } from "./protocol/profile.js";
 
+/**
+ * Outcome of one sketch solve. The evaluator treats it as authoritative: only
+ * `solved` and `underconstrained` (with a finite residual) produce geometry.
+ * `overconstrained` fails with `SKETCH_OVER_CONSTRAINED`; `nonconvergent`,
+ * `invalid`, and any unrecognized value fail with `SKETCH_SOLVE_FAILED`, even
+ * when the solver reports no error diagnostic.
+ */
 export type SketchSolveStatus =
   | "solved"
   | "underconstrained"
@@ -35,20 +42,31 @@ export type SketchSolveStatus =
   | "invalid";
 
 export interface SketchSolverCapabilities {
+  /**
+   * Entity kinds the solver accepts. The evaluator rejects a sketch containing
+   * any other kind with `KERNEL_CAPABILITY_MISSING` before calling `solve`.
+   */
   readonly entities: readonly SketchEntityIR["kind"][];
+  /** Constraint kinds the solver accepts, preflighted like `entities`. */
   readonly constraints: readonly SketchConstraintIR["kind"][];
   readonly reportsDegreesOfFreedom: boolean;
   readonly reportsConflicts: boolean;
 }
 
 export interface SolvedSketch {
+  /** Authoritative solve outcome; see {@link SketchSolveStatus}. */
   readonly status: SketchSolveStatus;
   readonly points: Readonly<Record<EntityId, Vec2>>;
   readonly radii: Readonly<Record<EntityId, number>>;
   readonly profile: ResolvedProfile;
   readonly degreesOfFreedom: number;
   readonly iterations: number;
+  /** Largest constraint residual; a non-finite value fails evaluation. */
   readonly residual: number;
+  /**
+   * Solver diagnostics, reported on the sketch node. The first error-severity
+   * entry becomes the evaluation failure.
+   */
   readonly diagnostics: readonly Diagnostic[];
 }
 
