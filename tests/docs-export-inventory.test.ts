@@ -1,3 +1,6 @@
+import { execFile } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import process from "node:process";
 import { describe, expect, it } from "vitest";
 import {
   apiReportExportNames,
@@ -5,6 +8,30 @@ import {
   collectNamedExports,
   compareExportNames,
 } from "../scripts/docs-export-inventory.mjs";
+
+const repository = fileURLToPath(new URL("..", import.meta.url));
+
+function checkExportIndex(locale: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      process.execPath,
+      ["scripts/generate-docs-export-index.mjs", "--check"],
+      {
+        cwd: repository,
+        encoding: "utf8",
+        env: { ...process.env, LANG: locale, LC_ALL: locale },
+        timeout: 30_000,
+      },
+      (error, stdout, stderr) => {
+        if (error !== null) {
+          reject(new Error(`${error.message}\n${stderr}`, { cause: error }));
+          return;
+        }
+        resolve(stdout);
+      },
+    );
+  });
+}
 
 describe("documentation export inventory", () => {
   it("collects every supported export form with its kind and source", () => {
@@ -79,6 +106,37 @@ describe("documentation export inventory", () => {
       ),
     ).toThrow("entry.ts exports 'thing' more than once");
   });
+
+  it("orders names with an explicit English collation", () => {
+    const names = [
+      "hole",
+      "Diagnostic",
+      "CircleEntityIR",
+      "yaw",
+      "diagnostic",
+      "ChamferNodeIR",
+      "iota",
+    ];
+    expect([...names].sort(compareExportNames)).toEqual([
+      "ChamferNodeIR",
+      "CircleEntityIR",
+      "diagnostic",
+      "Diagnostic",
+      "hole",
+      "iota",
+      "yaw",
+    ]);
+  });
+
+  it.each(["cs_CZ.UTF-8", "da_DK.UTF-8", "lt_LT.UTF-8", "C"])(
+    "accepts the committed export index under the %s host locale",
+    async (locale) => {
+      await expect(checkExportIndex(locale)).resolves.toContain(
+        "Generated export index is current.",
+      );
+    },
+    30_000,
+  );
 });
 
 describe("API report cross-check", () => {

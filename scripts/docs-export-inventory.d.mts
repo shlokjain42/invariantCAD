@@ -6,7 +6,7 @@ export interface DocumentedExport {
   readonly source: string;
 }
 
-/** Orders export names for the generated index. */
+/** Orders export names identically regardless of the host locale. */
 export function compareExportNames(first: string, second: string): number;
 
 /**

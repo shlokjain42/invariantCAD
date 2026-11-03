@@ -17,9 +17,16 @@ const specifierPattern =
 const apiReportDeclarationPattern =
   /^export[ \t]+(?:(?:declare|abstract)[ \t]+)*(?:const[ \t]+enum|const|let|var|class|function|interface|type|enum|namespace)[ \t]+([A-Za-z_$][\w$]*)/;
 
-/** Orders export names for the generated index. */
+// An explicit locale keeps the generated order identical on every host; the
+// process default locale would reorder rows on, for example, cs-CZ or da-DK.
+const exportNameCollator = new Intl.Collator("en");
+
+/** Orders export names identically regardless of the host locale. */
 export function compareExportNames(first, second) {
-  return first.localeCompare(second);
+  return (
+    exportNameCollator.compare(first, second) ||
+    (first < second ? -1 : first > second ? 1 : 0)
+  );
 }
 
 function blockSpecifiers(body, sourcePath) {
