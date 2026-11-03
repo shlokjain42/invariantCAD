@@ -47,6 +47,20 @@ and [Code of Conduct](https://github.com/shlokjain42/invariantCAD/blob/main/CODE
 describe the project's current single-maintainer boundaries and community
 process.
 
+## Pull requests and releases
+
+Protected `main` merges a pull request only after CI on Node 22.13, 24, and 26,
+the Chromium smoke test, CodeQL, Socket pull-request alerts, and a Greptile
+review pass, with every review conversation resolved. Greptile applies the
+repository rules in `.greptile/`.
+
+Ordinary pull requests add changelog entries under `Unreleased` and never bump
+the package version. Releases are prepared as `release/vX.Y.Z` pull requests.
+Merging one runs the full release acceptance suite and, after maintainer
+approval, publishes to npm with provenance, tags the release, creates the
+GitHub release, and updates the live documentation. See the
+[maintainer release procedure](/releasing).
+
 ## Protocol changes
 
 Document, topology, kernel, cache, artifact, and native-facade protocols are

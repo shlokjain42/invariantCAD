@@ -1,0 +1,23 @@
+{
+  "files": [
+    {
+      "path": "CONTRIBUTING.md",
+      "description": "Architectural invariants, required checks per change type, and protocol-change requirements."
+    },
+    {
+      "path": "docs/architecture.md",
+      "description": "Normative layers, ownership rules, protocol boundaries, and conformance requirements.",
+      "scope": ["src/**"]
+    },
+    {
+      "path": "docs/reference/support-matrix.mdx",
+      "description": "Canonical feature-by-feature capability boundary for Manifold, stock OCCT, and the owned facade.",
+      "scope": ["src/*kernel*.ts", "src/internal/occt-*.ts", "docs/**", "README.md"]
+    },
+    {
+      "path": "docs/releasing.md",
+      "description": "Release flow from release pull request to npm, GitHub release, and live docs.",
+      "scope": [".github/**", "scripts/release*.ts", "CHANGELOG.md", "docs/releases/**"]
+    }
+  ]
+}

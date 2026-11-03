@@ -161,6 +161,17 @@ A useful pull request:
 - lists the commands actually run; and
 - calls out compatibility, security, performance, and licensing impact.
 
+Protected `main` merges a pull request only after CI on every supported Node
+version, the Chromium browser smoke test, CodeQL, Socket pull-request alerts,
+and a Greptile review pass, and after every review conversation is resolved.
+Greptile applies the repository rules in `.greptile/`; reply to or resolve each
+of its comments, and comment `@greptileai` to request a fresh review.
+
+Do not bump the package version or add a dated changelog section in an ordinary
+pull request. Releases are prepared as `release/vX.Y.Z` pull requests and
+published automatically after merge; see the
+[maintainer release procedure](docs/releasing.md).
+
 Use a short imperative commit subject. Conventional-style prefixes such as
 `feat:`, `fix:`, `docs:`, `test:`, and `chore:` are encouraged but not
 required. Maintainers may squash or reword commits when merging.
