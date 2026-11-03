@@ -202,6 +202,62 @@ function originQueryChain(depth: number, queries: number): MutableDocument {
   };
 }
 
+/**
+ * A box followed by `length` fillets. Fillet `index` selects edges created by
+ * the feature `origin(index)`. `reverse` lists consumers before the features
+ * they depend on.
+ */
+function originFilletChain(
+  length: number,
+  origin: (index: number) => number,
+  reverse = false,
+): MutableDocument {
+  const literal = (value: number) => ({
+    op: "literal",
+    dimension: "length",
+    value,
+  });
+  const entries: [string, Record<string, unknown>][] = [
+    [
+      "f0",
+      {
+        kind: "box",
+        size: [literal(1), literal(1), literal(1)],
+        center: false,
+      },
+    ],
+  ];
+  for (let index = 1; index <= length; index += 1) {
+    entries.push([
+      `f${index}`,
+      {
+        kind: "fillet",
+        input: { node: `f${index - 1}`, kind: "solid" },
+        edges: {
+          topology: "edge",
+          query: {
+            op: "origin",
+            feature: `f${origin(index)}`,
+            relation: "created",
+          },
+          cardinality: { min: 1 },
+        },
+        radius: literal(0.1),
+      },
+    ]);
+  }
+  if (reverse) entries.reverse();
+  return {
+    schema: DOCUMENT_SCHEMA_V6,
+    version: 6,
+    name: "origin-fillet-chain",
+    units: { length: "mm", angle: "rad" },
+    parameters: {},
+    nodes: Object.fromEntries(entries),
+    outputs: { out: { node: `f${length}`, kind: "solid" } },
+  };
+}
+
 /** Counts node-record reads while validating a document. */
 function nodeReadsDuringValidation(document: MutableDocument): {
   readonly ok: boolean;
@@ -227,6 +283,38 @@ describe("bounded topology-origin validation", () => {
     // Each extra query reads only its own origin feature; it no longer walks
     // the 301-node chain again (previously about 90,000 more reads).
     expect(many.reads - single.reads).toBeLessThanOrEqual(2 * 299);
+  });
+
+  it("stops each feature's ancestor walk at a nearby origin", () => {
+    // Every fillet's origin is its input's input, two steps up the chain.
+    const nearby = (index: number): number => Math.max(0, index - 2);
+    const short = nodeReadsDuringValidation(originFilletChain(200, nearby));
+    const long = nodeReadsDuringValidation(originFilletChain(400, nearby));
+    expect(short.ok).toBe(true);
+    expect(long.ok).toBe(true);
+    // Linear work doubles with the chain; a full ancestor walk per fillet
+    // would roughly quadruple it (about 80,000 reads at 400 fillets).
+    expect(long.reads).toBeLessThanOrEqual(2.5 * short.reads);
+    expect(long.reads).toBeLessThanOrEqual(20 * 400);
+  });
+
+  it("stays linear when every feature selects a distant shared origin", () => {
+    for (const reverse of [false, true]) {
+      const short = nodeReadsDuringValidation(
+        originFilletChain(200, () => 0, reverse),
+      );
+      const long = nodeReadsDuringValidation(
+        originFilletChain(400, () => 0, reverse),
+      );
+      expect(short.ok).toBe(true);
+      expect(long.ok).toBe(true);
+      // A walk from every fillet down to the box would read about 80,000
+      // nodes at 400 fillets.
+      expect(long.reads, `reverse: ${reverse}`).toBeLessThanOrEqual(
+        2.5 * short.reads,
+      );
+      expect(long.reads, `reverse: ${reverse}`).toBeLessThanOrEqual(20 * 400);
+    }
   });
 
   it("still rejects an origin that is not an ancestor of the input", () => {
@@ -255,6 +343,43 @@ describe("bounded topology-origin validation", () => {
       relation: "created",
     };
     expect(validateDocument(asDocument(document)).ok).toBe(true);
+  });
+
+  it("keeps exact answers once a shared origin's descendants are collected", () => {
+    for (const reverse of [false, true]) {
+      // Fillets 1-59 and 61-74 select the box. Fillet 60 selects a later
+      // fillet and fillets 75-80 a detached box; neither is an ancestor. The
+      // box and the detached box are each checked often enough to switch to
+      // collected descendants.
+      const document = originFilletChain(
+        80,
+        (index) => (index === 60 ? 70 : 0),
+        reverse,
+      );
+      document.nodes.side = {
+        kind: "box",
+        size: document.nodes.f0!.size,
+        center: false,
+      };
+      const detached: [string, string][] = [];
+      for (let index = 75; index <= 80; index += 1) {
+        const edges = document.nodes[`f${index}`]!.edges as {
+          query: Record<string, unknown>;
+        };
+        edges.query = { op: "origin", feature: "side", relation: "created" };
+        detached.push([
+          "TOPOLOGY_SELECTOR_INVALID",
+          `/nodes/f${index}/edges/query/feature`,
+        ]);
+      }
+      const reported = codesAndPaths(
+        validateDocument(asDocument(document)),
+      ).sort((left, right) => String(left[1]).localeCompare(String(right[1])));
+      expect(reported, `reverse: ${reverse}`).toEqual([
+        ["TOPOLOGY_SELECTOR_INVALID", "/nodes/f60/edges/query/feature"],
+        ...detached,
+      ]);
+    }
   });
 });
 

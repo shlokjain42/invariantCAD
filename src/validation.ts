@@ -776,46 +776,130 @@ function validateSketch(
 }
 
 /**
- * Ancestor closures computed during one validation pass, keyed by the
- * document under validation. Every origin query of a consuming feature asks
- * about the same input, so its closure is walked once per pass rather than
- * once per query. The cache lives only for one validateDocumentInternal call,
- * so a later edit to an in-memory document can never see stale closures.
+ * Ancestor checks made during one validation pass, keyed by the document under
+ * validation. The cache lives only for one validateDocumentInternal call, so a
+ * later edit to an in-memory document can never see stale answers.
+ *
+ * A check walks up from the descendant. Walks are resumable: a walk stops at
+ * the possible ancestor, and a later check about the same descendant continues
+ * where it stopped. Nearby origins therefore cost a few steps, and many checks
+ * about one input walk its ancestors at most once. Once the walks toward one
+ * possible ancestor have cost as many steps as the graph has nodes, that
+ * ancestor's descendants are collected once through the reverse edges, so
+ * many distant consumers of one base feature stay linear as well.
  */
-interface AncestorClosureCache {
-  readonly closures: Map<NodeId, ReadonlySet<NodeId>>;
+interface AncestorWalk {
+  readonly visited: Set<NodeId>;
+  readonly pending: NodeId[];
+  steps: number;
+}
+
+interface AncestorQueryCache {
+  readonly walks: Map<NodeId, AncestorWalk>;
+  readonly walkSteps: Map<NodeId, number>;
+  readonly descendants: Map<NodeId, ReadonlySet<NodeId>>;
+  consumers: ReadonlyMap<NodeId, readonly NodeId[]> | undefined;
+  nodeCount: number | undefined;
   entries: number;
 }
 
-const ancestorClosureCaches = new WeakMap<
+const ancestorQueryCaches = new WeakMap<
   ValidatableDocument,
-  AncestorClosureCache
+  AncestorQueryCache
 >();
 
-/** Total cached closure entries before the cache is dropped and refilled. */
+/** Total retained walk and descendant entries before they are dropped. */
 const MAX_CACHED_ANCESTOR_ENTRIES = 1_000_000;
 
-/** The node itself plus every node reachable through its dependencies. */
-function ancestorClosure(
+function newAncestorQueryCache(): AncestorQueryCache {
+  return {
+    walks: new Map(),
+    walkSteps: new Map(),
+    descendants: new Map(),
+    consumers: undefined,
+    nodeCount: undefined,
+    entries: 0,
+  };
+}
+
+/**
+ * Expands a walk over the descendant and every node reachable through its
+ * dependencies until `possibleAncestor` is visited or the walk is exhausted.
+ */
+function advanceAncestorWalk(
   document: ValidatableDocument,
-  descendant: NodeId,
-): ReadonlySet<NodeId> {
-  const visited = new Set<NodeId>();
-  const pending: NodeId[] = [descendant];
+  walk: AncestorWalk,
+  possibleAncestor: NodeId,
+): boolean {
+  const { visited, pending } = walk;
   while (pending.length > 0) {
     const id = pending.pop()!;
+    walk.steps += 1;
     if (visited.has(id)) continue;
     visited.add(id);
     const node = Object.hasOwn(document.nodes, id)
       ? document.nodes[id]
       : undefined;
+    if (node !== undefined) {
+      const dependencies = nodeDependenciesForDocument(node, document);
+      for (let index = dependencies.length - 1; index >= 0; index -= 1) {
+        pending.push(dependencies[index]!.node);
+      }
+    }
+    if (id === possibleAncestor) return true;
+  }
+  return false;
+}
+
+/** Reverse dependency edges, built once per validation pass on demand. */
+function ancestorConsumers(
+  document: ValidatableDocument,
+  cache: AncestorQueryCache,
+): ReadonlyMap<NodeId, readonly NodeId[]> {
+  if (cache.consumers !== undefined) return cache.consumers;
+  const consumers = new Map<NodeId, NodeId[]>();
+  for (const id of Object.keys(document.nodes) as NodeId[]) {
+    const node = document.nodes[id];
     if (node === undefined) continue;
-    const dependencies = nodeDependenciesForDocument(node, document);
-    for (let index = dependencies.length - 1; index >= 0; index -= 1) {
-      pending.push(dependencies[index]!.node);
+    for (const dependency of nodeDependenciesForDocument(node, document)) {
+      const list = consumers.get(dependency.node);
+      if (list === undefined) consumers.set(dependency.node, [id]);
+      else list.push(id);
     }
   }
-  return visited;
+  cache.consumers = consumers;
+  return consumers;
+}
+
+/** The ancestor itself plus every node that depends on it. */
+function collectDescendants(
+  document: ValidatableDocument,
+  cache: AncestorQueryCache,
+  ancestor: NodeId,
+): ReadonlySet<NodeId> {
+  const consumers = ancestorConsumers(document, cache);
+  const reached = new Set<NodeId>([ancestor]);
+  const pending: NodeId[] = [ancestor];
+  while (pending.length > 0) {
+    const next = consumers.get(pending.pop()!);
+    if (next === undefined) continue;
+    for (const consumer of next) {
+      if (reached.has(consumer)) continue;
+      reached.add(consumer);
+      pending.push(consumer);
+    }
+  }
+  return reached;
+}
+
+/** Bounds memory on graphs with many deep consumers; dropped work is redone. */
+function retainAncestorEntries(cache: AncestorQueryCache, added: number): void {
+  cache.entries += added;
+  if (cache.entries > MAX_CACHED_ANCESTOR_ENTRIES) {
+    cache.walks.clear();
+    cache.descendants.clear();
+    cache.entries = 0;
+  }
 }
 
 function nodeIsAncestor(
@@ -823,23 +907,44 @@ function nodeIsAncestor(
   descendant: NodeId,
   possibleAncestor: NodeId,
 ): boolean {
-  const cache = ancestorClosureCaches.get(document);
+  if (descendant === possibleAncestor) return true;
+  const cache = ancestorQueryCaches.get(document);
   if (cache === undefined) {
-    return ancestorClosure(document, descendant).has(possibleAncestor);
+    return advanceAncestorWalk(
+      document,
+      { visited: new Set(), pending: [descendant], steps: 0 },
+      possibleAncestor,
+    );
   }
-  let closure = cache.closures.get(descendant);
-  if (closure === undefined) {
-    closure = ancestorClosure(document, descendant);
-    // Bound memory on graphs with many deep consumers; a dropped closure is
-    // recomputed on demand.
-    if (cache.entries + closure.size > MAX_CACHED_ANCESTOR_ENTRIES) {
-      cache.closures.clear();
-      cache.entries = 0;
-    }
-    cache.closures.set(descendant, closure);
-    cache.entries += closure.size;
+  const descendants = cache.descendants.get(possibleAncestor);
+  if (descendants !== undefined) return descendants.has(descendant);
+  let walk = cache.walks.get(descendant);
+  if (walk !== undefined) {
+    if (walk.visited.has(possibleAncestor)) return true;
+    if (walk.pending.length === 0) return false;
   }
-  return closure.has(possibleAncestor);
+  const spent = cache.walkSteps.get(possibleAncestor) ?? 0;
+  cache.nodeCount ??= Object.keys(document.nodes).length;
+  if (spent >= cache.nodeCount) {
+    const collected = collectDescendants(document, cache, possibleAncestor);
+    cache.descendants.set(possibleAncestor, collected);
+    retainAncestorEntries(cache, collected.size);
+    return collected.has(descendant);
+  }
+  const retained =
+    walk === undefined ? 0 : walk.visited.size + walk.pending.length;
+  if (walk === undefined) {
+    walk = { visited: new Set(), pending: [descendant], steps: 0 };
+    cache.walks.set(descendant, walk);
+  }
+  const stepsBefore = walk.steps;
+  const found = advanceAncestorWalk(document, walk, possibleAncestor);
+  cache.walkSteps.set(possibleAncestor, spent + walk.steps - stepsBefore);
+  retainAncestorEntries(
+    cache,
+    walk.visited.size + walk.pending.length - retained,
+  );
+  return found;
 }
 
 function validateTopologySelection(
@@ -2244,11 +2349,11 @@ function validateDocumentInternal<T extends ValidatableDocument>(
   // is reported alone instead of running version-specific checks against it.
   const identity = documentIdentityDiagnostic(document, admitStagedV7);
   if (identity !== undefined) return failure(identity);
-  ancestorClosureCaches.set(document, { closures: new Map(), entries: 0 });
+  ancestorQueryCaches.set(document, newAncestorQueryCache());
   try {
     return validateDocumentRules(document);
   } finally {
-    ancestorClosureCaches.delete(document);
+    ancestorQueryCaches.delete(document);
   }
 }
 
