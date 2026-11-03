@@ -576,13 +576,12 @@ describe("public imported-body document workflow", () => {
       evaluator.dispose();
     }
 
+    const { documentBodyImport: _strongImport, ...weakCapabilities } =
+      exactImportKernel().capabilities;
     const missingCapability = await createEvaluator({
       kernel: exactImportKernel({
         id: "occtV7-custom",
-        capabilities: {
-          ...exactImportKernel().capabilities,
-          documentBodyImport: undefined,
-        },
+        capabilities: weakCapabilities,
       }),
     });
     try {
