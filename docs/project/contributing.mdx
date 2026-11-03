@@ -22,6 +22,11 @@ pnpm test
 ```
 
 Node.js 22.13 or newer is required. The lockfile records the tested toolchain.
+The Mintlify commands `pnpm docs:dev`, `pnpm docs:validate`, `pnpm docs:links`,
+and `pnpm release:check` (which runs the validation and link checks) use the
+pinned Mint CLI, which supports Node.js 20.17 through 24 and exits on Node.js 25
+and newer. Run those commands with Node.js 24, as CI and the release workflow
+do.
 
 ## Validation levels
 
@@ -33,7 +38,7 @@ pnpm test:browser   # production Vite bundle in Chromium
 pnpm lint:package   # package export/type lint
 pnpm test:package   # packed clean-consumer smoke
 pnpm api:entrypoints:check # export/source/report/target manifest
-pnpm release:check  # full gate, including coverage + six benchmarks
+pnpm release:check  # full gate on Node 24, including coverage + six benchmarks
 ```
 
 Run the smallest relevant loop while developing, then the proportional full

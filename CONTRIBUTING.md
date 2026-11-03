@@ -50,6 +50,13 @@ pnpm lint
 pnpm test
 ```
 
+The Mintlify commands `pnpm docs:dev`, `pnpm docs:validate`, `pnpm docs:links`,
+and `pnpm release:check` (which runs the validation and link checks) use the
+pinned Mint CLI. It supports Node.js 20.17 through 24 and exits on Node.js 25
+and newer, so run those commands with Node.js 24, as CI and the release
+workflow do. This is a documentation-tooling ceiling, not a package runtime
+ceiling.
+
 Create a focused branch in your fork. Keep unrelated refactors separate from
 the behavior being changed. Do not commit generated build output, coverage,
 local artifacts, credentials, or npm tokens.
@@ -84,8 +91,8 @@ to the change before opening a pull request.
 | Public TypeScript API | `pnpm api:generate`, review `etc/api/`, and `pnpm api:check` |
 | Package exports or CLI | `pnpm lint:package` and `pnpm test:package` |
 | Browser or WASM loading | `pnpm test:browser` |
-| Dependency or release boundary | `pnpm audit:release` and `pnpm release:check` |
-| Mintlify navigation or components | `pnpm docs:validate` and `pnpm docs:links` |
+| Dependency or release boundary | `pnpm audit:release` and, on Node.js 24, `pnpm release:check` |
+| Mintlify navigation or components | `pnpm docs:validate` and `pnpm docs:links`, on Node.js 24 |
 
 `pnpm release:check` is intentionally heavyweight. A contributor does not need
 to run every heavyweight native facade gate unless the change affects that
