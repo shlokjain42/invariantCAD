@@ -1,7 +1,8 @@
 /**
  * Content Security Policy served with every production browser-smoke
- * response. It must stay identical to the example policy documented in
- * docs/evaluation/browser-and-workers.mdx.
+ * response. smoke.spec.ts checks that the example policies in
+ * docs/evaluation/browser-and-workers.mdx and
+ * docs/evaluation/occt-runtime-attestation.mdx stay identical to it.
  *
  * - `'wasm-unsafe-eval'` permits WebAssembly compilation.
  * - `'unsafe-eval'` is required because the bundled Manifold and stock
