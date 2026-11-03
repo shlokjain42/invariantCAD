@@ -1017,10 +1017,23 @@ class EvaluationOwner {
       [this],
     ) as CapturedEvaluationOwnerDisposal | undefined;
     if (capturedDisposal === undefined) {
-      for (let index = 0; index < this.#shapes.length; index += 1) {
-        this.kernel.disposeShape(this.#shapes[index]!);
-      }
+      // Mark the owner disposed first and attempt every shape exactly once,
+      // so one failing release neither leaks the rest nor leaves the result
+      // usable over released shapes.
       this.#disposed = true;
+      let firstError: unknown;
+      let disposalFailed = false;
+      for (let index = 0; index < this.#shapes.length; index += 1) {
+        try {
+          this.kernel.disposeShape(this.#shapes[index]!);
+        } catch (error) {
+          if (!disposalFailed) {
+            firstError = error;
+            disposalFailed = true;
+          }
+        }
+      }
+      if (disposalFailed) throw firstError;
       return;
     }
 
@@ -15551,7 +15564,14 @@ export class Evaluator {
       );
       return success(evaluated, diagnostics);
     } catch (error) {
-      for (const shape of createdShapes) this.kernel.disposeShape(shape);
+      for (const shape of createdShapes) {
+        try {
+          this.kernel.disposeShape(shape);
+        } catch {
+          // Preserve the original structured failure while making best-effort
+          // cleanup of every other shape created by this evaluation.
+        }
+      }
       const value =
         error instanceof EvaluationFailure
           ? error.diagnostic
