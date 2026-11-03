@@ -36,16 +36,23 @@ const pair = cad.assembly("bracket-pair", (assembly) => {
   assembly.instance("left", bracket);
   assembly.instance("right", bracket, {
     placement: [
-      tf.translate(vec3(mm(100), mm(0), mm(0))),
       tf.rotate(angleVec3(deg(0), deg(0), deg(180))),
+      tf.translate(vec3(mm(100), mm(0), mm(0))),
     ],
   });
 });
 ```
 
 Instances reference part or assembly definitions; they do not duplicate their
-component nodes. Placement operations execute in order. An instance can be
-suppressed by default with `{ suppressed: true }`.
+component nodes. An instance can be suppressed by default with
+`{ suppressed: true }`.
+
+Placement operations execute in authored order, and each one acts about the
+world origin on the result of the operations before it. The example therefore
+turns the bracket 180 degrees about the world Z axis and then moves it 100 mm
+along +X, so the occurrence transform's translation is (100, 0, 0). Listing the
+translation first would rotate that offset about the origin as well and place
+the occurrence at (-100, 0, 0).
 
 ## Nested assembly
 
