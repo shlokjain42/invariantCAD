@@ -241,14 +241,32 @@ function optionValues(
   return arguments_.options.get(name) ?? [];
 }
 
+// C0/C1 controls, line/paragraph separators, and bidirectional embedding,
+// override, and isolate controls from documents must not reach a terminal raw.
+const TERMINAL_UNSAFE_CHARACTERS =
+  /[\p{Cc}\u2028\u2029\u202a-\u202e\u2066-\u2069]/gu;
+
+/**
+ * Escapes characters that could drive a terminal or forge extra output lines
+ * when untrusted document text is echoed, so each report stays on its line.
+ */
+function terminalSafe(text: string): string {
+  return text.replace(
+    TERMINAL_UNSAFE_CHARACTERS,
+    (character) =>
+      `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+}
+
 function formatDiagnostics(diagnostics: readonly Diagnostic[]): string {
   return diagnostics
     .map(
       (item) =>
-        `${item.severity.toUpperCase()} ${item.code}${item.path === undefined ? "" : ` ${item.path}`}: ${item.message}`,
+        `${item.severity.toUpperCase()} ${item.code}${item.path === undefined ? "" : ` ${terminalSafe(item.path)}`}: ${terminalSafe(item.message)}`,
     )
     .join("\n");
 }
+
 
 type InlineParametersResult =
   | {
@@ -559,7 +577,7 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
     DEFAULT_DESIGN_DOCUMENT_LIMITS.maxDocumentBytes,
   );
   if (!documentText.ok) {
-    process.stderr.write(`${documentText.message}\n`);
+    process.stderr.write(`${terminalSafe(documentText.message)}\n`);
     return 1;
   }
   const parsed = parseDocument(documentText.value);
@@ -568,7 +586,9 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
     return 1;
   }
   if (args.command === "validate") {
-    process.stdout.write(`Valid InvariantCAD v${parsed.value.version} document: ${parsed.value.name}\n`);
+    process.stdout.write(
+      `Valid InvariantCAD v${parsed.value.version} document: ${terminalSafe(parsed.value.name)}\n`,
+    );
     return 0;
   }
   const parameterOverrides = await loadParameters(
@@ -576,7 +596,7 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
     inlineParameters.value,
   );
   if (!parameterOverrides.ok) {
-    process.stderr.write(`${parameterOverrides.message}\n`);
+    process.stderr.write(`${terminalSafe(parameterOverrides.message)}\n`);
     return 1;
   }
   const exactExport =

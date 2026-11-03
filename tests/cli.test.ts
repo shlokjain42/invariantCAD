@@ -1156,4 +1156,47 @@ describe("CLI", () => {
       await rm(directory, { recursive: true, force: true });
     }
   }, 15_000);
+
+  it("escapes control characters taken from untrusted documents", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "invariantcad-cli-"));
+    try {
+      const cad = design("placeholder");
+      cad.output(
+        "solid",
+        cad.box("solid", { size: vec3(mm(1), mm(1), mm(1)) }),
+      );
+      const hostileName =
+        "evil\u001b[2J\u001b]0;pwned\u0007\nValid InvariantCAD v6 document: other\u009b\u2028";
+      const documentValue = { ...cad.build(), name: hostileName };
+      const documentPath = join(directory, "hostile.json");
+      await writeFile(documentPath, stringifyDocument(documentValue));
+
+      const validated = invokeCli(["validate", documentPath]);
+      expect(validated.stderr).toBe("");
+      expect(validated.status).toBe(0);
+      expect(validated.stdout).toBe(
+        "Valid InvariantCAD v6 document: evil\\u001b[2J\\u001b]0;pwned\\u0007\\u000aValid InvariantCAD v6 document: other\\u009b\\u2028\n",
+      );
+
+      const brokenPath = join(directory, "broken.json");
+      const broken = JSON.parse(stringifyDocument(cad.build())) as {
+        outputs: Record<string, unknown>;
+      };
+      broken.outputs["bad\u001b]0;x\u0007\nINFO FORGED"] = {
+        node: "missing\u001b[2J",
+        kind: "solid",
+      };
+      await writeFile(brokenPath, JSON.stringify(broken));
+      const rejected = invokeCli(["validate", brokenPath]);
+      expect(rejected.status).toBe(1);
+      expect(rejected.stdout).toBe("");
+      expect(rejected.stderr).toContain("\\u001b");
+      expect(rejected.stderr).not.toMatch(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/u);
+      for (const line of rejected.stderr.trimEnd().split("\n")) {
+        expect(line).toMatch(/^ERROR [A-Z_]+/u);
+      }
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, 30_000);
 });
