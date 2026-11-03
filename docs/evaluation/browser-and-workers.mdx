@@ -211,7 +211,9 @@ transferred from a terminated realm.
 An internal one-shot coordinator used by the release gate rejects pre-abort
 without creating a worker, starts the deadline before worker startup, settles
 result/abort/timeout/startup races once, terminates every created worker exactly
-once, and waits for its termination adapter before returning. Browser
+once, and waits for its termination adapter before returning. It observes every
+returned worker's result even when a deadline or abort wins during startup, so
+a result that rejects on termination is not reported as unhandled. Browser
 `Worker.terminate()` itself returns `void`; the browser adapter can therefore
 confirm the termination request but cannot await or claim worker exit. It is not
 exported as a library API; applications should implement an appropriate

@@ -28,6 +28,24 @@ function handle<T>(
   return { result, terminate };
 }
 
+async function collectUnhandledRejections(
+  run: () => Promise<void>,
+): Promise<unknown[]> {
+  const unhandled: unknown[] = [];
+  const onUnhandledRejection = (reason: unknown): void => {
+    unhandled.push(reason);
+  };
+  process.on("unhandledRejection", onUnhandledRejection);
+  try {
+    await run();
+    // Node reports unhandled rejections after the microtask queue drains.
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  } finally {
+    process.off("unhandledRejection", onUnhandledRejection);
+  }
+  return unhandled;
+}
+
 async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
@@ -253,6 +271,92 @@ describe("disposable worker operation", () => {
 
     await expect(operation).rejects.toMatchObject({ name: "AbortError" });
     expect(terminate).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["deadline", "abort"] as const)(
+    "observes a result that rejects on termination when the %s wins during start",
+    async (race) => {
+      if (race === "deadline") {
+        vi.spyOn(performance, "now")
+          .mockReturnValueOnce(1_000)
+          .mockReturnValue(1_025);
+      }
+      const controller = new AbortController();
+      const workerResult = deferred<number>();
+      const then = vi.spyOn(workerResult.promise, "then");
+      const terminate = vi.fn(() => {
+        workerResult.reject(
+          new Error("worker terminated before reporting a result"),
+        );
+      });
+      let caught: unknown;
+      const unhandled = await collectUnhandledRejections(async () => {
+        caught = await runDisposableWorkerOperation(
+          () => {
+            if (race === "abort") controller.abort();
+            return handle(workerResult.promise, terminate);
+          },
+          { timeoutMs: 25, signal: controller.signal },
+        ).catch((error: unknown) => error);
+      });
+
+      if (race === "deadline") {
+        expect(caught).toBeInstanceOf(DisposableWorkerOperationTimeoutError);
+      } else {
+        expect(caught).toMatchObject({ name: "AbortError" });
+      }
+      expect(terminate).toHaveBeenCalledTimes(1);
+      expect(then).toHaveBeenCalledTimes(1);
+      expect(unhandled).toEqual([]);
+    },
+  );
+
+  it("observes the result of a handle without a termination method", async () => {
+    const workerFailure = new Error("worker failed");
+    const workerResult = deferred<number>();
+    let caught: unknown;
+    const unhandled = await collectUnhandledRejections(async () => {
+      const operation = runDisposableWorkerOperation(
+        () =>
+          ({ result: workerResult.promise }) as unknown as
+            DisposableWorkerOperationHandle<number>,
+        { timeoutMs: 1_000 },
+      );
+      workerResult.reject(workerFailure);
+      caught = await operation.catch((error: unknown) => error);
+    });
+
+    expect(caught).toBeInstanceOf(TypeError);
+    expect(caught).toMatchObject({
+      message: expect.stringContaining("has no terminate method"),
+    });
+    expect(unhandled).toEqual([]);
+  });
+
+  it("observes an adopted result whose then aborts synchronously", async () => {
+    const controller = new AbortController();
+    const workerFailure = new Error("worker failed while aborting");
+    const terminate = vi.fn();
+    const thenable = {
+      then(
+        _resolve: (value: number) => void,
+        reject: (error: unknown) => void,
+      ): void {
+        controller.abort();
+        reject(workerFailure);
+      },
+    };
+    let caught: unknown;
+    const unhandled = await collectUnhandledRejections(async () => {
+      caught = await runDisposableWorkerOperation(
+        () => handle(thenable as unknown as PromiseLike<number>, terminate),
+        { timeoutMs: 1_000, signal: controller.signal },
+      ).catch((error: unknown) => error);
+    });
+
+    expect(caught).toMatchObject({ name: "AbortError" });
+    expect(terminate).toHaveBeenCalledTimes(1);
+    expect(unhandled).toEqual([]);
   });
 
   it("returns a frozen timeout failure only after termination", async () => {

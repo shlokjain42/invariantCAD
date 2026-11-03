@@ -77,10 +77,13 @@ function adoptPromiseLike<T>(
  *
  * The first result, rejection, abort, or timeout wins. Every reachable handle
  * is terminated exactly once, and termination completes before this promise
- * settles. A `start` call that throws has not returned a reachable handle, so
- * there is no termination method available to invoke. An adapter whose
- * termination promise never settles will likewise keep this promise pending;
- * adapters must make forced termination independently bounded.
+ * settles. A reachable handle's result is always observed, including when a
+ * deadline or abort wins during `start`, so an adapter that rejects its result
+ * on termination does not cause an unhandled rejection. A `start` call that
+ * throws has not returned a reachable handle, so there is no termination method
+ * available to invoke. An adapter whose termination promise never settles will
+ * likewise keep this promise pending; adapters must make forced termination
+ * independently bounded.
  */
 export function runDisposableWorkerOperation<T>(
   start: () => DisposableWorkerOperationHandle<T>,
@@ -248,39 +251,44 @@ export function runDisposableWorkerOperation<T>(
           terminate = () => Reflect.apply(rawTerminate, handle, []);
         }
 
-        if (outcome === undefined) {
-          let rawResult: unknown;
-          try {
-            rawResult = Reflect.get(handle, "result");
-          } catch (error) {
-            select({ kind: "failure", error });
-          }
-          if (outcome === undefined) {
-            if (!objectLike(rawResult)) {
-              select({
-                kind: "failure",
-                error: new TypeError(
-                  "Disposable worker operation handle result is not PromiseLike",
-                ),
-              });
-            } else {
-              let then: unknown;
-              try {
-                then = Reflect.get(rawResult, "then");
-              } catch (error) {
-                select({ kind: "failure", error });
-              }
-              if (outcome === undefined) {
-                if (typeof then !== "function") {
-                  select({
-                    kind: "failure",
-                    error: new TypeError(
-                      "Disposable worker operation handle result is not PromiseLike",
-                    ),
-                  });
-                } else {
-                  result = adoptPromiseLike<T>(rawResult, then);
-                }
+        // Observe the result even when start already selected an outcome, so
+        // an adapter that rejects its result on termination cannot leak an
+        // unhandled rejection. `select` keeps the first outcome.
+        let rawResult: unknown;
+        let resultReadable = true;
+        try {
+          rawResult = Reflect.get(handle, "result");
+        } catch (error) {
+          resultReadable = false;
+          select({ kind: "failure", error });
+        }
+        if (resultReadable) {
+          if (!objectLike(rawResult)) {
+            select({
+              kind: "failure",
+              error: new TypeError(
+                "Disposable worker operation handle result is not PromiseLike",
+              ),
+            });
+          } else {
+            let then: unknown;
+            let thenReadable = true;
+            try {
+              then = Reflect.get(rawResult, "then");
+            } catch (error) {
+              thenReadable = false;
+              select({ kind: "failure", error });
+            }
+            if (thenReadable) {
+              if (typeof then !== "function") {
+                select({
+                  kind: "failure",
+                  error: new TypeError(
+                    "Disposable worker operation handle result is not PromiseLike",
+                  ),
+                });
+              } else {
+                result = adoptPromiseLike<T>(rawResult, then);
               }
             }
           }
@@ -299,7 +307,7 @@ export function runDisposableWorkerOperation<T>(
 
     startFinished = true;
     settleAfterTermination();
-    if (result !== undefined && outcome === undefined) {
+    if (result !== undefined) {
       void result.then(
         (value) => select({ kind: "success", value }),
         (error: unknown) => select({ kind: "failure", error }),
