@@ -58,11 +58,19 @@ exists, names the advisory, module versions, and the single development root
 through which every finding is reached, and fails the audit both when any
 finding falls outside it and when it no longer matches anything.
 
-The only current exception is GHSA-mrhx-c7xc-m3w5 in `zod` 3.24.0 and 3.25.76.
-Every published `mint` documentation-tooling release pins those versions and
-no patched `zod` 3 release exists. `mint` is neither shipped nor imported at
-runtime; InvariantCAD's own runtime dependency is `zod` `^4.6.6`. Remove the
-exception when `mint` adopts a patched `zod`.
+There are two current exceptions, both reached only through the `mint`
+documentation tooling, which is neither shipped nor imported at runtime:
+
+- GHSA-mrhx-c7xc-m3w5 in `zod` 3.24.0 and 3.25.76. Every published `mint`
+  release pins those versions and no patched `zod` 3 release exists.
+  InvariantCAD's own runtime dependency is `zod` `^4.6.6`. Remove the exception
+  when `mint` adopts a patched `zod`.
+- GHSA-g3hv-75wg-m249 in `minimatch` 3.1.5. The fix exists only in `minimatch`
+  11.0.1 and newer, while `mint`'s `glob` and Spectral dependencies require the
+  CommonJS `minimatch` 3 API; `mint` matches only repository-authored patterns.
+  API Extractor's `minimatch` is overridden to a patched 11.x release instead.
+  Remove the exception when `mint` no longer resolves a vulnerable
+  `minimatch`.
 
 The default geometry backend uses only Manifold's standalone core JavaScript,
 WebAssembly, and type artifacts. Those upstream `manifold-3d@3.5.1` files are
