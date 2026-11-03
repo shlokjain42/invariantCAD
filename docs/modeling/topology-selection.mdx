@@ -121,9 +121,18 @@ query.atLeast(2);      // two or more
 query.between(2, 8);   // inclusive range
 ```
 
-There is no unbounded "take whatever matched" selection. Cardinality protects a
-model from silently applying a feature to a different number of subshapes after
-a parameter or upstream feature change.
+There is no unbounded "take whatever matched" selection. Cardinality bounds the
+set the selector matches, so a parameter or upstream feature change that adds or
+removes a matching item fails the feature instead of silently changing its
+selected input.
+
+For shell openings and draft faces, the matched set is exactly the set of faces
+the operation receives. Fillet and chamfer `edges` are different: each selected
+edge is a seed that expands to its maximal tangent-edge contour after the
+cardinality check. A `select()` seed can therefore treat several
+tangent-connected edges, and an upstream change that makes a neighboring edge
+tangent can grow the treated contour without a diagnostic. See
+[fillet and chamfer](/modeling/features#fillet-and-chamfer).
 
 ## Explain a selection
 

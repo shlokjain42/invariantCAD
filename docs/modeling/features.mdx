@@ -102,6 +102,12 @@ const beveled = cad.chamfer("beveled", extrusion, {
 The selection resolves against the direct input solid. A missing, ambiguous, or
 wrong-cardinality selection fails before the treatment is applied.
 
+Selected edges are seeds, not hard boundaries. After the cardinality check, each
+seed expands to the maximal connected contour of tangent edges, so one selected
+edge can round or bevel a whole tangent chain. Cardinality counts the seeds, not
+the edges finally treated, and seeds on the same contour apply the treatment
+once.
+
 ## Shell and offset
 
 ```ts
