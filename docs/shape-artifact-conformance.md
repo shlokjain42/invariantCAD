@@ -576,9 +576,18 @@ Sidecar incidence is then encoded against that canonical order, so producer
 TopExp enumeration cannot change the bytes. Decode imports a new native root,
 captures its raw path order, maps stored paths to fresh indices, and
 exact-compares occurrence count plus every record's type, composed orientation,
-child count, and class path. It also exact-compares identified face/edge/vertex
-geometry and incidence. Only then does it attach the stored semantic evidence
-to fresh evaluation-scoped keys. A multiplicity, order, orientation,
+child count, and class path. It also compares identified face/edge/vertex
+geometry and incidence. Incidence, surface/curve kinds, and vertex points must
+match exactly. Stock binary BREP is not a bit-exact boundary for values OCCT
+derives from the reloaded representation: areas, lengths, centers, bounding
+boxes, normals, axes, directions, and radii can move by a few units in the last
+place, even for an ordinary extruded polygon. Each such value must match within
+`64` units in the last place of the larger of its own magnitude and the stored
+model scale (the largest stored coordinate magnitude, its square for areas, or
+`1` for unit vectors). The comparison only verifies the BREP section; the
+stored descriptors, not the recomputed values, are what the decoded shape
+reports. Only then does it attach the stored semantic evidence to fresh
+evaluation-scoped keys. A multiplicity, order, orientation,
 `IsSame`-class membership, shape type, child count, geometry, incidence, or
 root-structure mismatch rejects the artifact and disposes the partial shape.
 

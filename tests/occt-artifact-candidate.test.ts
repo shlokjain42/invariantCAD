@@ -371,6 +371,44 @@ function rectangleProfile(width: number, height: number): ResolvedProfile {
   };
 }
 
+function regularPolygonProfile(sides: number, radius: number): ResolvedProfile {
+  const points = Array.from({ length: sides }, (_, index) => {
+    const angle = (2 * Math.PI * index) / sides;
+    return [radius * Math.cos(angle), radius * Math.sin(angle)] as const;
+  });
+  return {
+    plane: { plane: "XY", origin: [0, 0, 0] },
+    outer: {
+      curves: points.map((start, index) => ({
+        kind: "line" as const,
+        start,
+        end: points[(index + 1) % sides]!,
+        source: {
+          kind: "sketch-entity" as const,
+          sketch: "artifact-polygon-profile",
+          entity: `side-${index}` as ProfileCurveSource["entity"],
+        },
+      })),
+    },
+    holes: [],
+  };
+}
+
+function polygonPrism(
+  kernel: GeometryKernel,
+  sides: number,
+  feature: string,
+): KernelShape {
+  if (kernel.extrude === undefined) {
+    throw new Error("OCCT extrusion support is unavailable");
+  }
+  return kernel.extrude(
+    regularPolygonProfile(sides, 10),
+    { distance: 10, symmetric: false, twist: 0, scaleTop: [1, 1], divisions: 0 },
+    { feature },
+  );
+}
+
 function quarterCirclePath(radius: number): ResolvedCircularArcPath {
   return {
     kind: "circularArc",
@@ -492,6 +530,70 @@ describe("OCCT shape-artifact codec candidate", { timeout: 30_000 }, () => {
       producer.dispose();
     }
   });
+
+  it.each([7, 24])(
+    "round-trips a non-rectilinear %i-sided prism whose derived bounds drift in binary BREP",
+    async (sides) => {
+      const producer = await createOcctKernel();
+      const consumer = await createOcctKernel();
+      let source: KernelShape | undefined;
+      let reimported: KernelShape | undefined;
+      const decoded: (readonly [GeometryKernel, KernelShape])[] = [];
+      try {
+        source = polygonPrism(producer, sides, `prism-${sides}`);
+        const artifact = await codec(producer).encodeShapeArtifact(
+          source,
+          ARTIFACT_CONTEXT,
+        );
+        for (const kernel of [producer, consumer]) {
+          const shape = await codec(kernel).decodeShapeArtifact(
+            artifact,
+            ARTIFACT_CONTEXT,
+          );
+          decoded.push([kernel, shape]);
+          expect(kernel.status(shape)).toEqual({ ok: true, code: "VALID" });
+          // The stored descriptors, not native recomputations, are restored,
+          // so the semantic observation still matches the source exactly.
+          const plan = observationPlan(producer);
+          expect(await observe(kernel, shape, plan)).toEqual(
+            await observe(producer, source, plan),
+          );
+          expectFreshTopologyKeys(
+            topology(producer, source),
+            topology(kernel, shape),
+          );
+        }
+
+        // A source that already went through one binary-BREP reload drifts
+        // again on the next reload and must still round-trip.
+        if (producer.exportShape === undefined || producer.importShape === undefined) {
+          throw new Error("OCCT binary-BREP exchange support is unavailable");
+        }
+        reimported = producer.importShape(
+          producer.exportShape(source, "brep-binary", { feature: "prism-export" }),
+          "brep-binary",
+          { feature: "prism-import" },
+        );
+        const reimportedArtifact = await codec(producer).encodeShapeArtifact(
+          reimported,
+          ARTIFACT_CONTEXT,
+        );
+        const shape = await codec(consumer).decodeShapeArtifact(
+          reimportedArtifact,
+          ARTIFACT_CONTEXT,
+        );
+        decoded.push([consumer, shape]);
+        expect(consumer.status(shape)).toEqual({ ok: true, code: "VALID" });
+      } finally {
+        for (const [kernel, shape] of decoded) kernel.disposeShape(shape);
+        if (reimported !== undefined) producer.disposeShape(reimported);
+        if (source !== undefined) producer.disposeShape(source);
+        consumer.dispose();
+        producer.dispose();
+      }
+    },
+    60_000,
+  );
 
   it("emits identical bytes and remaps a symmetric solid when TopExp enumeration reverses", async () => {
     const normalProducer = await createOcctKernel();

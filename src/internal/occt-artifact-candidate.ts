@@ -331,7 +331,7 @@ function bytesEqual(first: Uint8Array, second: Uint8Array): boolean {
 function exactNumber(first: number, second: number): boolean {
   // The repository evaluator-semantic quotient deliberately identifies signed
   // zero. Binary BREP can flip the sign bit of a geometrically zero normal
-  // component; every other finite value must remain exactly equal.
+  // component; every other stored value must remain exactly equal.
   return first === second;
 }
 
@@ -345,46 +345,123 @@ function sameVector(first: readonly number[], second: readonly number[]): boolea
   );
 }
 
-function sameOptionalVector(
-  first: readonly number[] | undefined,
-  second: readonly number[] | undefined,
-): boolean {
-  return first === undefined || second === undefined
-    ? first === second
-    : sameVector(first, second);
+/**
+ * Units in the last place that a derived descriptor value may move across a
+ * stock binary-BREP reload. Vertex points, kinds, incidence, and orientation
+ * stay exact. OCCT recomputes areas, lengths, centers, bounding boxes, and
+ * directions/normals/axes/radii from the reloaded representation, and those
+ * were observed to move by up to two units of the reference magnitude below.
+ * This only verifies that the BREP section still matches the stored
+ * descriptors; the stored values, not the recomputed ones, are restored.
+ */
+const DERIVED_VALUE_ULPS = 64;
+const ulpScratch = new Float64Array(1);
+const ulpScratchBits = new BigUint64Array(ulpScratch.buffer);
+
+function ulpOf(magnitude: number): number {
+  ulpScratch[0] = magnitude;
+  ulpScratchBits[0]! += 1n;
+  return ulpScratch[0]! - magnitude;
 }
 
-function sameOptionalNumber(
-  first: number | undefined,
-  second: number | undefined,
+/**
+ * Compares one derived value within DERIVED_VALUE_ULPS units in the last
+ * place of the larger of both magnitudes and `reference`. The reference keeps
+ * values near zero, such as a bounds component of a slanted face, on the
+ * model's scale instead of their own vanishing units in the last place.
+ */
+function derivedNumber(
+  first: number,
+  second: number,
+  reference: number,
+): boolean {
+  if (first === second) return true;
+  if (!Number.isFinite(first) || !Number.isFinite(second)) return false;
+  const magnitude = Math.max(Math.abs(first), Math.abs(second), reference);
+  return Math.abs(first - second) <= DERIVED_VALUE_ULPS * ulpOf(magnitude);
+}
+
+function derivedVector(
+  first: readonly number[],
+  second: readonly number[],
+  reference: number,
+): boolean {
+  return (
+    first.length === 3 &&
+    second.length === 3 &&
+    derivedNumber(first[0]!, second[0]!, reference) &&
+    derivedNumber(first[1]!, second[1]!, reference) &&
+    derivedNumber(first[2]!, second[2]!, reference)
+  );
+}
+
+function derivedOptionalVector(
+  first: readonly number[] | undefined,
+  second: readonly number[] | undefined,
+  reference: number,
 ): boolean {
   return first === undefined || second === undefined
     ? first === second
-    : exactNumber(first, second);
+    : derivedVector(first, second, reference);
+}
+
+function derivedOptionalNumber(
+  first: number | undefined,
+  second: number | undefined,
+  reference: number,
+): boolean {
+  return first === undefined || second === undefined
+    ? first === second
+    : derivedNumber(first, second, reference);
 }
 
 function sameSurface(
   first: KernelSurfaceDescriptor,
   second: KernelSurfaceDescriptor,
+  extent: number,
 ): boolean {
   return (
     first.kind === second.kind &&
-    sameOptionalVector(first.normal, second.normal) &&
-    sameOptionalVector(first.axis, second.axis) &&
-    sameOptionalNumber(first.radius, second.radius)
+    derivedOptionalVector(first.normal, second.normal, 1) &&
+    derivedOptionalVector(first.axis, second.axis, 1) &&
+    derivedOptionalNumber(first.radius, second.radius, extent)
   );
 }
 
 function sameCurve(
   first: KernelCurveDescriptor,
   second: KernelCurveDescriptor,
+  extent: number,
 ): boolean {
   return (
     first.kind === second.kind &&
-    sameOptionalVector(first.direction, second.direction) &&
-    sameOptionalVector(first.axis, second.axis) &&
-    sameOptionalNumber(first.radius, second.radius)
+    derivedOptionalVector(first.direction, second.direction, 1) &&
+    derivedOptionalVector(first.axis, second.axis, 1) &&
+    derivedOptionalNumber(first.radius, second.radius, extent)
   );
+}
+
+/** Largest stored coordinate magnitude: the model scale for derived values. */
+function storedExtent(
+  snapshot: KernelTopologySnapshot,
+  signal?: AbortSignal,
+): number {
+  let extent = 0;
+  const include = (vector: readonly number[]) => {
+    for (const component of vector) {
+      extent = Math.max(extent, Math.abs(component));
+    }
+  };
+  [...snapshot.faces, ...snapshot.edges].forEach((item, index) => {
+    if ((index & 0x3ff) === 0) checkAbort(signal);
+    include(item.bounds.min);
+    include(item.bounds.max);
+  });
+  snapshot.vertices.forEach((vertex, index) => {
+    if ((index & 0x3ff) === 0) checkAbort(signal);
+    include(vertex.point);
+  });
+  return Number.isFinite(extent) ? extent : 0;
 }
 
 function sortedAdjacencyIndices(
@@ -1003,6 +1080,8 @@ export function remapOcctShapeArtifactTopology(
   }
   const storedIndices = snapshotIndices(stored, signal);
   const freshIndices = snapshotIndices(fresh, signal);
+  const extent = storedExtent(stored, signal);
+  const area = extent * extent;
   const faceMapping = nativeMappings.face;
   const edgeMapping = nativeMappings.edge;
   const vertexMapping = nativeMappings.vertex;
@@ -1011,11 +1090,11 @@ export function remapOcctShapeArtifactTopology(
     const expected = stored.faces[index]!;
     const actual = fresh.faces[faceMapping[index]!]!;
     if (
-      !exactNumber(expected.area, actual.area) ||
-      !sameVector(expected.center, actual.center) ||
-      !sameVector(expected.bounds.min, actual.bounds.min) ||
-      !sameVector(expected.bounds.max, actual.bounds.max) ||
-      !sameSurface(expected.surface, actual.surface) ||
+      !derivedNumber(expected.area, actual.area, area) ||
+      !derivedVector(expected.center, actual.center, extent) ||
+      !derivedVector(expected.bounds.min, actual.bounds.min, extent) ||
+      !derivedVector(expected.bounds.max, actual.bounds.max, extent) ||
+      !sameSurface(expected.surface, actual.surface, extent) ||
       !sameIndices(
         mappedIndices(
           expected.edges,
@@ -1040,11 +1119,11 @@ export function remapOcctShapeArtifactTopology(
     const expected = stored.edges[index]!;
     const actual = fresh.edges[edgeMapping[index]!]!;
     if (
-      !exactNumber(expected.length, actual.length) ||
-      !sameVector(expected.center, actual.center) ||
-      !sameVector(expected.bounds.min, actual.bounds.min) ||
-      !sameVector(expected.bounds.max, actual.bounds.max) ||
-      !sameCurve(expected.curve, actual.curve) ||
+      !derivedNumber(expected.length, actual.length, extent) ||
+      !derivedVector(expected.center, actual.center, extent) ||
+      !derivedVector(expected.bounds.min, actual.bounds.min, extent) ||
+      !derivedVector(expected.bounds.max, actual.bounds.max, extent) ||
+      !sameCurve(expected.curve, actual.curve, extent) ||
       !sameIndices(
         mappedIndices(
           expected.faces,
