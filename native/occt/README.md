@@ -453,6 +453,15 @@ positive-volume solid with no loose topology and must satisfy the public
 direction/volume postconditions. The arena input BREP remains byte-stable on
 success or failure.
 
+Known difference from the stock path: in both modes the pinned ABI 0.6+
+transaction reverses a builder result whose signed volume is negative before it
+runs those checks, so an orientation-flipped result that then passes
+validation and the direction/volume postconditions is accepted. The stock
+TypeScript shell and offset paths do not reverse such a result; they reject it
+as not positive-volume. Removing the reversal for whole-solid offset (or
+reporting `RESULT_NOT_POSITIVE_VOLUME`) changes the native patch and therefore
+requires a rebuilt, re-pinned facade bundle.
+
 A successful solid-offset report owns its result and a complete version-1
 single-input graph under the same identity/deletion, generated, residual-created,
 canonicalization, sentinel, and source/result coverage rules as ABI 0.4/0.5.
