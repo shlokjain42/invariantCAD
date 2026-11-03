@@ -474,6 +474,42 @@ describe("expression immutability", () => {
     expect(evaluate(constructed)).toBe(2);
   });
 
+  it("rejects own fields that the deep freeze would not reach", () => {
+    // A named property on a value array, or a non-enumerable or symbol field
+    // on a node, would keep caller data mutable under a frozen root.
+    const extra = { n: 1 };
+    const withNamedProperty = Object.assign([mm(1).ir], { extra });
+    expect(() =>
+      fromExpressionIR(
+        { op: "max", dimension: "length", values: withNamedProperty } as never,
+        "length",
+      ),
+    ).toThrow("'max' values can contain only expression operands");
+    const hiddenIndexAlias = [mm(1).ir];
+    Object.defineProperty(hiddenIndexAlias, "hidden", { value: extra });
+    expect(() =>
+      fromExpressionIR(
+        { op: "min", dimension: "length", values: hiddenIndexAlias } as never,
+        "length",
+      ),
+    ).toThrow("'min' values can contain only expression operands");
+    const symbolField = {
+      op: "literal",
+      dimension: "length",
+      value: 1,
+      [Symbol("extra")]: extra,
+    };
+    expect(() => fromExpressionIR(symbolField as never, "length")).toThrow(
+      "'literal' fields must be enumerable string keys",
+    );
+    const hiddenField = { op: "literal", dimension: "length", value: 1 };
+    Object.defineProperty(hiddenField, "hidden", { value: extra });
+    expect(() => fromExpressionIR(hiddenField as never, "length")).toThrow(
+      "'literal' fields must be enumerable string keys",
+    );
+    expect(Object.isFrozen(extra)).toBe(false);
+  });
+
   it("constructs long derived chains without re-inspecting earlier nodes", () => {
     let total = mm(0);
     for (let index = 0; index < 20_000; index += 1) {

@@ -46,6 +46,7 @@ const reflectApply = Reflect.apply;
 const objectFreeze = Object.freeze;
 const objectHasOwn = Object.hasOwn;
 const objectKeys = Object.keys;
+const reflectOwnKeys = Reflect.ownKeys;
 const arrayIsArray = Array.isArray;
 const objectDefineProperty = Object.defineProperty;
 const IntrinsicWeakSet = WeakSet;
@@ -194,6 +195,14 @@ function expressionNodeOperands(
   }
   const allowed = EXPRESSION_IR_FIELDS[op as ExpressionIR["op"]];
   const keys = objectKeys(node);
+  // A non-enumerable or symbol field would keep caller data outside the
+  // deep freeze, so every own field must be an enumerable string key.
+  if (reflectOwnKeys(node).length !== keys.length) {
+    throw malformedExpression(
+      label,
+      `'${op}' fields must be enumerable string keys`,
+    );
+  }
   for (let keyIndex = 0; keyIndex < keys.length; keyIndex += 1) {
     const key = keys[keyIndex]!;
     let supported = false;
@@ -296,11 +305,21 @@ function expressionNodeOperands(
       }
       objectFreeze(values);
       const items = values as readonly unknown[];
-      const operands: object[] = [];
       for (let index = 0; index < items.length; index += 1) {
         if (!objectHasOwn(items, index)) {
           throw malformedExpression(label, `'${op}' values cannot be sparse`);
         }
+      }
+      // A dense array owns exactly its indices and length. Any other own
+      // property would keep caller data outside the deep freeze.
+      if (reflectOwnKeys(values).length !== items.length + 1) {
+        throw malformedExpression(
+          label,
+          `'${op}' values can contain only expression operands`,
+        );
+      }
+      const operands: object[] = [];
+      for (let index = 0; index < items.length; index += 1) {
         const value = expressionChild(items, index, op, label);
         if (value.dimension !== dimension) {
           throw mismatch(`'${op}' requires ${dimension} values, received ${String(value.dimension)}`);
