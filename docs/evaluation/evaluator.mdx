@@ -23,11 +23,25 @@ const preview = await createEvaluator({ profile: "mesh-preview" });
 const exact = await createEvaluator({ profile: "mechanical-exact" });
 ```
 
-`mesh-preview` creates Manifold and requires its common mesh-modeling baseline.
-`mechanical-exact` creates stock OCCT and requires exact B-Rep, the common exact
-feature set, STEP/BREP import and export, and face/edge/vertex topology. A
-supplied custom kernel is checked against the same profile before an evaluator
-is returned.
+Both profiles require kernel protocol version 1 and callable `box`,
+`cylinder`, and `sphere` primitives.
+
+- `mesh-preview` creates Manifold and requires a mesh representation plus
+  `extrude`, `revolve`, `boolean`, and `transform`.
+- `mechanical-exact` creates stock OCCT and requires an exact B-Rep
+  representation; the `extrude`, `revolve`, `loft`, `sweep`,
+  `circularArcSweep`, `compositeSweep`, `boolean`, `transform`, `fillet`,
+  `chamfer`, `shell`, and `offset` features; native `step`, `brep`, and
+  `brep-binary` import and export through `importShape` and `exportShape`; and
+  topology snapshots through a callable `topology()` whose capabilities cover
+  faces, edges, and vertices with semantic roles, sketch sources, geometry, and
+  adjacency.
+
+A supplied custom kernel is checked against the same profile before an
+evaluator is returned. `manifold` options are allowed only without a profile or
+with `mesh-preview`, and `occt` options only with `mechanical-exact`; any other
+combination throws `TypeError`. When you supply `kernel`, no kernel is created,
+so `manifold` and `occt` options are not used.
 
 Use `inspectEvaluatorProfile(kernel, profile)` when an application needs to
 show missing capabilities without attempting evaluator creation. The returned

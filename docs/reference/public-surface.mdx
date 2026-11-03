@@ -47,13 +47,19 @@ document hashing, and resource limits form the versioned document boundary.
 
 `createEvaluator`, `Evaluator`, `EvaluatedDesign`, evaluated output classes,
 evaluation options, mesh/export formats, measurements, materials, BOMs, and
-physical-property types execute documents and expose owned results.
+physical-property types execute documents and expose owned results. Evaluator
+profiles (`EvaluatorProfile`, `EVALUATOR_PROFILES`) and
+`inspectEvaluatorProfile` check a kernel against the `mesh-preview` or
+`mechanical-exact` runtime contract.
 
 ### Geometry kernels
 
 `GeometryKernel` and its capability/protocol types support custom backends.
 `createManifoldKernel` and `ManifoldKernel` implement the bundled default.
-OpenCascade creation is intentionally exposed through its own package subpath.
+Direct OpenCascade kernel construction and its options live on the
+`invariantcad/kernels/occt` subpath. The root
+`createEvaluator({ profile: "mechanical-exact" })` also creates the stock OCCT
+kernel, loading that module only when the profile is requested.
 
 ### Topology
 

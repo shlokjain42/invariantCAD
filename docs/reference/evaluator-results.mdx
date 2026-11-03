@@ -10,8 +10,21 @@ icon: "square-play"
 createEvaluator(options?: CreateEvaluatorOptions): Promise<Evaluator>
 ```
 
-`CreateEvaluatorOptions` accepts `kernel`, default-Manifold `manifold` options,
-and `sketchSolver`.
+`CreateEvaluatorOptions` has five optional fields:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `profile` | `"mesh-preview" \| "mechanical-exact"` | Runtime contract. Without `kernel`, `mesh-preview` creates Manifold and `mechanical-exact` creates stock OCCT. The kernel must pass `inspectEvaluatorProfile(kernel, profile)` or creation throws `TypeError` |
+| `kernel` | `GeometryKernel` | Use this kernel instead of creating one; the evaluator takes ownership |
+| `manifold` | `ManifoldKernelOptions` | Options for the created Manifold kernel; allowed without a profile or with `mesh-preview` |
+| `occt` | `OcctKernelOptions` | Options for the stock OCCT kernel that `mechanical-exact` creates |
+| `sketchSolver` | `SketchSolverBackend` | Replace the reference sketch solver; the evaluator takes ownership |
+
+Creation throws `TypeError` for an unknown `profile`, for `occt` without
+`profile: "mechanical-exact"`, and for `manifold` with `mechanical-exact`. When
+`kernel` is supplied, no kernel is created, so `manifold` and `occt` options are
+not used. See [evaluator profiles](/evaluation/evaluator#create-an-evaluator)
+for the capabilities each profile requires.
 
 ## Evaluation
 

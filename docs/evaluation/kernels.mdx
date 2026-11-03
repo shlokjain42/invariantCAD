@@ -63,8 +63,12 @@ created.
 
 The profile is stronger than checking `representation === "brep"`: creation
 also requires the documented primitive and feature baseline, native exchange
-methods, exactness, and face/edge/vertex topology. For custom loading, create
-the kernel explicitly and request the same preflight:
+methods, exactness, face/edge/vertex topology with semantic roles, sketch
+sources, geometry, and adjacency, and a callable `topology()` snapshot method.
+`inspectEvaluatorProfile(kernel, "mechanical-exact")` lists each missing
+requirement as a stable path such as `topology:adjacency` or
+`topology:snapshot`. For custom loading, create the kernel explicitly and
+request the same preflight:
 
 ```ts
 const kernel = await createOcctKernel({ wasm: customWasmSource });
