@@ -755,16 +755,35 @@ function validateSketch(
   );
 }
 
-function nodeIsAncestor(
+/**
+ * Ancestor closures computed during one validation pass, keyed by the
+ * document under validation. Every origin query of a consuming feature asks
+ * about the same input, so its closure is walked once per pass rather than
+ * once per query. The cache lives only for one validateDocumentInternal call,
+ * so a later edit to an in-memory document can never see stale closures.
+ */
+interface AncestorClosureCache {
+  readonly closures: Map<NodeId, ReadonlySet<NodeId>>;
+  entries: number;
+}
+
+const ancestorClosureCaches = new WeakMap<
+  ValidatableDocument,
+  AncestorClosureCache
+>();
+
+/** Total cached closure entries before the cache is dropped and refilled. */
+const MAX_CACHED_ANCESTOR_ENTRIES = 1_000_000;
+
+/** The node itself plus every node reachable through its dependencies. */
+function ancestorClosure(
   document: ValidatableDocument,
   descendant: NodeId,
-  possibleAncestor: NodeId,
-): boolean {
+): ReadonlySet<NodeId> {
   const visited = new Set<NodeId>();
   const pending: NodeId[] = [descendant];
   while (pending.length > 0) {
     const id = pending.pop()!;
-    if (id === possibleAncestor) return true;
     if (visited.has(id)) continue;
     visited.add(id);
     const node = Object.hasOwn(document.nodes, id)
@@ -776,7 +795,31 @@ function nodeIsAncestor(
       pending.push(dependencies[index]!.node);
     }
   }
-  return false;
+  return visited;
+}
+
+function nodeIsAncestor(
+  document: ValidatableDocument,
+  descendant: NodeId,
+  possibleAncestor: NodeId,
+): boolean {
+  const cache = ancestorClosureCaches.get(document);
+  if (cache === undefined) {
+    return ancestorClosure(document, descendant).has(possibleAncestor);
+  }
+  let closure = cache.closures.get(descendant);
+  if (closure === undefined) {
+    closure = ancestorClosure(document, descendant);
+    // Bound memory on graphs with many deep consumers; a dropped closure is
+    // recomputed on demand.
+    if (cache.entries + closure.size > MAX_CACHED_ANCESTOR_ENTRIES) {
+      cache.closures.clear();
+      cache.entries = 0;
+    }
+    cache.closures.set(descendant, closure);
+    cache.entries += closure.size;
+  }
+  return closure.has(possibleAncestor);
 }
 
 function validateTopologySelection(
@@ -2181,6 +2224,17 @@ function validateDocumentInternal<T extends ValidatableDocument>(
   // is reported alone instead of running version-specific checks against it.
   const identity = documentIdentityDiagnostic(document, admitStagedV7);
   if (identity !== undefined) return failure(identity);
+  ancestorClosureCaches.set(document, { closures: new Map(), entries: 0 });
+  try {
+    return validateDocumentRules(document);
+  } finally {
+    ancestorClosureCaches.delete(document);
+  }
+}
+
+function validateDocumentRules<T extends ValidatableDocument>(
+  document: T,
+): CadResult<T> {
   const diagnostics: Diagnostic[] = [];
   validateTopologyReferences(document, diagnostics);
   const usesMassDensity =
