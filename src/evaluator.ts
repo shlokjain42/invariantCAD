@@ -118,6 +118,10 @@ import {
 } from "./internal/resolved-profile-region.js";
 import { resolvedProfileRegionDiagnostic } from "./internal/resolved-profile-region-diagnostic.js";
 import {
+  sketchSolveFailureDiagnostic,
+  sketchSolverCapabilityDiagnostic,
+} from "./internal/sketch-solve-admission.js";
+import {
   combinePhysicalMassProperties,
   physicalMassProperties as scalePhysicalMassProperties,
   type PhysicalMassProperties,
@@ -14488,16 +14492,32 @@ export class Evaluator {
             );
             break;
           case "sketch": {
+            const unsupported = sketchSolverCapabilityDiagnostic(
+              this.sketchSolver,
+              node,
+              id,
+            );
+            if (unsupported !== undefined) {
+              throw new EvaluationFailure(unsupported);
+            }
             const solved = this.sketchSolver.solve(node, {
               evaluate: expression,
               feature: id,
               ...(options.signal === undefined ? {} : { signal: options.signal }),
             });
-            diagnostics.push(
-              ...solved.diagnostics.map((item) => ({ ...item, node: id })),
+            const solverDiagnostics = solved.diagnostics.map((item) => ({
+              ...item,
+              node: id,
+            }));
+            diagnostics.push(...solverDiagnostics);
+            const solveFailure = sketchSolveFailureDiagnostic(
+              this.sketchSolver,
+              solved,
+              solverDiagnostics,
+              id,
             );
-            if (hasErrors(solved.diagnostics)) {
-              throw new EvaluationFailure(solved.diagnostics[0]!);
+            if (solveFailure !== undefined) {
+              throw new EvaluationFailure(solveFailure);
             }
             const regionIssue = validateResolvedProfileRegion(
               solved.profile,

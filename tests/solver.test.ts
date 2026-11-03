@@ -6,9 +6,18 @@ import {
   evaluateExpression,
   mm,
   plane,
+  rad,
   tessellateProfile,
   vec2,
+  type DesignBuilder,
+  type DesignDocument,
   type Evaluator,
+  type ExpressionIR,
+  type SketchBuilder,
+  type SketchNodeIR,
+  type SketchSolveStatus,
+  type SketchSolverBackend,
+  type SolvedSketch,
 } from "../src/index.js";
 
 let evaluator: Evaluator;
@@ -150,5 +159,267 @@ describe("reference sketch solver", () => {
     expect(
       result.diagnostics.some((item) => item.code === "SKETCH_OVER_CONSTRAINED"),
     ).toBe(true);
+  });
+});
+
+function literalEvaluate(expression: ExpressionIR): number {
+  return evaluateExpression(expression, {
+    resolveParameter: () => {
+      throw new Error("This sketch has no parameters");
+    },
+  });
+}
+
+function sketchNode(
+  document: DesignDocument,
+  id = "profile",
+): SketchNodeIR {
+  const node = document.nodes[id as keyof typeof document.nodes];
+  if (node?.kind !== "sketch") throw new Error(`Sketch '${id}' was not built`);
+  return node;
+}
+
+function sketchDocument(
+  build: (sketch: SketchBuilder) => ReturnType<SketchBuilder["profile"]>,
+  extrude = true,
+): DesignDocument {
+  const cad: DesignBuilder = design("solver-fixture");
+  const profile = cad.sketch("profile", plane.xy(), build);
+  if (extrude) {
+    cad.output("solid", cad.extrude("solid", profile, { distance: mm(2) }));
+  }
+  return cad.build();
+}
+
+function solveReference(
+  document: DesignDocument,
+  evaluate: (expression: ExpressionIR) => number = literalEvaluate,
+): SolvedSketch {
+  const solver = createReferenceSketchSolver();
+  try {
+    return solver.solve(sketchNode(document), { evaluate, feature: "profile" });
+  } finally {
+    solver.dispose();
+  }
+}
+
+function statusSolver(
+  status: SketchSolveStatus | string,
+  options: {
+    readonly diagnostics?: SolvedSketch["diagnostics"];
+    readonly residual?: number;
+    readonly capabilities?: Partial<SketchSolverBackend["capabilities"]>;
+  } = {},
+): SketchSolverBackend & { readonly solveCalls: () => number } {
+  const delegate = createReferenceSketchSolver();
+  let calls = 0;
+  return {
+    id: "status-fixture",
+    capabilities: { ...delegate.capabilities, ...options.capabilities },
+    solve(sketch, context) {
+      calls += 1;
+      const solved = delegate.solve(sketch, context);
+      return {
+        ...solved,
+        status: status as SketchSolveStatus,
+        residual: options.residual ?? solved.residual,
+        diagnostics: options.diagnostics ?? [],
+      };
+    },
+    dispose() {
+      delegate.dispose();
+    },
+    solveCalls: () => calls,
+  };
+}
+
+function conflictingCircleDocument(): DesignDocument {
+  return sketchDocument((sketch) => {
+    const circle = sketch.circle("circle", {
+      center: vec2(mm(0), mm(0)),
+      radius: mm(7),
+    });
+    sketch.radius("radius", circle, mm(7)).diameter("diameter", circle, mm(20));
+    return sketch.profile(circle.loop());
+  });
+}
+
+describe("evaluator sketch-solver status and capability admission", () => {
+  it("does not report a non-finite residual as solved", () => {
+    const document = sketchDocument((sketch) => {
+      const circle = sketch.circle("circle", {
+        center: vec2(mm(0), mm(0)),
+        radius: mm(7),
+      });
+      sketch.radius("radius", circle, mm(7));
+      return sketch.profile(circle.loop());
+    });
+    const radiusValue = (
+      sketchNode(document).constraints[
+        "radius" as keyof SketchNodeIR["constraints"]
+      ] as { readonly value: ExpressionIR }
+    ).value;
+    const solved = solveReference(document, (expression) =>
+      expression === radiusValue ? Number.NaN : literalEvaluate(expression),
+    );
+    expect(solved.status).toBe("nonconvergent");
+    expect(solved.diagnostics).toEqual([
+      expect.objectContaining({ code: "SKETCH_SOLVE_FAILED", severity: "error" }),
+    ]);
+  });
+
+  it.each([
+    ["overconstrained", "SKETCH_OVER_CONSTRAINED", "/nodes/profile/constraints", "overconstrained"],
+    ["nonconvergent", "SKETCH_SOLVE_FAILED", "/nodes/profile", "nonconvergent"],
+    ["invalid", "SKETCH_SOLVE_FAILED", "/nodes/profile", "invalid"],
+    ["mystery", "SKETCH_SOLVE_FAILED", "/nodes/profile", "unrecognized"],
+  ] as const)(
+    "rejects a custom %s solve that reports no error diagnostic",
+    async (status, code, path, detailStatus) => {
+      const custom = await createEvaluator({ sketchSolver: statusSolver(status) });
+      try {
+        const result = await custom.evaluate(conflictingCircleDocument());
+        expect(result.ok).toBe(false);
+        expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([
+          expect.objectContaining({
+            code,
+            node: "profile",
+            path,
+            details: { sketchSolver: "status-fixture", status: detailStatus },
+          }),
+        ]);
+      } finally {
+        custom.dispose();
+      }
+    },
+  );
+
+  it("rejects a failed status even when the solver only reports warnings", async () => {
+    const custom = await createEvaluator({
+      sketchSolver: statusSolver("nonconvergent", {
+        diagnostics: [
+          {
+            code: "SKETCH_UNDER_CONSTRAINED",
+            severity: "warning",
+            message: "Solver warning only",
+          },
+        ],
+      }),
+    });
+    try {
+      const result = await custom.evaluate(conflictingCircleDocument());
+      expect(result.ok).toBe(false);
+      expect(result.diagnostics.map((item) => [item.code, item.severity])).toEqual([
+        ["SKETCH_UNDER_CONSTRAINED", "warning"],
+        ["SKETCH_SOLVE_FAILED", "error"],
+      ]);
+    } finally {
+      custom.dispose();
+    }
+  });
+
+  it("rejects an admitted status with a non-finite residual", async () => {
+    const custom = await createEvaluator({
+      sketchSolver: statusSolver("solved", { residual: Number.NaN }),
+    });
+    try {
+      const result = await custom.evaluate(conflictingCircleDocument());
+      expect(result.ok).toBe(false);
+      expect(result.diagnostics.at(-1)).toEqual(
+        expect.objectContaining({
+          code: "SKETCH_SOLVE_FAILED",
+          details: {
+            sketchSolver: "status-fixture",
+            status: "solved",
+            reason: "non-finite-residual",
+          },
+        }),
+      );
+    } finally {
+      custom.dispose();
+    }
+  });
+
+  it("reports the solver's own first error once, scoped to the sketch node", async () => {
+    const result = await evaluator.evaluate(conflictingCircleDocument());
+    expect(result.ok).toBe(false);
+    const errors = result.diagnostics.filter((item) => item.severity === "error");
+    expect(errors).toEqual([
+      expect.objectContaining({ code: "SKETCH_OVER_CONSTRAINED", node: "profile" }),
+    ]);
+  });
+
+  it("rejects unadvertised constraint and entity kinds before solving", async () => {
+    const constraintSolver = statusSolver("solved", {
+      capabilities: { constraints: ["radius"] },
+    });
+    const constraintEvaluator = await createEvaluator({
+      sketchSolver: constraintSolver,
+    });
+    try {
+      const result = await constraintEvaluator.evaluate(conflictingCircleDocument());
+      expect(result.ok).toBe(false);
+      expect(result.diagnostics).toEqual([
+        expect.objectContaining({
+          code: "KERNEL_CAPABILITY_MISSING",
+          node: "profile",
+          path: "/nodes/profile/constraints/diameter",
+          details: {
+            sketchSolver: "status-fixture",
+            kind: "constraint",
+            capability: "diameter",
+          },
+        }),
+      ]);
+      expect(constraintSolver.solveCalls()).toBe(0);
+    } finally {
+      constraintEvaluator.dispose();
+    }
+
+    const entitySolver = statusSolver("solved", {
+      capabilities: { entities: ["point", "line"] },
+    });
+    const entityEvaluator = await createEvaluator({ sketchSolver: entitySolver });
+    try {
+      const result = await entityEvaluator.evaluate(conflictingCircleDocument());
+      expect(result.ok).toBe(false);
+      expect(result.diagnostics).toEqual([
+        expect.objectContaining({
+          code: "KERNEL_CAPABILITY_MISSING",
+          path: "/nodes/profile/entities/circle",
+          details: {
+            sketchSolver: "status-fixture",
+            kind: "entity",
+            capability: "circle",
+          },
+        }),
+      ]);
+      expect(entitySolver.solveCalls()).toBe(0);
+    } finally {
+      entityEvaluator.dispose();
+    }
+  });
+
+  it("admits an advertised underconstrained custom solve", async () => {
+    const custom = await createEvaluator({
+      sketchSolver: statusSolver("underconstrained", {
+        diagnostics: [],
+      }),
+    });
+    try {
+      const result = await custom.evaluate(
+        sketchDocument((sketch) => {
+          const circle = sketch.circle("circle", {
+            center: vec2(mm(0), mm(0)),
+            radius: mm(7),
+          });
+          return sketch.profile(circle.loop());
+        }),
+      );
+      expect(result.ok).toBe(true);
+      if (result.ok) result.value.dispose();
+    } finally {
+      custom.dispose();
+    }
   });
 });

@@ -560,7 +560,21 @@ export class ReferenceSketchSolver implements SketchSolverBackend {
     const degreesOfFreedom = Math.max(0, variables.initial.length - rank);
     const diagnostics: Diagnostic[] = [];
     let status: SketchSolveStatus;
-    if (maximumResidual > sketch.tolerance) {
+    if (!Number.isFinite(maximumResidual)) {
+      // NaN compares false against every tolerance, so it must not fall
+      // through to the solved branches below.
+      status = "nonconvergent";
+      diagnostics.push(
+        diagnostic(
+          "SKETCH_SOLVE_FAILED",
+          "Sketch constraints did not converge to a finite residual",
+          {
+            severity: "error",
+            details: { maximumResidual: String(maximumResidual) },
+          },
+        ),
+      );
+    } else if (maximumResidual > sketch.tolerance) {
       status = "overconstrained";
       diagnostics.push(
         diagnostic(
