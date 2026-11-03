@@ -695,12 +695,17 @@ interface ResolvedExternalDocumentV7 {
   readonly document: DesignDocumentV7;
 }
 
+/**
+ * One prepared child batch per (resource, child configuration). Direct
+ * external-part selections are named by their child output; fixed-subassembly
+ * leaf selections are synthetic and listed in `syntheticOutputs`.
+ */
 interface ExternalPartEvaluationBatchV7 {
   readonly key: string;
-  readonly outputKind: "part" | "assembly";
   readonly external: ResolvedExternalDocumentV7;
   readonly configurationId: ConfigurationId | null;
   readonly outputs: Set<string>;
+  readonly syntheticOutputs: Set<string>;
   readonly partNodesByOutput: Map<string, NodeId>;
   readonly outputsByPartNode: Map<NodeId, string>;
   readonly firstOccurrence: SelectedExternalOccurrence;
@@ -1911,19 +1916,9 @@ function externalOutputContainsNode(
   output: string,
   candidate: string,
 ): boolean {
-  const reference =
-    batch.outputKind === "assembly"
-      ? undefined
-      : localAssemblyHasOwn(
-            batch.external.document.outputs,
-            output,
-          )
-        ? batch.external.document.outputs[output]
-        : undefined;
-  const root =
-    batch.outputKind === "assembly"
-      ? localAssemblyMapValue(batch.partNodesByOutput, output)
-      : reference?.node;
+  // Every selection, direct or synthetic, records the child part node it
+  // evaluates.
+  const root = localAssemblyMapValue(batch.partNodesByOutput, output);
   if (root === undefined) return false;
   const pending = new LocalAssemblyArray<NodeId>();
   pending[pending.length] = root;
@@ -1965,19 +1960,9 @@ function externalOutputContainsResource(
   output: string,
   candidate: string,
 ): boolean {
-  const reference =
-    batch.outputKind === "assembly"
-      ? undefined
-      : localAssemblyHasOwn(
-            batch.external.document.outputs,
-            output,
-          )
-        ? batch.external.document.outputs[output]
-        : undefined;
-  const root =
-    batch.outputKind === "assembly"
-      ? localAssemblyMapValue(batch.partNodesByOutput, output)
-      : reference?.node;
+  // Every selection, direct or synthetic, records the child part node it
+  // evaluates.
+  const root = localAssemblyMapValue(batch.partNodesByOutput, output);
   if (root === undefined) return false;
   const pending = new LocalAssemblyArray<NodeId>();
   pending[pending.length] = root;
@@ -2178,9 +2163,12 @@ function externalBatchDiagnostics(
         ? matchedOutputs[0]
         : undefined;
     let contextualItem = item;
-    if (batch.outputKind === "assembly") {
+    if (batch.syntheticOutputs.size > 0) {
+      // Only synthetic leaf selectors are rewritten; a direct external-part
+      // selection is a real child output and keeps its pointer and name.
       const partNode =
-        matchedOutput === undefined
+        matchedOutput === undefined ||
+        !localAssemblySetContains(batch.syntheticOutputs, matchedOutput)
           ? undefined
           : localAssemblyMapValue(
               batch.partNodesByOutput,
@@ -2214,8 +2202,8 @@ function externalBatchDiagnostics(
       }
       const syntheticOutput =
         typeof diagnosticOutput === "string" &&
-        localAssemblyMapContains(
-          batch.partNodesByOutput,
+        localAssemblySetContains(
+          batch.syntheticOutputs,
           diagnosticOutput,
         );
       let normalizedDetails = item.details;
@@ -2297,6 +2285,10 @@ function externalBatchDiagnostics(
 
     const componentOutputs = new LocalAssemblyArray<string>();
     const componentOutputSet = new LocalAssemblySet<string>();
+    const componentOutputKinds =
+      new LocalAssemblyArray<"part" | "assembly">();
+    const componentOutputKindSet =
+      new LocalAssemblySet<"part" | "assembly">();
     const componentPaths = new LocalAssemblyArray<string>();
     const componentPathSet = new LocalAssemblySet<string>();
     const childPartNodes = new LocalAssemblyArray<NodeId>();
@@ -2319,6 +2311,19 @@ function externalBatchDiagnostics(
         );
         componentOutputs[componentOutputs.length] =
           occurrence.output;
+      }
+      if (
+        !localAssemblySetContains(
+          componentOutputKindSet,
+          occurrence.outputKind,
+        )
+      ) {
+        localAssemblySetInsert(
+          componentOutputKindSet,
+          occurrence.outputKind,
+        );
+        componentOutputKinds[componentOutputKinds.length] =
+          occurrence.outputKind;
       }
       if (
         !localAssemblySetContains(
@@ -2355,6 +2360,11 @@ function externalBatchDiagnostics(
     );
     localAssemblyApply<void>(
       localAssemblyArraySort,
+      componentOutputKinds,
+      [lexicalCompare],
+    );
+    localAssemblyApply<void>(
+      localAssemblyArraySort,
       componentPaths,
       [lexicalCompare],
     );
@@ -2376,7 +2386,12 @@ function externalBatchDiagnostics(
         digest: batch.external.digest,
         byteLength: batch.external.byteLength,
         sourceVersion: batch.external.sourceVersion,
-        outputKind: batch.outputKind,
+        ...(componentOutputKinds.length === 1
+          ? { outputKind: componentOutputKinds[0] }
+          : {
+              outputKinds:
+                localAssemblyFreeze(componentOutputKinds),
+            }),
         ...(componentOutputs.length === 1
           ? { output: componentOutputs[0] }
           : {
@@ -5606,17 +5621,19 @@ async function evaluateProductDocumentCoreV7(
         );
       }
 
+      // Direct parts and fixed-subassembly leaves of one child document and
+      // configuration share a batch, so shared geometry is built and charged
+      // once.
       const batchKey =
-        `${occurrence.resource}\u0000${occurrence.configurationId ?? ""}` +
-        `\u0000${occurrence.outputKind}`;
+        `${occurrence.resource}\u0000${occurrence.configurationId ?? ""}`;
       let batch = localAssemblyMapValue(externalBatches, batchKey);
       if (batch === undefined) {
         batch = {
           key: batchKey,
-          outputKind: occurrence.outputKind,
           external,
           configurationId: occurrence.configurationId,
           outputs: new LocalAssemblySet<string>(),
+          syntheticOutputs: new LocalAssemblySet<string>(),
           partNodesByOutput:
             new LocalAssemblyMap<string, NodeId>(),
           outputsByPartNode:
@@ -5648,16 +5665,25 @@ async function evaluateProductDocumentCoreV7(
         );
         if (existingOutput === undefined) {
           /*
-           * The synthetic output map replaces the child output table, so the
-           * authored part node is already a unique, valid, non-secret selector.
-           * Using it keeps result names and diagnostics meaningful.
+           * Leaf selections are named by the authored part node, which keeps
+           * names and diagnostics meaningful. Direct external parts in the
+           * same batch are named by their child output, so when the child
+           * declares an output with this name the leaf uses a NUL-delimited
+           * selector that no authored output can match. Leaf views and
+           * diagnostics are renamed to the part node either way.
            */
-          preparedOutput = partNodeId;
+          preparedOutput = localAssemblyHasOwn(
+            external.document.outputs,
+            partNodeId,
+          )
+            ? `\u0000part\u0000${partNodeId}`
+            : partNodeId;
           localAssemblyMapInsert(
             batch.outputsByPartNode,
             partNodeId,
             preparedOutput,
           );
+          localAssemblySetInsert(batch.syntheticOutputs, preparedOutput);
         } else {
           preparedOutput = existingOutput;
         }
@@ -6494,7 +6520,12 @@ async function evaluateProductDocumentCoreV7(
               details: {
                 phase: LOCAL_ASSEMBLY_EVALUATION_PHASE,
                 protocolViolation: true,
-                output,
+                ...(localAssemblySetContains(
+                  batch.batch.syntheticOutputs,
+                  output,
+                )
+                  ? {}
+                  : { output }),
                 outputKind: geometryOutput.kind,
               },
             },

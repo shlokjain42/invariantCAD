@@ -1411,6 +1411,135 @@ describe("external fixed-subassembly evaluation", () => {
     }
   });
 
+  it("prepares one child batch for an external part and a fixed subassembly of the same document", async () => {
+    const childCad = stagedBodySetDesignV7("shared-child");
+    const leafSolid = childCad.box("leaf-solid", {
+      size: [mm(4), mm(3), mm(2)],
+    });
+    const leaf = childCad.part("leaf", leafSolid, {
+      partNumber: "LEAF-1",
+      massDensity: kgPerCubicMillimeter(1e-6),
+    });
+    const otherSolid = childCad.box("other-solid", {
+      size: [mm(1), mm(1), mm(1)],
+    });
+    const other = childCad.part("other", otherSolid, {
+      partNumber: "OTHER-1",
+      massDensity: kgPerCubicMillimeter(1e-6),
+    });
+    const childModule = childCad.assembly("module", (instances) => {
+      instances.instance("leaf-occ", leaf);
+    });
+    childCad.output("leafPart", leaf);
+    // A child output named like the leaf part node but selecting another part.
+    childCad.output("leaf", other);
+    childCad.output("module", childModule);
+    const child = await commitDocument(childCad.build());
+
+    const product = (directOutput: string): DesignDocumentV7 => {
+      const cad = stagedBodySetDesignV7("shared-child-product");
+      const resource = cad.resource("carriageModule", {
+        digest: child.digest,
+        byteLength: child.bytes.byteLength,
+        mediaType: DOCUMENT_MEDIA_TYPE,
+      });
+      const direct = cad.externalPart(resource, directOutput);
+      const fixed = cad.externalAssembly(resource, "module");
+      const assembly = cad.assembly("product", (instances) => {
+        instances.instance("direct-part", direct);
+        instances.instance("fixed-sub", fixed, {
+          placement: [tf.translate([mm(20), mm(0), mm(0)])],
+        });
+      });
+      cad.output("product", assembly);
+      return cad.build();
+    };
+
+    for (const testCase of [
+      { directOutput: "leafPart", directNode: "leaf", boxCalls: 1 },
+      { directOutput: "leaf", directNode: "other", boxCalls: 2 },
+    ]) {
+      const resolved = resolverFor(child);
+      const harness = await trackedManifold();
+      const result = await evaluateProductAssemblyOutputsV7(
+        harness.kernel,
+        product(testCase.directOutput),
+        {
+          resolver: resolved.resolver,
+          evaluationLimits: {
+            maxDistinctSolids: testCase.boxCalls,
+            maxSolidGraphNodes: testCase.boxCalls,
+          },
+        },
+      );
+      expect(result.ok, JSON.stringify(result.diagnostics)).toBe(true);
+      if (!result.ok) {
+        harness.disposeBase();
+        continue;
+      }
+      try {
+        expect(harness.boxCalls).toHaveBeenCalledTimes(testCase.boxCalls);
+        const [direct, fixedLeaf] =
+          result.value.output("product").occurrences;
+        expect(direct!.component).toMatchObject({
+          source: "external",
+          output: testCase.directOutput,
+          outputKind: "part",
+          partNode: testCase.directNode,
+        });
+        expect(direct!.part.name).toBe(testCase.directOutput);
+        expect(direct!.part.node).toBe(testCase.directNode);
+        expect(fixedLeaf!.component).toMatchObject({
+          source: "external",
+          output: "module",
+          outputKind: "assembly",
+          partNode: "leaf",
+        });
+        expect(fixedLeaf!.part.name).toBe("leaf");
+        expect(fixedLeaf!.part.node).toBe("leaf");
+        for (const occurrence of [direct!, fixedLeaf!]) {
+          const geometry = occurrence.part.geometry;
+          expect(geometry.kind).toBe("solid");
+          if (geometry.kind === "solid") {
+            expect(geometry.solid.name).toBe(occurrence.part.name);
+          }
+          expect(
+            (occurrence.part.export("stl-ascii") as string).split("\n")[0],
+          ).toBe(`solid ${occurrence.part.name}`);
+        }
+        const leafBox =
+          fixedLeaf!.part.geometry.kind === "solid"
+            ? fixedLeaf!.part.geometry.solid.measure().boundingBox
+            : undefined;
+        expect(leafBox?.max[0]! - leafBox?.min[0]!).toBeCloseTo(4);
+
+        const bom = result.value.output("product").billOfMaterials();
+        expect(bom.ok, JSON.stringify(bom.diagnostics)).toBe(true);
+        if (bom.ok) {
+          expect(
+            bom.value.items.map((item) => [
+              item.component.source === "external"
+                ? item.component.output
+                : undefined,
+              item.partNode,
+              item.quantity,
+            ]),
+          ).toEqual(
+            expect.arrayContaining([
+              [testCase.directOutput, testCase.directNode, 1],
+              ["module", "leaf", 1],
+            ]),
+          );
+        }
+      } finally {
+        result.value.dispose();
+        expect(harness.disposedShapes).toHaveLength(testCase.boxCalls);
+        expect(harness.liveShapes.size).toBe(0);
+        harness.disposeBase();
+      }
+    }
+  });
+
   it("reports external component provenance for deferred mesh failures through product meshing", async () => {
     const fixture = await singleExternalAssemblyProduct(
       childModule(),

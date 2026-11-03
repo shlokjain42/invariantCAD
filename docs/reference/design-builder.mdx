@@ -404,6 +404,10 @@ states and direct external parts for equal
 `(resource, output, child configuration)` states. Fixed-subassembly leaves
 share geometry by resource, child part node, and child configuration; distinct
 assembly output aliases retain separate component, diagnostic, and BOM identity.
+Every external component of one child document and child configuration, whether
+reached through `externalPart(...)` or `externalAssembly(...)`, is prepared in
+one batch, so a child part used both ways is constructed and charged against
+the product limits once while keeping separate component and BOM identity.
 Direct part evaluation may additionally deduplicate solid-DAG acquisition
 within a configuration batch. Authoring does not create a persistent or
 cross-run cache commitment.
