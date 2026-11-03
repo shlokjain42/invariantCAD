@@ -6,7 +6,10 @@ icon: "pen-tool"
 
 Sketches define planar profiles for extrusion, revolution, lofting, and sweeps.
 The callback receives a `SketchBuilder` and must return exactly one
-`sketch.profile(...)`.
+`sketch.profile(...)` from that same builder. Sketch references must come from
+that builder's methods; references from another sketch, or ones created with
+the exported reference classes' constructors, throw `TypeError`. The builder
+closes when the callback returns, so keep authoring inside the callback.
 
 ## Planes
 

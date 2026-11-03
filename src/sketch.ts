@@ -20,6 +20,24 @@ import type {
 
 const SKETCH_OWNER = Symbol("InvariantCAD.SketchOwner");
 
+/**
+ * References returned by SketchBuilder methods. The reference classes keep
+ * public constructors, so the owner field alone cannot prove that a reference
+ * names an entity or loop its sketch actually authored.
+ */
+const ISSUED_SKETCH_REFERENCES = new WeakSet<object>();
+/** Entity and constraint records each builder stored, with their keys. */
+const ISSUED_SKETCH_RECORDS = new WeakMap<
+  object,
+  { readonly owner: SketchBuilder; readonly key: EntityId }
+>();
+const CLOSED_SKETCH_BUILDERS = new WeakSet<SketchBuilder>();
+
+function issued<T extends object>(reference: T): T {
+  ISSUED_SKETCH_REFERENCES.add(reference);
+  return reference;
+}
+
 interface OwnedSketchReference {
   readonly [SKETCH_OWNER]: SketchBuilder;
 }
@@ -68,11 +86,13 @@ export class CircleRef implements OwnedSketchReference {
   }
 
   loop(options: { readonly reversed?: boolean } = {}): LoopRef {
-    return new LoopRef(this[SKETCH_OWNER], {
+    const loop = new LoopRef(this[SKETCH_OWNER], {
       kind: "circle",
       entity: this.id,
       ...optionalReversed(options.reversed, `Circle loop '${this.id}'`),
     });
+    // Only a circle its sketch issued can issue a loop the sketch accepts.
+    return ISSUED_SKETCH_REFERENCES.has(this) ? issued(loop) : loop;
   }
 }
 
@@ -170,26 +190,38 @@ export class SketchBuilder {
   readonly constraints: Record<EntityId, SketchConstraintIR> = {};
 
   private assertOwned(reference: OwnedSketchReference): void {
-    if (reference[SKETCH_OWNER] !== this) {
-      throw new TypeError("Sketch references cannot cross sketch boundaries");
+    assertSketchReference(this, reference);
+  }
+
+  private assertOpen(): void {
+    if (CLOSED_SKETCH_BUILDERS.has(this)) {
+      throw new TypeError(
+        "This sketch builder is closed; author entities inside its sketch() callback",
+      );
     }
   }
 
   private addEntity(id: string, entity: SketchEntityIR): EntityId {
+    this.assertOpen();
     const key = entityId(id);
     if (this.entities[key] !== undefined || this.constraints[key] !== undefined) {
       throw new TypeError(`Duplicate sketch ID '${id}'`);
     }
-    this.entities[key] = deepFreeze(entity);
+    const record = deepFreeze(entity);
+    ISSUED_SKETCH_RECORDS.set(record, { owner: this, key });
+    this.entities[key] = record;
     return key;
   }
 
   private addConstraint(id: string, constraint: SketchConstraintIR): void {
+    this.assertOpen();
     const key = entityId(id);
     if (this.entities[key] !== undefined || this.constraints[key] !== undefined) {
       throw new TypeError(`Duplicate sketch ID '${id}'`);
     }
-    this.constraints[key] = deepFreeze(constraint);
+    const record = deepFreeze(constraint);
+    ISSUED_SKETCH_RECORDS.set(record, { owner: this, key });
+    this.constraints[key] = record;
   }
 
   point(id: string, position: Vec2Expression): PointRef {
@@ -201,7 +233,7 @@ export class SketchBuilder {
       x: expressionIROf(position[0], "length", `Sketch point '${id}' x`),
       y: expressionIROf(position[1], "length", `Sketch point '${id}' y`),
     });
-    return new PointRef(this, key);
+    return issued(new PointRef(this, key));
   }
 
   line(id: string, start: PointRef, end: PointRef): LineRef {
@@ -212,7 +244,7 @@ export class SketchBuilder {
       start: start.id,
       end: end.id,
     });
-    return new LineRef(this, key, start, end);
+    return issued(new LineRef(this, key, start, end));
   }
 
   circle(id: string, options: CircleOptions): CircleRef {
@@ -223,7 +255,7 @@ export class SketchBuilder {
       radius: expressionIROf(options.radius, "length", `Sketch circle '${id}' radius`),
       ...optionalSegments(options.segments, 3, `Sketch circle '${id}'`),
     });
-    return new CircleRef(this, key, center);
+    return issued(new CircleRef(this, key, center));
   }
 
   arc(id: string, options: ArcOptions): ArcRef {
@@ -245,7 +277,7 @@ export class SketchBuilder {
       clockwise: optionalClockwise(options.clockwise, id),
       ...optionalSegments(options.segments, 2, `Sketch arc '${id}'`),
     });
-    return new ArcRef(this, key, center);
+    return issued(new ArcRef(this, key, center));
   }
 
   polyline(
@@ -293,6 +325,7 @@ export class SketchBuilder {
   }
 
   loop(edges: readonly (LineRef | ArcRef | EdgeUseIR)[]): LoopRef {
+    this.assertOpen();
     if (edges.length === 0) throw new TypeError("A loop cannot be empty");
     const uses = edges.map((edge, index): EdgeUseIR => {
       if (edge instanceof LineRef || edge instanceof ArcRef) {
@@ -307,19 +340,22 @@ export class SketchBuilder {
         ...optionalReversed(edge.reversed, `Loop edge ${index}`),
       };
     });
-    return new LoopRef(this, { kind: "edges", edges: uses });
+    return issued(new LoopRef(this, { kind: "edges", edges: uses }));
   }
 
   profile(
     outer: LoopRef,
     options: { readonly holes?: readonly LoopRef[] } = {},
   ): ProfileDefinition {
+    this.assertOpen();
     this.assertOwned(outer);
     for (const hole of options.holes ?? []) this.assertOwned(hole);
-    return new ProfileDefinition(this, {
-      outer: outer.ir,
-      holes: (options.holes ?? []).map((hole) => hole.ir),
-    });
+    return issued(
+      new ProfileDefinition(this, {
+        outer: outer.ir,
+        holes: (options.holes ?? []).map((hole) => hole.ir),
+      }),
+    );
   }
 
   coincident(id: string, first: PointRef, second: PointRef): this {
@@ -558,6 +594,63 @@ export class SketchBuilder {
       ]);
     }
     return this.polyline(id, points, { closed: true }) as LoopRef;
+  }
+}
+
+function assertSketchReference(
+  sketch: SketchBuilder,
+  reference: unknown,
+): void {
+  if (
+    typeof reference !== "object" ||
+    reference === null ||
+    !ISSUED_SKETCH_REFERENCES.has(reference)
+  ) {
+    throw new TypeError(
+      "Sketch references must be returned by a SketchBuilder method",
+    );
+  }
+  if ((reference as OwnedSketchReference)[SKETCH_OWNER] !== sketch) {
+    throw new TypeError("Sketch references cannot cross sketch boundaries");
+  }
+}
+
+/**
+ * Ends a sketch callback: later authoring through an escaped builder throws
+ * and its public entity and constraint records are frozen.
+ *
+ * @internal Not re-exported from the package root.
+ */
+export function closeSketchBuilder(sketch: SketchBuilder): void {
+  CLOSED_SKETCH_BUILDERS.add(sketch);
+  Object.freeze(sketch.entities);
+  Object.freeze(sketch.constraints);
+}
+
+/**
+ * Requires a closed sketch callback's result to be a profile its own builder
+ * issued, and every stored entity and constraint to be a record a builder
+ * method created under the same key.
+ *
+ * @internal Not re-exported from the package root.
+ */
+export function assertSketchProfile(
+  sketch: SketchBuilder,
+  profile: ProfileDefinition,
+): void {
+  assertSketchReference(sketch, profile);
+  for (const records of [sketch.entities, sketch.constraints]) {
+    for (const [key, record] of Object.entries(records)) {
+      const issuedRecord =
+        typeof record === "object" && record !== null
+          ? ISSUED_SKETCH_RECORDS.get(record)
+          : undefined;
+      if (issuedRecord?.owner !== sketch || issuedRecord.key !== key) {
+        throw new TypeError(
+          `Sketch record '${key}' must be created by a SketchBuilder method`,
+        );
+      }
+    }
   }
 }
 

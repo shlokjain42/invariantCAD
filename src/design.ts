@@ -53,7 +53,12 @@ import {
   type TopologyReferenceEntryIR,
   type TransformOperationIR,
 } from "./ir.js";
-import { ProfileDefinition, SketchBuilder } from "./sketch.js";
+import {
+  ProfileDefinition,
+  SketchBuilder,
+  assertSketchProfile,
+  closeSketchBuilder,
+} from "./sketch.js";
 import { TopologySelection } from "./topology.js";
 import {
   SHELL_DIRECTIONS,
@@ -70,6 +75,22 @@ import {
 } from "./topology-signatures.js";
 
 const DESIGN_OWNER = Symbol("InvariantCAD.DesignOwner");
+
+/**
+ * Handles returned by builder methods. The handle classes keep public
+ * constructors for compatibility, so the owner field alone cannot prove that
+ * a handle names a node or material its builder actually authored.
+ */
+const ISSUED_DESIGN_HANDLES = new WeakSet<object>();
+
+function issued<T extends object>(handle: T): T {
+  ISSUED_DESIGN_HANDLES.add(handle);
+  return handle;
+}
+
+/** Instance records created by AssemblyBuilder.instance(), by builder. */
+const ISSUED_ASSEMBLY_INSTANCES = new WeakMap<object, AssemblyBuilder>();
+const CLOSED_ASSEMBLY_BUILDERS = new WeakSet<AssemblyBuilder>();
 
 type Vec3ExpressionIR = readonly [ExpressionIR, ExpressionIR, ExpressionIR];
 
@@ -804,6 +825,11 @@ export class AssemblyBuilder {
       readonly suppressed?: boolean;
     } = {},
   ): this {
+    if (CLOSED_ASSEMBLY_BUILDERS.has(this)) {
+      throw new TypeError(
+        "This assembly builder is closed; add instances inside its assembly() callback",
+      );
+    }
     this.owner.assertOwned(component);
     const stableId = entityId(id);
     if (this.instances.some((instance) => instance.id === stableId)) {
@@ -819,14 +845,14 @@ export class AssemblyBuilder {
       false,
       `Assembly instance '${id}' suppressed`,
     );
-    this.instances.push(
-      deepFreeze({
-        id: stableId,
-        component: component.toIR(),
-        placement,
-        suppressed,
-      }),
-    );
+    const record = deepFreeze({
+      id: stableId,
+      component: component.toIR(),
+      placement,
+      suppressed,
+    });
+    ISSUED_ASSEMBLY_INSTANCES.set(record, this);
+    this.instances.push(record);
     return this;
   }
 }
@@ -1034,6 +1060,15 @@ export class DesignBuilder {
   }
 
   assertOwned(reference: ModelRef<OutputKind> | MaterialRef): void {
+    if (
+      typeof reference !== "object" ||
+      reference === null ||
+      !ISSUED_DESIGN_HANDLES.has(reference)
+    ) {
+      throw new TypeError(
+        "Model references must be returned by a DesignBuilder method",
+      );
+    }
     if (reference[DESIGN_OWNER] !== this) {
       throw new TypeError("Model references cannot cross design boundaries");
     }
@@ -1201,7 +1236,7 @@ export class DesignBuilder {
         : { metadata: detachMetadata(options.metadata, `Material '${id}' metadata`) }),
     });
     this.usesMassDensity = true;
-    return new MaterialRef(this, key);
+    return issued(new MaterialRef(this, key));
   }
 
   topologyReference<K extends TopologyKind>(
@@ -1320,7 +1355,9 @@ export class DesignBuilder {
     this.topologyReferenceVariantCount = aggregateVariantCount;
     this.topologyReferenceAdjacencyCount += addedAdjacencyCount;
     this.topologyReferenceEvidenceCount += addedEvidenceCount;
-    const reference = new TopologyReferenceRef(this, key, topology, target);
+    const reference = issued(
+      new TopologyReferenceRef(this, key, topology, target),
+    );
     this.topologyReferenceHandles.add(reference);
     return reference;
   }
@@ -1343,7 +1380,7 @@ export class DesignBuilder {
       size: ownedVec3IR(this, options.size, "length", `Box '${id}' size`),
       center: optionalBoolean(options.center, false, `Box '${id}' center`),
     });
-    return new SolidRef(this, key);
+    return issued(new SolidRef(this, key));
   }
 
   cylinder(
@@ -1379,7 +1416,7 @@ export class DesignBuilder {
       center: optionalBoolean(options.center, false, `Cylinder '${id}' center`),
       ...optionalSegments(options.segments, 3, `Cylinder '${id}' segments`),
     });
-    return new SolidRef(this, key);
+    return issued(new SolidRef(this, key));
   }
 
   sphere(
@@ -1396,7 +1433,7 @@ export class DesignBuilder {
       ),
       ...optionalSegments(options.segments, 4, `Sphere '${id}' segments`),
     });
-    return new SolidRef(this, key);
+    return issued(new SolidRef(this, key));
   }
 
   sketch(
@@ -1411,10 +1448,16 @@ export class DesignBuilder {
       `Sketch '${id}' tolerance`,
     );
     const sketch = new SketchBuilder();
-    const profile = build(sketch);
+    let profile: ProfileDefinition;
+    try {
+      profile = build(sketch);
+    } finally {
+      closeSketchBuilder(sketch);
+    }
     if (!(profile instanceof ProfileDefinition)) {
       throw new TypeError("A sketch callback must return sketch.profile(...)");
     }
+    assertSketchProfile(sketch, profile);
     assertSketchParametersOwned(this, id, sketch);
     const key = this.addNode(id, {
       kind: "sketch",
@@ -1424,7 +1467,7 @@ export class DesignBuilder {
       profile: profile.ir,
       tolerance,
     });
-    return new ProfileRef(this, key);
+    return issued(new ProfileRef(this, key));
   }
 
   polylinePath(
@@ -1447,7 +1490,7 @@ export class DesignBuilder {
       closed: false,
       tolerance,
     });
-    return new PathRef(this, key);
+    return issued(new PathRef(this, key));
   }
 
   circularArcPath(
@@ -1475,7 +1518,7 @@ export class DesignBuilder {
       closed: false,
       tolerance,
     });
-    return new PathRef(this, key);
+    return issued(new PathRef(this, key));
   }
 
   compositePath(
@@ -1519,7 +1562,7 @@ export class DesignBuilder {
       closed: false,
       tolerance,
     });
-    return new PathRef(this, key);
+    return issued(new PathRef(this, key));
   }
 
   extrude(
@@ -1565,7 +1608,7 @@ export class DesignBuilder {
       divisions:
         optionalInteger(options.divisions, 0, `Extrude '${id}' divisions`) ?? 0,
     });
-    return new SolidRef(this, key);
+    return issued(new SolidRef(this, key));
   }
 
   revolve(
@@ -1588,7 +1631,7 @@ export class DesignBuilder {
       ),
       ...optionalSegments(options.segments, 3, `Revolve '${id}' segments`),
     });
-    return new SolidRef(this, key);
+    return issued(new SolidRef(this, key));
   }
 
   loft(
@@ -1616,7 +1659,7 @@ export class DesignBuilder {
       profiles: profiles.map((profile) => profile.toIR()),
       ruled: true,
     });
-    return new SolidRef(this, key);
+    return issued(new SolidRef(this, key));
   }
 
   sweep(
@@ -1646,7 +1689,7 @@ export class DesignBuilder {
       transition: "right-corner",
       frame: "corrected-frenet",
     });
-    return new SolidRef(this, key);
+    return issued(new SolidRef(this, key));
   }
 
   private boolean(
@@ -1666,7 +1709,7 @@ export class DesignBuilder {
       target: target.toIR(),
       tools: tools.map((tool) => tool.toIR()),
     });
-    return new SolidRef(this, key);
+    return issued(new SolidRef(this, key));
   }
 
   union(id: string, target: SolidRef, tools: readonly SolidRef[]): SolidRef {
@@ -1700,7 +1743,7 @@ export class DesignBuilder {
       input: input.toIR(),
       operations: ownedOperations,
     });
-    return new SolidRef(this, key);
+    return issued(new SolidRef(this, key));
   }
 
   translate(id: string, input: SolidRef, value: Vec3Expression): SolidRef {
@@ -1755,7 +1798,7 @@ export class DesignBuilder {
         `Fillet '${id}' radius`,
       ),
     });
-    return new SolidRef(this, key);
+    return issued(new SolidRef(this, key));
   }
 
   chamfer(
@@ -1794,7 +1837,7 @@ export class DesignBuilder {
         `Chamfer '${id}' distance`,
       ),
     });
-    return new SolidRef(this, key);
+    return issued(new SolidRef(this, key));
   }
 
   shell(
@@ -1846,7 +1889,7 @@ export class DesignBuilder {
         `Shell '${id}' tolerance`,
       ),
     });
-    return new SolidRef(this, key);
+    return issued(new SolidRef(this, key));
   }
 
   offset(
@@ -1881,7 +1924,7 @@ export class DesignBuilder {
         `Offset '${id}' tolerance`,
       ),
     });
-    return new SolidRef(this, key);
+    return issued(new SolidRef(this, key));
   }
 
   draft(
@@ -1943,7 +1986,7 @@ export class DesignBuilder {
         ),
       },
     });
-    return new SolidRef(this, key);
+    return issued(new SolidRef(this, key));
   }
 
   part(
@@ -2008,7 +2051,7 @@ export class DesignBuilder {
       ...(massDensity === undefined ? {} : { massDensity }),
     });
     if (massDensity !== undefined) this.usesMassDensity = true;
-    return new PartRef(this, key);
+    return issued(new PartRef(this, key));
   }
 
   assembly(
@@ -2016,13 +2059,34 @@ export class DesignBuilder {
     build: (assembly: AssemblyBuilder) => void,
   ): AssemblyRef {
     const builder = new AssemblyBuilder(this);
-    build(builder);
+    try {
+      build(builder);
+    } finally {
+      CLOSED_ASSEMBLY_BUILDERS.add(builder);
+      Object.freeze(builder.instances);
+    }
+    // instances is a public array, so only records instance() issued for
+    // this builder may reach the document.
+    const instances: AssemblyInstanceIR[] = [];
+    const instanceIds = new Set<EntityId>();
+    for (const instance of builder.instances) {
+      if (ISSUED_ASSEMBLY_INSTANCES.get(instance) !== builder) {
+        throw new TypeError(
+          `Assembly '${id}' instances must be added with instance()`,
+        );
+      }
+      if (instanceIds.has(instance.id)) {
+        throw new TypeError(`Duplicate assembly instance '${instance.id}'`);
+      }
+      instanceIds.add(instance.id);
+      instances.push(instance);
+    }
     const node: AssemblyNodeIR = {
       kind: "assembly",
-      instances: builder.instances,
+      instances,
     };
     const key = this.addNode(id, node);
-    return new AssemblyRef(this, key);
+    return issued(new AssemblyRef(this, key));
   }
 
   configuration(

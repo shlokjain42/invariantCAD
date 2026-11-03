@@ -1,5 +1,12 @@
 import { afterAll, describe, expect, it } from "vitest";
 import {
+  AssemblyRef,
+  LoopRef,
+  MaterialRef,
+  PartRef,
+  PointRef,
+  ProfileDefinition,
+  SolidRef,
   createEvaluator,
   deg,
   design,
@@ -1110,5 +1117,135 @@ describe("part options", () => {
     expect(reparsed.ok, JSON.stringify(reparsed.diagnostics)).toBe(true);
     if (!reparsed.ok) return;
     expect(await hashDocument(reparsed.value)).toBe(await hashDocument(document));
+  });
+});
+
+describe("builder ownership boundary", () => {
+  function setup() {
+    const cad = design("ownership");
+    const box = cad.box("box", { size: vec3(mm(1), mm(1), mm(1)) });
+    const part = cad.part("part", box);
+    return { cad, box, part };
+  }
+
+  it("rejects handles built with public constructors instead of builder methods", () => {
+    const { cad, box } = setup();
+    expect(() => cad.translate("t", new SolidRef(cad, "ghost" as never), vec3(mm(1), mm(0), mm(0))))
+      .toThrow(/returned by a DesignBuilder method/);
+    expect(() => cad.union("u", box, [new SolidRef(cad, "box" as never)]))
+      .toThrow(/returned by a DesignBuilder method/);
+    expect(() =>
+      cad.assembly("a", (assembly) =>
+        assembly.instance("i", new PartRef(cad, "box" as never)),
+      ),
+    ).toThrow(/returned by a DesignBuilder method/);
+    expect(() =>
+      cad.part("p", box, { materialRef: new MaterialRef(cad, "ghost" as never) }),
+    ).toThrow(/returned by a DesignBuilder method/);
+    expect(() => cad.output("o", new AssemblyRef(cad, "box" as never)))
+      .toThrow(/returned by a DesignBuilder method/);
+    expect(validateDocument(cad.build()).ok).toBe(true);
+  });
+
+  it("only stores assembly instances added through instance()", () => {
+    const { cad, part } = setup();
+    expect(() =>
+      cad.assembly("raw", (assembly) => {
+        assembly.instances.push({
+          id: "ghost" as never,
+          component: { node: "ghost" as never, kind: "part" },
+          placement: [],
+          suppressed: false,
+        });
+      }),
+    ).toThrow(/instance\(\)/);
+
+    const other = design("other");
+    const otherPart = other.part("part", other.box("box", { size: vec3(mm(1), mm(1), mm(1)) }));
+    let foreignRecord: unknown;
+    other.assembly("source", (assembly) => {
+      assembly.instance("foreign", otherPart);
+      foreignRecord = assembly.instances[0];
+    });
+    expect(() =>
+      cad.assembly("borrowed", (assembly) => {
+        assembly.instances.push(foreignRecord as never);
+      }),
+    ).toThrow(/instance\(\)/);
+
+    expect(() =>
+      cad.assembly("duplicate", (assembly) => {
+        assembly.instance("first", part);
+        assembly.instances.push(assembly.instances[0]!);
+      }),
+    ).toThrow(/Duplicate assembly instance/);
+
+    let escaped: import("../src/index.js").AssemblyBuilder | undefined;
+    const assembly = cad.assembly("assembly", (builder) => {
+      escaped = builder;
+      builder.instance("first", part);
+    });
+    expect(() => escaped!.instance("late", part)).toThrow(/closed/);
+    cad.output("assembly", assembly);
+    const node = (cad.build().nodes as Readonly<Record<string, any>>).assembly;
+    expect(node.instances.map((instance: { id: string }) => instance.id)).toEqual(["first"]);
+    expect(validateDocument(cad.build()).ok).toBe(true);
+  });
+
+  it("requires the sketch callback to return its own builder's profile", () => {
+    const { cad } = setup();
+    let foreignProfile: ProfileDefinition | undefined;
+    cad.sketch("source", plane.xy(), (sketch) => {
+      foreignProfile = sketch.profile(sketch.circle("disk", { radius: mm(1) }).loop());
+      return foreignProfile;
+    });
+    expect(() =>
+      cad.sketch("borrowed", plane.xy(), (sketch) => {
+        sketch.circle("other", { radius: mm(2) });
+        return foreignProfile!;
+      }),
+    ).toThrow(/cannot cross sketch boundaries/);
+    expect(() =>
+      cad.sketch("forged-profile", plane.xy(), (sketch) => {
+        sketch.circle("disk", { radius: mm(2) });
+        return new ProfileDefinition(sketch, {
+          outer: { kind: "circle", entity: "disk" as never },
+          holes: [],
+        });
+      }),
+    ).toThrow(/returned by a SketchBuilder method/);
+    expect(() =>
+      cad.sketch("forged-loop", plane.xy(), (sketch) => {
+        sketch.circle("disk", { radius: mm(2) });
+        return sketch.profile(
+          new LoopRef(sketch, { kind: "circle", entity: "disk" as never }),
+        );
+      }),
+    ).toThrow(/returned by a SketchBuilder method/);
+    expect(() =>
+      cad.sketch("forged-point", plane.xy(), (sketch) => {
+        const a = sketch.point("a", vec2(mm(0), mm(0)));
+        sketch.line("l", a, new PointRef(sketch, "ghost" as never));
+        return sketch.profile(sketch.circle("disk", { radius: mm(2) }).loop());
+      }),
+    ).toThrow(/returned by a SketchBuilder method/);
+    expect(() =>
+      cad.sketch("raw-entity", plane.xy(), (sketch) => {
+        (sketch.entities as Record<string, unknown>).ghost = {
+          kind: "circle",
+          center: "nowhere",
+          radius: mm(1).ir,
+        };
+        return sketch.profile(sketch.circle("disk", { radius: mm(2) }).loop());
+      }),
+    ).toThrow(/SketchBuilder method/);
+
+    let escaped: SketchBuilder | undefined;
+    cad.sketch("escaped", plane.xy(), (sketch) => {
+      escaped = sketch;
+      return sketch.profile(sketch.circle("disk", { radius: mm(2) }).loop());
+    });
+    expect(() => escaped!.point("late", vec2(mm(0), mm(0)))).toThrow(/closed/);
+    expect(validateDocument(cad.build()).ok).toBe(true);
   });
 });
