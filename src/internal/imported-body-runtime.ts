@@ -1,4 +1,7 @@
-import type { DesignDocumentLimits } from "../document-limits.js";
+import {
+  DEFAULT_DESIGN_DOCUMENT_LIMITS,
+  type DesignDocumentLimits,
+} from "../document-limits.js";
 import {
   diagnostic,
   failure,
@@ -59,6 +62,11 @@ const ImportedBodyRuntimeReflect = Reflect;
 const ImportedBodyRuntimeWeakMap = WeakMap;
 const ImportedBodyRuntimeWeakSet = WeakSet;
 const importedBodyRuntimeArrayIsArray = Array.isArray;
+const importedBodyRuntimeNumberIsSafeInteger = Number.isSafeInteger;
+const importedBodyRuntimeAbortSignalAbortedGetter =
+  typeof AbortSignal === "undefined"
+    ? undefined
+    : Object.getOwnPropertyDescriptor(AbortSignal.prototype, "aborted")?.get;
 const importedBodyRuntimeObjectCreate = Object.create;
 const importedBodyRuntimeObjectDefineProperty = Object.defineProperty;
 const importedBodyRuntimeObjectFreeze = Object.freeze;
@@ -66,6 +74,7 @@ const importedBodyRuntimeObjectGetOwnPropertyDescriptor =
   Object.getOwnPropertyDescriptor;
 const importedBodyRuntimeObjectGetPrototypeOf = Object.getPrototypeOf;
 const importedBodyRuntimeObjectHasOwn = Object.hasOwn;
+const importedBodyRuntimeObjectKeys = Object.keys;
 const importedBodyRuntimeObjectPrototype = Object.prototype;
 const importedBodyRuntimeReflectApply = Reflect.apply;
 const importedBodyRuntimeReflectOwnKeys = Reflect.ownKeys;
@@ -525,6 +534,96 @@ function adaptImportedBodyResolver(
   };
 }
 
+function importedBodyOptionFailure(
+  message: string,
+  path: string,
+): CadResult<never> {
+  return failure(
+    diagnostic("IR_INVALID", message, {
+      severity: "error",
+      path,
+      details: { phase: "importedBodyEvaluation" },
+    }),
+  );
+}
+
+function isImportedBodyLimitValue(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    applyImportedBodyRuntime<boolean>(
+      importedBodyRuntimeNumberIsSafeInteger,
+      Number,
+      [value],
+    ) &&
+    value >= 0
+  );
+}
+
+function isImportedBodyAbortSignal(value: unknown): boolean {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    importedBodyRuntimeAbortSignalAbortedGetter === undefined
+  ) {
+    return false;
+  }
+  try {
+    return (
+      typeof applyImportedBodyRuntime<unknown>(
+        importedBodyRuntimeAbortSignalAbortedGetter,
+        value,
+        [],
+      ) === "boolean"
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Captures public document limits with option paths. The staged evaluator
+ * validates them again, but its diagnostics are relative to its own options.
+ */
+function captureImportedBodyDocumentLimits(
+  value: unknown,
+): CadResult<Partial<DesignDocumentLimits>> {
+  let limits: Readonly<Record<string, unknown>>;
+  try {
+    limits = captureOwnDataRecord(
+      value,
+      applyImportedBodyRuntime<string[]>(
+        importedBodyRuntimeObjectKeys,
+        ImportedBodyRuntimeObject,
+        [DEFAULT_DESIGN_DOCUMENT_LIMITS],
+      ),
+      "Imported-body document limits",
+      "/options/documentLimits",
+    );
+  } catch (error) {
+    const source = capturedSourceFailure(error);
+    return importedBodyOptionFailure(
+      source?.message ??
+        "Imported-body document limits could not be captured safely",
+      source?.path ?? "/options/documentLimits",
+    );
+  }
+  const keys = applyImportedBodyRuntime<string[]>(
+    importedBodyRuntimeObjectKeys,
+    ImportedBodyRuntimeObject,
+    [limits],
+  );
+  for (let index = 0; index < keys.length; index += 1) {
+    const key = keys[index]!;
+    if (!isImportedBodyLimitValue(limits[key])) {
+      return importedBodyOptionFailure(
+        `Imported-body document limit '${key}' must be a non-negative safe integer`,
+        `/options/documentLimits/${key}`,
+      );
+    }
+  }
+  return success(limits as Partial<DesignDocumentLimits>);
+}
+
 export function captureEvaluateImportedBodyOptions(
   options: EvaluateImportedBodyOptions,
 ): CadResult<CapturedEvaluateImportedBodyOptions> {
@@ -571,20 +670,13 @@ export function captureEvaluateImportedBodyOptions(
         ),
       );
     }
-    const maximum =
-      limits.maxResourceBytes ??
-      defaultImportedBodyResourceLimits.maxResourceBytes;
-    if (typeof maximum !== "number") {
-      return failure(
-        diagnostic(
-          "IR_INVALID",
-          "Imported-body maxResourceBytes must be a number",
-          {
-            severity: "error",
-            path: "/options/resourceLimits/maxResourceBytes",
-            details: { phase: "importedBodyEvaluation" },
-          },
-        ),
+    const maximum = importedBodyRuntimeHasOwn(limits, "maxResourceBytes")
+      ? limits.maxResourceBytes
+      : defaultImportedBodyResourceLimits.maxResourceBytes;
+    if (!isImportedBodyLimitValue(maximum)) {
+      return importedBodyOptionFailure(
+        "Imported-body maxResourceBytes must be a non-negative safe integer",
+        "/options/resourceLimits/maxResourceBytes",
       );
     }
     resourceLimits = freezeImportedBodyRuntime({
@@ -593,6 +685,21 @@ export function captureEvaluateImportedBodyOptions(
       maxResourceBytes: maximum,
       maxTotalResourceBytes: maximum,
     });
+  }
+  const signal = captured.value.signal;
+  if (signal !== undefined && !isImportedBodyAbortSignal(signal)) {
+    return importedBodyOptionFailure(
+      "Imported-body signal must be an AbortSignal",
+      "/options/signal",
+    );
+  }
+  let documentLimits: Partial<DesignDocumentLimits> | undefined;
+  if (captured.value.documentLimits !== undefined) {
+    const capturedLimits = captureImportedBodyDocumentLimits(
+      captured.value.documentLimits,
+    );
+    if (!capturedLimits.ok) return capturedLimits;
+    documentLimits = capturedLimits.value;
   }
   return success(
     freezeImportedBodyRuntime({
@@ -604,16 +711,8 @@ export function captureEvaluateImportedBodyOptions(
             ),
           }),
       ...(resourceLimits === undefined ? {} : { resourceLimits }),
-      ...(captured.value.documentLimits === undefined
-        ? {}
-        : {
-            documentLimits:
-              captured.value
-                .documentLimits as Partial<DesignDocumentLimits>,
-          }),
-      ...(captured.value.signal === undefined
-        ? {}
-        : { signal: captured.value.signal as AbortSignal }),
+      ...(documentLimits === undefined ? {} : { documentLimits }),
+      ...(signal === undefined ? {} : { signal: signal as AbortSignal }),
     }),
   );
 }

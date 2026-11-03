@@ -599,6 +599,191 @@ describe("public imported-body document workflow", () => {
     }
   });
 
+  it("locates the offending authored field in creation diagnostics", async () => {
+    const bytes = encoder.encode("precise-creation-paths");
+    const definition = await stepDefinition(bytes, {
+      bodyId: "housing",
+      resourceId: "housingStep",
+    });
+    const expectSourcePath = (
+      result: CadResult<ImportedBodyDocument>,
+      path: string,
+      message: string | RegExp,
+    ): void => {
+      expectFailure(result, "IMPORT_SOURCE_INVALID");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.path).toBe(path);
+      expect(result.diagnostics[0]?.message).toMatch(message);
+    };
+    const withResource = (
+      resource: Record<string, unknown>,
+    ): ImportedBodyDefinition =>
+      ({
+        ...definition,
+        resource: { ...definition.resource, ...resource },
+      }) as unknown as ImportedBodyDefinition;
+
+    expectSourcePath(
+      createImportedBodyDocument("   ", definition),
+      "/name",
+      "A design requires a name",
+    );
+    expectSourcePath(
+      createImportedBodyDocument("Paths", {
+        ...definition,
+        id: "1 housing",
+      }),
+      "/definition/id",
+      /^Node ID '1 housing' is invalid/u,
+    );
+    expectSourcePath(
+      createImportedBodyDocument("Paths", withResource({ id: "bad id" })),
+      "/definition/resource/id",
+      /^Resource ID 'bad id' is invalid/u,
+    );
+    expectSourcePath(
+      createImportedBodyDocument(
+        "Paths",
+        withResource({ digest: definition.resource.digest.toUpperCase() }),
+      ),
+      "/definition/resource/digest",
+      "Resource digest must be a lowercase sha256 commitment",
+    );
+    for (const byteLength of [-1, 1.5, Number.NaN]) {
+      expectSourcePath(
+        createImportedBodyDocument("Paths", withResource({ byteLength })),
+        "/definition/resource/byteLength",
+        "Resource byteLength must be a non-negative safe integer",
+      );
+    }
+    expectSourcePath(
+      createImportedBodyDocument(
+        "Paths",
+        withResource({ locations: ["memory:a", "memory:b", "memory:a"] }),
+      ),
+      "/definition/resource/locations/2",
+      "Resource location 'memory:a' is duplicated",
+    );
+    expect(
+      createImportedBodyDocument("Paths", withResource({ byteLength: 0 })).ok,
+    ).toBe(true);
+  });
+
+  it("maps parse-time policy failures to document paths", async () => {
+    const bytes = encoder.encode("precise-parse-paths");
+    const document = valueOf(
+      createImportedBodyDocument(
+        "Parse paths",
+        await stepDefinition(bytes, {
+          bodyId: "housing",
+          resourceId: "housingStep",
+        }),
+      ),
+    );
+    const raw = JSON.parse(stringifyImportedBodyDocument(document)) as {
+      resources: Record<string, Record<string, unknown>>;
+      nodes: Record<string, Record<string, unknown>>;
+    };
+
+    const wrongMedia = structuredClone(raw);
+    wrongMedia.resources.housingStep!.mediaType = "text/plain";
+    const media = parseImportedBodyDocument(JSON.stringify(wrongMedia));
+    expectFailure(media, "IR_INVALID");
+    expect(media.diagnostics[0]).toMatchObject({
+      message: "Imported-body step requires mediaType 'model/step'",
+      path: "/resources/housingStep/mediaType",
+    });
+
+    const brepNode = structuredClone(raw);
+    brepNode.nodes.housing = {
+      ...brepNode.nodes.housing,
+      format: "brep",
+      units: { mode: "declared", length: "mm" },
+    };
+    const brep = parseImportedBodyDocument(JSON.stringify(brepNode));
+    expectFailure(brep, "IR_INVALID");
+    expect(brep.diagnostics[0]?.path).toBe(
+      "/resources/housingStep/mediaType",
+    );
+  });
+
+  it("roots every evaluation-option diagnostic at /options", async () => {
+    const bytes = encoder.encode("precise-option-paths");
+    const document = valueOf(
+      createImportedBodyDocument("Option paths", await stepDefinition(bytes)),
+    );
+    const nativeImport = vi.fn((): KernelShape => ({
+      kernel: "option-paths-must-not-import",
+    }));
+    const resolver = vi.fn(() => bytes);
+    const evaluator = await createEvaluator({
+      kernel: exactImportKernel({ importDocumentBody: nativeImport }),
+    });
+    const accessorLimits = Object.defineProperty({}, "maxDocumentBytes", {
+      enumerable: true,
+      get: () => 1_000_000,
+    });
+    try {
+      for (const [options, path] of [
+        [
+          { resolver, resourceLimits: { maxResourceBytes: Number.NaN } },
+          "/options/resourceLimits/maxResourceBytes",
+        ],
+        [
+          { resolver, resourceLimits: { maxResourceBytes: -1 } },
+          "/options/resourceLimits/maxResourceBytes",
+        ],
+        [
+          { resolver, resourceLimits: { maxResourceBytes: null } },
+          "/options/resourceLimits/maxResourceBytes",
+        ],
+        [
+          { resolver, resourceLimits: { maxTotalResourceBytes: 1 } },
+          "/options/resourceLimits",
+        ],
+        [{ resolver, signal: {} }, "/options/signal"],
+        [
+          { resolver, documentLimits: { maxDocumentBytes: -5 } },
+          "/options/documentLimits/maxDocumentBytes",
+        ],
+        [
+          { resolver, documentLimits: { bogus: 1 } },
+          "/options/documentLimits",
+        ],
+        [
+          { resolver, documentLimits: accessorLimits },
+          "/options/documentLimits/maxDocumentBytes",
+        ],
+        [{ resolver, documentLimits: 3 }, "/options/documentLimits"],
+      ] as const) {
+        const result = await evaluator.evaluateImportedBody(
+          document,
+          options as unknown as EvaluateImportedBodyOptions,
+        );
+        expectFailure(result, "IR_INVALID");
+        expect(result.diagnostics, JSON.stringify(options)).toHaveLength(1);
+        expect(result.diagnostics[0]?.path, JSON.stringify(options)).toBe(
+          path,
+        );
+        expectPublicDiagnostics(result);
+      }
+      expect(resolver).not.toHaveBeenCalled();
+      expect(nativeImport).not.toHaveBeenCalled();
+
+      const controller = new AbortController();
+      const accepted = await evaluator.evaluateImportedBody(document, {
+        resolver,
+        resourceLimits: { maxResourceBytes: bytes.byteLength },
+        documentLimits: { maxDocumentBytes: 1_000_000 },
+        signal: controller.signal,
+      });
+      const value = valueOf(accepted);
+      value.dispose();
+    } finally {
+      evaluator.dispose();
+    }
+  });
+
   it("does not expose staged document-v7 implementation names", () => {
     const leakedNames = Object.keys(publicApi).filter(
       (name) =>

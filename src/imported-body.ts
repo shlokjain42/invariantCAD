@@ -2,7 +2,11 @@ import {
   DEFAULT_DESIGN_DOCUMENT_LIMITS,
   type DesignDocumentLimits,
 } from "./document-limits.js";
-import type { NodeId, ResourceId } from "./core/ids.js";
+import {
+  assertValidId,
+  type NodeId,
+  type ResourceId,
+} from "./core/ids.js";
 import {
   CadError,
   diagnostic,
@@ -254,6 +258,7 @@ const ImportedBodyArray = Array;
 const ImportedBodyNumber = Number;
 const ImportedBodyObject = Object;
 const ImportedBodyReflect = Reflect;
+const ImportedBodySet = Set;
 const ImportedBodyWeakSet = WeakSet;
 const importedBodyArrayIsArray = Array.isArray;
 const importedBodyObjectCreate = Object.create;
@@ -268,6 +273,9 @@ const importedBodyObjectPrototype = Object.prototype;
 const importedBodyNumberIsSafeInteger = Number.isSafeInteger;
 const importedBodyReflectApply = Reflect.apply;
 const importedBodyReflectOwnKeys = Reflect.ownKeys;
+const importedBodySetAdd = Set.prototype.add;
+const importedBodySetHas = Set.prototype.has;
+const importedBodyStringSlice = String.prototype.slice;
 const importedBodyWeakSetAdd = WeakSet.prototype.add;
 const importedBodyWeakSetHas = WeakSet.prototype.has;
 
@@ -526,6 +534,7 @@ function captureLocations(
     );
   }
   const copied = new ImportedBodyArray<string>(length);
+  const seen = new ImportedBodySet<string>();
   for (let index = 0; index < length; index += 1) {
     let descriptor: PropertyDescriptor | undefined;
     try {
@@ -551,7 +560,17 @@ function captureLocations(
         `${path}/${index}`,
       );
     }
-    defineImportedBodyValue(copied, index, descriptor.value);
+    const location = descriptor.value as string;
+    if (
+      applyImportedBody<boolean>(importedBodySetHas, seen, [location])
+    ) {
+      sourceFailure(
+        `Resource location '${location}' is duplicated`,
+        `${path}/${index}`,
+      );
+    }
+    applyImportedBody<Set<string>>(importedBodySetAdd, seen, [location]);
+    defineImportedBodyValue(copied, index, location);
   }
   return freezeImportedBody(copied);
 }
@@ -565,6 +584,42 @@ function expectedMediaType(format: ImportedBodyFormat): ImportedBodyMediaType {
     case "brep-binary":
       return IMPORTED_BODY_MEDIA_TYPES["brep-binary"];
   }
+}
+
+/** Applies the document ID grammar with the field's own diagnostic path. */
+function captureImportedBodyId(
+  id: string,
+  label: string,
+  path: string,
+): void {
+  try {
+    assertValidId(id, label);
+  } catch (error) {
+    sourceFailure(
+      publicImportedBodyErrorMessage(error, `${label} is invalid`),
+      path,
+    );
+  }
+}
+
+function isImportedBodyDigest(value: string): boolean {
+  if (
+    value.length !== 71 ||
+    applyImportedBody<string>(importedBodyStringSlice, value, [0, 7]) !==
+      "sha256:"
+  ) {
+    return false;
+  }
+  for (let index = 7; index < value.length; index += 1) {
+    const character = value[index]!;
+    if (
+      !(character >= "0" && character <= "9") &&
+      !(character >= "a" && character <= "f")
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 interface CapturedImportedBodyDefinition {
@@ -590,6 +645,7 @@ function captureImportedBodyDefinition(
       "/definition/id",
     );
   }
+  captureImportedBodyId(id, "Node ID", "/definition/id");
   if (
     format !== "step" &&
     format !== "brep" &&
@@ -617,15 +673,35 @@ function captureImportedBodyDefinition(
       "/definition/resource/id",
     );
   }
+  captureImportedBodyId(resourceId, "Resource ID", "/definition/resource/id");
   if (typeof digest !== "string") {
     sourceFailure(
       "Imported-body resource.digest must be a string",
       "/definition/resource/digest",
     );
   }
+  if (!isImportedBodyDigest(digest)) {
+    sourceFailure(
+      "Resource digest must be a lowercase sha256 commitment",
+      "/definition/resource/digest",
+    );
+  }
   if (typeof byteLength !== "number") {
     sourceFailure(
       "Imported-body resource.byteLength must be a number",
+      "/definition/resource/byteLength",
+    );
+  }
+  if (
+    !applyImportedBody<boolean>(
+      importedBodyNumberIsSafeInteger,
+      ImportedBodyNumber,
+      [byteLength],
+    ) ||
+    byteLength < 0
+  ) {
+    sourceFailure(
+      "Resource byteLength must be a non-negative safe integer",
       "/definition/resource/byteLength",
     );
   }
@@ -737,7 +813,19 @@ export function createImportedBodyDocument(
       );
     }
     const captured = captureImportedBodyDefinition(definition);
-    const builder = stagedBodySetDesignV7(name);
+    let builder: ReturnType<typeof stagedBodySetDesignV7>;
+    try {
+      builder = stagedBodySetDesignV7(name);
+    } catch (error) {
+      // The design builder validates only the document name.
+      sourceFailure(
+        publicImportedBodyErrorMessage(
+          error,
+          "Imported-body document name is invalid",
+        ),
+        "/name",
+      );
+    }
     const resource = builder.resource(
       captured.definition.resource.id,
       {
@@ -798,6 +886,46 @@ function importedBodySubsetFailure(
   );
 }
 
+/**
+ * Maps a creation-time definition path to the parsed document field that
+ * holds the same authored value. Document-v7 IDs cannot contain `~` or `/`,
+ * so they need no JSON Pointer escaping.
+ */
+function importedBodyDocumentPath(
+  definitionPath: string | undefined,
+  nodeId: string,
+  resourceId: string,
+): string {
+  const resourcePrefix = "/definition/resource";
+  const nodePath = `/nodes/${nodeId}`;
+  const resourcePath = `/resources/${resourceId}`;
+  const startsWith = (prefix: string): boolean =>
+    definitionPath !== undefined &&
+    applyImportedBody<string>(importedBodyStringSlice, definitionPath, [
+      0,
+      prefix.length,
+    ]) === prefix;
+  const suffix = (prefix: string): string =>
+    applyImportedBody<string>(importedBodyStringSlice, definitionPath, [
+      prefix.length,
+    ]);
+  if (definitionPath === "/name") return "/name";
+  if (
+    definitionPath === resourcePrefix ||
+    definitionPath === `${resourcePrefix}/id`
+  ) {
+    return resourcePath;
+  }
+  if (startsWith(`${resourcePrefix}/`)) {
+    return `${resourcePath}${suffix(resourcePrefix)}`;
+  }
+  if (definitionPath === "/definition/id") return nodePath;
+  if (startsWith("/definition/")) {
+    return `${nodePath}${suffix("/definition")}`;
+  }
+  return "/";
+}
+
 function narrowImportedBodyDocument(
   document: DesignDocumentV7,
 ): CadResult<ImportedBodyDocument> {
@@ -850,7 +978,11 @@ function narrowImportedBodyDocument(
     return importedBodySubsetFailure(
       recreated.diagnostics[0]?.message ??
         "The imported-body document violates the public workflow policy",
-      recreated.diagnostics[0]?.path,
+      importedBodyDocumentPath(
+        recreated.diagnostics[0]?.path,
+        nodeId,
+        resourceId,
+      ),
     );
   }
   const recreatedState = capturedImportedBodyDocument(recreated.value);
