@@ -112,6 +112,18 @@ apply determinant volume scaling for affine placements, and combine them using
 the parallel-axis theorem. Mirrored occurrences remain positive mass; a
 nonuniform scale changes volume and inertia as geometry requires.
 
+Assembly `measure()` aggregates the same occurrence kernel measurements.
+Volume, center of mass, and inertia combine as above. Surface area sums each
+occurrence's kernel area, scaled by the square of a uniform placement scale;
+only an occurrence placed with a nonuniform scale or shear uses the area of its
+default tessellation. Overlapping occurrences each count in full; they are not
+Boolean-unioned. The bounding box encloses every occurrence's kernel bounding
+box after placement, so it is exact when every placement keeps the coordinate
+axes aligned (translations, axis scales, mirrors across coordinate planes, and
+quarter-turn rotations) and may be larger than the tight box for other
+rotations or mirror planes. `tolerance` is the largest occurrence kernel
+tolerance, scaled by its placement's magnification.
+
 Missing density is a diagnostic, not zero mass. A BOM may still report known
 mass and `massComplete: false` while aggregate physical properties fail.
 
