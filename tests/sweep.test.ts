@@ -558,6 +558,57 @@ describe("polyline path admission", () => {
     ).toBeUndefined();
   });
 
+  it("rejects an adjacent fold-back that returns within tolerance", () => {
+    const tolerance = SWEEP_TOLERANCE;
+    // The corner sine is about 1.1e-9, above the collinearity floor, but the
+    // returning segment ends 1e-8 from the first segment, 9 mm from the
+    // shared vertex.
+    expect(
+      validateResolvedPolylinePath(
+        resolvedPath([
+          [0, 0, 0],
+          [10, 0, 0],
+          [1, 1e-8, 0],
+        ]),
+        tolerance,
+      ),
+    ).toEqual({
+      reason: "self-intersection",
+      message: "Path segments 0 and 1 fold back within tolerance",
+      pointIndex: 2,
+      segmentIndex: 1,
+      otherSegmentIndex: 0,
+    });
+    // A longer return passes the shared start point instead.
+    expect(
+      validateResolvedPolylinePath(
+        resolvedPath([
+          [0, 0, 0],
+          [10, 0, 0],
+          [-5, 1e-8, 0],
+        ]),
+        tolerance,
+      ),
+    ).toEqual(
+      expect.objectContaining({
+        reason: "self-intersection",
+        segmentIndex: 1,
+        otherSegmentIndex: 0,
+      }),
+    );
+    // A sharp but separated hairpin remains a simple path.
+    expect(
+      validateResolvedPolylinePath(
+        resolvedPath([
+          [0, 0, 0],
+          [10, 0, 0],
+          [1, 1e-3, 0],
+        ]),
+        tolerance,
+      ),
+    ).toBeUndefined();
+  });
+
   it("maps evaluator-reachable path failures to the path node before sweep", async () => {
     const cases: readonly {
       readonly reason:
