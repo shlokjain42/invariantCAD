@@ -52,7 +52,11 @@ import {
   canonicalizeTopologySelectionIRWithin,
 } from "./topology.js";
 import { normalizePersistentTopologyReference } from "./topology-signatures.js";
-import { validateDocument, validateDocumentV7 } from "./validation.js";
+import {
+  legacyDocumentApiV7Diagnostic,
+  validateDocument,
+  validateDocumentV7,
+} from "./validation.js";
 import {
   checkTrustedDesignDocumentSnapshotLimits,
   DEFAULT_DESIGN_DOCUMENT_LIMITS,
@@ -413,18 +417,42 @@ function canonicalizeDocumentTopology<T extends SerializableDocument>(
  * Writes the frozen v1-v6 canonical JSON. The output bytes are counted before
  * the canonical tree or string is built, and admitted output is unchanged.
  * The ceiling assumes plain data, such as builder or parser output, whose
- * property reads are stable.
+ * property reads are stable. Document v7 values, including imported-body
+ * documents, throw a TypeError instead of being written.
  */
 export function stringifyDocument(
   document: DesignDocument,
   options: StringifyOptions = {},
 ): string {
   const { maxDocumentBytes } = writerLimits(options);
+  rejectDocumentV7AtLegacyWriter(document);
   return canonicalStringifyDocumentWithin(
     canonicalizeDocumentTopology(document, maxDocumentBytes),
     maxDocumentBytes,
     options.pretty ? true : false,
   );
+}
+
+/**
+ * The v1-v6 writers never emit Document v7 bytes. Imported-body documents are
+ * written only by stringifyImportedBodyDocument.
+ */
+function rejectDocumentV7AtLegacyWriter(document: unknown): void {
+  if (typeof document !== "object" || document === null) return;
+  const identity = document as {
+    readonly schema?: unknown;
+    readonly version?: unknown;
+  };
+  const rejected = legacyDocumentApiV7Diagnostic(
+    identity.schema,
+    identity.version,
+  );
+  if (rejected !== undefined) {
+    const hint = rejected.hints?.[0];
+    throw new TypeError(
+      hint === undefined ? rejected.message : `${rejected.message}. ${hint}`,
+    );
+  }
 }
 
 function writerLimits(options: {
@@ -604,12 +632,18 @@ function validateLegacyDocumentSnapshot(
 ): CadResult<DesignDocument> {
   let parsed: ReturnType<typeof DesignDocumentSchema.safeParse>;
   try {
-    const version =
+    const record =
       typeof snapshot === "object" &&
       snapshot !== null &&
       !Array.isArray(snapshot)
-        ? (snapshot as Readonly<Record<string, unknown>>).version
+        ? (snapshot as Readonly<Record<string, unknown>>)
         : undefined;
+    const version = record?.version;
+    if (version === DOCUMENT_VERSION_V7) {
+      // Without this, the v1-v6 union reports only an opaque root mismatch.
+      const rejected = legacyDocumentApiV7Diagnostic(record?.schema, version);
+      if (rejected !== undefined) return failure(rejected);
+    }
     const schema =
       version === 1
         ? DesignDocumentV1Schema
@@ -1282,6 +1316,8 @@ export async function hashDocument(
   options: HashDocumentOptions = {},
 ): Promise<string> {
   const { maxDocumentBytes } = writerLimits(options);
+  // Like stringifyDocument, hashing covers only the frozen v1-v6 grammars.
+  rejectDocumentV7AtLegacyWriter(document);
   const canonicalDocument = canonicalizeDocumentTopology(
     document,
     maxDocumentBytes,

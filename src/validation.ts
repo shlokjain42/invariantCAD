@@ -9,6 +9,7 @@ import type {
 } from "./core/ids.js";
 import {
   diagnostic,
+  failure,
   hasErrors,
   success,
   type CadResult,
@@ -1748,6 +1749,101 @@ function validateNode(
   }
 }
 
+function legacyDocumentIdentities(): readonly {
+  readonly schema: string;
+  readonly version: number;
+}[] {
+  return [
+    { schema: DOCUMENT_SCHEMA_V1, version: DOCUMENT_VERSION_V1 },
+    { schema: DOCUMENT_SCHEMA_V2, version: DOCUMENT_VERSION_V2 },
+    { schema: DOCUMENT_SCHEMA_V3, version: DOCUMENT_VERSION_V3 },
+    { schema: DOCUMENT_SCHEMA_V4, version: DOCUMENT_VERSION_V4 },
+    { schema: DOCUMENT_SCHEMA_V5, version: DOCUMENT_VERSION_V5 },
+    { schema: DOCUMENT_SCHEMA_V6, version: DOCUMENT_VERSION_V6 },
+  ];
+}
+
+/**
+ * Rejects Document v7 at a frozen v1-v6 API boundary. The only public v7
+ * documents are imported-body documents, which have their own read, write, and
+ * evaluation entry points. Returns undefined when neither identity field names
+ * v7.
+ */
+export function legacyDocumentApiV7Diagnostic(
+  schema: unknown,
+  version: unknown,
+): Diagnostic | undefined {
+  if (schema !== DOCUMENT_SCHEMA_V7 && version !== DOCUMENT_VERSION_V7) {
+    return undefined;
+  }
+  return diagnostic(
+    "IR_INVALID",
+    "Document v7 is not supported by the v1-v6 design-document APIs",
+    {
+      severity: "error",
+      path: "/",
+      hints: [
+        "Read imported-body documents with parseImportedBodyDocument, write them with stringifyImportedBodyDocument, and evaluate them with Evaluator.evaluateImportedBody",
+      ],
+      details: {
+        schema,
+        version,
+        supported: legacyDocumentIdentities(),
+      },
+    },
+  );
+}
+
+function documentIdentityDiagnostic(
+  document: ValidatableDocument,
+  admitStagedV7: boolean,
+): Diagnostic | undefined {
+  const documentIdentity = document as {
+    readonly schema: unknown;
+    readonly version: unknown;
+  };
+  const schema = documentIdentity.schema;
+  const version = documentIdentity.version;
+  const isLegacy =
+    (schema === DOCUMENT_SCHEMA_V1 && version === DOCUMENT_VERSION_V1) ||
+    (schema === DOCUMENT_SCHEMA_V2 && version === DOCUMENT_VERSION_V2) ||
+    (schema === DOCUMENT_SCHEMA_V3 && version === DOCUMENT_VERSION_V3) ||
+    (schema === DOCUMENT_SCHEMA_V4 && version === DOCUMENT_VERSION_V4) ||
+    (schema === DOCUMENT_SCHEMA_V5 && version === DOCUMENT_VERSION_V5) ||
+    (schema === DOCUMENT_SCHEMA_V6 && version === DOCUMENT_VERSION_V6);
+  const isVersion7 =
+    schema === DOCUMENT_SCHEMA_V7 && version === DOCUMENT_VERSION_V7;
+  if (isLegacy || (admitStagedV7 && isVersion7)) return undefined;
+  if (!admitStagedV7) {
+    const stagedV7 = legacyDocumentApiV7Diagnostic(schema, version);
+    if (stagedV7 !== undefined) return stagedV7;
+  }
+  return diagnostic(
+    "IR_INVALID",
+    "Document schema and version must identify the same supported document grammar",
+    {
+      severity: "error",
+      path: "/",
+      details: {
+        schema,
+        version,
+        supported: [
+          ...legacyDocumentIdentities(),
+          ...(admitStagedV7 &&
+          (schema === DOCUMENT_SCHEMA_V7 || version === DOCUMENT_VERSION_V7)
+            ? [
+                {
+                  schema: DOCUMENT_SCHEMA_V7,
+                  version: DOCUMENT_VERSION_V7,
+                },
+              ]
+            : []),
+        ],
+      },
+    },
+  );
+}
+
 function validateTopologyReferences(
   document: ValidatableDocument,
   diagnostics: Diagnostic[],
@@ -1758,8 +1854,6 @@ function validateTopologyReferences(
   };
   const schema = documentIdentity.schema;
   const version = documentIdentity.version;
-  const isVersion1 =
-    schema === DOCUMENT_SCHEMA_V1 && version === DOCUMENT_VERSION_V1;
   const isVersion2 =
     schema === DOCUMENT_SCHEMA_V2 && version === DOCUMENT_VERSION_V2;
   const isVersion3 =
@@ -1772,47 +1866,6 @@ function validateTopologyReferences(
     schema === DOCUMENT_SCHEMA_V6 && version === DOCUMENT_VERSION_V6;
   const isVersion7 =
     schema === DOCUMENT_SCHEMA_V7 && version === DOCUMENT_VERSION_V7;
-  if (
-    !isVersion1 &&
-    !isVersion2 &&
-    !isVersion3 &&
-    !isVersion4 &&
-    !isVersion5 &&
-    !isVersion6 &&
-    !isVersion7
-  ) {
-    diagnostics.push(
-      diagnostic(
-        "IR_INVALID",
-        "Document schema and version must identify the same supported document grammar",
-        {
-          severity: "error",
-          path: "/",
-          details: {
-            schema,
-            version,
-            supported: [
-              { schema: DOCUMENT_SCHEMA_V1, version: DOCUMENT_VERSION_V1 },
-              { schema: DOCUMENT_SCHEMA_V2, version: DOCUMENT_VERSION_V2 },
-              { schema: DOCUMENT_SCHEMA_V3, version: DOCUMENT_VERSION_V3 },
-              { schema: DOCUMENT_SCHEMA_V4, version: DOCUMENT_VERSION_V4 },
-              { schema: DOCUMENT_SCHEMA_V5, version: DOCUMENT_VERSION_V5 },
-              { schema: DOCUMENT_SCHEMA_V6, version: DOCUMENT_VERSION_V6 },
-              ...(schema === DOCUMENT_SCHEMA_V7 ||
-              version === DOCUMENT_VERSION_V7
-                ? [
-                    {
-                      schema: DOCUMENT_SCHEMA_V7,
-                      version: DOCUMENT_VERSION_V7,
-                    },
-                  ]
-                : []),
-            ],
-          },
-        },
-      ),
-    );
-  }
 
   const topologyReferences = (
     document as ValidatableDocument & {
@@ -2076,7 +2129,12 @@ function detectGraphCycles(
 
 function validateDocumentInternal<T extends ValidatableDocument>(
   document: T,
+  admitStagedV7: boolean,
 ): CadResult<T> {
+  // Every later rule depends on one known grammar, so an unsupported identity
+  // is reported alone instead of running version-specific checks against it.
+  const identity = documentIdentityDiagnostic(document, admitStagedV7);
+  if (identity !== undefined) return failure(identity);
   const diagnostics: Diagnostic[] = [];
   validateTopologyReferences(document, diagnostics);
   const usesMassDensity =
@@ -2153,12 +2211,13 @@ function validateDocumentInternal<T extends ValidatableDocument>(
 export function validateDocument(
   document: DesignDocument,
 ): CadResult<DesignDocument> {
-  return validateDocumentInternal(document);
+  // Document v7, including the imported-body subset, is not a v1-v6 grammar.
+  return validateDocumentInternal(document, false);
 }
 
 /** Strict semantic validation for the isolated staged document-v7 grammar. */
 export function validateDocumentV7(
   document: DesignDocumentV7,
 ): CadResult<DesignDocumentV7> {
-  return validateDocumentInternal(document);
+  return validateDocumentInternal(document, true);
 }
