@@ -776,6 +776,79 @@ function meshGeometryMeasurements(mesh: MeshData): Pick<
   };
 }
 
+interface MeasuredAssemblyOccurrence {
+  readonly measured: ShapeMeasurements;
+  readonly transform: Mat4;
+  /** Default tessellation of the unplaced occurrence shape. */
+  readonly mesh: () => MeshData;
+}
+
+/**
+ * Aggregates area, bounds, and tolerance from occurrence kernel measurements.
+ *
+ * Rigid, mirrored, and uniformly scaled placements keep the kernel's surface
+ * area times the squared scale. Other affine placements change area in a way
+ * the kernel measurement cannot express, so those occurrences measure their
+ * placed default tessellation. Bounds enclose every placed kernel bounding
+ * box: exact for axis-aligned placements and conservative otherwise. The
+ * tolerance is the largest occurrence kernel tolerance times its placement's
+ * linear magnification (Frobenius norm when the placement is not a
+ * similarity). Empty occurrences contribute no area or bounds.
+ */
+function assemblyGeometryMeasurements(
+  occurrences: readonly MeasuredAssemblyOccurrence[],
+): Pick<ShapeMeasurements, "surfaceArea" | "boundingBox" | "tolerance"> {
+  const min: [number, number, number] = [Infinity, Infinity, Infinity];
+  const max: [number, number, number] = [-Infinity, -Infinity, -Infinity];
+  let surfaceArea = 0;
+  let tolerance = 0;
+  for (const { measured, transform: m, mesh } of occurrences) {
+    const gram = (first: number, second: number): number =>
+      m[first * 4]! * m[second * 4]! +
+      m[first * 4 + 1]! * m[second * 4 + 1]! +
+      m[first * 4 + 2]! * m[second * 4 + 2]!;
+    const squaredScale = (gram(0, 0) + gram(1, 1) + gram(2, 2)) / 3;
+    const allowance = 1e-12 * squaredScale;
+    const similarity =
+      Math.abs(gram(0, 1)) <= allowance &&
+      Math.abs(gram(0, 2)) <= allowance &&
+      Math.abs(gram(1, 2)) <= allowance &&
+      Math.abs(gram(0, 0) - squaredScale) <= allowance &&
+      Math.abs(gram(1, 1) - squaredScale) <= allowance &&
+      Math.abs(gram(2, 2) - squaredScale) <= allowance;
+    const magnification = Math.sqrt(similarity ? squaredScale : 3 * squaredScale);
+    tolerance = Math.max(tolerance, measured.tolerance * magnification);
+    if (measured.volume === 0 && measured.surfaceArea === 0) continue;
+    surfaceArea += similarity
+      ? measured.surfaceArea * squaredScale
+      : meshGeometryMeasurements(transformMesh(mesh(), m)).surfaceArea;
+    const bounds = measured.boundingBox;
+    for (const x of [bounds.min[0], bounds.max[0]]) {
+      for (const y of [bounds.min[1], bounds.max[1]]) {
+        for (const z of [bounds.min[2], bounds.max[2]]) {
+          for (let axis = 0; axis < 3; axis += 1) {
+            const value =
+              m[axis]! * x + m[axis + 4]! * y + m[axis + 8]! * z + m[axis + 12]!;
+            min[axis] = Math.min(min[axis]!, value);
+            max[axis] = Math.max(max[axis]!, value);
+          }
+        }
+      }
+    }
+  }
+  const clean = (value: number): number => (value === 0 ? 0 : value);
+  return {
+    surfaceArea,
+    boundingBox: Number.isFinite(min[0])
+      ? {
+          min: min.map(clean) as unknown as Vec3,
+          max: max.map(clean) as unknown as Vec3,
+        }
+      : { min: [0, 0, 0], max: [0, 0, 0] },
+    tolerance,
+  };
+}
+
 interface CapturedEvaluationOwnerDisposal {
   readonly disposeShape: (shape: KernelShape) => void;
   readonly shapes: readonly KernelShape[];
@@ -2494,30 +2567,38 @@ export class EvaluatedAssembly {
   }
 
   measure(): ShapeMeasurements {
-    const geometry = meshGeometryMeasurements(this.mesh());
+    this.owner.assertLive();
     const measuredShapes = new Map<KernelShape, ShapeMeasurements>();
-    const massProperties = combineMassProperties(
-      this.occurrences.map((occurrence) => {
+    const measuredOccurrences = this.occurrences.map(
+      (occurrence): MeasuredAssemblyOccurrence => {
         let measured = measuredShapes.get(occurrence.part.shape);
         if (measured === undefined) {
           measured = this.owner.kernel.measure(occurrence.part.shape);
           measuredShapes.set(occurrence.part.shape, measured);
         }
-        return transformMassProperties(
+        return {
+          measured,
+          transform: occurrence.transform,
+          mesh: () => this.owner.kernel.mesh(occurrence.part.shape),
+        };
+      },
+    );
+    const massProperties = combineMassProperties(
+      measuredOccurrences.map(({ measured, transform }) =>
+        transformMassProperties(
           {
             volume: measured.volume,
             centerOfMass: measured.centerOfMass,
             inertiaTensor: measured.inertiaTensor,
           },
-          occurrence.transform,
-        );
-      }),
+          transform,
+        ),
+      ),
     );
     return {
       ...massProperties,
-      ...geometry,
+      ...assemblyGeometryMeasurements(measuredOccurrences),
       genus: null,
-      tolerance: 0,
     };
   }
 

@@ -53,20 +53,22 @@ async function loadManifold(wasmUrl?: string): Promise<ManifoldToplevel> {
     return modulePromise;
   }
   configuredWasmUrl = wasmUrl;
-  modulePromise = initializeManifold(
+  const attempt = initializeManifold(
     wasmUrl === undefined ? undefined : { locateFile: () => wasmUrl },
   ).then((module) => {
     module.setup();
     return module;
   });
-  return modulePromise;
-}
-
-function asManifoldShape(shape: KernelShape): ManifoldShape {
-  if (!(shape instanceof ManifoldShape) || shape.disposed) {
-    throw new TypeError("Expected a live Manifold kernel shape");
-  }
-  return shape;
+  modulePromise = attempt;
+  // Cache only a successful initialization. A failed attempt left no module
+  // instance, so a later call may retry with the same or a corrected URL.
+  attempt.catch(() => {
+    if (modulePromise === attempt) {
+      modulePromise = undefined;
+      configuredWasmUrl = undefined;
+    }
+  });
+  return attempt;
 }
 
 function exactPerConnectedComponentGenus(
@@ -270,6 +272,35 @@ function radiansToDegrees(value: number): number {
   return (value * 180) / Math.PI;
 }
 
+/** Unit roundoff of the Float32 positions returned by `getMesh()`. */
+const FLOAT32_UNIT_ROUNDOFF = 2 ** -24;
+
+/**
+ * Bounds the volume change caused by rounding the recentered mesh to Float32.
+ *
+ * Each recentered coordinate is at most the bounding-box half extent on its
+ * axis, so Float32 rounding moves a vertex by at most the half diagonal times
+ * the Float32 unit roundoff. The double-precision recentering adds a few ulp
+ * of the original coordinates. Moving every vertex of a closed mesh by at
+ * most `d` changes its volume by at most `surfaceArea * d` to first order;
+ * the factor of two covers higher-order terms.
+ */
+function float32MeshVolumeBound(
+  surfaceArea: number,
+  reference: Vec3,
+  bounds: { readonly min: ArrayLike<number>; readonly max: ArrayLike<number> },
+): number {
+  const halfDiagonal = Math.hypot(
+    bounds.max[0]! / 2 - bounds.min[0]! / 2,
+    bounds.max[1]! / 2 - bounds.min[1]! / 2,
+    bounds.max[2]! / 2 - bounds.min[2]! / 2,
+  );
+  const displacement =
+    FLOAT32_UNIT_ROUNDOFF * halfDiagonal +
+    4 * Number.EPSILON * (Math.hypot(...reference) + halfDiagonal);
+  return 2 * surfaceArea * displacement;
+}
+
 export interface ManifoldKernelOptions {
   readonly wasmUrl?: string;
 }
@@ -294,6 +325,8 @@ export class ManifoldKernel implements GeometryKernel {
   };
   private readonly module: ManifoldToplevel;
   private readonly liveShapes = new Set<ManifoldShape>();
+  /** Every shape this instance created, including disposed ones. */
+  private readonly ownedShapes = new WeakSet<ManifoldShape>();
 
   constructor(module: ManifoldToplevel) {
     this.module = module;
@@ -301,8 +334,17 @@ export class ManifoldKernel implements GeometryKernel {
 
   private own(shape: ManifoldSolid): ManifoldShape {
     const wrapped = new ManifoldShape(shape);
+    this.ownedShapes.add(wrapped);
     this.liveShapes.add(wrapped);
     return wrapped;
+  }
+
+  /** Returns the native solid of a live shape created by this instance. */
+  private native(shape: KernelShape): ManifoldSolid {
+    if (!(shape instanceof ManifoldShape) || !this.liveShapes.has(shape)) {
+      throw new TypeError("Expected a live Manifold kernel shape");
+    }
+    return shape[MANIFOLD_SHAPE];
   }
 
   box(size: Vec3, center: boolean): KernelShape {
@@ -391,8 +433,8 @@ export class ManifoldKernel implements GeometryKernel {
     tools: readonly KernelShape[],
   ): KernelShape {
     const shapes = [
-      asManifoldShape(target)[MANIFOLD_SHAPE],
-      ...tools.map((tool) => asManifoldShape(tool)[MANIFOLD_SHAPE]),
+      this.native(target),
+      ...tools.map((tool) => this.native(tool)),
     ];
     const result =
       operation === "union"
@@ -407,22 +449,36 @@ export class ManifoldKernel implements GeometryKernel {
     shape: KernelShape,
     operations: readonly ResolvedTransformOperation[],
   ): KernelShape {
-    let current = asManifoldShape(shape)[MANIFOLD_SHAPE];
-    let ownsCurrent = false;
-    for (const operation of operations) {
-      const next =
-        operation.kind === "translate"
-          ? current.translate(operation.value)
-          : operation.kind === "rotate"
-            ? current.rotate(operation.value.map(radiansToDegrees) as unknown as Vec3)
-            : operation.kind === "scale"
-              ? current.scale(operation.value)
-              : current.mirror(operation.normal);
-      if (ownsCurrent) current.delete();
-      current = next;
-      ownsCurrent = true;
+    const input = this.native(shape);
+    let current = input;
+    try {
+      for (const operation of operations) {
+        const next =
+          operation.kind === "translate"
+            ? current.translate(operation.value)
+            : operation.kind === "rotate"
+              ? current.rotate(operation.value.map(radiansToDegrees) as unknown as Vec3)
+              : operation.kind === "scale"
+                ? current.scale(operation.value)
+                : current.mirror(operation.normal);
+        const previous = current;
+        current = next;
+        if (previous !== input) previous.delete();
+      }
+      // Every call returns a fresh native handle. Wrapping the input again
+      // would let two adapter shapes release one native Manifold.
+      if (current === input) current = input.translate([0, 0, 0]);
+      return this.own(current);
+    } catch (error) {
+      if (current !== input) {
+        try {
+          current.delete();
+        } catch {
+          // Preserve the original failure.
+        }
+      }
+      throw error;
     }
-    return this.own(current);
   }
 
   /**
@@ -438,13 +494,13 @@ export class ManifoldKernel implements GeometryKernel {
     const signal = manifoldContextSignal(context);
     checkManifoldSignal(signal);
     return connectedMeshBodyClassification(
-      asManifoldShape(shape)[MANIFOLD_SHAPE],
+      this.native(shape),
       signal,
     );
   }
 
   mesh(shape: KernelShape): MeshData {
-    const mesh = asManifoldShape(shape)[MANIFOLD_SHAPE].getMesh();
+    const mesh = this.native(shape).getMesh();
     const positions = new Float32Array(mesh.numVert * 3);
     for (let vertex = 0; vertex < mesh.numVert; vertex += 1) {
       positions[vertex * 3] = mesh.vertProperties[vertex * mesh.numProp]!;
@@ -455,7 +511,21 @@ export class ManifoldKernel implements GeometryKernel {
   }
 
   measure(shape: KernelShape): ShapeMeasurements {
-    const manifold = asManifoldShape(shape)[MANIFOLD_SHAPE];
+    const manifold = this.native(shape);
+    if (manifold.isEmpty()) {
+      // Native Manifold reports inverted infinite bounds and tolerance -1 for
+      // an empty shape. Use the zero convention shared with the OCCT kernel;
+      // Manifold's tolerance scales with the bounds, so it is zero here.
+      return {
+        volume: 0,
+        surfaceArea: 0,
+        centerOfMass: null,
+        inertiaTensor: zeroMassProperties().inertiaTensor,
+        boundingBox: { min: [0, 0, 0], max: [0, 0, 0] },
+        genus: 0,
+        tolerance: 0,
+      };
+    }
     const bounds = manifold.boundingBox();
     const volume = manifold.volume();
     const surfaceArea = manifold.surfaceArea();
@@ -491,6 +561,7 @@ export class ManifoldKernel implements GeometryKernel {
           5e-6 * volume,
           8 * surfaceArea * tolerance,
           integrated.volumeRoundoffBound,
+          float32MeshVolumeBound(surfaceArea, reference, bounds),
         );
         if (Math.abs(integrated.volume - volume) > volumeAllowance) {
           throw new RangeError(
@@ -517,7 +588,7 @@ export class ManifoldKernel implements GeometryKernel {
   }
 
   status(shape: KernelShape) {
-    const code = asManifoldShape(shape)[MANIFOLD_SHAPE].status();
+    const code = this.native(shape).status();
     return {
       ok: code === "NoError",
       code,
@@ -526,18 +597,36 @@ export class ManifoldKernel implements GeometryKernel {
   }
 
   disposeShape(shape: KernelShape): void {
-    if (!(shape instanceof ManifoldShape)) {
-      throw new TypeError("Expected a Manifold kernel shape");
+    if (!(shape instanceof ManifoldShape) || !this.ownedShapes.has(shape)) {
+      throw new TypeError(
+        "Expected a Manifold kernel shape owned by this kernel",
+      );
     }
     const wrapped = shape;
     if (wrapped.disposed) return;
-    wrapped[MANIFOLD_SHAPE].delete();
+    // A failed native release is not retried, so kernel disposal can finish.
     wrapped.disposed = true;
     this.liveShapes.delete(wrapped);
+    wrapped[MANIFOLD_SHAPE].delete();
   }
 
   dispose(): void {
-    for (const shape of [...this.liveShapes]) this.disposeShape(shape);
+    // Release every live shape before reporting any release failure.
+    const failures: unknown[] = [];
+    for (const shape of [...this.liveShapes]) {
+      try {
+        this.disposeShape(shape);
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) {
+      throw new AggregateError(
+        failures,
+        "Manifold kernel disposal encountered multiple release failures",
+      );
+    }
   }
 }
 

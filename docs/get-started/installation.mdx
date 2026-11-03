@@ -132,8 +132,11 @@ const evaluator = await createEvaluator({
 });
 ```
 
-The Manifold module is initialized once per JavaScript realm. A later request
-cannot change the configured URL after initialization.
+The Manifold module is initialized once per JavaScript realm, so pass `wasmUrl`
+on the first initialization in each page or worker. After a successful
+initialization, a later request cannot change the configured URL, including
+after an initialization that used the default location. A failed initialization
+is not cached: a later call can retry with the same or a corrected URL.
 
 OCCT has a larger separate runtime and additional initialization forms. Follow
 the [OpenCascade guide](/evaluation/open-cascade) for Node, browser, and custom
