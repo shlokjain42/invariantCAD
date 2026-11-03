@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  ManifoldKernel,
   createEvaluator,
   createManifoldKernel,
   design,
@@ -121,5 +122,73 @@ describe("Manifold mass-property integration", () => {
     } finally {
       evaluator.dispose();
     }
+  });
+});
+
+describe("Manifold native handle ownership", () => {
+  interface FakeSolid {
+    readonly name: string;
+    deletions: number;
+    translate(value: unknown): FakeSolid;
+    scale(value: unknown): FakeSolid;
+    delete(): void;
+  }
+
+  function fakeKernel(options: { readonly failDeleting?: string } = {}): {
+    readonly kernel: ManifoldKernel;
+    readonly solids: FakeSolid[];
+  } {
+    const solids: FakeSolid[] = [];
+    const create = (name: string): FakeSolid => {
+      const solid: FakeSolid = {
+        name,
+        deletions: 0,
+        translate: () => create(`${name}+translate`),
+        scale: () => {
+          throw new TypeError("scale failed");
+        },
+        delete: () => {
+          solid.deletions += 1;
+          if (name === options.failDeleting) {
+            throw new Error(`delete ${name} failed`);
+          }
+        },
+      };
+      solids.push(solid);
+      return solid;
+    };
+    let boxes = 0;
+    const kernel = new ManifoldKernel({
+      Manifold: { cube: () => create(`box${(boxes += 1)}`) },
+    } as never);
+    return { kernel, solids };
+  }
+
+  it("deletes owned transform intermediates when a later operation fails", () => {
+    const { kernel, solids } = fakeKernel();
+    const box = kernel.box([1, 1, 1], false);
+    expect(() =>
+      kernel.transform(box, [
+        { kind: "translate", value: [1, 0, 0] },
+        { kind: "scale", value: [2, 2, 2] },
+      ]),
+    ).toThrow("scale failed");
+    expect(solids.map((solid) => [solid.name, solid.deletions])).toEqual([
+      ["box1", 0],
+      ["box1+translate", 1],
+    ]);
+    kernel.dispose();
+    expect(solids[0]!.deletions).toBe(1);
+  });
+
+  it("releases every live shape before reporting a failed release", () => {
+    const { kernel, solids } = fakeKernel({ failDeleting: "box2" });
+    kernel.box([1, 1, 1], false);
+    kernel.box([1, 1, 1], false);
+    kernel.box([1, 1, 1], false);
+    expect(() => kernel.dispose()).toThrow("delete box2 failed");
+    expect(solids.map((solid) => solid.deletions)).toEqual([1, 1, 1]);
+    expect(() => kernel.dispose()).not.toThrow();
+    expect(solids.map((solid) => solid.deletions)).toEqual([1, 1, 1]);
   });
 });

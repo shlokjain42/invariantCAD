@@ -69,13 +69,16 @@ therefore does not advertise shape-artifact persistence for Manifold 3.5.1.
 
 ## Resource ownership
 
-Each adapter shape wraps a native Manifold object. Feature intermediates and
-evaluated output shapes are deleted by the owning evaluation. A kernel instance
-accepts only shapes it created: passing a shape from another
-`createManifoldKernel()` instance throws a `TypeError` and leaves the shape
-with its owner. Disposing the kernel releases any remaining live adapter
-shapes. The initialized Manifold
-module promise remains cached for the lifetime of the JavaScript realm.
+Each adapter shape wraps its own native Manifold object, and every kernel call
+returns a fresh shape that the caller disposes independently, including
+`transform` with an empty operation list. Feature intermediates and evaluated
+output shapes are deleted by the owning evaluation. A kernel instance accepts
+only shapes it created: passing a shape from another `createManifoldKernel()`
+instance throws a `TypeError` and leaves the shape with its owner. Disposing
+the kernel releases every remaining live adapter shape; if a native release
+fails, the others are still released before the error is rethrown. The
+initialized Manifold module promise remains cached for the lifetime of the
+JavaScript realm.
 
 ## Security and provenance
 

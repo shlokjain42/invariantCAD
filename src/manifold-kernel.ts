@@ -440,22 +440,36 @@ export class ManifoldKernel implements GeometryKernel {
     shape: KernelShape,
     operations: readonly ResolvedTransformOperation[],
   ): KernelShape {
-    let current = this.native(shape);
-    let ownsCurrent = false;
-    for (const operation of operations) {
-      const next =
-        operation.kind === "translate"
-          ? current.translate(operation.value)
-          : operation.kind === "rotate"
-            ? current.rotate(operation.value.map(radiansToDegrees) as unknown as Vec3)
-            : operation.kind === "scale"
-              ? current.scale(operation.value)
-              : current.mirror(operation.normal);
-      if (ownsCurrent) current.delete();
-      current = next;
-      ownsCurrent = true;
+    const input = this.native(shape);
+    let current = input;
+    try {
+      for (const operation of operations) {
+        const next =
+          operation.kind === "translate"
+            ? current.translate(operation.value)
+            : operation.kind === "rotate"
+              ? current.rotate(operation.value.map(radiansToDegrees) as unknown as Vec3)
+              : operation.kind === "scale"
+                ? current.scale(operation.value)
+                : current.mirror(operation.normal);
+        const previous = current;
+        current = next;
+        if (previous !== input) previous.delete();
+      }
+      // Every call returns a fresh native handle. Wrapping the input again
+      // would let two adapter shapes release one native Manifold.
+      if (current === input) current = input.translate([0, 0, 0]);
+      return this.own(current);
+    } catch (error) {
+      if (current !== input) {
+        try {
+          current.delete();
+        } catch {
+          // Preserve the original failure.
+        }
+      }
+      throw error;
     }
-    return this.own(current);
   }
 
   /**
@@ -581,13 +595,29 @@ export class ManifoldKernel implements GeometryKernel {
     }
     const wrapped = shape;
     if (wrapped.disposed) return;
-    wrapped[MANIFOLD_SHAPE].delete();
+    // A failed native release is not retried, so kernel disposal can finish.
     wrapped.disposed = true;
     this.liveShapes.delete(wrapped);
+    wrapped[MANIFOLD_SHAPE].delete();
   }
 
   dispose(): void {
-    for (const shape of [...this.liveShapes]) this.disposeShape(shape);
+    // Release every live shape before reporting any release failure.
+    const failures: unknown[] = [];
+    for (const shape of [...this.liveShapes]) {
+      try {
+        this.disposeShape(shape);
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) {
+      throw new AggregateError(
+        failures,
+        "Manifold kernel disposal encountered multiple release failures",
+      );
+    }
   }
 }
 

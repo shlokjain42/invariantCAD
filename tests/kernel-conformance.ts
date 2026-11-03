@@ -908,6 +908,25 @@ export function geometryKernelConformance(
       }
     });
 
+    it("returns an independently owned shape from an empty transform", () => {
+      if (
+        !kernelSupports(kernel.capabilities, "primitive", "box") ||
+        !kernelSupports(kernel.capabilities, "feature", "transform")
+      ) {
+        return;
+      }
+      const input = kernel.box!([1, 2, 3], false);
+      const copy = kernel.transform!(input, []);
+      const survivor = kernel.box!([2, 2, 2], false);
+      expect(copy).not.toBe(input);
+      kernel.disposeShape(input);
+      expectMeasurement(expectLiveShape(copy), "volume", 6, relativeTolerance);
+      kernel.disposeShape(copy);
+      kernel.disposeShape(copy);
+      expectMeasurement(expectLiveShape(survivor), "volume", 8, relativeTolerance);
+      // The afterEach kernel.dispose() must release the survivor cleanly.
+    });
+
     it("classifies one-body, multibody, and cavity Boolean results when declared", () => {
       if (
         inspectKernelBodyResultClassificationCapabilities(kernel.capabilities)
