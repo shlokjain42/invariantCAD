@@ -25,6 +25,7 @@ import {
   type PathValidationReason,
   type ResolvedCompositePath,
   type ResolvedPath,
+  type ResolvedPathSegment,
 } from "./path.js";
 
 export const SWEEP_TRANSITIONS = Object.freeze(["right-corner"] as const);
@@ -140,6 +141,68 @@ export interface SweepValidationIssue {
 
 function distance(a: Vec3, b: Vec3): number {
   return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+}
+
+/**
+ * `tan(turn / 2)` for a right-corner joint between two unit directions.
+ *
+ * A right-corner transition cuts both tubes on the bisector plane. Within a
+ * profile envelope of radius `r`, that miter plane reaches `r * tan(turn / 2)`
+ * before the vertex on the inner side and the same distance beyond it on the
+ * outer side.
+ */
+function rightCornerMiterSlope(incoming: Vec3, outgoing: Vec3): number {
+  const sine = Math.hypot(
+    incoming[1] * outgoing[2] - incoming[2] * outgoing[1],
+    incoming[2] * outgoing[0] - incoming[0] * outgoing[2],
+    incoming[0] * outgoing[1] - incoming[1] * outgoing[0],
+  );
+  const cosine =
+    incoming[0] * outgoing[0] +
+    incoming[1] * outgoing[1] +
+    incoming[2] * outgoing[2];
+  const slope = sine / (1 + cosine);
+  return Number.isFinite(slope) && slope >= 0
+    ? slope
+    : Number.POSITIVE_INFINITY;
+}
+
+function offsetPoint(point: Vec3, direction: Vec3, amount: number): Vec3 {
+  return [
+    point[0] + direction[0] * amount,
+    point[1] + direction[1] * amount,
+    point[2] + direction[2] * amount,
+  ];
+}
+
+/**
+ * Checks that a straight sweep segment can hold both of its right-corner miter
+ * setbacks and returns the segment extended by its outer miter reach.
+ *
+ * Within the profile envelope, the mitered tube piece of a straight segment
+ * stays inside the envelope cylinder around that extended segment, so remote
+ * clearance can be certified against it.
+ */
+function mitredLineSegment(
+  start: Vec3,
+  end: Vec3,
+  startSetback: number,
+  endSetback: number,
+  tolerance: number,
+): { readonly start: Vec3; readonly end: Vec3 } | undefined {
+  const segmentLength = distance(start, end);
+  if (!(segmentLength > startSetback + endSetback + tolerance)) {
+    return undefined;
+  }
+  const direction: Vec3 = [
+    (end[0] - start[0]) / segmentLength,
+    (end[1] - start[1]) / segmentLength,
+    (end[2] - start[2]) / segmentLength,
+  ];
+  return {
+    start: offsetPoint(start, direction, -startSetback),
+    end: offsetPoint(end, direction, endSetback),
+  };
 }
 
 function profileRadius(profile: ResolvedProfile): number {
@@ -378,15 +441,50 @@ export function validateResolvedSweep(
   }
   const radius = profileRadius(profile);
   if (path.kind === "polyline") {
+    const points = path.points;
+    const setbacks = points.map((point, index) => {
+      if (index === 0 || index === points.length - 1) return 0;
+      const incoming = resolvedPathSegmentStartTangent({
+        kind: "line",
+        start: points[index - 1]!,
+        end: point,
+      });
+      const outgoing = resolvedPathSegmentStartTangent({
+        kind: "line",
+        start: point,
+        end: points[index + 1]!,
+      });
+      return radius * rightCornerMiterSlope(incoming, outgoing);
+    });
+    const mitred: { readonly start: Vec3; readonly end: Vec3 }[] = [];
+    for (let index = 0; index < points.length - 1; index += 1) {
+      const segment = mitredLineSegment(
+        points[index]!,
+        points[index + 1]!,
+        setbacks[index]!,
+        setbacks[index + 1]!,
+        tolerance,
+      );
+      if (segment === undefined) {
+        return {
+          reason: "path-clearance",
+          message:
+            "Sweep path segment is too short for the right-corner miters of the profile envelope",
+          input: "path",
+          segmentIndex: index,
+        };
+      }
+      mitred.push(segment);
+    }
     const clearance = radius * 2 + tolerance;
-    for (let first = 0; first < path.points.length - 1; first += 1) {
-      for (let second = first + 2; second < path.points.length - 1; second += 1) {
+    for (let first = 0; first < mitred.length; first += 1) {
+      for (let second = first + 2; second < mitred.length; second += 1) {
         if (
           resolvedPolylineSegmentDistance(
-            path.points[first]!,
-            path.points[first + 1]!,
-            path.points[second]!,
-            path.points[second + 1]!,
+            mitred[first]!.start,
+            mitred[first]!.end,
+            mitred[second]!.start,
+            mitred[second]!.end,
           ) <= clearance
         ) {
           return {
@@ -412,10 +510,10 @@ export function validateResolvedSweep(
       };
     }
   } else {
-    const segments = resolvedCompositePathSegments(
+    const authoredSegments = resolvedCompositePathSegments(
       path as ResolvedCompositePath,
     );
-    for (const [index, segment] of segments.entries()) {
+    for (const [index, segment] of authoredSegments.entries()) {
       if (
         segment.kind === "circularArc" &&
         !(resolvedCircularArcGeometry(segment)!.radius > radius + tolerance)
@@ -428,6 +526,42 @@ export function validateResolvedSweep(
           segmentIndex: index,
         };
       }
+    }
+    // Line-line junctions use right-corner miters; arc-bearing junctions are
+    // G1 tangent and need no setback.
+    const junctionSetbacks = authoredSegments.map((segment, index) => {
+      const prior = authoredSegments[index - 1];
+      return prior?.kind === "line" && segment.kind === "line"
+        ? radius *
+            rightCornerMiterSlope(
+              resolvedPathSegmentEndTangent(prior),
+              resolvedPathSegmentStartTangent(segment),
+            )
+        : 0;
+    });
+    const segments: ResolvedPathSegment[] = [];
+    for (const [index, segment] of authoredSegments.entries()) {
+      if (segment.kind !== "line") {
+        segments.push(segment);
+        continue;
+      }
+      const mitred = mitredLineSegment(
+        segment.start,
+        segment.end,
+        junctionSetbacks[index]!,
+        junctionSetbacks[index + 1] ?? 0,
+        tolerance,
+      );
+      if (mitred === undefined) {
+        return {
+          reason: "path-clearance",
+          message:
+            "Composite line segment is too short for the right-corner miters of the profile envelope",
+          input: "path",
+          segmentIndex: index,
+        };
+      }
+      segments.push({ kind: "line", ...mitred });
     }
     for (let index = 1; index < segments.length; index += 1) {
       const prior = segments[index - 1]!;
