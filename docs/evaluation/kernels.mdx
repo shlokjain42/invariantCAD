@@ -45,13 +45,21 @@ Choose stock OCCT for analytic B-Rep geometry, topology snapshots, exact bounded
 lofts/sweeps, fillets/chamfers/shells/offsets, and STEP/BREP exchange. Stock
 history for several complex features remains partial.
 
-The OCCT kernel reads `context.signal` and every low-level STEP export option
-from own data properties only. An accessor-backed field, or one supplied by a
+The following own-data rule is implemented for the unreleased 0.2 line, not
+the current 0.1.1 npm package, which reads these fields through ordinary
+property access.
+The OCCT kernel reads `context.signal`, `context.feature`,
+`context.tolerance`, and every low-level STEP export option from own data
+properties only. An accessor-backed field, or one supplied by a
 caller-defined prototype such as a class getter, fails with `TypeError`
 instead of being ignored, so a class-based cancellation signal is never
 silently dropped. A field reachable only through the intrinsic
-`Object.prototype` is ignored, so prototype pollution cannot change or break
-kernel operations.
+`Object.prototype` is ignored, so prototype pollution cannot relabel feature
+lineage or change kernel tolerances. `feature` must be a string and
+`tolerance` a number when present. Each operation captures these values once
+when it is called: changing or reusing the context object afterwards does not
+change the lineage that later `topology()` calls report for shapes it already
+created.
 
 The profile is stronger than checking `representation === "brep"`: creation
 also requires the documented primitive and feature baseline, native exchange
@@ -65,6 +73,19 @@ const evaluator = await createEvaluator({
   kernel,
 });
 ```
+
+When `createOcctKernel()` receives an explicit `wasm` source or
+`moduleFactory` and the loaded module does not expose the owned facade ABI,
+the kernel is not the qualified zero-override stock runtime, even when it
+loads the identical stock `occt-wasm.wasm` bytes. It omits the persistent
+topology signature declaration (`capabilities.topology.signatures` and
+`signatureProfiles`), so evaluating a document that stores a persistent
+topology reference fails with `KERNEL_CAPABILITY_MISSING` for capability
+`persistent-topology-signatures`. In the unreleased 0.2 line it also omits the
+deterministic `stepExport` envelope and keeps weak raw STEP export. The
+`mechanical-exact` preflight still passes, because it does not require
+signatures. Prefer letting the bundler place `occt-wasm.wasm` next to its
+JavaScript glue so the zero-override `createOcctKernel()` call can load it.
 
 ## Owned OCCT facade
 
@@ -112,8 +133,9 @@ Use `inspectKernelStepExportCapabilities(...)` for the optional strong STEP
 envelope. `nativeExports` containing `"step"` promises only that bytes can be
 written. Calling `output.export("step")` without a second argument remains
 compatible with weak kernels; supporting kernels use their deterministic
-defaults. Passing any second argument, including `{}`, requires a valid
-`stepExport` envelope or throws `CadError` with
+defaults, and fall back to weak native bytes for an output they can write only
+as several STEP products. Passing any second argument, including `{}`,
+requires a valid `stepExport` envelope or throws `CadError` with
 `KERNEL_CAPABILITY_MISSING`.
 
 `nativeImports` is the weak exchange declaration. Document-backed imported

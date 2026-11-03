@@ -50,6 +50,18 @@ const kernel = await createOcctKernel({
 Bytes are copied where required so caller mutation cannot change an in-flight
 module initialization.
 
+An explicit source changes runtime identity, not only asset location. Unless
+the loaded module exposes the owned facade ABI, the kernel omits the
+persistent topology signature declaration (`capabilities.topology.signatures`
+and `signatureProfiles`), even for the identical stock bytes. Documents that
+store persistent topology references then fail with
+`KERNEL_CAPABILITY_MISSING` for capability `persistent-topology-signatures`,
+although the `mechanical-exact` preflight still passes. Supplying `wasm` or
+`moduleFactory` also omits the deterministic STEP envelope described under
+[Exact exchange](#exact-exchange). Prefer the zero-override
+`createOcctKernel()` call when the bundler can place `occt-wasm.wasm` next to
+its JavaScript glue.
+
 ## Tessellation and tolerance
 
 ```ts
