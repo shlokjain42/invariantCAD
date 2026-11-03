@@ -48,10 +48,12 @@ push. It has not reviewed Dependabot pull requests automatically; comment
 
 ## Automated publication
 
-Every push to `main` runs `.github/workflows/release.yml`. A commit is a
-release commit only when its `package.json` version differs from its first
-parent's, which happens only when a release pull request merges. For a
-release commit the workflow:
+Every push to `main` runs `.github/workflows/release.yml`. A push is a release
+only when its `package.json` version differs from the version `main` had
+before the push, which happens only when a release pull request merges by
+merge commit, squash, or rebase. A manual run of the workflow on `main`
+instead compares with the latest release tag that `main` contains, so it can
+finish an interrupted release. For a release the workflow:
 
 1. checks release metadata and runs `pnpm release:check`: strict TypeScript,
    source correctness and format hygiene, public-entrypoint and API-report

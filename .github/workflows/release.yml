@@ -1,8 +1,10 @@
 name: Publish npm
 
-# Every push to main is checked for a release commit: one whose package.json
-# version differs from its first parent's. That only happens when a release
-# pull request prepared by .github/workflows/prepare-release.yml merges.
+# Every push to main is checked for a release: a push whose package.json
+# version differs from the version main had before the push. That only happens
+# when a release pull request prepared by .github/workflows/prepare-release.yml
+# merges, by merge commit, squash, or rebase. A manual run compares main with
+# the latest release tag it contains, so it can finish an interrupted release.
 #
 # A release commit then runs the full acceptance suite, publishes the exact
 # smoke-tested tarball to npm through trusted publishing after approval in the
@@ -12,7 +14,7 @@ name: Publish npm
 #
 # The npm trusted publisher is bound to this workflow filename and the `npm`
 # environment; renaming either breaks publication. Every step is idempotent, so
-# "Re-run failed jobs" on the original run resumes a partial release.
+# re-running the original run resumes a partial release.
 
 on:
   push:
@@ -43,11 +45,12 @@ jobs:
           node-version: 24.x
           package-manager-cache: false
 
-      - name: Compare the package version with the previous main commit
+      - name: Compare the package version with main before this push
         id: plan
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          BEFORE: ${{ github.event.before }}
         run: |
           set -euo pipefail
           if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
@@ -58,8 +61,16 @@ jobs:
             git show "$1:package.json" |
               node -e 'let s="";process.stdin.on("data",(c)=>s+=c).on("end",()=>process.stdout.write(JSON.parse(s).version))'
           }
+          # A rebase-merged release pull request pushes several commits at once,
+          # so compare against main before the whole push, not HEAD's parent.
+          if [[ "$GITHUB_EVENT_NAME" == "push" && -n "$BEFORE" && ! "$BEFORE" =~ ^0+$ ]]; then
+            base="$BEFORE"
+          else
+            base="$(git describe --tags --abbrev=0 --match 'v[0-9]*' HEAD 2>/dev/null || echo HEAD^1)"
+          fi
           version="$(version_at HEAD)"
-          previous="$(version_at HEAD^1)"
+          previous="$(version_at "$base")"
+          echo "Comparing package.json at ${GITHUB_SHA} (${version}) with ${base} (${previous})."
           tag="v${version}"
           tag_commit="$(git rev-parse -q --verify "refs/tags/${tag}^{commit}" || true)"
           published="$(npm view "invariantcad@${version}" version 2>/dev/null || true)"
