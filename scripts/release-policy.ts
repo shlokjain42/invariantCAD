@@ -198,10 +198,13 @@ const MARKDOWN_TARGET = new RegExp(
  */
 type MarkdownLineKind = "code" | "start" | "continuation";
 
-/** An open block quote, or a list item whose content is `width` columns in. */
+/**
+ * An open block quote, or a list item whose content is `width` columns in and
+ * that is `filled` once it holds any block.
+ */
 type MarkdownContainer =
   | { readonly kind: "quote" }
-  | { readonly kind: "item"; readonly width: number };
+  | { readonly kind: "item"; readonly width: number; filled: boolean };
 
 interface MarkdownFence {
   readonly character: string;
@@ -289,7 +292,7 @@ function markdownLineKinds(lines: readonly string[]): readonly MarkdownLineKind[
         paragraph && matched === containers.length && opened.length === 0,
       );
       if (item === undefined) break;
-      opened.push({ kind: "item", width: item.width });
+      opened.push({ kind: "item", width: item.width, filled: false });
       rest = rest.slice(item.width);
     }
 
@@ -319,6 +322,13 @@ function markdownLineKinds(lines: readonly string[]): readonly MarkdownLineKind[
     }
     if (matched < containers.length || opened.length > 0) paragraph = false;
     containers = [...containers.slice(0, matched), ...opened];
+    containers.forEach((container, index) => {
+      // Each container holds the ones after it, and the last one holds this
+      // line's content unless it is blank.
+      if (container.kind === "item" && (!blank || index < containers.length - 1)) {
+        container.filled = true;
+      }
+    });
 
     if (blank) {
       paragraph = false;
@@ -346,7 +356,9 @@ function containerContent(container: MarkdownContainer, rest: string): string | 
     const marker = QUOTE_MARKER.exec(rest);
     return marker === null ? undefined : rest.slice(marker[0].length);
   }
-  if (BLANK.test(rest)) return "";
+  // A blank line continues a list item, unless the item is still empty: an
+  // item may start with at most one blank line.
+  if (BLANK.test(rest)) return container.filled ? "" : undefined;
   return indentation(rest) >= container.width ? rest.slice(container.width) : undefined;
 }
 
