@@ -112,10 +112,11 @@ Protocol changes require more than a type edit. Include:
 - a migration decision; and
 - corresponding guide, reference, support-matrix, and changelog updates.
 
-New public exports must remain visible in the generated export index. Run
-`pnpm docs:generate` when the public surface changes and commit the resulting
-documentation update. Any public signature change must also update and review
-the declaration-level reports with `pnpm api:generate`.
+New public exports must remain visible in the generated export index. When the
+public surface changes, first update and review the declaration-level reports
+with `pnpm api:generate`, then run `pnpm docs:generate` and commit both. The
+export-index generator fails on any export statement it cannot parse and on any
+name that its entry point's API report does not also list.
 
 ## Native OCCT facade
 
