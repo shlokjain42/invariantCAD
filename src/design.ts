@@ -387,6 +387,18 @@ function detachMetadata(
   const copies = new Map<object, JsonValue>();
   const active = new Set<object>();
   let structuralValues = 0;
+  // Reads own data properties only, so caller accessors never run and an
+  // inherited value never reaches the document.
+  const ownData = (container: object, key: string, path: string): unknown => {
+    const descriptor = Object.getOwnPropertyDescriptor(container, key);
+    if (descriptor === undefined) return undefined;
+    if (!Object.hasOwn(descriptor, "value")) {
+      throw new TypeError(
+        `${label}${path} must be a data property, not an accessor`,
+      );
+    }
+    return descriptor.value as unknown;
+  };
   const copy = (current: unknown, depth: number, path: string): JsonValue => {
     structuralValues += 1;
     if (structuralValues > limits.maxStructuralValues) {
@@ -424,36 +436,33 @@ function detachMetadata(
     active.add(current);
     let result: JsonValue;
     if (Array.isArray(current)) {
-      if (Object.getPrototypeOf(current) !== Array.prototype) {
-        throw new TypeError(`${label}${path} must be a plain JSON array`);
-      }
       const items: JsonValue[] = [];
       for (let index = 0; index < current.length; index += 1) {
-        if (!Object.hasOwn(current, index) || current[index] === undefined) {
+        const itemPath = `${path}/${index}`;
+        const item = ownData(current, String(index), itemPath);
+        if (item === undefined) {
           throw new TypeError(
-            `${label}${path}/${index} must be a JSON value; arrays cannot be sparse or hold undefined`,
+            `${label}${itemPath} must be a JSON value; arrays cannot be sparse or hold undefined`,
           );
         }
-        items.push(copy(current[index], depth + 1, `${path}/${index}`));
+        items.push(copy(item, depth + 1, itemPath));
       }
       result = items;
     } else {
-      const prototype = Object.getPrototypeOf(current);
-      if (prototype !== Object.prototype && prototype !== null) {
+      // A plain record's prototype is some realm's Object.prototype or null.
+      const prototype = Object.getPrototypeOf(current) as object | null;
+      if (prototype !== null && Object.getPrototypeOf(prototype) !== null) {
         throw new TypeError(
           `${label}${path} must contain only plain JSON objects and arrays`,
         );
       }
       const record: Record<string, JsonValue> = {};
       for (const key of Object.keys(current)) {
-        const child = (current as Readonly<Record<string, unknown>>)[key];
+        const childPath = `${path}/${key.replaceAll("~", "~0").replaceAll("/", "~1")}`;
+        const child = ownData(current, key, childPath);
         // Undefined members are omitted, exactly as the canonical writer does.
         if (child === undefined) continue;
-        const copied = copy(
-          child,
-          depth + 1,
-          `${path}/${key.replaceAll("~", "~0").replaceAll("/", "~1")}`,
-        );
+        const copied = copy(child, depth + 1, childPath);
         // Define rather than assign so an own "__proto__" key stays data.
         Object.defineProperty(record, key, {
           value: copied,
@@ -760,7 +769,6 @@ function principalPlane(
     },
   });
 }
-
 
 export const plane = {
   xy(origin?: Vec3Expression): Plane {

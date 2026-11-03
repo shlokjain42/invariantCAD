@@ -41,6 +41,8 @@ const objectHasOwn = Object.hasOwn;
 const objectKeys = Object.keys;
 const arrayIsArray = Array.isArray;
 const objectDefineProperty = Object.defineProperty;
+const objectGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
+const objectGetPrototypeOf = Object.getPrototypeOf;
 const IntrinsicWeakSet = WeakSet;
 const intrinsicWeakSetAdd = WeakSet.prototype.add;
 const intrinsicWeakSetHas = WeakSet.prototype.has;
@@ -72,6 +74,50 @@ function arrayAppend<T>(array: T[], value: T): void {
     enumerable: true,
     configurable: true,
   });
+}
+
+function prototypeOf(value: object): object | null {
+  return reflectApply(objectGetPrototypeOf, Object, [value]) as object | null;
+}
+
+/** A plain record's prototype is null or some realm's Object.prototype. */
+function isPlainRecord(value: object): boolean {
+  const prototype = prototypeOf(value);
+  return prototype === null || prototypeOf(prototype) === null;
+}
+
+/**
+ * A plain array's prototype is some realm's Array.prototype, which is itself
+ * an array and inherits directly from that realm's Object.prototype.
+ */
+function isPlainArray(value: object): boolean {
+  if (!arrayIsArray(value)) return false;
+  const prototype = prototypeOf(value);
+  if (prototype === null || !arrayIsArray(prototype)) return false;
+  const root = prototypeOf(prototype);
+  return root !== null && prototypeOf(root) === null;
+}
+
+/** Marks a property that exists but is an accessor or is not enumerable. */
+const NOT_OWN_DATA: unique symbol = Symbol("InvariantCAD.NotOwnData");
+
+/**
+ * Reads an own enumerable data property without running accessors or
+ * consulting the prototype chain; a missing property reads as undefined.
+ */
+function ownDataValue(
+  container: object,
+  key: string | number,
+): unknown {
+  const descriptor = reflectApply(objectGetOwnPropertyDescriptor, Object, [
+    container,
+    key,
+  ]) as PropertyDescriptor | undefined;
+  if (descriptor === undefined) return undefined;
+  if (!objectHasOwn(descriptor, "value") || descriptor.enumerable !== true) {
+    return NOT_OWN_DATA;
+  }
+  return descriptor.value;
 }
 
 function isDimension(value: unknown): value is Dimension {
@@ -118,21 +164,42 @@ function malformedExpression(label: string, problem: string): TypeError {
   return new TypeError(`${label} is malformed: ${problem}`);
 }
 
+/** Reads an IR field that must be an own enumerable data property. */
+function expressionField(
+  container: object,
+  key: string | number,
+  label: string,
+): unknown {
+  const value = ownDataValue(container, key);
+  if (value === NOT_OWN_DATA) {
+    throw malformedExpression(
+      label,
+      `field '${key}' must be an own enumerable data property`,
+    );
+  }
+  return value;
+}
+
 function expressionChild(
   container: object,
   key: string | number,
   op: string,
   label: string,
 ): Readonly<Record<string, unknown>> {
-  const child = (container as Readonly<Record<string, unknown>>)[key];
+  const child = expressionField(container, key, label);
   if (typeof child !== "object" || child === null || arrayIsArray(child)) {
     throw malformedExpression(label, `'${op}' requires an expression operand '${key}'`);
   }
-  const record = child as Readonly<Record<string, unknown>>;
-  if (!isDimension(record.dimension)) {
+  if (!isPlainRecord(child)) {
+    throw malformedExpression(label, "expression nodes must be plain records");
+  }
+  // Freeze before reading, so later reads of this operand see the same data.
+  objectFreeze(child);
+  const dimension = expressionField(child, "dimension", label);
+  if (!isDimension(dimension)) {
     throw malformedExpression(label, `'${op}' has an operand without a valid dimension`);
   }
-  return record;
+  return child as Readonly<Record<string, unknown>>;
 }
 
 /** Checks one frozen node's own fields and returns its expression operands. */
@@ -140,11 +207,14 @@ function expressionNodeOperands(
   node: Readonly<Record<string, unknown>>,
   label: string,
 ): readonly object[] {
-  const op = node.op;
+  if (!isPlainRecord(node)) {
+    throw malformedExpression(label, "expression nodes must be plain records");
+  }
+  const op = expressionField(node, "op", label);
   if (typeof op !== "string" || !objectHasOwn(EXPRESSION_IR_FIELDS, op)) {
     throw malformedExpression(label, `unsupported operation '${String(op)}'`);
   }
-  const dimension = node.dimension;
+  const dimension = expressionField(node, "dimension", label);
   if (!isDimension(dimension)) {
     throw malformedExpression(label, `'${op}' has an invalid dimension`);
   }
@@ -167,14 +237,14 @@ function expressionNodeOperands(
     new TypeError(`${label} has mismatched dimensions: ${problem}`);
   switch (op as ExpressionIR["op"]) {
     case "literal": {
-      const value = node.value;
+      const value = expressionField(node, "value", label);
       if (typeof value !== "number" || !Number.isFinite(value)) {
         throw malformedExpression(label, "literals must be finite numbers");
       }
       return [];
     }
     case "parameter": {
-      const id = node.id;
+      const id = expressionField(node, "id", label);
       if (typeof id !== "string") {
         throw malformedExpression(label, "parameter IDs must be strings");
       }
@@ -241,17 +311,23 @@ function expressionNodeOperands(
     }
     case "min":
     case "max": {
-      const values = node.values;
-      if (!arrayIsArray(values) || values.length === 0) {
+      const values = expressionField(node, "values", label);
+      if (
+        typeof values !== "object" ||
+        values === null ||
+        !isPlainArray(values) ||
+        (values as readonly unknown[]).length === 0
+      ) {
         throw malformedExpression(label, `'${op}' requires a non-empty value array`);
       }
       objectFreeze(values);
+      const items = values as readonly unknown[];
       const operands: object[] = [];
-      for (let index = 0; index < values.length; index += 1) {
-        if (!objectHasOwn(values, index)) {
+      for (let index = 0; index < items.length; index += 1) {
+        if (!objectHasOwn(items, index)) {
           throw malformedExpression(label, `'${op}' values cannot be sparse`);
         }
-        const value = expressionChild(values, index, op, label);
+        const value = expressionChild(items, index, op, label);
         if (value.dimension !== dimension) {
           throw mismatch(`'${op}' requires ${dimension} values, received ${String(value.dimension)}`);
         }
@@ -381,13 +457,19 @@ export function expressionIROf(
   if (typeof value !== "object" || value === null) {
     throw new TypeError(`${label} must be ${expressionKind(dimension)}`);
   }
-  const candidate = value as { readonly dimension?: unknown; readonly ir?: unknown };
-  if (candidate.dimension !== dimension) {
+  // Read only own data fields, so an accessor cannot report one dimension
+  // here and supply different IR or a different dimension later.
+  const actual = ownDataValue(value, "dimension");
+  if (actual !== dimension) {
     throw new TypeError(
-      `${label} must be ${expressionKind(dimension)}, received ${describeDimension(candidate.dimension)}`,
+      `${label} must be ${expressionKind(dimension)}, received ${describeDimension(actual)}`,
     );
   }
-  const ir = assertExpressionIR(candidate.ir, label);
+  const candidateIR = ownDataValue(value, "ir");
+  if (candidateIR === NOT_OWN_DATA) {
+    throw new TypeError(`${label} must be ${expressionKind(dimension)}`);
+  }
+  const ir = assertExpressionIR(candidateIR, label);
   if (ir.dimension !== dimension) {
     throw new TypeError(
       `${label} must be ${expressionKind(dimension)}, received ${ir.dimension}`,
@@ -416,6 +498,13 @@ export function expressionVectorIROf(
   ];
 }
 
+/** Reads an operand's own `dimension` data field without running accessors. */
+function operandDimension(value: unknown): unknown {
+  return typeof value === "object" && value !== null
+    ? ownDataValue(value, "dimension")
+    : undefined;
+}
+
 function expressionOperand<D extends Dimension>(
   value: unknown,
   dimension: D,
@@ -434,13 +523,20 @@ export class Expression<D extends Dimension> {
     if (!isDimension(dimension)) {
       throw new TypeError(`Unsupported expression dimension '${String(dimension)}'`);
     }
-    if (typeof ir !== "object" || ir === null || ir.dimension !== dimension) {
+    if (typeof ir !== "object" || ir === null) {
       throw new TypeError(
-        `Expression dimension mismatch: expected ${dimension}, received ${describeDimension((ir as { readonly dimension?: unknown } | null)?.dimension)}`,
+        `Expression dimension mismatch: expected ${dimension}, received ${describeDimension(undefined)}`,
+      );
+    }
+    // Validate before reading any field, so no accessor runs first.
+    const checked = assertExpressionIR(ir);
+    if (checked.dimension !== dimension) {
+      throw new TypeError(
+        `Expression dimension mismatch: expected ${dimension}, received ${checked.dimension}`,
       );
     }
     this.dimension = dimension;
-    this.ir = assertExpressionIR(ir);
+    this.ir = checked;
     if (new.target === Expression) Object.freeze(this);
   }
 
@@ -694,14 +790,13 @@ export const expr = {
     numerator: Expression<D>,
     denominator: Expression<D>,
   ): ScalarExpression {
-    const dimension = (numerator as { readonly dimension?: unknown } | null)
-      ?.dimension;
+    const dimension = operandDimension(numerator);
     if (!isDimension(dimension)) {
       throw new TypeError("ratio() numerator must be an expression");
     }
     return binary(
       "div",
-      numerator,
+      expressionOperand(numerator, dimension, "ratio() numerator"),
       expressionOperand(denominator, dimension, "ratio() denominator"),
       "scalar",
     );
@@ -753,8 +848,7 @@ function extremum<D extends Dimension>(
   values: readonly Expression<D>[],
 ): Expression<D> {
   if (values.length === 0) throw new TypeError(`${op}() requires a value`);
-  const dimension = (values[0] as { readonly dimension?: unknown } | undefined)
-    ?.dimension;
+  const dimension = operandDimension(values[0]);
   if (!isDimension(dimension)) {
     throw new TypeError(`${op}() values must be expressions`);
   }

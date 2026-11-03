@@ -1,3 +1,4 @@
+import { runInNewContext } from "node:vm";
 import { afterAll, describe, expect, it } from "vitest";
 import {
   AssemblyRef,
@@ -1037,6 +1038,58 @@ describe("builder input detachment", () => {
     expect(Object.getPrototypeOf(accepted.metadata!.own)).toBe(Object.prototype);
     const reparsed = parseDocument(stringifyDocument(accepted));
     expect(reparsed.ok, JSON.stringify(reparsed.diagnostics)).toBe(true);
+  });
+
+  it("copies metadata through own data properties without running accessors", () => {
+    let reads = 0;
+    const accessorRecord = Object.defineProperty({}, "value", {
+      enumerable: true,
+      get: () => {
+        reads += 1;
+        return 1;
+      },
+    });
+    const accessorItem = Object.defineProperty([0], "0", {
+      enumerable: true,
+      get: () => {
+        reads += 1;
+        return 1;
+      },
+    });
+    for (const metadata of [
+      accessorRecord,
+      { nested: accessorRecord },
+      { list: accessorItem },
+    ]) {
+      expect(() => design("accessor", { metadata: metadata as never })).toThrow(
+        "must be a data property, not an accessor",
+      );
+    }
+    expect(reads).toBe(0);
+
+    const inherited = Object.assign(Object.create({ hidden: 1 }) as object, {
+      shown: 2,
+    });
+    expect(() => design("inherited", { metadata: inherited as never })).toThrow(
+      "must contain only plain JSON objects and arrays",
+    );
+  });
+
+  it("accepts plain metadata records and arrays from another realm", () => {
+    const foreign = runInNewContext(
+      '({ owner: "ops", tags: ["a", "b"], nested: { count: 2 } })',
+    ) as Readonly<Record<string, unknown>>;
+    expect(Object.getPrototypeOf(foreign)).not.toBe(Object.prototype);
+    const local = { owner: "ops", tags: ["a", "b"], nested: { count: 2 } };
+    const fromForeign = design("realm", { metadata: foreign as never }).build();
+    const fromLocal = design("realm", { metadata: local }).build();
+    expect(Object.getPrototypeOf(fromForeign.metadata)).toBe(Object.prototype);
+    expect(stringifyDocument(fromForeign)).toBe(stringifyDocument(fromLocal));
+    expect(() =>
+      design("realm", {
+        metadata: { value: runInNewContext("new Map()") } as never,
+      }),
+    ).toThrow("must contain only plain JSON objects and arrays");
   });
 
   it("refuses to write hand-built documents with non-JSON metadata", async () => {

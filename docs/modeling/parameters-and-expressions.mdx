@@ -138,3 +138,6 @@ This restriction guarantees that every expression reference can be represented
 inside one closed document. Raw expression IR passed through
 `fromExpressionIR` refers to parameters only by ID; the builder accepts it only
 when that ID names a parameter it already defines, with the same dimension.
+Raw IR must be plain JSON records and arrays whose fields are own enumerable
+data properties. Accessors, inherited fields, and class instances throw
+`TypeError` without running any accessor.

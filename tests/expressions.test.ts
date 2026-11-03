@@ -1,3 +1,4 @@
+import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import {
   Expression,
@@ -276,6 +277,107 @@ describe("runtime expression dimensions", () => {
     cyclic.value = cyclic;
     expect(() => fromExpressionIR(cyclic as never, "length")).toThrow(/cycle/i);
     expect(() => fromExpressionIR(mm(1).ir, "angle")).toThrow(TypeError);
+  });
+
+  it("reads raw IR only through own data properties of plain records", () => {
+    let reads = 0;
+    const counted = <T,>(value: T) => ({
+      enumerable: true,
+      get: () => {
+        reads += 1;
+        return value;
+      },
+    });
+    const accessorLiteral = Object.defineProperty(
+      { op: "literal", dimension: "length" },
+      "value",
+      counted(1),
+    );
+    const accessorDimension = Object.defineProperty(
+      { op: "literal", value: 1 },
+      "dimension",
+      counted("length"),
+    );
+    const accessorOperand = Object.defineProperty(
+      { op: "neg", dimension: "length" },
+      "value",
+      counted(mm(1).ir),
+    );
+    const accessorValues = {
+      op: "max",
+      dimension: "length",
+      values: Object.defineProperty([mm(1).ir], "0", counted(mm(2).ir)),
+    };
+    const hiddenValue = Object.defineProperty(
+      { op: "literal", dimension: "length" },
+      "value",
+      { value: 1, enumerable: false },
+    );
+    const inheritedValue = Object.assign(
+      Object.create({ value: 1 }) as object,
+      { op: "literal", dimension: "length" },
+    );
+    class LiteralNode {
+      readonly op = "literal";
+      readonly dimension = "length";
+      readonly value = 1;
+    }
+    class ValueList extends Array<unknown> {}
+    const subclassedValues = {
+      op: "max",
+      dimension: "length",
+      values: ValueList.from([mm(1).ir]),
+    };
+    for (const ir of [
+      accessorLiteral,
+      accessorDimension,
+      accessorOperand,
+      accessorValues,
+      hiddenValue,
+      inheritedValue,
+      new LiteralNode(),
+      { op: "neg", dimension: "length", value: new LiteralNode() },
+      subclassedValues,
+    ]) {
+      expect(() => fromExpressionIR(ir as never, "length")).toThrow(TypeError);
+    }
+    expect(reads).toBe(0);
+
+    // Builder inputs read an expression's dimension and IR the same way.
+    const accessorExpression = Object.defineProperty(
+      { dimension: "length" },
+      "ir",
+      counted(mm(1).ir),
+    );
+    expect(() => mm(1).add(accessorExpression as never)).toThrow(TypeError);
+    expect(() => vec3(mm(1), mm(1), accessorExpression as never)).toThrow(
+      TypeError,
+    );
+    const accessorDimensionExpression = Object.defineProperty(
+      { ir: mm(1).ir },
+      "dimension",
+      counted("length"),
+    );
+    expect(() => expr.ratio(accessorDimensionExpression as never, mm(1))).toThrow(
+      TypeError,
+    );
+    expect(() => expr.max(accessorDimensionExpression as never)).toThrow(
+      TypeError,
+    );
+    expect(reads).toBe(0);
+  });
+
+  it("accepts plain raw IR records and arrays from another realm", () => {
+    const foreign = runInNewContext(`({
+      op: "max",
+      dimension: "length",
+      values: [
+        { op: "literal", dimension: "length", value: 2 },
+        { op: "literal", dimension: "length", value: 5 },
+      ],
+    })`) as ExpressionIR;
+    expect(Object.getPrototypeOf(foreign)).not.toBe(Object.prototype);
+    expect(evaluate(fromExpressionIR(foreign, "length"))).toBe(5);
   });
 
   it("accepts well-formed raw IR, including shared subtrees", () => {
