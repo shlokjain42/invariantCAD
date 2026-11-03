@@ -77,10 +77,20 @@ The source-repository fixtures are
 `tests/topology-persistence-torture-transform.test.ts`,
 `tests/topology-persistence-torture-chains.test.ts`,
 `tests/topology-reference-evaluator.test.ts`,
-`tests/topology-reference-explanations.test.ts`, and
+`tests/topology-reference-explanations.test.ts`,
+`tests/topology-signatures.test.ts`, and
 `tests/topology-signatures-occt.test.ts`, plus the real document-owned loft/sweep
 coverage in `tests/topology-reference-occt.test.ts`. The owned exact matrix is
 `scripts/test-public-occt-persistence.ts`.
+
+On the stock OCCT runtime, the transform torture file captures an exact box
+vertex, round-trips Document v6, resolves the vertex by `semantic-lineage`
+after translation and resizing, and consumes it through
+`topology.edges.adjacentTo(...)` in a fillet. The coincident-vertex row uses
+synthetic protocol-v2 snapshots in `tests/topology-signatures.test.ts`, covering
+both capture and resolution under partial and complete history. The owned
+exact matrix repeats vertex persistence on the owned facade runtime.
+
 Run them with:
 
 ```sh
@@ -90,6 +100,7 @@ pnpm vitest run \
   tests/topology-reference-evaluator.test.ts \
   tests/topology-reference-explanations.test.ts \
   tests/topology-reference-occt.test.ts \
+  tests/topology-signatures.test.ts \
   tests/topology-signatures-occt.test.ts
 ```
 

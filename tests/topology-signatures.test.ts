@@ -733,6 +733,88 @@ describe("persistent topology signatures", () => {
     ).toBe("TOPOLOGY_MATCH_AMBIGUOUS");
   });
 
+  it("refuses to capture or resolve distinct coincident vertices with identical evidence", () => {
+    const anchoredEdge: readonly KernelTopologyLineage[] = [
+      { feature: "box", relation: "created", role: "box.edge.x-min-y-min" },
+      { feature: "box", relation: "created" },
+    ];
+    const coincident = (
+      history: KernelTopologySnapshot["history"],
+    ): KernelTopologySnapshot => {
+      const edgeLineage = history === "complete" ? anchoredEdge : [];
+      const vertexLineage = history === "complete" ? broadLineage("box") : [];
+      return snapshot(
+        [],
+        [
+          edge("coincident-edge-a", {
+            lineage: edgeLineage,
+            vertices: ["coincident-a"],
+          }),
+          edge("coincident-edge-b", {
+            lineage: edgeLineage,
+            vertices: ["coincident-b"],
+          }),
+        ],
+        history,
+        [
+          vertex("coincident-a", {
+            point: [1, 2, 3],
+            lineage: vertexLineage,
+            edges: ["coincident-edge-a"],
+          }),
+          vertex("coincident-b", {
+            point: [1, 2, 3],
+            lineage: vertexLineage,
+            edges: ["coincident-edge-b"],
+          }),
+        ],
+      );
+    };
+
+    for (const history of ["partial", "complete"] as const) {
+      const current = coincident(history);
+      const captured = captureTopologyReference(
+        current,
+        "vertex",
+        key("coincident-a"),
+        { capabilities: capabilitiesV2, tolerance },
+      );
+      expect(captured.ok, history).toBe(false);
+      expect(failureDiagnostic(captured), history).toMatchObject({
+        code: "TOPOLOGY_MATCH_AMBIGUOUS",
+        details: { topology: "vertex", candidates: 2 },
+      });
+      expect(JSON.stringify(captured.diagnostics), history).not.toContain(
+        "coincident-",
+      );
+
+      const unique = snapshot(
+        [],
+        [current.edges[0]!],
+        history,
+        [current.vertices[0]!],
+      );
+      const stored = captureTopologyReference(
+        unique,
+        "vertex",
+        key("coincident-a"),
+        { capabilities: capabilitiesV2, tolerance },
+      );
+      expect(stored.ok, history).toBe(true);
+      if (!stored.ok) continue;
+      const resolved = resolveTopologyReference(stored.value, current, {
+        capabilities: capabilitiesV2,
+      });
+      expect(failureDiagnostic(resolved), history).toMatchObject({
+        code: "TOPOLOGY_MATCH_AMBIGUOUS",
+        details: { topology: "vertex", candidates: 2 },
+      });
+      expect(JSON.stringify(resolved.diagnostics), history).not.toContain(
+        "coincident-",
+      );
+    }
+  });
+
   it("normalizes persistent evidence into one canonical deeply frozen value", () => {
     const firstNeighbor = {
       topology: "edge" as const,
