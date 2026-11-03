@@ -60,7 +60,9 @@ const path = cad.polylinePath("path", [
 ```
 
 Paths are first-class nodes, not sketch profiles. The polyline must be open and
-simple; repeated points and redundant collinear vertices are rejected.
+simple; repeated points and redundant collinear vertices are rejected, and so is
+a corner that folds a segment back within tolerance of its neighbour
+(`self-intersection`). Composite line-line junctions reject the same fold-back.
 
 ## Three-point circular arc
 
@@ -213,6 +215,16 @@ The important user-facing rule is simple: the complete cross-section needs
 physical clearance around every bend and between remote path segments.
 Shrinking only a nominal width while leaving an off-center profile can still be
 invalid.
+
+Clearance is measured with the profile envelope radius `r`, the distance from
+the profile origin (the path start) to the farthest point of the section. A
+right corner that turns by `θ`, at a polyline vertex or a composite line-line
+junction, cuts the section on the bisector plane. That miter reaches
+`r · tan(θ / 2)` before the vertex on the inside of the turn and the same
+distance beyond it on the outside. Each straight segment must therefore be
+longer than the miter setbacks at its two ends, and remote segments must clear
+the segments extended by that outer reach by more than `2r`. Short segments
+between sharp corners fail with `FEATURE_INVALID` (reason `path-clearance`).
 
 For exact tolerances, major-arc restrictions, centered-profile stock-runtime
 behavior, and the owned-facade refinements, read the
