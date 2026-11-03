@@ -29,9 +29,25 @@ const upper = cad.sketch(
 const loft = cad.loft("loft", [lower, upper], { ruled: true });
 ```
 
-The current document grammar requires at least two distinct, ordered,
-hole-free profiles on compatible parallel principal planes. Interpolation is
-ruled; smooth, guided, open, and holed lofts remain future contracts.
+Interpolation is ruled: curve `i` of each section is joined to curve `i` of the
+next. The current document grammar therefore requires:
+
+- at least two hole-free profiles, each one closed outer loop;
+- planes of the same principal-plane family at distinct, strictly monotonic
+  stations (in-plane offsets are allowed);
+- the same loop orientation, clockwise or counterclockwise, in every section;
+- the same number of boundary curves with the same kinds and traversal
+  directions in the same order, so a rectangle can loft to a rectangle and a
+  circle to a circle, but a rectangle-to-circle loft fails with
+  `curve-signature-mismatch`;
+- the authored starting phase between every pair of adjacent sections. If
+  rotating a section's curve order would pair it more closely with its
+  neighbour, the loft fails with `curve-phase-mismatch` instead of letting OCCT
+  re-pair the curves. A gradual twist is fine as long as each adjacent pair
+  stays closest in its authored pairing.
+
+Rejected sections fail with `FEATURE_INVALID` at `/nodes/<id>/profiles/<index>`.
+Mixed-shape, smooth, guided, open, and holed lofts remain future contracts.
 
 ## Polyline path
 
