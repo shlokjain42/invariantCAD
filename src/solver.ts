@@ -26,6 +26,7 @@ import type {
   ResolvedLoop,
   ResolvedProfile,
 } from "./protocol/profile.js";
+import { jsonPointerSegment } from "./core/json-pointer.js";
 
 /**
  * Outcome of one sketch solve. The evaluator treats it as authoritative: only
@@ -600,7 +601,9 @@ export class ReferenceSketchSolver implements SketchSolverBackend {
     // The evaluator passes the sketch node id as `feature`; solve failures
     // point at it like every other modeling failure.
     const sketchPath =
-      context.feature === undefined ? undefined : `/nodes/${context.feature}`;
+      context.feature === undefined
+      ? undefined
+      : `/nodes/${jsonPointerSegment(context.feature)}`;
     let status: SketchSolveStatus;
     if (!Number.isFinite(maximumResidual)) {
       // NaN compares false against every tolerance, so it must not fall

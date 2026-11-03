@@ -208,6 +208,7 @@ import {
   type StagedSolidGraphRootV7,
   type StagedSolidLeafNodeV7,
 } from "./internal/document-v7-solid-graph-evaluation.js";
+import { jsonPointerSegment } from "./core/json-pointer.js";
 
 export type ParameterOverride = EvaluationParameterOverride;
 export type ShapeExportFormat = MeshExportFormat | KernelExchangeFormat;
@@ -14512,7 +14513,7 @@ export class Evaluator {
               ...item,
               node: id,
               ...(item.severity === "error" && item.path === undefined
-                ? { path: `/nodes/${id}` }
+                ? { path: `/nodes/${jsonPointerSegment(id)}` }
                 : {}),
             }));
             diagnostics.push(...solverDiagnostics);
@@ -14706,7 +14707,7 @@ export class Evaluator {
                   {
                     severity: "error",
                     node: id,
-                    path: `/nodes/${id}/profile`,
+                    path: `/nodes/${jsonPointerSegment(id)}/profile`,
                     hints: [
                       "The axis is the sketch plane's local v axis through the sketch origin (u = 0); keep the whole profile at u >= 0 or at u <= 0",
                     ],
@@ -14827,7 +14828,7 @@ export class Evaluator {
                   diagnostic("FEATURE_INVALID", classification.message, {
                     severity: "error",
                     node: id,
-                    path: `/nodes/${id}/profile`,
+                    path: `/nodes/${jsonPointerSegment(id)}/profile`,
                     details: {
                       reason: classification.reason,
                       ...(classification.segmentIndex === undefined

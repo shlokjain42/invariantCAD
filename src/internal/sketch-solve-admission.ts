@@ -10,6 +10,7 @@ import type {
   SketchSolveStatus,
   SolvedSketch,
 } from "../solver.js";
+import { jsonPointerSegment } from "../core/json-pointer.js";
 
 const ADMITTED_SKETCH_SOLVE_STATUSES: ReadonlySet<unknown> = new Set<
   SketchSolveStatus
@@ -56,7 +57,7 @@ export function sketchSolverCapabilityDiagnostic(
       {
         severity: "error",
         node,
-        path: `/nodes/${node}/${collection}/${id}`,
+        path: `/nodes/${jsonPointerSegment(node)}/${collection}/${jsonPointerSegment(id)}`,
         hints: ["Choose a sketch solver that advertises this capability"],
         details: {
           sketchSolver: solver.id,
@@ -124,7 +125,7 @@ export function sketchSolveFailureDiagnostic(
       {
         severity: "error",
         node,
-        path: `/nodes/${node}/constraints`,
+        path: `/nodes/${jsonPointerSegment(node)}/constraints`,
         details,
       },
     );
@@ -139,7 +140,7 @@ export function sketchSolveFailureDiagnostic(
     {
       severity: "error",
       node,
-      path: `/nodes/${node}`,
+      path: `/nodes/${jsonPointerSegment(node)}`,
       details,
     },
   );

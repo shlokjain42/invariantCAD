@@ -5,6 +5,7 @@ import {
 } from "../core/result.js";
 import type { SketchNodeIR } from "../ir.js";
 import type { ResolvedProfileRegionValidationIssue } from "./resolved-profile-region.js";
+import { jsonPointerSegment } from "../core/json-pointer.js";
 
 function authoredProfileCurveEntity(
   sketch: SketchNodeIR,
@@ -104,7 +105,7 @@ function openLoopDiagnostic(
       : [
           {
             node,
-            path: `/nodes/${node}/entities/${source.entity}`,
+            path: `/nodes/${jsonPointerSegment(node)}/entities/${jsonPointerSegment(source.entity)}`,
             message:
               index === 0
                 ? "Profile boundary entity before the gap"
