@@ -258,6 +258,80 @@ function originFilletChain(
   };
 }
 
+/**
+ * `chains` independent chains of `length` transforms over a base box. Each
+ * chain ends in `fillets` chained fillets that select edges created by its
+ * base box. `unions` unrelated unions of `unions` boxes are added beside them.
+ */
+function originChains(
+  chains: number,
+  length: number,
+  fillets: number,
+  unions: number,
+): MutableDocument {
+  const literal = (value: number) => ({
+    op: "literal",
+    dimension: "length",
+    value,
+  });
+  const box = () => ({
+    kind: "box",
+    size: [literal(1), literal(1), literal(1)],
+    center: false,
+  });
+  const solid = (node: string) => ({ node, kind: "solid" });
+  const nodes: Record<string, Record<string, unknown>> = {};
+  for (let chain = 0; chain < chains; chain += 1) {
+    nodes[`c${chain}_0`] = box();
+    for (let index = 1; index <= length; index += 1) {
+      nodes[`c${chain}_${index}`] = {
+        kind: "transform",
+        input: solid(`c${chain}_${index - 1}`),
+        operations: [
+          { kind: "translate", value: [literal(0), literal(0), literal(0)] },
+        ],
+      };
+    }
+    let input = `c${chain}_${length}`;
+    for (let index = 0; index < fillets; index += 1) {
+      nodes[`f${chain}_${index}`] = {
+        kind: "fillet",
+        input: solid(input),
+        edges: {
+          topology: "edge",
+          query: {
+            op: "origin",
+            feature: `c${chain}_0`,
+            relation: "created",
+          },
+          cardinality: { min: 1 },
+        },
+        radius: literal(0.1),
+      };
+      input = `f${chain}_${index}`;
+    }
+  }
+  const boxes = Array.from({ length: unions }, (_, index) => `u${index}`);
+  for (const id of boxes) nodes[id] = box();
+  for (let index = 0; index < unions; index += 1) {
+    nodes[`w${index}`] = {
+      kind: "boolean",
+      operation: "union",
+      target: solid(boxes[0]!),
+      tools: boxes.map(solid),
+    };
+  }
+  return {
+    schema: DOCUMENT_SCHEMA_V6,
+    version: 6,
+    name: "origin-chains",
+    units: { length: "mm", angle: "rad" },
+    parameters: {},
+    nodes,
+    outputs: { out: solid("f0_0") },
+  };
+}
+
 /** Counts node-record reads while validating a document. */
 function nodeReadsDuringValidation(document: MutableDocument): {
   readonly ok: boolean;
@@ -499,15 +573,31 @@ describe("bounded topology-origin validation", () => {
   });
 
   it("does not trade short wide walks for scans of unvisited downstream layers", () => {
-    // Each of the 20 base boxes is checked 10 times through a 200-input union.
-    // Those walks cost less than one reverse collection, which would also scan
-    // the 12,200 links of the two downstream layers (about 200,000 checks for
-    // 20 collections).
+    // Each of the 20 base boxes is checked 10 times through a 200-input union,
+    // about 205 walk steps per check. A complete reverse collection of a base
+    // box would also scan the 12,200 links of the two downstream layers (about
+    // 200,000 checks for 20 collections). Collections are abandoned once they
+    // cost more than the walks already made toward the same box.
     const plain = setChecksDuringWideOriginValidation(20, 200, 10, 0);
     const layered = setChecksDuringWideOriginValidation(20, 200, 10, 100);
     expect(plain.ok).toBe(true);
     expect(layered.ok).toBe(true);
-    expect(layered.setChecks).toBeLessThanOrEqual(plain.setChecks + 2 * 200);
+    expect(layered.setChecks - plain.setChecks).toBeLessThanOrEqual(
+      20 * 10 * 205,
+    );
+  });
+
+  it("collects a shared origin without waiting on unrelated wide branches", () => {
+    // Five 200-transform chains, each followed by 100 chained fillets that
+    // select edges created by the chain's base box. Validating 200 unrelated
+    // unions of 200 boxes reads their 40,200 references about once each. Their
+    // links must not delay collecting each base box's own small descendant
+    // set, which would repeat about 150 more 200-step walks per chain.
+    const plain = nodeReadsDuringValidation(originChains(5, 200, 100, 0));
+    const wide = nodeReadsDuringValidation(originChains(5, 200, 100, 200));
+    expect(plain.ok).toBe(true);
+    expect(wide.ok).toBe(true);
+    expect(wide.reads - plain.reads).toBeLessThanOrEqual(2 * 200 * 201);
   });
 
   it("still rejects an origin that is not an ancestor of the input", () => {
