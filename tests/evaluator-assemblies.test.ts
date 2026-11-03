@@ -92,6 +92,62 @@ describe("evaluated assembly occurrence transforms", () => {
       second.design.dispose();
     }
   });
+
+  it("shares one frozen occurrence list across outputs that name the same assembly", async () => {
+    const cad = design("aliased-assembly");
+    const part = cad.part(
+      "part",
+      cad.box("box", { size: vec3(mm(1), mm(1), mm(1)) }),
+    );
+    const pair = cad.assembly("pair", (instances) => {
+      instances.instance("left", part);
+      instances.instance("right", part, {
+        placement: [tf.translate(vec3(mm(5), mm(0), mm(0)))],
+      });
+    });
+    const aliases = Array.from({ length: 200 }, (_, index) => `alias${index}`);
+    for (const name of aliases) cad.output(name, pair);
+    const document = cad.build();
+
+    const result = await evaluator.evaluate(document);
+    expect(result.ok, JSON.stringify(result.diagnostics)).toBe(true);
+    if (!result.ok) return;
+    try {
+      const assemblies = aliases.map(
+        (name) => result.value.output(name) as EvaluatedAssembly,
+      );
+      const instances = assemblies[0]!.instances;
+      expect(Object.isFrozen(instances)).toBe(true);
+      expect(instances.map((item) => item.id)).toEqual(["left", "right"]);
+      for (const instance of instances) {
+        expect(Object.isFrozen(instance)).toBe(true);
+      }
+      expect(() => {
+        (instances[0] as { id: string }).id = "changed";
+      }).toThrow(TypeError);
+      for (const assembly of assemblies) {
+        expect(assembly.instances).toBe(instances);
+      }
+      expect(assemblies.map((assembly) => assembly.name)).toEqual(aliases);
+      expect(assemblies.at(-1)!.measure().volume).toBeCloseTo(2, 8);
+
+      // Sharing never crosses evaluations.
+      const again = await evaluator.evaluate(document, {
+        outputs: ["alias0"],
+      });
+      expect(again.ok, JSON.stringify(again.diagnostics)).toBe(true);
+      if (!again.ok) return;
+      try {
+        const other = again.value.output("alias0") as EvaluatedAssembly;
+        expect(other.instances).not.toBe(instances);
+        expect(other.instances).toEqual(instances);
+      } finally {
+        again.value.dispose();
+      }
+    } finally {
+      result.value.dispose();
+    }
+  });
 });
 
 function fanOutDocument(levels: number, fanOut = 2): DesignDocument {

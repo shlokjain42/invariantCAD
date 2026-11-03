@@ -2780,6 +2780,19 @@ export interface EvaluatedOccurrence {
   readonly transform: Mat4;
 }
 
+/**
+ * Frozen occurrence data keyed by an evaluation's flattened occurrence list.
+ * Several outputs can name one assembly node; they share this copy instead of
+ * each allocating records outside the assembly evaluation ceilings.
+ */
+const sharedAssemblyOccurrences = new WeakMap<
+  readonly AssemblyOccurrence[],
+  {
+    readonly occurrences: readonly AssemblyOccurrence[];
+    readonly instances: readonly EvaluatedOccurrence[];
+  }
+>();
+
 export class EvaluatedAssembly {
   readonly name: string;
   readonly instances: readonly EvaluatedOccurrence[];
@@ -2793,15 +2806,27 @@ export class EvaluatedAssembly {
   ) {
     this.name = name;
     this.owner = owner;
+    // Outputs that name the same assembly node share one frozen copy, so
+    // output aliases cost nothing per occurrence.
+    const shared = sharedAssemblyOccurrences.get(occurrences);
+    if (shared !== undefined) {
+      this.occurrences = shared.occurrences;
+      this.instances = shared.instances;
+      return;
+    }
     // Detach every occurrence transform into a frozen copy shared by the public
     // instances and the internal mesh, measure, and BOM paths, so no caller can
     // write through a public transform into this result or into shared
     // evaluator matrices.
-    this.occurrences = occurrences.map((occurrence) => ({
-      ...occurrence,
-      transform: Object.freeze([...occurrence.transform]) as unknown as Mat4,
-    }));
-    this.instances = this.occurrences.map((occurrence) => ({
+    this.occurrences = Object.freeze(
+      occurrences.map((occurrence) =>
+        Object.freeze({
+          ...occurrence,
+          transform: Object.freeze([...occurrence.transform]) as unknown as Mat4,
+        }),
+      ),
+    );
+    this.instances = Object.freeze(this.occurrences.map((occurrence) => Object.freeze({
       id: occurrence.id,
       partNode: occurrence.part.node,
       ...(occurrence.part.definition.partNumber === undefined
@@ -2826,7 +2851,11 @@ export class EvaluatedAssembly {
         ? {}
         : { massDensitySource: occurrence.part.massDensitySource }),
       transform: occurrence.transform,
-    }));
+    })));
+    sharedAssemblyOccurrences.set(occurrences, {
+      occurrences: this.occurrences,
+      instances: this.instances,
+    });
   }
 
   billOfMaterials(): CadResult<BillOfMaterials> {

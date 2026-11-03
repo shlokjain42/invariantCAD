@@ -72,9 +72,11 @@ density source, `billOfMaterials()`, and `physicalMassProperties()`.
 Provides:
 
 - `instances`: flattened evaluated part occurrences with stable paths and
-  transforms. Each `transform` is a frozen, detached copy of the placement
-  used by the result, so writing into it throws in strict mode and never
-  changes the assembly's mesh, measurements, BOM, or later evaluations
+  transforms. The array, each occurrence record, and each `transform` are
+  frozen, detached copies of the data the result uses, so writing into them
+  throws in strict mode and never changes the assembly's mesh, measurements,
+  BOM, or later evaluations. Outputs that name the same assembly node share
+  one `instances` array
 - `mesh(options?)`: merged placed occurrence mesh
 - `measure()`: aggregate geometric properties from occurrence kernel
   measurements (see [assembly aggregation](/analysis/measurements#assembly-aggregation))
