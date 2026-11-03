@@ -570,6 +570,7 @@ function validateTransform(
   path: string,
   diagnostics: Diagnostic[],
 ): void {
+  const field = operation.kind === "mirror" ? "normal" : "value";
   const values = operation.kind === "mirror" ? operation.normal : operation.value;
   const expected: Dimension =
     operation.kind === "translate"
@@ -578,7 +579,13 @@ function validateTransform(
         ? "angle"
         : "scalar";
   values.forEach((value, index) =>
-    validateExpression(value, expected, document, `${path}/${index}`, diagnostics),
+    validateExpression(
+      value,
+      expected,
+      document,
+      `${path}/${field}/${index}`,
+      diagnostics,
+    ),
   );
 }
 
