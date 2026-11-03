@@ -348,6 +348,14 @@ const result = await evaluator.evaluateImportedBody(importedDocument, {
 });
 ```
 
+`maxResourceBytes` must be a non-negative safe integer, `signal` an
+`AbortSignal`, and `documentLimits` a plain record of document limits. An
+invalid option returns `IR_INVALID` with a path rooted at `/options`, such as
+`/options/resourceLimits/maxResourceBytes`, before the resolver runs.
+Creation diagnostics name the definition field at fault, such as `/name`,
+`/definition/id`, or `/definition/resource/digest`, and parse diagnostics
+point into the document JSON, such as `/resources/housingStep/mediaType`.
+
 The resolver receives a frozen request containing the authored ID, digest,
 length, media type, location hints, and optional signal. Resolution,
 byte-length admission, and SHA-256 verification finish before
