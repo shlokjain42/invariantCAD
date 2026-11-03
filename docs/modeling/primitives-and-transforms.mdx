@@ -36,8 +36,13 @@ exact OCCT circle into a polygon; exact kernels can preserve analytic surfaces
 while using the value for mesh extraction where applicable.
 
 All size, height, and radius expressions must resolve to finite valid geometry.
-The evaluator rejects zero or negative dimensions before asking a kernel to
-construct the shape.
+Before asking a kernel to construct the shape, the evaluator rejects with
+`FEATURE_INVALID` any box size, cylinder `height`, cylinder `radius` (stored as
+`radiusBottom`), or sphere `radius` that is zero or negative. A cylinder's
+`radiusTop` is the one exception: it may be zero, which builds a cone that comes
+to a point at the top, and only a negative value is rejected. Because the bottom
+radius must stay positive, author a downward-pointing cone apex-up and then
+rotate or mirror it.
 
 ## One transform
 
