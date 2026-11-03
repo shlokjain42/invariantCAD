@@ -264,6 +264,21 @@ function ownedTransformOperation(
   }
 }
 
+/** Copies a caller array after rejecting holes, which `map` would skip. */
+function denseArray<T>(value: readonly T[], label: string): readonly T[] {
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${label} must be an array`);
+  }
+  const items: T[] = [];
+  for (let index = 0; index < value.length; index += 1) {
+    if (!Object.hasOwn(value, index)) {
+      throw new TypeError(`${label} cannot be sparse`);
+    }
+    items.push(value[index]!);
+  }
+  return items;
+}
+
 function ownedTransformOperations(
   owner: DesignBuilder,
   value: unknown,
@@ -1486,7 +1501,8 @@ export class DesignBuilder {
     points: readonly Vec3Expression[],
     options: { readonly tolerance?: number } = {},
   ): PathRef {
-    if (points.length < 2) {
+    const orderedPoints = denseArray(points, `Polyline path '${id}' points`);
+    if (orderedPoints.length < 2) {
       throw new TypeError("A polyline path requires at least two ordered points");
     }
     const tolerance = options.tolerance ?? 1e-7;
@@ -1495,7 +1511,7 @@ export class DesignBuilder {
     }
     const key = this.addNode(id, {
       kind: "polylinePath",
-      points: points.map((point, index) =>
+      points: orderedPoints.map((point, index) =>
         ownedVec3IR(this, point, "length", `Polyline path '${id}' point ${index}`),
       ),
       closed: false,
@@ -1540,12 +1556,27 @@ export class DesignBuilder {
     },
     options: { readonly tolerance?: number } = {},
   ): PathRef {
-    if (path.segments.length < 2) {
+    const segments = denseArray(
+      path.segments,
+      `Composite path '${id}' segments`,
+    );
+    if (segments.length < 2) {
       throw new TypeError(
         "A composite path requires at least two ordered segments",
       );
     }
-    if (!path.segments.some((segment) => segment.kind === "circularArc")) {
+    segments.forEach((segment, index) => {
+      if (
+        typeof segment !== "object" ||
+        segment === null ||
+        (segment.kind !== "line" && segment.kind !== "circularArc")
+      ) {
+        throw new TypeError(
+          `Composite path '${id}' segment ${index} must be a line or circularArc segment`,
+        );
+      }
+    });
+    if (!segments.some((segment) => segment.kind === "circularArc")) {
       throw new TypeError(
         "A composite path requires at least one circular-arc segment; use polylinePath for line-only paths",
       );
@@ -1561,7 +1592,7 @@ export class DesignBuilder {
     const key = this.addNode(id, {
       kind: "compositePath",
       start: vector(path.start, "start"),
-      segments: path.segments.map((segment, index) =>
+      segments: segments.map((segment, index) =>
         segment.kind === "line"
           ? { kind: "line", end: vector(segment.end, `segment ${index} end`) }
           : {

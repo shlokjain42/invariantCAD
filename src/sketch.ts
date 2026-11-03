@@ -131,6 +131,18 @@ export class ProfileDefinition implements OwnedSketchReference {
   }
 }
 
+/** Rejects holes before `map`, which would skip them and keep them sparse. */
+function assertDenseArray(value: readonly unknown[], label: string): void {
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${label} must be an array`);
+  }
+  for (let index = 0; index < value.length; index += 1) {
+    if (!Object.hasOwn(value, index)) {
+      throw new TypeError(`${label} cannot be sparse`);
+    }
+  }
+}
+
 function optionalReversed(
   value: unknown,
   label: string,
@@ -285,6 +297,7 @@ export class SketchBuilder {
     positions: readonly Vec2Expression[],
     options: { readonly closed?: boolean } = {},
   ): LoopRef | readonly LineRef[] {
+    assertDenseArray(positions, `Sketch polyline '${id}' points`);
     if (positions.length < 2) {
       throw new TypeError("A polyline requires at least two points");
     }
@@ -326,6 +339,7 @@ export class SketchBuilder {
 
   loop(edges: readonly (LineRef | ArcRef | EdgeUseIR)[]): LoopRef {
     this.assertOpen();
+    assertDenseArray(edges, "Sketch loop edges");
     if (edges.length === 0) throw new TypeError("A loop cannot be empty");
     const uses = edges.map((edge, index): EdgeUseIR => {
       if (edge instanceof LineRef || edge instanceof ArcRef) {

@@ -773,6 +773,66 @@ describe("builder option values", () => {
     }
   });
 
+  it("rejects sparse point, segment, and edge lists while authoring", () => {
+    const point = (x: number) => vec3(mm(x), mm(0), mm(0));
+    const sparse = <T,>(length: number, items: Readonly<Record<number, T>>): T[] =>
+      Object.assign(new Array<T>(length), items);
+
+    const paths = design("sparse-paths");
+    expect(() =>
+      paths.polylinePath("missing-point", sparse(3, { 0: point(0), 2: point(2) })),
+    ).toThrow("Polyline path 'missing-point' points cannot be sparse");
+    expect(() =>
+      paths.compositePath("missing-segment", {
+        start: point(0),
+        segments: sparse(3, {
+          0: { kind: "line", end: point(1) },
+          2: { kind: "circularArc", through: point(2), end: point(3) },
+        }),
+      }),
+    ).toThrow("Composite path 'missing-segment' segments cannot be sparse");
+    expect(() =>
+      paths.compositePath("unknown-segment", {
+        start: point(0),
+        segments: [
+          { kind: "spline", end: point(1) } as never,
+          { kind: "circularArc", through: point(2), end: point(3) },
+        ],
+      }),
+    ).toThrow("segment 0 must be a line or circularArc segment");
+    // Nothing was stored, so the document still serializes.
+    expect(() => stringifyDocument(paths.build())).not.toThrow();
+
+    const sketches = design("sparse-sketch");
+    expect(() =>
+      sketches.sketch("missing-position", plane.xy(), (sketch) =>
+        sketch.profile(
+          sketch.polyline(
+            "outline",
+            sparse(4, {
+              0: vec2(mm(0), mm(0)),
+              1: vec2(mm(1), mm(0)),
+              3: vec2(mm(0), mm(1)),
+            }),
+            { closed: true },
+          ) as LoopRef,
+        ),
+      ),
+    ).toThrow("Sketch polyline 'outline' points cannot be sparse");
+    expect(() =>
+      sketches.sketch("missing-edge", plane.xy(), (sketch) => {
+        const lines = sketch.polyline("open", [
+          vec2(mm(0), mm(0)),
+          vec2(mm(1), mm(0)),
+          vec2(mm(0), mm(1)),
+        ]) as readonly ReturnType<SketchBuilder["line"]>[];
+        return sketch.profile(
+          sketch.loop(sparse(3, { 0: lines[0]!, 2: lines[1]! })),
+        );
+      }),
+    ).toThrow("Sketch loop edges cannot be sparse");
+  });
+
   it("emits builder output that strict parsing reloads unchanged", async () => {
     const cad = design("round-trip-options", { metadata: { revision: 3 } });
     const width = cad.parameter.length("width", mm(20), {
