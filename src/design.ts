@@ -91,6 +91,15 @@ function issued<T extends object>(handle: T): T {
 /** Instance records created by AssemblyBuilder.instance(), by builder. */
 const ISSUED_ASSEMBLY_INSTANCES = new WeakMap<object, AssemblyBuilder>();
 const CLOSED_ASSEMBLY_BUILDERS = new WeakSet<AssemblyBuilder>();
+const CLOSED_CONFIGURATION_BUILDERS = new WeakSet<ConfigurationBuilder>();
+
+function assertConfigurationBuilderOpen(builder: ConfigurationBuilder): void {
+  if (CLOSED_CONFIGURATION_BUILDERS.has(builder)) {
+    throw new TypeError(
+      "This configuration builder is closed; add overrides inside its configuration() callback",
+    );
+  }
+}
 
 type Vec3ExpressionIR = readonly [ExpressionIR, ExpressionIR, ExpressionIR];
 
@@ -885,6 +894,7 @@ export class ConfigurationBuilder {
     parameter: Parameter<D>,
     value: Expression<NoInfer<D>>,
   ): this {
+    assertConfigurationBuilderOpen(this);
     this.owner.assertParameterOwned(parameter);
     if (
       typeof value !== "object" ||
@@ -915,6 +925,7 @@ export class ConfigurationBuilder {
     instanceId: string,
     suppressed = true,
   ): this {
+    assertConfigurationBuilderOpen(this);
     const stableId = this.owner.assertAssemblyInstance(assembly, instanceId);
     let instances = this.instanceSuppressionRecords[assembly.node];
     if (instances === undefined) {
@@ -931,6 +942,7 @@ export class ConfigurationBuilder {
   }
 
   partMaterial(part: PartRef, material: MaterialRef): this {
+    assertConfigurationBuilderOpen(this);
     this.owner.assertOwned(part);
     this.owner.assertOwned(material);
     if (Object.hasOwn(this.partMaterialRecords, part.node)) {
@@ -1041,6 +1053,8 @@ export class DesignBuilder {
     ConfigurationId,
     DesignConfigurationIR
   >;
+  /** IDs whose configuration() callback is still running. */
+  private readonly pendingConfigurations = new Set<ConfigurationId>();
   private readonly outputRecords = Object.create(null) as Record<
     string,
     RefIR<DesignOutputKind>
@@ -2095,11 +2109,22 @@ export class DesignBuilder {
     options: ConfigurationOptions = {},
   ): ConfigurationId {
     const key = configurationId(id);
-    if (Object.hasOwn(this.configurationRecords, key)) {
+    if (
+      Object.hasOwn(this.configurationRecords, key) ||
+      this.pendingConfigurations.has(key)
+    ) {
       throw new TypeError(`Duplicate configuration '${id}'`);
     }
     const builder = new ConfigurationBuilder(this);
-    build(builder);
+    // Reserve the ID while the callback runs, so a nested configuration()
+    // with the same ID cannot succeed and then be overwritten.
+    this.pendingConfigurations.add(key);
+    try {
+      build(builder);
+    } finally {
+      this.pendingConfigurations.delete(key);
+      CLOSED_CONFIGURATION_BUILDERS.add(builder);
+    }
     this.configurationRecords[key] = builder.toIR(options);
     return key;
   }

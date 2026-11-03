@@ -27,6 +27,7 @@ import {
   validateDocument,
   vec2,
   vec3,
+  type ConfigurationBuilder,
   type DesignBuilder,
   type DesignDocument,
   type Evaluator,
@@ -1247,5 +1248,72 @@ describe("builder ownership boundary", () => {
     });
     expect(() => escaped!.point("late", vec2(mm(0), mm(0)))).toThrow(/closed/);
     expect(validateDocument(cad.build()).ok).toBe(true);
+  });
+});
+
+describe("configuration builders", () => {
+  it("rejects a nested configuration with the same ID", () => {
+    const cad = design("nested-configuration");
+    const width = cad.parameter.length("w", mm(10));
+    let innerError: unknown;
+    cad.configuration("c", (outer) => {
+      try {
+        cad.configuration("c", (inner) => inner.parameter(width, mm(30)));
+      } catch (error) {
+        innerError = error;
+      }
+      outer.parameter(width, mm(20));
+    });
+    expect(innerError).toBeInstanceOf(TypeError);
+    expect((innerError as Error).message).toMatch(/Duplicate configuration 'c'/);
+    expect(cad.build().configurations).toEqual({
+      c: { parameterOverrides: { w: mm(20).ir } },
+    });
+    expect(() =>
+      cad.configuration("c", (configuration) =>
+        configuration.parameter(width, mm(40)),
+      ),
+    ).toThrow(/Duplicate configuration 'c'/);
+  });
+
+  it("closes the builder when its callback returns or throws", () => {
+    const cad = design("escaped-configuration");
+    const width = cad.parameter.length("w", mm(10));
+    const height = cad.parameter.length("h", mm(1));
+    const part = cad.part("part", cad.box("box", { size: vec3(width, height, mm(1)) }));
+    const steel = cad.material("steel", {
+      name: "Steel",
+      massDensity: gramsPerCubicCentimeter(7.8),
+    });
+    const assembly = cad.assembly("assembly", (builder) =>
+      builder.instance("first", part),
+    );
+    let escaped: ConfigurationBuilder | undefined;
+    cad.configuration("d", (configuration) => {
+      escaped = configuration;
+      configuration.parameter(width, mm(40));
+    });
+    expect(() => escaped!.parameter(height, mm(2))).toThrow(/closed/);
+    expect(() => escaped!.instanceSuppressed(assembly, "first")).toThrow(/closed/);
+    expect(() => escaped!.partMaterial(part, steel)).toThrow(/closed/);
+    expect(cad.build().configurations).toEqual({
+      d: { parameterOverrides: { w: mm(40).ir } },
+    });
+
+    let failed: ConfigurationBuilder | undefined;
+    expect(() =>
+      cad.configuration("e", (configuration) => {
+        failed = configuration;
+        configuration.parameter(width, mm(5));
+        throw new Error("callback failed");
+      }),
+    ).toThrow("callback failed");
+    expect(() => failed!.parameter(height, mm(3))).toThrow(/closed/);
+    expect(cad.build().configurations).not.toHaveProperty("e");
+    expect(
+      cad.configuration("e", (configuration) =>
+        configuration.parameter(width, mm(6)),
+      ),
+    ).toBe("e");
   });
 });

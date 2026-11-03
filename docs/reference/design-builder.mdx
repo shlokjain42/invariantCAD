@@ -8,9 +8,12 @@ Create a builder with `design(name, options?)`. Every returned authoring handle
 is immutable and owned by that builder. Only handles returned by builder
 methods are accepted: a `SolidRef`, `PartRef`, `MaterialRef`, or other handle
 created with its exported class constructor is rejected even when it names the
-builder as owner. The `AssemblyBuilder` passed to an `assembly(...)` callback
-closes when the callback returns, and an assembly stores only the instances
-that `instance(...)` added. The builder copies caller-supplied
+builder as owner. The `AssemblyBuilder` and `ConfigurationBuilder` passed to
+`assembly(...)` and `configuration(...)` callbacks close when the callback
+returns or throws, so later calls through an escaped builder throw instead of
+being silently dropped. An assembly stores only the instances that
+`instance(...)` added, and a configuration ID stays reserved while its callback
+runs, so a nested `configuration(...)` call with the same ID throws. The builder copies caller-supplied
 metadata, transform operations, and assembly placements into its own records,
 so changing those caller objects later cannot alter a built document, and
 authoring never freezes them. Expression IR is the exception: expressions are
