@@ -50,13 +50,19 @@ snapshots, exact fillets/chamfers/shells/offsets, lofts, or path sweeps.
 
 ## Precision model
 
-Manifold computes robust solids internally, but its public mesh carries
-Float32 vertex positions. Measurement methods call native Manifold volume,
-surface-area, bounding-box, and tolerance functions and combine those with
-bounded mesh integration for tensor properties. Genus is evaluated on every
-fresh component returned by `decompose()`, validated as a nonnegative safe
-integer, safe-summed, and cleaned up transactionally. That claim is exact for
-the Manifold mesh representation, not an assertion about a source B-Rep.
+Manifold computes robust solids internally, but its public mesh carries Float32
+vertex positions. Measurement methods call native Manifold volume,
+surface-area, bounding-box, and tolerance functions. The center of mass and
+inertia tensor come from integrating the Float32 mesh about its bounding-box
+center and rescaling to the native volume. That integration is accepted only
+when its volume matches the native volume within a bound that includes Float32
+rounding of the recentered positions, so slender, thin-walled, or widely
+separated geometry measures normally, and tensor precision is limited by
+Float32 coordinates relative to the whole shape's bounding box. Genus is
+evaluated on every fresh component returned by `decompose()`, validated as a
+nonnegative safe integer, safe-summed, and cleaned up transactionally. That
+claim is exact for the Manifold mesh representation, not an assertion about a
+source B-Rep.
 
 A public mesh round-trip is not a lossless native shape codec. InvariantCAD
 therefore does not advertise shape-artifact persistence for Manifold 3.5.1.

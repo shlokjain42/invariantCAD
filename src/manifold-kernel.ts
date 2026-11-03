@@ -270,6 +270,35 @@ function radiansToDegrees(value: number): number {
   return (value * 180) / Math.PI;
 }
 
+/** Unit roundoff of the Float32 positions returned by `getMesh()`. */
+const FLOAT32_UNIT_ROUNDOFF = 2 ** -24;
+
+/**
+ * Bounds the volume change caused by rounding the recentered mesh to Float32.
+ *
+ * Each recentered coordinate is at most the bounding-box half extent on its
+ * axis, so Float32 rounding moves a vertex by at most the half diagonal times
+ * the Float32 unit roundoff. The double-precision recentering adds a few ulp
+ * of the original coordinates. Moving every vertex of a closed mesh by at
+ * most `d` changes its volume by at most `surfaceArea * d` to first order;
+ * the factor of two covers higher-order terms.
+ */
+function float32MeshVolumeBound(
+  surfaceArea: number,
+  reference: Vec3,
+  bounds: { readonly min: ArrayLike<number>; readonly max: ArrayLike<number> },
+): number {
+  const halfDiagonal = Math.hypot(
+    bounds.max[0]! / 2 - bounds.min[0]! / 2,
+    bounds.max[1]! / 2 - bounds.min[1]! / 2,
+    bounds.max[2]! / 2 - bounds.min[2]! / 2,
+  );
+  const displacement =
+    FLOAT32_UNIT_ROUNDOFF * halfDiagonal +
+    4 * Number.EPSILON * (Math.hypot(...reference) + halfDiagonal);
+  return 2 * surfaceArea * displacement;
+}
+
 export interface ManifoldKernelOptions {
   readonly wasmUrl?: string;
 }
@@ -491,6 +520,7 @@ export class ManifoldKernel implements GeometryKernel {
           5e-6 * volume,
           8 * surfaceArea * tolerance,
           integrated.volumeRoundoffBound,
+          float32MeshVolumeBound(surfaceArea, reference, bounds),
         );
         if (Math.abs(integrated.volume - volume) > volumeAllowance) {
           throw new RangeError(

@@ -32,4 +32,54 @@ describe("Manifold mass-property integration", () => {
       kernel.dispose();
     }
   });
+
+  it("certifies slender rotated solids against Float32 mesh quantization", async () => {
+    const kernel = await createManifoldKernel();
+    try {
+      const bar = kernel.box!([2, 2, 500], true);
+      const rotated = kernel.transform!(bar, [
+        {
+          kind: "rotate",
+          value: [30, 45, 60].map((degrees) => (degrees * Math.PI) / 180) as [
+            number,
+            number,
+            number,
+          ],
+        },
+      ]);
+      const measured = kernel.measure(rotated);
+      expect(measured.volume).toBeCloseTo(2000, 6);
+      for (const coordinate of measured.centerOfMass!) {
+        expect(Math.abs(coordinate)).toBeLessThan(1e-3);
+      }
+      // The trace of the central inertia is invariant under rotation.
+      const trace =
+        measured.inertiaTensor[0][0] +
+        measured.inertiaTensor[1][1] +
+        measured.inertiaTensor[2][2];
+      const expectedTrace = (2000 * 2 * (2 * 2 + 2 * 2 + 500 * 500)) / 12;
+      expect(Math.abs(trace - expectedTrace) / expectedTrace).toBeLessThan(1e-5);
+    } finally {
+      kernel.dispose();
+    }
+  });
+
+  it("certifies disconnected results whose small components are far apart", async () => {
+    const kernel = await createManifoldKernel();
+    try {
+      const near = kernel.sphere!(5, 64);
+      const far = kernel.transform!(kernel.sphere!(5, 64), [
+        { kind: "translate", value: [20000, 0, 0] },
+      ]);
+      const union = kernel.boolean!("union", near, [far]);
+      const single = kernel.measure(near);
+      const measured = kernel.measure(union);
+      expect(measured.volume).toBeCloseTo(2 * single.volume, 6);
+      expect(measured.centerOfMass![0]).toBeCloseTo(10000, 2);
+      expect(Math.abs(measured.centerOfMass![1])).toBeLessThan(1e-3);
+      expect(Math.abs(measured.centerOfMass![2])).toBeLessThan(1e-3);
+    } finally {
+      kernel.dispose();
+    }
+  });
 });

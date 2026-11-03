@@ -122,8 +122,9 @@ that combine InvariantCAD output with externally measured components.
 
 OCCT measures exact native shapes and verifies certain sweep volumes against
 analytic profile/path oracles, but does not currently report genus. Manifold
-provides native volume and surface-area measurements with mesh-based tensor
-integration and exact genus for its mesh representation. Check `tolerance`,
-nullable capabilities, and backend representation when comparing results
-across kernels; equality of authored intent does not promise byte-identical
-floating-point output.
+provides native volume and surface-area measurements, integrates center of mass
+and inertia over its Float32 mesh (precision relative to the shape's
+bounding-box size), and reports exact genus for its mesh representation. Check
+`tolerance`, nullable capabilities, and backend representation when comparing
+results across kernels; equality of authored intent does not promise
+byte-identical floating-point output.
