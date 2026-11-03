@@ -48,6 +48,10 @@ function describeDimension(value: unknown): string {
   return isDimension(value) ? value : "a non-expression value";
 }
 
+function expressionKind(dimension: Dimension): string {
+  return `${dimension === "angle" ? "an" : "a"} ${dimension} expression`;
+}
+
 const EXPRESSION_IR_FIELDS: Readonly<Record<ExpressionIR["op"], readonly string[]>> =
   Object.freeze({
     literal: ["op", "dimension", "value"],
@@ -314,18 +318,18 @@ export function expressionIROf(
   label: string,
 ): ExpressionIR {
   if (typeof value !== "object" || value === null) {
-    throw new TypeError(`${label} must be a ${dimension} expression`);
+    throw new TypeError(`${label} must be ${expressionKind(dimension)}`);
   }
   const candidate = value as { readonly dimension?: unknown; readonly ir?: unknown };
   if (candidate.dimension !== dimension) {
     throw new TypeError(
-      `${label} must be a ${dimension} expression, received ${describeDimension(candidate.dimension)}`,
+      `${label} must be ${expressionKind(dimension)}, received ${describeDimension(candidate.dimension)}`,
     );
   }
   const ir = assertExpressionIR(candidate.ir, label);
   if (ir.dimension !== dimension) {
     throw new TypeError(
-      `${label} must be a ${dimension} expression, received ${ir.dimension}`,
+      `${label} must be ${expressionKind(dimension)}, received ${ir.dimension}`,
     );
   }
   return ir;

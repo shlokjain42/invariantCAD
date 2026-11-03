@@ -1,7 +1,9 @@
 import { entityId, type EntityId } from "./core/ids.js";
 import { deepFreeze } from "./core/json.js";
+import { DEFAULT_DESIGN_DOCUMENT_LIMITS } from "./document-limits.js";
 import {
   deg,
+  expressionIROf,
   mm,
   scalar,
   type AngleExpression,
@@ -476,14 +478,21 @@ export class SketchBuilder {
     if (!Number.isInteger(sides) || sides < 3) {
       throw new TypeError("A regular polygon requires at least three sides");
     }
+    if (sides > DEFAULT_DESIGN_DOCUMENT_LIMITS.maxStructuralValues) {
+      throw new RangeError(
+        `A regular polygon cannot have more than ${DEFAULT_DESIGN_DOCUMENT_LIMITS.maxStructuralValues} sides`,
+      );
+    }
     const [cx, cy] = options.center ?? [mm(0), mm(0)];
-    const rotation = options.rotation ?? deg(0);
+    // Vertex directions are resolved while authoring, so only the base
+    // rotation must be literal; each vertex angle is computed numerically.
+    const rotation = evaluateLiteralAngle(options.rotation ?? deg(0));
     const points: Vec2Expression[] = [];
     for (let index = 0; index < sides; index += 1) {
-      const angle = rotation.add(deg((index * 360) / sides));
+      const angle = rotation + (index * 2 * Math.PI) / sides;
       points.push([
-        cx.add(radius.mul(scalar(Math.cos(evaluateLiteralAngle(angle))))),
-        cy.add(radius.mul(scalar(Math.sin(evaluateLiteralAngle(angle))))),
+        cx.add(radius.mul(scalar(Math.cos(angle)))),
+        cy.add(radius.mul(scalar(Math.sin(angle)))),
       ]);
     }
     return this.polyline(id, points, { closed: true }) as LoopRef;
@@ -491,10 +500,11 @@ export class SketchBuilder {
 }
 
 function evaluateLiteralAngle(value: AngleExpression): number {
-  if (value.ir.op !== "literal") {
+  const ir = expressionIROf(value, "angle", "regularPolygon rotation");
+  if (ir.op !== "literal") {
     throw new TypeError(
       "regularPolygon rotation must currently be a literal angle expression",
     );
   }
-  return value.ir.value;
+  return ir.value;
 }

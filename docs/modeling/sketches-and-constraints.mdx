@@ -59,7 +59,8 @@ do not currently express islands or general multi-region region algebra.
 - `arc(id, { center, radius, startAngle, endAngle })`
 - `polyline(id, points, { closed })`
 - `rectangle(id, options)`
-- `regularPolygon(id, sides, radius, options)`
+- `regularPolygon(id, sides, radius, { center?, rotation? })`, where `radius`
+  and `center` may be parametric but `rotation` must be a literal angle
 
 Use `sketch.loop([...])` to assemble ordered lines and arcs. Reverse an edge use
 when the loop traversal runs opposite its authored direction. A loop must be
