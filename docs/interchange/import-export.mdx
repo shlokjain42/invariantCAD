@@ -216,12 +216,18 @@ const created = createImportedBodyDocument("verified-housing", {
   format: "step",
   units: { mode: "from-file" },
 });
+if (!created.ok) {
+  throw new Error(created.diagnostics.map((item) => item.message).join("\n"));
+}
+const importedDocument = created.value;
 ```
 
-`createImportedBodyDocument(...)` captures and validates the commitment but
-does not read, fetch, or hash the bytes. The caller computes the SHA-256 digest
-and exact byte length. `locations` are ordered hints passed to the resolver;
-InvariantCAD never interprets them as files, URLs, or package paths.
+`createImportedBodyDocument(...)` returns a `CadResult`; unwrap it before
+persisting or evaluating the document. It captures and validates the
+commitment but does not read, fetch, or hash the bytes. The caller computes
+the SHA-256 digest and exact byte length. `locations` are ordered hints passed
+to the resolver; InvariantCAD never interprets them as files, URLs, or package
+paths.
 
 The protocol-v1 media and unit policy is closed:
 
@@ -240,7 +246,7 @@ loose topology, approximate conversion, and weak-import fallback are rejected.
 Persist only the opaque document facade:
 
 ```ts
-const json = stringifyImportedBodyDocument(document);
+const json = stringifyImportedBodyDocument(importedDocument);
 const parsed = parseImportedBodyDocument(json, {
   limits: { maxDocumentBytes: 8 * 1024 * 1024 },
 });
@@ -254,7 +260,7 @@ Evaluation requires an exact B-Rep evaluator with the strong document-body
 import capability and a caller-supplied resolver:
 
 ```ts
-const result = await evaluator.evaluateImportedBody(document, {
+const result = await evaluator.evaluateImportedBody(importedDocument, {
   resolver: async (request) => {
     // Resolve by your own policy, then return bytes. InvariantCAD verifies
     // request.digest and request.byteLength before native parsing.
