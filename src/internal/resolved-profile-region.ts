@@ -852,6 +852,55 @@ function lineRayCrossings(
   return crosses ? 1 : 0;
 }
 
+/**
+ * Ray crossings of an arc whose circle is tangent to the horizontal ray.
+ *
+ * At the lowest point of the circle the arc lies above the ray; at the highest
+ * point it lies below. An arc endpoint exactly at the tangent point lies on
+ * the ray, which the half-open rule counts as below, so the arc contributes
+ * one crossing there only when its interior is above and the point is to the
+ * right. An interior tangency touches without crossing. An endpoint inside the
+ * angular window where tangency is numerically indistinguishable from two
+ * nearby crossings cannot be classified and fails closed.
+ */
+function tangentArcEndpointRayCrossings(
+  curve: Extract<ResolvedCurve, { readonly kind: "arc" }>,
+  center: Vec2,
+  normalizedY: number,
+  ratioGuard: number,
+  tolerance: number,
+): number | "uncertain" {
+  const interiorAbove = normalizedY < 0;
+  const tangentAngle = interiorAbove ? Math.PI * 1.5 : Math.PI / 2;
+  const parameter = roundCurveParameter(curve, tangentAngle, 0);
+  if (parameter === 0 || parameter === 1) {
+    if (!interiorAbove) return 0;
+    const intersectionX = center[0];
+    const xGuard = scalarNumericGuard(
+      tolerance,
+      ...center,
+      curve.radius,
+    );
+    if (!Number.isFinite(xGuard) || Math.abs(intersectionX) <= xGuard) {
+      return "uncertain";
+    }
+    return intersectionX > 0 ? 1 : 0;
+  }
+  // Near tangency, a ray offset within `ratioGuard` meets the circle within
+  // about sqrt(2 * ratioGuard) of the tangent angle.
+  const ambiguity = 2 * Math.sqrt(2 * ratioGuard);
+  for (const endpointAngle of [curve.startAngle, curve.endAngle]) {
+    const offset = normalizedAngle(endpointAngle - tangentAngle);
+    if (
+      !Number.isFinite(offset) ||
+      Math.min(offset, FULL_TURN - offset) <= ambiguity
+    ) {
+      return "uncertain";
+    }
+  }
+  return 0;
+}
+
 function roundRayCrossings(
   curve: Extract<ResolvedCurve, { readonly kind: "arc" | "circle" }>,
   point: Vec2,
@@ -873,8 +922,18 @@ function roundRayCrossings(
     return 0;
   }
   if (Math.abs(Math.abs(normalizedY) - 1) <= ratioGuard) {
-    // A horizontal-ray tangency does not change even/odd parity.
-    return 0;
+    // A horizontal-ray tangency does not change even/odd parity, unless an
+    // arc ends at the tangent point: then it is an endpoint on the ray and
+    // takes the same half-open rule as every other endpoint.
+    return curve.kind === "arc"
+      ? tangentArcEndpointRayCrossings(
+          curve,
+          center,
+          normalizedY,
+          ratioGuard,
+          tolerance,
+        )
+      : 0;
   }
   const principal = Math.asin(Math.max(-1, Math.min(1, normalizedY)));
   const candidateAngles = [
