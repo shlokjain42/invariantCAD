@@ -147,9 +147,9 @@ The repository does not silently download or distribute that bundle.
 ### Repository-only research and staged work
 
 The repository contains a private OCCT shape-artifact candidate, for the stock
-and owned runtimes, and a direct-box evaluator-cache experiment. No public backend advertises
-`shapeArtifacts`, no public evaluator option enables the experiment, and
-ordinary package consumers cannot bind it.
+and owned runtimes, and a direct-box evaluator-cache experiment. No public
+backend advertises `shapeArtifacts`, no public evaluator option enables the
+experiment, and ordinary package consumers cannot bind it.
 
 This research is now maintenance-only while product modeling catches up. Its
 formats, threat boundary, evidence, non-claims, and promotion gates live in the

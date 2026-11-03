@@ -156,10 +156,11 @@ InvariantCAD 0.1 includes:
 
 With the reference solver, a `radius`, `diameter`, or `equalRadius` constraint
 that changes a loop arc's radius, or a constraint that moves its center, does
-not move the adjacent line endpoints, so the loop opens; see
+not move the adjacent line endpoints, so the loop opens and evaluation fails
+with `SKETCH_NO_CLOSED_REGION`; see
 [arcs in constrained loops](docs/modeling/sketches-and-constraints.mdx#arcs-in-constrained-loops).
-In unreleased 0.2, evaluation then fails with `SKETCH_NO_CLOSED_REGION`, whose
-details give the gap and the curves on either side of it.
+In unreleased 0.2, that diagnostic's details give the gap and the curves on
+either side of it.
 
 The [support matrix](docs/reference/support-matrix.mdx) distinguishes authoring,
 Manifold, stock OCCT, and owned-facade support feature by feature.

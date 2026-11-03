@@ -32,14 +32,17 @@ No capability names extrude `twist`, `scaleTop`, or `divisions`. OCCT
 advertises plain `extrude` and passes capability preflight, including the
 `mechanical-exact` profile; a nonzero `twist`, a `scaleTop` other than
 `[1, 1]`, or nonzero `divisions` then fails inside the kernel with
-`KERNEL_ERROR`, not `KERNEL_CAPABILITY_MISSING`.
+`KERNEL_ERROR`, not `KERNEL_CAPABILITY_MISSING`. Published 0.1.1 tolerates a
+`twist` or `scaleTop` difference up to `modelingTolerance` (default `1e-7`)
+and builds a plain prism for it.
 
-OCCT applies a nonuniform `scale` through a general affine transform. Results
-with curved faces are approximate, so their measured volume and area can differ
-from the analytic values: a cylinder scaled by `[1, 2, 1]` measures about 0.9%
-too large. In published 0.1.1, every stock OCCT transform of a shape with a
-degenerate pole or apex edge, such as a sphere or a pointed cone, fails;
-unreleased 0.2 transforms them.
+OCCT applies a nonuniform `scale` through a general affine transform;
+published 0.1.1 treats factors that agree within `modelingTolerance` as
+uniform. Such results with curved faces are approximate, so their measured
+volume and area can differ from the analytic values: a cylinder scaled by
+`[1, 2, 1]` measures about 0.9% too large. In published 0.1.1, every stock OCCT
+transform of a shape with a degenerate pole or apex edge, such as a sphere or a
+pointed cone, fails; unreleased 0.2 transforms them.
 
 Unreleased 0.2 adds kernel-neutral evaluator checks that run before the
 geometry kernel:
@@ -75,8 +78,8 @@ Stock OCCT advertises both signature rows only from the bundled runtime that
 `createOcctKernel()` loads when neither `wasm` nor `moduleFactory` is supplied.
 An explicit `wasm` or `moduleFactory` without the owned facade ABI omits both,
 even with byte-identical stock files. The `mechanical-exact` preflight still
-passes, but a document with persistent topology references then fails with
-`KERNEL_CAPABILITY_MISSING`.
+passes, but a selector that uses a persistent topology reference then fails
+with `KERNEL_CAPABILITY_MISSING`.
 
 ## Product structure and analysis
 
@@ -173,7 +176,7 @@ minimal [Document v7 subset](/interchange/import-export#imported-body-document-f
 (schema `https://invariantcad.dev/schema/document/v7`, version `7`) that a
 future public Document v7 will keep accepting. Only the imported-body functions
 read, write, and evaluate it: `parseDocument`, `validateDocument`, and the other
-general v1-v6 document APIs return `IR_INVALID` at `/`, and
+general v1–v6 document APIs return `IR_INVALID` at `/`, and
 `stringifyDocument`, `hashDocument`, and `cloneDocument` throw `TypeError`.
 Multibody import, assembly import, repair/healing, automatic file/URL I/O, and
 approximate fallback remain unsupported.
@@ -185,7 +188,7 @@ approximate fallback remain unsupported.
 | Node.js 22.13 | Full package checks |
 | Node.js 24 | Full package and documentation checks |
 | Node.js 26 | Tests, coverage, package, and security gates |
-| Chromium production bundle | Manifold and stock OCCT smoke under the documented [Content Security Policy](/evaluation/browser-and-workers#content-security-policy) |
+| Chromium production bundle | Manifold and stock OCCT smoke; unreleased 0.2 serves it under the documented [Content Security Policy](/evaluation/browser-and-workers#content-security-policy) |
 | Firefox/Safari | Not yet release-gated |
 | Deno | Not claimed |
 
