@@ -297,3 +297,47 @@ describe("OCCT mesh call-order independence", () => {
     }
   });
 });
+
+describe("OCCT kernel disposal", () => {
+  it("releases every shape and the native kernel when one release fails", async () => {
+    const kernel = await createOcctKernel();
+    const raw = (kernel as unknown as {
+      raw: {
+        release(handle: unknown): void;
+        shapeCount?: unknown;
+        [Symbol.dispose](): void;
+      };
+    }).raw;
+    const boxes = [
+      kernel.box!([1, 1, 1], false),
+      kernel.box!([2, 2, 2], false),
+      kernel.box!([3, 3, 3], false),
+    ];
+    const release = raw.release.bind(raw);
+    const nativeDispose = raw[Symbol.dispose].bind(raw);
+    let injected = false;
+    const released: unknown[] = [];
+    let nativeDisposed = false;
+    raw.release = (handle: unknown) => {
+      if (!injected) {
+        injected = true;
+        release(handle);
+        throw new Error("injected release failure");
+      }
+      released.push(handle);
+      release(handle);
+    };
+    raw[Symbol.dispose] = () => {
+      nativeDisposed = true;
+      nativeDispose();
+    };
+
+    expect(() => kernel.dispose()).toThrow("injected release failure");
+    expect(released).toHaveLength(boxes.length - 1);
+    expect(nativeDisposed).toBe(true);
+    expect(() => kernel.disposeShape(boxes[0]!)).not.toThrow();
+    expect(() => kernel.measure(boxes[2]!)).toThrow(/disposed/u);
+    // A second dispose is a no-op.
+    expect(() => kernel.dispose()).not.toThrow();
+  });
+});

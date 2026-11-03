@@ -6778,9 +6778,32 @@ class OcctKernel implements GeometryKernel {
 
   dispose(): void {
     if (this.disposed) return;
-    for (const shape of [...this.liveShapes]) this.disposeShape(shape);
-    this.raw[Symbol.dispose]();
-    this.disposed = true;
+    // Release every shape and the native kernel even when one release fails,
+    // and mark the kernel disposed so it accepts no further work.
+    const cleanupErrors: unknown[] = [];
+    try {
+      for (const shape of [...this.liveShapes]) {
+        try {
+          this.disposeShape(shape);
+        } catch (error) {
+          cleanupErrors.push(error);
+        }
+      }
+    } finally {
+      try {
+        this.raw[Symbol.dispose]();
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+      this.disposed = true;
+    }
+    if (cleanupErrors.length === 1) throw cleanupErrors[0];
+    if (cleanupErrors.length > 1) {
+      throw new AggregateError(
+        cleanupErrors,
+        "OCCT kernel disposal encountered multiple release failures",
+      );
+    }
   }
 }
 
