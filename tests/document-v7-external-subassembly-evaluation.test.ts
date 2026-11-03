@@ -1461,80 +1461,80 @@ describe("external fixed-subassembly evaluation", () => {
     ]) {
       const resolved = resolverFor(child);
       const harness = await trackedManifold();
-      const result = await evaluateProductAssemblyOutputsV7(
-        harness.kernel,
-        product(testCase.directOutput),
-        {
-          resolver: resolved.resolver,
-          evaluationLimits: {
-            maxDistinctSolids: testCase.boxCalls,
-            maxSolidGraphNodes: testCase.boxCalls,
-          },
-        },
-      );
-      expect(result.ok, JSON.stringify(result.diagnostics)).toBe(true);
-      if (!result.ok) {
-        harness.disposeBase();
-        continue;
-      }
       try {
-        expect(harness.boxCalls).toHaveBeenCalledTimes(testCase.boxCalls);
-        const [direct, fixedLeaf] =
-          result.value.output("product").occurrences;
-        expect(direct!.component).toMatchObject({
-          source: "external",
-          output: testCase.directOutput,
-          outputKind: "part",
-          partNode: testCase.directNode,
-        });
-        expect(direct!.part.name).toBe(testCase.directOutput);
-        expect(direct!.part.node).toBe(testCase.directNode);
-        expect(fixedLeaf!.component).toMatchObject({
-          source: "external",
-          output: "module",
-          outputKind: "assembly",
-          partNode: "leaf",
-        });
-        expect(fixedLeaf!.part.name).toBe("leaf");
-        expect(fixedLeaf!.part.node).toBe("leaf");
-        for (const occurrence of [direct!, fixedLeaf!]) {
-          const geometry = occurrence.part.geometry;
-          expect(geometry.kind).toBe("solid");
-          if (geometry.kind === "solid") {
-            expect(geometry.solid.name).toBe(occurrence.part.name);
+        const result = await evaluateProductAssemblyOutputsV7(
+          harness.kernel,
+          product(testCase.directOutput),
+          {
+            resolver: resolved.resolver,
+            evaluationLimits: {
+              maxDistinctSolids: testCase.boxCalls,
+              maxSolidGraphNodes: testCase.boxCalls,
+            },
+          },
+        );
+        expect(result.ok, JSON.stringify(result.diagnostics)).toBe(true);
+        if (!result.ok) continue;
+        try {
+          expect(harness.boxCalls).toHaveBeenCalledTimes(testCase.boxCalls);
+          const [direct, fixedLeaf] =
+            result.value.output("product").occurrences;
+          expect(direct!.component).toMatchObject({
+            source: "external",
+            output: testCase.directOutput,
+            outputKind: "part",
+            partNode: testCase.directNode,
+          });
+          expect(direct!.part.name).toBe(testCase.directOutput);
+          expect(direct!.part.node).toBe(testCase.directNode);
+          expect(fixedLeaf!.component).toMatchObject({
+            source: "external",
+            output: "module",
+            outputKind: "assembly",
+            partNode: "leaf",
+          });
+          expect(fixedLeaf!.part.name).toBe("leaf");
+          expect(fixedLeaf!.part.node).toBe("leaf");
+          for (const occurrence of [direct!, fixedLeaf!]) {
+            const geometry = occurrence.part.geometry;
+            expect(geometry.kind).toBe("solid");
+            if (geometry.kind === "solid") {
+              expect(geometry.solid.name).toBe(occurrence.part.name);
+            }
+            expect(
+              (occurrence.part.export("stl-ascii") as string).split("\n")[0],
+            ).toBe(`solid ${occurrence.part.name}`);
           }
-          expect(
-            (occurrence.part.export("stl-ascii") as string).split("\n")[0],
-          ).toBe(`solid ${occurrence.part.name}`);
-        }
-        const leafBox =
-          fixedLeaf!.part.geometry.kind === "solid"
-            ? fixedLeaf!.part.geometry.solid.measure().boundingBox
-            : undefined;
-        expect(leafBox?.max[0]! - leafBox?.min[0]!).toBeCloseTo(4);
+          const leafBox =
+            fixedLeaf!.part.geometry.kind === "solid"
+              ? fixedLeaf!.part.geometry.solid.measure().boundingBox
+              : undefined;
+          expect(leafBox?.max[0]! - leafBox?.min[0]!).toBeCloseTo(4);
 
-        const bom = result.value.output("product").billOfMaterials();
-        expect(bom.ok, JSON.stringify(bom.diagnostics)).toBe(true);
-        if (bom.ok) {
-          expect(
-            bom.value.items.map((item) => [
-              item.component.source === "external"
-                ? item.component.output
-                : undefined,
-              item.partNode,
-              item.quantity,
-            ]),
-          ).toEqual(
-            expect.arrayContaining([
-              [testCase.directOutput, testCase.directNode, 1],
-              ["module", "leaf", 1],
-            ]),
-          );
+          const bom = result.value.output("product").billOfMaterials();
+          expect(bom.ok, JSON.stringify(bom.diagnostics)).toBe(true);
+          if (bom.ok) {
+            expect(
+              bom.value.items.map((item) => [
+                item.component.source === "external"
+                  ? item.component.output
+                  : undefined,
+                item.partNode,
+                item.quantity,
+              ]),
+            ).toEqual(
+              expect.arrayContaining([
+                [testCase.directOutput, testCase.directNode, 1],
+                ["module", "leaf", 1],
+              ]),
+            );
+          }
+        } finally {
+          result.value.dispose();
         }
-      } finally {
-        result.value.dispose();
         expect(harness.disposedShapes).toHaveLength(testCase.boxCalls);
         expect(harness.liveShapes.size).toBe(0);
+      } finally {
         harness.disposeBase();
       }
     }
@@ -1575,32 +1575,34 @@ describe("external fixed-subassembly evaluation", () => {
         cause: "child tessellation failed",
       },
     };
-    const result = await evaluateProductDocument(
-      kernel,
-      fixture.document,
-      { resolver: resolved.resolver },
-    );
-    expect(result.ok, JSON.stringify(result.diagnostics)).toBe(true);
-    if (!result.ok) {
-      harness.disposeBase();
-      return;
-    }
     try {
-      const assemblyError = capturedCadError(() =>
-        result.value.assembly("product").mesh(),
+      const result = await evaluateProductDocument(
+        kernel,
+        fixture.document,
+        { resolver: resolved.resolver },
       );
-      expect(assemblyError.diagnostics).toHaveLength(1);
-      expect(assemblyError.diagnostics[0]).toMatchObject(expected);
+      expect(result.ok, JSON.stringify(result.diagnostics)).toBe(true);
+      if (!result.ok) return;
+      try {
+        const assemblyError = capturedCadError(() =>
+          result.value.assembly("product").mesh(),
+        );
+        expect(assemblyError.diagnostics).toHaveLength(1);
+        expect(assemblyError.diagnostics[0]).toMatchObject(expected);
 
-      const productError = capturedCadError(() => result.value.mesh());
-      expect(productError.diagnostics).toEqual(assemblyError.diagnostics);
-      const exportError = capturedCadError(() =>
-        result.value.export("stl"),
-      );
-      expect(exportError.diagnostics).toEqual(assemblyError.diagnostics);
-    } finally {
-      result.value.dispose();
+        const productError = capturedCadError(() => result.value.mesh());
+        expect(productError.diagnostics).toEqual(
+          assemblyError.diagnostics,
+        );
+        const exportError = capturedCadError(() =>
+          result.value.export("stl"),
+        );
+        expect(exportError.diagnostics).toEqual(assemblyError.diagnostics);
+      } finally {
+        result.value.dispose();
+      }
       expect(harness.liveShapes.size).toBe(0);
+    } finally {
       harness.disposeBase();
     }
   });

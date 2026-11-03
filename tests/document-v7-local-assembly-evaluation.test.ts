@@ -2384,6 +2384,10 @@ describe("staged Document v7 local assembly evaluation", () => {
           geometry: { node: "bodies", kind: "bodySet" },
           massDensity: literal("massDensity", 1e-6),
         },
+        bare: {
+          kind: "part",
+          geometry: { node: "shared", kind: "solid" },
+        },
         asm: {
           kind: "assembly",
           instances: [
@@ -2393,6 +2397,13 @@ describe("staged Document v7 local assembly evaluation", () => {
               component: {
                 source: "local",
                 reference: { node: "multi" as NodeId, kind: "part" },
+              },
+            },
+            {
+              ...localPartInstance("bare-leaf", { mode: "inherit" }),
+              component: {
+                source: "local",
+                reference: { node: "bare" as NodeId, kind: "part" },
               },
             },
           ],
@@ -2406,12 +2417,15 @@ describe("staged Document v7 local assembly evaluation", () => {
     const kernel = await createManifoldKernel();
     try {
       const evaluations = [
-        await evaluateProductDocument(kernel, document),
-        await evaluateLocalAssemblyOutputsV7(kernel, document, {
-          outputs: ["product"],
-        }),
+        () => evaluateProductDocument(kernel, document),
+        () =>
+          evaluateLocalAssemblyOutputsV7(kernel, document, {
+            outputs: ["product"],
+          }),
       ];
-      for (const result of evaluations) {
+      // Each result is checked and disposed before the next one exists.
+      for (const evaluate of evaluations) {
+        const result = await evaluate();
         expect(result.ok, JSON.stringify(result.diagnostics)).toBe(true);
         if (!result.ok) continue;
         try {
@@ -2419,7 +2433,7 @@ describe("staged Document v7 local assembly evaluation", () => {
             result.value instanceof EvaluatedProductDocumentV7
               ? result.value.assembly("product")
               : result.value.output("product");
-          const [leaf, multiLeaf] = assembly.occurrences;
+          const [leaf, multiLeaf, bareLeaf] = assembly.occurrences;
           const part = leaf!.part;
           expect(part.name).toBe("part");
           expect(part.geometry.kind).toBe("solid");
@@ -2448,6 +2462,20 @@ describe("staged Document v7 local assembly evaluation", () => {
           expect(exported.diagnostics[0]?.details).not.toHaveProperty(
             "output",
           );
+
+          // Part-level mass checks keep pointing at the authored density.
+          const bareMass = bareLeaf!.part.physicalMassProperties();
+          expect(bareMass.ok).toBe(false);
+          if (!bareMass.ok) {
+            expect(bareMass.diagnostics[0]).toMatchObject({
+              code: "MASS_DENSITY_MISSING",
+              node: "bare",
+              path: "/nodes/bare/massDensity",
+            });
+            expect(bareMass.diagnostics[0]?.details ?? {}).not.toHaveProperty(
+              "partNode",
+            );
+          }
 
           const multi = multiLeaf!.part;
           expect(multi.name).toBe("multi");
@@ -2536,10 +2564,9 @@ describe("staged Document v7 local assembly evaluation", () => {
         configuration: "z",
         evaluationLimits: { maxSolidGraphNodes: 1 },
       });
+      if (limited.ok) limited.value.dispose();
       expect(limited.ok).toBe(false);
-      if (limited.ok) {
-        limited.value.dispose();
-      } else {
+      if (!limited.ok) {
         expect(limited.diagnostics[0]).toMatchObject({
           code: "RESOURCE_LIMIT_EXCEEDED",
           path: "/outputs/alpha",
@@ -2551,10 +2578,9 @@ describe("staged Document v7 local assembly evaluation", () => {
         outputs: ["product"],
         evaluationLimits: { maxSolidGraphNodes: 0 },
       });
+      if (leafLimited.ok) leafLimited.value.dispose();
       expect(leafLimited.ok).toBe(false);
-      if (leafLimited.ok) {
-        leafLimited.value.dispose();
-      } else {
+      if (!leafLimited.ok) {
         expect(leafLimited.diagnostics[0]).toMatchObject({
           code: "RESOURCE_LIMIT_EXCEEDED",
           path: "/nodes/part/geometry",
@@ -2574,10 +2600,9 @@ describe("staged Document v7 local assembly evaluation", () => {
       const preflight = await evaluateProductDocument(kernel, document, {
         outputs: ["alpha"],
       });
+      if (preflight.ok) preflight.value.dispose();
       expect(preflight.ok).toBe(false);
-      if (preflight.ok) {
-        preflight.value.dispose();
-      } else {
+      if (!preflight.ok) {
         expect(preflight.diagnostics[0]).toMatchObject({
           code: "KERNEL_CAPABILITY_MISSING",
           details: {
