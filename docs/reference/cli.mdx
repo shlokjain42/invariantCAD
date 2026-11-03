@@ -164,11 +164,11 @@ code 1.
 Options are command-specific. Unknown or inapplicable options, extra positional
 arguments, missing or empty values, malformed inline parameters, and duplicate
 single-value options fail before document reading, kernel initialization,
-evaluation, or export. `--output` is the one option that accepts an empty
-value, because frozen v1-v6 output names are arbitrary strings; an empty name
-the document does not define fails during evaluation with `OUTPUT_MISSING` and
-exit code 1. These failures write the reason and usage text to stderr
+evaluation, or export. These failures write the reason and usage text to stderr
 and return exit code 2; the CLI never silently ignores a misspelled option.
+`--output` is the one option that accepts an empty value, because frozen v1-v6
+output names are arbitrary strings; an empty name that the document does not
+define fails during evaluation with `OUTPUT_MISSING` and exit code 1.
 Command-scoped help validates any supplied option values without requiring or
 reading a document. For evaluation commands, a parameter file is read and
 validated before the selected geometry kernel is initialized.
