@@ -130,11 +130,12 @@ so an item gained or lost inside that range is not reported.
 
 For shell openings and draft faces, the matched set is exactly the set of faces
 the operation receives. Fillet and chamfer `edges` are different: each selected
-edge is a seed that expands to its maximal tangent-edge contour after the
-cardinality check. A `select()` seed can therefore treat several
-tangent-connected edges, and an upstream change that makes a neighboring edge
-tangent can grow the treated contour without a diagnostic. See
-[fillet and chamfer](/modeling/features#fillet-and-chamfer).
+edge is a seed that expands after the cardinality check to its maximal tangent
+contour, where consecutive edges meet tangentially and the faces on both sides
+also continue tangentially. A `select()` seed can therefore treat several
+connected edges, and an upstream change that makes a neighboring edge and its
+faces continue tangentially can grow the treated contour without a diagnostic.
+See [fillet and chamfer](/modeling/features#fillet-and-chamfer).
 
 ## Explain a selection
 
