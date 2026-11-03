@@ -187,17 +187,24 @@ built-in reference solver artifact-compatible.
 
 Every semantic witness uses a version-specific protocol tag and an exact
 SHA-256 digest; case IDs, rather than witness digests, must be unique. The
-frozen v1 audit accepts only v1 witnesses built with
-`observeKernelShapeSemantics(...)` and
-`hashKernelShapeSemanticObservation(...)`. The explicit v2 audit accepts only
-v2 witnesses built with the corresponding `...V2` functions. A v2 witness
-cannot be cast or relabeled into v1 admission. The audit creates each source
-shape through the case factory. Its ordinary self-round-trip path observes the
-source, encodes it, decodes it on a separate current kernel instance, and
-repeatedly exact-compares the returned digest; the dedicated pre-witness path
-below intentionally performs its first encode before status or witness
-observation. Multiple cases may deliberately share one witness when they
-represent the same expected semantics.
+frozen v1 audit admits any digest in the v1 semantic-witness domain, whether it
+came from `hashKernelShapeSemanticObservation(...)` over an
+`observeKernelShapeSemantics(...)` result or from
+`hashKernelShapeArtifactSemanticWitness(...)` over caller-canonicalized
+material. That helper hashes a string as its exact UTF-8 bytes and rejects a
+string containing an unpaired UTF-16 surrogate with
+`ARTIFACT_CACHE_ENTRY_INVALID` instead of replacing it, so distinct strings
+cannot share one witness. The explicit v2 audit admits only digests in the v2
+domain, which the corresponding `...V2` functions produce. Each audit checks
+only a witness's domain tag and digest shape: it cannot verify how a witness
+was produced, so the witness function's coverage is the caller's
+responsibility. A v2 witness cannot be cast or relabeled into v1 admission. The
+audit creates each source shape through the case factory. Its ordinary
+self-round-trip path observes the source, encodes it, decodes it on a separate
+current kernel instance, and repeatedly exact-compares the returned digest; the
+dedicated pre-witness path below intentionally performs its first encode before
+status or witness observation. Multiple cases may deliberately share one
+witness when they represent the same expected semantics.
 
 Golden artifacts are tagged fixtures with committed bytes and an expected
 semantic witness. They exercise decode compatibility independently of the
