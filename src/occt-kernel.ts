@@ -1237,7 +1237,9 @@ function callOcctNative<T>(
     } catch {
       // Releasing the exception object is best effort.
     }
-    throw new Error(`OCCT ${operation} failed: ${detail}`, { cause: error });
+    // No `cause`: the released exception must not be passed back to native
+    // helpers later.
+    throw new Error(`OCCT ${operation} failed: ${detail}`);
   }
 }
 
