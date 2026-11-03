@@ -19,18 +19,41 @@ All roots expose `all`, `createdBy`, `modifiedBy`, and `persistentReference`.
 | Kind | Predicate | Arguments |
 | --- | --- | --- |
 | Face | `surface` | backend surface-kind string |
-| Face | `normal` | scalar direction, optional angular tolerance |
-| Face | `radius` | length, optional linear tolerance |
+| Face | `normal` | scalar direction, optional angular tolerance (default `deg(0.1)`) |
+| Face | `radius` | length, optional linear tolerance (default `mm(1e-6)`) |
 | Face | `adjacentTo` | completed edge selection |
 | Edge | `curve` | backend curve-kind string |
-| Edge | `direction` | scalar direction, optional angular tolerance |
-| Edge | `radius` | length, optional linear tolerance |
+| Edge | `direction` | scalar direction, optional angular tolerance (default `deg(0.1)`) |
+| Edge | `radius` | length, optional linear tolerance (default `mm(1e-6)`) |
 | Edge | `adjacentTo` | completed face or vertex selection |
-| Vertex | `position` | 3D length vector, optional linear tolerance |
+| Vertex | `position` | 3D length vector, optional linear tolerance (default `mm(1e-6)`) |
 | Vertex | `adjacentTo` | completed edge selection |
 
 Surface and curve strings are kernel descriptor kinds. Prefer semantic
 origin/role filters for modeled intent when possible.
+
+### Tolerances and orientation
+
+`normal` and `direction` match when the angle between the requested vector and
+the descriptor's vector is at most the angular tolerance. The requested vector
+need not be unit length, but it cannot be zero.
+
+- Face `normal` is oriented. It compares against the face normal the kernel
+  reports, which is outward for planar faces on the OCCT backend, so
+  `normal(scalarVec3(0, 0, 1))` and `normal(scalarVec3(0, 0, -1))` select
+  opposite faces.
+- Edge `direction` ignores sign. `direction(scalarVec3(1, 0, 0))` and
+  `direction(scalarVec3(-1, 0, 0))` select the same edges.
+- `radius` matches when the descriptor radius differs from the requested
+  radius by at most the linear tolerance.
+- `position` applies its linear tolerance to each axis separately. A vertex
+  matches when every coordinate is within the tolerance, which is a box around
+  the requested point rather than a sphere.
+
+Only items whose descriptor reports the compared value can match. The
+OCCT backend reports normals for planar faces, directions for line edges, and
+radii for cylindrical faces and circular edges. Tolerances must be positive
+and finite; any other value fails with `TOPOLOGY_SELECTOR_INVALID`.
 
 ## Origin options
 
@@ -69,7 +92,11 @@ operators, removes exact duplicates, and sorts their IR representation.
 | `atLeast(n)` | `n` or more |
 | `between(min, max)` | inclusive bounded range |
 
-Counts are positive integers. There is no zero-match completed selection in the
+Counts are positive safe integers, at most `Number.MAX_SAFE_INTEGER`, and a
+maximum cannot be less than its minimum. The builder throws a `RangeError` for
+any other count. `validateDocument` and selection resolution reject such a
+selection with `TOPOLOGY_SELECTOR_INVALID`, and document parsing rejects it with
+`IR_INVALID`. There is no zero-match completed selection in the
 current feature authoring surface.
 
 ## Persistent atom
@@ -85,9 +112,22 @@ reference must target that consuming feature's direct input solid.
 ## Resolution outcomes
 
 Ordinary selection resolution returns keys only when cardinality is satisfied.
-Missing and ambiguous diagnostics include a frozen explanation report. Direct
-`explainTopologySelection` treats resolved/missing/ambiguous as report outcomes,
-while malformed inputs or nested persistent failures remain failed results.
+Missing and ambiguous diagnostics include a frozen explanation report.
+
+Direct `explainTopologySelection` turns only the outermost selection's
+resolved, missing, or ambiguous outcome into a successful report. Everything
+else stays a failed result:
+
+- a malformed selection or query input (`TOPOLOGY_SELECTOR_INVALID`)
+- any nested `adjacentTo` selection that is itself missing or ambiguous
+- any persistent-atom failure
+- an origin query against partial history (`TOPOLOGY_HISTORY_UNAVAILABLE`)
+- an exhausted operational limit
+- a malformed kernel snapshot (`KERNEL_ERROR` with `protocolViolation: true`)
+
+A structurally malformed selection is always reported as
+`TOPOLOGY_SELECTOR_INVALID`, never as a kernel fault, even when it is detected
+before the snapshot is read.
 
 Persistent resolution distinguishes:
 
