@@ -268,7 +268,12 @@ function normalized(value: Vec3, context: TopologyResolutionContext): Vec3 {
   if (!(magnitude > Number.EPSILON)) {
     invalid("Topology direction vectors cannot be zero", context, { value });
   }
-  return value.map((component) => component / magnitude) as unknown as Vec3;
+  // Divide by the largest component first. A finite vector whose magnitude
+  // overflows would otherwise collapse to zero and match every direction.
+  const scale = Math.max(...value.map((component) => Math.abs(component)));
+  const scaled = value.map((component) => component / scale);
+  const length = Math.hypot(...scaled);
+  return scaled.map((component) => component / length) as unknown as Vec3;
 }
 
 function angularDistance(first: Vec3, second: Vec3, unoriented: boolean): number {

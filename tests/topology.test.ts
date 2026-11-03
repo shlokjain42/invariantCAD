@@ -7,6 +7,7 @@ import {
   captureTopologyReference,
   createEvaluator,
   createManifoldKernel,
+  deg,
   design,
   explainTopologySelection,
   hashDocument,
@@ -1567,6 +1568,71 @@ describe("semantic topology selections", () => {
       ).ok;
     expect(tilted(0.5e-6)).toBe(true);
     expect(tilted(2e-6)).toBe(false);
+  });
+
+  it("keeps the direction of finite vectors whose magnitude overflows", () => {
+    const context: TopologyResolutionContext = {
+      evaluate: (expression) =>
+        expression.op === "literal" ? expression.value : Number.NaN,
+    };
+    const huge = 1.3e308;
+    expect(Math.hypot(huge, huge, 0)).toBe(Number.POSITIVE_INFINITY);
+    const current = (scale: number): KernelTopologySnapshot => ({
+      history: "complete",
+      faces: [
+        {
+          ...xMinimumFace,
+          surface: { kind: "plane", normal: [scale, scale, 0] },
+          edges: [],
+        },
+        { ...yMinimumFace, edges: [] },
+      ],
+      edges: [
+        {
+          ...verticalEdges[0]!,
+          curve: { kind: "line", direction: [scale, scale, 0] },
+        },
+        verticalEdges[1]!,
+      ],
+      vertices: [],
+    });
+
+    // A range-based selection must not pick the unrelated -y face or +z edge.
+    for (const [requested, reported] of [
+      [huge, 1],
+      [1, huge],
+      [huge, huge],
+    ] as const) {
+      for (const tolerance of [rad(1e-12), deg(0.1)]) {
+        expect(
+          resolveTopologySelection(
+            topology.faces
+              .normal(scalarVec3(requested, requested, 0), tolerance)
+              .atLeast(1).ir,
+            current(reported),
+            context,
+          ),
+        ).toEqual({ ok: true, value: [key("fx")], diagnostics: [] });
+        expect(
+          resolveTopologySelection(
+            topology.edges
+              .direction(scalarVec3(-requested, -requested, 0), tolerance)
+              .atLeast(1).ir,
+            current(reported),
+            context,
+          ),
+        ).toEqual({ ok: true, value: [key("e00")], diagnostics: [] });
+        expect(
+          resolveTopologySelection(
+            topology.faces
+              .normal(scalarVec3(-requested, -requested, 0), tolerance)
+              .atLeast(1).ir,
+            current(reported),
+            context,
+          ).diagnostics[0]?.code,
+        ).toBe("TOPOLOGY_SELECTION_MISSING");
+      }
+    }
   });
 
   it("preserves evaluator selection diagnostics while attaching explanations", async () => {
