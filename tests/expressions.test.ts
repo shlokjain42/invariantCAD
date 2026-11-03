@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  Expression,
+  angleVec3,
   cm,
   deg,
   evaluateExpression,
   expr,
   expressionDependencies,
+  fromExpressionIR,
   gramsPerCubicCentimeter,
   inch,
   kgPerCubicMeter,
@@ -13,6 +16,9 @@ import {
   mm,
   rad,
   scalar,
+  scalarVec3,
+  vec2,
+  vec3,
   type ExpressionContext,
   type ExpressionIR,
 } from "../src/index.js";
@@ -218,5 +224,107 @@ describe("expression operations", () => {
     expressionDependencies(parameterIR("x", "scalar"), accumulated);
     expressionDependencies(parameterIR("y", "scalar"), accumulated);
     expect([...accumulated].sort()).toEqual(["x", "y"]);
+  });
+});
+
+describe("runtime expression dimensions", () => {
+  const untyped = (value: unknown): never => value as never;
+
+  it("rejects wrong-dimensional arithmetic from untyped callers", () => {
+    expect(() => mm(1).add(untyped(deg(1)))).toThrow(TypeError);
+    expect(() => mm(1).sub(untyped(scalar(1)))).toThrow(TypeError);
+    expect(() => mm(1).mul(untyped(mm(2)))).toThrow(TypeError);
+    expect(() => mm(1).div(untyped(deg(2)))).toThrow(TypeError);
+    expect(() => mm(1).add(untyped(1))).toThrow(TypeError);
+    expect(() => mm(1).mul(untyped("2"))).toThrow(TypeError);
+    expect(() => expr.min(mm(1), untyped(deg(1)))).toThrow(TypeError);
+    expect(() => expr.max(deg(1), untyped(mm(1)))).toThrow(TypeError);
+    expect(() => expr.sin(untyped(mm(1)))).toThrow(TypeError);
+    expect(() => expr.cos(untyped(scalar(1)))).toThrow(TypeError);
+    expect(() => expr.tan(untyped(mm(1)))).toThrow(TypeError);
+    expect(() => expr.ratio(mm(1), untyped(deg(1)))).toThrow(TypeError);
+    expect(() => vec2(mm(1), untyped(deg(1)))).toThrow(TypeError);
+    expect(() => vec3(mm(1), mm(1), untyped(scalar(1)))).toThrow(TypeError);
+    expect(() => angleVec3(deg(1), untyped(mm(1)), deg(1))).toThrow(TypeError);
+    expect(() => scalarVec3(1, untyped(mm(1)), 1)).toThrow(TypeError);
+  });
+
+  it("rejects malformed or inconsistent raw expression IR", () => {
+    const invalid: unknown[] = [
+      { op: "pow", dimension: "length", value: mm(1).ir },
+      { op: "literal", dimension: "length", value: Number.NaN },
+      { op: "literal", dimension: "length", value: "1" },
+      { op: "literal", dimension: "length", value: 1, extra: true },
+      { op: "parameter", dimension: "length", id: "not valid" },
+      { op: "add", dimension: "length", left: mm(1).ir, right: deg(1).ir },
+      { op: "mul", dimension: "length", left: mm(1).ir, right: mm(1).ir },
+      { op: "div", dimension: "length", left: mm(1).ir, right: mm(1).ir },
+      { op: "neg", dimension: "length", value: deg(1).ir },
+      { op: "sin", dimension: "length", value: deg(1).ir },
+      { op: "sin", dimension: "scalar", value: mm(1).ir },
+      { op: "min", dimension: "length", values: [] },
+      { op: "max", dimension: "length", values: [mm(1).ir, deg(1).ir] },
+      { op: "max", dimension: "length", values: mm(1).ir },
+      { op: "add", dimension: "length", left: mm(1).ir },
+    ];
+    for (const ir of invalid) {
+      expect(() => fromExpressionIR(ir as ExpressionIR, "length"), JSON.stringify(ir))
+        .toThrow(TypeError);
+    }
+
+    const cyclic: Record<string, unknown> = { op: "neg", dimension: "length" };
+    cyclic.value = cyclic;
+    expect(() => fromExpressionIR(cyclic as never, "length")).toThrow(/cycle/i);
+    expect(() => fromExpressionIR(mm(1).ir, "angle")).toThrow(TypeError);
+  });
+
+  it("accepts well-formed raw IR, including shared subtrees", () => {
+    const shared = parameterIR("a", "length");
+    const ir: ExpressionIR = {
+      op: "div",
+      dimension: "scalar",
+      left: { op: "max", dimension: "length", values: [shared, shared] },
+      right: shared,
+    };
+    const value = fromExpressionIR(ir, "scalar");
+    expect(value.ir).toBe(ir);
+    expect(evaluate(value, { a: 4 })).toBe(1);
+  });
+});
+
+describe("expression immutability", () => {
+  it("deeply freezes raw IR even when the caller froze only its root", () => {
+    const left = { op: "literal", dimension: "length", value: 1 };
+    const ir = Object.freeze({
+      op: "add",
+      dimension: "length",
+      left,
+      right: { op: "literal", dimension: "length", value: 2 },
+    }) as unknown as ExpressionIR;
+    const value = fromExpressionIR(ir, "length");
+    expect(Object.isFrozen(left)).toBe(true);
+    expect(() => {
+      (left as { value: number }).value = 99;
+    }).toThrow(TypeError);
+    expect(evaluate(value)).toBe(3);
+
+    const values = [mm(1).ir, mm(2).ir];
+    const constructed = new Expression("length", {
+      op: "max",
+      dimension: "length",
+      values,
+    });
+    expect(Object.isFrozen(values)).toBe(true);
+    expect(Object.isFrozen(constructed)).toBe(true);
+    expect(evaluate(constructed)).toBe(2);
+  });
+
+  it("constructs long derived chains without re-inspecting earlier nodes", () => {
+    let total = mm(0);
+    for (let index = 0; index < 20_000; index += 1) {
+      total = total.add(mm(1));
+    }
+    expect(total.ir.op).toBe("add");
+    expect(Object.isFrozen(total.ir)).toBe(true);
   });
 });

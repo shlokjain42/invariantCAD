@@ -1,5 +1,5 @@
 import { deepFreeze } from "./core/json.js";
-import type { ParameterId } from "./core/ids.js";
+import { assertValidId, type ParameterId } from "./core/ids.js";
 
 export type Dimension = "scalar" | "length" | "angle" | "massDensity";
 
@@ -33,36 +33,366 @@ export type ExpressionIR =
 
 const EXPRESSION_MARKER = Symbol("InvariantCAD.Expression");
 
+const DIMENSIONS: readonly Dimension[] = Object.freeze([
+  "scalar",
+  "length",
+  "angle",
+  "massDensity",
+]);
+
+function isDimension(value: unknown): value is Dimension {
+  return DIMENSIONS.includes(value as Dimension);
+}
+
+function describeDimension(value: unknown): string {
+  return isDimension(value) ? value : "a non-expression value";
+}
+
+const EXPRESSION_IR_FIELDS: Readonly<Record<ExpressionIR["op"], readonly string[]>> =
+  Object.freeze({
+    literal: ["op", "dimension", "value"],
+    parameter: ["op", "dimension", "id"],
+    neg: ["op", "dimension", "value"],
+    abs: ["op", "dimension", "value"],
+    sin: ["op", "dimension", "value"],
+    cos: ["op", "dimension", "value"],
+    tan: ["op", "dimension", "value"],
+    add: ["op", "dimension", "left", "right"],
+    sub: ["op", "dimension", "left", "right"],
+    mul: ["op", "dimension", "left", "right"],
+    div: ["op", "dimension", "left", "right"],
+    min: ["op", "dimension", "values"],
+    max: ["op", "dimension", "values"],
+  });
+
+/**
+ * IR nodes already proven well-formed and deeply frozen. Derived expressions
+ * reuse their operands' nodes, so only each new root needs inspection.
+ */
+const wellFormedExpressionNodes = new WeakSet<object>();
+
+function malformedExpression(label: string, problem: string): TypeError {
+  return new TypeError(`${label} is malformed: ${problem}`);
+}
+
+function expressionChild(
+  container: object,
+  key: string | number,
+  op: string,
+  label: string,
+): Readonly<Record<string, unknown>> {
+  const child = (container as Readonly<Record<string, unknown>>)[key];
+  if (typeof child !== "object" || child === null || Array.isArray(child)) {
+    throw malformedExpression(label, `'${op}' requires an expression operand '${key}'`);
+  }
+  const record = child as Readonly<Record<string, unknown>>;
+  if (!isDimension(record.dimension)) {
+    throw malformedExpression(label, `'${op}' has an operand without a valid dimension`);
+  }
+  return record;
+}
+
+/** Checks one node's own fields and returns its expression operands. */
+function expressionNodeOperands(
+  node: Readonly<Record<string, unknown>>,
+  label: string,
+): readonly object[] {
+  const op = node.op;
+  if (typeof op !== "string" || !Object.hasOwn(EXPRESSION_IR_FIELDS, op)) {
+    throw malformedExpression(label, `unsupported operation '${String(op)}'`);
+  }
+  const dimension = node.dimension;
+  if (!isDimension(dimension)) {
+    throw malformedExpression(label, `'${op}' has an invalid dimension`);
+  }
+  const allowed = EXPRESSION_IR_FIELDS[op as ExpressionIR["op"]];
+  for (const key of Object.keys(node)) {
+    if (!allowed.includes(key)) {
+      throw malformedExpression(label, `'${op}' contains unsupported field '${key}'`);
+    }
+  }
+  const mismatch = (problem: string): TypeError =>
+    new TypeError(`${label} has mismatched dimensions: ${problem}`);
+  switch (op as ExpressionIR["op"]) {
+    case "literal": {
+      const value = node.value;
+      if (typeof value !== "number" || !Number.isFinite(value)) {
+        throw malformedExpression(label, "literals must be finite numbers");
+      }
+      return [];
+    }
+    case "parameter": {
+      const id = node.id;
+      if (typeof id !== "string") {
+        throw malformedExpression(label, "parameter IDs must be strings");
+      }
+      assertValidId(id, "Parameter ID");
+      return [];
+    }
+    case "neg":
+    case "abs": {
+      const value = expressionChild(node, "value", op, label);
+      if (value.dimension !== dimension) {
+        throw mismatch(`'${op}' of ${String(value.dimension)} cannot produce ${dimension}`);
+      }
+      return [value];
+    }
+    case "sin":
+    case "cos":
+    case "tan": {
+      const value = expressionChild(node, "value", op, label);
+      if (dimension !== "scalar" || value.dimension !== "angle") {
+        throw mismatch(`'${op}' requires an angle and produces a scalar`);
+      }
+      return [value];
+    }
+    case "add":
+    case "sub": {
+      const left = expressionChild(node, "left", op, label);
+      const right = expressionChild(node, "right", op, label);
+      if (left.dimension !== dimension || right.dimension !== dimension) {
+        throw mismatch(
+          `'${op}' requires two ${dimension} operands, received ${String(left.dimension)} and ${String(right.dimension)}`,
+        );
+      }
+      return [left, right];
+    }
+    case "mul": {
+      const left = expressionChild(node, "left", op, label);
+      const right = expressionChild(node, "right", op, label);
+      const inferred =
+        left.dimension === "scalar"
+          ? right.dimension
+          : right.dimension === "scalar"
+            ? left.dimension
+            : undefined;
+      if (inferred !== dimension) {
+        throw mismatch(
+          "multiplication requires at least one scalar operand and preserves the other dimension",
+        );
+      }
+      return [left, right];
+    }
+    case "div": {
+      const left = expressionChild(node, "left", op, label);
+      const right = expressionChild(node, "right", op, label);
+      const valid =
+        right.dimension === "scalar"
+          ? left.dimension === dimension
+          : left.dimension === right.dimension && dimension === "scalar";
+      if (!valid) {
+        throw mismatch(
+          "division by a scalar preserves the numerator dimension; other divisions require equal dimensions and produce a scalar",
+        );
+      }
+      return [left, right];
+    }
+    case "min":
+    case "max": {
+      const values = node.values;
+      if (!Array.isArray(values) || values.length === 0) {
+        throw malformedExpression(label, `'${op}' requires a non-empty value array`);
+      }
+      Object.freeze(values);
+      const operands: object[] = [];
+      for (let index = 0; index < values.length; index += 1) {
+        if (!Object.hasOwn(values, index)) {
+          throw malformedExpression(label, `'${op}' values cannot be sparse`);
+        }
+        const value = expressionChild(values, index, op, label);
+        if (value.dimension !== dimension) {
+          throw mismatch(`'${op}' requires ${dimension} values, received ${String(value.dimension)}`);
+        }
+        operands.push(value);
+      }
+      return operands;
+    }
+  }
+}
+
+/**
+ * Validates expression IR against the document expression grammar and its
+ * dimension rules, freezing every node it inspects. The walk is iterative and
+ * shares work across DAG-shaped trees, so deep or wide IR cannot overflow the
+ * stack, and nodes already proven well-formed are skipped.
+ *
+ * @internal Not re-exported from the package root.
+ */
+export function assertExpressionIR(
+  ir: unknown,
+  label = "Expression IR",
+): ExpressionIR {
+  if (typeof ir !== "object" || ir === null || Array.isArray(ir)) {
+    throw malformedExpression(label, "expected an expression object");
+  }
+  if (wellFormedExpressionNodes.has(ir)) return ir as ExpressionIR;
+  const states = new Map<object, "active" | "complete">();
+  const stack: { readonly node: object; readonly exit: boolean }[] = [
+    { node: ir, exit: false },
+  ];
+  while (stack.length > 0) {
+    const frame = stack.pop()!;
+    if (frame.exit) {
+      states.set(frame.node, "complete");
+      continue;
+    }
+    const node = frame.node;
+    if (wellFormedExpressionNodes.has(node)) continue;
+    const state = states.get(node);
+    if (state === "complete") continue;
+    if (state === "active") {
+      throw malformedExpression(label, "expression IR cannot contain cycles");
+    }
+    states.set(node, "active");
+    Object.freeze(node);
+    const operands = expressionNodeOperands(
+      node as Readonly<Record<string, unknown>>,
+      label,
+    );
+    stack.push({ node, exit: true });
+    for (let index = operands.length - 1; index >= 0; index -= 1) {
+      stack.push({ node: operands[index]!, exit: false });
+    }
+  }
+  for (const node of states.keys()) wellFormedExpressionNodes.add(node);
+  return ir as ExpressionIR;
+}
+
+/**
+ * Visits each distinct parameter node in already validated expression IR.
+ *
+ * @internal Not re-exported from the package root.
+ */
+export function forEachExpressionParameter(
+  ir: ExpressionIR,
+  visit: (node: Extract<ExpressionIR, { readonly op: "parameter" }>) => void,
+): void {
+  const seen = new Set<object>();
+  const stack: ExpressionIR[] = [ir];
+  while (stack.length > 0) {
+    const node = stack.pop()!;
+    if (seen.has(node)) continue;
+    seen.add(node);
+    switch (node.op) {
+      case "parameter":
+        visit(node);
+        break;
+      case "literal":
+        break;
+      case "neg":
+      case "abs":
+      case "sin":
+      case "cos":
+      case "tan":
+        stack.push(node.value);
+        break;
+      case "add":
+      case "sub":
+      case "mul":
+      case "div":
+        stack.push(node.right, node.left);
+        break;
+      case "min":
+      case "max":
+        for (let index = node.values.length - 1; index >= 0; index -= 1) {
+          stack.push(node.values[index]!);
+        }
+        break;
+    }
+  }
+}
+
+/**
+ * Reads the IR of an authoring expression after checking its dimension. Plain
+ * `{ dimension, ir }` records are accepted for repository-internal callers.
+ *
+ * @internal Not re-exported from the package root.
+ */
+export function expressionIROf(
+  value: unknown,
+  dimension: Dimension,
+  label: string,
+): ExpressionIR {
+  if (typeof value !== "object" || value === null) {
+    throw new TypeError(`${label} must be a ${dimension} expression`);
+  }
+  const candidate = value as { readonly dimension?: unknown; readonly ir?: unknown };
+  if (candidate.dimension !== dimension) {
+    throw new TypeError(
+      `${label} must be a ${dimension} expression, received ${describeDimension(candidate.dimension)}`,
+    );
+  }
+  const ir = assertExpressionIR(candidate.ir, label);
+  if (ir.dimension !== dimension) {
+    throw new TypeError(
+      `${label} must be a ${dimension} expression, received ${ir.dimension}`,
+    );
+  }
+  return ir;
+}
+
+function expressionOperand<D extends Dimension>(
+  value: unknown,
+  dimension: D,
+  label: string,
+): Expression<D> {
+  expressionIROf(value, dimension, label);
+  return value as Expression<D>;
+}
+
 export class Expression<D extends Dimension> {
   readonly dimension: D;
   readonly ir: ExpressionIR;
   readonly [EXPRESSION_MARKER] = true;
 
   constructor(dimension: D, ir: ExpressionIR) {
-    if (ir.dimension !== dimension) {
+    if (!isDimension(dimension)) {
+      throw new TypeError(`Unsupported expression dimension '${String(dimension)}'`);
+    }
+    if (typeof ir !== "object" || ir === null || ir.dimension !== dimension) {
       throw new TypeError(
-        `Expression dimension mismatch: expected ${dimension}, received ${ir.dimension}`,
+        `Expression dimension mismatch: expected ${dimension}, received ${describeDimension((ir as { readonly dimension?: unknown } | null)?.dimension)}`,
       );
     }
     this.dimension = dimension;
-    this.ir = deepFreeze(ir);
+    this.ir = assertExpressionIR(ir);
     if (new.target === Expression) Object.freeze(this);
   }
 
   add(other: Expression<D>): Expression<D> {
-    return binary("add", this, other, this.dimension);
+    return binary(
+      "add",
+      this,
+      expressionOperand(other, this.dimension, "Added expression"),
+      this.dimension,
+    );
   }
 
   sub(other: Expression<D>): Expression<D> {
-    return binary("sub", this, other, this.dimension);
+    return binary(
+      "sub",
+      this,
+      expressionOperand(other, this.dimension, "Subtracted expression"),
+      this.dimension,
+    );
   }
 
   mul(factor: ScalarLike): Expression<D> {
-    return binary("mul", this, asScalar(factor), this.dimension);
+    return binary(
+      "mul",
+      this,
+      asScalar(factor, "Multiplication factor"),
+      this.dimension,
+    );
   }
 
   div(divisor: ScalarLike): Expression<D> {
-    return binary("div", this, asScalar(divisor), this.dimension);
+    return binary(
+      "div",
+      this,
+      asScalar(divisor, "Division divisor"),
+      this.dimension,
+    );
   }
 
   neg(): Expression<D> {
@@ -144,8 +474,10 @@ function unary<D extends Dimension>(
   });
 }
 
-function asScalar(value: ScalarLike): ScalarExpression {
-  return typeof value === "number" ? scalar(value) : value;
+function asScalar(value: ScalarLike, label = "Scalar value"): ScalarExpression {
+  return typeof value === "number"
+    ? scalar(value)
+    : expressionOperand(value, "scalar", label);
 }
 
 export function scalar(value: number): ScalarExpression {
@@ -195,7 +527,10 @@ export function vec2(
   x: LengthExpression,
   y: LengthExpression,
 ): Vec2Expression {
-  return deepFreeze([x, y]);
+  return deepFreeze([
+    expressionOperand(x, "length", "vec2 x"),
+    expressionOperand(y, "length", "vec2 y"),
+  ]);
 }
 
 export function vec3(
@@ -203,7 +538,11 @@ export function vec3(
   y: LengthExpression,
   z: LengthExpression,
 ): Vec3Expression {
-  return deepFreeze([x, y, z]);
+  return deepFreeze([
+    expressionOperand(x, "length", "vec3 x"),
+    expressionOperand(y, "length", "vec3 y"),
+    expressionOperand(z, "length", "vec3 z"),
+  ]);
 }
 
 export function scalarVec3(
@@ -211,7 +550,11 @@ export function scalarVec3(
   y: ScalarLike,
   z: ScalarLike,
 ): ScalarVec3Expression {
-  return deepFreeze([asScalar(x), asScalar(y), asScalar(z)]);
+  return deepFreeze([
+    asScalar(x, "scalarVec3 x"),
+    asScalar(y, "scalarVec3 y"),
+    asScalar(z, "scalarVec3 z"),
+  ]);
 }
 
 export function angleVec3(
@@ -219,7 +562,11 @@ export function angleVec3(
   y: AngleExpression,
   z: AngleExpression,
 ): AngleVec3Expression {
-  return deepFreeze([x, y, z]);
+  return deepFreeze([
+    expressionOperand(x, "angle", "angleVec3 x"),
+    expressionOperand(y, "angle", "angleVec3 y"),
+    expressionOperand(z, "angle", "angleVec3 z"),
+  ]);
 }
 
 export function fromExpressionIR<D extends Dimension>(
@@ -262,7 +609,17 @@ export const expr = {
     numerator: Expression<D>,
     denominator: Expression<D>,
   ): ScalarExpression {
-    return binary("div", numerator, denominator, "scalar");
+    const dimension = (numerator as { readonly dimension?: unknown } | null)
+      ?.dimension;
+    if (!isDimension(dimension)) {
+      throw new TypeError("ratio() numerator must be an expression");
+    }
+    return binary(
+      "div",
+      numerator,
+      expressionOperand(denominator, dimension, "ratio() denominator"),
+      "scalar",
+    );
   },
 
   neg<D extends Dimension>(value: Expression<D>): Expression<D> {
@@ -274,35 +631,57 @@ export const expr = {
   },
 
   sin(value: AngleExpression): ScalarExpression {
-    return unary("sin", value, "scalar");
+    return unary(
+      "sin",
+      expressionOperand(value, "angle", "sin() argument"),
+      "scalar",
+    );
   },
 
   cos(value: AngleExpression): ScalarExpression {
-    return unary("cos", value, "scalar");
+    return unary(
+      "cos",
+      expressionOperand(value, "angle", "cos() argument"),
+      "scalar",
+    );
   },
 
   tan(value: AngleExpression): ScalarExpression {
-    return unary("tan", value, "scalar");
+    return unary(
+      "tan",
+      expressionOperand(value, "angle", "tan() argument"),
+      "scalar",
+    );
   },
 
   min<D extends Dimension>(...values: readonly Expression<D>[]): Expression<D> {
-    if (values.length === 0) throw new TypeError("min() requires a value");
-    return new Expression(values[0]!.dimension, {
-      op: "min",
-      dimension: values[0]!.dimension,
-      values: values.map((value) => value.ir),
-    });
+    return extremum("min", values);
   },
 
   max<D extends Dimension>(...values: readonly Expression<D>[]): Expression<D> {
-    if (values.length === 0) throw new TypeError("max() requires a value");
-    return new Expression(values[0]!.dimension, {
-      op: "max",
-      dimension: values[0]!.dimension,
-      values: values.map((value) => value.ir),
-    });
+    return extremum("max", values);
   },
 };
+
+function extremum<D extends Dimension>(
+  op: "min" | "max",
+  values: readonly Expression<D>[],
+): Expression<D> {
+  if (values.length === 0) throw new TypeError(`${op}() requires a value`);
+  const dimension = (values[0] as { readonly dimension?: unknown } | undefined)
+    ?.dimension;
+  if (!isDimension(dimension)) {
+    throw new TypeError(`${op}() values must be expressions`);
+  }
+  return new Expression(dimension as D, {
+    op,
+    dimension,
+    values: values.map(
+      (value, index) =>
+        expressionOperand(value, dimension, `${op}() value ${index}`).ir,
+    ),
+  });
+}
 
 export interface ExpressionContext {
   readonly resolveParameter: (
