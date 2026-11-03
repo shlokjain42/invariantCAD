@@ -776,6 +776,83 @@ function operationsMatrix(operations: readonly ResolvedTransformOperation[]): Ma
   return result;
 }
 
+type KernelCapabilityCheckKind = Exclude<
+  KernelCapabilityKind,
+  "compositeSweepRefinement" | "exactIndexedTopologyEvolution" | "measurement"
+>;
+
+/**
+ * Returns the diagnostic for a node whose kernel does not declare, or does not
+ * implement, the requested capability, or `undefined` when it is usable.
+ * Primitives and features are implemented by the method of the same name;
+ * native import and export formats are implemented by `importShape` and
+ * `exportShape`.
+ *
+ * @internal
+ */
+export function kernelCapabilityDiagnostic(
+  kernel: GeometryKernel,
+  kind: KernelCapabilityCheckKind,
+  capability: KernelPrimitive | KernelFeature | KernelExchangeFormat,
+  id: NodeId,
+): Diagnostic | undefined {
+  const supported =
+    kind === "primitive"
+      ? kernelSupports(
+          kernel.capabilities,
+          "primitive",
+          capability as KernelPrimitive,
+        )
+      : kind === "feature"
+        ? kernelSupports(
+            kernel.capabilities,
+            "feature",
+            capability as KernelFeature,
+          )
+        : kernelSupports(
+            kernel.capabilities,
+            kind,
+            capability as KernelExchangeFormat,
+          );
+  if (!supported) {
+    return diagnostic(
+      "KERNEL_CAPABILITY_MISSING",
+      `Kernel '${kernel.id}' does not support ${kind} '${capability}'`,
+      {
+        severity: "error",
+        node: id,
+        path: `/nodes/${id}`,
+        hints: ["Choose a compatible geometry kernel for this design"],
+        details: { kernel: kernel.id, kind, capability },
+      },
+    );
+  }
+  const method: keyof GeometryKernel =
+    kind === "nativeImport"
+      ? "importShape"
+      : kind === "nativeExport"
+        ? "exportShape"
+        : (capability as KernelPrimitive | KernelFeature);
+  if (typeof kernel[method] !== "function") {
+    return diagnostic(
+      "KERNEL_ERROR",
+      `Kernel '${kernel.id}' declares ${kind} '${capability}' without implementing it`,
+      {
+        severity: "error",
+        node: id,
+        path: `/nodes/${id}`,
+        details: {
+          kernel: kernel.id,
+          kind,
+          capability,
+          protocolViolation: true,
+        },
+      },
+    );
+  }
+  return undefined;
+}
+
 function meshGeometryMeasurements(mesh: MeshData): Pick<
   ShapeMeasurements,
   "surfaceArea" | "boundingBox"
@@ -13641,70 +13718,17 @@ export class Evaluator {
       return { kind: "solid", shape };
     };
     const requireKernelCapability = (
-      kind: Exclude<
-        KernelCapabilityKind,
-        | "compositeSweepRefinement"
-        | "exactIndexedTopologyEvolution"
-        | "measurement"
-      >,
+      kind: KernelCapabilityCheckKind,
       capability: KernelPrimitive | KernelFeature | KernelExchangeFormat,
       id: NodeId,
     ): void => {
-      const supported =
-        kind === "primitive"
-          ? kernelSupports(
-              this.kernel.capabilities,
-              "primitive",
-              capability as KernelPrimitive,
-            )
-          : kind === "feature"
-            ? kernelSupports(
-                this.kernel.capabilities,
-                "feature",
-                capability as KernelFeature,
-              )
-            : kernelSupports(
-                this.kernel.capabilities,
-                kind,
-                capability as KernelExchangeFormat,
-              );
-      if (!supported) {
-        throw new EvaluationFailure(
-          diagnostic(
-            "KERNEL_CAPABILITY_MISSING",
-            `Kernel '${this.kernel.id}' does not support ${kind} '${capability}'`,
-            {
-              severity: "error",
-              node: id,
-              path: `/nodes/${id}`,
-              hints: ["Choose a compatible geometry kernel for this design"],
-              details: { kernel: this.kernel.id, kind, capability },
-            },
-          ),
-        );
-      }
-      const implementation = this.kernel[
-        capability as keyof GeometryKernel
-      ];
-      if (typeof implementation !== "function") {
-        throw new EvaluationFailure(
-          diagnostic(
-            "KERNEL_ERROR",
-            `Kernel '${this.kernel.id}' declares ${kind} '${capability}' without implementing it`,
-            {
-              severity: "error",
-              node: id,
-              path: `/nodes/${id}`,
-              details: {
-                kernel: this.kernel.id,
-                kind,
-                capability,
-                protocolViolation: true,
-              },
-            },
-          ),
-        );
-      }
+      const missing = kernelCapabilityDiagnostic(
+        this.kernel,
+        kind,
+        capability,
+        id,
+      );
+      if (missing !== undefined) throw new EvaluationFailure(missing);
     };
     const requireExactIndexedTopologyEvolution = (
       capability: KernelFeature,
