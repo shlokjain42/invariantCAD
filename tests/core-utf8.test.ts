@@ -66,15 +66,22 @@ describe("fatal UTF-8 decoding and canonical strings", () => {
     );
   });
 
-  it("accepts U+FEFF at any position of a canonical string", () => {
-    for (const value of ["\ufeffkernel", "ker\ufeffnel", "kernel\ufeff"]) {
+  it("rejects a leading U+FEFF but accepts it later in a canonical string", () => {
+    // A leading U+FEFF is the published artifact-cache identity rule: such a
+    // string is not canonical even though the decoder now keeps the mark.
+    for (const value of ["\ufeffkernel", "\ufeff"]) {
+      expect(
+        isCanonicalUtf8StringWithin(value, 64),
+        JSON.stringify(value),
+      ).toBe(false);
+    }
+    for (const value of ["ker\ufeffnel", "kernel\ufeff"]) {
       expect(
         isCanonicalUtf8StringWithin(value, 64),
         JSON.stringify(value),
       ).toBe(true);
     }
-    expect(isCanonicalUtf8StringWithin("\ufeff", 3)).toBe(true);
-    expect(isCanonicalUtf8StringWithin("\ufeff", 2)).toBe(false);
+    expect(isCanonicalUtf8StringWithin("kernel\ufeff", 8)).toBe(false);
     expect(isCanonicalUtf8StringWithin("\ud800", 64)).toBe(false);
     expect(isCanonicalUtf8StringWithin("", 64)).toBe(false);
   });

@@ -83,6 +83,12 @@ export function utf8ByteLengthWithin(
  * Checks one nonempty, canonically round-trippable UTF-8 string without an
  * unbounded intermediate allocation. A string longer than the byte ceiling in
  * UTF-16 code units cannot fit even when every code unit is ASCII.
+ *
+ * A string that starts with U+FEFF is not canonical. Its UTF-8 form begins with
+ * the byte-order-mark sequence, which BOM-stripping decoders silently drop, so
+ * an identity starting with it could not round-trip through every reader. The
+ * published artifact-cache protocol has always rejected such identities; this
+ * rule states that explicitly instead of relying on decoder defaults.
  */
 export function isCanonicalUtf8StringWithin(
   value: unknown,
@@ -91,7 +97,8 @@ export function isCanonicalUtf8StringWithin(
   if (
     typeof value !== "string" ||
     value.length === 0 ||
-    value.length > maximumBytes
+    value.length > maximumBytes ||
+    stringCharCodeAt(value, 0) === 0xfeff
   ) {
     return false;
   }
