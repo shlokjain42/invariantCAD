@@ -1039,7 +1039,9 @@ function computeImpact(
           consumer,
           source,
         );
-        const edgeKey = `${dependency}\u0000${consumer}`;
+        // Parameter keys are unconstrained strings, so a separator alone could
+        // collide; the length prefix marks where the dependency ends.
+        const edgeKey = `${dependency.length}:${dependency}${consumer}`;
         const edge = contextParameterEdges.get(edgeKey);
         if (edge === undefined) {
           contextParameterEdges.set(edgeKey, {

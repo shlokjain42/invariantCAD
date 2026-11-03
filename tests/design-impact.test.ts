@@ -688,6 +688,40 @@ describe("authored design-impact analysis", () => {
     ).toEqual([""]);
   });
 
+  it("keeps parameter dependency edges distinct when keys contain separators", () => {
+    const cad = design("impact-edge-keys");
+    const ab = cad.parameter.length("keyab", mm(1));
+    const a = cad.parameter.length("keya", mm(2));
+    const c = cad.parameter.length("keyc", ab.mul(2));
+    const bc = cad.parameter.length("keybc", a.mul(3));
+    cad.output("body", cad.box("body", { size: vec3(c, bc, mm(1)) }));
+    // The edges "a\0b" -> "c" and "a" -> "b\0c" shared one separator-joined
+    // key, so the second edge and its consumer's reason were dropped.
+    const document = JSON.parse(
+      JSON.stringify(cad.build())
+        .replaceAll('"keyab"', JSON.stringify("a\u0000b"))
+        .replaceAll('"keya"', '"a"')
+        .replaceAll('"keyc"', '"c"')
+        .replaceAll('"keybc"', JSON.stringify("b\u0000c")),
+    ) as DesignDocument;
+
+    const report = impactValue(
+      analyzeDesignImpact(document, { parameters: ["a\u0000b", "a"] }),
+    );
+    expect(report.parameters).toEqual([
+      { parameter: "a", reasons: [{ kind: "seed" }] },
+      { parameter: "a\u0000b", reasons: [{ kind: "seed" }] },
+      {
+        parameter: "b\u0000c",
+        reasons: [{ kind: "dependency", parameter: "a" }],
+      },
+      {
+        parameter: "c",
+        reasons: [{ kind: "dependency", parameter: "a\u0000b" }],
+      },
+    ]);
+  });
+
   it("rejects empty, malformed, sparse, and unknown change seeds", () => {
     const document = authoredFixture();
     expect(analyzeDesignImpact(document, {}).diagnostics[0]).toMatchObject({
