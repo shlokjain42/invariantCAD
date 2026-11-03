@@ -33,15 +33,54 @@ export type ExpressionIR =
 
 const EXPRESSION_MARKER = Symbol("InvariantCAD.Expression");
 
-const DIMENSIONS: readonly Dimension[] = Object.freeze([
-  "scalar",
-  "length",
-  "angle",
-  "massDensity",
-]);
+// Captured at load so expression validation keeps its guarantees even if a
+// caller later replaces these globals or their prototype methods.
+const reflectApply = Reflect.apply;
+const objectFreeze = Object.freeze;
+const objectHasOwn = Object.hasOwn;
+const objectKeys = Object.keys;
+const arrayIsArray = Array.isArray;
+const objectDefineProperty = Object.defineProperty;
+const IntrinsicWeakSet = WeakSet;
+const intrinsicWeakSetAdd = WeakSet.prototype.add;
+const intrinsicWeakSetHas = WeakSet.prototype.has;
+const IntrinsicWeakMap = WeakMap;
+const intrinsicWeakMapGet = WeakMap.prototype.get;
+const intrinsicWeakMapSet = WeakMap.prototype.set;
+
+function weakSetAdd(set: WeakSet<object>, value: object): void {
+  reflectApply(intrinsicWeakSetAdd, set, [value]);
+}
+
+function weakSetHas(set: WeakSet<object>, value: object): boolean {
+  return reflectApply(intrinsicWeakSetHas, set, [value]) as boolean;
+}
+
+function weakMapGet<V>(map: WeakMap<object, V>, key: object): V | undefined {
+  return reflectApply(intrinsicWeakMapGet, map, [key]) as V | undefined;
+}
+
+function weakMapSet<V>(map: WeakMap<object, V>, key: object, value: V): void {
+  reflectApply(intrinsicWeakMapSet, map, [key, value]);
+}
+
+/** Appends without consulting Array.prototype index accessors. */
+function arrayAppend<T>(array: T[], value: T): void {
+  objectDefineProperty(array, array.length, {
+    value,
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
+}
 
 function isDimension(value: unknown): value is Dimension {
-  return DIMENSIONS.includes(value as Dimension);
+  return (
+    value === "scalar" ||
+    value === "length" ||
+    value === "angle" ||
+    value === "massDensity"
+  );
 }
 
 function describeDimension(value: unknown): string {
@@ -53,27 +92,27 @@ function expressionKind(dimension: Dimension): string {
 }
 
 const EXPRESSION_IR_FIELDS: Readonly<Record<ExpressionIR["op"], readonly string[]>> =
-  Object.freeze({
-    literal: ["op", "dimension", "value"],
-    parameter: ["op", "dimension", "id"],
-    neg: ["op", "dimension", "value"],
-    abs: ["op", "dimension", "value"],
-    sin: ["op", "dimension", "value"],
-    cos: ["op", "dimension", "value"],
-    tan: ["op", "dimension", "value"],
-    add: ["op", "dimension", "left", "right"],
-    sub: ["op", "dimension", "left", "right"],
-    mul: ["op", "dimension", "left", "right"],
-    div: ["op", "dimension", "left", "right"],
-    min: ["op", "dimension", "values"],
-    max: ["op", "dimension", "values"],
+  objectFreeze({
+    literal: objectFreeze(["op", "dimension", "value"]),
+    parameter: objectFreeze(["op", "dimension", "id"]),
+    neg: objectFreeze(["op", "dimension", "value"]),
+    abs: objectFreeze(["op", "dimension", "value"]),
+    sin: objectFreeze(["op", "dimension", "value"]),
+    cos: objectFreeze(["op", "dimension", "value"]),
+    tan: objectFreeze(["op", "dimension", "value"]),
+    add: objectFreeze(["op", "dimension", "left", "right"]),
+    sub: objectFreeze(["op", "dimension", "left", "right"]),
+    mul: objectFreeze(["op", "dimension", "left", "right"]),
+    div: objectFreeze(["op", "dimension", "left", "right"]),
+    min: objectFreeze(["op", "dimension", "values"]),
+    max: objectFreeze(["op", "dimension", "values"]),
   });
 
 /**
  * IR nodes already proven well-formed and deeply frozen. Derived expressions
  * reuse their operands' nodes, so only each new root needs inspection.
  */
-const wellFormedExpressionNodes = new WeakSet<object>();
+const wellFormedExpressionNodes = new IntrinsicWeakSet<object>();
 
 function malformedExpression(label: string, problem: string): TypeError {
   return new TypeError(`${label} is malformed: ${problem}`);
@@ -86,7 +125,7 @@ function expressionChild(
   label: string,
 ): Readonly<Record<string, unknown>> {
   const child = (container as Readonly<Record<string, unknown>>)[key];
-  if (typeof child !== "object" || child === null || Array.isArray(child)) {
+  if (typeof child !== "object" || child === null || arrayIsArray(child)) {
     throw malformedExpression(label, `'${op}' requires an expression operand '${key}'`);
   }
   const record = child as Readonly<Record<string, unknown>>;
@@ -96,13 +135,13 @@ function expressionChild(
   return record;
 }
 
-/** Checks one node's own fields and returns its expression operands. */
+/** Checks one frozen node's own fields and returns its expression operands. */
 function expressionNodeOperands(
   node: Readonly<Record<string, unknown>>,
   label: string,
 ): readonly object[] {
   const op = node.op;
-  if (typeof op !== "string" || !Object.hasOwn(EXPRESSION_IR_FIELDS, op)) {
+  if (typeof op !== "string" || !objectHasOwn(EXPRESSION_IR_FIELDS, op)) {
     throw malformedExpression(label, `unsupported operation '${String(op)}'`);
   }
   const dimension = node.dimension;
@@ -110,8 +149,17 @@ function expressionNodeOperands(
     throw malformedExpression(label, `'${op}' has an invalid dimension`);
   }
   const allowed = EXPRESSION_IR_FIELDS[op as ExpressionIR["op"]];
-  for (const key of Object.keys(node)) {
-    if (!allowed.includes(key)) {
+  const keys = objectKeys(node);
+  for (let keyIndex = 0; keyIndex < keys.length; keyIndex += 1) {
+    const key = keys[keyIndex]!;
+    let supported = false;
+    for (let index = 0; index < allowed.length; index += 1) {
+      if (allowed[index] === key) {
+        supported = true;
+        break;
+      }
+    }
+    if (!supported) {
       throw malformedExpression(label, `'${op}' contains unsupported field '${key}'`);
     }
   }
@@ -194,25 +242,28 @@ function expressionNodeOperands(
     case "min":
     case "max": {
       const values = node.values;
-      if (!Array.isArray(values) || values.length === 0) {
+      if (!arrayIsArray(values) || values.length === 0) {
         throw malformedExpression(label, `'${op}' requires a non-empty value array`);
       }
-      Object.freeze(values);
+      objectFreeze(values);
       const operands: object[] = [];
       for (let index = 0; index < values.length; index += 1) {
-        if (!Object.hasOwn(values, index)) {
+        if (!objectHasOwn(values, index)) {
           throw malformedExpression(label, `'${op}' values cannot be sparse`);
         }
         const value = expressionChild(values, index, op, label);
         if (value.dimension !== dimension) {
           throw mismatch(`'${op}' requires ${dimension} values, received ${String(value.dimension)}`);
         }
-        operands.push(value);
+        arrayAppend(operands, value);
       }
       return operands;
     }
   }
 }
+
+const EXPRESSION_ACTIVE = 1;
+const EXPRESSION_COMPLETE = 2;
 
 /**
  * Validates expression IR against the document expression grammar and its
@@ -226,39 +277,47 @@ export function assertExpressionIR(
   ir: unknown,
   label = "Expression IR",
 ): ExpressionIR {
-  if (typeof ir !== "object" || ir === null || Array.isArray(ir)) {
+  if (typeof ir !== "object" || ir === null || arrayIsArray(ir)) {
     throw malformedExpression(label, "expected an expression object");
   }
-  if (wellFormedExpressionNodes.has(ir)) return ir as ExpressionIR;
-  const states = new Map<object, "active" | "complete">();
-  const stack: { readonly node: object; readonly exit: boolean }[] = [
-    { node: ir, exit: false },
-  ];
-  while (stack.length > 0) {
-    const frame = stack.pop()!;
-    if (frame.exit) {
-      states.set(frame.node, "complete");
+  if (weakSetHas(wellFormedExpressionNodes, ir)) return ir as ExpressionIR;
+  const states = new IntrinsicWeakMap<object, number>();
+  const visited: object[] = [];
+  const nodes: object[] = [ir];
+  const exits: boolean[] = [false];
+  while (nodes.length > 0) {
+    const top = nodes.length - 1;
+    const node = nodes[top]!;
+    const exit = exits[top]!;
+    nodes.length = top;
+    exits.length = top;
+    if (exit) {
+      weakMapSet(states, node, EXPRESSION_COMPLETE);
       continue;
     }
-    const node = frame.node;
-    if (wellFormedExpressionNodes.has(node)) continue;
-    const state = states.get(node);
-    if (state === "complete") continue;
-    if (state === "active") {
+    if (weakSetHas(wellFormedExpressionNodes, node)) continue;
+    const state = weakMapGet(states, node);
+    if (state === EXPRESSION_COMPLETE) continue;
+    if (state === EXPRESSION_ACTIVE) {
       throw malformedExpression(label, "expression IR cannot contain cycles");
     }
-    states.set(node, "active");
-    Object.freeze(node);
+    weakMapSet(states, node, EXPRESSION_ACTIVE);
+    arrayAppend(visited, node);
+    objectFreeze(node);
     const operands = expressionNodeOperands(
       node as Readonly<Record<string, unknown>>,
       label,
     );
-    stack.push({ node, exit: true });
+    arrayAppend(nodes, node);
+    arrayAppend(exits, true);
     for (let index = operands.length - 1; index >= 0; index -= 1) {
-      stack.push({ node: operands[index]!, exit: false });
+      arrayAppend(nodes, operands[index]!);
+      arrayAppend(exits, false);
     }
   }
-  for (const node of states.keys()) wellFormedExpressionNodes.add(node);
+  for (let index = 0; index < visited.length; index += 1) {
+    weakSetAdd(wellFormedExpressionNodes, visited[index]!);
+  }
   return ir as ExpressionIR;
 }
 
@@ -271,12 +330,13 @@ export function forEachExpressionParameter(
   ir: ExpressionIR,
   visit: (node: Extract<ExpressionIR, { readonly op: "parameter" }>) => void,
 ): void {
-  const seen = new Set<object>();
+  const seen = new IntrinsicWeakSet<object>();
   const stack: ExpressionIR[] = [ir];
   while (stack.length > 0) {
-    const node = stack.pop()!;
-    if (seen.has(node)) continue;
-    seen.add(node);
+    const node = stack[stack.length - 1]!;
+    stack.length -= 1;
+    if (weakSetHas(seen, node)) continue;
+    weakSetAdd(seen, node);
     switch (node.op) {
       case "parameter":
         visit(node);
@@ -288,18 +348,19 @@ export function forEachExpressionParameter(
       case "sin":
       case "cos":
       case "tan":
-        stack.push(node.value);
+        arrayAppend(stack, node.value);
         break;
       case "add":
       case "sub":
       case "mul":
       case "div":
-        stack.push(node.right, node.left);
+        arrayAppend(stack, node.right);
+        arrayAppend(stack, node.left);
         break;
       case "min":
       case "max":
         for (let index = node.values.length - 1; index >= 0; index -= 1) {
-          stack.push(node.values[index]!);
+          arrayAppend(stack, node.values[index]!);
         }
         break;
     }
