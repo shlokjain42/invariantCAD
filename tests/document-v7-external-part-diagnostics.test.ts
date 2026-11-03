@@ -8,7 +8,13 @@ import type {
 import { createManifoldKernel } from "../src/manifold-kernel.js";
 import { stringifyDocumentV7 } from "../src/serialization.js";
 import { stagedBodySetDesignV7 } from "../src/internal/document-v7-body-set-authoring.js";
-import { evaluateProductAssemblyOutputsV7 } from "../src/internal/document-v7-local-assembly-evaluation.js";
+import {
+  evaluateProductAssemblyOutputsV7,
+  externalComponentDiagnostics,
+  productOccurrenceDiagnostics,
+} from "../src/internal/document-v7-local-assembly-evaluation.js";
+import { diagnostic } from "../src/core/result.js";
+import { IDENTITY_MATRIX } from "../src/core/math.js";
 
 const DOCUMENT_MEDIA_TYPE =
   "application/vnd.invariantcad.document+json";
@@ -40,6 +46,99 @@ function onePartDocument(): DesignDocumentV7 {
 }
 
 describe("Document v7 external-part diagnostic attribution", () => {
+  it("preserves a child-owned output as childOutput beside the parent-selected output", async () => {
+    const committed = await commitDocument(onePartDocument());
+    const root = stagedBodySetDesignV7("child-output-product");
+    const resource = root.resource("childDocument", {
+      digest: committed.digest,
+      byteLength: committed.bytes.byteLength,
+      mediaType: DOCUMENT_MEDIA_TYPE,
+    });
+    const external = root.externalPart(resource, "mainPart");
+    const assembly = root.assembly("product", (instances) => {
+      instances.instance("direct", external, {
+        configuration: { mode: "base" },
+      });
+    });
+    root.output("product", assembly);
+    const childItem = diagnostic(
+      "KERNEL_ERROR",
+      "Child output 'childOwned' failed",
+      {
+        severity: "error",
+        node: "solid",
+        path: "/outputs/childOwned",
+        details: { output: "childOwned", reason: "child-specific" },
+      },
+    );
+    const parentProvenance = {
+      componentResource: "childDocument",
+      output: "mainPart",
+      outputKind: "part",
+      childOutput: "childOwned",
+      childNode: "solid",
+      childPath: "/outputs/childOwned",
+      occurrencePath: ["direct"],
+      reason: "child-specific",
+    };
+
+    const [evaluationItem] = externalComponentDiagnostics(
+      [childItem],
+      {
+        source: "external",
+        id: "direct",
+        path: ["direct"],
+        parentNode: "product",
+        componentPath: "/nodes/product/instances/0/component",
+        configurationId: null,
+        transform: IDENTITY_MATRIX,
+        resource: "childDocument",
+        output: "mainPart",
+        outputKind: "part",
+      } as never,
+    );
+    expect(evaluationItem).toMatchObject({
+      code: "KERNEL_ERROR",
+      node: "product",
+      path: "/nodes/product/instances/0/component",
+      details: { ...parentProvenance, componentSource: "external" },
+    });
+
+    const base = await createManifoldKernel();
+    try {
+      const result = await evaluateProductAssemblyOutputsV7(
+        base,
+        root.build(),
+        { outputs: ["product"], resolver: () => committed.bytes },
+      );
+      expect(result.ok, JSON.stringify(result.diagnostics)).toBe(true);
+      if (!result.ok) return;
+      try {
+        const occurrence = result.value.output("product").occurrences[0]!;
+        const [deferredItem] = productOccurrenceDiagnostics(
+          [childItem],
+          occurrence,
+        );
+        expect(deferredItem).toMatchObject({
+          code: "KERNEL_ERROR",
+          node: "product",
+          path: "/nodes/product/instances/0/component",
+          details: {
+            ...parentProvenance,
+            resource: "childDocument",
+            digest: committed.digest,
+            byteLength: committed.bytes.byteLength,
+            sourceVersion: 7,
+          },
+        });
+      } finally {
+        result.value.dispose();
+      }
+    } finally {
+      base.dispose();
+    }
+  });
+
   it("attributes graph-node failures to the external output that reaches the node", async () => {
     const child = stagedBodySetDesignV7("two-output-child");
     const aSolid = child.box("a-solid", {

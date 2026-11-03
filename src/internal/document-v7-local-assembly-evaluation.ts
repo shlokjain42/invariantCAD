@@ -1855,7 +1855,14 @@ function unsupported(
   );
 }
 
-function externalComponentDiagnostics(
+/**
+ * Re-anchors child diagnostics at one external occurrence's component pointer.
+ * Exported only so the provenance shape can be tested directly; no current
+ * child pipeline emits a diagnostic that names its own output.
+ *
+ * @internal
+ */
+export function externalComponentDiagnostics(
   diagnostics: readonly Diagnostic[],
   occurrence: SelectedExternalOccurrence,
   external?: ResolvedExternalDocumentV7,
@@ -2425,7 +2432,13 @@ function externalBatchDiagnostics(
   return localAssemblyFreeze(wrapped);
 }
 
-function productOccurrenceDiagnostics(
+/**
+ * Adds external component provenance to deferred diagnostics of one evaluated
+ * occurrence. Exported only so the provenance shape can be tested directly.
+ *
+ * @internal
+ */
+export function productOccurrenceDiagnostics(
   diagnostics: readonly Diagnostic[],
   occurrence: EvaluatedLocalOccurrenceV7,
 ): readonly Diagnostic[] {
