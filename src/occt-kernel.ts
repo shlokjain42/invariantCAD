@@ -281,6 +281,44 @@ function exactSolidOffsetHistoryRecordLimit(
   return limit;
 }
 
+function occtModelingTolerance(value: unknown): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "number") {
+    throw new TypeError("OCCT modelingTolerance must be a number");
+  }
+  if (!Number.isFinite(value) || !(value > 0)) {
+    throw new RangeError("OCCT modelingTolerance must be finite and positive");
+  }
+  return value;
+}
+
+/**
+ * Validates tessellation controls before they reach BRepMesh. A NaN
+ * deflection otherwise sends the native mesher into an unbounded loop, and
+ * zero or negative values fail with an opaque native exception.
+ */
+function occtMeshOptions(value: unknown, label: string): MeshOptions {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new TypeError(`${label} must be an object`);
+  }
+  const options = value as MeshOptions;
+  for (const key of ["linearDeflection", "angularDeflection"] as const) {
+    const deflection: unknown = options[key];
+    if (deflection === undefined) continue;
+    if (typeof deflection !== "number") {
+      throw new TypeError(`${label}.${key} must be a number`);
+    }
+    if (!Number.isFinite(deflection) || !(deflection > 0)) {
+      throw new RangeError(`${label}.${key} must be finite and positive`);
+    }
+  }
+  const relative: unknown = options.relative;
+  if (relative !== undefined && typeof relative !== "boolean") {
+    throw new TypeError(`${label}.relative must be a boolean`);
+  }
+  return options;
+}
+
 type TopologyHistory = KernelTopologySnapshot["history"];
 
 interface RetainedTopologyHandle {
@@ -6326,7 +6364,10 @@ class OcctKernel implements GeometryKernel {
 
   mesh(shape: KernelShape, options: MeshOptions = {}): MeshData {
     const handle = this.shape(shape)[OCCT_SHAPE];
-    const merged = { ...this.tessellation, ...options };
+    const merged = occtMeshOptions(
+      { ...this.tessellation, ...options },
+      "OCCT mesh options",
+    );
     const mesh = this.raw.tessellate(handle, {
       ...(merged.linearDeflection === undefined
         ? {}
@@ -6608,11 +6649,23 @@ export async function createOcctKernel(
       : capturedAttestedRuntime.wasmBinary;
   const moduleFactory =
     capturedAttestedRuntime?.moduleFactory ?? moduleFactoryInput;
+  const tessellationInput: unknown = options.tessellation;
+  if (
+    tessellationInput !== undefined &&
+    (typeof tessellationInput !== "object" || tessellationInput === null)
+  ) {
+    throw new TypeError("OCCT tessellation must be an object");
+  }
+  // Validate the frozen snapshot, not the caller's object, so the checked
+  // values are exactly the values the kernel later uses.
   const tessellation =
-    options.tessellation === undefined
+    tessellationInput === undefined
       ? undefined
-      : Object.freeze({ ...options.tessellation });
-  const modelingTolerance = options.modelingTolerance;
+      : occtMeshOptions(
+          Object.freeze({ ...tessellationInput }),
+          "OCCT tessellation",
+        );
+  const modelingTolerance = occtModelingTolerance(options.modelingTolerance);
   const onOutput = options.onOutput;
   const onError = options.onError;
   const maxExactBooleanHistoryRecords = exactBooleanHistoryRecordLimit(

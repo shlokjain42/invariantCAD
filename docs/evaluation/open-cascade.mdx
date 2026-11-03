@@ -61,6 +61,14 @@ const kernel = await createOcctKernel({
 ```
 
 Modeling tolerance is part of topology fingerprints and feature validation.
+It is a length in model units and must be a finite number greater than zero;
+the default is `1e-7`. `createOcctKernel()` rejects any other value before it
+loads WebAssembly, with `TypeError` for a non-number and `RangeError` for NaN,
+zero, a negative value, or infinity. Tessellation deflections must likewise be
+finite and positive, and `relative` must be a boolean. The kernel checks the
+creation-time defaults and every per-call `mesh()` override before native
+meshing starts.
+
 Tessellation options affect `mesh()` and mesh exports, not the underlying B-Rep.
 Do not change tolerances merely to force an invalid model through a check.
 
