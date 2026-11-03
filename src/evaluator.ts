@@ -3874,6 +3874,10 @@ export class EvaluatedPartV7 {
         {
           severity: "error",
           node: this.#value.node,
+          // A local leaf is not an output, so it points at its part geometry.
+          ...(identity.kind === "assemblyPart"
+            ? { path: evaluatedBodySetV7DiagnosticPath(identity) }
+            : {}),
           details:
             identity.kind === "output"
               ? { output: this.#name, format: renderedFormat }

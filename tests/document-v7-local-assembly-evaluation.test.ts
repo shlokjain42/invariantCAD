@@ -2442,6 +2442,7 @@ describe("staged Document v7 local assembly evaluation", () => {
           expect(exported.diagnostics[0]).toMatchObject({
             code: "EXPORT_UNSUPPORTED",
             node: "part",
+            path: "/nodes/part/geometry",
             details: { partNode: "part", format: "step" },
           });
           expect(exported.diagnostics[0]?.details).not.toHaveProperty(
