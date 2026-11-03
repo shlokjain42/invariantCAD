@@ -24,17 +24,35 @@ function plainScalar(text) {
   return plain;
 }
 
+// YAML continues a key's value on following more-indented lines, so a value
+// is single-line only when no indented line other than a comment follows it
+// before the next top-level line.
+function continuesOnNextLine(lines, keyIndex) {
+  for (const line of lines.slice(keyIndex + 1)) {
+    if (line.trim() === "") continue;
+    return /^[ \t]+[^ \t#]/.test(line);
+  }
+  return false;
+}
+
 /**
  * Returns the single-line scalar value of one top-level frontmatter key,
  * with surrounding quotes removed and escapes left as written. Returns
  * undefined when the key is missing or repeated, or when its value is blank,
- * null, a block scalar, or not a plain or quoted single-line string.
+ * null, a block scalar, continued on another line, or not a plain or quoted
+ * single-line string.
  */
 export function frontmatterScalar(frontmatter, field) {
   const prefix = `${field}:`;
-  const lines = frontmatter.split("\n").filter((line) => line.startsWith(prefix));
-  if (lines.length !== 1) return undefined;
-  const rest = lines[0].slice(prefix.length);
+  const lines = frontmatter.split("\n");
+  const keyIndexes = [];
+  lines.forEach((line, index) => {
+    if (line.startsWith(prefix)) keyIndexes.push(index);
+  });
+  if (keyIndexes.length !== 1) return undefined;
+  const keyIndex = keyIndexes[0];
+  if (continuesOnNextLine(lines, keyIndex)) return undefined;
+  const rest = lines[keyIndex].slice(prefix.length);
   if (rest !== "" && !/^[ \t]/.test(rest)) return undefined;
   const text = rest.trim();
   const quoted =

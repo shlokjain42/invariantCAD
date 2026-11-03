@@ -22,6 +22,12 @@ describe("documentation page frontmatter", () => {
     expect(frontmatterScalar(`${line}\ndescription: "Other"`, "title")).toBe(value);
   });
 
+  it("ignores indented comments and blank lines after a single-line value", () => {
+    expect(
+      frontmatterScalar('title: "Kept"\n  # note\n\ndescription: "Other"', "title"),
+    ).toBe("Kept");
+  });
+
   it.each([
     ["an empty double-quoted value", 'title: ""\ndescription: "Real"'],
     ["an empty single-quoted value", "title: ''\ndescription: \"Real\""],
@@ -29,6 +35,9 @@ describe("documentation page frontmatter", () => {
     ["a blank value followed by another key", 'title:\ndescription: "Real"'],
     ["a blank value at the end", 'description: "Real"\ntitle:'],
     ["a blank value followed by an indented line", "title:\n  Continued"],
+    ["a plain value continued on an indented line", 'title: First\n  second\ndescription: "Real"'],
+    ["a plain value continued after a blank line", "title: First\n\n\tsecond"],
+    ["a quoted value followed by an indented line", 'title: "First"\n  second'],
     ["a YAML null", 'title: null\ndescription: "Real"'],
     ["a YAML tilde null", 'title: ~\ndescription: "Real"'],
     ["a block scalar", "title: >-\n  Folded title"],
