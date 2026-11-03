@@ -199,13 +199,24 @@ contract exists.
 
 At the evaluated-output boundary,
 `output.export("step", { metadata?, signal?, maxOutputBytes? })` supplies a
-complete resolved metadata request to a supporting kernel. The qualified
-bundled stock runtime writes one AP214IS product, then a purpose-built
-structural Part 21 transformer
+complete resolved metadata request to a supporting kernel. For a single solid
+or part, the qualified bundled stock runtime writes one AP214IS product, then
+a purpose-built structural Part 21 transformer
 replaces only the relevant `FILE_NAME` and `PRODUCT` string tokens. It validates
 the exchange envelope, section structure, record arity, one-product
 assumption, exact EOF, metadata, entity count, scan work, and resulting byte
 size. It does not use a regular expression or reinterpret geometry.
+
+OCCT writes a shape that holds several disjoint solids, such as a union of
+separated boxes or a subtraction that splits its target, as an assembly with
+several `PRODUCT` records. That shape is outside the single-product contract.
+`output.export("step")` with no second argument then returns the weak native
+STEP bytes, as the published 0.1.1 package did. Passing any options object
+requests the strong contract and throws `CadError` with
+`EXPORT_UNSUPPORTED` and `details.reason === "multiple-products"`. A low-level
+`kernel.exportShape(shape, "step")` call without `context.stepExport` follows
+the same weak fallback; with `context.stepExport` it throws the same
+`CadError`.
 
 Default metadata uses the document name for `FILE_NAME`, the fixed
 `1970-01-01T00:00:00` timestamp, and the output alias for an ordinary solid's
@@ -215,8 +226,14 @@ timestamp is accepted only as a valid `YYYY-MM-DDTHH:MM:SS` calendar value and
 is deterministic because it is explicit input. Protocol v1 accepts Unicode
 scalar text in the four identity/description fields: apostrophes are doubled
 for STEP, while literal backslashes and non-ASCII scalars use ISO-10303-21
-`\X2\...\X0\` or `\X4\...\X0\` directives. Control characters and unpaired
-UTF-16 surrogates are rejected.
+`\X2\...\X0\` or `\X4\...\X0\` directives. Explicit caller metadata that
+contains control characters or unpaired UTF-16 surrogates is rejected.
+
+Defaults derived from authored text never make an export fail. In each
+defaulted field, control characters become spaces and unpaired surrogates
+become U+FFFD. An empty required field uses `InvariantCAD Shape`. When the
+resolved strings would exceed the metadata budget, the longest defaulted
+values are truncated at Unicode scalar boundaries until they fit.
 
 Material identity, configuration selection, arbitrary document metadata, and
 arbitrary part metadata are not representable through this current mapping.
@@ -235,7 +252,10 @@ Aggregate assembly and body-set exact STEP export remains unsupported.
 
 The 64 KiB metadata budget measures the five resolved strings as UTF-8.
 Part 21 escaping can expand Unicode or backslash text, and that expanded form
-counts toward the 64 MiB returned-output ceiling.
+counts toward the 64 MiB returned-output ceiling. Exceeding `maxOutputBytes`,
+the default output ceiling, or the fixed input, scan, or entity ceilings
+throws `CadError` with `RESOURCE_LIMIT_EXCEEDED`; `details.resource` names the
+ceiling and `details.limit` gives its value.
 
 The byte guarantee is deliberately narrow: identical bytes require the same
 backend shape representation, options, metadata, implementation, and exact

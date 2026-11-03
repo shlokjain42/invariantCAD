@@ -168,9 +168,16 @@ import {
 import {
   DEFAULT_OCCT_STEP_METADATA_LIMITS,
   OCCT_STEP_METADATA_TIMESTAMP,
+  occtStepRewriteRefusal,
   rewriteOcctStepMetadataFromSource,
   type OcctStepMetadata,
 } from "./internal/occt-step-metadata.js";
+import {
+  AUTOMATIC_STEP_TEXT_FALLBACK,
+  fitAutomaticStepTexts,
+  normalizeAutomaticStepText,
+} from "./internal/step-export-defaults.js";
+import { CadError, diagnostic } from "./core/result.js";
 import {
   assertAttestedFacadeMarker,
   captureAttestedOcctRuntime,
@@ -1149,6 +1156,23 @@ function captureOcctShapeExportContext(
   };
 }
 
+/**
+ * Reports a deterministic STEP export the kernel cannot complete for a valid
+ * shape (several products, or a post-write ceiling) as a structured
+ * `CadError`, not as a validation exception.
+ */
+function throwOcctStepExportRefusal(
+  code: "EXPORT_UNSUPPORTED" | "RESOURCE_LIMIT_EXCEEDED",
+  message: string,
+  details: Readonly<Record<string, unknown>>,
+): never {
+  const value = diagnostic(code, message, {
+    severity: "error",
+    details: { kernel: "occt", operation: "export", format: "step", ...details },
+  });
+  throw new CadError(value.message, [value]);
+}
+
 function deterministicStepExportMetadata(
   context: CapturedOcctShapeExportContext,
 ): {
@@ -1156,16 +1180,23 @@ function deterministicStepExportMetadata(
   readonly maxOutputBytes: number;
 } {
   if (context.stepExport === undefined) {
+    // Automatic defaults must not fail: normalize text the strict metadata
+    // rules would reject and fit the three copies into the metadata budget.
     const feature =
       typeof context.feature === "string" && context.feature.length > 0
-        ? context.feature
-        : "InvariantCAD Shape";
+        ? normalizeAutomaticStepText(context.feature)
+        : AUTOMATIC_STEP_TEXT_FALLBACK;
+    const [fileName, productId, productName] = fitAutomaticStepTexts(
+      [feature, feature, feature],
+      DEFAULT_OCCT_STEP_METADATA_LIMITS.maxMetadataUtf8Bytes -
+        OCCT_STEP_METADATA_TIMESTAMP.length,
+    ) as [string, string, string];
     return {
       metadata: {
-        fileName: feature,
+        fileName,
         timestamp: OCCT_STEP_METADATA_TIMESTAMP,
-        productId: feature,
-        productName: feature,
+        productId,
+        productName,
         productDescription: "",
       },
       maxOutputBytes:
@@ -5033,26 +5064,67 @@ class OcctKernel implements GeometryKernel {
           return encodeUtf8(source);
         }
         const request = deterministicRequest!;
-        const rewritten = rewriteOcctStepMetadataFromSource(() => {
-          const currentHandle = this.shape(shape)[OCCT_SHAPE];
-          if (currentHandle !== handle) {
-            throw new OcctKernelBoundaryTypeError(
-              "OCCT STEP export shape ownership changed during capture",
+        let nativeSource: string | undefined;
+        let rewritten: string;
+        try {
+          rewritten = rewriteOcctStepMetadataFromSource(() => {
+            const currentHandle = this.shape(shape)[OCCT_SHAPE];
+            if (currentHandle !== handle) {
+              throw new OcctKernelBoundaryTypeError(
+                "OCCT STEP export shape ownership changed during capture",
+              );
+            }
+            const source = this.raw.exportStep(currentHandle);
+            checkOcctSignal(capturedContext.signal);
+            nativeSource = source;
+            return source;
+          }, {
+            metadata: request.metadata,
+            ...(capturedContext.signal === undefined
+              ? {}
+              : { signal: capturedContext.signal }),
+            limits: {
+              ...DEFAULT_OCCT_STEP_METADATA_LIMITS,
+              maxOutputUtf8Bytes: request.maxOutputBytes,
+            },
+          });
+        } catch (error) {
+          const refusal = occtStepRewriteRefusal(error);
+          if (refusal?.kind === "multiple-products") {
+            if (
+              capturedContext.stepExport === undefined &&
+              nativeSource !== undefined
+            ) {
+              // No strong contract was requested: keep the weak native
+              // exchange bytes for shapes OCCT writes as several products.
+              checkOcctSignal(capturedContext.signal);
+              return encodeUtf8(nativeSource);
+            }
+            throwOcctStepExportRefusal(
+              "EXPORT_UNSUPPORTED",
+              "Deterministic STEP export supports exactly one product; OCCT writes this shape as several STEP products",
+              { reason: "multiple-products" },
             );
           }
-          const source = this.raw.exportStep(currentHandle);
-          checkOcctSignal(capturedContext.signal);
-          return source;
-        }, {
-          metadata: request.metadata,
-          ...(capturedContext.signal === undefined
-            ? {}
-            : { signal: capturedContext.signal }),
-          limits: {
-            ...DEFAULT_OCCT_STEP_METADATA_LIMITS,
-            maxOutputUtf8Bytes: request.maxOutputBytes,
-          },
-        });
+          if (refusal?.kind === "limit") {
+            const resource =
+              refusal.resource === "maxOutputUtf8Bytes"
+                ? "maxOutputBytes"
+                : refusal.resource;
+            throwOcctStepExportRefusal(
+              "RESOURCE_LIMIT_EXCEEDED",
+              `OCCT STEP export exceeds ${resource} ${refusal.limit}`,
+              {
+                resource,
+                limit: refusal.limit,
+                ...(refusal.actual === undefined
+                  ? {}
+                  : { actual: refusal.actual }),
+              },
+            );
+          }
+          throw error;
+        }
         checkOcctSignal(capturedContext.signal);
         const encoded = encodeUtf8(rewritten);
         if (typedArrayByteLengthGetter === undefined) {
@@ -5066,8 +5138,14 @@ class OcctKernel implements GeometryKernel {
           [],
         ) as number;
         if (encodedByteLength > request.maxOutputBytes) {
-          throw new OcctKernelBoundaryRangeError(
-            `OCCT STEP metadata output exceeds maxOutputBytes ${request.maxOutputBytes}`,
+          throwOcctStepExportRefusal(
+            "RESOURCE_LIMIT_EXCEEDED",
+            `OCCT STEP export exceeds maxOutputBytes ${request.maxOutputBytes}`,
+            {
+              resource: "maxOutputBytes",
+              limit: request.maxOutputBytes,
+              actual: encodedByteLength,
+            },
           );
         }
         return encoded;
