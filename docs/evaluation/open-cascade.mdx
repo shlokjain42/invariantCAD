@@ -33,9 +33,12 @@ results, and for transforms of those results, replaces the volume and rescales
 density-one inertia. Revolve and other features use the native volume. A
 compound that repeats the same solid occurrence counts it once per occurrence
 in volume, inertia, and surface area alike, matching `classifyBodyResult()`.
-Genus is currently `null`, not zero: the stock and owned facades do not expose
-the degenerate-edge predicate needed to evaluate the B-Rep Euler formula
-correctly for spheres, cones, seams, holes, and disconnected shells.
+Measuring a compound shares that classifier's bound of 1,000,000 visited plus
+queued occurrences; a larger compound fails with `RangeError` and every
+traversal handle is released. Genus is currently `null`, not zero: the stock
+and owned facades do not expose the degenerate-edge predicate needed to
+evaluate the B-Rep Euler formula correctly for spheres, cones, seams, holes,
+and disconnected shells.
 
 ## Load a WASM source explicitly
 

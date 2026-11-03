@@ -6644,6 +6644,10 @@ class OcctKernel implements GeometryKernel {
    * compound repeats a solid occurrence, measure every occurrence so volume,
    * inertia and surface area use one multiplicity. Other shapes keep the
    * distinct-solid list and its order, so their results are unchanged.
+   *
+   * Visited plus queued occurrences share classifyBodyResult's bound, so a
+   * small file that nests shared compounds cannot expand into unbounded
+   * handles. Every traversal handle is released when the walk fails.
    */
   private measuredSolidOccurrences(handle: ShapeHandle): ShapeHandle[] {
     const rootType = this.raw.getShapeType(handle);
@@ -6656,10 +6660,27 @@ class OcctKernel implements GeometryKernel {
     }
     const occurrences: ShapeHandle[] = [];
     const pending: ShapeHandle[] = [];
+    let visited = 1;
+    let failed = false;
+    let failure: unknown;
+    // Queue children one at a time: spreading a large compound's children
+    // into push() can exceed the call-argument limit after native allocation.
+    const queueChildren = (parent: ShapeHandle): void => {
+      const children = this.raw.iterShapes(parent);
+      for (let index = 0; index < children.length; index += 1) {
+        pending.push(children[index]!);
+      }
+      if (visited + pending.length > MAX_BODY_CLASSIFICATION_OCCURRENCES) {
+        throw new OcctKernelBoundaryRangeError(
+          "OCCT measurement exceeded its occurrence limit",
+        );
+      }
+    };
     try {
-      pending.push(...this.raw.iterShapes(handle));
+      queueChildren(handle);
       while (pending.length > 0) {
         const current = pending.pop()!;
+        visited += 1;
         let retained = false;
         try {
           const type = this.raw.getShapeType(current);
@@ -6667,24 +6688,42 @@ class OcctKernel implements GeometryKernel {
             occurrences.push(current);
             retained = true;
           } else if (type === "compound" || type === "compsolid") {
-            pending.push(...this.raw.iterShapes(current));
+            queueChildren(current);
           }
         } finally {
           if (!retained) this.raw.release(current);
         }
       }
     } catch (error) {
-      this.releaseHandles(pending);
-      this.releaseHandles(occurrences);
-      this.releaseHandles(solids);
-      throw error;
+      failed = true;
+      failure = error;
     }
-    if (occurrences.length === solids.length) {
-      this.releaseHandles(occurrences);
-      return solids;
+    // A release failure never replaces an earlier failure.
+    const release = (handles: readonly ShapeHandle[]): void => {
+      for (let index = handles.length - 1; index >= 0; index -= 1) {
+        try {
+          this.raw.release(handles[index]!);
+        } catch (error) {
+          if (!failed) {
+            failed = true;
+            failure = error;
+          }
+        }
+      }
+    };
+    if (failed) {
+      release(pending);
+      release(occurrences);
+      release(solids);
+      throw failure;
     }
-    this.releaseHandles(solids);
-    return occurrences.reverse();
+    const keepDistinct = occurrences.length === solids.length;
+    release(keepDistinct ? occurrences : solids);
+    if (failed) {
+      release(keepDistinct ? solids : occurrences);
+      throw failure;
+    }
+    return keepDistinct ? solids : occurrences.reverse();
   }
 
   measure(shape: KernelShape): ShapeMeasurements {
