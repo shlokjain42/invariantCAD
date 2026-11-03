@@ -1,0 +1,124 @@
+name: Prepare release
+
+# Pushes a release/vX.Y.Z branch whose single commit moves the curated
+# Unreleased changelog entries under a dated heading, bumps package.json, and
+# adds the release-notes page. A maintainer then opens the release pull
+# request from the linked page so every required check and reviewer runs.
+# Merging that pull request starts .github/workflows/release.yml.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Stable version to prepare, such as 0.2.0
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: invariantcad-prepare-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Push release branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      VERSION: ${{ inputs.version }}
+
+    steps:
+      - name: Require main and a stable version
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "::error::Prepare releases from main, not $GITHUB_REF."
+            exit 1
+          fi
+          if [[ ! "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::Expected a stable X.Y.Z version."
+            exit 1
+          fi
+
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Reject an existing tag or release branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --tags origin "refs/tags/v${VERSION}" >/dev/null; then
+            echo "::error::Tag v${VERSION} already exists."
+            exit 1
+          fi
+          if git ls-remote --exit-code --heads origin "refs/heads/release/v${VERSION}" >/dev/null; then
+            echo "::error::Branch release/v${VERSION} already exists."
+            exit 1
+          fi
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
+
+      - name: Install Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.x
+          package-manager-cache: false
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Prepare release files
+        run: pnpm exec tsx scripts/release.ts prepare "$VERSION"
+
+      - name: Verify prepared release files
+        run: pnpm exec tsx scripts/release.ts check "$VERSION"
+
+      - name: Push release branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          branch="release/v${VERSION}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch --create "$branch"
+          git add CHANGELOG.md package.json docs/docs.json "docs/releases/${VERSION}.md"
+          git commit --message "release: invariantcad ${VERSION}"
+          git push origin "refs/heads/${branch}"
+
+      - name: Link the release pull request
+        shell: bash
+        run: |
+          set -euo pipefail
+          title="release: invariantcad ${VERSION}"
+          body="$(cat <<EOF
+          ## Release invariantcad ${VERSION}
+
+          Prepared by the **Prepare release** workflow. Merging this pull request
+          runs the release workflow: full acceptance, then npm publication after
+          approval in the \`npm\` environment, then the annotated \`v${VERSION}\`
+          tag, the GitHub release, and the live documentation.
+
+          ## Before merging
+
+          - [ ] Edit \`docs/releases/${VERSION}.md\` into curated release notes; its body becomes the GitHub release.
+          - [ ] Update release status text such as README, roadmap, support matrix, and SECURITY.md supported versions.
+          - [ ] Review the \`etc/api/\` diff since the previous release and the CHANGELOG ${VERSION} section.
+          - [ ] Every required check and review thread is resolved.
+          EOF
+          )"
+          encode() { node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$1"; }
+          url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/compare/main...release/v${VERSION}?expand=1&labels=release&title=$(encode "$title")&body=$(encode "$body")"
+          {
+            echo "## Release branch ready"
+            echo
+            echo "[Open the invariantcad ${VERSION} release pull request](${url})"
+            echo
+            echo "Opening it yourself, rather than with the workflow token, starts CI, CodeQL, Socket, and Greptile."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "Open the release pull request: ${url}"

@@ -1,22 +1,35 @@
 name: Publish npm
 
+# Every push to main is checked for a release commit: one whose package.json
+# version differs from its first parent's. That only happens when a release
+# pull request prepared by .github/workflows/prepare-release.yml merges.
+#
+# A release commit then runs the full acceptance suite, publishes the exact
+# smoke-tested tarball to npm through trusted publishing after approval in the
+# `npm` environment, confirms that the registry holds those bytes, creates the
+# annotated vX.Y.Z tag and GitHub release, and advances the docs-live branch
+# that the hosted documentation deploys from.
+#
+# The npm trusted publisher is bound to this workflow filename and the `npm`
+# environment; renaming either breaks publication. Every step is idempotent, so
+# "Re-run failed jobs" on the original run resumes a partial release.
+
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
-  id-token: write
-
-concurrency:
-  group: invariantcad-npm-publish
-  cancel-in-progress: false
 
 jobs:
-  publish:
-    name: Publish tagged package
+  plan:
+    name: Detect release commit
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-    environment: npm
+    timeout-minutes: 5
+    outputs:
+      release: ${{ steps.plan.outputs.release }}
+      version: ${{ steps.plan.outputs.version }}
 
     steps:
       - name: Check out repository
@@ -24,41 +37,122 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Verify annotated release tag
+      - name: Install Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.x
+          package-manager-cache: false
+
+      - name: Compare the package version with the previous main commit
+        id: plan
         shell: bash
         run: |
           set -euo pipefail
-          expected="v$(node -p "require('./package.json').version")"
-          if [[ "$GITHUB_REF_TYPE" != "tag" ]]; then
-            echo "::error::Publish must be dispatched from an annotated release tag."
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "::error::Releases run only from main, not $GITHUB_REF."
             exit 1
           fi
-          if [[ "$GITHUB_REF_NAME" != "$expected" ]]; then
-            echo "::error::Expected tag $expected, received $GITHUB_REF_NAME."
-            exit 1
-          fi
+          version_at() {
+            git show "$1:package.json" |
+              node -e 'let s="";process.stdin.on("data",(c)=>s+=c).on("end",()=>process.stdout.write(JSON.parse(s).version))'
+          }
+          version="$(version_at HEAD)"
+          previous="$(version_at HEAD^1)"
+          tag="v${version}"
+          tag_commit="$(git rev-parse -q --verify "refs/tags/${tag}^{commit}" || true)"
+          published="$(npm view "invariantcad@${version}" version 2>/dev/null || true)"
 
-          tag_ref="refs/tags/$GITHUB_REF_NAME"
-          if [[ "$(git cat-file -t "$tag_ref")" != "tag" ]]; then
-            echo "::error::$GITHUB_REF_NAME is not an annotated tag."
+          release=false
+          if [[ "$version" == "$previous" ]]; then
+            echo "package.json stays at ${version}; this commit is not a release."
+          elif [[ -n "$tag_commit" && "$tag_commit" != "$GITHUB_SHA" ]]; then
+            echo "::error::${tag} already points at ${tag_commit}, not ${GITHUB_SHA}."
             exit 1
+          elif [[ "$published" == "$version" && -n "$tag_commit" ]]; then
+            echo "invariantcad@${version} and ${tag} already exist; nothing to resume."
+          else
+            release=true
+            echo "Releasing invariantcad ${version} (previous ${previous})."
           fi
-          tag_commit="$(git rev-parse --verify "$tag_ref^{commit}")"
-          if [[ "$tag_commit" != "$(git rev-parse HEAD)" ]]; then
-            echo "::error::$GITHUB_REF_NAME does not point at the checked-out release commit."
-            exit 1
-          fi
+          {
+            echo "release=${release}"
+            echo "version=${version}"
+          } >> "$GITHUB_OUTPUT"
 
-          git fetch --no-tags origin \
-            "+refs/heads/main:refs/remotes/origin/main"
-          if ! git merge-base --is-ancestor \
-            "$tag_commit" refs/remotes/origin/main; then
-            echo "::error::The tagged release commit is not contained in origin/main."
-            exit 1
-          fi
+  verify:
+    name: Release acceptance
+    needs: plan
+    if: needs.plan.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install pnpm
         uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
+
+      - name: Install Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.x
+          package-manager-cache: false
+
+      - name: Install npm with trusted-publishing support
+        run: npm install --global npm@12.0.1
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Check release metadata
+        run: pnpm exec tsx scripts/release.ts check "$VERSION"
+
+      - name: Run release acceptance suite
+        run: pnpm release:check
+
+      - name: Stage the smoke-tested tarball and release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .artifacts/release
+          cp ".artifacts/invariantcad-${VERSION}.tgz" .artifacts/release/
+          pnpm exec tsx scripts/release.ts notes "$VERSION" > .artifacts/release/notes.md
+
+      - name: Upload release files
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release
+          path: .artifacts/release/
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: Publish to npm
+    needs: [plan, verify]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: invariantcad-npm-publish
+      cancel-in-progress: false
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+
+    steps:
+      - name: Download release files
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release
+          path: release
 
       - name: Install Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -70,14 +164,105 @@ jobs:
       - name: Install npm with trusted-publishing support
         run: npm install --global npm@12.0.1
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+      - name: Publish the verified tarball through npm trusted publishing
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$(npm view "invariantcad@${VERSION}" version 2>/dev/null || true)" == "$VERSION" ]]; then
+            echo "invariantcad@${VERSION} is already on npm; continuing to the GitHub release."
+            exit 0
+          fi
+          npm publish "./release/invariantcad-${VERSION}.tgz" --access public --provenance
 
-      - name: Install Chromium
-        run: pnpm exec playwright install --with-deps chromium
+  github-release:
+    name: Tag, GitHub release, and live docs
+    needs: [plan, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    concurrency:
+      group: invariantcad-npm-publish
+      cancel-in-progress: false
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
 
-      - name: Run release acceptance suite
-        run: pnpm release:check
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
 
-      - name: Publish through npm trusted publishing
-        run: npm publish --access public --provenance
+      - name: Download release files
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release
+          path: ${{ runner.temp }}/release
+
+      - name: Install Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.x
+          package-manager-cache: false
+
+      - name: Confirm npm serves the verified tarball
+        shell: bash
+        run: |
+          set -euo pipefail
+          tarball="${RUNNER_TEMP}/release/invariantcad-${VERSION}.tgz"
+          expected="$(node -e 'const {createHash}=require("node:crypto");process.stdout.write("sha512-"+createHash("sha512").update(require("node:fs").readFileSync(process.argv[1])).digest("base64"))' "$tarball")"
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            actual="$(npm view "invariantcad@${VERSION}" dist.integrity 2>/dev/null || true)"
+            if [[ "$actual" == "$expected" ]]; then
+              echo "npm serves the smoke-tested invariantcad-${VERSION}.tgz (${expected})."
+              exit 0
+            fi
+            echo "Waiting for the registry (attempt ${attempt}): '${actual}'"
+            sleep 15
+          done
+          echo "::error::npm integrity '${actual}' does not match the verified tarball '${expected}'."
+          exit 1
+
+      - name: Create the annotated release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+          existing="$(git rev-parse -q --verify "refs/tags/${tag}^{commit}" || true)"
+          if [[ -n "$existing" ]]; then
+            if [[ "$existing" != "$GITHUB_SHA" || "$(git cat-file -t "refs/tags/${tag}")" != "tag" ]]; then
+              echo "::error::${tag} exists but is not an annotated tag on ${GITHUB_SHA}."
+              exit 1
+            fi
+            echo "${tag} already exists on ${GITHUB_SHA}."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag --annotate "$tag" --message "InvariantCAD ${VERSION}" "$GITHUB_SHA"
+          git push origin "refs/tags/${tag}"
+
+      - name: Publish the GitHub release
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "The ${tag} GitHub release already exists."
+            exit 0
+          fi
+          gh release create "$tag" --verify-tag --latest \
+            --title "InvariantCAD ${VERSION}" \
+            --notes-file "${RUNNER_TEMP}/release/notes.md"
+
+      - name: Advance the live documentation branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "+refs/heads/docs-live:refs/remotes/origin/docs-live"
+          if ! git merge-base --is-ancestor refs/remotes/origin/docs-live "$GITHUB_SHA"; then
+            echo "::error::docs-live is not an ancestor of ${GITHUB_SHA}; refusing a non-fast-forward update."
+            exit 1
+          fi
+          git push origin "${GITHUB_SHA}:refs/heads/docs-live"
