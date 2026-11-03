@@ -51,9 +51,7 @@ push. It has not reviewed Dependabot pull requests automatically; comment
 Every push to `main` runs `.github/workflows/release.yml`. A push is a release
 only when its `package.json` version differs from the version `main` had
 before the push, which happens only when a release pull request merges by
-merge commit, squash, or rebase. A manual run of the workflow on `main`
-instead compares with the latest release tag that `main` contains, so it can
-finish an interrupted release. For a release the workflow:
+merge commit, squash, or rebase. For a release the workflow:
 
 1. checks release metadata and runs `pnpm release:check`: strict TypeScript,
    source correctness and format hygiene, public-entrypoint and API-report
@@ -81,10 +79,14 @@ gate InvariantCAD on Node 26, so this tooling ceiling is not a package runtime
 ceiling.
 
 Every step is idempotent. If a job fails, fix the cause and re-run the original
-workflow run. **Re-run failed jobs** resumes from the same commit; **Re-run all
-jobs** repeats acceptance and then finishes whatever is missing among the npm
-version, tag, GitHub release, and `docs-live`. Both skip work already done and
-refuse a tag that points elsewhere.
+workflow run for the release push. **Re-run failed jobs** resumes from the same
+commit; **Re-run all jobs** repeats acceptance and then finishes whatever is
+missing among the npm version, tag, GitHub release, and `docs-live`. Both skip
+work already done, refuse a tag that points elsewhere, and refuse an npm
+version whose provenance names another commit. The workflow deliberately has
+no manual trigger: a fresh run on a later `main` commit could otherwise release
+unrelated changes under the stuck version. GitHub allows re-runs for 30 days;
+after that, release a new patch version instead.
 Published npm versions are immutable. If verification uncovers a defect, do not
 attempt to replace the version; fix it and release a new patch version.
 

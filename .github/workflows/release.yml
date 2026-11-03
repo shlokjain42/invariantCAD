@@ -3,8 +3,7 @@ name: Publish npm
 # Every push to main is checked for a release: a push whose package.json
 # version differs from the version main had before the push. That only happens
 # when a release pull request prepared by .github/workflows/prepare-release.yml
-# merges, by merge commit, squash, or rebase. A manual run compares main with
-# the latest release tag it contains, so it can finish an interrupted release.
+# merges, by merge commit, squash, or rebase.
 #
 # A release commit then runs the full acceptance suite, publishes the exact
 # smoke-tested tarball to npm through trusted publishing after approval in the
@@ -13,13 +12,14 @@ name: Publish npm
 # that the hosted documentation deploys from.
 #
 # The npm trusted publisher is bound to this workflow filename and the `npm`
-# environment; renaming either breaks publication. Every step is idempotent, so
-# re-running the original run resumes a partial release.
+# environment; renaming either breaks publication. Every step is idempotent.
+# Recover a partial release by re-running the original push run, which keeps
+# the release commit and its pre-push base; there is deliberately no manual
+# trigger that could release a later main commit under the same version.
 
 on:
   push:
     branches: [main]
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -63,11 +63,11 @@ jobs:
           }
           # A rebase-merged release pull request pushes several commits at once,
           # so compare against main before the whole push, not HEAD's parent.
-          if [[ "$GITHUB_EVENT_NAME" == "push" && -n "$BEFORE" && ! "$BEFORE" =~ ^0+$ ]]; then
-            base="$BEFORE"
-          else
-            base="$(git describe --tags --abbrev=0 --match 'v[0-9]*' HEAD 2>/dev/null || echo HEAD^1)"
+          if [[ -z "$BEFORE" || "$BEFORE" =~ ^0+$ ]]; then
+            echo "::error::This push has no previous main commit to compare with."
+            exit 1
           fi
+          base="$BEFORE"
           version="$(version_at HEAD)"
           previous="$(version_at "$base")"
           echo "Comparing package.json at ${GITHUB_SHA} (${version}) with ${base} (${previous})."
