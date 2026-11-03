@@ -16,7 +16,10 @@ import {
 import { deepFreeze, type JsonValue } from "./core/json.js";
 import { DEFAULT_DESIGN_DOCUMENT_LIMITS } from "./document-limits.js";
 import {
+  assertExpressionIR,
   deg,
+  expressionIROf,
+  forEachExpressionParameter,
   mm,
   scalar,
   type AngleExpression,
@@ -67,6 +70,312 @@ import {
 } from "./topology-signatures.js";
 
 const DESIGN_OWNER = Symbol("InvariantCAD.DesignOwner");
+
+type Vec3ExpressionIR = readonly [ExpressionIR, ExpressionIR, ExpressionIR];
+
+/** Parameter IR nodes issued by a builder, keyed by node identity. */
+const PARAMETER_NODE_OWNERS = new WeakMap<object, DesignBuilder>();
+/** Each builder's parameter records, for raw IR that names a parameter by ID. */
+const DESIGN_PARAMETER_RECORDS = new WeakMap<
+  DesignBuilder,
+  Readonly<Record<ParameterId, ParameterIR>>
+>();
+
+/**
+ * Expressions carry only parameter IDs, so identity is checked through the
+ * issued parameter node. Raw IR without an issued node binds by ID and must
+ * name a parameter this design already defines, with the same dimension.
+ */
+function assertExpressionParametersOwned(
+  owner: DesignBuilder,
+  ir: ExpressionIR,
+  label: string,
+): void {
+  const records = DESIGN_PARAMETER_RECORDS.get(owner);
+  forEachExpressionParameter(ir, (node) => {
+    const nodeOwner = PARAMETER_NODE_OWNERS.get(node);
+    if (nodeOwner !== undefined) {
+      if (nodeOwner !== owner) {
+        throw new TypeError(
+          "Parameter references cannot cross design boundaries",
+        );
+      }
+      return;
+    }
+    const record =
+      records !== undefined && Object.hasOwn(records, node.id)
+        ? records[node.id]
+        : undefined;
+    if (record === undefined) {
+      throw new TypeError(
+        `${label} references parameter '${node.id}', which this design does not define`,
+      );
+    }
+    if (record.dimension !== node.dimension) {
+      throw new TypeError(
+        `${label} references ${record.dimension} parameter '${node.id}' as ${node.dimension}`,
+      );
+    }
+  });
+}
+
+/** Reads an expression's IR after checking its dimension and parameter owner. */
+function ownedExpressionIR(
+  owner: DesignBuilder,
+  value: unknown,
+  dimension: Dimension,
+  label: string,
+): ExpressionIR {
+  const ir = expressionIROf(value, dimension, label);
+  assertExpressionParametersOwned(owner, ir, label);
+  return ir;
+}
+
+/** Checks raw expression IR, such as a transform-operation component. */
+function ownedRawExpressionIR(
+  owner: DesignBuilder,
+  value: unknown,
+  dimension: Dimension,
+  label: string,
+): ExpressionIR {
+  const ir = assertExpressionIR(value, label);
+  if (ir.dimension !== dimension) {
+    throw new TypeError(
+      `${label} must be ${dimension === "angle" ? "an" : "a"} ${dimension} expression, received ${ir.dimension}`,
+    );
+  }
+  assertExpressionParametersOwned(owner, ir, label);
+  return ir;
+}
+
+function threeComponents(value: unknown, label: string): readonly unknown[] {
+  if (!Array.isArray(value) || value.length !== 3) {
+    throw new TypeError(`${label} must contain exactly three components`);
+  }
+  return value;
+}
+
+function ownedVec3IR(
+  owner: DesignBuilder,
+  value: unknown,
+  dimension: Dimension,
+  label: string,
+): Vec3ExpressionIR {
+  const components = threeComponents(value, label);
+  return [
+    ownedExpressionIR(owner, components[0], dimension, `${label}[0]`),
+    ownedExpressionIR(owner, components[1], dimension, `${label}[1]`),
+    ownedExpressionIR(owner, components[2], dimension, `${label}[2]`),
+  ];
+}
+
+function ownedRawVec3IR(
+  owner: DesignBuilder,
+  value: unknown,
+  dimension: Dimension,
+  label: string,
+): Vec3ExpressionIR {
+  const components = threeComponents(value, label);
+  return [
+    ownedRawExpressionIR(owner, components[0], dimension, `${label}[0]`),
+    ownedRawExpressionIR(owner, components[1], dimension, `${label}[1]`),
+    ownedRawExpressionIR(owner, components[2], dimension, `${label}[2]`),
+  ];
+}
+
+/**
+ * Copies one transform operation into a builder-owned record after checking
+ * its kind, component dimensions, and parameter owners.
+ */
+function ownedTransformOperation(
+  owner: DesignBuilder,
+  value: unknown,
+  label: string,
+): TransformOperationIR {
+  if (typeof value !== "object" || value === null) {
+    throw new TypeError(`${label} must be a transform operation`);
+  }
+  const operation = value as {
+    readonly kind?: unknown;
+    readonly value?: unknown;
+    readonly normal?: unknown;
+  };
+  switch (operation.kind) {
+    case "translate":
+      return {
+        kind: "translate",
+        value: ownedRawVec3IR(owner, operation.value, "length", `${label} value`),
+      };
+    case "rotate":
+      return {
+        kind: "rotate",
+        value: ownedRawVec3IR(owner, operation.value, "angle", `${label} value`),
+      };
+    case "scale":
+      return {
+        kind: "scale",
+        value: ownedRawVec3IR(owner, operation.value, "scalar", `${label} value`),
+      };
+    case "mirror":
+      return {
+        kind: "mirror",
+        normal: ownedRawVec3IR(
+          owner,
+          operation.normal,
+          "scalar",
+          `${label} normal`,
+        ),
+      };
+    default:
+      throw new TypeError(
+        `${label} must be a translate, rotate, scale, or mirror operation`,
+      );
+  }
+}
+
+function ownedTransformOperations(
+  owner: DesignBuilder,
+  value: unknown,
+  label: string,
+): TransformOperationIR[] {
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${label} must be an array of transform operations`);
+  }
+  if (value.length > DEFAULT_DESIGN_DOCUMENT_LIMITS.maxStructuralValues) {
+    throw new RangeError(
+      `${label} exceed the authoring limit of ${DEFAULT_DESIGN_DOCUMENT_LIMITS.maxStructuralValues} operations`,
+    );
+  }
+  const operations: TransformOperationIR[] = [];
+  for (let index = 0; index < value.length; index += 1) {
+    if (!Object.hasOwn(value, index)) {
+      throw new TypeError(`${label} cannot be sparse`);
+    }
+    operations.push(
+      ownedTransformOperation(owner, value[index], `${label}[${index}]`),
+    );
+  }
+  return operations;
+}
+
+function ownedPlaneIR(
+  owner: DesignBuilder,
+  value: unknown,
+  label: string,
+): PlaneIR {
+  const ir =
+    typeof value === "object" && value !== null
+      ? (value as { readonly ir?: unknown }).ir
+      : undefined;
+  if (typeof ir !== "object" || ir === null) {
+    throw new TypeError(`${label} must be created by plane.xy(), plane.xz(), or plane.yz()`);
+  }
+  const candidate = ir as {
+    readonly type?: unknown;
+    readonly plane?: unknown;
+    readonly origin?: unknown;
+  };
+  if (
+    candidate.type !== "principal" ||
+    (candidate.plane !== "XY" &&
+      candidate.plane !== "XZ" &&
+      candidate.plane !== "YZ")
+  ) {
+    throw new TypeError(`${label} must be a principal XY, XZ, or YZ plane`);
+  }
+  return {
+    type: "principal",
+    plane: candidate.plane,
+    origin: ownedRawVec3IR(owner, candidate.origin, "length", `${label} origin`),
+  };
+}
+
+/** Checks parameter owners in every expression a topology selection holds. */
+function assertTopologySelectionParametersOwned(
+  owner: DesignBuilder,
+  selection: TopologySelection,
+  label: string,
+): void {
+  const pending: unknown[] = [selection.ir.query];
+  const expression = (value: unknown): void => {
+    assertExpressionParametersOwned(
+      owner,
+      assertExpressionIR(value, label),
+      label,
+    );
+  };
+  while (pending.length > 0) {
+    const query = pending.pop();
+    if (typeof query !== "object" || query === null) continue;
+    const node = query as {
+      readonly op?: unknown;
+      readonly queries?: unknown;
+      readonly query?: unknown;
+      readonly selection?: { readonly query?: unknown };
+      readonly value?: unknown;
+      readonly tolerance?: unknown;
+    };
+    switch (node.op) {
+      case "and":
+      case "or":
+        if (Array.isArray(node.queries)) pending.push(...node.queries);
+        break;
+      case "not":
+        pending.push(node.query);
+        break;
+      case "adjacentTo":
+        pending.push(node.selection?.query);
+        break;
+      case "direction":
+      case "normal":
+      case "position":
+        if (Array.isArray(node.value)) node.value.forEach(expression);
+        expression(node.tolerance);
+        break;
+      case "radius":
+        expression(node.value);
+        expression(node.tolerance);
+        break;
+      default:
+        break;
+    }
+  }
+}
+
+/** Checks parameter owners in every expression a sketch callback authored. */
+function assertSketchParametersOwned(
+  owner: DesignBuilder,
+  id: string,
+  sketch: SketchBuilder,
+): void {
+  const check = (value: ExpressionIR, path: string): void =>
+    assertExpressionParametersOwned(owner, value, `Sketch '${id}' ${path}`);
+  for (const [entityKey, entity] of Object.entries(sketch.entities)) {
+    switch (entity.kind) {
+      case "point":
+        check(entity.x, `entity '${entityKey}' x`);
+        check(entity.y, `entity '${entityKey}' y`);
+        break;
+      case "circle":
+        check(entity.radius, `entity '${entityKey}' radius`);
+        break;
+      case "arc":
+        check(entity.radius, `entity '${entityKey}' radius`);
+        check(entity.startAngle, `entity '${entityKey}' startAngle`);
+        check(entity.endAngle, `entity '${entityKey}' endAngle`);
+        break;
+      default:
+        break;
+    }
+  }
+  for (const [constraintKey, constraint] of Object.entries(
+    sketch.constraints,
+  )) {
+    if ("value" in constraint) {
+      check(constraint.value, `constraint '${constraintKey}' value`);
+    }
+  }
+}
 
 export class ModelRef<K extends OutputKind> {
   readonly kind: K;
@@ -244,13 +553,31 @@ function principalPlane(
   value: PrincipalPlane,
   origin: Vec3Expression = [mm(0), mm(0), mm(0)],
 ): Plane {
+  const components = threeComponents(origin, "Plane origin");
   return deepFreeze({
     ir: {
       type: "principal",
       plane: value,
-      origin: [origin[0].ir, origin[1].ir, origin[2].ir],
+      origin: [
+        expressionIROf(components[0], "length", "Plane origin[0]"),
+        expressionIROf(components[1], "length", "Plane origin[1]"),
+        expressionIROf(components[2], "length", "Plane origin[2]"),
+      ],
     },
   });
+}
+
+function vectorIR(
+  value: unknown,
+  dimension: Dimension,
+  label: string,
+): Vec3ExpressionIR {
+  const components = threeComponents(value, label);
+  return [
+    expressionIROf(components[0], dimension, `${label}[0]`),
+    expressionIROf(components[1], dimension, `${label}[1]`),
+    expressionIROf(components[2], dimension, `${label}[2]`),
+  ];
 }
 
 export const plane = {
@@ -269,25 +596,25 @@ export const tf = {
   translate(value: Vec3Expression): TransformOperationIR {
     return deepFreeze({
       kind: "translate",
-      value: [value[0].ir, value[1].ir, value[2].ir],
+      value: vectorIR(value, "length", "Translation"),
     });
   },
   rotate(value: AngleVec3Expression): TransformOperationIR {
     return deepFreeze({
       kind: "rotate",
-      value: [value[0].ir, value[1].ir, value[2].ir],
+      value: vectorIR(value, "angle", "Rotation"),
     });
   },
   scale(value: ScalarVec3Expression): TransformOperationIR {
     return deepFreeze({
       kind: "scale",
-      value: [value[0].ir, value[1].ir, value[2].ir],
+      value: vectorIR(value, "scalar", "Scale"),
     });
   },
   mirror(normal: ScalarVec3Expression): TransformOperationIR {
     const operation: TransformOperationIR = {
       kind: "mirror",
-      normal: [normal[0].ir, normal[1].ir, normal[2].ir],
+      normal: vectorIR(normal, "scalar", "Mirror normal"),
     };
     return deepFreeze(operation);
   },
@@ -314,11 +641,16 @@ export class AssemblyBuilder {
     if (this.instances.some((instance) => instance.id === stableId)) {
       throw new TypeError(`Duplicate assembly instance '${id}'`);
     }
+    const placement = ownedTransformOperations(
+      this.owner,
+      options.placement ?? [],
+      `Assembly instance '${id}' placement`,
+    );
     this.instances.push(
       deepFreeze({
         id: stableId,
         component: component.toIR(),
-        placement: options.placement ?? [],
+        placement,
         suppressed: options.suppressed ?? false,
       }),
     );
@@ -355,17 +687,27 @@ export class ConfigurationBuilder {
     value: Expression<NoInfer<D>>,
   ): this {
     this.owner.assertParameterOwned(parameter);
-    if (value.dimension !== parameter.dimension) {
+    if (
+      typeof value !== "object" ||
+      value === null ||
+      value.dimension !== parameter.dimension
+    ) {
       throw new TypeError(
         `Configuration value for '${parameter.id}' must have dimension ${parameter.dimension}`,
       );
     }
+    const ir = ownedExpressionIR(
+      this.owner,
+      value,
+      parameter.dimension,
+      `Configuration value for '${parameter.id}'`,
+    );
     if (Object.hasOwn(this.parameterRecords, parameter.id)) {
       throw new TypeError(
         `Duplicate configuration parameter override '${parameter.id}'`,
       );
     }
-    this.parameterRecords[parameter.id] = value.ir;
+    this.parameterRecords[parameter.id] = ir;
     return this;
   }
 
@@ -501,6 +843,7 @@ export class DesignBuilder {
     if (name.trim().length === 0) throw new TypeError("A design requires a name");
     this.name = name;
     this.metadata = options.metadata;
+    DESIGN_PARAMETER_RECORDS.set(this, this.parameterRecords);
   }
 
   assertOwned(reference: ModelRef<OutputKind> | MaterialRef): void {
@@ -573,14 +916,32 @@ export class DesignBuilder {
     if (Object.hasOwn(this.parameterRecords, key)) {
       throw new TypeError(`Duplicate parameter '${id}'`);
     }
-    if (defaultValue.dimension !== dimension) {
+    if (
+      typeof defaultValue !== "object" ||
+      defaultValue === null ||
+      defaultValue.dimension !== dimension
+    ) {
       throw new TypeError(`Parameter '${id}' must have dimension ${dimension}`);
     }
+    const defaultIR = ownedExpressionIR(
+      this,
+      defaultValue,
+      dimension,
+      `Parameter '${id}' default`,
+    );
+    const min =
+      options.min === undefined
+        ? undefined
+        : ownedExpressionIR(this, options.min, dimension, `Parameter '${id}' min`);
+    const max =
+      options.max === undefined
+        ? undefined
+        : ownedExpressionIR(this, options.max, dimension, `Parameter '${id}' max`);
     this.parameterRecords[key] = deepFreeze({
       dimension,
-      default: defaultValue.ir,
-      ...(options.min === undefined ? {} : { min: options.min.ir }),
-      ...(options.max === undefined ? {} : { max: options.max.ir }),
+      default: defaultIR,
+      ...(min === undefined ? {} : { min }),
+      ...(max === undefined ? {} : { max }),
       ...(options.label === undefined ? {} : { label: options.label }),
       ...(options.description === undefined
         ? {}
@@ -589,6 +950,7 @@ export class DesignBuilder {
     if (dimension === "massDensity") this.usesMassDensity = true;
     const parameter = new ParameterClass(key, dimension);
     this.parameterReferences.add(parameter);
+    PARAMETER_NODE_OWNERS.set(parameter.ir, this);
     return parameter;
   }
 
@@ -627,12 +989,18 @@ export class DesignBuilder {
     if (options.name.trim().length === 0) {
       throw new TypeError(`Material '${id}' requires a non-empty name`);
     }
-    if (options.massDensity.dimension !== "massDensity") {
+    if (options.massDensity?.dimension !== "massDensity") {
       throw new TypeError("Material massDensity must be a mass-density expression");
     }
+    const massDensity = ownedExpressionIR(
+      this,
+      options.massDensity,
+      "massDensity",
+      `Material '${id}' massDensity`,
+    );
     this.materialRecords[key] = deepFreeze({
       name: options.name,
-      massDensity: options.massDensity.ir,
+      massDensity,
       ...(options.description === undefined
         ? {}
         : { description: options.description }),
@@ -778,11 +1146,7 @@ export class DesignBuilder {
   ): SolidRef {
     const key = this.addNode(id, {
       kind: "box",
-      size: options.size.map((item) => item.ir) as [
-        typeof options.size[0]["ir"],
-        typeof options.size[1]["ir"],
-        typeof options.size[2]["ir"],
-      ],
+      size: ownedVec3IR(this, options.size, "length", `Box '${id}' size`),
       center: options.center ?? false,
     });
     return new SolidRef(this, key);
@@ -800,9 +1164,24 @@ export class DesignBuilder {
   ): SolidRef {
     const key = this.addNode(id, {
       kind: "cylinder",
-      height: options.height.ir,
-      radiusBottom: options.radius.ir,
-      radiusTop: (options.radiusTop ?? options.radius).ir,
+      height: ownedExpressionIR(
+        this,
+        options.height,
+        "length",
+        `Cylinder '${id}' height`,
+      ),
+      radiusBottom: ownedExpressionIR(
+        this,
+        options.radius,
+        "length",
+        `Cylinder '${id}' radius`,
+      ),
+      radiusTop: ownedExpressionIR(
+        this,
+        options.radiusTop ?? options.radius,
+        "length",
+        `Cylinder '${id}' radiusTop`,
+      ),
       center: options.center ?? false,
       ...(options.segments === undefined ? {} : { segments: options.segments }),
     });
@@ -815,7 +1194,12 @@ export class DesignBuilder {
   ): SolidRef {
     const key = this.addNode(id, {
       kind: "sphere",
-      radius: options.radius.ir,
+      radius: ownedExpressionIR(
+        this,
+        options.radius,
+        "length",
+        `Sphere '${id}' radius`,
+      ),
       ...(options.segments === undefined ? {} : { segments: options.segments }),
     });
     return new SolidRef(this, key);
@@ -827,14 +1211,16 @@ export class DesignBuilder {
     build: (sketch: SketchBuilder) => ProfileDefinition,
     options: { readonly tolerance?: number } = {},
   ): ProfileRef {
+    const planeIR = ownedPlaneIR(this, sketchPlane, `Sketch '${id}' plane`);
     const sketch = new SketchBuilder();
     const profile = build(sketch);
     if (!(profile instanceof ProfileDefinition)) {
       throw new TypeError("A sketch callback must return sketch.profile(...)");
     }
+    assertSketchParametersOwned(this, id, sketch);
     const key = this.addNode(id, {
       kind: "sketch",
-      plane: sketchPlane.ir,
+      plane: planeIR,
       entities: sketch.entities,
       constraints: sketch.constraints,
       profile: profile.ir,
@@ -857,7 +1243,9 @@ export class DesignBuilder {
     }
     const key = this.addNode(id, {
       kind: "polylinePath",
-      points: points.map((point) => [point[0].ir, point[1].ir, point[2].ir]),
+      points: points.map((point, index) =>
+        ownedVec3IR(this, point, "length", `Polyline path '${id}' point ${index}`),
+      ),
       closed: false,
       tolerance,
     });
@@ -879,13 +1267,13 @@ export class DesignBuilder {
         "Circular-arc path tolerance must be finite and positive",
       );
     }
-    const vector = (point: Vec3Expression) =>
-      [point[0].ir, point[1].ir, point[2].ir] as const;
+    const vector = (point: Vec3Expression, name: string) =>
+      ownedVec3IR(this, point, "length", `Circular-arc path '${id}' ${name}`);
     const key = this.addNode(id, {
       kind: "circularArcPath",
-      start: vector(points.start),
-      through: vector(points.through),
-      end: vector(points.end),
+      start: vector(points.start, "start"),
+      through: vector(points.through, "through"),
+      end: vector(points.end, "end"),
       closed: false,
       tolerance,
     });
@@ -916,18 +1304,18 @@ export class DesignBuilder {
         "Composite path tolerance must be finite and positive",
       );
     }
-    const vector = (point: Vec3Expression) =>
-      [point[0].ir, point[1].ir, point[2].ir] as const;
+    const vector = (point: Vec3Expression, name: string) =>
+      ownedVec3IR(this, point, "length", `Composite path '${id}' ${name}`);
     const key = this.addNode(id, {
       kind: "compositePath",
-      start: vector(path.start),
-      segments: path.segments.map((segment) =>
+      start: vector(path.start, "start"),
+      segments: path.segments.map((segment, index) =>
         segment.kind === "line"
-          ? { kind: "line", end: vector(segment.end) }
+          ? { kind: "line", end: vector(segment.end, `segment ${index} end`) }
           : {
               kind: "circularArc",
-              through: vector(segment.through),
-              end: vector(segment.end),
+              through: vector(segment.through, `segment ${index} through`),
+              end: vector(segment.end, `segment ${index} end`),
             },
       ),
       closed: false,
@@ -949,13 +1337,29 @@ export class DesignBuilder {
   ): SolidRef {
     this.assertOwned(profile);
     const scaleTop = options.scaleTop ?? [scalar(1), scalar(1)];
+    if (!Array.isArray(scaleTop) || scaleTop.length !== 2) {
+      throw new TypeError(`Extrude '${id}' scaleTop must contain two scalars`);
+    }
     const key = this.addNode(id, {
       kind: "extrude",
       profile: profile.toIR(),
-      distance: options.distance.ir,
+      distance: ownedExpressionIR(
+        this,
+        options.distance,
+        "length",
+        `Extrude '${id}' distance`,
+      ),
       symmetric: options.symmetric ?? false,
-      twist: (options.twist ?? deg(0)).ir,
-      scaleTop: [scaleTop[0].ir, scaleTop[1].ir],
+      twist: ownedExpressionIR(
+        this,
+        options.twist ?? deg(0),
+        "angle",
+        `Extrude '${id}' twist`,
+      ),
+      scaleTop: [
+        ownedExpressionIR(this, scaleTop[0], "scalar", `Extrude '${id}' scaleTop[0]`),
+        ownedExpressionIR(this, scaleTop[1], "scalar", `Extrude '${id}' scaleTop[1]`),
+      ],
       divisions: options.divisions ?? 0,
     });
     return new SolidRef(this, key);
@@ -973,7 +1377,12 @@ export class DesignBuilder {
     const key = this.addNode(id, {
       kind: "revolve",
       profile: profile.toIR(),
-      angle: (options.angle ?? deg(360)).ir,
+      angle: ownedExpressionIR(
+        this,
+        options.angle ?? deg(360),
+        "angle",
+        `Revolve '${id}' angle`,
+      ),
       ...(options.segments === undefined ? {} : { segments: options.segments }),
     });
     return new SolidRef(this, key);
@@ -1075,13 +1484,18 @@ export class DesignBuilder {
     operations: readonly TransformOperationIR[],
   ): SolidRef {
     this.assertOwned(input);
-    if (operations.length === 0) {
+    const ownedOperations = ownedTransformOperations(
+      this,
+      operations,
+      `Transform '${id}' operations`,
+    );
+    if (ownedOperations.length === 0) {
       throw new TypeError("A transform requires at least one operation");
     }
     const key = this.addNode(id, {
       kind: "transform",
       input: input.toIR(),
-      operations,
+      operations: ownedOperations,
     });
     return new SolidRef(this, key);
   }
@@ -1122,11 +1536,21 @@ export class DesignBuilder {
       this.assertOwned(reference);
     }
     this.assertPersistentTopologyReferences(options.edges, input);
+    assertTopologySelectionParametersOwned(
+      this,
+      options.edges,
+      `Fillet '${id}' edges`,
+    );
     const key = this.addNode(id, {
       kind: "fillet",
       input: input.toIR(),
       edges: options.edges.toIR(),
-      radius: options.radius.ir,
+      radius: ownedExpressionIR(
+        this,
+        options.radius,
+        "length",
+        `Fillet '${id}' radius`,
+      ),
     });
     return new SolidRef(this, key);
   }
@@ -1151,11 +1575,21 @@ export class DesignBuilder {
       this.assertOwned(reference);
     }
     this.assertPersistentTopologyReferences(options.edges, input);
+    assertTopologySelectionParametersOwned(
+      this,
+      options.edges,
+      `Chamfer '${id}' edges`,
+    );
     const key = this.addNode(id, {
       kind: "chamfer",
       input: input.toIR(),
       edges: options.edges.toIR(),
-      distance: options.distance.ir,
+      distance: ownedExpressionIR(
+        this,
+        options.distance,
+        "length",
+        `Chamfer '${id}' distance`,
+      ),
     });
     return new SolidRef(this, key);
   }
@@ -1186,13 +1620,28 @@ export class DesignBuilder {
     if (!SHELL_DIRECTIONS.includes(direction)) {
       throw new TypeError("Shell direction must be 'inward' or 'outward'");
     }
+    assertTopologySelectionParametersOwned(
+      this,
+      options.openings,
+      `Shell '${id}' openings`,
+    );
     const key = this.addNode(id, {
       kind: "shell",
       input: input.toIR(),
       openings: options.openings.toIR(),
-      thickness: options.thickness.ir,
+      thickness: ownedExpressionIR(
+        this,
+        options.thickness,
+        "length",
+        `Shell '${id}' thickness`,
+      ),
       direction,
-      tolerance: (options.tolerance ?? mm(1e-6)).ir,
+      tolerance: ownedExpressionIR(
+        this,
+        options.tolerance ?? mm(1e-6),
+        "length",
+        `Shell '${id}' tolerance`,
+      ),
     });
     return new SolidRef(this, key);
   }
@@ -1215,9 +1664,19 @@ export class DesignBuilder {
     const key = this.addNode(id, {
       kind: "offset",
       input: input.toIR(),
-      distance: options.distance.ir,
+      distance: ownedExpressionIR(
+        this,
+        options.distance,
+        "length",
+        `Offset '${id}' distance`,
+      ),
       direction,
-      tolerance: (options.tolerance ?? mm(1e-6)).ir,
+      tolerance: ownedExpressionIR(
+        this,
+        options.tolerance ?? mm(1e-6),
+        "length",
+        `Offset '${id}' tolerance`,
+      ),
     });
     return new SolidRef(this, key);
   }
@@ -1250,27 +1709,35 @@ export class DesignBuilder {
       this.assertOwned(reference);
     }
     this.assertPersistentTopologyReferences(options.faces, input);
+    assertTopologySelectionParametersOwned(
+      this,
+      options.faces,
+      `Draft '${id}' faces`,
+    );
     const key = this.addNode(id, {
       kind: "draft",
       input: input.toIR(),
       faces: options.faces.toIR(),
-      angle: options.angle.ir,
-      pullDirection: [
-        options.pullDirection[0].ir,
-        options.pullDirection[1].ir,
-        options.pullDirection[2].ir,
-      ],
+      angle: ownedExpressionIR(this, options.angle, "angle", `Draft '${id}' angle`),
+      pullDirection: ownedVec3IR(
+        this,
+        options.pullDirection,
+        "scalar",
+        `Draft '${id}' pullDirection`,
+      ),
       neutralPlane: {
-        origin: [
-          options.neutralPlane.origin[0].ir,
-          options.neutralPlane.origin[1].ir,
-          options.neutralPlane.origin[2].ir,
-        ],
-        normal: [
-          options.neutralPlane.normal[0].ir,
-          options.neutralPlane.normal[1].ir,
-          options.neutralPlane.normal[2].ir,
-        ],
+        origin: ownedVec3IR(
+          this,
+          options.neutralPlane.origin,
+          "length",
+          `Draft '${id}' neutralPlane origin`,
+        ),
+        normal: ownedVec3IR(
+          this,
+          options.neutralPlane.normal,
+          "scalar",
+          `Draft '${id}' neutralPlane normal`,
+        ),
       },
     });
     return new SolidRef(this, key);
@@ -1288,18 +1755,27 @@ export class DesignBuilder {
     if (options.materialRef !== undefined) this.assertOwned(options.materialRef);
     if (
       options.massDensity !== undefined &&
-      options.massDensity.dimension !== "massDensity"
+      options.massDensity?.dimension !== "massDensity"
     ) {
       throw new TypeError("Part massDensity must be a mass-density expression");
     }
     const { massDensity, materialRef, ...definition } = options;
+    const massDensityIR =
+      massDensity === undefined
+        ? undefined
+        : ownedExpressionIR(
+            this,
+            massDensity,
+            "massDensity",
+            `Part '${id}' massDensity`,
+          );
     if (massDensity !== undefined) this.usesMassDensity = true;
     const key = this.addNode(id, {
       kind: "part",
       solid: solid.toIR(),
       ...definition,
       ...(materialRef === undefined ? {} : { materialId: materialRef.id }),
-      ...(massDensity === undefined ? {} : { massDensity: massDensity.ir }),
+      ...(massDensityIR === undefined ? {} : { massDensity: massDensityIR }),
     });
     return new PartRef(this, key);
   }

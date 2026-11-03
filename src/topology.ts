@@ -6,8 +6,10 @@ import {
 } from "./core/json.js";
 import {
   deg,
+  expressionIROf,
   mm,
   type AngleExpression,
+  type ExpressionIR,
   type LengthExpression,
   type ScalarVec3Expression,
   type Vec3Expression,
@@ -63,6 +65,21 @@ function cardinality(
     }
   }
   return deepFreeze({ min, ...(max === undefined ? {} : { max }) });
+}
+
+function vectorIR(
+  value: unknown,
+  dimension: "length" | "scalar",
+  label: string,
+): readonly [ExpressionIR, ExpressionIR, ExpressionIR] {
+  if (!Array.isArray(value) || value.length !== 3) {
+    throw new TypeError(`${label} must contain exactly three components`);
+  }
+  return [
+    expressionIROf(value[0], dimension, `${label}[0]`),
+    expressionIROf(value[1], dimension, `${label}[1]`),
+    expressionIROf(value[2], dimension, `${label}[2]`),
+  ];
 }
 
 function assertCompatible<K extends TopologyKind>(
@@ -493,8 +510,8 @@ class EdgeTopologyQueries extends TopologyQueries<"edge"> {
   ): TopologyQuery<"edge"> {
     return new TopologyQuery("edge", {
       op: "direction",
-      value: [value[0].ir, value[1].ir, value[2].ir],
-      tolerance: tolerance.ir,
+      value: vectorIR(value, "scalar", "Edge direction"),
+      tolerance: expressionIROf(tolerance, "angle", "Edge direction tolerance"),
     });
   }
 
@@ -504,8 +521,8 @@ class EdgeTopologyQueries extends TopologyQueries<"edge"> {
   ): TopologyQuery<"edge"> {
     return new TopologyQuery("edge", {
       op: "radius",
-      value: value.ir,
-      tolerance: tolerance.ir,
+      value: expressionIROf(value, "length", "Edge radius"),
+      tolerance: expressionIROf(tolerance, "length", "Edge radius tolerance"),
     });
   }
 
@@ -532,8 +549,8 @@ class VertexTopologyQueries extends TopologyQueries<"vertex"> {
   ): TopologyQuery<"vertex"> {
     return new TopologyQuery("vertex", {
       op: "position",
-      value: [value[0].ir, value[1].ir, value[2].ir],
-      tolerance: tolerance.ir,
+      value: vectorIR(value, "length", "Vertex position"),
+      tolerance: expressionIROf(tolerance, "length", "Vertex position tolerance"),
     });
   }
 
@@ -563,8 +580,8 @@ class FaceTopologyQueries extends TopologyQueries<"face"> {
   ): TopologyQuery<"face"> {
     return new TopologyQuery("face", {
       op: "normal",
-      value: [value[0].ir, value[1].ir, value[2].ir],
-      tolerance: tolerance.ir,
+      value: vectorIR(value, "scalar", "Face normal"),
+      tolerance: expressionIROf(tolerance, "angle", "Face normal tolerance"),
     });
   }
 
@@ -574,8 +591,8 @@ class FaceTopologyQueries extends TopologyQueries<"face"> {
   ): TopologyQuery<"face"> {
     return new TopologyQuery("face", {
       op: "radius",
-      value: value.ir,
-      tolerance: tolerance.ir,
+      value: expressionIROf(value, "length", "Face radius"),
+      tolerance: expressionIROf(tolerance, "length", "Face radius tolerance"),
     });
   }
 

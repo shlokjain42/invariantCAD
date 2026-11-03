@@ -146,13 +146,17 @@ describe("whole-solid offsets", () => {
       cad.offset("foreign", foreign, { distance: mm(1) }),
     ).toThrow("cross design boundaries");
 
-    // @ts-expect-error Offset distance must be a length expression.
-    cad.offset("angle-distance", box, { distance: deg(45) });
-    cad.offset("angle-tolerance", box, {
-      distance: mm(1),
-      // @ts-expect-error Offset tolerance must be a length expression.
-      tolerance: deg(1),
-    });
+    expect(() =>
+      // @ts-expect-error Offset distance must be a length expression.
+      cad.offset("angle-distance", box, { distance: deg(45) }),
+    ).toThrow("Offset 'angle-distance' distance must be a length expression");
+    expect(() =>
+      cad.offset("angle-tolerance", box, {
+        distance: mm(1),
+        // @ts-expect-error Offset tolerance must be a length expression.
+        tolerance: deg(1),
+      }),
+    ).toThrow("Offset 'angle-tolerance' tolerance must be a length expression");
   });
 
   it("reports missing and malformed kernel capabilities before invocation", async () => {

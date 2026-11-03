@@ -159,10 +159,13 @@ export class SketchBuilder {
   }
 
   point(id: string, position: Vec2Expression): PointRef {
+    if (!Array.isArray(position) || position.length !== 2) {
+      throw new TypeError(`Sketch point '${id}' requires two length coordinates`);
+    }
     const key = this.addEntity(id, {
       kind: "point",
-      x: position[0].ir,
-      y: position[1].ir,
+      x: expressionIROf(position[0], "length", `Sketch point '${id}' x`),
+      y: expressionIROf(position[1], "length", `Sketch point '${id}' y`),
     });
     return new PointRef(this, key);
   }
@@ -183,7 +186,7 @@ export class SketchBuilder {
     const key = this.addEntity(id, {
       kind: "circle",
       center: center.id,
-      radius: options.radius.ir,
+      radius: expressionIROf(options.radius, "length", `Sketch circle '${id}' radius`),
       ...(options.segments === undefined ? {} : { segments: options.segments }),
     });
     return new CircleRef(this, key, center);
@@ -194,9 +197,17 @@ export class SketchBuilder {
     const key = this.addEntity(id, {
       kind: "arc",
       center: center.id,
-      radius: options.radius.ir,
-      startAngle: options.startAngle.ir,
-      endAngle: options.endAngle.ir,
+      radius: expressionIROf(options.radius, "length", `Sketch arc '${id}' radius`),
+      startAngle: expressionIROf(
+        options.startAngle,
+        "angle",
+        `Sketch arc '${id}' startAngle`,
+      ),
+      endAngle: expressionIROf(
+        options.endAngle,
+        "angle",
+        `Sketch arc '${id}' endAngle`,
+      ),
       clockwise: options.clockwise ?? false,
       ...(options.segments === undefined ? {} : { segments: options.segments }),
     });
@@ -231,6 +242,8 @@ export class SketchBuilder {
 
   rectangle(id: string, options: RectangleOptions): LoopRef {
     const [cx, cy] = options.center ?? [mm(0), mm(0)];
+    expressionIROf(options.width, "length", `Sketch rectangle '${id}' width`);
+    expressionIROf(options.height, "length", `Sketch rectangle '${id}' height`);
     const halfWidth = options.width.mul(0.5);
     const halfHeight = options.height.mul(0.5);
     return this.polyline(
@@ -310,7 +323,7 @@ export class SketchBuilder {
       kind: "distance",
       first: first.id,
       second: second.id,
-      value: value.ir,
+      value: expressionIROf(value, "length", `Sketch constraint '${id}' value`),
     });
     return this;
   }
@@ -327,7 +340,7 @@ export class SketchBuilder {
       kind: "distanceX",
       first: first.id,
       second: second.id,
-      value: value.ir,
+      value: expressionIROf(value, "length", `Sketch constraint '${id}' value`),
     });
     return this;
   }
@@ -344,14 +357,18 @@ export class SketchBuilder {
       kind: "distanceY",
       first: first.id,
       second: second.id,
-      value: value.ir,
+      value: expressionIROf(value, "length", `Sketch constraint '${id}' value`),
     });
     return this;
   }
 
   length(id: string, line: LineRef, value: LengthExpression): this {
     this.assertOwned(line);
-    this.addConstraint(id, { kind: "length", entity: line.id, value: value.ir });
+    this.addConstraint(id, {
+      kind: "length",
+      entity: line.id,
+      value: expressionIROf(value, "length", `Sketch constraint '${id}' value`),
+    });
     return this;
   }
 
@@ -400,7 +417,7 @@ export class SketchBuilder {
       kind: "angle",
       first: first.id,
       second: second.id,
-      value: value.ir,
+      value: expressionIROf(value, "angle", `Sketch constraint '${id}' value`),
     });
     return this;
   }
@@ -411,7 +428,11 @@ export class SketchBuilder {
     value: LengthExpression,
   ): this {
     this.assertOwned(circle);
-    this.addConstraint(id, { kind: "radius", entity: circle.id, value: value.ir });
+    this.addConstraint(id, {
+      kind: "radius",
+      entity: circle.id,
+      value: expressionIROf(value, "length", `Sketch constraint '${id}' value`),
+    });
     return this;
   }
 
@@ -424,7 +445,7 @@ export class SketchBuilder {
     this.addConstraint(id, {
       kind: "diameter",
       entity: circle.id,
-      value: value.ir,
+      value: expressionIROf(value, "length", `Sketch constraint '${id}' value`),
     });
     return this;
   }
@@ -483,6 +504,7 @@ export class SketchBuilder {
         `A regular polygon cannot have more than ${DEFAULT_DESIGN_DOCUMENT_LIMITS.maxStructuralValues} sides`,
       );
     }
+    expressionIROf(radius, "length", `Sketch regular polygon '${id}' radius`);
     const [cx, cy] = options.center ?? [mm(0), mm(0)];
     // Vertex directions are resolved while authoring, so only the base
     // rotation must be literal; each vertex angle is computed numerically.
