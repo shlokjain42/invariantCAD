@@ -133,10 +133,11 @@ release boundary and is not implicitly shipped by the npm package.
 
 ## Documentation
 
-The Mintlify source lives under `docs/`. Every navigated page requires `title`
-and `description` frontmatter. Keep examples complete enough to copy, clearly
-separate tested behavior from roadmap work, and use the support matrix as the
-canonical feature boundary.
+The Mintlify source lives under `docs/`. Every navigated page requires
+non-blank `title` and `description` frontmatter values, each written on one
+line. Keep examples complete enough to copy, clearly separate tested behavior
+from roadmap work, and use the support matrix as the canonical feature
+boundary.
 
 Selected complete code fences are generated from strict TypeScript regions in
 `examples/docs/`. Do not edit content between `docs-example` markers directly:
