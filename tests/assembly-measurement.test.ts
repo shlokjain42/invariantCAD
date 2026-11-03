@@ -170,4 +170,90 @@ describe("assembly geometric measurements", () => {
       evaluator.dispose();
     }
   });
+
+  it("encloses occurrences placed with arbitrary rotations", async () => {
+    const evaluator = await createEvaluator();
+    try {
+      const placement = [
+        tf.rotate([deg(30), deg(45), deg(60)]),
+        tf.translate(vec3(mm(7), mm(-3), mm(11))),
+      ];
+      const result = await evaluateWith(evaluator, (cad) => {
+        const box = cad.part(
+          "box-part",
+          cad.box("box", { size: vec3(mm(1), mm(2), mm(3)) }),
+        );
+        const sphere = cad.part(
+          "sphere-part",
+          cad.sphere("sphere", { radius: mm(4) }),
+        );
+        cad.output(
+          "rotated-box",
+          cad.assembly("rotated-box", (instances) => {
+            instances.instance("box", box, { placement });
+          }),
+        );
+        cad.output(
+          "rotated-sphere",
+          cad.assembly("rotated-sphere", (instances) => {
+            instances.instance("sphere", sphere, { placement });
+          }),
+        );
+      });
+      try {
+        // A Float32 mesh coordinate of magnitude near 15 rounds by ~1e-6.
+        const slack = 1e-5;
+        const meshBounds = (name: string): ShapeMeasurements["boundingBox"] => {
+          const output = result.output(name);
+          expect(output).toBeInstanceOf(EvaluatedAssembly);
+          const { positions } = output.mesh();
+          const min: [number, number, number] = [Infinity, Infinity, Infinity];
+          const max: [number, number, number] = [-Infinity, -Infinity, -Infinity];
+          for (let index = 0; index < positions.length; index += 3) {
+            for (let axis = 0; axis < 3; axis += 1) {
+              min[axis] = Math.min(min[axis]!, positions[index + axis]!);
+              max[axis] = Math.max(max[axis]!, positions[index + axis]!);
+            }
+          }
+          return { min, max };
+        };
+        const expectEncloses = (
+          outer: ShapeMeasurements["boundingBox"],
+          inner: ShapeMeasurements["boundingBox"],
+        ): void => {
+          for (let axis = 0; axis < 3; axis += 1) {
+            expect(outer.min[axis]!).toBeLessThanOrEqual(inner.min[axis]! + slack);
+            expect(outer.max[axis]!).toBeGreaterThanOrEqual(inner.max[axis]! - slack);
+          }
+        };
+
+        // A box's kernel bounding box is the box itself, so its placed
+        // corners give the tight placed bounds.
+        const box = assemblyMeasure(result, "rotated-box");
+        const boxMesh = meshBounds("rotated-box");
+        expectEncloses(box.boundingBox, boxMesh);
+        expectBoxClose(box.boundingBox, boxMesh, slack);
+        expectRelativelyClose(box.surfaceArea, 2 * (1 * 2 + 1 * 3 + 2 * 3), 1e-12);
+
+        // A rotated sphere's placed kernel box encloses the sphere but is
+        // larger than its tight bounds, never smaller.
+        const sphere = assemblyMeasure(result, "rotated-sphere");
+        const sphereMesh = meshBounds("rotated-sphere");
+        expectEncloses(sphere.boundingBox, sphereMesh);
+        const center = [7, -3, 11];
+        for (let axis = 0; axis < 3; axis += 1) {
+          expect(sphere.boundingBox.max[axis]! - center[axis]!).toBeLessThanOrEqual(
+            4 * Math.sqrt(3) + slack,
+          );
+          expect(center[axis]! - sphere.boundingBox.min[axis]!).toBeLessThanOrEqual(
+            4 * Math.sqrt(3) + slack,
+          );
+        }
+      } finally {
+        result.dispose();
+      }
+    } finally {
+      evaluator.dispose();
+    }
+  });
 });
