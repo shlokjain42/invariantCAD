@@ -451,7 +451,9 @@ function disposeKernelsAndAssertOwnership(
   }
 }
 
-describe("OCCT artifact v3 adversarial native identity", () => {
+// These tests start real OCCT WebAssembly runtimes, which can exceed vitest's
+// 5 s default under coverage on a loaded host; 30 s still fails a real hang.
+describe("OCCT artifact v3 adversarial native identity", { timeout: 30_000 }, () => {
   it("canonicalizes producer permutations and preserves fresh consumer order through a selected-edge fillet", async () => {
     const normalProducer = await createOcctKernel();
     const permutedProducer = await createOcctKernel();

@@ -180,6 +180,8 @@ describe("genus measurement capability", () => {
     }
   });
 
+  // This test starts a real OCCT WebAssembly runtime, which can exceed vitest's
+  // 5 s default under coverage on a loaded host; 30 s still fails a real hang.
   it("returns unsupported OCCT genus without disturbing other measurements", async () => {
     const kernel = await createOcctKernel();
     const shapes: KernelShape[] = [];
@@ -255,7 +257,7 @@ describe("genus measurement capability", () => {
       }
       kernel.dispose();
     }
-  });
+  }, 30_000);
 
   it("reports empty, single, and overlapping assembly genus as unsupported", async () => {
     const kernel = await createManifoldKernel();

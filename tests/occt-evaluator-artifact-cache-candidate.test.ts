@@ -140,7 +140,9 @@ function boxDocument() {
   return cad.build();
 }
 
-describe("private OCCT evaluator artifact-cache candidate", () => {
+// These tests start real OCCT WebAssembly runtimes, which can exceed vitest's
+// 5 s default under coverage on a loaded host; 30 s still fails a real hang.
+describe("private OCCT evaluator artifact-cache candidate", { timeout: 30_000 }, () => {
   it("keeps the candidate-only evaluator entry point runtime-private", async () => {
     const observed = await observedOcctKernel();
     const evaluator = await createEvaluator({

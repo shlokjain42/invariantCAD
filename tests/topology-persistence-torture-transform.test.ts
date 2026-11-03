@@ -87,7 +87,9 @@ function expectBounds(
   }
 }
 
-describe("OCCT persistent-topology transform torture", () => {
+// These tests start real OCCT WebAssembly runtimes, which can exceed vitest's
+// 5 s default under coverage on a loaded host; 30 s still fails a real hang.
+describe("OCCT persistent-topology transform torture", { timeout: 30_000 }, () => {
   it("round-trips source-aware face and edge references across dimension and rigid-transform crossovers", async () => {
     const kernel = await createOcctKernel();
     const raw = (kernel as any).raw as { readonly shapeCount: number };

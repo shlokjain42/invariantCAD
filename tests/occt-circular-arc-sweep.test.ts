@@ -299,7 +299,9 @@ function expectClosedSolidTopology(
   }
 }
 
-describe("OCCT exact circular-arc solid sweep", () => {
+// These tests start real OCCT WebAssembly runtimes, which can exceed vitest's
+// 5 s default under coverage on a loaded host; 30 s still fails a real hang.
+describe("OCCT exact circular-arc solid sweep", { timeout: 30_000 }, () => {
   it("advertises the dedicated bounded capability", async () => {
     const kernel = await createOcctKernel();
     try {

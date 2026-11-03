@@ -440,7 +440,9 @@ function expectCompleteLoftInventory(
   }
 }
 
-describe("OCCT ruled solid loft", () => {
+// These tests start real OCCT WebAssembly runtimes, which can exceed vitest's
+// 5 s default under coverage on a loaded host; 30 s still fails a real hang.
+describe("OCCT ruled solid loft", { timeout: 30_000 }, () => {
   it("builds and exports a two-section rectangular frustum", async () => {
     const kernel = await createOcctKernel();
     try {
