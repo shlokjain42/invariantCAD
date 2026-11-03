@@ -80,7 +80,9 @@ function replaceBrepSection(
   return rewritten;
 }
 
-describe("OCCT artifact native occurrence integrity", () => {
+// These tests start real OCCT WebAssembly runtimes, which can exceed vitest's
+// 5 s default under coverage on a loaded host; 30 s still fails a real hang.
+describe("OCCT artifact native occurrence integrity", { timeout: 30_000 }, () => {
   it("rejects a duplicate occurrence of the same located TShape transactionally", async () => {
     const raw = await RawOcctKernel.init();
     let sourceBrep: Uint8Array;

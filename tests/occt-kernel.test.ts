@@ -39,7 +39,9 @@ function profileCurveSource(entity: string): ProfileCurveSource {
   };
 }
 
-describe("OCCT exact-kernel integration", () => {
+// These tests start real OCCT WebAssembly runtimes, which can exceed vitest's
+// 5 s default under coverage on a loaded host; 30 s still fails a real hang.
+describe("OCCT exact-kernel integration", { timeout: 30_000 }, () => {
   it("measures an empty Boolean result without asking OCCT for nonexistent bounds", async () => {
     const kernel = await createOcctKernel();
     const target = kernel.box!([10, 10, 10], false);

@@ -419,7 +419,9 @@ function legacyFactory(
   };
 }
 
-describe("OCCT ABI 0.4 exact Boolean integration", () => {
+// These tests start real OCCT WebAssembly runtimes, which can exceed vitest's
+// 5 s default under coverage on a loaded host; 30 s still fails a real hang.
+describe("OCCT ABI 0.4 exact Boolean integration", { timeout: 30_000 }, () => {
   it.each([-1, 0.5, 2_147_483_648, Number.NaN])(
     "rejects invalid history record budget %s before loading the module",
     async (maxExactBooleanHistoryRecords) => {

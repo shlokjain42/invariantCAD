@@ -167,7 +167,9 @@ function freshProcessStep(): Promise<Uint8Array> {
   });
 }
 
-describe("OCCT deterministic STEP export", () => {
+// These tests start real OCCT WebAssembly runtimes, which can exceed vitest's
+// 5 s default under coverage on a loaded host; 30 s still fails a real hang.
+describe("OCCT deterministic STEP export", { timeout: 30_000 }, () => {
   it("advertises a valid, bounded exact STEP determinism envelope", async () => {
     const kernel = await createOcctKernel();
     try {

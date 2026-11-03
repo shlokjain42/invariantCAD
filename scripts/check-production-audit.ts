@@ -1,13 +1,15 @@
 import { spawnSync } from "node:child_process";
 import {
   evaluateAuditAdvisories,
+  pnpmAuditCommand,
   type AuditAdvisory,
 } from "./audit-policy.js";
 
-const command = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
-const audit = spawnSync(command, ["audit", "--json"], {
+const { command, args, shell } = pnpmAuditCommand(process.platform);
+const audit = spawnSync(command, args, {
   encoding: "utf8",
   maxBuffer: 64 * 1024 * 1024,
+  shell,
 });
 
 if (audit.error !== undefined) throw audit.error;

@@ -1,6 +1,10 @@
 import { readFile, writeFile } from "node:fs/promises";
 import process from "node:process";
 import {
+  assertInventoryMatchesApiReport,
+  collectNamedExports,
+} from "./docs-export-inventory.mjs";
+import {
   PUBLIC_ENTRYPOINTS,
   validatePublicEntrypoints,
 } from "./public-entrypoints.mjs";
@@ -10,88 +14,18 @@ const outputUrl = new URL("../docs/reference/export-index.mdx", import.meta.url)
 
 const publicEntrypointState = await validatePublicEntrypoints();
 
-function collectNamedExports(sourceText, sourcePath) {
-  const exports = [];
-
-  // Public entry points intentionally use explicit named exports. Parsing that
-  // constrained syntax keeps this script independent of TypeScript's compiler
-  // API, which changed in TypeScript 7.
-  const blockPattern = /^export\s+(type\s+)?\{([\s\S]*?)\}\s*(?:from\s+["']([^"']+)["'])?\s*;/gm;
-  for (const match of sourceText.matchAll(blockPattern)) {
-    const blockIsTypeOnly = match[1] !== undefined;
-    const module = match[3] ?? "local";
-    const uncommented = match[2]
-      .replace(/\/\*[\s\S]*?\*\//g, "")
-      .replace(/\/\/.*$/gm, "");
-    for (const rawSpecifier of uncommented.split(",")) {
-      const specifier = rawSpecifier.trim();
-      if (specifier === "") continue;
-      const specifierMatch = /^(type\s+)?([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/.exec(
-        specifier,
-      );
-      if (specifierMatch === null) {
-        throw new Error(`${sourcePath} has an unsupported export: ${specifier}`);
-      }
-      exports.push({
-        name: specifierMatch[3] ?? specifierMatch[2],
-        kind: blockIsTypeOnly || specifierMatch[1] !== undefined ? "type" : "value",
-        source: module,
-      });
-    }
-  }
-
-  const declarationPattern =
-    /^export\s+(?:(?:declare|abstract|async)\s+)*(const|let|var|class|function|interface|type|enum)\s+([A-Za-z_$][\w$]*)/gm;
-  for (const match of sourceText.matchAll(declarationPattern)) {
-    const declaration = match[1];
-    exports.push({
-      name: match[2],
-      kind:
-        declaration === "interface" || declaration === "type"
-          ? declaration
-          : declaration === "class" || declaration === "function" || declaration === "enum"
-            ? declaration
-            : "value",
-      source: "local",
-    });
-  }
-
-  for (const match of sourceText.matchAll(/^export\s+([^\n]+)/gm)) {
-    const prefix = match[1].trimStart();
-    if (
-      prefix.startsWith("{") ||
-      prefix.startsWith("type {") ||
-      /^(?:(?:declare|abstract|async)\s+)*(?:const|let|var|class|function|interface|type|enum)\b/.test(
-        prefix,
-      )
-    ) {
-      continue;
-    }
-    throw new Error(
-      `${sourcePath} contains an unsupported export declaration: export ${prefix}`,
-    );
-  }
-
-  const unique = new Map();
-  for (const item of exports) {
-    if (unique.has(item.name)) {
-      throw new Error(`${sourcePath} exports '${item.name}' more than once`);
-    }
-    unique.set(item.name, item);
-  }
-  return [...unique.values()].sort((first, second) =>
-    first.name.localeCompare(second.name),
-  );
-}
-
 const inventory = [];
 for (const entry of PUBLIC_ENTRYPOINTS) {
   const sourceUrl = new URL(entry.source, root);
   const sourceText = await readFile(sourceUrl, "utf8");
-  inventory.push({
-    ...entry,
-    exports: collectNamedExports(sourceText, entry.source),
-  });
+  const exports = collectNamedExports(sourceText, entry.source);
+  assertInventoryMatchesApiReport(
+    exports,
+    await readFile(new URL(entry.apiReport, root), "utf8"),
+    entry.source,
+    entry.apiReport,
+  );
+  inventory.push({ ...entry, exports });
 }
 
 const lines = [

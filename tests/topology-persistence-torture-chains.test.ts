@@ -144,7 +144,9 @@ function closeVector(
   );
 }
 
-describe("real-OCCT persistent-topology feature-chain torture", () => {
+// These tests start real OCCT WebAssembly runtimes, which can exceed vitest's
+// 5 s default under coverage on a loaded host; 30 s still fails a real hang.
+describe("real-OCCT persistent-topology feature-chain torture", { timeout: 30_000 }, () => {
   it("keeps an unchanged Boolean-result edge across tool extremes, fails on a target crossover, and recovers", async () => {
     const kernel = await createOcctKernel();
     const evaluator = await createEvaluator({ kernel });

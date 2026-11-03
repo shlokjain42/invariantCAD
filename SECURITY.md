@@ -63,7 +63,7 @@ documentation tooling, which is neither shipped nor imported at runtime:
 
 - GHSA-mrhx-c7xc-m3w5 in `zod` 3.24.0 and 3.25.76. Every published `mint`
   release pins those versions and no patched `zod` 3 release exists.
-  InvariantCAD's own runtime dependency is `zod` `^4.6.6`. Remove the exception
+  InvariantCAD's own runtime dependency is `zod` `^4.6.7`. Remove the exception
   when `mint` adopts a patched `zod`.
 - GHSA-g3hv-75wg-m249 in `minimatch` 3.1.5. The fix exists only in `minimatch`
   11.0.1 and newer, while `mint`'s `glob` and Spectral dependencies require the

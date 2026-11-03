@@ -10,11 +10,11 @@ has one named part output, and records analytical default-volume and bounds
 expectations. It does not stand in for features that InvariantCAD does not yet
 support.
 
-| Model | Construction | Default output |
-| --- | --- | --- |
-| Electronics enclosure | Box subtraction plus four cylindrical mounting bosses | `enclosure` |
-| Six-bolt flange | Overlapping cylinders, a through bore, and a six-hole bolt circle | `flange` |
-| Hollow stepped shaft | Three overlapping shaft stages and a continuous axial bore | `shaft` |
+| Model | Benchmark ID | Construction | Default output |
+| --- | --- | --- | --- |
+| Electronics enclosure | `electronics-enclosure` | Box subtraction plus four cylindrical mounting bosses | `enclosure` |
+| Six-bolt flange | `six-bolt-flange` | Overlapping cylinders, a through bore, and a six-hole bolt circle | `flange` |
+| Hollow stepped shaft | `hollow-stepped-shaft` | Three overlapping shaft stages and a continuous axial bore | `shaft` |
 
 All three models are parameterized, material-backed parts and use only the
 common Manifold and stock OCCT modeling subset: boxes, cylinders, transforms,
@@ -64,9 +64,19 @@ pnpm exec tsx scripts/benchmark-reference-models.ts \
   --repeat-runs 1 > .artifacts/reference-models-v2.json
 ```
 
-Use one or more `--model <id>` options to measure a subset. The complete
-one-repeat corpus also executes in Node 26 CI as a protocol and correctness
-check, without comparing performance values.
+Use one or more `--model <id>` options with the benchmark IDs from the table
+above to measure a subset. The default output names are not accepted; an
+unknown ID fails and lists the valid ones.
+
+```bash
+pnpm exec tsx scripts/benchmark-reference-models.ts \
+  --kernel all \
+  --model electronics-enclosure \
+  --repeat-runs 1
+```
+
+The complete one-repeat corpus also executes in Node 26 CI as a protocol and
+correctness check, without comparing performance values.
 
 Each run records canonical document bytes and SHA-256, node and parameter
 counts, measured geometry and mass, tessellation counts and buffer sizes,

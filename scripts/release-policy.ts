@@ -11,6 +11,9 @@
 
 export const REPOSITORY_URL = "https://github.com/shlokjain42/invariantCAD";
 
+/** The hosted documentation site, package.json `homepage`. */
+export const DOCUMENTATION_URL = "https://invariant-cad.mintlify.site";
+
 const STABLE_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
 const RELEASE_DATE = /^(\d{4})-(\d{2})-(\d{2})$/u;
 const UNRELEASED_HEADING = "\n## [Unreleased]\n";
@@ -154,7 +157,11 @@ export function releaseNotesPage(version: string, changelogEntries: string): str
 
 /**
  * Returns the GitHub release body for a release-notes page: the Markdown after
- * the page's YAML frontmatter, as published for earlier releases.
+ * the page's YAML frontmatter. Release pages link to other documentation pages
+ * with site-relative or file-relative targets, which GitHub would resolve
+ * against the repository, so those targets become absolute documentation-site
+ * URLs. Code blocks, fenced or indented and at any depth of block quotes and
+ * list items, and inline code spans are left as written.
  */
 export function releaseNotesBody(page: string): string {
   if (!page.startsWith("---\n")) {
@@ -164,7 +171,305 @@ export function releaseNotesBody(page: string): string {
   if (end === -1) throw new Error("Release notes frontmatter is not closed");
   const body = page.slice(end + "\n---\n".length).replace(/^\n+/u, "");
   if (body.trim() === "") throw new Error("Release notes body is empty");
-  return body;
+  return absoluteDocumentationLinks(body);
+}
+
+const RELEASE_NOTES_DIRECTORY = "releases";
+// One left-to-right scan of a prose run. An inline code span comes first so
+// that it is skipped whole. As in CommonMark, it opens with a complete run of
+// backticks and closes at the next run of the same length; shorter or longer
+// runs inside it are content. It may wrap onto later lines of its paragraph
+// but never crosses a blank line. A reference definition may sit inside block
+// quotes or list items, so it may follow quote markers and indentation; code
+// blocks never reach this scan.
+const MARKDOWN_TARGET = new RegExp(
+  [
+    "(?<!`)(`+)(?!`)(?:[^`\\n]|\\n(?![ \\t]*(?:\\n|$))|`+(?!`))*?(?<!`)\\1(?!`)",
+    "^((?:[ \\t]*>)*[ \\t]*\\[[^\\]\\n]+\\]:[ \\t]*)(<[^<>\\n]*>|\\S+)",
+    "(\\]\\(\\s*)(<[^<>\\n]*>|[^)\\s]+)",
+    "(\\b(?:href|src)=[\"'])([^\"']+)",
+  ].join("|"),
+  "gmu",
+);
+
+/**
+ * How one Markdown line takes part in link rewriting: verbatim code, the
+ * start of a prose block, or the continuation of the paragraph before it.
+ */
+type MarkdownLineKind = "code" | "start" | "continuation";
+
+/**
+ * An open block quote, or a list item whose content is `width` columns in and
+ * that is `filled` once it holds any block.
+ */
+type MarkdownContainer =
+  | { readonly kind: "quote" }
+  | { readonly kind: "item"; readonly width: number; filled: boolean };
+
+interface MarkdownFence {
+  readonly character: string;
+  readonly length: number;
+}
+
+const TAB_STOP = 4;
+const QUOTE_MARKER = /^ {0,3}> ?/u;
+const LIST_MARKER = /^ {0,3}(?:[-+*]|(\d{1,9})[.)])(?= |$)/u;
+const FENCE_MARKER = /^ {0,3}(`{3,}|~{3,})/u;
+const CLOSING_FENCE = /^ {0,3}(`{3,}|~{3,}) *$/u;
+const THEMATIC_BREAK = /^ {0,3}([-*_])(?: *\1){2,} *$/u;
+const ATX_HEADING = /^ {0,3}#{1,6}(?: |$)/u;
+const SETEXT_UNDERLINE = /^ {0,3}(?:=+|-+) *$/u;
+const BLANK = /^ *$/u;
+
+function absoluteDocumentationLinks(markdown: string): string {
+  const lines = markdown.split("\n");
+  const kinds = markdownLineKinds(lines);
+  const output: string[] = [];
+  let prose: string[] = [];
+  const flushProse = (): void => {
+    if (prose.length > 0) output.push(absoluteProseLinks(prose.join("\n")));
+    prose = [];
+  };
+  lines.forEach((line, index) => {
+    const kind = kinds[index];
+    if (kind !== "continuation") flushProse();
+    if (kind === "code") output.push(line);
+    else prose.push(line);
+  });
+  flushProse();
+  return output.join("\n");
+}
+
+/**
+ * Classifies each line with the CommonMark block structure that decides what
+ * is code: fenced and indented code blocks at any depth of block quotes and
+ * list items, fences that end with their container, lazy paragraph
+ * continuation, and backtick fence openers whose info string holds a
+ * backtick, which are inline code instead. Other block kinds count as prose.
+ */
+function markdownLineKinds(lines: readonly string[]): readonly MarkdownLineKind[] {
+  let containers: readonly MarkdownContainer[] = [];
+  let fence: MarkdownFence | undefined;
+  let paragraph = false;
+  return lines.map((line): MarkdownLineKind => {
+    let rest = expandTabs(line.replace(/\r$/u, ""));
+    let matched = 0;
+    for (const container of containers) {
+      const inner = containerContent(container, rest);
+      if (inner === undefined) break;
+      rest = inner;
+      matched += 1;
+    }
+    if (fence !== undefined) {
+      if (matched === containers.length) {
+        const closing = CLOSING_FENCE.exec(rest)?.[1];
+        if (
+          closing !== undefined &&
+          closing[0] === fence.character &&
+          closing.length >= fence.length
+        ) {
+          fence = undefined;
+        }
+        return "code";
+      }
+      // A fenced block ends with the block quote or list item around it.
+      fence = undefined;
+    }
+
+    const opened: MarkdownContainer[] = [];
+    for (;;) {
+      if (THEMATIC_BREAK.test(rest)) break;
+      const quote = QUOTE_MARKER.exec(rest);
+      if (quote !== null) {
+        opened.push({ kind: "quote" });
+        rest = rest.slice(quote[0].length);
+        continue;
+      }
+      // Only a paragraph that this line would otherwise continue directly
+      // limits which list items may start.
+      const item = listItemStart(
+        rest,
+        paragraph && matched === containers.length && opened.length === 0,
+      );
+      if (item === undefined) break;
+      opened.push({ kind: "item", width: item.width, filled: false });
+      rest = rest.slice(item.width);
+    }
+
+    if (
+      paragraph &&
+      matched === containers.length &&
+      opened.length === 0 &&
+      SETEXT_UNDERLINE.test(rest)
+    ) {
+      // The underline turns the paragraph above it into a heading.
+      paragraph = false;
+      return "start";
+    }
+    const blank = BLANK.test(rest);
+    const opener = fenceOpener(rest);
+    const interrupts =
+      opener !== undefined || ATX_HEADING.test(rest) || THEMATIC_BREAK.test(rest);
+    if (
+      paragraph &&
+      matched < containers.length &&
+      opened.length === 0 &&
+      !blank &&
+      !interrupts
+    ) {
+      // Lazy continuation keeps every open container.
+      return "continuation";
+    }
+    if (matched < containers.length || opened.length > 0) paragraph = false;
+    containers = [...containers.slice(0, matched), ...opened];
+    containers.forEach((container, index) => {
+      // Each container holds the ones after it, and the last one holds this
+      // line's content unless it is blank.
+      if (container.kind === "item" && (!blank || index < containers.length - 1)) {
+        container.filled = true;
+      }
+    });
+
+    if (blank) {
+      paragraph = false;
+      return "start";
+    }
+    if (indentation(rest) >= 4) return paragraph ? "continuation" : "code";
+    if (opener !== undefined) {
+      fence = opener;
+      paragraph = false;
+      return "code";
+    }
+    if (interrupts) {
+      paragraph = false;
+      return "start";
+    }
+    const continues = paragraph;
+    paragraph = true;
+    return continues ? "continuation" : "start";
+  });
+}
+
+/** Returns a line's text inside an open container, or undefined when it ends. */
+function containerContent(container: MarkdownContainer, rest: string): string | undefined {
+  if (container.kind === "quote") {
+    const marker = QUOTE_MARKER.exec(rest);
+    return marker === null ? undefined : rest.slice(marker[0].length);
+  }
+  // A blank line continues a list item, unless the item is still empty: an
+  // item may start with at most one blank line.
+  if (BLANK.test(rest)) return container.filled ? "" : undefined;
+  return indentation(rest) >= container.width ? rest.slice(container.width) : undefined;
+}
+
+/** Returns the content offset of a list item that starts the text. */
+function listItemStart(
+  rest: string,
+  interruptsParagraph: boolean,
+): { readonly width: number } | undefined {
+  const marker = LIST_MARKER.exec(rest);
+  if (marker === null) return undefined;
+  const after = rest.slice(marker[0].length);
+  const empty = BLANK.test(after);
+  const ordinal = marker[1];
+  if (interruptsParagraph && (empty || (ordinal !== undefined && Number(ordinal) !== 1))) {
+    return undefined;
+  }
+  const spaces = indentation(after);
+  // Content that starts five or more spaces after the marker is indented code
+  // one space in; an empty first line puts the content one space in as well.
+  return { width: marker[0].length + (empty || spaces > 4 ? 1 : spaces) };
+}
+
+/** Returns the fence that the text opens, if any. */
+function fenceOpener(rest: string): MarkdownFence | undefined {
+  const marker = FENCE_MARKER.exec(rest);
+  const run = marker?.[1];
+  if (marker === null || run === undefined) return undefined;
+  const character = run[0] ?? "";
+  // A backtick fence's info string cannot contain a backtick, so such a line
+  // is a paragraph that starts with an inline code span.
+  if (character === "`" && rest.slice(marker[0].length).includes("`")) return undefined;
+  return { character, length: run.length };
+}
+
+/** Expands tabs to the four-column stops that CommonMark block structure uses. */
+function expandTabs(line: string): string {
+  let expanded = "";
+  for (const character of line) {
+    expanded +=
+      character === "\t" ? " ".repeat(TAB_STOP - (expanded.length % TAB_STOP)) : character;
+  }
+  return expanded;
+}
+
+/** Counts leading spaces; tabs are already expanded. */
+function indentation(text: string): number {
+  return /^ */u.exec(text)?.[0].length ?? 0;
+}
+
+function absoluteProseLinks(prose: string): string {
+  return prose.replace(
+    MARKDOWN_TARGET,
+    (
+      match: string,
+      code: string | undefined,
+      referencePrefix: string | undefined,
+      referenceTarget: string | undefined,
+      linkPrefix: string | undefined,
+      linkTarget: string | undefined,
+      attributePrefix: string | undefined,
+      attributeTarget: string | undefined,
+    ) => {
+      if (code !== undefined) return match;
+      if (referencePrefix !== undefined && referenceTarget !== undefined) {
+        return `${referencePrefix}${linkDestination(referenceTarget)}`;
+      }
+      if (linkPrefix !== undefined && linkTarget !== undefined) {
+        return `${linkPrefix}${linkDestination(linkTarget)}`;
+      }
+      return `${attributePrefix ?? ""}${documentationUrl(attributeTarget ?? "")}`;
+    },
+  );
+}
+
+/** Rewrites a Markdown destination, keeping its optional angle brackets. */
+function linkDestination(target: string): string {
+  return target.startsWith("<") && target.endsWith(">")
+    ? `<${documentationUrl(target.slice(1, -1))}>`
+    : documentationUrl(target);
+}
+
+/** Resolves one link target the way the documentation site does. */
+function documentationUrl(target: string): string {
+  if (target.startsWith("#") || /^[a-z][a-z\d+.-]*:/iu.test(target)) {
+    return target;
+  }
+  if (target.startsWith("//")) {
+    throw new Error(
+      `Release notes link '${target}' must name its scheme; use an absolute URL`,
+    );
+  }
+  const suffixStart = target.search(/[?#]/u);
+  const path = suffixStart === -1 ? target : target.slice(0, suffixStart);
+  const suffix = suffixStart === -1 ? "" : target.slice(suffixStart);
+  const segments = path.startsWith("/") ? [] : [RELEASE_NOTES_DIRECTORY];
+  for (const segment of path.split("/")) {
+    if (segment === "" || segment === ".") continue;
+    if (segment === "..") {
+      if (segments.pop() === undefined) {
+        throw new Error(
+          `Release notes link '${target}' leaves the documentation site; use an absolute URL`,
+        );
+      }
+      continue;
+    }
+    segments.push(segment);
+  }
+  const last = segments.length - 1;
+  if (last >= 0) segments[last] = segments[last]!.replace(/\.mdx?$/u, "");
+  if (segments[segments.length - 1] === "index") segments.pop();
+  return `${DOCUMENTATION_URL}/${segments.join("/")}${suffix}`;
 }
 
 /** Lists every disagreement between the merged files and `version`. */

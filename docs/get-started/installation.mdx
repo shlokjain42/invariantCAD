@@ -141,10 +141,18 @@ facade setup.
 
 ## Package-manager install scripts
 
-Some strict package-manager configurations block dependency build scripts. The
-stock OCCT and browser toolchains may require explicitly allowing their
-documented runtime preparation. Do not enable arbitrary install scripts
-globally; scope any exception to the package that requires it and keep the
+InvariantCAD needs no install scripts. Neither the package nor its runtime
+dependencies (`occt-wasm`, `zod`, and `comlink` through `occt-wasm`) declare
+`preinstall`, `install`, `postinstall`, or `prepare` scripts, and the Manifold
+and stock OCCT WebAssembly runtimes ship prebuilt inside the installed
+packages. Installing with `npm install --ignore-scripts`, or under pnpm's
+default policy of blocking dependency build scripts, is supported: the release
+gate installs the packed package with `--ignore-scripts` before running its
+clean-consumer smoke test.
+
+Do not allow install scripts on InvariantCAD's behalf. If other tooling in your
+application, such as a bundler or browser test runner, needs one, follow that
+tool's documentation, scope the exception to that package, and keep the
 lockfile reviewed.
 
 <Warning>

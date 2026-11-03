@@ -1,0 +1,61 @@
+import { describe, expect, it } from "vitest";
+import {
+  frontmatterScalar,
+  pageFrontmatter,
+} from "../scripts/docs-frontmatter.mjs";
+
+describe("documentation page frontmatter", () => {
+  it("extracts the leading YAML block", () => {
+    expect(pageFrontmatter('---\ntitle: "A"\n---\n\nBody\n')).toBe('title: "A"');
+    expect(pageFrontmatter("# No frontmatter\n")).toBeUndefined();
+    expect(pageFrontmatter('Intro\n---\ntitle: "A"\n---\n')).toBeUndefined();
+  });
+
+  it.each([
+    ['title: "Export index"', "Export index"],
+    ["title: 'It''s quoted'", "It''s quoted"],
+    ['title: "Escaped \\" quote"', 'Escaped \\" quote'],
+    ["title: Plain words", "Plain words"],
+    ['title:   "Padded"   ', "Padded"],
+    ['title: "Commented" # note', "Commented"],
+    ['title: "Tab\\tseparated"', "Tab\\tseparated"],
+    ['title: "\\u0041 escaped letter"', "\\u0041 escaped letter"],
+  ])("reads %s", (line, value) => {
+    expect(frontmatterScalar(`${line}\ndescription: "Other"`, "title")).toBe(value);
+  });
+
+  it("ignores indented comments and blank lines after a single-line value", () => {
+    expect(
+      frontmatterScalar('title: "Kept"\n  # note\n\ndescription: "Other"', "title"),
+    ).toBe("Kept");
+  });
+
+  it.each([
+    ["an empty double-quoted value", 'title: ""\ndescription: "Real"'],
+    ["an empty single-quoted value", "title: ''\ndescription: \"Real\""],
+    ["a whitespace-only quoted value", 'title: "   "\ndescription: "Real"'],
+    ["an escaped space", 'title: "\\u0020"'],
+    ["escaped tab and line feed", 'title: "\\t\\n"'],
+    ["hex and long escaped spaces", 'title: "\\x20\\U00000020\\ "'],
+    ["escaped YAML line and space separators", 'title: "\\N\\_\\L\\P"'],
+    ["an escape YAML does not define", 'title: "Bad \\q escape"'],
+    ["a blank value followed by another key", 'title:\ndescription: "Real"'],
+    ["a blank value at the end", 'description: "Real"\ntitle:'],
+    ["a blank value followed by an indented line", "title:\n  Continued"],
+    ["a plain value continued on an indented line", 'title: First\n  second\ndescription: "Real"'],
+    ["a plain value continued after a blank line", "title: First\n\n\tsecond"],
+    ["a quoted value followed by an indented line", 'title: "First"\n  second'],
+    ["an indented line after an indented comment", "title: First\n  # note\n  second"],
+    ["an indented line after a top-level comment", "title: First\n# note\n  second"],
+    ["a YAML null", 'title: null\ndescription: "Real"'],
+    ["a YAML tilde null", 'title: ~\ndescription: "Real"'],
+    ["a block scalar", "title: >-\n  Folded title"],
+    ["an unterminated quote", 'title: "Open\ndescription: "Real"'],
+    ["a comment only", "title: # nothing"],
+    ["a missing key", 'description: "Real"'],
+    ["a repeated key", 'title: "One"\ntitle: "Two"'],
+    ["a nested key only", 'meta:\n  title: "Nested"'],
+  ])("rejects %s", (_label, frontmatter) => {
+    expect(frontmatterScalar(frontmatter, "title")).toBeUndefined();
+  });
+});

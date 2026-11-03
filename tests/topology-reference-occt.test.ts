@@ -15,7 +15,9 @@ import {
 } from "../src/index.js";
 import { createOcctKernel } from "../src/occt-kernel.js";
 
-describe("OCCT document-owned persistent topology reference", () => {
+// These tests start real OCCT WebAssembly runtimes, which can exceed vitest's
+// 5 s default under coverage on a loaded host; 30 s still fails a real hang.
+describe("OCCT document-owned persistent topology reference", { timeout: 30_000 }, () => {
   it("captures a box face and consumes it as a shell opening after a parameter change", async () => {
     const kernel = await createOcctKernel();
     let evaluator: Evaluator | undefined;

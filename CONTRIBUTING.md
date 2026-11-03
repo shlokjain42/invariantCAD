@@ -50,6 +50,13 @@ pnpm lint
 pnpm test
 ```
 
+The Mintlify commands `pnpm docs:dev`, `pnpm docs:validate`, `pnpm docs:links`,
+and `pnpm release:check` (which runs the validation and link checks) use the
+pinned Mint CLI. It supports Node.js 20.17 through 24 and exits on Node.js 25
+and newer, so run those commands with Node.js 24, as CI and the release
+workflow do. This is a documentation-tooling ceiling, not a package runtime
+ceiling.
+
 Create a focused branch in your fork. Keep unrelated refactors separate from
 the behavior being changed. Do not commit generated build output, coverage,
 local artifacts, credentials, or npm tokens.
@@ -84,8 +91,8 @@ to the change before opening a pull request.
 | Public TypeScript API | `pnpm api:generate`, review `etc/api/`, and `pnpm api:check` |
 | Package exports or CLI | `pnpm lint:package` and `pnpm test:package` |
 | Browser or WASM loading | `pnpm test:browser` |
-| Dependency or release boundary | `pnpm audit:release` and `pnpm release:check` |
-| Mintlify navigation or components | `pnpm docs:validate` and `pnpm docs:links` |
+| Dependency or release boundary | `pnpm audit:release` and, on Node.js 24, `pnpm release:check` |
+| Mintlify navigation or components | `pnpm docs:validate` and `pnpm docs:links`, on Node.js 24 |
 
 `pnpm release:check` is intentionally heavyweight. A contributor does not need
 to run every heavyweight native facade gate unless the change affects that
@@ -112,10 +119,11 @@ Protocol changes require more than a type edit. Include:
 - a migration decision; and
 - corresponding guide, reference, support-matrix, and changelog updates.
 
-New public exports must remain visible in the generated export index. Run
-`pnpm docs:generate` when the public surface changes and commit the resulting
-documentation update. Any public signature change must also update and review
-the declaration-level reports with `pnpm api:generate`.
+New public exports must remain visible in the generated export index. When the
+public surface changes, first update and review the declaration-level reports
+with `pnpm api:generate`, then run `pnpm docs:generate` and commit both. The
+export-index generator fails on any export statement it cannot parse and on any
+name that its entry point's API report does not also list.
 
 ## Native OCCT facade
 
@@ -132,10 +140,11 @@ release boundary and is not implicitly shipped by the npm package.
 
 ## Documentation
 
-The Mintlify source lives under `docs/`. Every navigated page requires `title`
-and `description` frontmatter. Keep examples complete enough to copy, clearly
-separate tested behavior from roadmap work, and use the support matrix as the
-canonical feature boundary.
+The Mintlify source lives under `docs/`. Every navigated page requires
+non-blank `title` and `description` frontmatter values, each written on one
+line. Keep examples complete enough to copy, clearly separate tested behavior
+from roadmap work, and use the support matrix as the canonical feature
+boundary.
 
 Selected complete code fences are generated from strict TypeScript regions in
 `examples/docs/`. Do not edit content between `docs-example` markers directly:

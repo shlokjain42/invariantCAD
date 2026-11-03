@@ -1,7 +1,9 @@
 import { execFile } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import process from "node:process";
 import { beforeAll, describe, expect, it } from "vitest";
+import { referenceModels } from "../examples/reference-models/index.js";
 import {
   enforceCrossKernelCanonicalIdentity,
   validateBenchmarkCase,
@@ -212,4 +214,45 @@ describe("reference-model benchmark protocol", () => {
       ]),
     ).toThrow(/differs between kernels/u);
   });
+});
+
+describe("reference-model benchmark model selection", () => {
+  it("documents every --model ID on the corpus page", () => {
+    const page = readFileSync(
+      new URL("../docs/reference/reference-model-corpus.mdx", import.meta.url),
+      "utf8",
+    );
+    for (const model of referenceModels) {
+      expect(page).toContain(`| \`${model.id}\` |`);
+    }
+    expect(page).toContain(`--model ${referenceModels[0]!.id}`);
+  });
+
+  it("rejects an output name given as --model and lists the valid IDs", async () => {
+    const script = fileURLToPath(
+      new URL("../scripts/benchmark-reference-models.ts", import.meta.url),
+    );
+    const failure = await new Promise<{ code: number | null; stderr: string }>(
+      (resolve) => {
+        execFile(
+          process.execPath,
+          ["--import", "tsx", script, "--model", "enclosure"],
+          {
+            cwd: fileURLToPath(new URL("..", import.meta.url)),
+            encoding: "utf8",
+            timeout: 30_000,
+            killSignal: "SIGKILL",
+          },
+          (error, _stdout, stderr) => {
+            resolve({ code: error === null ? 0 : (error.code as number | null), stderr });
+          },
+        );
+      },
+    );
+    expect(failure.code).toBe(1);
+    expect(failure.stderr).toContain(
+      "Unknown reference model 'enclosure'. Valid --model IDs: " +
+        referenceModels.map((model) => model.id).join(", "),
+    );
+  }, 30_000);
 });

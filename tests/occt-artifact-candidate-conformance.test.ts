@@ -182,7 +182,9 @@ async function candidateTarget(): Promise<{
   return { kernel, codec };
 }
 
-describe("OCCT candidate shape-artifact conformance gate", () => {
+// These tests start real OCCT WebAssembly runtimes, which can exceed vitest's
+// 5 s default under coverage on a loaded host; 30 s still fails a real hang.
+describe("OCCT candidate shape-artifact conformance gate", { timeout: 30_000 }, () => {
   it("retains the private v1/v2 fixtures only as an explicit fail-closed corpus", async () => {
     const kernel = await createOcctKernel();
     try {

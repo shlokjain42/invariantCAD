@@ -22,6 +22,11 @@ pnpm test
 ```
 
 Node.js 22.13 or newer is required. The lockfile records the tested toolchain.
+The Mintlify commands `pnpm docs:dev`, `pnpm docs:validate`, `pnpm docs:links`,
+and `pnpm release:check` (which runs the validation and link checks) use the
+pinned Mint CLI, which supports Node.js 20.17 through 24 and exits on Node.js 25
+and newer. Run those commands with Node.js 24, as CI and the release workflow
+do.
 
 ## Validation levels
 
@@ -33,7 +38,7 @@ pnpm test:browser   # production Vite bundle in Chromium
 pnpm lint:package   # package export/type lint
 pnpm test:package   # packed clean-consumer smoke
 pnpm api:entrypoints:check # export/source/report/target manifest
-pnpm release:check  # full gate, including coverage + six benchmarks
+pnpm release:check  # full gate on Node 24, including coverage + six benchmarks
 ```
 
 Run the smallest relevant loop while developing, then the proportional full
@@ -77,9 +82,10 @@ history, failure rollback, resource ceilings, and disposal.
 
 ## Documentation changes
 
-The Mintlify source lives in `/docs`. Every navigated page needs `title` and
-`description` frontmatter. Keep examples compilable, distinguish tested from
-planned behavior, and link to one canonical support matrix.
+The Mintlify source lives in `/docs`. Every navigated page needs non-blank
+`title` and `description` frontmatter values, each written on one line. Keep
+examples compilable, distinguish tested from planned behavior, and link to one
+canonical support matrix.
 
 Selected complete fences are synchronized from strict TypeScript regions under
 `examples/docs/`. The
@@ -94,13 +100,15 @@ coverage, and source-mapped public imports without starting native runtimes.
 missing from the manifest, imports every listed module, runs its Manifold or
 OCCT workflow, and requires all named behavioral checks to pass.
 
-The current executable matrix covers portable parametric modeling and STL,
-sketch/extrude plus exact STEP, fixed assemblies with configurations and BOMs,
-canonical document migration and hashing, persistent topology
-capture/resolution/explanation, and bounded parsing with structured
-diagnostics. Unmarked fences are intentionally illustrative fragments: keep
-them accurate and type-aligned, but do not imply that they are independently
-compiled or executed.
+The manifest is the authoritative list of the executable matrix. It currently
+covers portable parametric modeling and STL; sketch/extrude plus exact STEP;
+fixed assemblies with configurations and BOMs; canonical document migration and
+hashing; content-committed imported bodies with caller-supplied resource
+resolution, canonical persistence, and an exact STEP round trip; persistent
+topology capture, resolution, and explanation; and bounded parsing with
+structured diagnostics. Unmarked fences are intentionally illustrative
+fragments: keep them accurate and type-aligned, but do not imply that they are
+independently compiled or executed.
 
 ## Security reports
 

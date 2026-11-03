@@ -42,7 +42,9 @@ function expectAggregateInvariants(
   ).toBe(explanation.candidatesMatched);
 }
 
-describe("OCCT persistent topology reference integration", () => {
+// These tests start real OCCT WebAssembly runtimes, which can exceed vitest's
+// 5 s default under coverage on a loaded host; 30 s still fails a real hang.
+describe("OCCT persistent topology reference integration", { timeout: 30_000 }, () => {
   it("explains an edge resolved by semantic lineage through a real OCCT transform", async () => {
     const kernel = await createOcctKernel();
     const source = kernel.box!([10, 20, 30], false, {

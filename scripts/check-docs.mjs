@@ -2,6 +2,7 @@ import { access, readFile, readdir } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { frontmatterScalar, pageFrontmatter } from "./docs-frontmatter.mjs";
 
 const repositoryRoot = resolve(fileURLToPath(new URL("../", import.meta.url)));
 const docsRoot = resolve(repositoryRoot, "docs");
@@ -58,13 +59,15 @@ for (const page of pages) {
   if (file === undefined) throw new Error(`Mintlify page '${page}' does not exist`);
   navigatedFiles.push(file);
   const text = await readFile(file, "utf8");
-  const frontmatter = text.match(/^---\n([\s\S]*?)\n---\n/);
-  if (frontmatter === null) {
+  const frontmatter = pageFrontmatter(text);
+  if (frontmatter === undefined) {
     throw new Error(`${relative(repositoryRoot, file)} has no frontmatter`);
   }
   for (const field of ["title", "description"]) {
-    if (!new RegExp(`^${field}:\\s*["']?.+`, "m").test(frontmatter[1])) {
-      throw new Error(`${relative(repositoryRoot, file)} has no ${field}`);
+    if (frontmatterScalar(frontmatter, field) === undefined) {
+      throw new Error(
+        `${relative(repositoryRoot, file)} needs one non-blank, single-line ${field}`,
+      );
     }
   }
 }

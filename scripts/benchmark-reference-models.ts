@@ -293,7 +293,10 @@ async function createKernel(id: ReferenceKernelId): Promise<GeometryKernel> {
 function modelById(id: string): ReferenceModel {
   const model = referenceModels.find((candidate) => candidate.id === id);
   if (model === undefined) {
-    throw new RangeError(`Unknown reference model '${id}'`);
+    throw new RangeError(
+      `Unknown reference model '${id}'. Valid --model IDs: ` +
+        referenceModels.map((candidate) => candidate.id).join(", "),
+    );
   }
   return model;
 }

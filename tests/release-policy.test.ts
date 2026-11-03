@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
+  DOCUMENTATION_URL,
   REPOSITORY_URL,
   assertReleaseDate,
   compareStableVersions,
@@ -185,6 +186,162 @@ describe("release verification", () => {
     }
   });
 
+  it("rewrites documentation-relative links to absolute site URLs for GitHub", () => {
+    const page = [
+      "---",
+      'title: "InvariantCAD 1.3.0"',
+      "---",
+      "",
+      "# InvariantCAD 1.3.0",
+      "",
+      "See [profiles](/evaluation/evaluator) and [the matrix](/reference/support-matrix#occt).",
+      "Read the [roadmap](../roadmap.md), [import](../interchange/import-export.mdx),",
+      "the [previous notes](0.1.1.md), [this release](./1.3.0), and the [home](/).",
+      '![diagram](/assets/flow.svg "Flow") and <a href="/get-started/quickstart">start</a>.',
+      '<img src="/assets/logo.svg" alt="logo"> and [spaced](</guides/first steps.mdx>).',
+      "Keep [GitHub](https://github.com/shlokjain42/invariantCAD), [mail](mailto:a@b.c),",
+      "[bracketed GitHub](<https://github.com/shlokjain42/invariantCAD>),",
+      "and [anchors](#highlights) as written, as well as `[code](/not-a-link)`.",
+      "A `code span that wraps",
+      "[onto](/not-a-link) the next line` is code, but a lone ` backtick",
+      "",
+      "A ``span with ` and [guide](/not-a-link)`` is code, as is ```one with ``[x](/y)```.",
+      "",
+      "does not protect [later](/guides/later) paragraphs.",
+      "",
+      "[reference]: /guides/index",
+      "[bracketed]: <../roadmap.md>",
+      "",
+      "```md",
+      "[fenced](/not-a-link)",
+      "```",
+      "",
+    ].join("\n");
+    expect(releaseNotesBody(page)).toBe(
+      [
+        "# InvariantCAD 1.3.0",
+        "",
+        `See [profiles](${DOCUMENTATION_URL}/evaluation/evaluator) and [the matrix](${DOCUMENTATION_URL}/reference/support-matrix#occt).`,
+        `Read the [roadmap](${DOCUMENTATION_URL}/roadmap), [import](${DOCUMENTATION_URL}/interchange/import-export),`,
+        `the [previous notes](${DOCUMENTATION_URL}/releases/0.1.1), [this release](${DOCUMENTATION_URL}/releases/1.3.0), and the [home](${DOCUMENTATION_URL}/).`,
+        `![diagram](${DOCUMENTATION_URL}/assets/flow.svg "Flow") and <a href="${DOCUMENTATION_URL}/get-started/quickstart">start</a>.`,
+        `<img src="${DOCUMENTATION_URL}/assets/logo.svg" alt="logo"> and [spaced](<${DOCUMENTATION_URL}/guides/first steps>).`,
+        "Keep [GitHub](https://github.com/shlokjain42/invariantCAD), [mail](mailto:a@b.c),",
+        "[bracketed GitHub](<https://github.com/shlokjain42/invariantCAD>),",
+        "and [anchors](#highlights) as written, as well as `[code](/not-a-link)`.",
+        "A `code span that wraps",
+        "[onto](/not-a-link) the next line` is code, but a lone ` backtick",
+        "",
+        "A ``span with ` and [guide](/not-a-link)`` is code, as is ```one with ``[x](/y)```.",
+        "",
+        `does not protect [later](${DOCUMENTATION_URL}/guides/later) paragraphs.`,
+        "",
+        `[reference]: ${DOCUMENTATION_URL}/guides`,
+        `[bracketed]: <${DOCUMENTATION_URL}/roadmap>`,
+        "",
+        "```md",
+        "[fenced](/not-a-link)",
+        "```",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  // Every prose target below is under /guides/ and must become absolute. The
+  // code targets would be rewritten, or ../../CHANGELOG.md would throw, if a
+  // code block were mistaken for prose.
+  const absoluteGuides = (lines: readonly string[]): string =>
+    lines.join("\n").replaceAll("/guides/", `${DOCUMENTATION_URL}/guides/`);
+  const releaseBody = (lines: readonly string[]): string =>
+    releaseNotesBody(`---\ntitle: "x"\n---\n\n${lines.join("\n")}`);
+
+  it("leaves code blocks inside list items and block quotes unchanged", () => {
+    const lines = [
+      "- A nested example:",
+      "",
+      "    ~~~md",
+      "    [changes](../../CHANGELOG.md) and [guide](/not-a-link)",
+      "    ~~~",
+      "",
+      "  - Deeper:",
+      "",
+      "    ```md",
+      "    [deeper](/not-a-link)",
+      "    ```",
+      "",
+      "  Back in the outer item, see [guide](/guides/item).",
+      "",
+      "> ```md",
+      "> [quoted](/not-a-link)",
+      "> ```",
+      ">",
+      ">     [indented in a quote](/not-a-link)",
+      ">",
+      "> See [quote link](/guides/quote).",
+      ">",
+      "> [quoted ref]: /guides/quoted",
+      "",
+      "    [indented](/not-a-link) top-level code",
+      "",
+      "Setext heading",
+      "===",
+      "    [after a heading](/not-a-link)",
+      "",
+      "-",
+      "",
+      "    [after an empty item](/not-a-link)",
+      "",
+      "- Item text",
+      "      [continued](/guides/continued) as paragraph text",
+      "",
+      "- ```md",
+      "  [first block](/not-a-link)",
+      "  ```",
+      "-     [indented item code](/not-a-link)",
+      "",
+      "> Lazy quote",
+      "    [lazy](/guides/lazy) continuation",
+      "",
+      "1. ```md",
+      "   [unclosed](/not-a-link)",
+      "2. The fence ended with its item, so [after](/guides/after) is prose.",
+    ];
+    expect(releaseBody(lines)).toBe(absoluteGuides(lines));
+  });
+
+  it("treats a backtick fence opener with a backtick after it as inline code", () => {
+    const lines = [
+      "```[example](/not-a-link)``` opens a paragraph, so [this](/guides/this) changes.",
+      "",
+      "See [later](/guides/later) paragraphs too.",
+      "",
+      "~~~md `title`",
+      "[tilde fence](/not-a-link)",
+      "~~~",
+      "",
+      "Then [after](/guides/after).",
+    ];
+    expect(releaseBody(lines)).toBe(absoluteGuides(lines));
+  });
+
+  it("lets a list item end a quoted paragraph whose line has no quote marker", () => {
+    // CommonMark, and GitHub's renderer, close the quote here and start an
+    // ordered list at 2, so the link is real rather than inline code.
+    expect(() => releaseBody(["> Try `text", "2. [changes](../../CHANGELOG.md)`"])).toThrow(
+      "Release notes link '../../CHANGELOG.md' leaves the documentation site",
+    );
+    expect(releaseBody(["> Try `text", "> 2. [example](/not-a-link)`"])).toBe(
+      "> Try `text\n> 2. [example](/not-a-link)`",
+    );
+  });
+
+  it("rejects a release-notes link that leaves the documentation site", () => {
+    const page = '---\ntitle: "x"\n---\n\nSee [changes](../../CHANGELOG.md).\n';
+    expect(() => releaseNotesBody(page)).toThrow(
+      "Release notes link '../../CHANGELOG.md' leaves the documentation site; use an absolute URL",
+    );
+  });
+
   it("rejects release notes without frontmatter or body", () => {
     expect(() => releaseNotesBody("# Title\n")).toThrow(/frontmatter/u);
     expect(() => releaseNotesBody("---\ntitle: x\n")).toThrow(/not closed/u);
@@ -214,6 +371,25 @@ describe("repository release state", () => {
     const body = releaseNotesBody(repositoryFile(`docs/releases/${currentVersion}.md`));
     expect(body.startsWith(`# InvariantCAD ${currentVersion}\n`)).toBe(true);
     expect(body).not.toMatch(/^title:/mu);
+  });
+
+  it("publishes no site-relative links in any release body", () => {
+    expect(JSON.parse(sources.packageJson)).toMatchObject({ homepage: DOCUMENTATION_URL });
+    const pages = sources.docsJson.match(/releases\/\d+\.\d+\.\d+/gu) ?? [];
+    expect(pages).toContain(`releases/${currentVersion}`);
+    const bodies = pages.map((page) => releaseNotesBody(repositoryFile(`docs/${page}.md`)));
+    for (const body of bodies) {
+      // Code is published as written, so only destinations outside code must
+      // carry a scheme or be an in-page anchor.
+      const prose = body
+        .replace(/^ {0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?^ {0,3}\1[ \t]*$/gmu, "")
+        .replace(/(`+)[^`]*?\1/gu, "");
+      expect(prose).not.toMatch(/\]\(\s*(?!<?(?:[a-z][a-z\d+.-]*:|#))/iu);
+      expect(prose).not.toMatch(/\b(?:href|src)=["'](?![a-z][a-z\d+.-]*:|#)/iu);
+    }
+    // A release page need not link to the site, but the published pages do,
+    // so the check above is not vacuous.
+    expect(bodies.some((body) => body.includes(`](${DOCUMENTATION_URL}/`))).toBe(true);
   });
 
   it("keeps the changelog preparable for the next release", () => {
