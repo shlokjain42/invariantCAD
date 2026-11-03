@@ -21,7 +21,7 @@ import {
   type KernelShapeArtifactCapabilities,
   type KernelShapeArtifactContext,
 } from "./kernel.js";
-import { isCanonicalUtf8StringWithin } from "./core/utf8.js";
+import { decodeUtf8Fatal, isCanonicalUtf8StringWithin } from "./core/utf8.js";
 import {
   encodeKernelShapeSemanticObservation,
   encodeKernelShapeSemanticObservationV2,
@@ -989,6 +989,14 @@ async function hashBounded(
   try {
     if (typeof input === "string") {
       bytes = encodeBoundedUtf8(input, maximum);
+      // TextEncoder replaces unpaired surrogates with U+FFFD, which would let
+      // distinct strings share one witness. Reject them like the artifact
+      // cache does instead of hashing a replacement.
+      if (bytes !== undefined && decodeUtf8Fatal(bytes) !== input) {
+        return invalidOptions(
+          "Witness input string contains an unpaired UTF-16 surrogate",
+        );
+      }
     } else {
       const info = exactUint8ArrayInfo(input);
       bytes =
@@ -1029,7 +1037,13 @@ async function hashBounded(
   }
 }
 
-/** Hashes a caller-canonicalized semantic observation under a fixed domain. */
+/**
+ * Hashes a caller-canonicalized semantic observation under a fixed domain.
+ *
+ * A string is hashed as its exact UTF-8 bytes; one containing an unpaired
+ * UTF-16 surrogate is rejected with `ARTIFACT_CACHE_ENTRY_INVALID` rather than
+ * silently replaced.
+ */
 export async function hashKernelShapeArtifactSemanticWitness(
   input: string | Uint8Array,
   options?: { readonly maxBytes?: number; readonly signal?: AbortSignal },

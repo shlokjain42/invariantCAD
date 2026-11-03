@@ -1100,6 +1100,38 @@ describe("shape-artifact witness helpers", () => {
     expectTypeOf(fixture).toEqualTypeOf<KernelShapeArtifactFixtureWitness>();
   });
 
+  it("rejects unpaired surrogates instead of replacing them before hashing", async () => {
+    // A literal U+FFFD is well formed and still hashes.
+    const replacement = await valueOf(
+      hashKernelShapeArtifactSemanticWitness("obs\ufffd"),
+    );
+    for (const input of ["obs\ud800", "obs\udbff", "\udc00obs", "obs\udc00\ud800"]) {
+      const result = await hashKernelShapeArtifactSemanticWitness(input);
+      expectFailure(result, "ARTIFACT_CACHE_ENTRY_INVALID");
+      expect(result.ok ? undefined : result.diagnostics[0]?.message).toMatch(
+        /unpaired UTF-16 surrogate/u,
+      );
+    }
+    expect(replacement).toMatch(
+      new RegExp(`^${KERNEL_SHAPE_ARTIFACT_SEMANTIC_WITNESS_PREFIX}[0-9a-f]{64}$`),
+    );
+
+    // Paired surrogates are well formed and hash as their exact UTF-8 bytes.
+    const paired = "obs\u{1f600}";
+    expect(await valueOf(hashKernelShapeArtifactSemanticWitness(paired))).toBe(
+      await valueOf(
+        hashKernelShapeArtifactSemanticWitness(new TextEncoder().encode(paired)),
+      ),
+    );
+
+    // The byte ceiling is still enforced before well-formedness is inspected.
+    const oversized = await hashKernelShapeArtifactSemanticWitness(
+      "abc\ud800",
+      { maxBytes: 3 },
+    );
+    expectFailure(oversized, "ARTIFACT_CACHE_LIMIT_EXCEEDED");
+  });
+
   it("bounds inputs, validates exact byte kinds, and observes pre-abort", async () => {
     const bounded = await hashKernelShapeArtifactSemanticWitness("abcd", {
       maxBytes: 3,
