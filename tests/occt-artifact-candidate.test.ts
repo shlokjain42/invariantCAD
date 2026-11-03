@@ -57,6 +57,23 @@ function codec(kernel: GeometryKernel): KernelShapeArtifactCodecCandidate {
   return candidate;
 }
 
+/**
+ * Creates a producer and a consumer kernel. When the second creation fails,
+ * the first kernel is disposed before the failure propagates, so a test's own
+ * try/finally only ever owns kernels that both exist.
+ */
+async function createProducerAndConsumer(): Promise<
+  readonly [GeometryKernel, GeometryKernel]
+> {
+  const producer = await createOcctKernel();
+  try {
+    return [producer, await createOcctKernel()];
+  } catch (error) {
+    producer.dispose();
+    throw error;
+  }
+}
+
 function codecWithRuntimePairIdentity(
   kernel: GeometryKernel,
   runtimePairIdentity: string,
@@ -534,8 +551,7 @@ describe("OCCT shape-artifact codec candidate", { timeout: 30_000 }, () => {
   it.each([7, 24])(
     "round-trips a non-rectilinear %i-sided prism whose derived bounds drift in binary BREP",
     async (sides) => {
-      const producer = await createOcctKernel();
-      const consumer = await createOcctKernel();
+      const [producer, consumer] = await createProducerAndConsumer();
       let source: KernelShape | undefined;
       let reimported: KernelShape | undefined;
       const decoded: (readonly [GeometryKernel, KernelShape])[] = [];
@@ -596,8 +612,7 @@ describe("OCCT shape-artifact codec candidate", { timeout: 30_000 }, () => {
   );
 
   it("derives the descriptor tolerance from each restored native item, not the sidecar", async () => {
-    const producer = await createOcctKernel();
-    const consumer = await createOcctKernel();
+    const [producer, consumer] = await createProducerAndConsumer();
     let roleBox: KernelShape | undefined;
     let slenderBox: KernelShape | undefined;
     let decoded: KernelShape | undefined;
@@ -696,8 +711,7 @@ describe("OCCT shape-artifact codec candidate", { timeout: 30_000 }, () => {
   }, 30_000);
 
   it("does not let distance from the origin loosen lengths, areas, or radii", async () => {
-    const producer = await createOcctKernel();
-    const consumer = await createOcctKernel();
+    const [producer, consumer] = await createProducerAndConsumer();
     const sources: KernelShape[] = [];
     const decoded: KernelShape[] = [];
     try {
@@ -1171,29 +1185,28 @@ describe("OCCT shape-artifact codec candidate", { timeout: 30_000 }, () => {
   });
 
   it("decodes every artifact the encoder admits at the sidecar string ceiling", async () => {
-    const producer = await createOcctKernel();
-    const consumer = await createOcctKernel();
-    const producerCodec = codec(producer);
-    // U+4E00 is two UTF-16 bytes, which the sidecar ceiling counts, but three
-    // UTF-8 bytes. Synthesized topology keys and every adjacency occurrence
-    // add further UTF-8 strings that no declared sidecar total includes.
-    const featureOf = (length: number) => "一".repeat(length);
-    const encodes = async (length: number): Promise<boolean> => {
-      const shape = box(producer, featureOf(length));
-      try {
-        await producerCodec.encodeShapeArtifact(shape, ARTIFACT_CONTEXT);
-        return true;
-      } catch (error) {
-        if (!(error instanceof RangeError)) throw error;
-        expect(error.message).toMatch(/string budget was exceeded/u);
-        return false;
-      } finally {
-        producer.disposeShape(shape);
-      }
-    };
+    const [producer, consumer] = await createProducerAndConsumer();
     let source: KernelShape | undefined;
     let decoded: KernelShape | undefined;
     try {
+      const producerCodec = codec(producer);
+      // U+4E00 is two UTF-16 bytes, which the sidecar ceiling counts, but three
+      // UTF-8 bytes. Synthesized topology keys and every adjacency occurrence
+      // add further UTF-8 strings that no declared sidecar total includes.
+      const featureOf = (length: number) => "一".repeat(length);
+      const encodes = async (length: number): Promise<boolean> => {
+        const shape = box(producer, featureOf(length));
+        try {
+          await producerCodec.encodeShapeArtifact(shape, ARTIFACT_CONTEXT);
+          return true;
+        } catch (error) {
+          if (!(error instanceof RangeError)) throw error;
+          expect(error.message).toMatch(/string budget was exceeded/u);
+          return false;
+        } finally {
+          producer.disposeShape(shape);
+        }
+      };
       let admitted = 1;
       let refused = 64_000;
       expect(await encodes(admitted)).toBe(true);
