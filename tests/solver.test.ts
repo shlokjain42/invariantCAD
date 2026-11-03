@@ -203,6 +203,23 @@ function solveReference(
   }
 }
 
+function rectangleLines(sketch: SketchBuilder) {
+  const p0 = sketch.point("p0", vec2(mm(0), mm(0)));
+  const p1 = sketch.point("p1", vec2(mm(40), mm(0)));
+  const p2 = sketch.point("p2", vec2(mm(40), mm(20)));
+  const p3 = sketch.point("p3", vec2(mm(0), mm(20)));
+  return {
+    p0,
+    p1,
+    p2,
+    p3,
+    bottom: sketch.line("bottom", p0, p1),
+    right: sketch.line("right", p1, p2),
+    top: sketch.line("top", p2, p3),
+    left: sketch.line("left", p3, p0),
+  };
+}
+
 function angleTriangle(value: number): DesignDocument {
   return sketchDocument((sketch) => {
     const a = sketch.point("a", vec2(mm(0), mm(0)));
@@ -250,6 +267,104 @@ describe("reference solver angle constraints", () => {
       false,
     );
     if (result.ok) result.value.dispose();
+  });
+});
+
+describe("reference solver degrees of freedom and status", () => {
+  it("reports every free coordinate of an unconstrained rectangle", () => {
+    const solved = solveReference(
+      sketchDocument((sketch) => {
+        const lines = rectangleLines(sketch);
+        return sketch.profile(
+          sketch.loop([lines.bottom, lines.right, lines.top, lines.left]),
+        );
+      }),
+    );
+    expect(solved.status).toBe("underconstrained");
+    expect(solved.degreesOfFreedom).toBe(8);
+    expect(solved.residual).toBe(0);
+    expect(solved.diagnostics).toEqual([
+      expect.objectContaining({
+        code: "SKETCH_UNDER_CONSTRAINED",
+        severity: "info",
+        details: { degreesOfFreedom: 8 },
+      }),
+    ]);
+  });
+
+  it("solves the documented fully constrained rectangle with zero freedom", async () => {
+    const document = sketchDocument((sketch) => {
+      const lines = rectangleLines(sketch);
+      sketch
+        .fixed("anchor", lines.p0)
+        .horizontal("bottom-horizontal", lines.bottom)
+        .horizontal("top-horizontal", lines.top)
+        .vertical("right-vertical", lines.right)
+        .vertical("left-vertical", lines.left)
+        .length("width", lines.bottom, mm(40))
+        .length("height", lines.left, mm(20));
+      return sketch.profile(
+        sketch.loop([lines.bottom, lines.right, lines.top, lines.left]),
+      );
+    });
+    const solved = solveReference(document);
+    expect(solved.status).toBe("solved");
+    expect(solved.degreesOfFreedom).toBe(0);
+    expect(solved.diagnostics).toEqual([]);
+    expect(solved.residual).toBeLessThanOrEqual(sketchNode(document).tolerance);
+
+    const result = await evaluator.evaluate(document);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    try {
+      expect(result.diagnostics).toEqual([]);
+      expect(result.value.output("solid").measure().volume).toBeCloseTo(1600, 6);
+    } finally {
+      result.value.dispose();
+    }
+  });
+
+  it("leaves only the radius free on a circle whose centre is fixed", () => {
+    const solved = solveReference(
+      sketchDocument((sketch) => {
+        const circle = sketch.circle("circle", {
+          center: vec2(mm(3), mm(4)),
+          radius: mm(5),
+        });
+        sketch.fixed("centre", circle.center);
+        return sketch.profile(circle.loop());
+      }),
+    );
+    expect(solved.status).toBe("underconstrained");
+    expect(solved.degreesOfFreedom).toBe(1);
+    expect(solved.diagnostics).toEqual([
+      expect.objectContaining({
+        code: "SKETCH_UNDER_CONSTRAINED",
+        severity: "info",
+        details: { degreesOfFreedom: 1 },
+      }),
+    ]);
+  });
+
+  it("reports a conflicting constraint set as overconstrained", () => {
+    const solved = solveReference(
+      sketchDocument((sketch) => {
+        const circle = sketch.circle("circle", {
+          center: vec2(mm(0), mm(0)),
+          radius: mm(7),
+        });
+        sketch.radius("radius", circle, mm(7)).diameter("diameter", circle, mm(20));
+        return sketch.profile(circle.loop());
+      }),
+    );
+    expect(solved.status).toBe("overconstrained");
+    expect(solved.residual).toBeGreaterThan(1);
+    expect(solved.diagnostics).toEqual([
+      expect.objectContaining({
+        code: "SKETCH_OVER_CONSTRAINED",
+        severity: "error",
+      }),
+    ]);
   });
 });
 
