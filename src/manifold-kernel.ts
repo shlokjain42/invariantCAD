@@ -30,6 +30,52 @@ import {
 
 const MANIFOLD_SHAPE = Symbol("InvariantCAD.ManifoldShape");
 
+/**
+ * Largest absolute profile coordinate, in millimetres, that Manifold cross
+ * sections accept. Manifold's 2D polygon engine stores coordinates as scaled
+ * 64-bit integers and silently fails just above 2^34 mm (about 1.7e10 mm), so
+ * profiles are rejected beyond this documented, conservative ceiling instead.
+ */
+export const MANIFOLD_MAX_PROFILE_COORDINATE = 1e10;
+
+/**
+ * Runs one native Manifold operation. The WebAssembly runtime can throw raw
+ * native values (such as an exception pointer number) instead of an Error;
+ * those become an Error that names the operation.
+ */
+function manifoldNative<T>(operation: string, run: () => T): T {
+  try {
+    return run();
+  } catch (error) {
+    if (error instanceof Error) throw error;
+    throw new Error(
+      `Manifold ${operation} failed with a native exception`,
+    );
+  }
+}
+
+function manifoldProfileContours(
+  profile: ResolvedProfile,
+): [number, number][][] {
+  const contours = tessellateProfile(profile).contours.map((contour) =>
+    contour.map((point) => [point[0], point[1]] as [number, number]),
+  );
+  for (const contour of contours) {
+    for (const [x, y] of contour) {
+      if (
+        !(Math.abs(x) <= MANIFOLD_MAX_PROFILE_COORDINATE) ||
+        !(Math.abs(y) <= MANIFOLD_MAX_PROFILE_COORDINATE)
+      ) {
+        throw new RangeError(
+          `Manifold profiles are limited to coordinates within ±${MANIFOLD_MAX_PROFILE_COORDINATE} mm; ` +
+            `found (${x}, ${y}). Use the exact OCCT kernel for larger extents.`,
+        );
+      }
+    }
+  }
+  return contours;
+}
+
 class ManifoldShape implements KernelShape {
   readonly kernel = "manifold";
   readonly [MANIFOLD_SHAPE]: ManifoldSolid;
@@ -391,18 +437,21 @@ export class ManifoldKernel implements GeometryKernel {
       readonly divisions: number;
     },
   ): KernelShape {
-    const contours = tessellateProfile(profile).contours.map((contour) =>
-      contour.map((point) => [point[0], point[1]] as [number, number]),
+    const contours = manifoldProfileContours(profile);
+    const section = manifoldNative(
+      "cross section",
+      () => new this.module.CrossSection(contours, "EvenOdd"),
     );
-    const section = new this.module.CrossSection(contours, "EvenOdd");
     let local: ManifoldSolid;
     try {
-      local = section.extrude(
-        options.distance,
-        options.divisions,
-        radiansToDegrees(options.twist),
-        options.scaleTop,
-        options.symmetric,
+      local = manifoldNative("extrude", () =>
+        section.extrude(
+          options.distance,
+          options.divisions,
+          radiansToDegrees(options.twist),
+          options.scaleTop,
+          options.symmetric,
+        ),
       );
     } finally {
       section.delete();
@@ -418,10 +467,10 @@ export class ManifoldKernel implements GeometryKernel {
     profile: ResolvedProfile,
     options: { readonly angle: number; readonly segments?: number },
   ): KernelShape {
-    const tessellated = tessellateProfile(profile).contours;
+    const bounded = manifoldProfileContours(profile);
     let minimumX = Number.POSITIVE_INFINITY;
     let maximumX = Number.NEGATIVE_INFINITY;
-    for (const contour of tessellated) {
+    for (const contour of bounded) {
       for (const point of contour) {
         minimumX = Math.min(minimumX, point[0]);
         maximumX = Math.max(maximumX, point[0]);
@@ -430,16 +479,20 @@ export class ManifoldKernel implements GeometryKernel {
     // Manifold keeps only the positive-X side of a revolved section, so a
     // profile on the negative side of the axis is revolved as its mirror image.
     const mirrored = -minimumX > maximumX;
-    const contours = tessellated.map((contour) =>
-      contour.map(
-        (point) =>
-          [mirrored ? -point[0] : point[0], point[1]] as [number, number],
-      ),
+    const contours = mirrored
+      ? bounded.map((contour) =>
+          contour.map((point) => [-point[0], point[1]] as [number, number]),
+        )
+      : bounded;
+    const section = manifoldNative(
+      "cross section",
+      () => new this.module.CrossSection(contours, "EvenOdd"),
     );
-    const section = new this.module.CrossSection(contours, "EvenOdd");
     let local: ManifoldSolid;
     try {
-      local = section.revolve(options.segments, radiansToDegrees(options.angle));
+      local = manifoldNative("revolve", () =>
+        section.revolve(options.segments, radiansToDegrees(options.angle)),
+      );
     } finally {
       section.delete();
     }
