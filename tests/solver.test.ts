@@ -264,10 +264,10 @@ describe("reference solver angle constraints", () => {
     const result = await evaluator.evaluate(angleTriangle(1e20), {
       signal: AbortSignal.timeout(5_000),
     });
+    if (result.ok) result.value.dispose();
     expect(result.diagnostics.some((item) => item.code === "EVALUATION_ABORTED")).toBe(
       false,
     );
-    if (result.ok) result.value.dispose();
   });
 });
 
@@ -438,6 +438,7 @@ describe("reference solver arc constraints inside closed loops", () => {
         sketch.radius("radius", refs.right, mm(6));
       }),
     );
+    if (result.ok) result.value.dispose();
     expect(result.ok).toBe(false);
     const errors = result.diagnostics.filter((item) => item.severity === "error");
     expect(errors).toEqual([
@@ -477,6 +478,67 @@ describe("reference solver arc constraints inside closed loops", () => {
     ]);
   });
 
+  it("omits entity names and the arc hint when solver provenance is missing", async () => {
+    const delegate = createReferenceSketchSolver();
+    const stripSources = (
+      loop: SolvedSketch["profile"]["outer"],
+    ): SolvedSketch["profile"]["outer"] => ({
+      ...loop,
+      curves: loop.curves.map((curve) => {
+        const { source: _source, ...unsourced } = curve;
+        return unsourced;
+      }),
+    });
+    const unsourced: SketchSolverBackend = {
+      id: "unsourced-fixture",
+      capabilities: delegate.capabilities,
+      solve(sketch, context) {
+        const solved = delegate.solve(sketch, context);
+        return {
+          ...solved,
+          profile: {
+            ...solved.profile,
+            outer: stripSources(solved.profile.outer),
+            holes: solved.profile.holes.map(stripSources),
+          },
+        };
+      },
+      dispose() {
+        delegate.dispose();
+      },
+    };
+    const custom = await createEvaluator({ sketchSolver: unsourced });
+    try {
+      const result = await custom.evaluate(
+        slotDocument((sketch, refs) => {
+          sketch.radius("radius", refs.right, mm(6));
+        }),
+      );
+      if (result.ok) result.value.dispose();
+      expect(result.ok).toBe(false);
+      const error = result.diagnostics.find((item) => item.severity === "error");
+      expect(error).toEqual(
+        expect.objectContaining({
+          code: "SKETCH_NO_CLOSED_REGION",
+          path: "/nodes/profile/profile",
+          details: expect.objectContaining({
+            curveIndex: 0,
+            otherCurveIndex: 1,
+            gap: expect.closeTo(1, 9),
+          }),
+        }),
+      );
+      // Without matching provenance the resolved indices cannot be tied to
+      // authored entities, so neither the entities nor the arc hint are named.
+      expect(error).not.toHaveProperty("related");
+      expect(error).not.toHaveProperty("hints");
+      expect(error?.details).not.toHaveProperty("curveSource");
+      expect(error?.details).not.toHaveProperty("otherCurveSource");
+    } finally {
+      custom.dispose();
+    }
+  });
+
   it("opens the loop the same way for diameter, equal-radius, and centre moves", async () => {
     for (const [name, constrain] of [
       [
@@ -501,6 +563,7 @@ describe("reference solver arc constraints inside closed loops", () => {
       ],
     ] as const) {
       const result = await evaluator.evaluate(slotDocument(constrain));
+      if (result.ok) result.value.dispose();
       expect(result.ok, name).toBe(false);
       expect(
         result.diagnostics.find((item) => item.severity === "error"),
@@ -623,6 +686,7 @@ describe("evaluator sketch-solver status and capability admission", () => {
       const custom = await createEvaluator({ sketchSolver: statusSolver(status) });
       try {
         const result = await custom.evaluate(conflictingCircleDocument());
+        if (result.ok) result.value.dispose();
         expect(result.ok).toBe(false);
         expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([
           expect.objectContaining({
@@ -652,6 +716,7 @@ describe("evaluator sketch-solver status and capability admission", () => {
     });
     try {
       const result = await custom.evaluate(conflictingCircleDocument());
+      if (result.ok) result.value.dispose();
       expect(result.ok).toBe(false);
       expect(result.diagnostics.map((item) => [item.code, item.severity])).toEqual([
         ["SKETCH_UNDER_CONSTRAINED", "warning"],
@@ -668,6 +733,7 @@ describe("evaluator sketch-solver status and capability admission", () => {
     });
     try {
       const result = await custom.evaluate(conflictingCircleDocument());
+      if (result.ok) result.value.dispose();
       expect(result.ok).toBe(false);
       expect(result.diagnostics.at(-1)).toEqual(
         expect.objectContaining({
@@ -686,6 +752,7 @@ describe("evaluator sketch-solver status and capability admission", () => {
 
   it("reports the solver's own first error once, scoped to the sketch node", async () => {
     const result = await evaluator.evaluate(conflictingCircleDocument());
+    if (result.ok) result.value.dispose();
     expect(result.ok).toBe(false);
     const errors = result.diagnostics.filter((item) => item.severity === "error");
     expect(errors).toEqual([
@@ -702,6 +769,7 @@ describe("evaluator sketch-solver status and capability admission", () => {
     });
     try {
       const result = await constraintEvaluator.evaluate(conflictingCircleDocument());
+      if (result.ok) result.value.dispose();
       expect(result.ok).toBe(false);
       expect(result.diagnostics).toEqual([
         expect.objectContaining({
@@ -726,6 +794,7 @@ describe("evaluator sketch-solver status and capability admission", () => {
     const entityEvaluator = await createEvaluator({ sketchSolver: entitySolver });
     try {
       const result = await entityEvaluator.evaluate(conflictingCircleDocument());
+      if (result.ok) result.value.dispose();
       expect(result.ok).toBe(false);
       expect(result.diagnostics).toEqual([
         expect.objectContaining({

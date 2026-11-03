@@ -112,19 +112,12 @@ function openLoopDiagnostic(
           },
         ],
   );
-  const touchesArc = sides.some(([, curveIndex]) => {
-    const entity = authoredProfileCurveEntity(
-      sketch,
-      issue.loop,
-      issue.holeIndex,
-      curveIndex,
-    );
-    return (
-      entity !== undefined &&
-      Object.prototype.hasOwnProperty.call(sketch.entities, entity) &&
-      sketch.entities[entity]?.kind === "arc"
-    );
-  });
+  // Only provenance-confirmed sides name an authored entity; a solver whose
+  // resolved curves do not follow the authored loop gets no arc hint.
+  const touchesArc = sources.some(
+    (source) =>
+      source !== undefined && sketch.entities[source.entity]?.kind === "arc",
+  );
   const [curveSource, otherCurveSource] = sources;
   return diagnostic(
     "SKETCH_NO_CLOSED_REGION",
