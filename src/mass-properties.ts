@@ -622,8 +622,9 @@ export function principalRadiiOfGyration(
   options?: PrincipalInertiaOptions,
 ): Vec3 | null {
   const validated = validateProperties(properties);
-  if (validated.weight === 0) return null;
+  // Decompose before the empty return so invalid options fail consistently.
   const principal = principalInertia(validated.inertiaTensor, options);
+  if (validated.weight === 0) return null;
   return principal.moments.map((moment) =>
     stableRadius(moment, validated.weight, "Principal radius of gyration"),
   ) as unknown as Vec3;
@@ -638,10 +639,8 @@ export function radiusOfGyrationAboutAxis(
   axis: InertiaAxis,
 ): number | null {
   const validated = validateProperties(properties);
+  // Validate the axis before the empty return, as momentOfInertiaAboutAxis does.
+  const moment = momentOfInertiaAboutAxis(properties, axis);
   if (validated.weight === 0) return null;
-  return stableRadius(
-    momentOfInertiaAboutAxis(properties, axis),
-    validated.weight,
-    "Axis radius of gyration",
-  );
+  return stableRadius(moment, validated.weight, "Axis radius of gyration");
 }

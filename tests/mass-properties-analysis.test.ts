@@ -691,6 +691,41 @@ describe("empty, validation, and immutability boundaries", () => {
     ).toThrowError(/direction must be finite/i);
   });
 
+  it("validates axes and options before returning empty radii", () => {
+    expect(() =>
+      momentOfInertiaAboutAxis(EMPTY, {
+        point: [0, 0, 0],
+        direction: [0, 0, 0],
+      }),
+    ).toThrowError(/non-zero and normalizable/i);
+    expect(() =>
+      radiusOfGyrationAboutAxis(EMPTY, {
+        point: [0, 0, 0],
+        direction: [0, 0, 0],
+      }),
+    ).toThrowError(/non-zero and normalizable/i);
+    expect(() =>
+      radiusOfGyrationAboutAxis(EMPTY, {
+        point: [Number.NaN, 0, 0],
+        direction: [1, 0, 0],
+      }),
+    ).toThrowError(/axis point must be finite/i);
+    expect(() =>
+      principalInertia(ZERO_TENSOR, { relativeDegeneracyTolerance: -1 }),
+    ).toThrowError(/relative degeneracy tolerance/i);
+    expect(() =>
+      principalRadiiOfGyration(EMPTY, { relativeDegeneracyTolerance: -1 }),
+    ).toThrowError(/relative degeneracy tolerance/i);
+    expect(() =>
+      principalRadiiOfGyration(EMPTY, {
+        absoluteDegeneracyTolerance: Number.NaN,
+      }),
+    ).toThrowError(/absolute degeneracy tolerance/i);
+    expect(
+      principalRadiiOfGyration(EMPTY, { relativeDegeneracyTolerance: 1e-6 }),
+    ).toBeNull();
+  });
+
   it("rejects mechanically impossible properties across every analysis path", () => {
     const impossible: VolumetricMassProperties = {
       volume: 1,
