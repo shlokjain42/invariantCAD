@@ -65,6 +65,20 @@ const common = cad.intersect("common", target, [clip]);
 An empty tool array is rejected during authoring. The result is one solid; input
 solids remain feature dependencies and are not mutated.
 
+## Exact-kernel features
+
+Fillet, chamfer, shell, and whole-solid offset are exact B-Rep features. The
+default Manifold kernel from `createEvaluator()` advertises only extrude,
+revolve, Boolean, and transform, so these examples fail there with
+`KERNEL_CAPABILITY_MISSING`. Evaluate them with stock OCCT:
+
+```ts
+const evaluator = await createEvaluator({ profile: "mechanical-exact" });
+```
+
+See the [support matrix](/reference/support-matrix) for each kernel's feature
+and topology-history coverage.
+
 ## Fillet and chamfer
 
 Edge treatments require an explicit edge selection:
