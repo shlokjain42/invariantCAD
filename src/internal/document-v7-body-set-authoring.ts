@@ -1752,6 +1752,29 @@ export class StagedBodySetDesignBuilderV7 {
     return key;
   }
 
+  /**
+   * Native primitive construction reads caller options, so the ID is reserved
+   * first; a re-entrant registration of the same ID then fails instead of
+   * being replaced later.
+   */
+  #registerNativeLeaf(
+    id: string,
+    construct: () => { readonly node: NodeId },
+  ): StagedBodyLeafRefV7 {
+    const key = this.#assertNodeAvailable(id);
+    authoringSetInsert(this.#nodeIds, key);
+    let reference: { readonly node: NodeId };
+    try {
+      reference = construct();
+    } catch (error) {
+      authoringSetRemove(this.#nodeIds, key);
+      throw error;
+    }
+    return this.#registerLeaf(
+      new StagedBodyLeafRefV7(this, reference.node),
+    );
+  }
+
   #registerLeaf<T extends StagedBodyLeafRefV7>(reference: T): T {
     authoringWeakSetInsert(this.#solidHandles, reference);
     return reference;
@@ -1772,11 +1795,8 @@ export class StagedBodySetDesignBuilderV7 {
     id: string,
     options: { readonly size: Vec3Expression; readonly center?: boolean },
   ): StagedBodyLeafRefV7 {
-    const key = this.#assertNodeAvailable(id);
-    const reference = this.#base.box(id, options);
-    authoringSetInsert(this.#nodeIds, key);
-    return this.#registerLeaf(
-      new StagedBodyLeafRefV7(this, reference.node),
+    return this.#registerNativeLeaf(id, () =>
+      this.#base.box(id, options),
     );
   }
 
@@ -1790,11 +1810,8 @@ export class StagedBodySetDesignBuilderV7 {
       readonly segments?: number;
     },
   ): StagedBodyLeafRefV7 {
-    const key = this.#assertNodeAvailable(id);
-    const reference = this.#base.cylinder(id, options);
-    authoringSetInsert(this.#nodeIds, key);
-    return this.#registerLeaf(
-      new StagedBodyLeafRefV7(this, reference.node),
+    return this.#registerNativeLeaf(id, () =>
+      this.#base.cylinder(id, options),
     );
   }
 
@@ -1805,11 +1822,8 @@ export class StagedBodySetDesignBuilderV7 {
       readonly segments?: number;
     },
   ): StagedBodyLeafRefV7 {
-    const key = this.#assertNodeAvailable(id);
-    const reference = this.#base.sphere(id, options);
-    authoringSetInsert(this.#nodeIds, key);
-    return this.#registerLeaf(
-      new StagedBodyLeafRefV7(this, reference.node),
+    return this.#registerNativeLeaf(id, () =>
+      this.#base.sphere(id, options),
     );
   }
 
@@ -1992,7 +2006,6 @@ export class StagedBodySetDesignBuilderV7 {
       ["position"],
       "Datum-point options",
     );
-    const key = this.#assertNodeAvailable(id);
     const node: DatumPointNodeIRV7 = {
       kind: "datumPoint",
       position: captureDatumVectorIR(
@@ -2002,6 +2015,8 @@ export class StagedBodySetDesignBuilderV7 {
       ),
     };
     const definition = deepFreeze(node);
+    // Vector capture can run caller traps; check the ID only afterwards.
+    const key = this.#assertNodeAvailable(id);
     const reference = new StagedDatumPointRefV7(
       this,
       key,
@@ -2024,7 +2039,6 @@ export class StagedBodySetDesignBuilderV7 {
       ["origin", "direction"],
       "Datum-axis options",
     );
-    const key = this.#assertNodeAvailable(id);
     const node: DatumAxisNodeIRV7 = {
       kind: "datumAxis",
       origin: captureDatumVectorIR(
@@ -2039,6 +2053,8 @@ export class StagedBodySetDesignBuilderV7 {
       ),
     };
     const definition = deepFreeze(node);
+    // Vector capture can run caller traps; check the ID only afterwards.
+    const key = this.#assertNodeAvailable(id);
     const reference = new StagedDatumAxisRefV7(
       this,
       key,
@@ -2062,7 +2078,6 @@ export class StagedBodySetDesignBuilderV7 {
       ["origin", "xDirection", "normal"],
       "Datum-plane options",
     );
-    const key = this.#assertNodeAvailable(id);
     const node: DatumPlaneNodeIRV7 = {
       kind: "datumPlane",
       origin: captureDatumVectorIR(
@@ -2082,6 +2097,8 @@ export class StagedBodySetDesignBuilderV7 {
       ),
     };
     const definition = deepFreeze(node);
+    // Vector capture can run caller traps; check the ID only afterwards.
+    const key = this.#assertNodeAvailable(id);
     const reference = new StagedDatumPlaneRefV7(
       this,
       key,
@@ -2105,7 +2122,6 @@ export class StagedBodySetDesignBuilderV7 {
       ["origin", "xDirection", "yDirection"],
       "Coordinate-system options",
     );
-    const key = this.#assertNodeAvailable(id);
     const node: CoordinateSystemNodeIRV7 = {
       kind: "coordinateSystem",
       origin: captureDatumVectorIR(
@@ -2125,6 +2141,8 @@ export class StagedBodySetDesignBuilderV7 {
       ),
     };
     const definition = deepFreeze(node);
+    // Vector capture can run caller traps; check the ID only afterwards.
+    const key = this.#assertNodeAvailable(id);
     const reference = new StagedCoordinateSystemRefV7(
       this,
       key,
@@ -2177,8 +2195,13 @@ export class StagedBodySetDesignBuilderV7 {
       this.#assemblyHandleInstanceIds,
     );
     build(configuration);
-    this.#configurationRecords[key] =
+    const definition =
       configuration[STAGED_CONFIGURATION_TO_IR](capturedOptions);
+    // The callback is caller code; a re-entrant registration of this ID wins.
+    if (authoringHasOwn(this.#configurationRecords, key)) {
+      throw new TypeError(`Duplicate configuration '${id}'`);
+    }
+    this.#configurationRecords[key] = definition;
     return key;
   }
 
@@ -2222,6 +2245,10 @@ export class StagedBodySetDesignBuilderV7 {
             ),
           }),
     });
+    // Density and metadata capture can run caller traps; recheck the ID.
+    if (authoringHasOwn(this.#materialRecords, key)) {
+      throw new TypeError(`Duplicate material '${id}'`);
+    }
     const reference = authoringFreeze(
       new MaterialRef(this.#handleOwner, key),
     );
@@ -2505,6 +2532,34 @@ export class StagedBodySetDesignBuilderV7 {
             ),
           }),
     });
+    // Location and metadata capture can run caller traps that author other
+    // resources, so the namespace and the aggregate ceilings are checked
+    // again immediately before the record is committed.
+    if (authoringHasOwn(this.#resourceRecords, key)) {
+      throw new TypeError(`Duplicate resource '${id}'`);
+    }
+    if (
+      this.#resourceCount >=
+      DEFAULT_DESIGN_DOCUMENT_LIMITS.maxResourceDefinitions
+    ) {
+      throw new RangeError(
+        `Resource definition count exceeds the authoring limit of ${DEFAULT_DESIGN_DOCUMENT_LIMITS.maxResourceDefinitions}`,
+      );
+    }
+    if (
+      this.#resourceLocationCount + (locations?.length ?? 0) >
+      DEFAULT_DESIGN_DOCUMENT_LIMITS.maxResourceLocations
+    ) {
+      throw new RangeError(RESOURCE_LOCATION_LIMIT_MESSAGE);
+    }
+    if (
+      this.#resourceLocationBytes + addedLocationBytes >
+      DEFAULT_DESIGN_DOCUMENT_LIMITS.maxResourceLocationBytes
+    ) {
+      throw new RangeError(
+        `Resource location bytes exceed the authoring limit of ${DEFAULT_DESIGN_DOCUMENT_LIMITS.maxResourceLocationBytes}`,
+      );
+    }
     const reference = new StagedResourceRefV7(this, key);
     authoringWeakSetInsert(this.#resourceHandles, reference);
     authoringWeakMapWrite(this.#resourceHandleIds, reference, key);
@@ -2689,7 +2744,6 @@ export class StagedBodySetDesignBuilderV7 {
     id: string,
     members: readonly StagedBodySetMemberAuthoringV7[],
   ): StagedBodySetRefV7 {
-    const key = this.#assertNodeAvailable(id);
     const capturedMembers = captureDenseOwnDataArray(
       members,
       "Body-set members",
@@ -2744,6 +2798,8 @@ export class StagedBodySetDesignBuilderV7 {
       kind: "bodySet",
       bodies: authoringFreeze(copied),
     });
+    // Member capture can run caller traps; check the ID only afterwards.
+    const key = this.#assertNodeAvailable(id);
     const reference = new StagedBodySetRefV7(this, key);
     authoringWeakSetInsert(this.#bodySetHandles, reference);
     authoringSetInsert(this.#nodeIds, key);
@@ -2818,6 +2874,9 @@ export class StagedBodySetDesignBuilderV7 {
         throw new TypeError(
           `Unsupported node '${id}' escaped the staged authoring facade`,
         );
+      }
+      if (authoringHasOwn(this.#nodeRecords, id)) {
+        throw new TypeError(`Duplicate feature '${id}'`);
       }
       nativeNodes[id] = node;
     }

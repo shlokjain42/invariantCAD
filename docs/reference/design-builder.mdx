@@ -459,7 +459,11 @@ configuration, material, part, assembly instance, placement, resource, import,
 unit-policy, datum, or body-member option record contains an accessor or
 unknown field. Those inputs must be plain own-data records; required arrays
 must be dense own-data arrays. Accessors are not invoked and unsupported
-semantics are rejected rather than silently discarded. Build then applies
+semantics are rejected rather than silently discarded. Namespace checks also
+hold across re-entrant calls: if a callback or a Proxy trap registers the same
+node, configuration, material, or resource ID while another call is still
+capturing its inputs, one of the two calls fails with the duplicate error and
+neither definition is silently replaced at build. Build then applies
 caller-selected document limits and strict v7 validation before returning the
 detached, recursively frozen document.
 
