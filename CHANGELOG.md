@@ -2,6 +2,81 @@
 
 ## [Unreleased]
 
+- Breaking for published behavior: the general v1-v6 document APIs no longer
+  accept Document v7, including imported-body JSON and mixed pairs such as a v7
+  schema with another version. validateDocument, parseDocument,
+  parseDocumentValue, migrateDocument, hashDesignFeatures, analyzeDesignImpact,
+  and Evaluator.evaluate return one IR_INVALID diagnostic at "/" whose hint
+  names parseImportedBodyDocument, stringifyImportedBodyDocument, and
+  Evaluator.evaluateImportedBody. stringifyDocument, hashDocument, and
+  cloneDocument throw a TypeError with the same message. Previously
+  validateDocument, stringifyDocument, and hashDocument accepted v7 JSON such as
+  a parsed imported-body document, and Evaluator.evaluate failed with an
+  unrelated KERNEL_ERROR. Documents v1-v6 validate, serialize, and hash exactly
+  as before.
+- Documented the JSON written by the imported-body workflow as a fixed, minimal
+  Document v7 subset: schema https://invariantcad.dev/schema/document/v7,
+  version 7, one resource, one importedBody node, one direct solid output with
+  the node's name, empty parameters, and fixed units. It is read only by
+  parseImportedBodyDocument and evaluated only by
+  Evaluator.evaluateImportedBody. The subset is frozen, tests pin its canonical
+  bytes and SHA-256, and a future public Document v7 will keep accepting it, so
+  imported-body documents saved by 0.2 stay readable.
+- validateDocument and Evaluator.evaluate now return IR_INVALID instead of
+  throwing a TypeError for an in-memory document with an unsupported
+  schema/version pair or a node kind outside its version's grammar. An
+  unsupported identity is reported alone, at "/", without follow-on diagnostics
+  from rules that assume a known version.
+- Validating topology origin and sketch-source queries no longer walks the
+  feature graph once per query. Ancestor walks are shared within one
+  validation, so many queries against one input, nearby origins, a distant
+  shared base feature, and paths through features with many inputs all stay
+  linear. A 2.4 MiB document with 8,000 origin queries that took about 26
+  seconds to parse now parses in under two seconds, keeping parse time bounded
+  by the document limits.
+- Diagnostic paths are now RFC 6901 JSON Pointers for every ID: a `~` or `/` in
+  a node, parameter, output, sketch-entity, constraint, configuration, or
+  topology-reference ID is escaped as `~0` or `~1`. This applies to semantic
+  validation and to structural parse errors. Before this change, a node named
+  `a/b` was reported under `/nodes/a/b/...`, a location that does not exist.
+  Paths for ordinary IDs are unchanged.
+- REFERENCE_KIND_MISMATCH now names the required kind when a reference correctly
+  declares what its target produces but the consumer needs something else, for
+  example "Reference requires part or assembly, but node 'b' produces solid",
+  instead of the self-contradictory "produces solid, but the reference declares
+  solid". Both messages for a node reference whose kind does not fit (this one
+  and the existing declared-versus-produced message) now carry
+  details.expected, details.actual, and details.declared. Other
+  REFERENCE_KIND_MISMATCH diagnostics, such as configuration-target and
+  topology-origin mismatches, are unchanged.
+- Staged document byte admission now rejects BOM-prefixed documents, as
+  parseDocument and the CLI do, instead of silently dropping the byte-order
+  mark. Artifact-cache and conformance identities that begin with U+FEFF are
+  still rejected; that rule is now explicit rather than a decoder side effect.
+- parseImportedBodyDocument and the staged Document v7 parsers and migrations
+  now honor raised ParseDocumentOptions.limits, such as maxNestingDepth,
+  maxStructuralValues, and maxResourceLocations. Previously a second internal
+  check capped every limit at its default, so documents within the caller's
+  raised limits were rejected with an opaque IR_INVALID. parseImportedBodyDocument
+  applies the same limits when it checks the document against the imported-body
+  subset.
+- Imported-body diagnostics no longer alter user-authored values that contain
+  "v7", "V7", or "staged". Resource and body IDs, locations, and kernel IDs such
+  as 'parts/bracket_v7.step' or 'occtV7-custom' now appear exactly as written.
+- Imported-body diagnostics now point at the offending field. Creation errors
+  report /name, /definition/id, /definition/resource/digest,
+  /definition/resource/byteLength, or the duplicated location's index instead of
+  "/definition". Parse-time policy errors use document pointers such as
+  /resources/<id>/mediaType. Every invalid evaluation option is reported under
+  /options before the resolver runs: maxResourceBytes must be a non-negative
+  safe integer (an explicit null is now rejected instead of meaning the
+  default), signal must be an AbortSignal, and documentLimits must be a plain
+  record of non-negative safe integers.
+- Corrected the documentation. The Document v3 and v4 rows now credit topology
+  roles rather than new node kinds, since every frozen version admits the same
+  20 node kinds. Frozen node schemas are documented as structural. The limits
+  page now describes how v1-v6 parsing treats accessors and Array subclasses.
+  The imported-body walkthrough unwraps its CadResult before use.
 - The repository-staged `stagedBodySetDesignV7(...)` facade now captures
   `bodySet(...)` members and `resource(...)` `locations` as dense own-data
   plain arrays. Each array's `length` is read once from its own data property.
