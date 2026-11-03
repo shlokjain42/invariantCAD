@@ -1,9 +1,15 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { kernelCapabilityDiagnostic } from "../src/evaluator.js";
-import type { GeometryKernel, KernelCapabilities } from "../src/index.js";
+import type {
+  GeometryKernel,
+  KernelCapabilities,
+  NodeId,
+} from "../src/index.js";
 import { createManifoldKernel } from "../src/manifold-kernel.js";
 
 let manifold: GeometryKernel;
+
+const node = (id: string): NodeId => id as NodeId;
 
 beforeAll(async () => {
   manifold = await createManifoldKernel();
@@ -38,7 +44,12 @@ describe("evaluator kernel capability checks", () => {
       { importShape: () => undefined },
     );
     expect(
-      kernelCapabilityDiagnostic(kernel, "nativeImport", "step", "imported"),
+      kernelCapabilityDiagnostic(
+        kernel,
+        "nativeImport",
+        "step",
+        node("imported"),
+      ),
     ).toBeUndefined();
   });
 
@@ -49,7 +60,12 @@ describe("evaluator kernel capability checks", () => {
     );
     for (const format of ["brep", "brep-binary"] as const) {
       expect(
-        kernelCapabilityDiagnostic(kernel, "nativeExport", format, "exported"),
+        kernelCapabilityDiagnostic(
+          kernel,
+          "nativeExport",
+          format,
+          node("exported"),
+        ),
       ).toBeUndefined();
     }
   });
@@ -60,7 +76,9 @@ describe("evaluator kernel capability checks", () => {
       { importShape: undefined, exportShape: undefined },
     );
     for (const kind of ["nativeImport", "nativeExport"] as const) {
-      expect(kernelCapabilityDiagnostic(kernel, kind, "step", "node")).toEqual(
+      expect(
+        kernelCapabilityDiagnostic(kernel, kind, "step", node("node")),
+      ).toEqual(
         expect.objectContaining({
           code: "KERNEL_ERROR",
           node: "node",
@@ -84,7 +102,9 @@ describe("evaluator kernel capability checks", () => {
       },
     );
     for (const kind of ["nativeImport", "nativeExport"] as const) {
-      expect(kernelCapabilityDiagnostic(kernel, kind, "step", "node")).toEqual(
+      expect(
+        kernelCapabilityDiagnostic(kernel, kind, "step", node("node")),
+      ).toEqual(
         expect.objectContaining({
           code: "KERNEL_CAPABILITY_MISSING",
           details: expect.objectContaining({ kind, capability: "step" }),
@@ -95,14 +115,19 @@ describe("evaluator kernel capability checks", () => {
 
   it("keeps primitive and feature checks on the method of the same name", () => {
     expect(
-      kernelCapabilityDiagnostic(manifold, "primitive", "box", "box"),
+      kernelCapabilityDiagnostic(manifold, "primitive", "box", node("box")),
     ).toBeUndefined();
     expect(
-      kernelCapabilityDiagnostic(manifold, "feature", "boolean", "union"),
+      kernelCapabilityDiagnostic(
+        manifold,
+        "feature",
+        "boolean",
+        node("union"),
+      ),
     ).toBeUndefined();
     const missingBox = kernelWith({}, { box: undefined });
     expect(
-      kernelCapabilityDiagnostic(missingBox, "primitive", "box", "box"),
+      kernelCapabilityDiagnostic(missingBox, "primitive", "box", node("box")),
     ).toEqual(
       expect.objectContaining({
         code: "KERNEL_ERROR",
@@ -110,7 +135,12 @@ describe("evaluator kernel capability checks", () => {
       }),
     );
     expect(
-      kernelCapabilityDiagnostic(manifold, "feature", "fillet", "rounded"),
+      kernelCapabilityDiagnostic(
+        manifold,
+        "feature",
+        "fillet",
+        node("rounded"),
+      ),
     ).toEqual(expect.objectContaining({ code: "KERNEL_CAPABILITY_MISSING" }));
   });
 });
