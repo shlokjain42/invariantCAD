@@ -1808,6 +1808,53 @@ describe("builder ownership boundary", () => {
     expect(validateDocument(cad.build()).ok).toBe(true);
   });
 
+  it("reads callback builder records without running accessors", () => {
+    const { cad, part } = setup();
+    let reads = 0;
+    const accessor = (value: unknown) => ({
+      enumerable: true,
+      configurable: true,
+      get: () => {
+        reads += 1;
+        return value;
+      },
+    });
+    expect(() =>
+      cad.assembly("accessor-entry", (assembly) => {
+        assembly.instance("first", part);
+        Object.defineProperty(assembly.instances, 0, accessor(assembly.instances[0]));
+      }),
+    ).toThrow("must be a data property, not an accessor");
+    expect(() =>
+      cad.assembly("accessor-field", (assembly) => {
+        assembly.instance("first", part);
+        Object.defineProperty(assembly, "instances", accessor([...assembly.instances]));
+      }),
+    ).toThrow(TypeError);
+    expect(() =>
+      cad.sketch("accessor-records", plane.xy(), (sketch) => {
+        const profile = sketch.profile(sketch.circle("disk", { radius: mm(1) }).loop());
+        Object.defineProperty(sketch, "entities", accessor({ ...sketch.entities }));
+        return profile;
+      }),
+    ).toThrow(TypeError);
+    expect(reads).toBe(0);
+
+    // Configuration records are private to the builder, not public fields.
+    const width = cad.parameter.length("width", mm(1));
+    cad.configuration("variant", (configuration) => {
+      configuration.parameter(width, mm(2));
+      Object.assign(configuration, {
+        parameterRecords: { depth: mm(9).ir },
+        partMaterialRecords: { part: "ghost" },
+      });
+    });
+    expect(cad.build().configurations).toEqual({
+      variant: { parameterOverrides: { width: mm(2).ir } },
+    });
+    expect(validateDocument(cad.build()).ok).toBe(true);
+  });
+
   it("requires the sketch callback to return its own builder's profile", () => {
     const { cad } = setup();
     let foreignProfile: ProfileDefinition | undefined;

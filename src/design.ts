@@ -959,15 +959,17 @@ export interface ConfigurationOptions {
 
 export class ConfigurationBuilder {
   readonly owner: DesignBuilder;
-  private readonly parameterRecords = Object.create(null) as Record<
+  // ES private, not TypeScript private: the builder is handed to caller
+  // callbacks, which must not be able to write unchecked override records.
+  readonly #parameterRecords = Object.create(null) as Record<
     ParameterId,
     ExpressionIR
   >;
-  private readonly instanceSuppressionRecords = Object.create(null) as Record<
+  readonly #instanceSuppressionRecords = Object.create(null) as Record<
     NodeId,
     Record<EntityId, boolean>
   >;
-  private readonly partMaterialRecords = Object.create(null) as Record<
+  readonly #partMaterialRecords = Object.create(null) as Record<
     NodeId,
     MaterialId
   >;
@@ -993,12 +995,12 @@ export class ConfigurationBuilder {
       parameter.dimension,
       `Configuration value for '${parameter.id}'`,
     );
-    if (Object.hasOwn(this.parameterRecords, parameter.id)) {
+    if (Object.hasOwn(this.#parameterRecords, parameter.id)) {
       throw new TypeError(
         `Duplicate configuration parameter override '${parameter.id}'`,
       );
     }
-    this.parameterRecords[parameter.id] = ir;
+    this.#parameterRecords[parameter.id] = ir;
     return this;
   }
 
@@ -1014,10 +1016,10 @@ export class ConfigurationBuilder {
       true,
       `Configuration suppression of '${assembly.node}/${stableId}'`,
     );
-    let instances = this.instanceSuppressionRecords[assembly.node];
+    let instances = this.#instanceSuppressionRecords[assembly.node];
     if (instances === undefined) {
       instances = Object.create(null) as Record<EntityId, boolean>;
-      this.instanceSuppressionRecords[assembly.node] = instances;
+      this.#instanceSuppressionRecords[assembly.node] = instances;
     }
     if (Object.hasOwn(instances, stableId)) {
       throw new TypeError(
@@ -1032,21 +1034,21 @@ export class ConfigurationBuilder {
     assertConfigurationBuilderOpen(this);
     this.owner.assertOwned(part);
     this.owner.assertOwned(material);
-    if (Object.hasOwn(this.partMaterialRecords, part.node)) {
+    if (Object.hasOwn(this.#partMaterialRecords, part.node)) {
       throw new TypeError(
         `Duplicate configuration material override '${part.node}'`,
       );
     }
-    this.partMaterialRecords[part.node] = material.id;
+    this.#partMaterialRecords[part.node] = material.id;
     return this;
   }
 
   toIR(options: ConfigurationOptions = {}): DesignConfigurationIR {
     options = ownRecord(options, "Configuration options");
     if (
-      Object.keys(this.parameterRecords).length === 0 &&
-      Object.keys(this.instanceSuppressionRecords).length === 0 &&
-      Object.keys(this.partMaterialRecords).length === 0
+      Object.keys(this.#parameterRecords).length === 0 &&
+      Object.keys(this.#instanceSuppressionRecords).length === 0 &&
+      Object.keys(this.#partMaterialRecords).length === 0
     ) {
       throw new TypeError("A configuration requires at least one override");
     }
@@ -1056,21 +1058,21 @@ export class ConfigurationBuilder {
     );
     return deepFreeze({
       ...(description === undefined ? {} : { description }),
-      ...(Object.keys(this.parameterRecords).length === 0
+      ...(Object.keys(this.#parameterRecords).length === 0
         ? {}
-        : { parameterOverrides: { ...this.parameterRecords } }),
-      ...(Object.keys(this.instanceSuppressionRecords).length === 0
+        : { parameterOverrides: { ...this.#parameterRecords } }),
+      ...(Object.keys(this.#instanceSuppressionRecords).length === 0
         ? {}
         : {
             instanceSuppressions: Object.fromEntries(
-              Object.entries(this.instanceSuppressionRecords).map(
+              Object.entries(this.#instanceSuppressionRecords).map(
                 ([assembly, instances]) => [assembly, { ...instances }],
               ),
             ),
           }),
-      ...(Object.keys(this.partMaterialRecords).length === 0
+      ...(Object.keys(this.#partMaterialRecords).length === 0
         ? {}
-        : { partMaterialOverrides: { ...this.partMaterialRecords } }),
+        : { partMaterialOverrides: { ...this.#partMaterialRecords } }),
       ...(options.metadata === undefined
         ? {}
         : {
@@ -2239,17 +2241,24 @@ export class DesignBuilder {
     build: (assembly: AssemblyBuilder) => void,
   ): AssemblyRef {
     const builder = new AssemblyBuilder(this);
+    let issuedInstances: unknown;
     try {
       build(builder);
     } finally {
       CLOSED_ASSEMBLY_BUILDERS.add(builder);
-      Object.freeze(builder.instances);
+      // instances is a public field, so it is read through own data only:
+      // an accessor-backed field or entry never runs.
+      issuedInstances = readOwnData(builder, "instances");
+      if (Array.isArray(issuedInstances)) Object.freeze(issuedInstances);
     }
-    // instances is a public array, so only records instance() issued for
-    // this builder may reach the document.
+    // Only records instance() issued for this builder may reach the document.
     const instances: AssemblyInstanceIR[] = [];
     const instanceIds = new Set<EntityId>();
-    for (const instance of builder.instances) {
+    for (const instance of ownDenseArray(
+      issuedInstances as readonly AssemblyInstanceIR[],
+      `Assembly '${id}' instances`,
+      { maximumLength: DEFAULT_DESIGN_DOCUMENT_LIMITS.maxStructuralValues },
+    )) {
       if (ISSUED_ASSEMBLY_INSTANCES.get(instance) !== builder) {
         throw new TypeError(
           `Assembly '${id}' instances must be added with instance()`,

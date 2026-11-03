@@ -685,8 +685,11 @@ function assertSketchReference(
  */
 export function closeSketchBuilder(sketch: SketchBuilder): void {
   CLOSED_SKETCH_BUILDERS.add(sketch);
-  Object.freeze(sketch.entities);
-  Object.freeze(sketch.constraints);
+  // Public fields are read through own data only, so an accessor never runs.
+  for (const field of ["entities", "constraints"] as const) {
+    const records = readOwnData(sketch, field);
+    if (typeof records === "object" && records !== null) Object.freeze(records);
+  }
 }
 
 /**
