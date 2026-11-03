@@ -51,7 +51,7 @@ simple; repeated points and redundant collinear vertices are rejected.
 ```ts
 const arc = cad.circularArcPath("bend", {
   start: vec3(mm(0), mm(0), mm(0)),
-  through: vec3(mm(7.071), mm(2.929), mm(0)),
+  through: vec3(mm(10 / Math.sqrt(2)), mm(10 - 10 / Math.sqrt(2)), mm(0)),
   end: vec3(mm(10), mm(10), mm(0)),
 });
 ```
@@ -68,7 +68,7 @@ const route = cad.compositePath("route", {
     { kind: "line", end: vec3(mm(5), mm(0), mm(0)) },
     {
       kind: "circularArc",
-      through: vec3(mm(8.535), mm(1.465), mm(0)),
+      through: vec3(mm(5 + 5 / Math.sqrt(2)), mm(5 - 5 / Math.sqrt(2)), mm(0)),
       end: vec3(mm(10), mm(5), mm(0)),
     },
     { kind: "line", end: vec3(mm(10), mm(10), mm(0)) },
@@ -79,6 +79,12 @@ const route = cad.compositePath("route", {
 A composite has at least two segments and at least one arc. Segments connect by
 construction because each begins at the previous end. Arc junctions must be
 forward G1 tangent; line-line junctions use right-corner semantics.
+
+Tangency at a junction that touches an arc is checked to a scale-independent
+sine of `1e-8` (`COMPOSITE_PATH_MAX_JUNCTION_SINE`). Write arc points as exact
+expressions, as above. A through point rounded to a few decimals, such as
+`mm(8.535)`, tilts the arc enough to fail with `FEATURE_INVALID` (reason
+`non-tangent-junction`).
 
 ## Sweep a profile
 
@@ -100,6 +106,85 @@ const swept = cad.sweep("swept", section, route, {
 
 Those option values are currently the only admitted frame and transition
 contracts; omitting them selects the same defaults.
+
+### Complete example
+
+This canonical module combines the route and section above, sweeps them on
+stock OCCT, and is executed in CI:
+
+{/* docs-example:start composite-route-sweep */}
+
+```ts
+import {
+  EvaluatedSolid,
+  createEvaluator,
+  design,
+  mm,
+  plane,
+  vec3,
+} from "invariantcad";
+
+const cad = design("routed-bar");
+
+// Arc points are exact expressions: an arc-bearing junction must be tangent
+// to a scale-independent sine of 1e-8, so hand-rounded coordinates fail.
+const route = cad.compositePath("route", {
+  start: vec3(mm(0), mm(0), mm(0)),
+  segments: [
+    { kind: "line", end: vec3(mm(5), mm(0), mm(0)) },
+    {
+      kind: "circularArc",
+      through: vec3(mm(5 + 5 / Math.sqrt(2)), mm(5 - 5 / Math.sqrt(2)), mm(0)),
+      end: vec3(mm(10), mm(5), mm(0)),
+    },
+    { kind: "line", end: vec3(mm(10), mm(10), mm(0)) },
+  ],
+});
+
+// The YZ section is seated at the route start, normal to its +X tangent.
+const section = cad.sketch("section", plane.yz(), (sketch) =>
+  sketch.profile(
+    sketch.rectangle("section-outline", { width: mm(2), height: mm(2) }),
+  ),
+);
+
+const swept = cad.sweep("swept", section, route, {
+  frame: "corrected-frenet",
+  transition: "right-corner",
+});
+cad.output("swept", swept);
+
+async function evaluateRoutedBar() {
+  // Sweeps are exact features, so evaluate them with stock OCCT.
+  const evaluator = await createEvaluator({ profile: "mechanical-exact" });
+  try {
+    const result = await evaluator.evaluate(cad.build());
+    if (!result.ok) {
+      throw new Error(
+        result.diagnostics
+          .map((item) => `${item.code} ${item.path ?? ""}: ${item.message}`)
+          .join("\n"),
+      );
+    }
+    try {
+      const solid = result.value.output("swept");
+      if (!(solid instanceof EvaluatedSolid)) {
+        throw new Error("Expected the 'swept' output to be a solid");
+      }
+      return { volume: solid.measure().volume };
+    } finally {
+      result.value.dispose();
+    }
+  } finally {
+    evaluator.dispose();
+  }
+}
+
+export const routedBarSummary = await evaluateRoutedBar();
+console.log(routedBarSummary);
+```
+
+{/* docs-example:end composite-route-sweep */}
 
 ## Clearance and conditioning
 
