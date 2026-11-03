@@ -200,6 +200,7 @@ describe("release verification", () => {
       '![diagram](/assets/flow.svg "Flow") and <a href="/get-started/quickstart">start</a>.',
       '<img src="/assets/logo.svg" alt="logo"> and [spaced](</guides/first steps.mdx>).',
       "Keep [GitHub](https://github.com/shlokjain42/invariantCAD), [mail](mailto:a@b.c),",
+      "[bracketed GitHub](<https://github.com/shlokjain42/invariantCAD>),",
       "and [anchors](#highlights) as written, as well as `[code](/not-a-link)`.",
       "",
       "[reference]: /guides/index",
@@ -220,6 +221,7 @@ describe("release verification", () => {
         `![diagram](${DOCUMENTATION_URL}/assets/flow.svg "Flow") and <a href="${DOCUMENTATION_URL}/get-started/quickstart">start</a>.`,
         `<img src="${DOCUMENTATION_URL}/assets/logo.svg" alt="logo"> and [spaced](<${DOCUMENTATION_URL}/guides/first steps>).`,
         "Keep [GitHub](https://github.com/shlokjain42/invariantCAD), [mail](mailto:a@b.c),",
+        "[bracketed GitHub](<https://github.com/shlokjain42/invariantCAD>),",
         "and [anchors](#highlights) as written, as well as `[code](/not-a-link)`.",
         "",
         `[reference]: ${DOCUMENTATION_URL}/guides`,
@@ -277,7 +279,13 @@ describe("repository release state", () => {
     expect(pages).toContain(`releases/${currentVersion}`);
     const bodies = pages.map((page) => releaseNotesBody(repositoryFile(`docs/${page}.md`)));
     for (const body of bodies) {
-      expect(body).not.toMatch(/\]\((?!https:\/\/|mailto:|#)/u);
+      // Code is published as written, so only destinations outside code must
+      // carry a scheme or be an in-page anchor.
+      const prose = body
+        .replace(/^ {0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?^ {0,3}\1[ \t]*$/gmu, "")
+        .replace(/(`+)[^`]*?\1/gu, "");
+      expect(prose).not.toMatch(/\]\(\s*(?!<?(?:[a-z][a-z\d+.-]*:|#))/iu);
+      expect(prose).not.toMatch(/\b(?:href|src)=["'](?![a-z][a-z\d+.-]*:|#)/iu);
     }
     // A release page need not link to the site, but the published pages do,
     // so the check above is not vacuous.
