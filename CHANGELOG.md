@@ -23,7 +23,8 @@
 - GitHub release notes now publish documentation links, image sources, angle-
   bracketed destinations and reference definitions as absolute URLs on the
   hosted site, and leave inline code (including wrapped and multi-backtick
-  spans) and fenced code unchanged.
+  spans) and fenced or indented code blocks, including those inside lists and
+  block quotes, unchanged.
 - The documentation gate now rejects title or description frontmatter values
   that continue onto an indented line, including after blank or comment lines.
 - `parseDocument(text, options?)` now rejects JSON that repeats an object

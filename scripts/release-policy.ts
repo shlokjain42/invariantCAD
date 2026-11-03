@@ -160,7 +160,8 @@ export function releaseNotesPage(version: string, changelogEntries: string): str
  * the page's YAML frontmatter. Release pages link to other documentation pages
  * with site-relative or file-relative targets, which GitHub would resolve
  * against the repository, so those targets become absolute documentation-site
- * URLs. Fenced code and inline code spans are left as written.
+ * URLs. Code blocks, fenced or indented and at any depth of block quotes and
+ * list items, and inline code spans are left as written.
  */
 export function releaseNotesBody(page: string): string {
   if (!page.startsWith("---\n")) {
@@ -178,48 +179,221 @@ const RELEASE_NOTES_DIRECTORY = "releases";
 // that it is skipped whole. As in CommonMark, it opens with a complete run of
 // backticks and closes at the next run of the same length; shorter or longer
 // runs inside it are content. It may wrap onto later lines of its paragraph
-// but never crosses a blank line.
+// but never crosses a blank line. A reference definition may sit inside block
+// quotes or list items, so it may follow quote markers and indentation; code
+// blocks never reach this scan.
 const MARKDOWN_TARGET = new RegExp(
   [
     "(?<!`)(`+)(?!`)(?:[^`\\n]|\\n(?![ \\t]*(?:\\n|$))|`+(?!`))*?(?<!`)\\1(?!`)",
-    "^( {0,3}\\[[^\\]\\n]+\\]:[ \\t]*)(<[^<>\\n]*>|\\S+)",
+    "^((?:[ \\t]*>)*[ \\t]*\\[[^\\]\\n]+\\]:[ \\t]*)(<[^<>\\n]*>|\\S+)",
     "(\\]\\(\\s*)(<[^<>\\n]*>|[^)\\s]+)",
     "(\\b(?:href|src)=[\"'])([^\"']+)",
   ].join("|"),
   "gmu",
 );
-const FENCE = /^ {0,3}(`{3,}|~{3,})/u;
+
+/**
+ * How one Markdown line takes part in link rewriting: verbatim code, the
+ * start of a prose block, or the continuation of the paragraph before it.
+ */
+type MarkdownLineKind = "code" | "start" | "continuation";
+
+/** An open block quote, or a list item whose content is `width` columns in. */
+type MarkdownContainer =
+  | { readonly kind: "quote" }
+  | { readonly kind: "item"; readonly width: number };
+
+interface MarkdownFence {
+  readonly character: string;
+  readonly length: number;
+}
+
+const TAB_STOP = 4;
+const QUOTE_MARKER = /^ {0,3}> ?/u;
+const LIST_MARKER = /^ {0,3}(?:[-+*]|(\d{1,9})[.)])(?= |$)/u;
+const FENCE_MARKER = /^ {0,3}(`{3,}|~{3,})/u;
+const CLOSING_FENCE = /^ {0,3}(`{3,}|~{3,}) *$/u;
+const THEMATIC_BREAK = /^ {0,3}([-*_])(?: *\1){2,} *$/u;
+const ATX_HEADING = /^ {0,3}#{1,6}(?: |$)/u;
+const SETEXT_UNDERLINE = /^ {0,3}(?:=+|-+) *$/u;
+const BLANK = /^ *$/u;
 
 function absoluteDocumentationLinks(markdown: string): string {
+  const lines = markdown.split("\n");
+  const kinds = markdownLineKinds(lines);
   const output: string[] = [];
   let prose: string[] = [];
-  let fence: string | undefined;
   const flushProse = (): void => {
     if (prose.length > 0) output.push(absoluteProseLinks(prose.join("\n")));
     prose = [];
   };
-  for (const line of markdown.split("\n")) {
-    const marker = FENCE.exec(line)?.[1];
-    if (fence !== undefined) {
-      if (
-        marker !== undefined &&
-        marker[0] === fence[0] &&
-        marker.length >= fence.length &&
-        line.trim() === marker
-      ) {
-        fence = undefined;
-      }
-      output.push(line);
-    } else if (marker !== undefined) {
-      flushProse();
-      fence = marker;
-      output.push(line);
-    } else {
-      prose.push(line);
-    }
-  }
+  lines.forEach((line, index) => {
+    const kind = kinds[index];
+    if (kind !== "continuation") flushProse();
+    if (kind === "code") output.push(line);
+    else prose.push(line);
+  });
   flushProse();
   return output.join("\n");
+}
+
+/**
+ * Classifies each line with the CommonMark block structure that decides what
+ * is code: fenced and indented code blocks at any depth of block quotes and
+ * list items, fences that end with their container, lazy paragraph
+ * continuation, and backtick fence openers whose info string holds a
+ * backtick, which are inline code instead. Other block kinds count as prose.
+ */
+function markdownLineKinds(lines: readonly string[]): readonly MarkdownLineKind[] {
+  let containers: readonly MarkdownContainer[] = [];
+  let fence: MarkdownFence | undefined;
+  let paragraph = false;
+  return lines.map((line): MarkdownLineKind => {
+    let rest = expandTabs(line.replace(/\r$/u, ""));
+    let matched = 0;
+    for (const container of containers) {
+      const inner = containerContent(container, rest);
+      if (inner === undefined) break;
+      rest = inner;
+      matched += 1;
+    }
+    if (fence !== undefined) {
+      if (matched === containers.length) {
+        const closing = CLOSING_FENCE.exec(rest)?.[1];
+        if (
+          closing !== undefined &&
+          closing[0] === fence.character &&
+          closing.length >= fence.length
+        ) {
+          fence = undefined;
+        }
+        return "code";
+      }
+      // A fenced block ends with the block quote or list item around it.
+      fence = undefined;
+    }
+
+    const opened: MarkdownContainer[] = [];
+    for (;;) {
+      if (THEMATIC_BREAK.test(rest)) break;
+      const quote = QUOTE_MARKER.exec(rest);
+      if (quote !== null) {
+        opened.push({ kind: "quote" });
+        rest = rest.slice(quote[0].length);
+        continue;
+      }
+      // Only a paragraph that this line would otherwise continue directly
+      // limits which list items may start.
+      const item = listItemStart(
+        rest,
+        paragraph && matched === containers.length && opened.length === 0,
+      );
+      if (item === undefined) break;
+      opened.push({ kind: "item", width: item.width });
+      rest = rest.slice(item.width);
+    }
+
+    if (
+      paragraph &&
+      matched === containers.length &&
+      opened.length === 0 &&
+      SETEXT_UNDERLINE.test(rest)
+    ) {
+      // The underline turns the paragraph above it into a heading.
+      paragraph = false;
+      return "start";
+    }
+    const blank = BLANK.test(rest);
+    const opener = fenceOpener(rest);
+    const interrupts =
+      opener !== undefined || ATX_HEADING.test(rest) || THEMATIC_BREAK.test(rest);
+    if (
+      paragraph &&
+      matched < containers.length &&
+      opened.length === 0 &&
+      !blank &&
+      !interrupts
+    ) {
+      // Lazy continuation keeps every open container.
+      return "continuation";
+    }
+    if (matched < containers.length || opened.length > 0) paragraph = false;
+    containers = [...containers.slice(0, matched), ...opened];
+
+    if (blank) {
+      paragraph = false;
+      return "start";
+    }
+    if (indentation(rest) >= 4) return paragraph ? "continuation" : "code";
+    if (opener !== undefined) {
+      fence = opener;
+      paragraph = false;
+      return "code";
+    }
+    if (interrupts) {
+      paragraph = false;
+      return "start";
+    }
+    const continues = paragraph;
+    paragraph = true;
+    return continues ? "continuation" : "start";
+  });
+}
+
+/** Returns a line's text inside an open container, or undefined when it ends. */
+function containerContent(container: MarkdownContainer, rest: string): string | undefined {
+  if (container.kind === "quote") {
+    const marker = QUOTE_MARKER.exec(rest);
+    return marker === null ? undefined : rest.slice(marker[0].length);
+  }
+  if (BLANK.test(rest)) return "";
+  return indentation(rest) >= container.width ? rest.slice(container.width) : undefined;
+}
+
+/** Returns the content offset of a list item that starts the text. */
+function listItemStart(
+  rest: string,
+  interruptsParagraph: boolean,
+): { readonly width: number } | undefined {
+  const marker = LIST_MARKER.exec(rest);
+  if (marker === null) return undefined;
+  const after = rest.slice(marker[0].length);
+  const empty = BLANK.test(after);
+  const ordinal = marker[1];
+  if (interruptsParagraph && (empty || (ordinal !== undefined && Number(ordinal) !== 1))) {
+    return undefined;
+  }
+  const spaces = indentation(after);
+  // Content that starts five or more spaces after the marker is indented code
+  // one space in; an empty first line puts the content one space in as well.
+  return { width: marker[0].length + (empty || spaces > 4 ? 1 : spaces) };
+}
+
+/** Returns the fence that the text opens, if any. */
+function fenceOpener(rest: string): MarkdownFence | undefined {
+  const marker = FENCE_MARKER.exec(rest);
+  const run = marker?.[1];
+  if (marker === null || run === undefined) return undefined;
+  const character = run[0] ?? "";
+  // A backtick fence's info string cannot contain a backtick, so such a line
+  // is a paragraph that starts with an inline code span.
+  if (character === "`" && rest.slice(marker[0].length).includes("`")) return undefined;
+  return { character, length: run.length };
+}
+
+/** Expands tabs to the four-column stops that CommonMark block structure uses. */
+function expandTabs(line: string): string {
+  let expanded = "";
+  for (const character of line) {
+    expanded +=
+      character === "\t" ? " ".repeat(TAB_STOP - (expanded.length % TAB_STOP)) : character;
+  }
+  return expanded;
+}
+
+/** Counts leading spaces; tabs are already expanded. */
+function indentation(text: string): number {
+  return /^ */u.exec(text)?.[0].length ?? 0;
 }
 
 function absoluteProseLinks(prose: string): string {

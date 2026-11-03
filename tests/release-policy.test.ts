@@ -247,6 +247,79 @@ describe("release verification", () => {
     );
   });
 
+  // Every prose target below is under /guides/ and must become absolute. The
+  // code targets would be rewritten, or ../../CHANGELOG.md would throw, if a
+  // code block were mistaken for prose.
+  const absoluteGuides = (lines: readonly string[]): string =>
+    lines.join("\n").replaceAll("/guides/", `${DOCUMENTATION_URL}/guides/`);
+  const releaseBody = (lines: readonly string[]): string =>
+    releaseNotesBody(`---\ntitle: "x"\n---\n\n${lines.join("\n")}`);
+
+  it("leaves code blocks inside list items and block quotes unchanged", () => {
+    const lines = [
+      "- A nested example:",
+      "",
+      "    ~~~md",
+      "    [changes](../../CHANGELOG.md) and [guide](/not-a-link)",
+      "    ~~~",
+      "",
+      "  - Deeper:",
+      "",
+      "    ```md",
+      "    [deeper](/not-a-link)",
+      "    ```",
+      "",
+      "  Back in the outer item, see [guide](/guides/item).",
+      "",
+      "> ```md",
+      "> [quoted](/not-a-link)",
+      "> ```",
+      ">",
+      ">     [indented in a quote](/not-a-link)",
+      ">",
+      "> See [quote link](/guides/quote).",
+      ">",
+      "> [quoted ref]: /guides/quoted",
+      "",
+      "    [indented](/not-a-link) top-level code",
+      "",
+      "Setext heading",
+      "===",
+      "    [after a heading](/not-a-link)",
+      "",
+      "- Item text",
+      "      [continued](/guides/continued) as paragraph text",
+      "",
+      "- ```md",
+      "  [first block](/not-a-link)",
+      "  ```",
+      "-     [indented item code](/not-a-link)",
+      "",
+      "> Lazy quote",
+      "    [lazy](/guides/lazy) continuation",
+      "",
+      "1. ```md",
+      "   [unclosed](/not-a-link)",
+      "2. The fence ended with its item, so [after](/guides/after) is prose.",
+    ];
+    expect(releaseBody(lines)).toBe(absoluteGuides(lines));
+  });
+
+  it("treats a backtick fence opener with a backtick after it as inline code", () => {
+    const lines = [
+      "```[example](/not-a-link)``` opens a paragraph, so [this](/guides/this) changes.",
+      "",
+      "See [later](/guides/later) paragraphs too.",
+      "",
+      "~~~md `title`",
+      "[tilde fence](/not-a-link)",
+      "~~~",
+      "",
+      "Then [after](/guides/after).",
+    ];
+    expect(releaseBody(lines)).toBe(absoluteGuides(lines));
+  });
+
   it("rejects a release-notes link that leaves the documentation site", () => {
     const page = '---\ntitle: "x"\n---\n\nSee [changes](../../CHANGELOG.md).\n';
     expect(() => releaseNotesBody(page)).toThrow(
