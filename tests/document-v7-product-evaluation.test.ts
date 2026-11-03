@@ -2092,6 +2092,123 @@ describe("staged document-v7 mixed product evaluation", () => {
     expect(harness.importCalls).toHaveLength(0);
   });
 
+  it("attributes body-result classification failures to the batch that owns the Boolean", async () => {
+    const box = {
+      kind: "box",
+      size: [literal("length", 2), literal("length", 2), literal("length", 2)],
+      center: true,
+    } as const;
+    const document = (
+      name: string,
+      nodes: Readonly<Record<string, unknown>>,
+    ): DesignDocumentV7 =>
+      ({
+        schema: DOCUMENT_SCHEMA_V7,
+        version: DOCUMENT_VERSION_V7,
+        name,
+        units: { length: "mm", angle: "rad" },
+        parameters: {},
+        nodes,
+        outputs: { cut: { node: "cut", kind: "solid" } },
+      }) as unknown as DesignDocumentV7;
+    // Both documents own a node named "cut"; only the child's is a Boolean.
+    const root = captureProductDocumentV7(document("root", { cut: box }));
+    const child = captureProductDocumentV7(
+      document("child", {
+        a: box,
+        b: { kind: "sphere", radius: literal("length", 1.5), segments: 16 },
+        cut: {
+          kind: "boolean",
+          operation: "subtract",
+          target: { node: "a", kind: "solid" },
+          tools: [{ node: "b", kind: "solid" }],
+        },
+      }),
+    );
+    expect(root.ok, JSON.stringify(root.diagnostics)).toBe(true);
+    expect(child.ok, JSON.stringify(child.diagnostics)).toBe(true);
+    if (!root.ok || !child.ok) return;
+    const options = {
+      parameters: {},
+      evaluationLimits: DEFAULT_PART_EVALUATION_LIMITS_V7,
+      resourceLimits: DEFAULT_RESOURCE_RESOLUTION_LIMITS_V7,
+      materialScope: "selected" as const,
+    };
+    const selection = Object.freeze([
+      Object.freeze({
+        name: "cut",
+        node: "cut" as NodeId,
+        kind: "solid" as const,
+        path: "/outputs/cut",
+      }),
+    ]);
+    const rootPrepared = prepareProductGeometryOutputsV7(
+      root.value,
+      selection,
+      options,
+    );
+    const childPrepared = prepareProductGeometryOutputsV7(
+      child.value,
+      selection,
+      options,
+    );
+    expect(rootPrepared.ok).toBe(true);
+    expect(childPrepared.ok).toBe(true);
+    if (!rootPrepared.ok || !childPrepared.ok) return;
+
+    const manifold = await createManifoldKernel();
+    try {
+      const {
+        bodyResultClassification: _omitted,
+        ...capabilities
+      } = manifold.capabilities;
+      const kernel = Object.create(manifold) as GeometryKernel;
+      Object.defineProperty(kernel, "capabilities", {
+        value: capabilities,
+        enumerable: true,
+      });
+      const childScopeDigest =
+        `sha256:${"3".repeat(64)}` as ResourceDigestIR;
+      const preflight = preflightPreparedProductGeometryOutputsV7(
+        kernel,
+        [rootPrepared.value, childPrepared.value],
+        [
+          {
+            documentScope: { source: "root" },
+            selectionPath: "/outputs/cut",
+          },
+          {
+            documentScope: {
+              source: "external",
+              resource: "childDocument" as ResourceId,
+              digest: childScopeDigest,
+            },
+            selectionPath: "/components/child",
+          },
+        ],
+      );
+      expect(preflight.ok).toBe(false);
+      if (preflight.ok) return;
+      expect(preflight.diagnostics).toHaveLength(1);
+      expect(preflight.diagnostics[0]).toMatchObject({
+        code: "KERNEL_CAPABILITY_MISSING",
+        node: "cut",
+        details: {
+          kind: "bodyResultClassification",
+          productBatchIndex: 1,
+          documentScope: {
+            source: "external",
+            resource: "childDocument",
+            digest: childScopeDigest,
+          },
+          selectionPath: "/components/child",
+        },
+      });
+    } finally {
+      manifold.dispose();
+    }
+  });
+
   it("rolls back every acquired shape on kernel failure and cancellation", async () => {
     const failureHarness = createKernelHarness({
       failPrimitiveCall: 1,

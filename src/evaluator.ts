@@ -11780,6 +11780,9 @@ function productGeometryDiagnosticMatchesPlanNodeV7(
       (typeof capability !== "string" || capability === "boolean")
     );
   }
+  if (kind === "bodyResultClassification") {
+    return node.kind === "boolean";
+  }
   return true;
 }
 
