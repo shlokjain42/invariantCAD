@@ -10,6 +10,55 @@ function threeBoxes() {
 }
 
 describe("output selection and allowEmpty", () => {
+  it("rejects a non-string output entry without converting it to a key", async () => {
+    const evaluator = await createEvaluator();
+    try {
+      for (const signal of [undefined, new AbortController().signal]) {
+        let conversions = 0;
+        const entry = {
+          toString() {
+            conversions += 1;
+            return "a";
+          },
+        };
+        const result = await evaluator.evaluate(threeBoxes(), {
+          outputs: ["b", entry] as unknown as readonly string[],
+          ...(signal === undefined ? {} : { signal }),
+        });
+        if (result.ok) result.value.dispose();
+        expect(result.ok).toBe(false);
+        expect(result.diagnostics).toEqual([
+          expect.objectContaining({
+            code: "IR_INVALID",
+            path: "/options/outputs/1",
+          }),
+        ]);
+        expect(conversions).toBe(0);
+      }
+    } finally {
+      evaluator.dispose();
+    }
+  });
+
+  it("escapes an unknown output name in its JSON Pointer", async () => {
+    const evaluator = await createEvaluator();
+    try {
+      const result = await evaluator.evaluate(threeBoxes(), {
+        outputs: ["x/y~z"],
+      });
+      if (result.ok) result.value.dispose();
+      expect(result.ok).toBe(false);
+      expect(result.diagnostics).toEqual([
+        expect.objectContaining({
+          code: "OUTPUT_MISSING",
+          path: "/outputs/x~1y~0z",
+        }),
+      ]);
+    } finally {
+      evaluator.dispose();
+    }
+  });
+
   it("distinguishes an explicitly empty selection from a document without outputs", async () => {
     const evaluator = await createEvaluator();
     try {

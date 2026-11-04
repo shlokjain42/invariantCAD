@@ -828,7 +828,7 @@ export function kernelCapabilityDiagnostic(
       {
         severity: "error",
         node: id,
-        path: `/nodes/${id}`,
+        path: `/nodes/${jsonPointerSegment(id)}`,
         hints: ["Choose a compatible geometry kernel for this design"],
         details: { kernel: kernel.id, kind, capability },
       },
@@ -847,7 +847,7 @@ export function kernelCapabilityDiagnostic(
       {
         severity: "error",
         node: id,
-        path: `/nodes/${id}`,
+        path: `/nodes/${jsonPointerSegment(id)}`,
         details: {
           kernel: kernel.id,
           kind,
@@ -15153,7 +15153,7 @@ export class Evaluator {
                   resolvedTransform(
                     operation,
                     id,
-                    `/nodes/${id}/operations/${index}`,
+                    `/nodes/${jsonPointerSegment(id)}/operations/${index}`,
                   ),
                 ),
                 featureContext(id),
@@ -15493,7 +15493,8 @@ export class Evaluator {
                   configuredInstanceSuppression(id, instance.id) ??
                   instance.suppressed;
                 if (suppressed) continue;
-                const instancePath = `/nodes/${id}/instances/${instanceIndex}`;
+                const instancePath =
+                  `/nodes/${jsonPointerSegment(id)}/instances/${instanceIndex}`;
                 if (
                   instance.component.kind === "assembly" &&
                   activeAssemblies + 1 > maxDepth
@@ -15618,12 +15619,25 @@ export class Evaluator {
         );
       }
       const rawOutputs = new Map<string, NodeValue>();
+      let outputIndex = -1;
       for (const name of requested) {
+        outputIndex += 1;
         if (yieldsToHost) {
           // Let timers, UI events, and worker messages run, so a host abort
           // can land before evaluation starts and between selected outputs.
           await this.#yieldToHost();
           ensureLive();
+        }
+        // Check the type before any lookup: converting a caller object to a
+        // property key would run its toString() and could pick another output.
+        if (typeof name !== "string") {
+          throw new EvaluationFailure(
+            diagnostic(
+              "IR_INVALID",
+              `Evaluation options.outputs[${outputIndex}] must be a string`,
+              { severity: "error", path: `/options/outputs/${outputIndex}` },
+            ),
+          );
         }
         const reference = Object.hasOwn(document.outputs, name)
           ? document.outputs[name]
@@ -15632,7 +15646,7 @@ export class Evaluator {
           throw new EvaluationFailure(
             diagnostic("OUTPUT_MISSING", `Unknown output '${name}'`, {
               severity: "error",
-              path: `/outputs/${name}`,
+              path: `/outputs/${jsonPointerSegment(name)}`,
             }),
           );
         }

@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+- Evaluation now rejects a non-string `outputs` entry with `IR_INVALID` at
+  `/options/outputs/<index>` before looking it up. Before, the entry was
+  converted to a property key, which ran its `toString()` and could select an
+  output the caller then could not read back by name. An unknown output name,
+  a zero mirror normal, and an assembly instance limit now escape `/` and `~`
+  in the node ID or output name of their JSON Pointer path.
 - Public evaluation now rejects a mirror normal whose components all resolve to
   zero, for a `transform` node or a `tf.mirror` assembly placement, with
   `FEATURE_INVALID` at `/nodes/<id>/operations/<index>/normal` or
