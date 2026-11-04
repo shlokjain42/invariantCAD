@@ -557,6 +557,13 @@ Methods throw `TypeError` or `RangeError` for invalid direct calls, including:
 - option records, transform operations, plane IR, path segments, raw loop
   edge uses, and topology selections whose fields are accessors, inherited, or
   not held by a plain record
+- option records with more than 1,000,000 own fields, the default
+  `maxStructuralValues`, which are refused before any field is copied
+- raw expression IR, such as IR passed to `fromExpressionIR`, whose
+  validation would visit more than 1,000,000 nodes and scheduled operands,
+  counting a shared operand each time it is scheduled; a `min` or `max` whose
+  operand list alone exceeds what remains of that budget is refused before the
+  list is frozen or copied
 - cyclic topology selections, selections with more query nodes than the
   default `maxTopologyQueryNodes` limit of 100,000 or more structural values
   than the default `maxStructuralValues` of 1,000,000, and selections nested
