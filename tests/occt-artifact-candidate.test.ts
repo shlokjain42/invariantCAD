@@ -6,8 +6,9 @@ import type {
 import { inspectKernelShapeArtifactSupport } from "../src/artifact-cache.js";
 import type { KernelShapeArtifactCodecCandidate } from "../src/conformance.js";
 import {
-  OCCT_SHAPE_ARTIFACT_CANDIDATE_ACCESS,
+  getOcctShapeArtifactCandidateHost,
   getOcctShapeArtifactCodecCandidate,
+  registerOcctShapeArtifactCandidateHost,
   type OcctShapeArtifactCandidateHost,
   type OcctShapeArtifactCapturedSidecarState,
   type OcctShapeArtifactCapturedState,
@@ -56,6 +57,23 @@ function codec(kernel: GeometryKernel): KernelShapeArtifactCodecCandidate {
   return candidate;
 }
 
+/**
+ * Creates a producer and a consumer kernel. When the second creation fails,
+ * the first kernel is disposed before the failure propagates, so a test's own
+ * try/finally only ever owns kernels that both exist.
+ */
+async function createProducerAndConsumer(): Promise<
+  readonly [GeometryKernel, GeometryKernel]
+> {
+  const producer = await createOcctKernel();
+  try {
+    return [producer, await createOcctKernel()];
+  } catch (error) {
+    producer.dispose();
+    throw error;
+  }
+}
+
 function codecWithRuntimePairIdentity(
   kernel: GeometryKernel,
   runtimePairIdentity: string,
@@ -63,12 +81,7 @@ function codecWithRuntimePairIdentity(
   readonly codec: KernelShapeArtifactCodecCandidate;
   readonly restoreCalls: () => number;
 } {
-  const host = (
-    kernel as GeometryKernel & {
-      readonly [OCCT_SHAPE_ARTIFACT_CANDIDATE_ACCESS]?:
-        OcctShapeArtifactCandidateHost;
-    }
-  )[OCCT_SHAPE_ARTIFACT_CANDIDATE_ACCESS];
+  const host = getOcctShapeArtifactCandidateHost(kernel);
   if (host === undefined) {
     throw new Error("The stock OCCT runtime did not expose its candidate host");
   }
@@ -92,13 +105,8 @@ function codecWithRuntimePairIdentity(
       return host.restore(state, signal);
     },
   });
-  const wrappedKernel = new Proxy(kernel, {
-    get(target, property, receiver) {
-      return property === OCCT_SHAPE_ARTIFACT_CANDIDATE_ACCESS
-        ? wrappedHost
-        : Reflect.get(target, property, receiver);
-    },
-  });
+  const wrappedKernel = new Proxy(kernel, {});
+  registerOcctShapeArtifactCandidateHost(wrappedKernel, wrappedHost);
   const candidate = getOcctShapeArtifactCodecCandidate(wrappedKernel);
   if (candidate === undefined) {
     throw new Error("The runtime-pair candidate codec was unavailable");
@@ -112,6 +120,13 @@ function codecWithRuntimePairIdentity(
 function box(kernel: GeometryKernel, feature = "role-box"): KernelShape {
   if (kernel.box === undefined) throw new Error("OCCT box support is unavailable");
   return kernel.box([2, 3, 5], false, { feature });
+}
+
+function sphere(kernel: GeometryKernel, feature: string): KernelShape {
+  if (kernel.sphere === undefined) {
+    throw new Error("OCCT sphere support is unavailable");
+  }
+  return kernel.sphere(2, undefined, { feature });
 }
 
 function topology(
@@ -373,6 +388,44 @@ function rectangleProfile(width: number, height: number): ResolvedProfile {
   };
 }
 
+function regularPolygonProfile(sides: number, radius: number): ResolvedProfile {
+  const points = Array.from({ length: sides }, (_, index) => {
+    const angle = (2 * Math.PI * index) / sides;
+    return [radius * Math.cos(angle), radius * Math.sin(angle)] as const;
+  });
+  return {
+    plane: { plane: "XY", origin: [0, 0, 0] },
+    outer: {
+      curves: points.map((start, index) => ({
+        kind: "line" as const,
+        start,
+        end: points[(index + 1) % sides]!,
+        source: {
+          kind: "sketch-entity" as const,
+          sketch: "artifact-polygon-profile",
+          entity: `side-${index}` as ProfileCurveSource["entity"],
+        },
+      })),
+    },
+    holes: [],
+  };
+}
+
+function polygonPrism(
+  kernel: GeometryKernel,
+  sides: number,
+  feature: string,
+): KernelShape {
+  if (kernel.extrude === undefined) {
+    throw new Error("OCCT extrusion support is unavailable");
+  }
+  return kernel.extrude(
+    regularPolygonProfile(sides, 10),
+    { distance: 10, symmetric: false, twist: 0, scaleTop: [1, 1], divisions: 0 },
+    { feature },
+  );
+}
+
 function quarterCirclePath(radius: number): ResolvedCircularArcPath {
   return {
     kind: "circularArc",
@@ -403,26 +456,56 @@ describe("OCCT shape-artifact codec candidate", { timeout: 30_000 }, () => {
       expect(inspectKernelShapeArtifactSupport(kernel)).toEqual({
         status: "absent",
       });
-      const host = (
-        kernel as GeometryKernel & {
-          readonly [OCCT_SHAPE_ARTIFACT_CANDIDATE_ACCESS]?:
-            OcctShapeArtifactCandidateHost;
-        }
-      )[OCCT_SHAPE_ARTIFACT_CANDIDATE_ACCESS];
+      const host = getOcctShapeArtifactCandidateHost(kernel);
       expect(host).toBeDefined();
       if (host === undefined) throw new Error("Expected candidate host");
       const malformedHost = Object.freeze({
         ...host,
         compatibilityFingerprint: `unpaired-\ud800`,
       });
-      const malformedKernel = new Proxy(kernel, {
-        get(target, property, receiver) {
-          return property === OCCT_SHAPE_ARTIFACT_CANDIDATE_ACCESS
-            ? malformedHost
-            : Reflect.get(target, property, receiver);
-        },
-      });
+      const malformedKernel = new Proxy(kernel, {});
+      registerOcctShapeArtifactCandidateHost(malformedKernel, malformedHost);
       expect(getOcctShapeArtifactCodecCandidate(malformedKernel)).toBeUndefined();
+    } finally {
+      kernel.dispose();
+    }
+  });
+
+  it("keeps the candidate host unreachable by reflection on the kernel", async () => {
+    const kernel = await createOcctKernel();
+    try {
+      const host = getOcctShapeArtifactCandidateHost(kernel);
+      expect(host).toBeDefined();
+      if (host === undefined) throw new Error("Expected candidate host");
+      const reachable = new Set<unknown>();
+      for (
+        let target: object | null = kernel;
+        target !== null && target !== Object.prototype;
+        target = Object.getPrototypeOf(target) as object | null
+      ) {
+        for (const key of Reflect.ownKeys(target)) {
+          // Package consumers can enumerate every own key; none may be a
+          // symbol, and no member may name the candidate operations.
+          expect(typeof key).toBe("string");
+          expect(String(key)).not.toMatch(/shapeartifactcandidate/iu);
+          const descriptor = Reflect.getOwnPropertyDescriptor(target, key);
+          if (descriptor !== undefined && "value" in descriptor) {
+            reachable.add(descriptor.value);
+          }
+        }
+      }
+      expect(reachable.has(host)).toBe(false);
+      expect(reachable.has(host.capture)).toBe(false);
+      expect(reachable.has(host.encodeNative)).toBe(false);
+      expect(reachable.has(host.restore)).toBe(false);
+
+      // The registry is keyed by object identity: an unregistered wrapper
+      // gets no candidate, and an existing registration cannot be replaced.
+      expect(getOcctShapeArtifactCodecCandidate(new Proxy(kernel, {})))
+        .toBeUndefined();
+      expect(() => registerOcctShapeArtifactCandidateHost(kernel, host))
+        .toThrow(/already registered/u);
+      expect(getOcctShapeArtifactCandidateHost(kernel)).toBe(host);
     } finally {
       kernel.dispose();
     }
@@ -464,6 +547,311 @@ describe("OCCT shape-artifact codec candidate", { timeout: 30_000 }, () => {
       producer.dispose();
     }
   });
+
+  it.each([7, 24])(
+    "round-trips a non-rectilinear %i-sided prism whose derived bounds drift in binary BREP",
+    async (sides) => {
+      const [producer, consumer] = await createProducerAndConsumer();
+      let source: KernelShape | undefined;
+      let reimported: KernelShape | undefined;
+      const decoded: (readonly [GeometryKernel, KernelShape])[] = [];
+      try {
+        source = polygonPrism(producer, sides, `prism-${sides}`);
+        const artifact = await codec(producer).encodeShapeArtifact(
+          source,
+          ARTIFACT_CONTEXT,
+        );
+        for (const kernel of [producer, consumer]) {
+          const shape = await codec(kernel).decodeShapeArtifact(
+            artifact,
+            ARTIFACT_CONTEXT,
+          );
+          decoded.push([kernel, shape]);
+          expect(kernel.status(shape)).toEqual({ ok: true, code: "VALID" });
+          // The stored descriptors, not native recomputations, are restored,
+          // so the semantic observation still matches the source exactly.
+          const plan = observationPlan(producer);
+          expect(await observe(kernel, shape, plan)).toEqual(
+            await observe(producer, source, plan),
+          );
+          expectFreshTopologyKeys(
+            topology(producer, source),
+            topology(kernel, shape),
+          );
+        }
+
+        // A source that already went through one binary-BREP reload drifts
+        // again on the next reload and must still round-trip.
+        if (producer.exportShape === undefined || producer.importShape === undefined) {
+          throw new Error("OCCT binary-BREP exchange support is unavailable");
+        }
+        reimported = producer.importShape(
+          producer.exportShape(source, "brep-binary", { feature: "prism-export" }),
+          "brep-binary",
+          { feature: "prism-import" },
+        );
+        const reimportedArtifact = await codec(producer).encodeShapeArtifact(
+          reimported,
+          ARTIFACT_CONTEXT,
+        );
+        const shape = await codec(consumer).decodeShapeArtifact(
+          reimportedArtifact,
+          ARTIFACT_CONTEXT,
+        );
+        decoded.push([consumer, shape]);
+        expect(consumer.status(shape)).toEqual({ ok: true, code: "VALID" });
+      } finally {
+        for (const [kernel, shape] of decoded) kernel.disposeShape(shape);
+        if (reimported !== undefined) producer.disposeShape(reimported);
+        if (source !== undefined) producer.disposeShape(source);
+        consumer.dispose();
+        producer.dispose();
+      }
+    },
+    60_000,
+  );
+
+  it("derives the descriptor tolerance from each restored native item, not the sidecar", async () => {
+    const [producer, consumer] = await createProducerAndConsumer();
+    let roleBox: KernelShape | undefined;
+    let slenderBox: KernelShape | undefined;
+    let decoded: KernelShape | undefined;
+    try {
+      if (producer.box === undefined) {
+        throw new Error("OCCT box support is unavailable");
+      }
+      roleBox = box(producer);
+      // The far end face sits at 1e9 while the near end face stays at unit
+      // scale, so one model-wide scale would loosen the near face's checks.
+      slenderBox = producer.box([1e9, 1, 1], false, { feature: "slender-box" });
+      const producerCodec = codec(producer);
+      const roleArtifact = await producerCodec.encodeShapeArtifact(
+        roleBox,
+        ARTIFACT_CONTEXT,
+      );
+      const slenderArtifact = await producerCodec.encodeShapeArtifact(
+        slenderBox,
+        ARTIFACT_CONTEXT,
+      );
+
+      // A finite but extreme stored bound once became the comparison scale,
+      // whose unit in the last place overflowed to Infinity and admitted any
+      // other stored descriptor.
+      const overflowingBound = rewriteSidecarState(roleArtifact, (state) => {
+        const [face, ...faces] = state.topology.faces;
+        const [edge, ...edges] = state.topology.edges;
+        if (face === undefined || edge === undefined) {
+          throw new TypeError("Candidate state lacks a face or an edge");
+        }
+        const [x, y, z] = edge.center;
+        return {
+          ...state,
+          topology: {
+            ...state.topology,
+            faces: [
+              {
+                ...face,
+                bounds: {
+                  ...face.bounds,
+                  max: [Number.MAX_VALUE, face.bounds.max[1], face.bounds.max[2]],
+                },
+              },
+              ...faces,
+            ],
+            edges: [{ ...edge, center: [x + 0.5, y, z] }, ...edges],
+          },
+        };
+      });
+      // A small shift on the unit-scale end face hides inside 64 units in
+      // the last place of 1e9 but not of the face's own native scale.
+      const nearFaceShift = rewriteSidecarState(slenderArtifact, (state) => {
+        const index = state.topology.faces.findIndex(
+          (face) => face.bounds.max[0] < 1,
+        );
+        const face = state.topology.faces[index];
+        if (face === undefined) {
+          throw new TypeError("Slender box state lacks its near end face");
+        }
+        const [x, y, z] = face.center;
+        const faces = [...state.topology.faces];
+        faces[index] = { ...face, center: [x, y + 1e-6, z] };
+        return { ...state, topology: { ...state.topology, faces } };
+      });
+
+      // A long side face has area 1e9; the square of its 1e9 span once let
+      // its stored area drift by thousands of units.
+      const longFaceArea = rewriteSidecarState(slenderArtifact, (state) => {
+        const index = state.topology.faces.findIndex(
+          (face) => face.area > 1e8,
+        );
+        const face = state.topology.faces[index];
+        if (face === undefined) {
+          throw new TypeError("Slender box state lacks a long side face");
+        }
+        const faces = [...state.topology.faces];
+        faces[index] = { ...face, area: face.area + 4096 };
+        return { ...state, topology: { ...state.topology, faces } };
+      });
+
+      const consumerCodec = codec(consumer);
+      for (const [label, payload] of [
+        ["overflowing stored bound", overflowingBound],
+        ["near-face shift on a slender box", nearFaceShift],
+        ["long-face area drift on a slender box", longFaceArea],
+      ] as const) {
+        const borrowed = payload.slice();
+        await expectRejected(() =>
+          consumerCodec.decodeShapeArtifact(payload, ARTIFACT_CONTEXT),
+        );
+        expect(payload, `${label} input mutation`).toEqual(borrowed);
+        expect(liveShapeCount(consumer), `${label} leaked a shape`).toBe(0);
+      }
+
+      decoded = await consumerCodec.decodeShapeArtifact(
+        slenderArtifact,
+        ARTIFACT_CONTEXT,
+      );
+      expect(consumer.status(decoded)).toEqual({ ok: true, code: "VALID" });
+      const centers = (snapshot: KernelTopologySnapshot) =>
+        snapshot.faces.map((face) => JSON.stringify(face.center)).sort();
+      expect(centers(topology(consumer, decoded))).toEqual(
+        centers(topology(producer, slenderBox)),
+      );
+    } finally {
+      if (decoded !== undefined) consumer.disposeShape(decoded);
+      if (slenderBox !== undefined) producer.disposeShape(slenderBox);
+      if (roleBox !== undefined) producer.disposeShape(roleBox);
+      consumer.dispose();
+      producer.dispose();
+    }
+  }, 30_000);
+
+  it("does not let distance from the origin loosen lengths, areas, or radii", async () => {
+    const [producer, consumer] = await createProducerAndConsumer();
+    const sources: KernelShape[] = [];
+    const decoded: KernelShape[] = [];
+    try {
+      if (
+        producer.box === undefined ||
+        producer.cylinder === undefined ||
+        producer.transform === undefined
+      ) {
+        throw new Error("OCCT box, cylinder, or transform support is unavailable");
+      }
+      const transform = producer.transform.bind(producer);
+      // At x = 1e12 a coordinate's unit in the last place is about 1.2e-4,
+      // so 64 of them exceed the 0.01 size of these items. Lengths, areas,
+      // and radii do not depend on position, so that distance must not widen
+      // their checks the way it widens checks on centers and bounds.
+      const farAway = (shape: KernelShape, feature: string): KernelShape => {
+        try {
+          return transform(
+            shape,
+            [{ kind: "translate", value: [1e12, 0, 0] }],
+            { feature },
+          );
+        } finally {
+          producer.disposeShape(shape);
+        }
+      };
+      const farBox = farAway(
+        producer.box([1, 0.01, 0.01], false, { feature: "far-small-box" }),
+        "far-small-box-move",
+      );
+      sources.push(farBox);
+      const farCylinder = farAway(
+        producer.cylinder(1, 0.01, 0.01, false, undefined, {
+          feature: "far-small-cylinder",
+        }),
+        "far-small-cylinder-move",
+      );
+      sources.push(farCylinder);
+      const producerCodec = codec(producer);
+      const boxArtifact = await producerCodec.encodeShapeArtifact(
+        farBox,
+        ARTIFACT_CONTEXT,
+      );
+      const cylinderArtifact = await producerCodec.encodeShapeArtifact(
+        farCylinder,
+        ARTIFACT_CONTEXT,
+      );
+
+      const rewriteEdge = (
+        artifact: Uint8Array,
+        select: (edge: KernelTopologySnapshot["edges"][number]) => boolean,
+        change: (
+          edge: KernelTopologySnapshot["edges"][number],
+        ) => KernelTopologySnapshot["edges"][number],
+      ) =>
+        rewriteSidecarState(artifact, (state) => {
+          const edges = [...state.topology.edges];
+          const index = edges.findIndex(select);
+          const edge = edges[index];
+          if (edge === undefined) {
+            throw new TypeError("Far-away state lacks the selected edge");
+          }
+          edges[index] = change(edge);
+          return { ...state, topology: { ...state.topology, edges } };
+        });
+      const shortEdge = (edge: KernelTopologySnapshot["edges"][number]) =>
+        edge.length < 0.1;
+      const circularEdge = (edge: KernelTopologySnapshot["edges"][number]) =>
+        edge.curve.radius !== undefined;
+      const halvedLength = rewriteEdge(boxArtifact, shortEdge, (edge) => ({
+        ...edge,
+        length: edge.length / 2,
+      }));
+      const halvedArea = rewriteSidecarState(boxArtifact, (state) => {
+        const faces = [...state.topology.faces];
+        const index = faces.findIndex((face) => face.area < 0.001);
+        const face = faces[index];
+        if (face === undefined) {
+          throw new TypeError("Far-away box state lacks a small end face");
+        }
+        faces[index] = { ...face, area: face.area / 2 };
+        return { ...state, topology: { ...state.topology, faces } };
+      });
+      const halvedRadius = rewriteEdge(cylinderArtifact, circularEdge, (edge) => ({
+        ...edge,
+        curve: { ...edge.curve, radius: edge.curve.radius! / 2 },
+      }));
+
+      const consumerCodec = codec(consumer);
+      for (const [label, payload] of [
+        ["halved short-edge length", halvedLength],
+        ["halved end-face area", halvedArea],
+        ["halved circular-edge radius", halvedRadius],
+      ] as const) {
+        const borrowed = payload.slice();
+        const error = await expectRejected(() =>
+          consumerCodec.decodeShapeArtifact(payload, ARTIFACT_CONTEXT),
+        );
+        expect(String(error), label).toMatch(/changed identified (face|edge)/u);
+        expect(payload, `${label} input mutation`).toEqual(borrowed);
+        expect(liveShapeCount(consumer), `${label} leaked a shape`).toBe(0);
+      }
+
+      // Unchanged artifacts, and a sidecar rewritten within its own scale,
+      // still decode, so the rejections above come from the size checks.
+      const nudgedLength = rewriteEdge(boxArtifact, shortEdge, (edge) => ({
+        ...edge,
+        length: edge.length + 4 * Number.EPSILON * edge.length,
+      }));
+      for (const payload of [boxArtifact, cylinderArtifact, nudgedLength]) {
+        const shape = await consumerCodec.decodeShapeArtifact(
+          payload,
+          ARTIFACT_CONTEXT,
+        );
+        decoded.push(shape);
+        expect(consumer.status(shape)).toEqual({ ok: true, code: "VALID" });
+      }
+    } finally {
+      for (const shape of decoded) consumer.disposeShape(shape);
+      for (const shape of sources) producer.disposeShape(shape);
+      consumer.dispose();
+      producer.dispose();
+    }
+  }, 30_000);
 
   it("emits identical bytes and remaps a symmetric solid when TopExp enumeration reverses", async () => {
     const normalProducer = await createOcctKernel();
@@ -527,13 +915,16 @@ describe("OCCT shape-artifact codec candidate", { timeout: 30_000 }, () => {
     }
   });
 
-  it("does not change an already mesh- and topology-warm source", async () => {
+  it.each([
+    ["role-rich box", (kernel: GeometryKernel) => box(kernel, "warm-role-box")],
+    ["curved sphere", (kernel: GeometryKernel) => sphere(kernel, "warm-sphere")],
+  ] as const)("does not change an already mesh- and topology-warm %s source", async (_name, create) => {
     const producer = await createOcctKernel();
     const consumer = await createOcctKernel();
     let source: KernelShape | undefined;
     let decoded: KernelShape | undefined;
     try {
-      source = box(producer, "warm-role-box");
+      source = create(producer);
       const plan = observationPlan(producer);
       const beforeObservation = await observe(producer, source, plan);
       const beforeMesh = producer.mesh(source);
@@ -558,7 +949,7 @@ describe("OCCT shape-artifact codec candidate", { timeout: 30_000 }, () => {
       consumer.dispose();
       producer.dispose();
     }
-  });
+  }, 30_000);
 
   it("preserves partial history from a binary-BREP import", async () => {
     const producer = await createOcctKernel();
@@ -808,6 +1199,60 @@ describe("OCCT shape-artifact codec candidate", { timeout: 30_000 }, () => {
       producer.dispose();
     }
   });
+
+  it("decodes every artifact the encoder admits at the sidecar string ceiling", async () => {
+    const [producer, consumer] = await createProducerAndConsumer();
+    let source: KernelShape | undefined;
+    let decoded: KernelShape | undefined;
+    try {
+      const producerCodec = codec(producer);
+      // U+4E00 is two UTF-16 bytes, which the sidecar ceiling counts, but three
+      // UTF-8 bytes. Synthesized topology keys and every adjacency occurrence
+      // add further UTF-8 strings that no declared sidecar total includes.
+      const featureOf = (length: number) => "一".repeat(length);
+      const encodes = async (length: number): Promise<boolean> => {
+        const shape = box(producer, featureOf(length));
+        try {
+          await producerCodec.encodeShapeArtifact(shape, ARTIFACT_CONTEXT);
+          return true;
+        } catch (error) {
+          if (!(error instanceof RangeError)) throw error;
+          expect(error.message).toMatch(/string budget was exceeded/u);
+          return false;
+        } finally {
+          producer.disposeShape(shape);
+        }
+      };
+      let admitted = 1;
+      let refused = 64_000;
+      expect(await encodes(admitted)).toBe(true);
+      expect(await encodes(refused)).toBe(false);
+      while (refused - admitted > 1) {
+        const middle = Math.floor((admitted + refused) / 2);
+        if (await encodes(middle)) admitted = middle;
+        else refused = middle;
+      }
+
+      source = box(producer, featureOf(admitted));
+      const artifact = await producerCodec.encodeShapeArtifact(
+        source,
+        ARTIFACT_CONTEXT,
+      );
+      decoded = await codec(consumer).decodeShapeArtifact(artifact, {
+        ...ARTIFACT_CONTEXT,
+        maxArtifactBytes: artifact.byteLength,
+      });
+      expect(consumer.status(decoded)).toEqual({ ok: true, code: "VALID" });
+      expect(topology(consumer, decoded).faces[0]?.lineage).toEqual(
+        topology(producer, source).faces[0]?.lineage,
+      );
+    } finally {
+      if (decoded !== undefined) consumer.disposeShape(decoded);
+      if (source !== undefined) producer.disposeShape(source);
+      consumer.dispose();
+      producer.dispose();
+    }
+  }, 60_000);
 
   it("preflights unique identity counts before materializing topology handle arrays", async () => {
     const kernel = await createOcctKernel();
@@ -1410,4 +1855,118 @@ describe("OCCT shape-artifact codec candidate", { timeout: 30_000 }, () => {
       producer.dispose();
     }
   });
+});
+
+describe("stock OCCT semantic observation repeatability", () => {
+  const coarse = Object.freeze({ linearDeflection: 1 });
+  const fine = Object.freeze({ linearDeflection: 0.05 });
+
+  function meshPlan(
+    kernel: GeometryKernel,
+    meshes: KernelShapeSemanticObservationPlan["meshes"],
+  ): KernelShapeSemanticObservationPlan {
+    return {
+      id: "occt-mesh-repeatability",
+      meshes,
+      topology: "omit",
+      nativeExchanges: [],
+      probes: [],
+      notApplicableFeatures: kernel.capabilities.features.map((feature) => ({
+        feature,
+        reason: "Mesh repeatability does not exercise downstream features",
+      })),
+    };
+  }
+
+  function triangles(
+    observation: KernelShapeSemanticObservationV2,
+    id: string,
+  ): KernelShapeSemanticObservationV2["meshes"][number]["triangles"] {
+    const mesh = observation.meshes.find((candidate) => candidate.id === id);
+    if (mesh === undefined) throw new Error(`Missing observed mesh ${id}`);
+    return mesh.triangles;
+  }
+
+  function curvedSphere(kernel: GeometryKernel, feature: string): KernelShape {
+    if (kernel.sphere === undefined) {
+      throw new Error("OCCT sphere support is unavailable");
+    }
+    return kernel.sphere(5, undefined, { feature });
+  }
+
+  it("observes the same curved shape twice with equal witnesses", async () => {
+    const kernel = await createOcctKernel();
+    let shape: KernelShape | undefined;
+    try {
+      shape = curvedSphere(kernel, "repeat-sphere");
+      const plan = meshPlan(kernel, [
+        { id: "a-fine", options: fine },
+        { id: "b-coarse", options: coarse },
+      ]);
+      const first = await observe(kernel, shape, plan);
+      const second = await observe(kernel, shape, plan);
+      expect(triangles(first, "b-coarse").length).toBeLessThan(
+        triangles(first, "a-fine").length,
+      );
+      expect(second).toEqual(first);
+    } finally {
+      if (shape !== undefined) kernel.disposeShape(shape);
+      kernel.dispose();
+    }
+  }, 30_000);
+
+  it("does not let request-id order change any request's triangles", async () => {
+    const kernel = await createOcctKernel();
+    const shapes: KernelShape[] = [];
+    try {
+      const fineFirst = curvedSphere(kernel, "fine-first-sphere");
+      shapes.push(fineFirst);
+      const coarseFirst = curvedSphere(kernel, "coarse-first-sphere");
+      shapes.push(coarseFirst);
+      const fineSortsFirst = await observe(
+        kernel,
+        fineFirst,
+        meshPlan(kernel, [
+          { id: "b-coarse", options: coarse },
+          { id: "a-fine", options: fine },
+        ]),
+      );
+      const coarseSortsFirst = await observe(
+        kernel,
+        coarseFirst,
+        meshPlan(kernel, [
+          { id: "a-coarse", options: coarse },
+          { id: "b-fine", options: fine },
+        ]),
+      );
+      expect(triangles(fineSortsFirst, "b-coarse")).toEqual(
+        triangles(coarseSortsFirst, "a-coarse"),
+      );
+      expect(triangles(fineSortsFirst, "a-fine")).toEqual(
+        triangles(coarseSortsFirst, "b-fine"),
+      );
+    } finally {
+      for (const shape of shapes) kernel.disposeShape(shape);
+      kernel.dispose();
+    }
+  }, 30_000);
+
+  it("does not let an earlier kernel mesh change the observation", async () => {
+    const kernel = await createOcctKernel();
+    const shapes: KernelShape[] = [];
+    try {
+      const plan = meshPlan(kernel, [{ id: "coarse", options: coarse }]);
+      const cold = curvedSphere(kernel, "cold-sphere");
+      shapes.push(cold);
+      const warmed = curvedSphere(kernel, "warmed-sphere");
+      shapes.push(warmed);
+      expect(kernel.mesh(warmed, fine).indices.length).toBeGreaterThan(0);
+      const coldObservation = await observe(kernel, cold, plan);
+      const warmedObservation = await observe(kernel, warmed, plan);
+      expect(warmedObservation.meshes).toEqual(coldObservation.meshes);
+    } finally {
+      for (const shape of shapes) kernel.disposeShape(shape);
+      kernel.dispose();
+    }
+  }, 30_000);
 });

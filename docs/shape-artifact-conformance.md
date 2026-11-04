@@ -164,6 +164,14 @@ the runtime under test:
 - backend-owned format version; and
 - compatibility fingerprint.
 
+Both modes validate these fields with the artifact-cache protocol's own rules,
+for the expected identity and for a candidate codec's declaration alike: the
+kernel ID and format must be nonempty strings of at most `256` UTF-8 bytes,
+and the fingerprint at most `2,048` bytes, that decode back unchanged under a
+fatal UTF-8 decoder. Unpaired UTF-16 surrogates and a leading U+FEFF are
+therefore rejected rather than replaced or stripped. An identity the cache
+could never advertise or key cannot pass a candidate audit either.
+
 The compatibility fingerprint is not a topology-signature fingerprint or a
 friendly runtime label. It must identify every implementation, native/WASM
 runtime, serialization format, tolerance, option, and semantic choice that can
@@ -180,17 +188,24 @@ built-in reference solver artifact-compatible.
 
 Every semantic witness uses a version-specific protocol tag and an exact
 SHA-256 digest; case IDs, rather than witness digests, must be unique. The
-frozen v1 audit accepts only v1 witnesses built with
-`observeKernelShapeSemantics(...)` and
-`hashKernelShapeSemanticObservation(...)`. The explicit v2 audit accepts only
-v2 witnesses built with the corresponding `...V2` functions. A v2 witness
-cannot be cast or relabeled into v1 admission. The audit creates each source
-shape through the case factory. Its ordinary self-round-trip path observes the
-source, encodes it, decodes it on a separate current kernel instance, and
-repeatedly exact-compares the returned digest; the dedicated pre-witness path
-below intentionally performs its first encode before status or witness
-observation. Multiple cases may deliberately share one witness when they
-represent the same expected semantics.
+frozen v1 audit admits any digest in the v1 semantic-witness domain, whether it
+came from `hashKernelShapeSemanticObservation(...)` over an
+`observeKernelShapeSemantics(...)` result or from
+`hashKernelShapeArtifactSemanticWitness(...)` over caller-canonicalized
+material. That helper hashes a string as its exact UTF-8 bytes, including any
+leading U+FEFF, and rejects a string containing an unpaired UTF-16 surrogate with
+`ARTIFACT_CACHE_ENTRY_INVALID` instead of replacing it, so distinct strings
+cannot share one witness. The explicit v2 audit admits only digests in the v2
+domain, which the corresponding `...V2` functions produce. Each audit checks
+only a witness's domain tag and digest shape: it cannot verify how a witness
+was produced, so the witness function's coverage is the caller's
+responsibility. A v2 witness cannot be cast or relabeled into v1 admission. The
+audit creates each source shape through the case factory. Its ordinary
+self-round-trip path observes the source, encodes it, decodes it on a separate
+current kernel instance, and repeatedly exact-compares the returned digest; the
+dedicated pre-witness path below intentionally performs its first encode before
+status or witness observation. Multiple cases may deliberately share one
+witness when they represent the same expected semantics.
 
 Golden artifacts are tagged fixtures with committed bytes and an expected
 semantic witness. They exercise decode compatibility independently of the
@@ -252,6 +267,14 @@ identity source, while retaining duplicate triangles and their multiplicity.
 The request ID and exact tessellation options are part of the observation, so
 release plans can exercise more than one reviewed tessellation profile.
 
+The observer meshes the same live shape once per request, in request-ID order,
+so a kernel's `mesh()` must depend only on the shape and that request's
+options. The stock OCCT adapter tessellates a mesh-free native copy for every
+call and never stores triangulation on the owned shape. Request-ID order,
+repeated observations, and earlier `mesh()` calls therefore cannot change a
+recorded triangle multiset, and a coarse request never reuses a finer
+triangulation produced by an earlier request.
+
 ### Exact key-neutral topology labeling
 
 When topology is observed, the ordinary topology validator first detaches and
@@ -264,11 +287,16 @@ Canonical observation-local `f*`, `e*`, and `v*` labels are produced by exact
 incidence-graph canonicalization: intrinsic labels are refined by neighbor
 colors, unresolved color cells are exhaustively individualized, and the
 lexicographically least complete labeling wins. Search states are bounded by
-`maxCanonicalLabelStates`; color-refinement and labeling node/link work is
-separately bounded by `maxCanonicalWork`. Either ceiling fails rather than using
-enumeration as a tiebreaker. Thus isomorphic key-renamed snapshots encode
-equally, including symmetric graphs, provided the exact bounded search
-completes.
+`maxCanonicalLabelStates`. `maxCanonicalWork` separately bounds
+color-refinement and labeling node/link work plus the canonical serialization
+of every discrete search leaf after the first: each later leaf charges its
+canonical UTF-8 byte length before it is serialized and compared, because that
+cost scales with descriptor and lineage payload rather than with node count.
+The first leaf is the emitted topology payload and is bounded by
+`maxObservationBytes`, so a graph whose refinement is already discrete pays no
+serialization work. Either ceiling fails rather than using enumeration as a
+tiebreaker. Thus isomorphic key-renamed snapshots encode equally, including
+symmetric graphs, provided the exact bounded search completes.
 
 ### Feature, native-exchange, and ownership coverage
 
@@ -405,7 +433,7 @@ The semantic observer has a separate cumulative resource envelope. Defaults are:
 | `maxAdjacencyLinks` | `1_000_000` | Incidence entries in one normalized snapshot |
 | `maxLineageRecords` | `1_000_000` | Lineage records in one normalized snapshot |
 | `maxCanonicalLabelStates` | `1_000_000` | Exact graph-labeling search states |
-| `maxCanonicalWork` | `10_000_000` | Color-refinement and canonical-label node/link work units |
+| `maxCanonicalWork` | `10_000_000` | Color-refinement and canonical-label node/link work units, plus canonical bytes of each search leaf after the first |
 | `maxNativeExchangeBytes` | `64 MiB` | One detached native export |
 | `maxProbes` | `64` | Each probe or feature-exclusion inventory |
 | `maxDerivedShapes` | `256` | Accepted imported and probe-produced shapes |
@@ -513,7 +541,11 @@ or impossible minimum representation before allocating topology tables. Nested
 reads charge the same lineage, adjacency, UTF-16 byte, and orientation totals;
 indices must be sorted, unique, and in range; canonical lineage order is strict;
 and exact end-of-input is mandatory. There is no JSON parse/object/re-encode
-canonicality pass.
+canonicality pass. The later topology remap re-enforces only the item,
+adjacency-link, and lineage-record ceilings on the decoded and fresh snapshots.
+It does not apply a second string budget to synthesized or runtime topology
+keys, which no declared total covers, so the remap never rejects an artifact
+on size when it is within every declared sidecar ceiling.
 
 Native identity v1 represents each unique located solid, shell, wire, face,
 edge, and vertex by the zero-based direct-child sequence from the serialized
@@ -545,9 +577,29 @@ Sidecar incidence is then encoded against that canonical order, so producer
 TopExp enumeration cannot change the bytes. Decode imports a new native root,
 captures its raw path order, maps stored paths to fresh indices, and
 exact-compares occurrence count plus every record's type, composed orientation,
-child count, and class path. It also exact-compares identified face/edge/vertex
-geometry and incidence. Only then does it attach the stored semantic evidence
-to fresh evaluation-scoped keys. A multiplicity, order, orientation,
+child count, and class path. It also compares identified face/edge/vertex
+geometry and incidence. Incidence, surface/curve kinds, and vertex points must
+match exactly. Stock binary BREP is not a bit-exact boundary for values OCCT
+derives from the reloaded representation: areas, lengths, centers, bounding
+boxes, normals, axes, directions, and radii can move by a few units in the last
+place, even for an ordinary extruded polygon. Each such stored value must match
+the value OCCT derives from the restored native shape within `64` units in the
+last place of the larger of that native value's magnitude and the restored
+item's own native scale. For centers and bounds, that scale is the largest
+coordinate magnitude of that face's or edge's native bounds, because their
+rounding grows with distance from the origin. Lengths and radii use the
+largest side of those bounds, areas the product of its two largest sides, and
+unit vectors `1`. The area scale still covers cancellation inside a trimmed
+face, while a slender face is not held only to the square of its longest
+side. None of these depend on position, so an item far from the origin is
+held to its own size rather than to its coordinates. Both the magnitude and the scale come
+from the restored native shape, never from the sidecar, so a stored value
+cannot widen its own tolerance, a distant item cannot loosen the comparison of
+a small one, and a tolerance that would not be finite rejects the artifact.
+The comparison only verifies the BREP section;
+the stored descriptors, not the recomputed values, are what the decoded shape
+reports. Only then does it attach the stored semantic evidence to fresh
+evaluation-scoped keys. A multiplicity, order, orientation,
 `IsSame`-class membership, shape type, child count, geometry, incidence, or
 root-structure mismatch rejects the artifact and disposes the partial shape.
 
@@ -693,16 +745,20 @@ measurements and topology. A consumer with another solver fingerprint derives a
 different key, records `miss`, performs one native box call, and invokes neither
 codec direction.
 
-The parent-mediated record is one exact binary frame: an 8-byte versioned magic,
-a little-endian 32-bit canonical-JSON header length capped at 32 KiB, then the
-exact artifact payload. Fatal UTF-8, closed header fields, protocol/key/metadata
-and integrity validation, request-specific byte ceilings, SHA-256, exact
-payload length, and exact EOF are checked. The gate preserves caller-owned
-input, rejects a changed payload, forged key/metadata, shared or hostile
-typed-array input, and post-start abort, then proves recovery with another fresh
-consumer. Its evidence names `trusted-parent-mediated-record` and explicitly
-sets `recordIntegrityAuthenticated: false`; the digest detects corruption, not
-an authorized parent's malicious substitution.
+The parent-mediated record is one exact binary frame: an 8-byte versioned
+magic, a little-endian 32-bit length for a closed-field JSON header capped at
+32 KiB, then the exact artifact payload. The header is ordinary
+`JSON.stringify` output rather than canonical JSON, and the consuming child
+does not require a canonical key order; record metadata is instead revalidated
+by the artifact-cache record checks and the payload by SHA-256. The consuming
+child checks fatal UTF-8, closed header fields, protocol/key/metadata and
+integrity validation, request-specific byte ceilings, SHA-256, exact payload
+length, and exact EOF. The gate preserves caller-owned input, rejects a changed
+payload, forged key/metadata, shared or hostile typed-array input, and
+post-start abort, then proves recovery with another fresh consumer. Its
+evidence names `trusted-parent-mediated-record` and explicitly sets
+`recordIntegrityAuthenticated: false`; the digest detects corruption, not an
+authorized parent's malicious substitution.
 
 The verified facade-bundle gate invokes the same command against its packaged
 runtime automatically. Every successful result records one-shot cleanup before

@@ -15,7 +15,7 @@ import {
   INVARIANTCAD_OCCT_FACADE_0_9_0_RELEASE_MANIFEST_SHA256,
   OcctRuntimeAttestationError,
 } from "../src/occt-runtime-node.js";
-import { OCCT_SHAPE_ARTIFACT_CANDIDATE_ACCESS } from "../src/internal/occt-artifact-candidate.js";
+import { getOcctShapeArtifactCandidateHost } from "../src/internal/occt-artifact-candidate.js";
 
 const textEncoder = new TextEncoder();
 const STATE_KEY = "__invariantCadRuntimeAttestationTest";
@@ -267,14 +267,8 @@ async function loadAttestedOcctRuntime(
   });
 }
 
-function candidateFingerprint(kernel: unknown): string {
-  const host = (
-    kernel as {
-      readonly [OCCT_SHAPE_ARTIFACT_CANDIDATE_ACCESS]?: {
-        readonly compatibilityFingerprint: string;
-      };
-    }
-  )[OCCT_SHAPE_ARTIFACT_CANDIDATE_ACCESS];
+function candidateFingerprint(kernel: object): string {
+  const host = getOcctShapeArtifactCandidateHost(kernel);
   if (host === undefined) throw new Error("candidate host was unavailable");
   return host.compatibilityFingerprint;
 }

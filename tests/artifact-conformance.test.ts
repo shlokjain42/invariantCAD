@@ -733,6 +733,65 @@ describe("kernel shape-artifact codec audit", () => {
     ).toBe(2_048);
   });
 
+  it("uses the artifact-cache canonical UTF-8 identity ceiling for formats", async () => {
+    const boundaryCapabilities: KernelShapeArtifactCapabilities =
+      Object.freeze({ ...ARTIFACT_CAPABILITIES, format: "é".repeat(128) });
+    const boundaryHarness = new SyntheticHarness("none", boundaryCapabilities);
+    const accepted = await auditKernelShapeArtifactCodec(
+      await optionsFor(boundaryHarness, "candidate"),
+    );
+    expect(accepted.ok, JSON.stringify(accepted.diagnostics)).toBe(true);
+    boundaryHarness.expectFullyDisposed();
+
+    // Each identity is 256 or fewer UTF-16 code units, so a code-unit count
+    // admitted it even though the artifact-cache protocol never can.
+    for (const format of ["é".repeat(129), "format-\ud800", "\udc00-format", "\ufeffformat"]) {
+      const capabilities: KernelShapeArtifactCapabilities = Object.freeze({
+        ...ARTIFACT_CAPABILITIES,
+        format,
+      });
+      const harness = new SyntheticHarness("none", capabilities);
+      const rejected = await auditKernelShapeArtifactCodec(
+        await optionsFor(harness, "candidate"),
+      );
+      expectFailure(rejected, "ARTIFACT_CACHE_ENTRY_INVALID");
+      expect(harness.runtimes).toHaveLength(0);
+
+      // A malformed codec declaration is refused even when the caller's
+      // expected identity is itself well formed.
+      const codecHarness = new SyntheticHarness("none", capabilities);
+      const malformedCodec = await auditKernelShapeArtifactCodec(
+        await optionsFor(codecHarness, "candidate", {
+          expectedIdentity: {
+            kernelId: KERNEL_ID,
+            artifact: ARTIFACT_CAPABILITIES,
+          },
+        }),
+      );
+      expectFailure(malformedCodec, "ARTIFACT_CACHE_ENTRY_INVALID");
+      expect(malformedCodec.ok ? "" : malformedCodec.diagnostics[0]?.message)
+        .toMatch(/codec is incomplete or malformed/u);
+      codecHarness.expectFullyDisposed();
+    }
+  });
+
+  it.each([
+    ["multibyte kernel ID over the byte ceiling", "é".repeat(129)],
+    ["lone-surrogate kernel ID", "kernel-\ud800"],
+  ] as const)(
+    "rejects a %s before creating a runtime",
+    async (_label, kernelId) => {
+      const harness = new SyntheticHarness();
+      const result = await auditKernelShapeArtifactCodec(
+        await optionsFor(harness, "candidate", {
+          expectedIdentity: { kernelId, artifact: ARTIFACT_CAPABILITIES },
+        }),
+      );
+      expectFailure(result, "ARTIFACT_CACHE_ENTRY_INVALID");
+      expect(harness.runtimes).toHaveLength(0);
+    },
+  );
+
   it.each([
     ["kernel ID", { kernelId: "other-kernel", artifact: ARTIFACT_CAPABILITIES }],
     [
@@ -1039,6 +1098,44 @@ describe("shape-artifact witness helpers", () => {
     expect(semanticBytes).not.toBe(fixture);
     expectTypeOf(semanticBytes).toEqualTypeOf<KernelShapeArtifactSemanticWitness>();
     expectTypeOf(fixture).toEqualTypeOf<KernelShapeArtifactFixtureWitness>();
+  });
+
+  it("rejects unpaired surrogates instead of replacing them before hashing", async () => {
+    // A literal U+FFFD is well formed and still hashes.
+    const replacement = await valueOf(
+      hashKernelShapeArtifactSemanticWitness("obs\ufffd"),
+    );
+    for (const input of ["obs\ud800", "obs\udbff", "\udc00obs", "obs\udc00\ud800", "\ufeff\ud800"]) {
+      const result = await hashKernelShapeArtifactSemanticWitness(input);
+      expectFailure(result, "ARTIFACT_CACHE_ENTRY_INVALID");
+      expect(result.ok ? undefined : result.diagnostics[0]?.message).toMatch(
+        /unpaired UTF-16 surrogate/u,
+      );
+    }
+    expect(replacement).toMatch(
+      new RegExp(`^${KERNEL_SHAPE_ARTIFACT_SEMANTIC_WITNESS_PREFIX}[0-9a-f]{64}$`),
+    );
+
+    // Paired surrogates and a leading U+FEFF, which a default fatal decoder
+    // would strip, are well formed and hash as their exact UTF-8 bytes.
+    for (const wellFormed of ["obs\u{1f600}", "\ufeffobs", "\u{1f600}"]) {
+      expect(
+        await valueOf(hashKernelShapeArtifactSemanticWitness(wellFormed)),
+      ).toBe(
+        await valueOf(
+          hashKernelShapeArtifactSemanticWitness(
+            new TextEncoder().encode(wellFormed),
+          ),
+        ),
+      );
+    }
+
+    // The byte ceiling is still enforced before well-formedness is inspected.
+    const oversized = await hashKernelShapeArtifactSemanticWitness(
+      "abc\ud800",
+      { maxBytes: 3 },
+    );
+    expectFailure(oversized, "ARTIFACT_CACHE_LIMIT_EXCEEDED");
   });
 
   it("bounds inputs, validates exact byte kinds, and observes pre-abort", async () => {

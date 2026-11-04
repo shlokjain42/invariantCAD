@@ -19,9 +19,23 @@ import {
 } from "../src/index.js";
 import { bindOcctEvaluatorArtifactCacheCandidate } from "../src/internal/evaluator-artifact-cache-candidate.js";
 import {
+  getOcctShapeArtifactCandidateHost,
+  registerOcctShapeArtifactCandidateHost,
+} from "../src/internal/occt-artifact-candidate.js";
+import {
   createOcctKernel,
   type OcctKernelOptions,
 } from "../src/occt-kernel.js";
+
+/**
+ * The candidate host is registered by kernel identity, so a test wrapper must
+ * explicitly share its delegate's host to stay bindable.
+ */
+function shareCandidateHost<T extends object>(wrapper: T, delegate: object): T {
+  const host = getOcctShapeArtifactCandidateHost(delegate);
+  if (host !== undefined) registerOcctShapeArtifactCandidateHost(wrapper, host);
+  return wrapper;
+}
 
 function artifactCompatibleSolver(
   fingerprint = "invariantcad.reference-sketch-solver.test@1",
@@ -68,6 +82,7 @@ async function observedOcctKernel(
       return typeof value === "function" ? value.bind(target) : value;
     },
   }) as GeometryKernel;
+  shareCandidateHost(kernel, delegate);
   return {
     kernel,
     boxCalls: () => boxes,
@@ -282,6 +297,83 @@ describe("private OCCT evaluator artifact-cache candidate", { timeout: 30_000 },
     }
   });
 
+  it("attributes direct-box kernel errors to the box node like the unbound evaluator", async () => {
+    const divisionByZero = () => {
+      const cad = design("division-by-zero-cache-box");
+      cad.output(
+        "box",
+        cad.box("box", { size: vec3(mm(2).div(0), mm(3), mm(5)) }),
+      );
+      return cad.build();
+    };
+    const failures = async (
+      bound: boolean,
+      boxError?: Error,
+    ): Promise<readonly unknown[]> => {
+      const observed = await observedOcctKernel();
+      const kernel =
+        boxError === undefined
+          ? observed.kernel
+          : shareCandidateHost(
+              new Proxy(observed.kernel, {
+                get(target, property) {
+                  if (property === "box") {
+                    return () => {
+                      throw boxError;
+                    };
+                  }
+                  return Reflect.get(target, property, target);
+                },
+              }) as GeometryKernel,
+              observed.kernel,
+            );
+      const evaluator = await createEvaluator({
+        kernel,
+        sketchSolver: artifactCompatibleSolver(),
+      });
+      try {
+        if (bound) {
+          expect(
+            bindOcctEvaluatorArtifactCacheCandidate(evaluator, {
+              trust: "trusted",
+              cache: { store: new MemoryArtifactCacheStore() },
+            }).ok,
+          ).toBe(true);
+        }
+        const result = await evaluator.evaluate(
+          boxError === undefined ? divisionByZero() : boxDocument(),
+        );
+        expect(result.ok).toBe(false);
+        expect(observed.liveShapes()).toBe(0);
+        return result.ok ? [] : result.diagnostics;
+      } finally {
+        evaluator.dispose();
+      }
+    };
+
+    const unboundExpression = await failures(false);
+    expect(unboundExpression).toEqual([
+      expect.objectContaining({
+        code: "KERNEL_ERROR",
+        node: "box",
+        path: "/nodes/box",
+      }),
+    ]);
+    expect(await failures(true)).toEqual(unboundExpression);
+
+    const nativeError = new Error("injected native box failure");
+    const unboundNative = await failures(false, nativeError);
+    expect(unboundNative).toEqual([
+      expect.objectContaining({
+        code: "KERNEL_ERROR",
+        message: "injected native box failure",
+        node: "box",
+        path: "/nodes/box",
+      }),
+    ]);
+    expect(await failures(true, nativeError)).toEqual(unboundNative);
+  });
+
   it("preserves box validation before performing any cache operation", async () => {
     const events: ArtifactCacheEvent[] = [];
     const observed = await observedOcctKernel();
@@ -360,6 +452,7 @@ describe("private OCCT evaluator artifact-cache candidate", { timeout: 30_000 },
         return Reflect.get(target, property, target);
       },
     }) as GeometryKernel;
+    shareCandidateHost(limitedKernel, limitedObserved.kernel);
     const limitedEvaluator = await createEvaluator({
       kernel: limitedKernel,
       sketchSolver: artifactCompatibleSolver(),

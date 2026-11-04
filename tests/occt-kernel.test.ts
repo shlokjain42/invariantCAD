@@ -372,6 +372,38 @@ describe("OCCT exact-kernel integration", { timeout: 30_000 }, () => {
     }
   });
 
+  it("tessellates every mesh request independently of earlier meshes", async () => {
+    const kernel = await createOcctKernel();
+    try {
+      const coarse = { linearDeflection: 1 } as const;
+      const fine = { linearDeflection: 0.01 } as const;
+      const fresh = kernel.sphere!(5, undefined, { feature: "fresh-sphere" });
+      const warmed = kernel.sphere!(5, undefined, { feature: "warm-sphere" });
+      try {
+        const freshCoarse = kernel.mesh(fresh, coarse);
+        const freshFine = kernel.mesh(fresh, fine);
+        expect(freshFine.indices.length).toBeGreaterThan(
+          freshCoarse.indices.length,
+        );
+
+        // BRepMesh reuses any finer triangulation already stored on a
+        // shape. Meshing must not leave that cache on the owned shape, or a
+        // later coarse request would silently return the fine mesh.
+        const warmedFine = kernel.mesh(warmed, fine);
+        const warmedCoarse = kernel.mesh(warmed, coarse);
+        expect(warmedFine).toEqual(freshFine);
+        expect(warmedCoarse).toEqual(freshCoarse);
+        expect(kernel.mesh(fresh, coarse)).toEqual(freshCoarse);
+        expect(kernel.status(warmed)).toEqual({ ok: true, code: "VALID" });
+      } finally {
+        kernel.disposeShape(warmed);
+        kernel.disposeShape(fresh);
+      }
+    } finally {
+      kernel.dispose();
+    }
+  });
+
   it("releases the mesh-free affine input when native transform fails", async () => {
     const kernel = await createOcctKernel();
     const raw = (kernel as any).raw as Record<

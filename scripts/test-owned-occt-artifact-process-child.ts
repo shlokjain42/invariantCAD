@@ -27,8 +27,9 @@ import {
 } from "../src/evaluator.js";
 import { mm, vec3 } from "../src/expressions.js";
 import {
+  getOcctShapeArtifactCandidateHost,
   getOcctShapeArtifactCodecCandidate,
-  OCCT_SHAPE_ARTIFACT_CANDIDATE_ACCESS,
+  registerOcctShapeArtifactCandidateHost,
   type OcctShapeArtifactCandidateHost,
 } from "../src/internal/occt-artifact-candidate.js";
 import { bindOcctEvaluatorArtifactCacheCandidate } from "../src/internal/evaluator-artifact-cache-candidate.js";
@@ -893,40 +894,40 @@ function isolatedEvaluatorCacheKernel(
           return Reflect.apply(box, target, args);
         };
       }
-      if (property === OCCT_SHAPE_ARTIFACT_CANDIDATE_ACCESS) {
-        const host = Reflect.get(
-          target,
-          property,
-          target,
-        ) as OcctShapeArtifactCandidateHost | undefined;
-        if (host === undefined) return undefined;
-        return Object.freeze({
-          compatibilityFingerprint: host.compatibilityFingerprint,
-          capture: (
-            shape: KernelShape,
-            signal?: AbortSignal,
-          ) => {
-            artifactCaptureCalls += 1;
-            return host.capture(shape, signal);
-          },
-          encodeNative: (
-            shape: KernelShape,
-            maxBytes: number,
-            signal?: AbortSignal,
-          ) => host.encodeNative(shape, maxBytes, signal),
-          restore: (
-            state: Parameters<OcctShapeArtifactCandidateHost["restore"]>[0],
-            signal?: AbortSignal,
-          ) => {
-            artifactRestoreCalls += 1;
-            return host.restore(state, signal);
-          },
-        }) satisfies OcctShapeArtifactCandidateHost;
-      }
       const value: unknown = Reflect.get(target, property, target);
       return typeof value === "function" ? value.bind(target) : value;
     },
   }) as GeometryKernel;
+  // The candidate host is registered by kernel identity, so the wrapper
+  // registers a counting host of its own instead of intercepting a property.
+  const host = getOcctShapeArtifactCandidateHost(kernel);
+  if (host !== undefined) {
+    registerOcctShapeArtifactCandidateHost(
+      wrapped,
+      Object.freeze({
+        compatibilityFingerprint: host.compatibilityFingerprint,
+        capture: (
+          shape: KernelShape,
+          signal?: AbortSignal,
+        ) => {
+          artifactCaptureCalls += 1;
+          return host.capture(shape, signal);
+        },
+        encodeNative: (
+          shape: KernelShape,
+          maxBytes: number,
+          signal?: AbortSignal,
+        ) => host.encodeNative(shape, maxBytes, signal),
+        restore: (
+          state: Parameters<OcctShapeArtifactCandidateHost["restore"]>[0],
+          signal?: AbortSignal,
+        ) => {
+          artifactRestoreCalls += 1;
+          return host.restore(state, signal);
+        },
+      }) satisfies OcctShapeArtifactCandidateHost,
+    );
+  }
   return Object.freeze({
     kernel: wrapped,
     nativeBoxCalls: () => nativeBoxCalls,

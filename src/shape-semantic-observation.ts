@@ -1562,11 +1562,50 @@ function refineColors(
   }
 }
 
+/**
+ * Serializes one discrete search leaf to the canonical key used to choose the
+ * least leaf. The first leaf is the topology payload the observation emits, so
+ * maxObservationBytes already bounds it. Every later leaf repeats that
+ * serialization and one full key comparison, so its canonical byte length is
+ * charged to maxCanonicalWork before the string is built; the length walk
+ * itself stops at the remaining work allowance.
+ */
+function canonicalLeafKey(
+  value: unknown,
+  resources: ObservationResources,
+  budget: SnapshotMaterializationBudget,
+  chargeBytes: boolean,
+): string {
+  if (!chargeBytes) {
+    return boundedCanonicalKey(value, budget.maximumBytes, resources).key;
+  }
+  const remaining = Math.max(
+    0,
+    resources.limits.maxCanonicalWork - resources.canonicalWork,
+  );
+  const maximum = Math.min(budget.maximumBytes, remaining);
+  const byteLength = canonicalProtocolByteLengthWithin(
+    value,
+    maximum,
+    () => throwIfAborted(resources),
+  );
+  if (byteLength === undefined) {
+    if (maximum < budget.maximumBytes) canonicalWork(resources, maximum + 1);
+    throw limitFailure(
+      "maxObservationBytes",
+      resources.limits.maxObservationBytes,
+    );
+  }
+  canonicalWork(resources, byteLength);
+  return canonicalStringifyProtocol(value);
+}
+
 function canonicalTopologyLeaf(
   nodes: readonly GraphNode[],
   colors: readonly number[],
   resources: ObservationResources,
   budget: SnapshotMaterializationBudget,
+  chargeBytes: boolean,
 ): {
   readonly key: string;
   readonly value: Omit<Extract<KernelShapeSemanticTopologyV1, { support: "observed" }>, "support" | "history">;
@@ -1627,7 +1666,7 @@ function canonicalTopologyLeaf(
     vertices: Object.freeze(vertices),
   });
   return {
-    key: boundedCanonicalKey(value, budget.maximumBytes, resources).key,
+    key: canonicalLeafKey(value, resources, budget, chargeBytes),
     value,
   };
 }
@@ -1639,6 +1678,7 @@ function canonicalLabelGraph(
 ): Omit<Extract<KernelShapeSemanticTopologyV1, { support: "observed" }>, "support" | "history"> {
   canonicalWork(resources, nodes.length);
   const initial = rankLabels(nodes.map((node) => node.intrinsicKey));
+  let leaves = 0;
   const search = (input: readonly number[]): ReturnType<typeof canonicalTopologyLeaf> => {
     resources.canonicalLabelStates += 1;
     if (
@@ -1665,7 +1705,14 @@ function canonicalLabelGraph(
         first.length - second.length || firstColor - secondColor,
       )[0];
     if (unresolved === undefined) {
-      return canonicalTopologyLeaf(nodes, colors, resources, budget);
+      leaves += 1;
+      return canonicalTopologyLeaf(
+        nodes,
+        colors,
+        resources,
+        budget,
+        leaves > 1,
+      );
     }
     const [selectedColor, cell] = unresolved;
     let best: ReturnType<typeof canonicalTopologyLeaf> | undefined;

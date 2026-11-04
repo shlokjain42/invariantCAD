@@ -13,6 +13,7 @@ import { detachKernelTopologySnapshot } from "./topology-snapshot.js";
 import type {
   KernelCurveDescriptor,
   KernelSurfaceDescriptor,
+  KernelTopologyBounds,
   KernelTopologyKey,
   KernelTopologyLineage,
   KernelTopologySnapshot,
@@ -38,10 +39,6 @@ import {
   occtArtifactLimitRefusal,
   throwOcctArtifactLimitRefusal,
 } from "./occt-artifact-limit.js";
-
-export const OCCT_SHAPE_ARTIFACT_CANDIDATE_ACCESS = Symbol(
-  "InvariantCAD.OcctShapeArtifactCandidateAccess",
-);
 
 export const OCCT_SHAPE_ARTIFACT_CANDIDATE_FORMAT =
   "org.invariantcad.occt-shape-candidate" as const;
@@ -105,6 +102,37 @@ export interface OcctShapeArtifactCandidateHost {
   ): KernelShape;
 }
 
+/**
+ * Module-private host registry. A WeakMap keeps the candidate operations off
+ * every kernel object and prototype, so package consumers cannot reach them
+ * by reflection; only repository modules that import this module can.
+ */
+const candidateHostByKernel = new WeakMap<object, OcctShapeArtifactCandidateHost>();
+
+/**
+ * Registers the package-private candidate host for one kernel object.
+ *
+ * The OCCT kernel registers itself once from its constructor. Repository
+ * tests may register a host for a wrapping proxy. A second registration for
+ * the same object is refused instead of silently replacing the host.
+ */
+export function registerOcctShapeArtifactCandidateHost(
+  kernel: object,
+  host: OcctShapeArtifactCandidateHost,
+): void {
+  if (candidateHostByKernel.has(kernel)) {
+    throw new TypeError("OCCT artifact candidate host is already registered");
+  }
+  candidateHostByKernel.set(kernel, host);
+}
+
+/** Returns the registered package-private host, if this object has one. */
+export function getOcctShapeArtifactCandidateHost(
+  kernel: object,
+): OcctShapeArtifactCandidateHost | undefined {
+  return candidateHostByKernel.get(kernel);
+}
+
 /** Structurally compatible with the public conformance candidate interface. */
 export interface OcctShapeArtifactCodecCandidate {
   readonly capabilities: KernelShapeArtifactCapabilities;
@@ -134,7 +162,6 @@ const MAX_STATE_BYTES = 16 * 1024 * 1024;
 const MAX_TOPOLOGY_ITEMS = 100_000;
 const MAX_ADJACENCY_LINKS = 1_000_000;
 const MAX_LINEAGE_RECORDS = 1_000_000;
-const MAX_STRING_BYTES = 1_000_000;
 const MAGIC = new Uint8Array([
   0x49, 0x43, 0x41, 0x44, 0x4f, 0x43, 0x43, 0x54,
   0x41, 0x52, 0x54, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -305,7 +332,7 @@ function bytesEqual(first: Uint8Array, second: Uint8Array): boolean {
 function exactNumber(first: number, second: number): boolean {
   // The repository evaluator-semantic quotient deliberately identifies signed
   // zero. Binary BREP can flip the sign bit of a geometrically zero normal
-  // component; every other finite value must remain exactly equal.
+  // component; every other stored value must remain exactly equal.
   return first === second;
 }
 
@@ -319,46 +346,155 @@ function sameVector(first: readonly number[], second: readonly number[]): boolea
   );
 }
 
-function sameOptionalVector(
-  first: readonly number[] | undefined,
-  second: readonly number[] | undefined,
-): boolean {
-  return first === undefined || second === undefined
-    ? first === second
-    : sameVector(first, second);
+/**
+ * Units in the last place that a derived descriptor value may move across a
+ * stock binary-BREP reload. Vertex points, kinds, incidence, and orientation
+ * stay exact. OCCT recomputes areas, lengths, centers, bounding boxes, and
+ * directions/normals/axes/radii from the reloaded representation. Across
+ * prisms, cylinders, cones, spheres, booleans, fillets, and boxes rotated and
+ * moved up to 1e12 from the origin, centers and bounds moved by up to two
+ * units of their coordinate scale, unit vectors by under one unit of 1, and
+ * areas by up to four units of their own magnitude; lengths and radii did not
+ * move. This only verifies that the BREP section still matches the stored
+ * descriptors; the stored values, not the recomputed ones, are restored.
+ */
+const DERIVED_VALUE_ULPS = 64;
+const ulpScratch = new Float64Array(1);
+const ulpScratchBits = new BigUint64Array(ulpScratch.buffer);
+
+/**
+ * Spacing of doubles in the binade of a finite nonnegative magnitude. Every
+ * finite binade, including the one holding Number.MAX_VALUE, has a finite
+ * power-of-two spacing, so this never overflows to Infinity.
+ */
+function ulpOf(magnitude: number): number {
+  ulpScratch[0] = magnitude;
+  const exponent = Number((ulpScratchBits[0]! >> 52n) & 0x7ffn);
+  return exponent === 0 ? Number.MIN_VALUE : 2 ** (exponent - 1075);
 }
 
-function sameOptionalNumber(
-  first: number | undefined,
-  second: number | undefined,
+/**
+ * Compares one stored derived value with the value OCCT derives from the
+ * restored native shape, within DERIVED_VALUE_ULPS units in the last place of
+ * the larger of the native value's magnitude and `reference`. The magnitude
+ * and the reference both come from the restored native shape, never from the
+ * sidecar, so a stored value cannot widen its own tolerance. The reference
+ * keeps values near zero, such as a bounds component of a slanted face, on
+ * the item's native scale instead of their own vanishing units in the last
+ * place. A tolerance that would not be finite fails closed.
+ */
+function derivedNumber(
+  stored: number,
+  native: number,
+  reference: number,
 ): boolean {
-  return first === undefined || second === undefined
-    ? first === second
-    : exactNumber(first, second);
+  if (stored === native) return true;
+  if (!Number.isFinite(stored) || !Number.isFinite(native)) return false;
+  const magnitude = Math.max(Math.abs(native), reference);
+  if (!Number.isFinite(magnitude)) return false;
+  return Math.abs(stored - native) <= DERIVED_VALUE_ULPS * ulpOf(magnitude);
+}
+
+function derivedVector(
+  stored: readonly number[],
+  native: readonly number[],
+  reference: number,
+): boolean {
+  return (
+    stored.length === 3 &&
+    native.length === 3 &&
+    derivedNumber(stored[0]!, native[0]!, reference) &&
+    derivedNumber(stored[1]!, native[1]!, reference) &&
+    derivedNumber(stored[2]!, native[2]!, reference)
+  );
+}
+
+function derivedOptionalVector(
+  stored: readonly number[] | undefined,
+  native: readonly number[] | undefined,
+  reference: number,
+): boolean {
+  return stored === undefined || native === undefined
+    ? stored === native
+    : derivedVector(stored, native, reference);
+}
+
+function derivedOptionalNumber(
+  stored: number | undefined,
+  native: number | undefined,
+  reference: number,
+): boolean {
+  return stored === undefined || native === undefined
+    ? stored === native
+    : derivedNumber(stored, native, reference);
 }
 
 function sameSurface(
-  first: KernelSurfaceDescriptor,
-  second: KernelSurfaceDescriptor,
+  stored: KernelSurfaceDescriptor,
+  native: KernelSurfaceDescriptor,
+  span: number,
 ): boolean {
   return (
-    first.kind === second.kind &&
-    sameOptionalVector(first.normal, second.normal) &&
-    sameOptionalVector(first.axis, second.axis) &&
-    sameOptionalNumber(first.radius, second.radius)
+    stored.kind === native.kind &&
+    derivedOptionalVector(stored.normal, native.normal, 1) &&
+    derivedOptionalVector(stored.axis, native.axis, 1) &&
+    derivedOptionalNumber(stored.radius, native.radius, span)
   );
 }
 
 function sameCurve(
-  first: KernelCurveDescriptor,
-  second: KernelCurveDescriptor,
+  stored: KernelCurveDescriptor,
+  native: KernelCurveDescriptor,
+  span: number,
 ): boolean {
   return (
-    first.kind === second.kind &&
-    sameOptionalVector(first.direction, second.direction) &&
-    sameOptionalVector(first.axis, second.axis) &&
-    sameOptionalNumber(first.radius, second.radius)
+    stored.kind === native.kind &&
+    derivedOptionalVector(stored.direction, native.direction, 1) &&
+    derivedOptionalVector(stored.axis, native.axis, 1) &&
+    derivedOptionalNumber(stored.radius, native.radius, span)
   );
+}
+
+/**
+ * Native scale of one restored face or edge, read from the bounds OCCT
+ * derives for it: `extent` is its largest coordinate magnitude and `span` its
+ * largest bounds side. Only positions (centers and bounds) are compared on
+ * `extent`, because their rounding grows with distance from the origin.
+ * Lengths, radii (on `span`), and areas (on `span` squared) do not depend on
+ * position, so a far-away item never loosens them. Per-item scales also keep
+ * a distant or large item from loosening the comparison of a small one
+ * elsewhere in the same shape.
+ */
+/**
+ * Area reference for a face: the product of its two largest bound extents.
+ * Integration over a trimmed face can cancel to an area far below that
+ * product, so it covers that rounding, while a slender face is not given the
+ * square of its longest side as its area scale.
+ */
+function nativeAreaScale(bounds: KernelTopologyBounds): number {
+  const { min, max } = bounds;
+  const x = Math.max(max[0] - min[0], 0);
+  const y = Math.max(max[1] - min[1], 0);
+  const z = Math.max(max[2] - min[2], 0);
+  return Math.max(x * y, x * z, y * z);
+}
+
+function nativeScale(bounds: KernelTopologyBounds): {
+  readonly extent: number;
+  readonly span: number;
+} {
+  const { min, max } = bounds;
+  return {
+    extent: Math.max(
+      Math.abs(min[0]),
+      Math.abs(min[1]),
+      Math.abs(min[2]),
+      Math.abs(max[0]),
+      Math.abs(max[1]),
+      Math.abs(max[2]),
+    ),
+    span: Math.max(max[0] - min[0], max[1] - min[1], max[2] - min[2], 0),
+  };
 }
 
 function sortedAdjacencyIndices(
@@ -943,11 +1079,19 @@ export function remapOcctShapeArtifactTopology(
   signal?: AbortSignal,
 ): KernelTopologySnapshot {
   checkAbort(signal);
+  // Both snapshots are already materialized and bounded: the stored one by
+  // the sidecar decoder's declared item, link, lineage-record, and UTF-16
+  // string totals, the fresh one by this kernel's topology of the restored
+  // root. Detaching copies string references, not contents. A string charge
+  // here would count synthesized and runtime topology keys once per adjacency
+  // occurrence, which no declared sidecar total covers, and would reject
+  // artifacts the encoder admitted. Only the structural ceilings are
+  // re-enforced, so no artifact within the declared ceilings fails here on
+  // size.
   const limits = {
     maxTopologyItems: MAX_TOPOLOGY_ITEMS,
     maxAdjacencyLinks: MAX_ADJACENCY_LINKS,
     maxEvidenceRecords: MAX_LINEAGE_RECORDS,
-    maxStringBytes: MAX_STRING_BYTES,
   } as const;
   const stored = detachKernelTopologySnapshot(storedSnapshot, limits);
   checkAbort(signal);
@@ -976,12 +1120,13 @@ export function remapOcctShapeArtifactTopology(
     if ((index & 0xff) === 0) checkAbort(signal);
     const expected = stored.faces[index]!;
     const actual = fresh.faces[faceMapping[index]!]!;
+    const { extent, span } = nativeScale(actual.bounds);
     if (
-      !exactNumber(expected.area, actual.area) ||
-      !sameVector(expected.center, actual.center) ||
-      !sameVector(expected.bounds.min, actual.bounds.min) ||
-      !sameVector(expected.bounds.max, actual.bounds.max) ||
-      !sameSurface(expected.surface, actual.surface) ||
+      !derivedNumber(expected.area, actual.area, nativeAreaScale(actual.bounds)) ||
+      !derivedVector(expected.center, actual.center, extent) ||
+      !derivedVector(expected.bounds.min, actual.bounds.min, extent) ||
+      !derivedVector(expected.bounds.max, actual.bounds.max, extent) ||
+      !sameSurface(expected.surface, actual.surface, span) ||
       !sameIndices(
         mappedIndices(
           expected.edges,
@@ -1005,12 +1150,13 @@ export function remapOcctShapeArtifactTopology(
     if ((index & 0xff) === 0) checkAbort(signal);
     const expected = stored.edges[index]!;
     const actual = fresh.edges[edgeMapping[index]!]!;
+    const { extent, span } = nativeScale(actual.bounds);
     if (
-      !exactNumber(expected.length, actual.length) ||
-      !sameVector(expected.center, actual.center) ||
-      !sameVector(expected.bounds.min, actual.bounds.min) ||
-      !sameVector(expected.bounds.max, actual.bounds.max) ||
-      !sameCurve(expected.curve, actual.curve) ||
+      !derivedNumber(expected.length, actual.length, span) ||
+      !derivedVector(expected.center, actual.center, extent) ||
+      !derivedVector(expected.bounds.min, actual.bounds.min, extent) ||
+      !derivedVector(expected.bounds.max, actual.bounds.max, extent) ||
+      !sameCurve(expected.curve, actual.curve, span) ||
       !sameIndices(
         mappedIndices(
           expected.faces,
@@ -1406,11 +1552,7 @@ function candidateHost(kernel: GeometryKernel): OcctShapeArtifactCandidateHost |
     ) {
       return undefined;
     }
-    const host: unknown = (
-      kernel as GeometryKernel & {
-        readonly [OCCT_SHAPE_ARTIFACT_CANDIDATE_ACCESS]?: unknown;
-      }
-    )[OCCT_SHAPE_ARTIFACT_CANDIDATE_ACCESS];
+    const host: unknown = getOcctShapeArtifactCandidateHost(kernel);
     if (
       typeof host !== "object" ||
       host === null ||

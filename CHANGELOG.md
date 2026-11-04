@@ -2,6 +2,51 @@
 
 ## [Unreleased]
 
+- Stock OCCT `mesh()` now tessellates a mesh-free copy of the shape on every
+  call, so a mesh depends only on the shape and the options of that request.
+  Before, OCCT stored the triangulation on the shape and reused any finer one,
+  so a coarse request after a fine one silently returned the fine mesh, and
+  `observeKernelShapeSemanticsV2(...)` results for curved shapes depended on
+  mesh-request IDs and earlier `mesh()` calls. That could make the codec audit
+  reject a lossless golden. Meshes of shapes that were never meshed before are
+  unchanged. Calling `mesh()` repeatedly on the same shape now re-tessellates
+  each time instead of reusing the cached triangulation.
+- `auditKernelShapeArtifactCodec(...)` and
+  `auditKernelShapeArtifactCodecV2(...)` now validate the expected kernel ID,
+  the expected artifact format, and a candidate codec's declared format with the
+  artifact cache's own identity rules: nonempty, well-formed UTF-8 of at most
+  `256` bytes. An identity with an unpaired UTF-16 surrogate or more than 256
+  UTF-8 bytes could never be advertised or used as a cache key. It now fails the
+  audit with `ARTIFACT_CACHE_ENTRY_INVALID` instead of passing a candidate
+  audit.
+- `hashKernelShapeArtifactSemanticWitness(...)` now rejects a string that
+  contains an unpaired UTF-16 surrogate with `ARTIFACT_CACHE_ENTRY_INVALID`
+  instead of hashing it with U+FFFD substituted. Before, strings that differed
+  only in such characters produced the same witness, so a codec that altered
+  them could still match. Well-formed strings and byte input hash exactly as
+  before.
+- Semantic-observation topology labeling now charges the canonical bytes of
+  every graph-search leaf after the first to `maxCanonicalWork`. Highly
+  symmetric topology with large descriptor or lineage payloads used to run for
+  seconds to minutes without yielding under the default limits. It now fails
+  promptly with an `ARTIFACT_CACHE_LIMIT_EXCEEDED` diagnostic for
+  `maxCanonicalWork`. Graphs whose refinement is already discrete, including
+  ordinary geometry, pay nothing extra, and every successful observation and
+  witness is unchanged.
+- The stock OCCT kernel object no longer exposes its repository-private shape-
+  artifact candidate operations through a symbol-keyed getter or prototype
+  methods that could be found by reflection. The public API, the
+  `GeometryKernel` surface, and the absent `shapeArtifacts` capability are
+  unchanged.
+- The private stock-OCCT shape-artifact candidate now checks binary-BREP
+  derived-descriptor drift against each restored face's or edge's native scale,
+  within 64 units in the last place: its largest native bounds coordinate for
+  centers and bounds, its largest bounds side for lengths and radii, the
+  product of its two largest bounds sides for areas, and 1 for unit vectors.
+  A slender face is therefore not given the square of its longest side as
+  its area scale. Distance from the origin never
+  loosens a length, area, or radius check, a stored sidecar value can no longer
+  widen its own tolerance, and a non-finite tolerance rejects the artifact.
 - Topology selection counts must now be safe integers. `exactly`, `atLeast`, and
   `between` throw `RangeError` for any count above `Number.MAX_SAFE_INTEGER`
   (for example `2 ** 53` or `1e300`), and `validateDocument` and

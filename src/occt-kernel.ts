@@ -147,9 +147,8 @@ import {
   type IndexedTopologyCounts,
 } from "./internal/topology-evolution.js";
 import {
-  OCCT_SHAPE_ARTIFACT_CANDIDATE_ACCESS,
+  registerOcctShapeArtifactCandidateHost,
   remapOcctShapeArtifactTopology,
-  type OcctShapeArtifactCandidateHost,
   type OcctShapeArtifactCapturedCandidateState,
   type OcctShapeArtifactCapturedState,
   type OcctShapeArtifactNativeStructure,
@@ -1780,29 +1779,29 @@ class OcctKernel implements GeometryKernel {
           context,
         );
     }
-  }
-
-  get [OCCT_SHAPE_ARTIFACT_CANDIDATE_ACCESS]():
-    | OcctShapeArtifactCandidateHost
-    | undefined {
+    // The candidate host lives in a module-private registry rather than on
+    // this object or its prototype, so it is not reachable by reflection.
     const compatibilityFingerprint =
       this.artifactCandidateCompatibilityFingerprint;
-    return compatibilityFingerprint === undefined
-      ? undefined
-      : Object.freeze({
+    if (compatibilityFingerprint !== undefined) {
+      registerOcctShapeArtifactCandidateHost(
+        this,
+        Object.freeze({
           compatibilityFingerprint,
           capture: (shape: KernelShape, signal?: AbortSignal) =>
-            this.captureShapeArtifactCandidate(shape, signal),
+            this.#captureShapeArtifactCandidate(shape, signal),
           encodeNative: (
             shape: KernelShape,
             maxBytes: number,
             signal?: AbortSignal,
-          ) => this.encodeShapeArtifactCandidateNative(shape, maxBytes, signal),
+          ) => this.#encodeShapeArtifactCandidateNative(shape, maxBytes, signal),
           restore: (
             state: OcctShapeArtifactCapturedState,
             signal?: AbortSignal,
-          ) => this.restoreShapeArtifactCandidate(state, signal),
-        });
+          ) => this.#restoreShapeArtifactCandidate(state, signal),
+        }),
+      );
+    }
   }
 
   private assertKernelLive(): void {
@@ -1828,7 +1827,7 @@ class OcctKernel implements GeometryKernel {
     return shape as OcctShape;
   }
 
-  private captureShapeArtifactCandidate(
+  #captureShapeArtifactCandidate(
     shape: KernelShape,
     signal?: AbortSignal,
   ): OcctShapeArtifactCapturedCandidateState {
@@ -1855,7 +1854,7 @@ class OcctKernel implements GeometryKernel {
     });
   }
 
-  private encodeShapeArtifactCandidateNative(
+  #encodeShapeArtifactCandidateNative(
     shape: KernelShape,
     maxBytes: number,
     signal?: AbortSignal,
@@ -1908,7 +1907,7 @@ class OcctKernel implements GeometryKernel {
     }
   }
 
-  private restoreShapeArtifactCandidate(
+  #restoreShapeArtifactCandidate(
     state: OcctShapeArtifactCapturedState,
     signal?: AbortSignal,
   ): OcctShape {

@@ -1274,6 +1274,73 @@ describe("canonical kernel-shape semantic observation", () => {
     expect(derivedSource.live).toBe(true);
   });
 
+  it("charges repeated search-leaf serialization to maxCanonicalWork", async () => {
+    const heavyLineage: readonly KernelTopologyLineage[] = Object.freeze(
+      Array.from({ length: 1_000 }, (_, index) =>
+        Object.freeze({
+          feature: `feature-${String(index).padStart(5, "0")}`,
+          relation: "created" as const,
+        }),
+      ),
+    );
+    // Identical isolated faces make every face ordering a separate discrete
+    // leaf, so node/link work stays tiny while each leaf re-serializes the
+    // complete lineage payload.
+    const identicalFaces = (prefix: string): KernelTopologySnapshot => ({
+      history: "complete",
+      faces: Array.from({ length: 3 }, (_, index) =>
+        face(`${prefix}-f${index}`, 1, [], heavyLineage),
+      ),
+      edges: [],
+      vertices: [],
+    });
+    const topologyPlan = plan({ topology: "required" });
+    const limits = { maxCanonicalWork: 100_000 };
+
+    const symmetric = new SyntheticRuntime({
+      topology: () => identicalFaces("symmetric"),
+    });
+    const charged = await observeKernelShapeSemantics(
+      symmetric.kernel,
+      symmetric.shape(),
+      topologyPlan,
+      { limits },
+    );
+    expectFailure(charged, "ARTIFACT_CACHE_LIMIT_EXCEEDED");
+    if (!charged.ok) {
+      expect(charged.diagnostics[0]?.details).toMatchObject({
+        resource: "maxCanonicalWork",
+        limit: 100_000,
+      });
+    }
+
+    // The same graph still labels canonically under the default ceiling.
+    const admitted = new SyntheticRuntime({
+      topology: () => identicalFaces("admitted"),
+    });
+    const admittedObservation = await observed(
+      admitted,
+      admitted.shape(),
+      topologyPlan,
+    );
+    expect(admittedObservation.topology).toMatchObject({
+      support: "observed",
+    });
+
+    // A single discrete leaf is the emitted payload itself, already bounded by
+    // maxObservationBytes, so its serialization is not charged as search work.
+    const asymmetric = new SyntheticRuntime({
+      topology: () => asymmetricTopology("single", false, "complete", heavyLineage),
+    });
+    const single = await observeKernelShapeSemantics(
+      asymmetric.kernel,
+      asymmetric.shape(),
+      topologyPlan,
+      { limits },
+    );
+    expect(single.ok, JSON.stringify(single.ok ? [] : single.diagnostics)).toBe(true);
+  });
+
   it("honors pre-abort before touching the kernel", async () => {
     const runtime = new SyntheticRuntime();
     const controller = new AbortController();

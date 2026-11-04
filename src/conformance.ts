@@ -1,4 +1,5 @@
 import {
+  ARTIFACT_CACHE_MAX_IDENTITY_BYTES,
   inspectKernelShapeArtifactSupport,
   type KernelShapeArtifactSupportInspection,
 } from "./artifact-cache.js";
@@ -20,7 +21,7 @@ import {
   type KernelShapeArtifactCapabilities,
   type KernelShapeArtifactContext,
 } from "./kernel.js";
-import { isCanonicalUtf8StringWithin } from "./core/utf8.js";
+import { hasUnpairedUtf16Surrogate, isCanonicalUtf8StringWithin } from "./core/utf8.js";
 import {
   encodeKernelShapeSemanticObservation,
   encodeKernelShapeSemanticObservationV2,
@@ -650,7 +651,10 @@ function captureIdentity(
     if (
       !isPlainRecord(raw) ||
       !exactKeys(raw, ["kernelId", "artifact"]) ||
-      !boundedString(raw.kernelId, 256) ||
+      !isCanonicalUtf8StringWithin(
+        raw.kernelId,
+        ARTIFACT_CACHE_MAX_IDENTITY_BYTES,
+      ) ||
       !isPlainRecord(raw.artifact) ||
       !exactKeys(raw.artifact, [
         "protocolVersion",
@@ -659,7 +663,10 @@ function captureIdentity(
         "compatibilityFingerprint",
       ]) ||
       raw.artifact.protocolVersion !== KERNEL_SHAPE_ARTIFACT_PROTOCOL_VERSION ||
-      !boundedString(raw.artifact.format, 256) ||
+      !isCanonicalUtf8StringWithin(
+        raw.artifact.format,
+        ARTIFACT_CACHE_MAX_IDENTITY_BYTES,
+      ) ||
       typeof raw.artifact.formatVersion !== "number" ||
       !Number.isSafeInteger(raw.artifact.formatVersion) ||
       raw.artifact.formatVersion < 1 ||
@@ -982,6 +989,15 @@ async function hashBounded(
   try {
     if (typeof input === "string") {
       bytes = encodeBoundedUtf8(input, maximum);
+      // TextEncoder replaces unpaired surrogates with U+FFFD, which would let
+      // distinct strings share one witness. Reject them instead of hashing a
+      // replacement. A direct scan, unlike a fatal decode round trip, keeps a
+      // leading U+FEFF hashable as its exact bytes.
+      if (bytes !== undefined && hasUnpairedUtf16Surrogate(input)) {
+        return invalidOptions(
+          "Witness input string contains an unpaired UTF-16 surrogate",
+        );
+      }
     } else {
       const info = exactUint8ArrayInfo(input);
       bytes =
@@ -1022,7 +1038,13 @@ async function hashBounded(
   }
 }
 
-/** Hashes a caller-canonicalized semantic observation under a fixed domain. */
+/**
+ * Hashes a caller-canonicalized semantic observation under a fixed domain.
+ *
+ * A string is hashed as its exact UTF-8 bytes; one containing an unpaired
+ * UTF-16 surrogate is rejected with `ARTIFACT_CACHE_ENTRY_INVALID` rather than
+ * silently replaced.
+ */
 export async function hashKernelShapeArtifactSemanticWitness(
   input: string | Uint8Array,
   options?: { readonly maxBytes?: number; readonly signal?: AbortSignal },
@@ -1196,7 +1218,10 @@ function normalizeCandidateCapabilities(
         "compatibilityFingerprint",
       ]) ||
       value.protocolVersion !== KERNEL_SHAPE_ARTIFACT_PROTOCOL_VERSION ||
-      !boundedString(value.format, 256) ||
+      !isCanonicalUtf8StringWithin(
+        value.format,
+        ARTIFACT_CACHE_MAX_IDENTITY_BYTES,
+      ) ||
       typeof value.formatVersion !== "number" ||
       !Number.isSafeInteger(value.formatVersion) ||
       value.formatVersion < 1 ||
