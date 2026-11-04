@@ -27,6 +27,14 @@ updates:
       # occt-wasm is pinned together with native/occt/upstream.lock.json and the
       # owned-facade patches. Upgrade it deliberately, not automatically.
       - dependency-name: occt-wasm
+      # tsup 9 requires Node ^22.18, ^24.11, or >=26, but the package and the
+      # required CI job build on Node 22.13. Revisit when the floor rises.
+      - dependency-name: tsup
+        update-types: ["version-update:semver-major"]
+      # mint 4.2.1157 pulled in advisories in adm-zip, axios, fflate,
+      # image-size, js-yaml, and re2js that the dependency audit rejects.
+      # Upgrade the docs CLI deliberately once its tree is clean.
+      - dependency-name: mint
 
   - package-ecosystem: github-actions
     directory: /
