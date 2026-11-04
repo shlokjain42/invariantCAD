@@ -40,9 +40,11 @@ OCCT applies a nonuniform `scale` through a general affine transform;
 published 0.1.1 treats factors that agree within `modelingTolerance` as
 uniform. Such results with curved faces are approximate, so their measured
 volume and area can differ from the analytic values: a cylinder scaled by
-`[1, 2, 1]` measures about 0.9% too large. In published 0.1.1, every stock OCCT
-transform of a shape with a degenerate pole or apex edge, such as a sphere or a
-pointed cone, fails; unreleased 0.2 transforms them.
+`[1, 2, 1]` measures about 0.9% too large. In published 0.1.1, stock OCCT
+transforms of shapes with complete topology history and a degenerate pole or
+apex edge, such as a sphere or pointed cone, fail; unreleased 0.2 transforms
+them. Shapes with partial history, such as imported shapes and stock Boolean
+results, skip that per-edge work and transform in 0.1.1 as well.
 
 Unreleased 0.2 adds kernel-neutral evaluator checks that run before the
 geometry kernel:

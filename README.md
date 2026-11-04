@@ -21,8 +21,8 @@ for deterministic builds.
 ## Why InvariantCAD
 
 - Native TypeScript authoring with dimension-aware expressions
-- Immutable, versioned JSON design documents, grammar-checked while authored
-  and validated when parsed or evaluated
+- Immutable, versioned JSON design documents, validated when parsed or
+  evaluated; unreleased 0.2 also checks the grammar while authoring
 - Replaceable geometry kernels: Manifold mesh and OpenCascade B-Rep
 - Parametric sketches, primitives, features, transforms, and Booleans
 - Semantic topology queries and persistent face, edge, and vertex references
