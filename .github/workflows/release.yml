@@ -6,8 +6,9 @@ name: Publish npm
 # merges, by merge commit, squash, or rebase.
 #
 # A release commit then runs the full acceptance suite, publishes the exact
-# smoke-tested tarball to npm through trusted publishing after approval in the
-# `npm` environment, confirms that the registry holds those bytes, creates the
+# smoke-tested tarball to npm through trusted publishing from the `npm`
+# environment (deployable only from main, with no manual reviewer), confirms
+# that the registry holds those bytes, creates the
 # annotated vX.Y.Z tag and GitHub release, and advances the docs-live branch
 # that the hosted documentation deploys from.
 #

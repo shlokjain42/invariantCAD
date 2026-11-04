@@ -2,8 +2,9 @@ name: Prepare release
 
 # Pushes a release/vX.Y.Z branch whose single commit moves the curated
 # Unreleased changelog entries under a dated heading, bumps package.json, and
-# adds the release-notes page. A maintainer then opens the release pull
-# request from the linked page so every required check and reviewer runs.
+# adds the release-notes page. The maintainer or development agent then opens
+# the release pull request with a personal or agent identity (for example
+# `gh pr create`), so every required check and review runs.
 # Merging that pull request starts .github/workflows/release.yml.
 
 on:
@@ -100,8 +101,8 @@ jobs:
           ## Release invariantcad ${VERSION}
 
           Prepared by the **Prepare release** workflow. Merging this pull request
-          runs the release workflow: full acceptance, then npm publication after
-          approval in the \`npm\` environment, then the annotated \`v${VERSION}\`
+          runs the release workflow: full acceptance, then npm publication through
+          the \`npm\` environment (main only, no manual reviewer), then the annotated \`v${VERSION}\`
           tag, the GitHub release, and the live documentation.
 
           ## Before merging
@@ -119,6 +120,6 @@ jobs:
             echo
             echo "[Open the invariantcad ${VERSION} release pull request](${url})"
             echo
-            echo "Opening it yourself, rather than with the workflow token, starts CI, CodeQL, Socket, and Greptile."
+            echo "Open it with a personal or agent identity (for example gh pr create), not the workflow token, so CI, CodeQL, Socket, and Greptile run."
           } >> "$GITHUB_STEP_SUMMARY"
           echo "Open the release pull request: ${url}"

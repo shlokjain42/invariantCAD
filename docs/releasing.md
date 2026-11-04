@@ -1,6 +1,6 @@
 ---
 title: "Maintainer release procedure"
-description: "Merge gates, release pull requests, approval-gated npm publication with provenance, live documentation, and the trusted-publisher bootstrap."
+description: "Merge gates, release pull requests, automated npm publication with provenance, live documentation, and the trusted-publisher bootstrap."
 icon: "package-check"
 ---
 
@@ -8,8 +8,18 @@ icon: "package-check"
 
 This is the release runbook for the public `invariantcad` npm package, its
 GitHub release, and the live documentation. Every release flows through
-GitHub: a reviewed release pull request, then an automated, approval-gated
-publication from the merged commit. Nothing is published from a workstation.
+GitHub: a gated release pull request, then automated publication from the
+merged commit. Nothing is published from a workstation.
+
+The flow has no manual approval step, so a maintainer or a development agent
+can carry a change from branch to npm without waiting on anyone. Its
+safeguards are automated:
+
+- protected `main` with required checks, Greptile review, and resolved
+  conversations;
+- an `npm` environment that only `main` may deploy to;
+- npm trusted publishing bound to this repository, workflow, and environment;
+- registry provenance verification before the tag and GitHub release.
 
 ## Everyday changes
 
@@ -37,9 +47,11 @@ push. It has not reviewed Dependabot pull requests automatically; comment
    `## [0.2.0]` heading, updates the comparison links, bumps `package.json`,
    adds `docs/releases/0.2.0.md` and its navigation entry, verifies the result
    with `pnpm release:metadata:check 0.2.0`, and pushes `release/v0.2.0`.
-3. Open the release pull request from the link in the workflow summary.
-   Opening it yourself, rather than with the workflow token, starts every
-   required check and review.
+3. Open the release pull request, for example with
+   `gh pr create --base main --head release/v0.2.0 --label release` or from
+   the link in the workflow summary. Open it with a personal or agent identity
+   rather than the workflow token, because pull requests opened by the
+   workflow token do not start the required checks and reviews.
 4. In that pull request, curate `docs/releases/0.2.0.md` into release notes;
    its body becomes the GitHub release. Link other documentation pages with
    the same site-relative or file-relative targets as any other page; the
@@ -64,8 +76,9 @@ merge commit, squash, or rebase. For a release the workflow:
    packed tarball, checked coverage, the six-case reference benchmark,
    dependency audit, Mintlify validation and links, and the production browser
    bundle;
-2. waits for approval in the `npm` environment, then publishes that exact
-   smoke-tested tarball through npm trusted publishing with provenance. It
+2. deploys to the `npm` environment, which accepts only `main` and has no
+   manual reviewer, and publishes that exact smoke-tested tarball through npm
+   trusted publishing with provenance. It
    refuses a version older than one already on npm, so npm's `latest`
    dist-tag never moves backwards;
 3. confirms through npm's SLSA provenance that the registry package was built
