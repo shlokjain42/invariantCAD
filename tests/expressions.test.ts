@@ -483,6 +483,84 @@ describe("runtime expression dimensions", () => {
   });
 });
 
+describe("expression evaluation over shared and deep IR", () => {
+  const parameter = { op: "parameter", id: "a", dimension: "length" } as ExpressionIR;
+
+  function doubling(levels: number): ExpressionIR {
+    let node = parameter;
+    for (let level = 0; level < levels; level += 1) {
+      node = { op: "add", dimension: "length", left: node, right: node } as ExpressionIR;
+    }
+    return node;
+  }
+
+  it("evaluates each shared node once instead of once per path", () => {
+    let resolutions = 0;
+    const value = evaluateExpression(doubling(60), {
+      resolveParameter() {
+        resolutions += 1;
+        return 1;
+      },
+    });
+    expect(value).toBe(2 ** 60);
+    expect(resolutions).toBe(1);
+  });
+
+  it("collects dependencies of shared IR in linear time and tree order", () => {
+    expect([...expressionDependencies(doubling(60))]).toEqual(["a"]);
+    const ordered = {
+      op: "max",
+      dimension: "length",
+      values: [
+        { op: "parameter", id: "c", dimension: "length" },
+        {
+          op: "add",
+          dimension: "length",
+          left: { op: "parameter", id: "b", dimension: "length" },
+          right: { op: "parameter", id: "c", dimension: "length" },
+        },
+        { op: "parameter", id: "a", dimension: "length" },
+      ],
+    } as unknown as ExpressionIR;
+    expect([...expressionDependencies(ordered)]).toEqual(["c", "b", "a"]);
+  });
+
+  it("evaluates operand chains deeper than the call stack", () => {
+    let node: ExpressionIR = { op: "literal", dimension: "length", value: 3 } as ExpressionIR;
+    for (let depth = 0; depth < 200_000; depth += 1) {
+      node = { op: "neg", dimension: "length", value: node } as ExpressionIR;
+    }
+    expect(evaluateExpression(node, noParameters)).toBe(3);
+  });
+
+  it("checks the divisor before evaluating the numerator", () => {
+    const resolved: string[] = [];
+    const ir = {
+      op: "div",
+      dimension: "length",
+      left: { op: "parameter", id: "a", dimension: "length" },
+      right: { op: "literal", dimension: "scalar", value: 0 },
+    } as ExpressionIR;
+    expect(() =>
+      evaluateExpression(ir, {
+        resolveParameter(id) {
+          resolved.push(id);
+          return 1;
+        },
+      }),
+    ).toThrow("Division by zero in CAD expression");
+    expect(resolved).toEqual([]);
+  });
+
+  it("rejects cyclic raw IR instead of looping", () => {
+    const node: Record<string, unknown> = { op: "neg", dimension: "length" };
+    node["value"] = node;
+    expect(() => evaluateExpression(node as unknown as ExpressionIR, noParameters)).toThrow(
+      "CAD expression IR cannot contain cycles",
+    );
+  });
+});
+
 describe("expression immutability", () => {
   it("deeply freezes raw IR even when the caller froze only its root", () => {
     const left = { op: "literal", dimension: "length", value: 1 };

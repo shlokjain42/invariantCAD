@@ -912,105 +912,144 @@ export interface ExpressionContext {
   ) => number;
 }
 
-export function evaluateExpression(
-  expression: ExpressionIR,
+/** Operand `index` of a node in evaluation order: a divisor precedes its numerator. */
+function evaluationOperand(
+  node: ExpressionIR,
+  index: number,
+): ExpressionIR | undefined {
+  switch (node.op) {
+    case "literal":
+    case "parameter":
+      return undefined;
+    case "neg":
+    case "abs":
+    case "sin":
+    case "cos":
+    case "tan":
+      return index === 0 ? node.value : undefined;
+    case "add":
+    case "sub":
+    case "mul":
+      return index === 0 ? node.left : index === 1 ? node.right : undefined;
+    case "div":
+      return index === 0 ? node.right : index === 1 ? node.left : undefined;
+    case "min":
+    case "max":
+      return index < node.values.length ? node.values[index] : undefined;
+    default:
+      return undefined;
+  }
+}
+
+/** Combines a node's already evaluated operands. */
+function combineOperands(
+  node: ExpressionIR,
+  results: WeakMap<object, number>,
   context: ExpressionContext,
 ): number {
-  let result: number;
-  switch (expression.op) {
+  const value = (operand: ExpressionIR): number =>
+    weakMapGet(results, operand) as number;
+  switch (node.op) {
     case "literal":
-      result = expression.value;
-      break;
+      return node.value;
     case "parameter":
-      result = context.resolveParameter(expression.id, expression.dimension);
-      break;
+      return context.resolveParameter(node.id, node.dimension);
     case "neg":
-      result = -evaluateExpression(expression.value, context);
-      break;
+      return -value(node.value);
     case "abs":
-      result = Math.abs(evaluateExpression(expression.value, context));
-      break;
+      return Math.abs(value(node.value));
     case "sin":
-      result = Math.sin(evaluateExpression(expression.value, context));
-      break;
+      return Math.sin(value(node.value));
     case "cos":
-      result = Math.cos(evaluateExpression(expression.value, context));
-      break;
+      return Math.cos(value(node.value));
     case "tan":
-      result = Math.tan(evaluateExpression(expression.value, context));
-      break;
+      return Math.tan(value(node.value));
     case "add":
-      result =
-        evaluateExpression(expression.left, context) +
-        evaluateExpression(expression.right, context);
-      break;
+      return value(node.left) + value(node.right);
     case "sub":
-      result =
-        evaluateExpression(expression.left, context) -
-        evaluateExpression(expression.right, context);
-      break;
+      return value(node.left) - value(node.right);
     case "mul":
-      result =
-        evaluateExpression(expression.left, context) *
-        evaluateExpression(expression.right, context);
-      break;
-    case "div": {
-      const divisor = evaluateExpression(expression.right, context);
-      if (Math.abs(divisor) < Number.EPSILON) {
-        throw new RangeError("Division by zero in CAD expression");
-      }
-      result = evaluateExpression(expression.left, context) / divisor;
-      break;
-    }
+      return value(node.left) * value(node.right);
+    case "div":
+      return value(node.left) / value(node.right);
     case "min":
     case "max": {
       // Fold instead of spreading: a valid document may hold more operands
       // than a call can pass as arguments.
-      const fold = expression.op === "min" ? Math.min : Math.max;
-      result = expression.op === "min" ? Infinity : -Infinity;
-      for (let index = 0; index < expression.values.length; index += 1) {
-        result = fold(
-          result,
-          evaluateExpression(expression.values[index]!, context),
-        );
+      const fold = node.op === "min" ? Math.min : Math.max;
+      let result = node.op === "min" ? Infinity : -Infinity;
+      for (let index = 0; index < node.values.length; index += 1) {
+        result = fold(result, value(node.values[index]!));
       }
-      break;
+      return result;
     }
+    default:
+      return Number.NaN;
   }
-  if (!Number.isFinite(result)) {
-    throw new RangeError("CAD expression evaluated to a non-finite number");
+}
+
+export function evaluateExpression(
+  expression: ExpressionIR,
+  context: ExpressionContext,
+): number {
+  // Each distinct node is evaluated once per call, so shared subtrees cost
+  // time linear in the number of distinct nodes, and an explicit stack keeps
+  // long operand chains off the call stack.
+  if (typeof expression !== "object" || expression === null) {
+    throw new TypeError("CAD expression operands must be expression nodes");
   }
-  return Object.is(result, -0) ? 0 : result;
+  const results = new IntrinsicWeakMap<object, number>();
+  const scheduled = new IntrinsicWeakSet<object>();
+  const nodes: ExpressionIR[] = [expression];
+  const cursors: number[] = [0];
+  weakSetAdd(scheduled, expression);
+  while (nodes.length > 0) {
+    const top = nodes.length - 1;
+    const node = nodes[top]!;
+    const cursor = cursors[top]!;
+    if (node.op === "div" && cursor === 1) {
+      const divisor = weakMapGet(results, node.right) as number;
+      if (Math.abs(divisor) < Number.EPSILON) {
+        throw new RangeError("Division by zero in CAD expression");
+      }
+    }
+    const operand = evaluationOperand(node, cursor);
+    if (operand !== undefined) {
+      cursors[top] = cursor + 1;
+      if (typeof operand !== "object" || operand === null) {
+        throw new TypeError("CAD expression operands must be expression nodes");
+      }
+      if (weakMapGet(results, operand) === undefined) {
+        // The stack is the path from the root, so a scheduled operand
+        // without a result is an ancestor of this node.
+        if (weakSetHas(scheduled, operand)) {
+          throw new TypeError("CAD expression IR cannot contain cycles");
+        }
+        weakSetAdd(scheduled, operand);
+        arrayAppend(nodes, operand);
+        arrayAppend(cursors, 0);
+      }
+      continue;
+    }
+    const result = combineOperands(node, results, context);
+    if (!Number.isFinite(result)) {
+      throw new RangeError("CAD expression evaluated to a non-finite number");
+    }
+    weakMapSet(results, node, Object.is(result, -0) ? 0 : result);
+    nodes.length = top;
+    cursors.length = top;
+  }
+  return weakMapGet(results, expression) as number;
 }
 
 export function expressionDependencies(
   expression: ExpressionIR,
   output = new Set<ParameterId>(),
 ): ReadonlySet<ParameterId> {
-  switch (expression.op) {
-    case "parameter":
-      output.add(expression.id);
-      break;
-    case "neg":
-    case "abs":
-    case "sin":
-    case "cos":
-    case "tan":
-      expressionDependencies(expression.value, output);
-      break;
-    case "add":
-    case "sub":
-    case "mul":
-    case "div":
-      expressionDependencies(expression.left, output);
-      expressionDependencies(expression.right, output);
-      break;
-    case "min":
-    case "max":
-      for (const value of expression.values) expressionDependencies(value, output);
-      break;
-    case "literal":
-      break;
-  }
+  // Visits each distinct node once, in the same left-to-right order as a
+  // tree walk, so shared subtrees cost linear time.
+  forEachExpressionParameter(expression, (node) => {
+    output.add(node.id);
+  });
   return output;
 }
