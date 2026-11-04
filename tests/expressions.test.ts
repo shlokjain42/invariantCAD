@@ -23,6 +23,10 @@ import {
   type ExpressionContext,
   type ExpressionIR,
 } from "../src/index.js";
+import {
+  EXPRESSION_IR_MAX_WORK,
+  assertExpressionIRWithin,
+} from "../src/expressions.js";
 
 const noParameters: ExpressionContext = {
   resolveParameter(id) {
@@ -444,6 +448,38 @@ describe("runtime expression dimensions", () => {
     const value = fromExpressionIR(ir, "scalar");
     expect(value.ir).toBe(ir);
     expect(evaluate(value, { a: 4 })).toBe(1);
+  });
+
+  it("counts every scheduled operand, shared or not, against the work ceiling", () => {
+    const sharedMax = (): object => {
+      const leaf = { op: "literal", dimension: "length", value: 1 };
+      return { op: "max", dimension: "length", values: [leaf, leaf, leaf, leaf] };
+    };
+    // One root, four scheduled operands, one distinct leaf: six units.
+    expect(() => assertExpressionIRWithin(sharedMax(), "IR", 6)).not.toThrow();
+    expect(() => assertExpressionIRWithin(sharedMax(), "IR", 5)).toThrow(
+      "IR is malformed: expression IR exceeds 5 nodes",
+    );
+  });
+
+  it("refuses an oversized min/max operand list before freezing or copying it", () => {
+    const leaf = { op: "literal", dimension: "length", value: 1 };
+    const values = Array.from({ length: 10 }, () => leaf);
+    const ir = { op: "min", dimension: "length", values };
+    expect(() => assertExpressionIRWithin(ir, "IR", 5)).toThrow(
+      "IR is malformed: expression IR exceeds its node ceiling",
+    );
+    expect(Object.isFrozen(values)).toBe(false);
+    expect(Object.isFrozen(leaf)).toBe(false);
+  });
+
+  it("rejects raw IR whose operands exceed the document structural ceiling", () => {
+    const leaf = { op: "literal", dimension: "length", value: 1 };
+    const values = new Array<object>(EXPRESSION_IR_MAX_WORK + 1).fill(leaf);
+    expect(() =>
+      fromExpressionIR({ op: "min", dimension: "length", values } as never, "length"),
+    ).toThrow("expression IR exceeds its node ceiling");
+    expect(Object.isFrozen(values)).toBe(false);
   });
 });
 

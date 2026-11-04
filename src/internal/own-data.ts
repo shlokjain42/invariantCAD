@@ -83,10 +83,18 @@ function ownDataField(container: object, key: string | number, label: string): u
  * replaced by its default. Non-plain records, accessors, and, when
  * `allowedKeys` is given, other fields throw TypeError.
  */
+/**
+ * Largest number of own fields a caller record may carry. It matches the
+ * default `maxStructuralValues` document ceiling, so the snapshot copy is
+ * bounded even for fields a method ignores.
+ */
+export const OWN_RECORD_MAX_FIELDS = 1_000_000;
+
 export function ownRecord<T extends object>(
   value: T,
   label: string,
   allowedKeys?: readonly string[],
+  maxFields: number = OWN_RECORD_MAX_FIELDS,
 ): T {
   if (typeof value !== "object" || value === null || !isPlainRecord(value)) {
     throw new TypeError(`${label} must be a plain record`);
@@ -98,6 +106,9 @@ export function ownRecord<T extends object>(
   const keys = reflectApply(objectGetOwnPropertyNames, Object, [
     value,
   ]) as string[];
+  if (keys.length > maxFields) {
+    throw new TypeError(`${label} must have at most ${maxFields} own fields`);
+  }
   for (let index = 0; index < keys.length; index += 1) {
     const key = keys[index]!;
     if (allowedKeys !== undefined) {

@@ -176,6 +176,7 @@ function expressionChild(
 function expressionNodeOperands(
   node: Readonly<Record<string, unknown>>,
   label: string,
+  remainingWork: number,
 ): readonly object[] {
   if (!isPlainRecord(node)) {
     throw malformedExpression(label, "expression nodes must be plain records");
@@ -303,6 +304,13 @@ function expressionNodeOperands(
       ) {
         throw malformedExpression(label, `'${op}' requires a non-empty value array`);
       }
+      // Bound the operand list before freezing, scanning, or copying it.
+      if ((values as readonly unknown[]).length > remainingWork) {
+        throw malformedExpression(
+          label,
+          `expression IR exceeds its node ceiling`,
+        );
+      }
       objectFreeze(values);
       const items = values as readonly unknown[];
       for (let index = 0; index < items.length; index += 1) {
@@ -342,15 +350,37 @@ const EXPRESSION_COMPLETE = 2;
  *
  * @internal Not re-exported from the package root.
  */
+/**
+ * Largest number of expression nodes and scheduled operands one validation may
+ * visit. It matches the default `maxStructuralValues` document ceiling, so no
+ * expression a document can hold is refused, while raw IR with millions of
+ * operands (even shared ones) is rejected before it is copied or scheduled.
+ */
+export const EXPRESSION_IR_MAX_WORK = 1_000_000;
+
 export function assertExpressionIR(
   ir: unknown,
   label = "Expression IR",
+): ExpressionIR {
+  return assertExpressionIRWithin(ir, label, EXPRESSION_IR_MAX_WORK);
+}
+
+/**
+ * {@link assertExpressionIR} with an explicit work ceiling.
+ *
+ * @internal Not re-exported from the package root.
+ */
+export function assertExpressionIRWithin(
+  ir: unknown,
+  label: string,
+  maxWork: number,
 ): ExpressionIR {
   if (typeof ir !== "object" || ir === null || arrayIsArray(ir)) {
     throw malformedExpression(label, "expected an expression object");
   }
   if (weakSetHas(wellFormedExpressionNodes, ir)) return ir as ExpressionIR;
   const states = new IntrinsicWeakMap<object, number>();
+  let work = 0;
   const visited: object[] = [];
   const nodes: object[] = [ir];
   const exits: boolean[] = [false];
@@ -371,6 +401,10 @@ export function assertExpressionIR(
       throw malformedExpression(label, "expression IR cannot contain cycles");
     }
     weakMapSet(states, node, EXPRESSION_ACTIVE);
+    work += 1;
+    if (work > maxWork) {
+      throw malformedExpression(label, `expression IR exceeds ${maxWork} nodes`);
+    }
     arrayAppend(visited, node);
     // Reject non-plain objects before freezing, so a rejected caller object
     // is left as it was.
@@ -381,7 +415,13 @@ export function assertExpressionIR(
     const operands = expressionNodeOperands(
       node as Readonly<Record<string, unknown>>,
       label,
+      maxWork - work,
     );
+    // Scheduling counts too, so shared operands cannot inflate the stack.
+    work += operands.length;
+    if (work > maxWork) {
+      throw malformedExpression(label, `expression IR exceeds ${maxWork} nodes`);
+    }
     arrayAppend(nodes, node);
     arrayAppend(exits, true);
     for (let index = operands.length - 1; index >= 0; index -= 1) {

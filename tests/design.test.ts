@@ -36,6 +36,7 @@ import {
   type NodeId,
   type SketchBuilder,
 } from "../src/index.js";
+import { ownRecord } from "../src/internal/own-data.js";
 
 let evaluator: Evaluator | undefined;
 
@@ -2188,5 +2189,16 @@ describe("builder option records", () => {
     expect(() => cad.part("bracket", body, options)).toThrow(
       /unsupported field 'solid'/u,
     );
+  });
+
+  it("refuses option records with more own fields than the snapshot ceiling", () => {
+    const options: Record<string, unknown> = { size: 1 };
+    for (let index = 0; index < 4; index += 1) {
+      Object.defineProperty(options, `hidden${index}`, { value: index, enumerable: false });
+    }
+    expect(() => ownRecord(options, "Box options", undefined, 4)).toThrow(
+      "Box options must have at most 4 own fields",
+    );
+    expect(ownRecord({ size: 1 }, "Box options", undefined, 1)).toEqual({ size: 1 });
   });
 });
