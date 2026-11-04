@@ -588,9 +588,11 @@ last place of the larger of that native value's magnitude and the restored
 item's own native scale. For centers and bounds, that scale is the largest
 coordinate magnitude of that face's or edge's native bounds, because their
 rounding grows with distance from the origin. Lengths and radii use the
-largest side of those bounds, areas its square, and unit vectors `1`; none of
-these depend on position, so an item far from the origin is held to its own
-size rather than to its coordinates. Both the magnitude and the scale come
+largest side of those bounds, areas the product of its two largest sides, and
+unit vectors `1`. The area scale still covers cancellation inside a trimmed
+face, while a slender face is not held only to the square of its longest
+side. None of these depend on position, so an item far from the origin is
+held to its own size rather than to its coordinates. Both the magnitude and the scale come
 from the restored native shape, never from the sidecar, so a stored value
 cannot widen its own tolerance, a distant item cannot loosen the comparison of
 a small one, and a tolerance that would not be finite rejects the artifact.

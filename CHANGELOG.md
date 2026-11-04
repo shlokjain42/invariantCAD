@@ -41,8 +41,10 @@
 - The private stock-OCCT shape-artifact candidate now checks binary-BREP
   derived-descriptor drift against each restored face's or edge's native scale,
   within 64 units in the last place: its largest native bounds coordinate for
-  centers and bounds, its largest bounds side for lengths and radii, that side
-  squared for areas, and 1 for unit vectors. Distance from the origin never
+  centers and bounds, its largest bounds side for lengths and radii, the
+  product of its two largest bounds sides for areas, and 1 for unit vectors.
+  A slender face is therefore not given the square of its longest side as
+  its area scale. Distance from the origin never
   loosens a length, area, or radius check, a stored sidecar value can no longer
   widen its own tolerance, and a non-finite tolerance rejects the artifact.
 - Topology selection counts must now be safe integers. `exactly`, `atLeast`, and
