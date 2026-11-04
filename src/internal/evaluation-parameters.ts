@@ -1,3 +1,4 @@
+import { jsonPointerSegment } from "../core/json-pointer.js";
 import type { ConfigurationId, ParameterId } from "../core/ids.js";
 import {
   diagnostic,
@@ -150,11 +151,11 @@ export function resolveEvaluationParameters(
     };
   }
   const sourcePath = (id: ParameterId): string => {
-    if (overrideValues.has(id)) return `/parameters/${id}`;
-    if (Object.hasOwn(configurationOverrides, id)) {
-      return `/configurations/${configurationId}/parameterOverrides/${id}`;
+    if (overrideValues.has(id)) return `/parameters/${jsonPointerSegment(id)}`;
+    if (configurationId !== null && Object.hasOwn(configurationOverrides, id)) {
+      return `/configurations/${jsonPointerSegment(configurationId)}/parameterOverrides/${jsonPointerSegment(id)}`;
     }
-    return `/parameters/${id}/default`;
+    return `/parameters/${jsonPointerSegment(id)}/default`;
   };
   const parameterIds = (Object.keys(document.parameters) as ParameterId[]).sort(
     (first, second) => (first < second ? -1 : first > second ? 1 : 0),
@@ -164,7 +165,7 @@ export function resolveEvaluationParameters(
       diagnostics.push(
         diagnostic("PARAMETER_MISSING", `Unknown parameter override '${key}'`, {
           severity: "error",
-          path: `/parameters/${key}`,
+          path: `/parameters/${jsonPointerSegment(key)}`,
         }),
       );
     }
@@ -220,7 +221,7 @@ export function resolveEvaluationParameters(
             diagnostic(
               "EXPRESSION_DIMENSION_MISMATCH",
               `Override for '${rawId}' is ${override.dimension}, expected ${definition.dimension}`,
-              { severity: "error", path: `/parameters/${rawId}` },
+              { severity: "error", path: `/parameters/${jsonPointerSegment(rawId)}` },
             ),
           );
         }
@@ -230,7 +231,7 @@ export function resolveEvaluationParameters(
           diagnostic(
             "EXPRESSION_INVALID",
             `Override for '${rawId}' must be a number or Expression`,
-            { severity: "error", path: `/parameters/${rawId}` },
+            { severity: "error", path: `/parameters/${jsonPointerSegment(rawId)}` },
           ),
         );
       } else {
@@ -260,7 +261,7 @@ export function resolveEvaluationParameters(
             diagnostic(
               "PARAMETER_MISSING",
               `Missing parameter '${dependency}'`,
-              { severity: "error", path: `/parameters/${dependency}` },
+              { severity: "error", path: `/parameters/${jsonPointerSegment(dependency)}` },
             ),
           );
           sourceInvalid.add(rawId);
@@ -324,7 +325,7 @@ export function resolveEvaluationParameters(
                         `Missing parameter '${dependency}'`,
                         {
                           severity: "error",
-                          path: `/parameters/${dependency}`,
+                          path: `/parameters/${jsonPointerSegment(dependency)}`,
                         },
                       ),
                     );
@@ -336,7 +337,7 @@ export function resolveEvaluationParameters(
                         `Parameter '${dependency}' is ${dependencyDefinition.dimension}, expected ${expected}`,
                         {
                           severity: "error",
-                          path: `/parameters/${dependency}`,
+                          path: `/parameters/${jsonPointerSegment(dependency)}`,
                         },
                       ),
                     );
@@ -432,7 +433,7 @@ export function resolveEvaluationParameters(
           throw new ParameterResolutionFailure(
             diagnostic("PARAMETER_MISSING", `Missing parameter '${id}'`, {
               severity: "error",
-              path: `/parameters/${id}`,
+              path: `/parameters/${jsonPointerSegment(id)}`,
             }),
           );
         }
@@ -441,7 +442,7 @@ export function resolveEvaluationParameters(
             diagnostic(
               "EXPRESSION_DIMENSION_MISMATCH",
               `Parameter '${id}' is ${definition.dimension}, expected ${expected}`,
-              { severity: "error", path: `/parameters/${id}` },
+              { severity: "error", path: `/parameters/${jsonPointerSegment(id)}` },
             ),
           );
         }
@@ -481,7 +482,7 @@ export function resolveEvaluationParameters(
                 `Parameter '${rawId}' ${field} bound is invalid: ${safeErrorMessage(error)}`,
                 {
                   severity: "error",
-                  path: `/parameters/${rawId}/${field}`,
+                  path: `/parameters/${jsonPointerSegment(rawId)}/${field}`,
                 },
               ),
           );

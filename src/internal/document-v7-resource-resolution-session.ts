@@ -1,3 +1,4 @@
+import { jsonPointerSegment } from "../core/json-pointer.js";
 import type { ResourceId } from "../core/ids.js";
 import {
   diagnostic,
@@ -718,7 +719,7 @@ function commitmentConflict(
 ): CadResult<never> {
   return invalidInput(
     `Scoped resource '${resource.definition.id}' has conflicting commitments`,
-    `/resources/${resource.definition.id}`,
+    `/resources/${jsonPointerSegment(resource.definition.id)}`,
   );
 }
 

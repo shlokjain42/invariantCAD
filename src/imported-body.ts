@@ -1,3 +1,4 @@
+import { jsonPointerSegment } from "./core/json-pointer.js";
 import {
   DEFAULT_DESIGN_DOCUMENT_LIMITS,
   type DesignDocumentLimits,
@@ -913,8 +914,8 @@ function importedBodyDocumentPath(
   resourceId: string,
 ): string {
   const resourcePrefix = "/definition/resource";
-  const nodePath = `/nodes/${nodeId}`;
-  const resourcePath = `/resources/${resourceId}`;
+  const nodePath = `/nodes/${jsonPointerSegment(nodeId)}`;
+  const resourcePath = `/resources/${jsonPointerSegment(resourceId)}`;
   const startsWith = (prefix: string): boolean =>
     definitionPath !== undefined &&
     applyImportedBody<string>(importedBodyStringSlice, definitionPath, [
@@ -973,7 +974,7 @@ function narrowImportedBodyDocument(
   ) {
     return importedBodySubsetFailure(
       "The sole output must directly reference the sole imported-body node",
-      `/outputs/${output}`,
+      `/outputs/${jsonPointerSegment(output)}`,
     );
   }
   const definition = {
