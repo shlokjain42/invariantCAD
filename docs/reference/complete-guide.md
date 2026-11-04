@@ -1233,7 +1233,7 @@ relinking information, and applicable notices for review. Those materials are
 engineering compliance inputs, not legal certification. Public distribution
 remains pending external legal, release, and security review; until then,
 consumers must build the pinned recipe in
-[native/occt](https://github.com/shlokjain42/invariantCAD/tree/v0.1.1/native/occt)
+[native/occt](https://github.com/shlokjain42/invariantCAD/tree/v0.2.0/native/occt)
 or obtain an equivalently reviewed matching pair through an explicit channel.
 
 ## Architecture
