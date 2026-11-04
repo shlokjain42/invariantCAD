@@ -2,6 +2,92 @@
 
 ## [Unreleased]
 
+- Transforming a sphere or cone on the stock OCCT kernel no longer fails.
+  Translate, rotate, scale and mirror previously threw `curveType: [object
+  WebAssembly.Exception]` on the mechanical-exact profile for any shape with a
+  degenerate pole or apex edge, in published 0.1.1 too. Such edges are now
+  seeded through an adjacent face; rigid motions and uniform scale keep complete
+  topology history.
+- The OCCT kernel no longer compares dimensionless values with the length
+  `modelingTolerance`. A transform scale is treated as uniform only when its
+  factors agree to within floating-point rounding, so an anisotropic scale such
+  as `[1, 1.009, 1]` is applied as authored. Exact extrusion rejects any twist
+  other than `0` and any top scale other than `[1, 1]` with `KERNEL_ERROR`.
+  Published 0.1.1 silently built an untwisted, untapered prism or a uniformly
+  scaled solid when a raised tolerance covered the difference.
+- `createOcctKernel()` now rejects an invalid `modelingTolerance` before loading
+  WebAssembly: `TypeError` for a non-number, `RangeError` for NaN, zero,
+  negative or infinite values. Published 0.1.1 accepted such values, silently
+  dropped topology signatures, failed cylinders with opaque native errors, and
+  reported the value as `measure().tolerance`. Tessellation deflections must
+  likewise be finite and positive, and `relative` must be a boolean, both at
+  creation and on every `mesh()` call. Each tessellation field is read once
+  from an own data property; accessors and caller-prototype fields throw
+  `TypeError`, and `Object.prototype` pollution is ignored. A NaN deflection
+  previously hung the native mesher.
+- Plain `output.export("step")` and low-level `kernel.exportShape(shape,
+  "step")` on the stock OCCT kernel again export valid outputs that hold several
+  disjoint solids, such as a union of separated boxes or a subtraction that
+  splits its target. These shapes fall back to weak native STEP bytes; on main
+  they threw a raw `TypeError` ("Malformed OCCT STEP document"). Passing STEP
+  options, or `context.stepExport`, requests the single-product deterministic
+  contract and now throws `CadError` with `EXPORT_UNSUPPORTED` and
+  `details.reason === "multiple-products"` for such shapes.
+- Deterministic STEP metadata defaults derived from the document never make a
+  plain `output.export("step")` fail. In document names, output aliases, part
+  numbers and descriptions, control characters become spaces and unpaired
+  surrogates become U+FFFD. An empty required value becomes `InvariantCAD
+  Shape`, and the longest defaults are truncated at Unicode scalar boundaries to
+  fit the 64 KiB metadata budget. Text past the budget is never scanned or
+  copied. On main, multi-line descriptions, tabs in
+  document names or descriptions over 64 KiB failed with
+  `EXPORT_OPTIONS_INVALID`. Explicit `metadata` overrides keep the strict rules.
+- Exceeding `maxOutputBytes`, the default 64 MiB STEP output ceiling, or a fixed
+  STEP input, scan or entity ceiling on the stock OCCT kernel now throws
+  `CadError` with `RESOURCE_LIMIT_EXCEEDED`, both from `output.export("step",
+  ...)` and from low-level `exportShape(...)`. `details.resource` names the
+  ceiling, `details.limit` gives its value, and `details.actual` gives the
+  measured size when known. These cases previously threw a plain `RangeError`.
+- OCCT `mesh()` now tessellates a cache-free copy of the shape. A finer earlier
+  mesh therefore no longer changes later meshes, STL/OBJ exports, assembly
+  surface areas computed from part meshes, or BREP and binary BREP bytes.
+  Published 0.1.1 stored the triangulation on the native shape, so these results
+  depended on call order.
+- OCCT `measure()` counts a solid that a compound repeats once per occurrence
+  for volume, center of mass and inertia, matching surface area and
+  `classifyBodyResult()`. Published 0.1.1 counted it once for volume but twice
+  for area. Shapes without repeated occurrences measure exactly as before.
+- Stock OCCT fillet and chamfer failures now report the operation and the native
+  message, for example `OCCT fillet failed: std::runtime_error:
+  filletWithHistory: operation failed`. They previously surfaced as
+  `KERNEL_ERROR` `[object WebAssembly.Exception]`.
+- `OcctKernel.dispose()` now releases every remaining shape and the native
+  kernel, and marks the kernel disposed, even when one shape release fails. It
+  then rethrows that failure, or an `AggregateError` when several fail.
+  Published 0.1.1 stopped at the first failure and kept the kernel accepting
+  work.
+- The OCCT kernel reads `context.feature` and `context.tolerance` from own data
+  properties only, as it already does for `context.signal`, and captures them
+  once per call. `feature` must be a string and `tolerance` a number. Accessor-
+  backed or class-prototype fields throw `TypeError`, and `Object.prototype`
+  pollution is ignored. Reusing or changing a context object after a call no
+  longer relabels the topology roles of shapes it already created; published
+  0.1.1 re-read the context lazily.
+- Each OCCT kernel's `capabilities` object, including its nested arrays, is now
+  deeply frozen and independent of other kernels. In published 0.1.1, mutating
+  one kernel's capability arrays changed every other OCCT kernel and the
+  artifact compatibility fingerprint.
+- OCCT measure() on a compound or compsolid now charges visited plus queued
+  occurrences to the same 1,000,000 bound as classifyBodyResult(). A larger
+  compound throws RangeError and every traversal handle is released. Large wide
+  compounds no longer leak native child handles when traversal fails.
+- A plain output.export("step") of an output the stock OCCT kernel writes as
+  several STEP products now runs the native writer once and returns those weak
+  bytes. Other kernels that refuse with EXPORT_UNSUPPORTED and details.reason
+  "multiple-products" are retried once without stepExport.
+- Automatic STEP metadata defaults keep the first Unicode scalar of every
+  required field before sharing the metadata budget. Under a small advertised
+  maxMetadataBytes, defaults that can fit are no longer rejected.
 - Revolve now rejects a profile that crosses its axis, the sketch plane's local
   v axis through the sketch origin (u = 0). It fails with `FEATURE_INVALID` at
   `/nodes/<id>/profile`, reason `profile-crosses-axis`, before any kernel call.

@@ -117,6 +117,77 @@ function abortError(): DOMException {
   );
 }
 
+/**
+ * Refusals that are not malformed input: the native writer produced a valid
+ * document that this single-product rewriter cannot represent, or a fixed
+ * post-write ceiling was exceeded. The kernel maps them to structured errors.
+ */
+export type OcctStepRewriteRefusal =
+  | { readonly kind: "multiple-products" }
+  | {
+      readonly kind: "limit";
+      readonly resource:
+        | "maxInputCodeUnits"
+        | "maxOutputUtf8Bytes"
+        | "maxScanUnits"
+        | "maxEntityCount";
+      readonly limit: number;
+      readonly actual?: number;
+    };
+
+const occtStepRewriteRefusals = new WeakMap<object, OcctStepRewriteRefusal>();
+const occtStepWeakMapGet = WeakMap.prototype.get;
+const occtStepWeakMapSet = WeakMap.prototype.set;
+
+function refusal<T extends object>(
+  error: T,
+  value: OcctStepRewriteRefusal,
+): T {
+  occtStepReflectApply(occtStepWeakMapSet, occtStepRewriteRefusals, [
+    error,
+    value,
+  ]);
+  return error;
+}
+
+function multipleProductsRefusal(): TypeError {
+  return refusal(
+    new OcctStepTypeError(
+      "OCCT STEP document has multiple DATA PRODUCT records; deterministic export supports exactly one product",
+    ),
+    { kind: "multiple-products" },
+  );
+}
+
+function limitRefusal(
+  message: string,
+  resource: Extract<OcctStepRewriteRefusal, { kind: "limit" }>["resource"],
+  limit: number,
+  actual?: number,
+): RangeError {
+  return refusal(new OcctStepRangeError(message), {
+    kind: "limit",
+    resource,
+    limit,
+    ...(actual === undefined ? {} : { actual }),
+  });
+}
+
+/** Returns the structured refusal behind an error thrown by this rewriter. */
+export function occtStepRewriteRefusal(
+  error: unknown,
+): OcctStepRewriteRefusal | undefined {
+  if (
+    (typeof error !== "object" && typeof error !== "function") ||
+    error === null
+  ) {
+    return undefined;
+  }
+  return occtStepReflectApply(occtStepWeakMapGet, occtStepRewriteRefusals, [
+    error,
+  ]) as OcctStepRewriteRefusal | undefined;
+}
+
 function arrayPush<T>(values: T[], value: T): void {
   occtStepReflectApply(occtStepArrayPush, values, [value]);
 }
@@ -659,8 +730,10 @@ class StepScanner {
     }
     this.scanUnits += 1;
     if (this.scanUnits > this.maxScanUnits) {
-      throw new OcctStepRangeError(
+      throw limitRefusal(
         `OCCT STEP metadata scan exceeds maxScanUnits ${this.maxScanUnits}`,
+        "maxScanUnits",
+        this.maxScanUnits,
       );
     }
 
@@ -1168,8 +1241,10 @@ function scanData(
     }
     entityCount += 1;
     if (entityCount > maximumEntities) {
-      throw new OcctStepRangeError(
+      throw limitRefusal(
         `OCCT STEP metadata scan exceeds maxEntityCount ${maximumEntities}`,
+        "maxEntityCount",
+        maximumEntities,
       );
     }
 
@@ -1193,11 +1268,6 @@ function scanData(
         }
         if (scanDataRecord(scanner, metadata, replacements)) {
           productCount += 1;
-          if (productCount !== 1) {
-            throw new OcctStepTypeError(
-              "Malformed OCCT STEP document: multiple DATA PRODUCT records",
-            );
-          }
         }
         records += 1;
         scanner.skipTrivia();
@@ -1211,15 +1281,16 @@ function scanData(
     } else {
       if (scanDataRecord(scanner, metadata, replacements)) {
         productCount += 1;
-        if (productCount !== 1) {
-          throw new OcctStepTypeError(
-            "Malformed OCCT STEP document: multiple DATA PRODUCT records",
-          );
-        }
       }
     }
     scanner.skipTrivia();
     scanner.expectCode(0x3b, "';'");
+  }
+  // A second product is reported only after the whole DATA section has been
+  // scanned, so every entity, scan, and input limit applies to the complete
+  // document before a caller may fall back to the native bytes.
+  if (productCount > 1) {
+    throw multipleProductsRefusal();
   }
   if (productCount !== 1) {
     throw new OcctStepTypeError(
@@ -1293,8 +1364,11 @@ function rewritePreparedOcctStepMetadata(
   }
   checkAbort(signal);
   if (source.length > limits.maxInputCodeUnits) {
-    throw new OcctStepRangeError(
+    throw limitRefusal(
       `OCCT STEP metadata source exceeds maxInputCodeUnits ${limits.maxInputCodeUnits}`,
+      "maxInputCodeUnits",
+      limits.maxInputCodeUnits,
+      source.length,
     );
   }
   const scanner = new StepScanner(source, signal, limits.maxScanUnits);
@@ -1337,8 +1411,11 @@ function rewritePreparedOcctStepMetadata(
     outputBytes += replacement.value.length - replacement.oldUtf8Bytes;
   }
   if (outputBytes > limits.maxOutputUtf8Bytes) {
-    throw new OcctStepRangeError(
+    throw limitRefusal(
       `OCCT STEP metadata output exceeds maxOutputUtf8Bytes (maxOutputBytes) ${limits.maxOutputUtf8Bytes}`,
+      "maxOutputUtf8Bytes",
+      limits.maxOutputUtf8Bytes,
+      outputBytes,
     );
   }
   const output = applyReplacements(source, replacements);
@@ -1351,7 +1428,9 @@ function rewritePreparedOcctStepMetadata(
  *
  * The scanner accepts the exact ISO-10303-21 envelope, one HEADER section with
  * one direct FILE_NAME record, and one DATA section containing one PRODUCT
- * record. It preserves all bytes outside the five STEP string tokens it
+ * record. A document with several PRODUCT records (OCCT writes a compound of
+ * several solids as an assembly) is refused with a `multiple-products`
+ * {@link occtStepRewriteRefusal}. It preserves all bytes outside the five STEP string tokens it
  * replaces. Printable ASCII is preserved, apostrophes are doubled, and
  * reverse solidus plus non-ASCII Unicode scalars use Part-21 X2/X4 escapes.
  */

@@ -61,6 +61,32 @@ function rewrite(
   });
 }
 
+describe("multiple-product refusal ordering", () => {
+  const twoProductsThenMore = stepDocument(
+    [HEADER_FILE_NAME, HEADER_FILE_SCHEMA],
+    [
+      "#1=APPLICATION_CONTEXT('x');",
+      "#2=PRODUCT('id-1','name-1','description-1',(#4));",
+      "#3=PRODUCT('id-2','name-2','description-2',(#4));",
+      "#4=PRODUCT_CONTEXT('x',#1,'mechanical');",
+      "#5=CARTESIAN_POINT('',(0.,0.,0.));",
+      "#6=CARTESIAN_POINT('',(1.,0.,0.));",
+    ],
+  );
+
+  it("applies the entity limit to entities after the second product", () => {
+    expect(() =>
+      rewrite(twoProductsThenMore, { maxEntityCount: 5 }),
+    ).toThrow("maxEntityCount");
+  });
+
+  it("reports multiple products once the whole document is within limits", () => {
+    expect(() =>
+      rewrite(twoProductsThenMore, { maxEntityCount: 6 }),
+    ).toThrow("multiple DATA PRODUCT");
+  });
+});
+
 describe("bounded OCCT STEP metadata rewrite", () => {
   it("replaces only the exact FILE_NAME and PRODUCT string tokens", () => {
     const source = stepDocument();

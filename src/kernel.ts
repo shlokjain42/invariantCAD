@@ -1470,7 +1470,12 @@ export interface GeometryKernel {
    * Exports one borrowed shape in a native interchange format.
    *
    * `context.stepExport` requests the strong deterministic STEP contract;
-   * omitting it retains the backend's weaker native-exchange behavior.
+   * omitting it retains the backend's weaker native-exchange behavior, under
+   * which a supporting kernel may still return deterministic bytes. When
+   * `stepExport` is present but the kernel can write the shape only as
+   * several products, it throws `CadError` with `EXPORT_UNSUPPORTED` and
+   * `details.reason` `"multiple-products"`; a plain evaluated-output STEP
+   * export then retries without `stepExport`.
    */
   exportShape?(
     shape: KernelShape,

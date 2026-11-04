@@ -572,8 +572,15 @@ evaluated.dispose();
 Most evaluation failures return diagnostics. Direct `output(name)` misuse,
 post-disposal access, and unsupported direct `export()` formats throw. An
 unsupported export uses `CadError`, which carries its structured diagnostics.
-Invalid high-level STEP option structure or metadata likewise throws
+Invalid high-level STEP option structure or explicit metadata likewise throws
 `CadError` with the unreleased 0.2 `EXPORT_OPTIONS_INVALID` code; its
 JSON-Pointer `path` is relative to `StepExportOptions`, not the design
-document. Valid cancellation signals continue to use `AbortError`, and direct
-low-level kernel exports keep their backend validation exceptions.
+document. Metadata defaults derived from the document never fail validation.
+In the unreleased 0.2 line, a STEP request with options for an output the
+kernel can write only as several products throws `CadError` with
+`EXPORT_UNSUPPORTED` and `details.reason === "multiple-products"`; without
+options the export falls back to weak native bytes. On the stock OCCT kernel,
+exceeding `maxOutputBytes` or a fixed STEP ceiling throws `CadError` with
+`RESOURCE_LIMIT_EXCEEDED`, whose `details.resource` and `details.limit` name
+the ceiling. Valid cancellation signals continue to use `AbortError`, and
+direct low-level kernel exports keep their backend validation exceptions.

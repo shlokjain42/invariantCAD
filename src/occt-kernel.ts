@@ -6,7 +6,7 @@ import type {
   Vec3 as OcctVec3,
 } from "occt-wasm";
 import type { Vec2, Vec3 } from "./core/math.js";
-import { canonicalStringifyProtocol } from "./core/json.js";
+import { canonicalStringifyProtocol, deepFreeze } from "./core/json.js";
 import {
   KERNEL_BODY_RESULT_CLASSIFICATION_PROTOCOL_VERSION,
   KERNEL_DOCUMENT_BODY_IMPORT_PROTOCOL_VERSION,
@@ -168,9 +168,17 @@ import {
 import {
   DEFAULT_OCCT_STEP_METADATA_LIMITS,
   OCCT_STEP_METADATA_TIMESTAMP,
+  occtStepRewriteRefusal,
   rewriteOcctStepMetadataFromSource,
   type OcctStepMetadata,
 } from "./internal/occt-step-metadata.js";
+import {
+  AUTOMATIC_STEP_TEXT_FALLBACK,
+  boundedAutomaticStepText,
+  fitAutomaticStepTexts,
+  isAutomaticStepExportContext,
+} from "./internal/step-export-defaults.js";
+import { CadError, diagnostic } from "./core/result.js";
 import {
   assertAttestedFacadeMarker,
   captureAttestedOcctRuntime,
@@ -279,6 +287,60 @@ function exactSolidOffsetHistoryRecordLimit(
     );
   }
   return limit;
+}
+
+function occtModelingTolerance(value: unknown): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "number") {
+    throw new TypeError("OCCT modelingTolerance must be a number");
+  }
+  if (!Number.isFinite(value) || !(value > 0)) {
+    throw new RangeError("OCCT modelingTolerance must be finite and positive");
+  }
+  return value;
+}
+
+/**
+ * Captures and validates tessellation controls before they reach BRepMesh. A
+ * NaN deflection otherwise sends the native mesher into an unbounded loop,
+ * and zero or negative values fail with an opaque native exception.
+ *
+ * Each field is read once from an own data property, so an accessor or a
+ * caller-defined prototype cannot return one value to validation and another
+ * to the mesher. The result is a frozen null-prototype snapshot holding only
+ * the defined fields, so reading an absent field never reaches
+ * `Object.prototype`.
+ */
+function occtMeshOptions(value: unknown, label: string): MeshOptions {
+  const record = occtKernelRecord(value, label);
+  const captured = Object.create(null) as {
+    linearDeflection?: number;
+    angularDeflection?: number;
+    relative?: boolean;
+  };
+  for (const key of ["linearDeflection", "angularDeflection"] as const) {
+    const deflection = occtKernelOwnDataValue(record, key, `${label}.${key}`);
+    if (deflection === undefined) continue;
+    if (typeof deflection !== "number") {
+      throw new TypeError(`${label}.${key} must be a number`);
+    }
+    if (!Number.isFinite(deflection) || !(deflection > 0)) {
+      throw new RangeError(`${label}.${key} must be finite and positive`);
+    }
+    captured[key] = deflection;
+  }
+  const relative = occtKernelOwnDataValue(
+    record,
+    "relative",
+    `${label}.relative`,
+  );
+  if (relative !== undefined) {
+    if (typeof relative !== "boolean") {
+      throw new TypeError(`${label}.relative must be a boolean`);
+    }
+    captured.relative = relative;
+  }
+  return Object.freeze(captured);
 }
 
 type TopologyHistory = KernelTopologySnapshot["history"];
@@ -1053,16 +1115,50 @@ function checkOcctSignal(signal: unknown): void {
   }
 }
 
-function checkContext(context?: KernelFeatureContext): void {
-  if (context === undefined) return;
+/**
+ * Validates one feature context and returns a frozen snapshot of its own
+ * data `signal`, `feature`, and `tolerance` fields. Operations rebind their
+ * `context` to the snapshot on entry, so lineage annotations that run later
+ * from topology() see the values captured at the call, never accessors,
+ * caller prototypes, or Object.prototype pollution. Every field is defined
+ * on the snapshot, so a missing field can never be read from a prototype.
+ */
+function checkContext(
+  context?: KernelFeatureContext,
+): KernelFeatureContext | undefined {
+  if (context === undefined) return undefined;
   const captured = occtKernelRecord(context, "CAD kernel context");
-  checkOcctSignal(
-    occtKernelOwnDataValue(
-      captured,
-      "signal",
-      "CAD kernel context.signal",
-    ),
+  const signal = occtKernelOwnDataValue(
+    captured,
+    "signal",
+    "CAD kernel context.signal",
   );
+  checkOcctSignal(signal);
+  const feature = occtKernelOwnDataValue(
+    captured,
+    "feature",
+    "CAD kernel context.feature",
+  );
+  if (feature !== undefined && typeof feature !== "string") {
+    throw new OcctKernelBoundaryTypeError(
+      "CAD kernel context.feature must be a string",
+    );
+  }
+  const tolerance = occtKernelOwnDataValue(
+    captured,
+    "tolerance",
+    "CAD kernel context.tolerance",
+  );
+  if (tolerance !== undefined && typeof tolerance !== "number") {
+    throw new OcctKernelBoundaryTypeError(
+      "CAD kernel context.tolerance must be a number",
+    );
+  }
+  return Object.freeze({
+    signal,
+    feature,
+    tolerance,
+  }) as KernelFeatureContext;
 }
 
 interface CapturedOcctShapeExportContext {
@@ -1111,6 +1207,76 @@ function captureOcctShapeExportContext(
   };
 }
 
+const OcctNativeException: (new (...args: never[]) => object) | undefined =
+  typeof WebAssembly === "undefined"
+    ? undefined
+    : (WebAssembly as { Exception?: new (...args: never[]) => object })
+        .Exception;
+
+/**
+ * Runs one raw Embind call that occt-wasm does not wrap. A native C++
+ * exception escapes as a bare `WebAssembly.Exception` with no message, so
+ * translate it with the module's `getExceptionMessage`, release its native
+ * reference, and throw an Error that names the operation.
+ */
+function callOcctNative<T>(
+  module: unknown,
+  operation: string,
+  invoke: () => T,
+): T {
+  try {
+    return invoke();
+  } catch (error) {
+    if (
+      OcctNativeException === undefined ||
+      !(error instanceof OcctNativeException)
+    ) {
+      throw error;
+    }
+    const helpers = module as {
+      readonly getExceptionMessage?: (error: unknown) => unknown;
+      readonly decrementExceptionRefcount?: (error: unknown) => void;
+    };
+    let detail = "native exception";
+    try {
+      const described = helpers.getExceptionMessage?.(error);
+      if (Array.isArray(described)) {
+        const parts = described.filter(
+          (part): part is string => typeof part === "string" && part !== "",
+        );
+        if (parts.length > 0) detail = parts.join(": ");
+      }
+    } catch {
+      // Keep the generic detail; the operation name still identifies it.
+    }
+    try {
+      helpers.decrementExceptionRefcount?.(error);
+    } catch {
+      // Releasing the exception object is best effort.
+    }
+    // No `cause`: the released exception must not be passed back to native
+    // helpers later.
+    throw new Error(`OCCT ${operation} failed: ${detail}`);
+  }
+}
+
+/**
+ * Reports a deterministic STEP export the kernel cannot complete for a valid
+ * shape (several products, or a post-write ceiling) as a structured
+ * `CadError`, not as a validation exception.
+ */
+function throwOcctStepExportRefusal(
+  code: "EXPORT_UNSUPPORTED" | "RESOURCE_LIMIT_EXCEEDED",
+  message: string,
+  details: Readonly<Record<string, unknown>>,
+): never {
+  const value = diagnostic(code, message, {
+    severity: "error",
+    details: { kernel: "occt", operation: "export", format: "step", ...details },
+  });
+  throw new CadError(value.message, [value]);
+}
+
 function deterministicStepExportMetadata(
   context: CapturedOcctShapeExportContext,
 ): {
@@ -1118,16 +1284,27 @@ function deterministicStepExportMetadata(
   readonly maxOutputBytes: number;
 } {
   if (context.stepExport === undefined) {
+    // Automatic defaults must not fail: normalize text the strict metadata
+    // rules would reject and fit the three copies into the metadata budget.
+    // Only the prefix that the budget could hold is read from the feature.
+    const budget =
+      DEFAULT_OCCT_STEP_METADATA_LIMITS.maxMetadataUtf8Bytes -
+      OCCT_STEP_METADATA_TIMESTAMP.length;
     const feature =
       typeof context.feature === "string" && context.feature.length > 0
-        ? context.feature
-        : "InvariantCAD Shape";
+        ? boundedAutomaticStepText(context.feature, budget)
+        : AUTOMATIC_STEP_TEXT_FALLBACK;
+    const [fileName, productId, productName] = fitAutomaticStepTexts(
+      [feature, feature, feature],
+      budget,
+      [true, true, true],
+    ) as [string, string, string];
     return {
       metadata: {
-        fileName: feature,
+        fileName,
         timestamp: OCCT_STEP_METADATA_TIMESTAMP,
-        productId: feature,
-        productName: feature,
+        productId,
+        productName,
         productDescription: "",
       },
       maxOutputBytes:
@@ -1388,7 +1565,9 @@ class OcctKernel implements GeometryKernel {
   readonly id = "occt";
   readonly capabilities: KernelCapabilities;
   declare readonly draft?: NonNullable<GeometryKernel["draft"]>;
-  private static readonly BASE_CAPABILITIES: KernelCapabilities = {
+  // Deeply frozen: the constructor shares these nested arrays between
+  // instances, so no kernel may mutate another kernel's declaration.
+  private static readonly BASE_CAPABILITIES: KernelCapabilities = deepFreeze({
     protocolVersion: 1,
     representation: "brep",
     exact: true,
@@ -1432,7 +1611,7 @@ class OcctKernel implements GeometryKernel {
       geometry: true,
       adjacency: true,
     },
-  };
+  });
   private readonly raw: RawOcctKernel;
   private readonly facade: OcctFacadeProbe | undefined;
   private readonly tessellation: MeshOptions;
@@ -1467,7 +1646,11 @@ class OcctKernel implements GeometryKernel {
   ) {
     this.raw = raw;
     this.facade = facade;
-    this.tessellation = Object.freeze({ ...(options.tessellation ?? {}) });
+    this.tessellation = occtMeshOptions(
+      occtKernelOwnDataValue(options, "tessellation", "OCCT tessellation") ??
+        {},
+      "OCCT tessellation",
+    );
     this.modelingTolerance = options.modelingTolerance ?? 1e-7;
     this.maxExactBooleanHistoryRecords = maxExactBooleanHistoryRecords;
     this.maxExactEdgeTreatmentHistoryRecords =
@@ -1506,7 +1689,7 @@ class OcctKernel implements GeometryKernel {
             `runtime=${topologySignatureRuntime}`,
             `modelingTolerance=${this.modelingTolerance}`,
           ].join(";");
-    this.capabilities = {
+    this.capabilities = deepFreeze({
       ...OcctKernel.BASE_CAPABILITIES,
       ...(this.deterministicStepExport
         ? {
@@ -1574,7 +1757,7 @@ class OcctKernel implements GeometryKernel {
               ],
             },
           }),
-    };
+    });
     this.artifactCandidateCompatibilityFingerprint =
       occtArtifactCandidateCompatibilityFingerprint(
         topologySignatureRuntime,
@@ -3333,7 +3516,7 @@ class OcctKernel implements GeometryKernel {
     center: boolean,
     context?: KernelFeatureContext,
   ): KernelShape {
-    checkContext(context);
+    context = checkContext(context);
     const box = this.raw.makeBox(size[0], size[1], size[2]);
     const min: Vec3 = center
       ? [-size[0] / 2, -size[1] / 2, -size[2] / 2]
@@ -3364,7 +3547,7 @@ class OcctKernel implements GeometryKernel {
     _segments?: number,
     context?: KernelFeatureContext,
   ): KernelShape {
-    checkContext(context);
+    context = checkContext(context);
     const cylinder =
       Math.abs(radiusBottom - radiusTop) <= this.modelingTolerance
         ? this.raw.makeCylinder(radiusBottom, height)
@@ -3393,7 +3576,7 @@ class OcctKernel implements GeometryKernel {
     _segments?: number,
     context?: KernelFeatureContext,
   ): KernelShape {
-    checkContext(context);
+    context = checkContext(context);
     return this.own(this.raw.makeSphere(radius), context, {
       annotation: this.sphereTopologyAnnotation(context),
     });
@@ -3410,11 +3593,13 @@ class OcctKernel implements GeometryKernel {
     },
     context?: KernelFeatureContext,
   ): KernelShape {
-    checkContext(context);
+    context = checkContext(context);
+    // Twist (radians) and top scale (unitless) are not lengths; any nonzero
+    // value would be silently dropped by the straight prism below.
     if (
-      Math.abs(options.twist) > this.modelingTolerance ||
-      Math.abs(options.scaleTop[0] - 1) > this.modelingTolerance ||
-      Math.abs(options.scaleTop[1] - 1) > this.modelingTolerance ||
+      options.twist !== 0 ||
+      options.scaleTop[0] !== 1 ||
+      options.scaleTop[1] !== 1 ||
       options.divisions !== 0
     ) {
       throw new RangeError(
@@ -3462,7 +3647,7 @@ class OcctKernel implements GeometryKernel {
     options: { readonly angle: number; readonly segments?: number },
     context?: KernelFeatureContext,
   ): KernelShape {
-    checkContext(context);
+    context = checkContext(context);
     const built = this.profileFace(profile);
     const axis = numericPlaneBasis(profile.plane).v;
     let result: ShapeHandle | undefined;
@@ -3501,7 +3686,7 @@ class OcctKernel implements GeometryKernel {
     options: ResolvedLoftOptions,
     context?: KernelFeatureContext,
   ): KernelShape {
-    checkContext(context);
+    context = checkContext(context);
     if (typeof options !== "object" || options === null || options.ruled !== true) {
       throw new TypeError("Document lofts must use ruled interpolation");
     }
@@ -3683,7 +3868,7 @@ class OcctKernel implements GeometryKernel {
     options: ResolvedSweepOptions,
     context?: KernelFeatureContext,
   ): KernelShape {
-    checkContext(context);
+    context = checkContext(context);
     if (
       typeof options !== "object" ||
       options === null ||
@@ -4411,7 +4596,7 @@ class OcctKernel implements GeometryKernel {
     tools: readonly KernelShape[],
     context?: KernelFeatureContext,
   ): KernelShape {
-    checkContext(context);
+    context = checkContext(context);
     if (tools.length === 0) {
       throw new RangeError("Boolean operations require at least one tool shape");
     }
@@ -4635,9 +4820,16 @@ class OcctKernel implements GeometryKernel {
     }
   }
 
+  /**
+   * Scale factors are dimensionless, so uniformity is decided relative to the
+   * factors themselves (a few ULPs of floating-point noise), never against the
+   * length-valued modeling tolerance.
+   */
   private uniformScaleFactor(value: Vec3): number | undefined {
-    return Math.abs(value[0] - value[1]) <= this.modelingTolerance &&
-      Math.abs(value[1] - value[2]) <= this.modelingTolerance
+    const nearlyEqual = (first: number, second: number): boolean =>
+      Math.abs(first - second) <=
+      4 * Number.EPSILON * Math.max(Math.abs(first), Math.abs(second));
+    return nearlyEqual(value[0], value[1]) && nearlyEqual(value[1], value[2])
       ? value[0]
       : undefined;
   }
@@ -4649,12 +4841,63 @@ class OcctKernel implements GeometryKernel {
       : uniformFactor ** 3;
   }
 
+  /**
+   * Seeds one edge by transforming an adjacent face instead of the bare edge.
+   * The face keeps the edge's pcurve, so a degenerate edge stays measurable.
+   * The transforms preserve subshape structure, so the edge keeps its index
+   * within the face. Returns undefined when no adjacent face yields a seed.
+   */
+  private transformedEdgeSeedInFace(
+    inputShape: OcctShape,
+    descriptor: KernelEdgeDescriptor,
+    edge: ShapeHandle,
+    operations: readonly ResolvedTransformOperation[],
+    lineage: readonly KernelTopologyLineage[],
+    context?: KernelFeatureContext,
+  ): TopologyLineageSeed | undefined {
+    for (const faceKey of descriptor.faces) {
+      const face = inputShape.topologyHandles.get(faceKey);
+      if (face?.topology !== "face") continue;
+      const faceEdges = this.raw.getSubShapes(face.handle, "edge");
+      let index: number;
+      try {
+        index = faceEdges.findIndex((candidate) =>
+          this.raw.isSame(candidate, edge),
+        );
+      } finally {
+        this.releaseHandles(faceEdges);
+      }
+      if (index < 0) continue;
+      const transformedFace = this.applyTransformOperations(
+        face.handle,
+        operations,
+        context,
+      );
+      try {
+        const transformedEdges = this.raw.getSubShapes(transformedFace, "edge");
+        try {
+          const transformedEdge = transformedEdges[index];
+          if (transformedEdges.length !== faceEdges.length) continue;
+          if (transformedEdge === undefined) continue;
+          return this.topologySeedFromHandle(transformedEdge, "edge", lineage);
+        } catch {
+          continue;
+        } finally {
+          this.releaseHandles(transformedEdges);
+        }
+      } finally {
+        this.raw.release(transformedFace);
+      }
+    }
+    return undefined;
+  }
+
   transform(
     shape: KernelShape,
     operations: readonly ResolvedTransformOperation[],
     context?: KernelFeatureContext,
   ): KernelShape {
-    checkContext(context);
+    context = checkContext(context);
     const inputShape = this.shape(shape);
     const current = this.applyTransformOperations(
       inputShape[OCCT_SHAPE],
@@ -4679,22 +4922,38 @@ class OcctKernel implements GeometryKernel {
           if (retained === undefined) {
             throw new Error("OCCT topology snapshot lost a retained subshape handle");
           }
+          const lineage = uniqueLineage([...descriptor.lineage, ...modified]);
           const transformed = this.applyTransformOperations(
             retained.handle,
             operations,
             context,
           );
+          let seed: TopologyLineageSeed | undefined;
           try {
-            seeds.push(
-              this.topologySeedFromHandle(
-                transformed,
-                descriptor.topology,
-                uniqueLineage([...descriptor.lineage, ...modified]),
-              ),
+            seed = this.topologySeedFromHandle(
+              transformed,
+              descriptor.topology,
+              lineage,
             );
+          } catch {
+            // A degenerate pole or apex edge transformed on its own loses
+            // the pcurve that carries its geometry, so native queries throw.
           } finally {
             this.raw.release(transformed);
           }
+          if (seed === undefined && descriptor.topology === "edge") {
+            seed = this.transformedEdgeSeedInFace(
+              inputShape,
+              descriptor,
+              retained.handle,
+              operations,
+              lineage,
+              context,
+            );
+          }
+          // An unseeded subshape fails seed coverage, so the result honestly
+          // reports partial history instead of failing the whole transform.
+          if (seed !== undefined) seeds.push(seed);
         }
         annotation = { seeds, requireSeedCoverage: true };
       }
@@ -4727,7 +4986,7 @@ class OcctKernel implements GeometryKernel {
     format: KernelExchangeFormat,
     context?: KernelFeatureContext,
   ): KernelShape {
-    checkContext(context);
+    context = checkContext(context);
     let imported: ShapeHandle;
     switch (format) {
       case "step":
@@ -4765,7 +5024,7 @@ class OcctKernel implements GeometryKernel {
     context?: KernelFeatureContext,
   ): KernelShape {
     this.assertKernelLive();
-    checkContext(context);
+    context = checkContext(context);
     const bytes = snapshotDocumentBodyBytes(data);
     const capturedOptions = captureDocumentBodyImportOptions(options);
     checkContext(context);
@@ -4884,6 +5143,9 @@ class OcctKernel implements GeometryKernel {
     context?: KernelShapeExportContext,
   ): Uint8Array {
     const capturedContext = captureOcctShapeExportContext(context);
+    // A plain evaluated-output export marks its context: it binds strong
+    // defaults but accepts the weak native bytes for a multi-product shape.
+    const automaticStepExport = isAutomaticStepExportContext(context);
     if (format !== "step" && capturedContext.stepExport !== undefined) {
       throw new OcctKernelBoundaryTypeError(
         "OCCT deterministic STEP export options require the 'step' format",
@@ -4917,26 +5179,92 @@ class OcctKernel implements GeometryKernel {
           return encodeUtf8(source);
         }
         const request = deterministicRequest!;
-        const rewritten = rewriteOcctStepMetadataFromSource(() => {
-          const currentHandle = this.shape(shape)[OCCT_SHAPE];
-          if (currentHandle !== handle) {
-            throw new OcctKernelBoundaryTypeError(
-              "OCCT STEP export shape ownership changed during capture",
+        let nativeSource: string | undefined;
+        let rewritten: string;
+        try {
+          rewritten = rewriteOcctStepMetadataFromSource(() => {
+            const currentHandle = this.shape(shape)[OCCT_SHAPE];
+            if (currentHandle !== handle) {
+              throw new OcctKernelBoundaryTypeError(
+                "OCCT STEP export shape ownership changed during capture",
+              );
+            }
+            const source = this.raw.exportStep(currentHandle);
+            checkOcctSignal(capturedContext.signal);
+            nativeSource = source;
+            return source;
+          }, {
+            metadata: request.metadata,
+            ...(capturedContext.signal === undefined
+              ? {}
+              : { signal: capturedContext.signal }),
+            limits: {
+              ...DEFAULT_OCCT_STEP_METADATA_LIMITS,
+              maxOutputUtf8Bytes: request.maxOutputBytes,
+            },
+          });
+        } catch (error) {
+          const refusal = occtStepRewriteRefusal(error);
+          if (refusal?.kind === "multiple-products") {
+            if (
+              (capturedContext.stepExport === undefined ||
+                automaticStepExport) &&
+              nativeSource !== undefined
+            ) {
+              // No strong contract was requested: keep the weak native
+              // exchange bytes for shapes OCCT writes as several products.
+              // The scan above already applied the entity, scan, and input
+              // limits to the whole document; apply the output ceiling too.
+              checkOcctSignal(capturedContext.signal);
+              const weakBytes = encodeUtf8(nativeSource);
+              if (typedArrayByteLengthGetter === undefined) {
+                throw new TypeError("Uint8Array byte-length intrinsic is unavailable");
+              }
+              // Read the length through the captured intrinsic getter, as the
+              // single-product path does, so caller code cannot change it.
+              const weakByteLength = occtKernelReflectApply(
+                typedArrayByteLengthGetter,
+                weakBytes,
+                [],
+              ) as number;
+              if (weakByteLength > request.maxOutputBytes) {
+                throwOcctStepExportRefusal(
+                  "RESOURCE_LIMIT_EXCEEDED",
+                  `OCCT STEP export exceeds maxOutputBytes ${request.maxOutputBytes}`,
+                  {
+                    resource: "maxOutputBytes",
+                    limit: request.maxOutputBytes,
+                    actual: weakByteLength,
+                  },
+                );
+              }
+              return weakBytes;
+            }
+            throwOcctStepExportRefusal(
+              "EXPORT_UNSUPPORTED",
+              "Deterministic STEP export supports exactly one product; OCCT writes this shape as several STEP products",
+              { reason: "multiple-products" },
             );
           }
-          const source = this.raw.exportStep(currentHandle);
-          checkOcctSignal(capturedContext.signal);
-          return source;
-        }, {
-          metadata: request.metadata,
-          ...(capturedContext.signal === undefined
-            ? {}
-            : { signal: capturedContext.signal }),
-          limits: {
-            ...DEFAULT_OCCT_STEP_METADATA_LIMITS,
-            maxOutputUtf8Bytes: request.maxOutputBytes,
-          },
-        });
+          if (refusal?.kind === "limit") {
+            const resource =
+              refusal.resource === "maxOutputUtf8Bytes"
+                ? "maxOutputBytes"
+                : refusal.resource;
+            throwOcctStepExportRefusal(
+              "RESOURCE_LIMIT_EXCEEDED",
+              `OCCT STEP export exceeds ${resource} ${refusal.limit}`,
+              {
+                resource,
+                limit: refusal.limit,
+                ...(refusal.actual === undefined
+                  ? {}
+                  : { actual: refusal.actual }),
+              },
+            );
+          }
+          throw error;
+        }
         checkOcctSignal(capturedContext.signal);
         const encoded = encodeUtf8(rewritten);
         if (typedArrayByteLengthGetter === undefined) {
@@ -4950,8 +5278,14 @@ class OcctKernel implements GeometryKernel {
           [],
         ) as number;
         if (encodedByteLength > request.maxOutputBytes) {
-          throw new OcctKernelBoundaryRangeError(
-            `OCCT STEP metadata output exceeds maxOutputBytes ${request.maxOutputBytes}`,
+          throwOcctStepExportRefusal(
+            "RESOURCE_LIMIT_EXCEEDED",
+            `OCCT STEP export exceeds maxOutputBytes ${request.maxOutputBytes}`,
+            {
+              resource: "maxOutputBytes",
+              limit: request.maxOutputBytes,
+              actual: encodedByteLength,
+            },
           );
         }
         return encoded;
@@ -5474,7 +5808,7 @@ class OcctKernel implements GeometryKernel {
     options: ResolvedDraftOptions,
     context?: KernelFeatureContext,
   ): KernelShape {
-    checkContext(context);
+    context = checkContext(context);
     validateDraftOptions(options);
     if (!Array.isArray(faces)) {
       throw new TypeError("Draft faces must be an array");
@@ -5692,7 +6026,7 @@ class OcctKernel implements GeometryKernel {
     options: { readonly radius: number },
     context?: KernelFeatureContext,
   ): KernelShape {
-    checkContext(context);
+    context = checkContext(context);
     if (!Number.isFinite(options.radius) || !(options.radius > 0)) {
       throw new RangeError("Fillet radius must be finite and positive");
     }
@@ -5724,12 +6058,14 @@ class OcctKernel implements GeometryKernel {
       edgeIds: selected.handles,
       inputFaceHashes: faceHashes,
       invoke: (edgeIds, inputHashes) =>
-        rawKernel.filletWithHistory(
-          input[OCCT_SHAPE],
-          edgeIds as Parameters<typeof rawKernel.filletWithHistory>[1],
-          options.radius,
-          inputHashes as Parameters<typeof rawKernel.filletWithHistory>[3],
-          TOPOLOGY_HASH_UPPER_BOUND,
+        callOcctNative(module, "fillet", () =>
+          rawKernel.filletWithHistory(
+            input[OCCT_SHAPE],
+            edgeIds as Parameters<typeof rawKernel.filletWithHistory>[1],
+            options.radius,
+            inputHashes as Parameters<typeof rawKernel.filletWithHistory>[3],
+            TOPOLOGY_HASH_UPPER_BOUND,
+          ),
         ),
       adopt: (evolution) =>
         this.own(evolution.resultId as ShapeHandle, context, {
@@ -5746,7 +6082,7 @@ class OcctKernel implements GeometryKernel {
     options: { readonly distance: number },
     context?: KernelFeatureContext,
   ): KernelShape {
-    checkContext(context);
+    context = checkContext(context);
     if (!Number.isFinite(options.distance) || !(options.distance > 0)) {
       throw new RangeError("Chamfer distance must be finite and positive");
     }
@@ -5780,12 +6116,14 @@ class OcctKernel implements GeometryKernel {
       edgeIds: selected.handles,
       inputFaceHashes: faceHashes,
       invoke: (edgeIds, inputHashes) =>
-        rawKernel.chamferWithHistory(
-          input[OCCT_SHAPE],
-          edgeIds as Parameters<typeof rawKernel.chamferWithHistory>[1],
-          options.distance,
-          inputHashes as Parameters<typeof rawKernel.chamferWithHistory>[3],
-          TOPOLOGY_HASH_UPPER_BOUND,
+        callOcctNative(module, "chamfer", () =>
+          rawKernel.chamferWithHistory(
+            input[OCCT_SHAPE],
+            edgeIds as Parameters<typeof rawKernel.chamferWithHistory>[1],
+            options.distance,
+            inputHashes as Parameters<typeof rawKernel.chamferWithHistory>[3],
+            TOPOLOGY_HASH_UPPER_BOUND,
+          ),
         ),
       adopt: (evolution) =>
         this.own(evolution.resultId as ShapeHandle, context, {
@@ -5992,7 +6330,7 @@ class OcctKernel implements GeometryKernel {
     options: ResolvedShellOptions,
     context?: KernelFeatureContext,
   ): KernelShape {
-    checkContext(context);
+    context = checkContext(context);
     if (!Number.isFinite(options.thickness) || !(options.thickness > 0)) {
       throw new RangeError("Shell thickness must be finite and positive");
     }
@@ -6171,7 +6509,7 @@ class OcctKernel implements GeometryKernel {
     options: ResolvedOffsetOptions,
     context?: KernelFeatureContext,
   ): KernelShape {
-    checkContext(context);
+    context = checkContext(context);
     if (!Number.isFinite(options.distance) || !(options.distance > 0)) {
       throw new RangeError("Offset distance must be finite and positive");
     }
@@ -6324,20 +6662,132 @@ class OcctKernel implements GeometryKernel {
 
   mesh(shape: KernelShape, options: MeshOptions = {}): MeshData {
     const handle = this.shape(shape)[OCCT_SHAPE];
-    const merged = { ...this.tessellation, ...options };
-    const mesh = this.raw.tessellate(handle, {
-      ...(merged.linearDeflection === undefined
-        ? {}
-        : { linearDeflection: merged.linearDeflection }),
-      ...(merged.angularDeflection === undefined
-        ? {}
-        : { angularDeflection: merged.angularDeflection }),
-      ...(merged.relative === undefined ? {} : { relative: merged.relative }),
-    });
-    return {
-      positions: mesh.positions.slice(),
-      indices: mesh.indices.slice(),
+    // Both snapshots are frozen null-prototype records of validated own data
+    // fields, so these reads return exactly the checked values.
+    const overrides = occtMeshOptions(options, "OCCT mesh options");
+    const defaults = this.tessellation;
+    const linearDeflection =
+      overrides.linearDeflection ?? defaults.linearDeflection;
+    const angularDeflection =
+      overrides.angularDeflection ?? defaults.angularDeflection;
+    const relative = overrides.relative ?? defaults.relative;
+    // occt-wasm reads absent fields through [[Get]] before applying its own
+    // defaults, so the request has no prototype for pollution to reach.
+    const request = Object.create(null) as {
+      linearDeflection?: number;
+      angularDeflection?: number;
+      relative?: boolean;
     };
+    if (linearDeflection !== undefined) {
+      request.linearDeflection = linearDeflection;
+    }
+    if (angularDeflection !== undefined) {
+      request.angularDeflection = angularDeflection;
+    }
+    if (relative !== undefined) request.relative = relative;
+    // BRepMesh stores its triangulation on the faces it meshes and reuses a
+    // finer stored one for later coarser requests; BREP export would also
+    // serialize it. Mesh a cache-free copy so neither depends on call order.
+    const meshSource = this.raw.copy(handle);
+    try {
+      const mesh = this.raw.tessellate(meshSource, Object.freeze(request));
+      return {
+        positions: mesh.positions.slice(),
+        indices: mesh.indices.slice(),
+      };
+    } finally {
+      this.raw.release(meshSource);
+    }
+  }
+
+  /**
+   * Returns owned handles for the solids that measure() integrates.
+   *
+   * `getSubShapes` lists each distinct solid once, while native surface area,
+   * native volume and classifyBodyResult count every occurrence. When a
+   * compound repeats a solid occurrence, measure every occurrence so volume,
+   * inertia and surface area use one multiplicity. Other shapes keep the
+   * distinct-solid list and its order, so their results are unchanged.
+   *
+   * Visited plus queued occurrences share classifyBodyResult's bound, so a
+   * small file that nests shared compounds cannot expand into unbounded
+   * handles. Every traversal handle is released when the walk fails.
+   */
+  private measuredSolidOccurrences(handle: ShapeHandle): ShapeHandle[] {
+    const rootType = this.raw.getShapeType(handle);
+    const solids = this.raw.getSubShapes(handle, "solid");
+    if (
+      solids.length === 0 ||
+      (rootType !== "compound" && rootType !== "compsolid")
+    ) {
+      return solids;
+    }
+    const occurrences: ShapeHandle[] = [];
+    const pending: ShapeHandle[] = [];
+    let visited = 1;
+    let failed = false;
+    let failure: unknown;
+    // Queue children one at a time: spreading a large compound's children
+    // into push() can exceed the call-argument limit after native allocation.
+    const queueChildren = (parent: ShapeHandle): void => {
+      const children = this.raw.iterShapes(parent);
+      for (let index = 0; index < children.length; index += 1) {
+        pending.push(children[index]!);
+      }
+      if (visited + pending.length > MAX_BODY_CLASSIFICATION_OCCURRENCES) {
+        throw new OcctKernelBoundaryRangeError(
+          "OCCT measurement exceeded its occurrence limit",
+        );
+      }
+    };
+    try {
+      queueChildren(handle);
+      while (pending.length > 0) {
+        const current = pending.pop()!;
+        visited += 1;
+        let retained = false;
+        try {
+          const type = this.raw.getShapeType(current);
+          if (type === "solid") {
+            occurrences.push(current);
+            retained = true;
+          } else if (type === "compound" || type === "compsolid") {
+            queueChildren(current);
+          }
+        } finally {
+          if (!retained) this.raw.release(current);
+        }
+      }
+    } catch (error) {
+      failed = true;
+      failure = error;
+    }
+    // A release failure never replaces an earlier failure.
+    const release = (handles: readonly ShapeHandle[]): void => {
+      for (let index = handles.length - 1; index >= 0; index -= 1) {
+        try {
+          this.raw.release(handles[index]!);
+        } catch (error) {
+          if (!failed) {
+            failed = true;
+            failure = error;
+          }
+        }
+      }
+    };
+    if (failed) {
+      release(pending);
+      release(occurrences);
+      release(solids);
+      throw failure;
+    }
+    const keepDistinct = occurrences.length === solids.length;
+    release(keepDistinct ? occurrences : solids);
+    if (failed) {
+      release(keepDistinct ? solids : occurrences);
+      throw failure;
+    }
+    return keepDistinct ? solids : occurrences.reverse();
   }
 
   measure(shape: KernelShape): ShapeMeasurements {
@@ -6358,7 +6808,7 @@ class OcctKernel implements GeometryKernel {
       };
     }
     const bounds = this.raw.getBoundingBox(handle, false);
-    const solids = this.raw.getSubShapes(handle, "solid");
+    const solids = this.measuredSolidOccurrences(handle);
     let nativeMassProperties = zeroMassProperties();
     try {
       const components: GeometricMassProperties[] = [];
@@ -6573,9 +7023,32 @@ class OcctKernel implements GeometryKernel {
 
   dispose(): void {
     if (this.disposed) return;
-    for (const shape of [...this.liveShapes]) this.disposeShape(shape);
-    this.raw[Symbol.dispose]();
-    this.disposed = true;
+    // Release every shape and the native kernel even when one release fails,
+    // and mark the kernel disposed so it accepts no further work.
+    const cleanupErrors: unknown[] = [];
+    try {
+      for (const shape of [...this.liveShapes]) {
+        try {
+          this.disposeShape(shape);
+        } catch (error) {
+          cleanupErrors.push(error);
+        }
+      }
+    } finally {
+      try {
+        this.raw[Symbol.dispose]();
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+      this.disposed = true;
+    }
+    if (cleanupErrors.length === 1) throw cleanupErrors[0];
+    if (cleanupErrors.length > 1) {
+      throw new AggregateError(
+        cleanupErrors,
+        "OCCT kernel disposal encountered multiple release failures",
+      );
+    }
   }
 }
 
@@ -6606,11 +7079,20 @@ export async function createOcctKernel(
       : capturedAttestedRuntime.wasmBinary;
   const moduleFactory =
     capturedAttestedRuntime?.moduleFactory ?? moduleFactoryInput;
+  const tessellationInput: unknown = options.tessellation;
+  if (
+    tessellationInput !== undefined &&
+    (typeof tessellationInput !== "object" || tessellationInput === null)
+  ) {
+    throw new TypeError("OCCT tessellation must be an object");
+  }
+  // Capture each field once from own data; the frozen snapshot holds exactly
+  // the validated values that the kernel later uses.
   const tessellation =
-    options.tessellation === undefined
+    tessellationInput === undefined
       ? undefined
-      : Object.freeze({ ...options.tessellation });
-  const modelingTolerance = options.modelingTolerance;
+      : occtMeshOptions(tessellationInput, "OCCT tessellation");
+  const modelingTolerance = occtModelingTolerance(options.modelingTolerance);
   const onOutput = options.onOutput;
   const onError = options.onError;
   const maxExactBooleanHistoryRecords = exactBooleanHistoryRecordLimit(

@@ -195,6 +195,11 @@ import {
   retainEvaluatedImportedBody,
 } from "./internal/imported-body-runtime.js";
 import {
+  markAutomaticStepExportContext,
+  resolveAutomaticStepTexts,
+  stepTextUtf8LengthUpTo,
+} from "./internal/step-export-defaults.js";
+import {
   DOCUMENT_V7_RUNTIME_INTEGRITY_MESSAGE,
   documentV7RuntimeIntrinsicsAreIntact,
   throwDocumentV7RuntimeIntegrityError,
@@ -1708,14 +1713,30 @@ function evaluatedStepExportContext(
       productDescription: "",
     };
   const overrides = options?.metadata;
-  const fileName =
-    overrides?.fileName ?? evaluationOwnerDocumentName(owner);
   const timestamp =
     overrides?.timestamp ?? DEFAULT_KERNEL_STEP_EXPORT_TIMESTAMP;
-  const productId = overrides?.productId ?? identity.productId;
-  const productName = overrides?.productName ?? identity.productName;
-  const productDescription =
-    overrides?.productDescription ?? identity.productDescription;
+  // Explicit caller text is validated strictly below. Defaults derived from
+  // authored document text go through a total mapping first, so a valid
+  // document never fails a plain export on its own names or descriptions.
+  const [fileName, productId, productName, productDescription] =
+    resolveAutomaticStepTexts(
+      [
+        overrides?.fileName,
+        overrides?.productId,
+        overrides?.productName,
+        overrides?.productDescription,
+      ],
+      [
+        evaluationOwnerDocumentName(owner),
+        identity.productId,
+        identity.productName,
+        identity.productDescription,
+      ],
+      [true, true, true, false],
+      maxMetadataBytes -
+        stepTextUtf8LengthUpTo(timestamp, maxMetadataBytes),
+      maxMetadataBytes,
+    ) as [string, string, string, string];
   let remainingMetadataBytes = maxMetadataBytes;
   remainingMetadataBytes = validateStepExportMetadataString(
     fileName,
@@ -1831,6 +1852,81 @@ function evaluatedWeakExportContext(
   return freezeEvaluationOwnerRecord(
     context,
   ) as KernelShapeExportContext;
+}
+
+function evaluationOwnerOwnData(value: object, key: PropertyKey): unknown {
+  const descriptor = evaluationOwnerReflectApply(
+    evaluationOwnerObjectGetOwnPropertyDescriptor,
+    Object,
+    [value, key],
+  ) as PropertyDescriptor | undefined;
+  return descriptor !== undefined &&
+    (evaluationOwnerReflectApply(
+      evaluationOwnerObjectHasOwn,
+      Object,
+      [descriptor, "value"],
+    ) as boolean)
+    ? descriptor.value
+    : undefined;
+}
+
+/**
+ * Recognizes a kernel's refusal to write one shape as a single deterministic
+ * STEP product: `CadError` `EXPORT_UNSUPPORTED` with
+ * `details.reason === "multiple-products"`. Inspection never throws.
+ */
+function isStepMultipleProductsRefusal(error: unknown): boolean {
+  try {
+    if (!(error instanceof CadError)) return false;
+    const diagnostics = evaluationOwnerOwnData(error, "diagnostics");
+    if (
+      !(evaluationOwnerReflectApply(
+        evaluationOwnerArrayIsArray,
+        Array,
+        [diagnostics],
+      ) as boolean)
+    ) {
+      return false;
+    }
+    const first = evaluationOwnerOwnData(diagnostics as object, 0);
+    if (typeof first !== "object" || first === null) return false;
+    const details = evaluationOwnerOwnData(first, "details");
+    return (
+      evaluationOwnerOwnData(first, "code") === "EXPORT_UNSUPPORTED" &&
+      typeof details === "object" &&
+      details !== null &&
+      evaluationOwnerOwnData(details, "reason") === "multiple-products"
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Runs one native export. A plain `export("step")` binds deterministic
+ * defaults on a supporting kernel; when that kernel can write the shape only
+ * as several STEP products (a disjoint union, a split subtraction) and the
+ * caller passed no options, the export keeps the weak native exchange
+ * instead of failing, as published 0.1.1 did. Explicit options never fall
+ * back. Kernels in this package recognize the marked context and return the
+ * weak bytes from their first native write; other kernels that refuse are
+ * retried once without `stepExport`.
+ */
+function exportWithAutomaticStepFallback<T>(
+  invoke: (context: KernelShapeExportContext) => T,
+  context: KernelShapeExportContext,
+  automaticStepName: string | undefined,
+  assertLive: () => void,
+): T {
+  if (automaticStepName === undefined) return invoke(context);
+  markAutomaticStepExportContext(context);
+  try {
+    return invoke(context);
+  } catch (error) {
+    if (!isStepMultipleProductsRefusal(error)) throw error;
+  }
+  assertLive();
+  return invoke(evaluatedWeakExportContext(automaticStepName));
 }
 
 export class EvaluatedSolid {
@@ -1954,9 +2050,17 @@ export class EvaluatedSolid {
         : undefined;
     this.owner.assertLive();
     assertCapturedStepExportSignalReady(capturedOptions);
-    return this.owner.kernel.exportShape(
-      this.shape,
-      format,
+    const kernel = this.owner.kernel;
+    const exportShape = kernel.exportShape as NonNullable<
+      GeometryKernel["exportShape"]
+    >;
+    return exportWithAutomaticStepFallback(
+      (context) =>
+        evaluationOwnerReflectApply(exportShape, kernel, [
+          this.shape,
+          format,
+          context,
+        ]) as Uint8Array,
       stepMetadataLimit !== undefined
         ? evaluatedStepExportContext(
             this,
@@ -1966,6 +2070,10 @@ export class EvaluatedSolid {
             capturedOptions,
           )
         : evaluatedWeakExportContext(this.name),
+      stepMetadataLimit !== undefined && capturedOptions === undefined
+        ? this.name
+        : undefined,
+      () => this.owner.assertLive(),
     );
   }
 }

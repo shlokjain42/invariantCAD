@@ -28,10 +28,16 @@ a single unplaced occurrence reports the same area, bounds, and tolerance as
 its part; see
 [assembly aggregation](/analysis/measurements#assembly-aggregation). Volume and
 inertia normally come from the same native shape; the documented validated
-analytic volume-override path for admitted sweep and revolve cases replaces the
-volume and rescales density-one inertia. Genus is currently `null`, not zero:
-the stock and owned facades do not expose the degenerate-edge predicate needed
-to evaluate the B-Rep Euler formula correctly for spheres, cones, seams, holes,
+analytic volume-override path for admitted circular-arc and composite sweep
+results, and for transforms of those results, replaces the volume and rescales
+density-one inertia. Revolve and other features use the native volume. A
+compound that repeats the same solid occurrence counts it once per occurrence
+in volume, inertia, and surface area alike, matching `classifyBodyResult()`.
+Measuring a compound shares that classifier's bound of 1,000,000 visited plus
+queued occurrences; a larger compound fails with `RangeError` and every
+traversal handle is released. Genus is currently `null`, not zero: the stock
+and owned facades do not expose the degenerate-edge predicate needed to
+evaluate the B-Rep Euler formula correctly for spheres, cones, seams, holes,
 and disconnected shells.
 
 ## Load a WASM source explicitly
@@ -47,6 +53,18 @@ const kernel = await createOcctKernel({
 Bytes are copied where required so caller mutation cannot change an in-flight
 module initialization.
 
+An explicit source changes runtime identity, not only asset location. Unless
+the loaded module exposes the owned facade ABI, the kernel omits the
+persistent topology signature declaration (`capabilities.topology.signatures`
+and `signatureProfiles`), even for the identical stock bytes. Documents that
+store persistent topology references then fail with
+`KERNEL_CAPABILITY_MISSING` for capability `persistent-topology-signatures`,
+although the `mechanical-exact` preflight still passes. Supplying `wasm` or
+`moduleFactory` also omits the deterministic STEP envelope described under
+[Exact exchange](#exact-exchange). Prefer the zero-override
+`createOcctKernel()` call when the bundler can place `occt-wasm.wasm` next to
+its JavaScript glue.
+
 ## Tessellation and tolerance
 
 ```ts
@@ -61,6 +79,23 @@ const kernel = await createOcctKernel({
 ```
 
 Modeling tolerance is part of topology fingerprints and feature validation.
+It is a length in model units and must be a finite number greater than zero;
+the default is `1e-7`. `createOcctKernel()` rejects any other value before it
+loads WebAssembly, with `TypeError` for a non-number and `RangeError` for NaN,
+zero, a negative value, or infinity. Tessellation deflections must likewise be
+finite and positive, and `relative` must be a boolean. The kernel checks the
+creation-time defaults and every per-call `mesh()` override before native
+meshing starts. It reads each tessellation field once from an own data
+property: an accessor or a field inherited from a caller-defined prototype
+fails with `TypeError`, and `Object.prototype` entries are ignored.
+
+The tolerance applies only to lengths. It never relaxes dimensionless values:
+a transform scale is treated as uniform only when its three factors agree to
+within floating-point rounding, and any other factors use the exact affine
+map. Exact extrusion requires a twist of exactly `0` and a top scale of exactly
+`[1, 1]`; any other value fails with `KERNEL_ERROR` instead of producing a
+straight prism.
+
 Tessellation options affect `mesh()` and mesh exports, not the underlying B-Rep.
 Do not change tolerances merely to force an invalid model through a check.
 
@@ -184,13 +219,24 @@ contract exists.
 
 At the evaluated-output boundary,
 `output.export("step", { metadata?, signal?, maxOutputBytes? })` supplies a
-complete resolved metadata request to a supporting kernel. The qualified
-bundled stock runtime writes one AP214IS product, then a purpose-built
-structural Part 21 transformer
+complete resolved metadata request to a supporting kernel. For a single solid
+or part, the qualified bundled stock runtime writes one AP214IS product, then
+a purpose-built structural Part 21 transformer
 replaces only the relevant `FILE_NAME` and `PRODUCT` string tokens. It validates
 the exchange envelope, section structure, record arity, one-product
 assumption, exact EOF, metadata, entity count, scan work, and resulting byte
 size. It does not use a regular expression or reinterpret geometry.
+
+OCCT writes a shape that holds several disjoint solids, such as a union of
+separated boxes or a subtraction that splits its target, as an assembly with
+several `PRODUCT` records. That shape is outside the single-product contract.
+`output.export("step")` with no second argument then returns the weak native
+STEP bytes, as the published 0.1.1 package did. Passing any options object
+requests the strong contract and throws `CadError` with
+`EXPORT_UNSUPPORTED` and `details.reason === "multiple-products"`. A low-level
+`kernel.exportShape(shape, "step")` call without `context.stepExport` follows
+the same weak fallback; with `context.stepExport` it throws the same
+`CadError`.
 
 Default metadata uses the document name for `FILE_NAME`, the fixed
 `1970-01-01T00:00:00` timestamp, and the output alias for an ordinary solid's
@@ -200,8 +246,14 @@ timestamp is accepted only as a valid `YYYY-MM-DDTHH:MM:SS` calendar value and
 is deterministic because it is explicit input. Protocol v1 accepts Unicode
 scalar text in the four identity/description fields: apostrophes are doubled
 for STEP, while literal backslashes and non-ASCII scalars use ISO-10303-21
-`\X2\...\X0\` or `\X4\...\X0\` directives. Control characters and unpaired
-UTF-16 surrogates are rejected.
+`\X2\...\X0\` or `\X4\...\X0\` directives. Explicit caller metadata that
+contains control characters or unpaired UTF-16 surrogates is rejected.
+
+Defaults derived from authored text never make an export fail. In each
+defaulted field, control characters become spaces and unpaired surrogates
+become U+FFFD. An empty required field uses `InvariantCAD Shape`. When the
+resolved strings would exceed the metadata budget, the longest defaulted
+values are truncated at Unicode scalar boundaries until they fit.
 
 Material identity, configuration selection, arbitrary document metadata, and
 arbitrary part metadata are not representable through this current mapping.
@@ -220,7 +272,10 @@ Aggregate assembly and body-set exact STEP export remains unsupported.
 
 The 64 KiB metadata budget measures the five resolved strings as UTF-8.
 Part 21 escaping can expand Unicode or backslash text, and that expanded form
-counts toward the 64 MiB returned-output ceiling.
+counts toward the 64 MiB returned-output ceiling. Exceeding `maxOutputBytes`,
+the default output ceiling, or the fixed input, scan, or entity ceilings
+throws `CadError` with `RESOURCE_LIMIT_EXCEEDED`; `details.resource` names the
+ceiling and `details.limit` gives its value.
 
 The byte guarantee is deliberately narrow: identical bytes require the same
 backend shape representation, options, metadata, implementation, and exact

@@ -61,6 +61,19 @@ const kernel = await createOcctKernel({
 });
 ```
 
+<Warning>
+  An explicit `wasm` source is more than an asset-location change. Even when it
+  serves the unmodified stock `occt-wasm.wasm`, the kernel is no longer the
+  qualified zero-override stock runtime: it omits the persistent topology
+  signature declaration, so documents that store persistent topology
+  references fail with `KERNEL_CAPABILITY_MISSING`, and (in the unreleased 0.2
+  line) it omits the deterministic STEP envelope and keeps weak raw STEP
+  export. Prefer letting the bundler emit `occt-wasm.wasm` next to its
+  JavaScript glue so `createOcctKernel()` can run without overrides. See
+  [Choosing a geometry kernel](/evaluation/kernels) and
+  [OpenCascade backend](/evaluation/open-cascade).
+</Warning>
+
 `createOcctKernel` snapshots all caller-owned initialization options before its
 first asynchronous import. WASM `ArrayBuffer` and `Uint8Array` inputs are
 copied, including an exact typed-array view; a URL's href is captured with a
