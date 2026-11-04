@@ -19,9 +19,7 @@ models.
 
 ## Status vocabulary
 
-- **Published** means available in the public `invariantcad` 0.1.1 npm package.
-- **Unreleased** means implemented on the main branch after 0.1.1 but not yet
-  present in a public npm release.
+- **Published** means available in the public `invariantcad` 0.2.0 npm package.
 - **Repository-only** means source or evidence exists for development, but the
   capability is deliberately inaccessible to package consumers.
 - **Completed in** a release identifies a milestone whose outcomes shipped in
@@ -35,10 +33,10 @@ Capabilities are never inferred from a roadmap item. The
 [support matrix](/reference/support-matrix) and runtime capability reports are
 the authority for usable behavior.
 
-The Document v7 product work described below is source-only staging for 0.2,
-except the frozen imported-body subset that the unreleased 0.2 imported-body
-workflow reads and writes. None of it is available in the public 0.1.1 package
-unless a later roadmap entry explicitly marks it published.
+The Document v7 product work described below is source-only staging, except
+the frozen imported-body subset that the 0.2.0 imported-body workflow reads and
+writes. None of the rest is available in the public 0.2.0 package unless a
+later roadmap entry explicitly marks it published.
 
 ## Current baseline
 
@@ -100,9 +98,9 @@ The foundation-hardening release added:
 The owned runtime still requires the caller to provide reviewed runtime files.
 The repository does not silently download or distribute that bundle.
 
-### Unreleased for 0.2
+### Published in 0.2.0
 
-- The bundled zero-override stock OCCT runtime now advertises a versioned
+- The bundled zero-override stock OCCT runtime advertises a versioned
   deterministic single-product AP214IS STEP contract. It supplies closed
   document/output/part identity defaults, explicit Unicode metadata,
   caller cancellation and output ceilings, authored-metadata and structural
@@ -113,7 +111,7 @@ The repository does not silently download or distribute that bundle.
   does not claim geometric canonicalization, imported-file canonicalization,
   exact aggregate STEP, bounded native peak allocation, or a portable
   artifact/cache format.
-- A public opaque single-imported-body workflow now captures a caller-supplied
+- A public opaque single-imported-body workflow captures a caller-supplied
   SHA-256 and byte-length commitment, canonically persists only the strict
   one-resource/one-imported-body/one-output subset, resolves bytes through a
   caller callback, verifies the commitment, and requires the strong exact
@@ -132,10 +130,11 @@ The repository does not silently download or distribute that bundle.
   `hashDesignFeatures`, `analyzeDesignImpact`, and `Evaluator.evaluate` return
   `IR_INVALID` at `/`, and `stringifyDocument`, `hashDocument`, and
   `cloneDocument` throw `TypeError`.
-- `ShapeMeasurements.genus` is now `number | null`. A number is the exact sum
-  of connected-component genera, which Manifold advertises through a versioned
-  measurement capability. Stock and owned OCCT return `null` instead of the
-  0.1.1 heuristic, and assembly aggregates return `null` instead of `0`.
+- `ShapeMeasurements.genus` widened from `number` to `number | null`. A number
+  is the exact sum of connected-component genera, which Manifold advertises
+  through a versioned measurement capability. Stock and owned OCCT return
+  `null` instead of the 0.1.1 heuristic, and assembly aggregates return `null`
+  instead of `0`.
   Semantic-observation protocol v1 stays exact-genus only and therefore fails
   with `KERNEL_CAPABILITY_MISSING` on OCCT; explicit v2 observer, encoder,
   hash, witness, and codec-audit entry points in `invariantcad/conformance`
@@ -312,10 +311,10 @@ primitive/import/Boolean/transform DAGs, including generic solid and direct
 primitive outputs through the staged authoring facade. The internal mixed
 evaluator can select an already-admitted direct solid output, but that does not
 add a public or facade-authored output kind. These are correctness-tested source
-inputs staged for 0.2, not public 0.1.1 authoring or evaluation capabilities.
-`evaluateProductDocument(...)` has no package-root, package-subpath, or CLI
-export in `invariantcad@0.1.1`; the public document alias and migration target
-remain v6.
+inputs staged in the repository, not public 0.2.0 authoring or evaluation
+capabilities. `evaluateProductDocument(...)` has no package-root,
+package-subpath, or CLI export in `invariantcad@0.2.0`; the public document
+alias and migration target remain v6.
 
 The staged v7 text parser rejects duplicate decoded JSON object members,
 including escape-equivalent names, and applies structural and nesting ceilings
@@ -394,7 +393,7 @@ measurable product program.
   named configurations, suppression, material overrides, and BOMs; document
   migration, canonicalization, parsing, and hashing; exact persistent-topology
   capture, resolution, and explanation; and structured document-limit
-  diagnostics. Unreleased 0.2 extends the matrix to eight modules with a
+  diagnostics. 0.2.0 extends the matrix to eight modules with a
   verified imported-body round trip (content commitment, caller-supplied
   resource resolution, canonical persistence, and exact STEP round trip) and an
   exact composite line/arc route sweep. Other feature-level snippets remain
@@ -462,13 +461,13 @@ cleanup. Real stock-OCCT evidence resolves a committed child document and its
 scoped STEP body, evaluates an imported/Boolean fixed subassembly, retains
 exact leaf topology and STEP export, produces a placed aggregate mesh/STL view,
 and restores the native ownership baseline. The milestone remains in progress
-because all of this Document v7 evidence is source-only staging for 0.2. Only
-the single-imported-body slice becomes public in 0.2, through the unreleased
-imported-body workflow and its frozen Document v7 subset. The evidence does not
-yet cover public v7 promotion, multi-level external-document graphs or
-scalable recursive component libraries, datum-backed modeling, other
-body-consuming operations, or the wider shape algebra; none of it is part of
-public 0.1.1.
+because all of this Document v7 evidence is source-only staging. Only the
+single-imported-body slice became public in 0.2.0, through the imported-body
+workflow and its frozen Document v7 subset. The evidence does not yet cover
+public v7 promotion, multi-level external-document graphs or scalable
+recursive component libraries, datum-backed modeling, other body-consuming
+operations, or the wider shape algebra; apart from that slice, none of it is
+part of public 0.2.0.
 
 ## Milestone 2 — everyday part modeling
 

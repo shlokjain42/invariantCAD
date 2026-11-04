@@ -108,7 +108,7 @@ geometry. Shared definitions still contribute once per unsuppressed occurrence.
 
 ## Current boundary
 
-Assemblies in 0.1 use fixed authored placements. There is no mate/joint solver,
+Assemblies in 0.2 use fixed authored placements. There is no mate/joint solver,
 degrees-of-freedom analysis, motion study, contact, or interference engine yet.
 Those are planned as separate protocols rather than hidden behavior inside
 fixed transforms.
@@ -128,7 +128,7 @@ assembly output. Neither handle publishes a local feature node. Staged
 assemblies can be published as product outputs and selected through
 `evaluateProductAssemblyOutputsV7(...)`; the historical local evaluator/result
 names remain source aliases during staging. This entire capability is
-repository-only work for 0.2. It is not available from the public 0.1.1 package
+repository-only work. It is not available from the public 0.2.0 package
 root, a package subpath, the public evaluator, or the CLI.
 
 Evaluation expands the active root-local graph iteratively. A direct external

@@ -19,7 +19,7 @@ and deployment needs.
 | STEP/BREP | No | Yes | Yes |
 | Exact topology snapshot | No | Yes | Yes |
 | Genus | Exact per connected mesh component | Unsupported (`null`) | Unsupported (`null`) |
-| Body-result classification (unreleased 0.2) | Positive-volume connected components of the approximate mesh | Exact compound/compsolid solid occurrences | Same exact traversal as stock OCCT |
+| Body-result classification | Positive-volume connected components of the approximate mesh | Exact compound/compsolid solid occurrences | Same exact traversal as stock OCCT |
 | Draft | No | No | Yes, bounded ABI contract |
 | Complete exact feature evolution | No | Partial | Selected Boolean/treatment/offset feature slices |
 | Browser release test | Chromium | Chromium | Repository/local conformance only |
@@ -45,9 +45,8 @@ Choose stock OCCT for analytic B-Rep geometry, topology snapshots, exact bounded
 lofts/sweeps, fillets/chamfers/shells/offsets, and STEP/BREP exchange. Stock
 history for several complex features remains partial.
 
-The following own-data rule is implemented for the unreleased 0.2 line, not
-the current 0.1.1 npm package, which reads these fields through ordinary
-property access.
+The following own-data rule applies since 0.2.0; the 0.1.1 package read these
+fields through ordinary property access.
 The OCCT kernel reads `context.signal`, `context.feature`,
 `context.tolerance`, and every low-level STEP export option from own data
 properties only. An accessor-backed field, or one supplied by a
@@ -85,7 +84,7 @@ loads the identical stock `occt-wasm.wasm` bytes. It omits the persistent
 topology signature declaration (`capabilities.topology.signatures` and
 `signatureProfiles`), so evaluating a document that stores a persistent
 topology reference fails with `KERNEL_CAPABILITY_MISSING` for capability
-`persistent-topology-signatures`. In the unreleased 0.2 line it also omits the
+`persistent-topology-signatures`. It also omits the
 deterministic `stepExport` envelope and keeps weak raw STEP export. The
 `mechanical-exact` preflight still passes, because it does not require
 signatures. Prefer letting the bundler place `occt-wasm.wasm` next to its
@@ -131,8 +130,7 @@ behavior merely by defining an unadvertised method.
 Use `inspectKernelMeasurementCapabilities(...)` or
 `kernelSupports(capabilities, "measurement", "genus")` for discovery. A numeric
 measurement is exact for the backend representation; `null` means unsupported.
-The following strong STEP envelope is implemented for the unreleased 0.2 line,
-not the current 0.1.1 npm package.
+The following strong STEP envelope was added in 0.2.0 and is not in 0.1.1.
 Use `inspectKernelStepExportCapabilities(...)` for the optional strong STEP
 envelope. `nativeExports` containing `"step"` promises only that bytes can be
 written. Calling `output.export("step")` without a second argument remains
@@ -159,7 +157,7 @@ uses fatal UTF-8 for text BREP, and releases provisional native handles on
 failure or cancellation. It does not claim healing, assembly import, stable
 feature lineage, or containment of an untrusted native parser.
 
-The unreleased public `ImportedBodyDocument` workflow composes this kernel
+The public `ImportedBodyDocument` workflow composes this kernel
 contract with a caller-supplied SHA-256/byte-length commitment and resolver.
 It accepts only STEP + `model/step` + file units, text BREP + `text/plain` +
 declared units, or binary BREP + `application/octet-stream` + declared units.
@@ -171,8 +169,7 @@ resolution or commitment verification fails and never falls back to
 ## Body-result classification
 
 <Note>
-  Body-result classification is implemented for the unreleased 0.2 line, not
-  the current 0.1.1 npm package.
+  Body-result classification was added in 0.2.0 and is not in 0.1.1.
 </Note>
 
 Protocol v1 is an optional kernel capability. A kernel that advertises

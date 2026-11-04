@@ -12,8 +12,8 @@ Public site: <https://invariant-cad.mintlify.site>
 - [Quickstart](get-started/quickstart.mdx)
 - [Core concepts](get-started/core-concepts.mdx)
 - [Product scope](project/product-scope.mdx)
-- [0.1 support matrix](reference/support-matrix.mdx)
-- [Complete single-page 0.1 guide](reference/complete-guide.md)
+- [0.2 support matrix](reference/support-matrix.mdx)
+- [Complete single-page guide](reference/complete-guide.md)
 - [Release process](releasing.md)
 
 ## Site structure

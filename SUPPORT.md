@@ -7,7 +7,7 @@ particular model, kernel, or deployment will be supported.
 
 ## Supported releases
 
-The current `0.1.x` release line receives security and correctness fixes. The
+The current `0.2.x` release line receives security and correctness fixes. The
 `main` branch contains active development and may include behavior that has not
 been released to npm.
 

@@ -58,7 +58,7 @@ See the [evaluator guide](/evaluation/evaluator) for option semantics.
 | `export("stl")` | `Uint8Array` | Binary STL; the header holds the output name (see [exporters](/reference/public-surface#exporters)) |
 | `export("stl-ascii")` | `string` | ASCII STL |
 | `export("obj")` | `string` | Wavefront OBJ |
-| `export("step", options?)` | `Uint8Array` | No-options weak native export is published; deterministic options are an unreleased 0.2 strong contract |
+| `export("step", options?)` | `Uint8Array` | No-options weak native export shipped in 0.1.1; deterministic options are a 0.2.0 strong contract |
 | `export("brep")` | `Uint8Array` | Requires native text BREP export |
 | `export("brep-binary")` | `Uint8Array` | Requires native binary BREP export |
 
@@ -91,8 +91,7 @@ from an explicitly retained single solid or part leaf.
 ## EvaluatedImportedBody
 
 <Note>
-  This public result is implemented for the unreleased 0.2 line and is not in
-  the current `invariantcad@0.1.1` npm package.
+  This public result was added in 0.2.0 and is not in `invariantcad@0.1.1`.
 </Note>
 
 ```ts
@@ -152,8 +151,8 @@ Datums are selected separately by node ID and are never design outputs. The
 built `DesignDocumentV7` is detached, deeply frozen, and accepted by strict v7
 parsing and semantic validation; `build({ limits })` can apply partial
 `DesignDocumentLimits` overrides and raises a `CadError` rather than returning
-an invalid document. This is repository-only work staged for 0.2. The facade is
-not a root or package-subpath export and does not change the public 0.1.1 v6
+an invalid document. This is repository-only staged work. The facade is
+not a root or package-subpath export and does not change the public 0.2.0 v6
 builder or evaluator types.
 
 ### Mixed product-document outputs
@@ -214,8 +213,8 @@ recursive external-product graphs, or active second-level external-document
 boundaries. It also does not enable a cross-run evaluator cache.
 
 `evaluateProductDocument`, `EvaluatedProductDocumentV7`, and their supporting
-types are repository-staged implementation for 0.2. They are not exported by
-the public `invariantcad@0.1.1` package root or a package subpath, are not
+types are repository-staged implementation. They are not exported by
+the public `invariantcad@0.2.0` package root or a package subpath, are not
 available through the CLI, and do not promote Document v7, change the public
 v6 `DesignDocument`/`EvaluatedOutput` aliases, or add a migration target.
 
@@ -567,10 +566,10 @@ location I/O, Boolean or transform inputs that are body sets/parts/assemblies,
 other body-consuming operations, and generic solid outputs remain unsupported.
 The slice adds no mates, joints, degrees-of-freedom solving, motion, contact,
 interference, collision, assembly-wide topology, aggregate geometric
-`measure()`, exact aggregate STEP/BREP, or cross-run cache. This work is staged
-for 0.2 and does not widen the public 0.1.1 package-root `EvaluatedOutput` union,
-document alias, builder, evaluator, CLI, or migration target; those remain on
-the frozen v6 surface.
+`measure()`, exact aggregate STEP/BREP, or cross-run cache. This work is
+repository-staged and does not widen the public 0.2.0 package-root
+`EvaluatedOutput` union, document alias, builder, evaluator, CLI, or migration
+target; those remain on the frozen v6 surface.
 
 ## Lifetime
 
@@ -592,10 +591,10 @@ Most evaluation failures return diagnostics. Direct `output(name)` misuse,
 post-disposal access, and unsupported direct `export()` formats throw. An
 unsupported export uses `CadError`, which carries its structured diagnostics.
 Invalid high-level STEP option structure or explicit metadata likewise throws
-`CadError` with the unreleased 0.2 `EXPORT_OPTIONS_INVALID` code; its
+`CadError` with the `EXPORT_OPTIONS_INVALID` code; its
 JSON-Pointer `path` is relative to `StepExportOptions`, not the design
 document. Metadata defaults derived from the document never fail validation.
-In the unreleased 0.2 line, a STEP request with options for an output the
+A STEP request with options for an output the
 kernel can write only as several products throws `CadError` with
 `EXPORT_UNSUPPORTED` and `details.reason === "multiple-products"`; without
 options the export falls back to weak native bytes. On the stock OCCT kernel,

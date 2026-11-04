@@ -20,7 +20,7 @@ const yz = plane.yz();
 const xz = plane.xz();
 ```
 
-Document 0.1 supports the three principal plane orientations with an optional
+InvariantCAD 0.2 supports the three principal plane orientations with an optional
 parameterized origin.
 
 ## A profile with holes
@@ -107,7 +107,7 @@ const profile = cad.sketch("constrained-profile", plane.xy(), (sketch) => {
 | Curves | radius, diameter, line-circle tangent |
 
 The built-in solver is a permissively licensed reference implementation for
-0.1. It is replaceable through the sketch-solver protocol. Industrial conflict
+0.2. It is replaceable through the sketch-solver protocol. Industrial conflict
 isolation, redundant-constraint explanations, drag solving, and large sparse
 systems remain roadmap items.
 
