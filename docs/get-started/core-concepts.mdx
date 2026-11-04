@@ -34,7 +34,9 @@ schema keys: descriptive, stable, and unique within their namespace.
 
 - plain JSON-compatible data
 - deeply frozen after authoring or parsing
-- validated against size, depth, expression, graph, and reference limits
+- checked against the document grammar as each builder method is called, and
+  validated against size, depth, expression, graph, and reference limits when
+  it is parsed or evaluated
 - independent of a geometry backend
 - explicit about its schema URI and protocol version
 

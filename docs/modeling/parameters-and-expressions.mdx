@@ -55,10 +55,15 @@ const positiveOffset = clearance.abs();
 - `mul` and `div` accept a scalar expression or finite number.
 - `neg` and `abs` preserve the dimension.
 - `expr.min`, `expr.max`, and trigonometric helpers construct additional
-  serializable operations.
+  serializable operations. `expr.min` and `expr.max` require one dimension,
+  `expr.sin`, `expr.cos`, and `expr.tan` take an angle and return a scalar,
+  and `expr.ratio` divides two values of the same dimension into a scalar.
 
-TypeScript prevents many dimension mistakes, while runtime validation protects
-documents received from untyped or hostile sources.
+TypeScript prevents many dimension mistakes at compile time. The same rules are
+also checked at runtime: arithmetic, the vector helpers, and every builder
+input throw `TypeError` for a wrong-dimensional expression from an untyped
+caller. Document validation applies them again to documents received from
+untyped or hostile sources.
 
 ## Vectors
 
@@ -116,15 +121,25 @@ configuration context. See [configurations and BOMs](/modeling/configurations-an
 ## Parameter ownership
 
 Parameters are bound to the `DesignBuilder` that created them. Cross-design use
-throws immediately:
+throws immediately, including inside derived expressions, vectors, transform
+operations, sketch entities, topology predicates, parameter defaults and
+bounds, densities, configuration values, and assembly placements:
 
 ```ts
 const first = design("first");
 const foreignWidth = first.parameter.length("width", mm(10));
 
 const second = design("second");
-// second.box(...foreignWidth...) is rejected during authoring.
+// second.box(...foreignWidth...) is rejected during authoring, even when
+// second defines its own "width" parameter.
 ```
 
 This restriction guarantees that every expression reference can be represented
-inside one closed document.
+inside one closed document. Raw expression IR passed through
+`fromExpressionIR` refers to parameters only by ID; the builder accepts it only
+when that ID names a parameter it already defines, with the same dimension.
+Raw IR must be plain JSON records and arrays whose fields are own enumerable
+data properties. Accessors, inherited fields, and class instances throw
+`TypeError` without running any accessor. A record may hold no symbol or
+non-enumerable fields, and a `min` or `max` value array may hold nothing but
+its operands, because the freeze would not reach such extra data.

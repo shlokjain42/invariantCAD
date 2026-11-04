@@ -117,15 +117,22 @@ input, not its total size.
 These are programmer mistakes and throw immediately:
 
 - duplicate IDs
-- cross-design references
+- cross-design references, including parameters inside expressions
+- wrong-dimensional expressions
 - a face selection passed to a fillet
 - an empty Boolean tool array
 - a configuration with no overrides
-- non-positive tolerances
+- non-positive or non-finite numeric sketch and path tolerances
+- `segments` or `divisions` values outside the document grammar
 - unsupported literal authoring option values
 
 Catch them at application input boundaries if users directly drive a builder.
 Do not catch and ignore them inside a model definition.
+
+Expression values are resolved only during evaluation, so an expression-valued
+tolerance (shell, offset, or topology predicate), a zero direction vector, or a
+negative radius is reported as a diagnostic, such as
+`TOPOLOGY_SELECTOR_INVALID`, instead of being thrown while authoring.
 
 For the unreleased public imported-body workflow, invalid caller definitions
 and unsafe source descriptors return `IMPORT_SOURCE_INVALID`; invalid

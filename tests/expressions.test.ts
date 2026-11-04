@@ -1,0 +1,557 @@
+import { runInNewContext } from "node:vm";
+import { describe, expect, it } from "vitest";
+import {
+  Expression,
+  angleVec3,
+  cm,
+  deg,
+  evaluateExpression,
+  expr,
+  expressionDependencies,
+  fromExpressionIR,
+  gramsPerCubicCentimeter,
+  inch,
+  kgPerCubicMeter,
+  kgPerCubicMillimeter,
+  meters,
+  mm,
+  rad,
+  scalar,
+  scalarVec3,
+  vec2,
+  vec3,
+  type ExpressionContext,
+  type ExpressionIR,
+} from "../src/index.js";
+import {
+  EXPRESSION_IR_MAX_WORK,
+  assertExpressionIRWithin,
+} from "../src/expressions.js";
+
+const noParameters: ExpressionContext = {
+  resolveParameter(id) {
+    throw new Error(`Unexpected parameter '${id}'`);
+  },
+};
+
+function evaluate(
+  value: { readonly ir: ExpressionIR },
+  parameters: Readonly<Record<string, number>> = {},
+): number {
+  return evaluateExpression(value.ir, {
+    resolveParameter(id) {
+      const resolved = parameters[id];
+      if (resolved === undefined) throw new Error(`Missing parameter '${id}'`);
+      return resolved;
+    },
+  });
+}
+
+function literalValue(value: { readonly ir: ExpressionIR }): number {
+  if (value.ir.op !== "literal") throw new Error("Expected a literal");
+  return value.ir.value;
+}
+
+const parameterIR = (
+  id: string,
+  dimension: ExpressionIR["dimension"],
+): ExpressionIR => ({ op: "parameter", id: id as never, dimension });
+
+describe("unit helpers", () => {
+  it("converts lengths, angles, and densities to document base units", () => {
+    expect(literalValue(mm(12.5))).toBe(12.5);
+    expect(literalValue(cm(2.54))).toBeCloseTo(25.4, 12);
+    expect(literalValue(meters(0.1))).toBeCloseTo(100, 12);
+    expect(literalValue(inch(1))).toBeCloseTo(25.4, 12);
+    expect(literalValue(cm(2.54))).toBeCloseTo(literalValue(inch(1)), 12);
+    expect(literalValue(rad(1.25))).toBe(1.25);
+    expect(literalValue(deg(180))).toBeCloseTo(Math.PI, 15);
+    expect(literalValue(scalar(3))).toBe(3);
+    expect(literalValue(kgPerCubicMillimeter(2.7e-6))).toBe(2.7e-6);
+    expect(literalValue(kgPerCubicMeter(2700))).toBeCloseTo(2.7e-6, 18);
+    expect(literalValue(gramsPerCubicCentimeter(2.7))).toBeCloseTo(2.7e-6, 18);
+    for (const value of [
+      cm(1),
+      meters(1),
+      inch(1),
+    ]) {
+      expect(value.dimension).toBe("length");
+    }
+    expect(deg(1).dimension).toBe("angle");
+    expect(gramsPerCubicCentimeter(1).dimension).toBe("massDensity");
+    expect(kgPerCubicMeter(1).dimension).toBe("massDensity");
+  });
+
+  it("rejects non-finite literals", () => {
+    expect(() => mm(Number.NaN)).toThrow(TypeError);
+    expect(() => cm(Number.POSITIVE_INFINITY)).toThrow(TypeError);
+    expect(() => deg(Number.NEGATIVE_INFINITY)).toThrow(TypeError);
+    expect(() => scalar(Number.NaN)).toThrow(TypeError);
+  });
+});
+
+describe("expression operations", () => {
+  it("evaluates arithmetic, min, max, trigonometry, and ratios", () => {
+    const width = mm(30);
+    expect(evaluate(width.add(mm(5)))).toBe(35);
+    expect(evaluate(width.sub(mm(5)))).toBe(25);
+    expect(evaluate(width.mul(2))).toBe(60);
+    expect(evaluate(width.mul(scalar(0.5)))).toBe(15);
+    expect(evaluate(width.div(4))).toBe(7.5);
+    expect(evaluate(width.neg())).toBe(-30);
+    expect(evaluate(mm(-3).abs())).toBe(3);
+    expect(evaluate(expr.add(mm(1), mm(2)))).toBe(3);
+    expect(evaluate(expr.sub(mm(1), mm(2)))).toBe(-1);
+    expect(evaluate(expr.mul(mm(2), 3))).toBe(6);
+    expect(evaluate(expr.div(mm(9), 3))).toBe(3);
+    expect(evaluate(expr.neg(mm(2)))).toBe(-2);
+    expect(evaluate(expr.abs(mm(-2)))).toBe(2);
+    expect(evaluate(expr.min(mm(4), mm(-2), mm(7)))).toBe(-2);
+    expect(evaluate(expr.max(mm(4), mm(-2), mm(7)))).toBe(7);
+    expect(evaluate(expr.min(mm(4)))).toBe(4);
+    expect(evaluate(expr.sin(deg(30)))).toBeCloseTo(0.5, 15);
+    expect(evaluate(expr.cos(deg(60)))).toBeCloseTo(0.5, 15);
+    expect(evaluate(expr.tan(deg(45)))).toBeCloseTo(1, 15);
+    expect(evaluate(expr.ratio(mm(30), mm(12)))).toBe(2.5);
+    expect(evaluate(expr.ratio(deg(90), deg(45)))).toBeCloseTo(2, 15);
+
+    expect(expr.sin(deg(30)).dimension).toBe("scalar");
+    expect(expr.ratio(mm(1), mm(2)).dimension).toBe("scalar");
+    expect(expr.min(deg(1), deg(2)).dimension).toBe("angle");
+    expect(expr.max(scalar(1), scalar(2)).ir).toEqual({
+      op: "max",
+      dimension: "scalar",
+      values: [scalar(1).ir, scalar(2).ir],
+    });
+    expect(() => expr.min()).toThrow(TypeError);
+    expect(() => expr.max()).toThrow(TypeError);
+  });
+
+  it("resolves parameters with their expected dimension", () => {
+    const seen: string[] = [];
+    const result = evaluateExpression(
+      {
+        op: "add",
+        dimension: "length",
+        left: parameterIR("width", "length"),
+        right: {
+          op: "mul",
+          dimension: "length",
+          left: parameterIR("wall", "length"),
+          right: parameterIR("count", "scalar"),
+        },
+      },
+      {
+        resolveParameter(id, dimension) {
+          seen.push(`${id}:${dimension}`);
+          return id === "width" ? 10 : id === "wall" ? 2 : 3;
+        },
+      },
+    );
+    expect(result).toBe(16);
+    expect(seen).toEqual(["width:length", "wall:length", "count:scalar"]);
+  });
+
+  it("reports division by zero and non-finite results", () => {
+    expect(() => evaluate(mm(1).div(0))).toThrow(/Division by zero/);
+    expect(() => evaluate(expr.ratio(mm(1), mm(0)))).toThrow(/Division by zero/);
+    expect(() =>
+      evaluate(mm(Number.MAX_VALUE).add(mm(Number.MAX_VALUE))),
+    ).toThrow(/non-finite/);
+    expect(Object.is(evaluate(mm(0).neg()), 0)).toBe(true);
+  });
+
+  it("folds min and max over very many operands without argument spread", () => {
+    const count = 200_000;
+    const values = Array.from({ length: count }, (_, index) => ({
+      op: "literal" as const,
+      dimension: "length" as const,
+      value: index % 2 === 0 ? index : -index,
+    }));
+    expect(
+      evaluateExpression({ op: "max", dimension: "length", values }, noParameters),
+    ).toBe(count - 2);
+    expect(
+      evaluateExpression({ op: "min", dimension: "length", values }, noParameters),
+    ).toBe(-(count - 1));
+  });
+
+  it("lists every referenced parameter for every operation", () => {
+    const dependencies = (ir: ExpressionIR): string[] =>
+      [...expressionDependencies(ir)].sort();
+    expect(dependencies(mm(1).ir)).toEqual([]);
+    expect(dependencies(parameterIR("a", "length"))).toEqual(["a"]);
+    for (const op of ["neg", "abs"] as const) {
+      expect(
+        dependencies({ op, dimension: "length", value: parameterIR("a", "length") }),
+      ).toEqual(["a"]);
+    }
+    for (const op of ["sin", "cos", "tan"] as const) {
+      expect(
+        dependencies({ op, dimension: "scalar", value: parameterIR("t", "angle") }),
+      ).toEqual(["t"]);
+    }
+    for (const op of ["add", "sub"] as const) {
+      expect(
+        dependencies({
+          op,
+          dimension: "length",
+          left: parameterIR("a", "length"),
+          right: parameterIR("b", "length"),
+        }),
+      ).toEqual(["a", "b"]);
+    }
+    for (const op of ["mul", "div"] as const) {
+      expect(
+        dependencies({
+          op,
+          dimension: "length",
+          left: parameterIR("a", "length"),
+          right: parameterIR("k", "scalar"),
+        }),
+      ).toEqual(["a", "k"]);
+    }
+    for (const op of ["min", "max"] as const) {
+      expect(
+        dependencies({
+          op,
+          dimension: "length",
+          values: [
+            parameterIR("c", "length"),
+            mm(1).ir,
+            parameterIR("a", "length"),
+            parameterIR("c", "length"),
+          ],
+        }),
+      ).toEqual(["a", "c"]);
+    }
+    const accumulated = new Set<never>();
+    expressionDependencies(parameterIR("x", "scalar"), accumulated);
+    expressionDependencies(parameterIR("y", "scalar"), accumulated);
+    expect([...accumulated].sort()).toEqual(["x", "y"]);
+  });
+});
+
+describe("runtime expression dimensions", () => {
+  const untyped = (value: unknown): never => value as never;
+
+  it("rejects wrong-dimensional arithmetic from untyped callers", () => {
+    expect(() => mm(1).add(untyped(deg(1)))).toThrow(TypeError);
+    expect(() => mm(1).sub(untyped(scalar(1)))).toThrow(TypeError);
+    expect(() => mm(1).mul(untyped(mm(2)))).toThrow(TypeError);
+    expect(() => mm(1).div(untyped(deg(2)))).toThrow(TypeError);
+    expect(() => mm(1).add(untyped(1))).toThrow(TypeError);
+    expect(() => mm(1).mul(untyped("2"))).toThrow(TypeError);
+    expect(() => expr.min(mm(1), untyped(deg(1)))).toThrow(TypeError);
+    expect(() => expr.max(deg(1), untyped(mm(1)))).toThrow(TypeError);
+    expect(() => expr.sin(untyped(mm(1)))).toThrow(TypeError);
+    expect(() => expr.cos(untyped(scalar(1)))).toThrow(TypeError);
+    expect(() => expr.tan(untyped(mm(1)))).toThrow(TypeError);
+    expect(() => expr.ratio(mm(1), untyped(deg(1)))).toThrow(TypeError);
+    expect(() => vec2(mm(1), untyped(deg(1)))).toThrow(TypeError);
+    expect(() => vec3(mm(1), mm(1), untyped(scalar(1)))).toThrow(TypeError);
+    expect(() => angleVec3(deg(1), untyped(mm(1)), deg(1))).toThrow(TypeError);
+    expect(() => scalarVec3(1, untyped(mm(1)), 1)).toThrow(TypeError);
+  });
+
+  it("rejects malformed or inconsistent raw expression IR", () => {
+    const invalid: unknown[] = [
+      { op: "pow", dimension: "length", value: mm(1).ir },
+      { op: "literal", dimension: "length", value: Number.NaN },
+      { op: "literal", dimension: "length", value: "1" },
+      { op: "literal", dimension: "length", value: 1, extra: true },
+      { op: "parameter", dimension: "length", id: "not valid" },
+      { op: "add", dimension: "length", left: mm(1).ir, right: deg(1).ir },
+      { op: "mul", dimension: "length", left: mm(1).ir, right: mm(1).ir },
+      { op: "div", dimension: "length", left: mm(1).ir, right: mm(1).ir },
+      { op: "neg", dimension: "length", value: deg(1).ir },
+      { op: "sin", dimension: "length", value: deg(1).ir },
+      { op: "sin", dimension: "scalar", value: mm(1).ir },
+      { op: "min", dimension: "length", values: [] },
+      { op: "max", dimension: "length", values: [mm(1).ir, deg(1).ir] },
+      { op: "max", dimension: "length", values: mm(1).ir },
+      { op: "add", dimension: "length", left: mm(1).ir },
+    ];
+    for (const ir of invalid) {
+      expect(() => fromExpressionIR(ir as ExpressionIR, "length"), JSON.stringify(ir))
+        .toThrow(TypeError);
+    }
+
+    const cyclic: Record<string, unknown> = { op: "neg", dimension: "length" };
+    cyclic.value = cyclic;
+    expect(() => fromExpressionIR(cyclic as never, "length")).toThrow(/cycle/i);
+    expect(() => fromExpressionIR(mm(1).ir, "angle")).toThrow(TypeError);
+  });
+
+  it("reads raw IR only through own data properties of plain records", () => {
+    let reads = 0;
+    const counted = <T,>(value: T) => ({
+      enumerable: true,
+      get: () => {
+        reads += 1;
+        return value;
+      },
+    });
+    const accessorLiteral = Object.defineProperty(
+      { op: "literal", dimension: "length" },
+      "value",
+      counted(1),
+    );
+    const accessorDimension = Object.defineProperty(
+      { op: "literal", value: 1 },
+      "dimension",
+      counted("length"),
+    );
+    const accessorOperand = Object.defineProperty(
+      { op: "neg", dimension: "length" },
+      "value",
+      counted(mm(1).ir),
+    );
+    const accessorValues = {
+      op: "max",
+      dimension: "length",
+      values: Object.defineProperty([mm(1).ir], "0", counted(mm(2).ir)),
+    };
+    const hiddenValue = Object.defineProperty(
+      { op: "literal", dimension: "length" },
+      "value",
+      { value: 1, enumerable: false },
+    );
+    const inheritedValue = Object.assign(
+      Object.create({ value: 1 }) as object,
+      { op: "literal", dimension: "length" },
+    );
+    class LiteralNode {
+      readonly op = "literal";
+      readonly dimension = "length";
+      readonly value = 1;
+    }
+    class ValueList extends Array<unknown> {}
+    const subclassedValues = {
+      op: "max",
+      dimension: "length",
+      values: ValueList.from([mm(1).ir]),
+    };
+    for (const ir of [
+      accessorLiteral,
+      accessorDimension,
+      accessorOperand,
+      accessorValues,
+      hiddenValue,
+      inheritedValue,
+      new LiteralNode(),
+      { op: "neg", dimension: "length", value: new LiteralNode() },
+      subclassedValues,
+    ]) {
+      expect(() => fromExpressionIR(ir as never, "length")).toThrow(TypeError);
+    }
+    expect(reads).toBe(0);
+
+    // Builder inputs read an expression's dimension and IR the same way.
+    const accessorExpression = Object.defineProperty(
+      { dimension: "length" },
+      "ir",
+      counted(mm(1).ir),
+    );
+    expect(() => mm(1).add(accessorExpression as never)).toThrow(TypeError);
+    expect(() => vec3(mm(1), mm(1), accessorExpression as never)).toThrow(
+      TypeError,
+    );
+    const accessorDimensionExpression = Object.defineProperty(
+      { ir: mm(1).ir },
+      "dimension",
+      counted("length"),
+    );
+    expect(() => expr.ratio(accessorDimensionExpression as never, mm(1))).toThrow(
+      TypeError,
+    );
+    expect(() => expr.max(accessorDimensionExpression as never)).toThrow(
+      TypeError,
+    );
+    expect(reads).toBe(0);
+  });
+
+  it("rejects non-string operations and dimensions without converting them", () => {
+    let conversions = 0;
+    const convertible = {
+      toString: () => {
+        conversions += 1;
+        return "literal";
+      },
+      valueOf: () => {
+        conversions += 1;
+        return "literal";
+      },
+      [Symbol.toPrimitive]: () => {
+        conversions += 1;
+        return "literal";
+      },
+    };
+    expect(() =>
+      fromExpressionIR(
+        { op: convertible, dimension: "length", value: 1 } as never,
+        "length",
+      ),
+    ).toThrow("operation must be a string");
+    expect(() =>
+      fromExpressionIR(
+        { op: "sum", dimension: "length", value: 1 } as never,
+        "length",
+      ),
+    ).toThrow("unsupported operation 'sum'");
+    expect(() => new Expression(convertible as never, mm(1).ir)).toThrow(
+      "Expression dimension must be a string",
+    );
+    expect(() => new Expression("volume" as never, mm(1).ir)).toThrow(
+      "Unsupported expression dimension 'volume'",
+    );
+    expect(conversions).toBe(0);
+  });
+
+  it("leaves rejected non-plain IR roots unfrozen", () => {
+    class LiteralNode {
+      op = "literal";
+      dimension = "length";
+      value = 1;
+    }
+    const instance = new LiteralNode();
+    const map = new Map([["op", "literal"]]);
+    for (const ir of [instance, map]) {
+      expect(() => fromExpressionIR(ir as never, "length")).toThrow(
+        "expression nodes must be plain records",
+      );
+      expect(Object.isFrozen(ir)).toBe(false);
+    }
+  });
+
+  it("accepts plain raw IR records and arrays from another realm", () => {
+    const foreign = runInNewContext(`({
+      op: "max",
+      dimension: "length",
+      values: [
+        { op: "literal", dimension: "length", value: 2 },
+        { op: "literal", dimension: "length", value: 5 },
+      ],
+    })`) as ExpressionIR;
+    expect(Object.getPrototypeOf(foreign)).not.toBe(Object.prototype);
+    expect(evaluate(fromExpressionIR(foreign, "length"))).toBe(5);
+  });
+
+  it("accepts well-formed raw IR, including shared subtrees", () => {
+    const shared = parameterIR("a", "length");
+    const ir: ExpressionIR = {
+      op: "div",
+      dimension: "scalar",
+      left: { op: "max", dimension: "length", values: [shared, shared] },
+      right: shared,
+    };
+    const value = fromExpressionIR(ir, "scalar");
+    expect(value.ir).toBe(ir);
+    expect(evaluate(value, { a: 4 })).toBe(1);
+  });
+
+  it("counts every scheduled operand, shared or not, against the work ceiling", () => {
+    const sharedMax = (): object => {
+      const leaf = { op: "literal", dimension: "length", value: 1 };
+      return { op: "max", dimension: "length", values: [leaf, leaf, leaf, leaf] };
+    };
+    // One root, four scheduled operands, one distinct leaf: six units.
+    expect(() => assertExpressionIRWithin(sharedMax(), "IR", 6)).not.toThrow();
+    expect(() => assertExpressionIRWithin(sharedMax(), "IR", 5)).toThrow(
+      "IR is malformed: expression IR exceeds 5 nodes",
+    );
+  });
+
+  it("refuses an oversized min/max operand list before freezing or copying it", () => {
+    const leaf = { op: "literal", dimension: "length", value: 1 };
+    const values = Array.from({ length: 10 }, () => leaf);
+    const ir = { op: "min", dimension: "length", values };
+    expect(() => assertExpressionIRWithin(ir, "IR", 5)).toThrow(
+      "IR is malformed: expression IR exceeds its node ceiling",
+    );
+    expect(Object.isFrozen(values)).toBe(false);
+    expect(Object.isFrozen(leaf)).toBe(false);
+  });
+
+  it("rejects raw IR whose operands exceed the document structural ceiling", () => {
+    const leaf = { op: "literal", dimension: "length", value: 1 };
+    const values = new Array<object>(EXPRESSION_IR_MAX_WORK + 1).fill(leaf);
+    expect(() =>
+      fromExpressionIR({ op: "min", dimension: "length", values } as never, "length"),
+    ).toThrow("expression IR exceeds its node ceiling");
+    expect(Object.isFrozen(values)).toBe(false);
+  });
+});
+
+describe("expression immutability", () => {
+  it("deeply freezes raw IR even when the caller froze only its root", () => {
+    const left = { op: "literal", dimension: "length", value: 1 };
+    const ir = Object.freeze({
+      op: "add",
+      dimension: "length",
+      left,
+      right: { op: "literal", dimension: "length", value: 2 },
+    }) as unknown as ExpressionIR;
+    const value = fromExpressionIR(ir, "length");
+    expect(Object.isFrozen(left)).toBe(true);
+    expect(() => {
+      (left as { value: number }).value = 99;
+    }).toThrow(TypeError);
+    expect(evaluate(value)).toBe(3);
+
+    const values = [mm(1).ir, mm(2).ir];
+    const constructed = new Expression("length", {
+      op: "max",
+      dimension: "length",
+      values,
+    });
+    expect(Object.isFrozen(values)).toBe(true);
+    expect(Object.isFrozen(constructed)).toBe(true);
+    expect(evaluate(constructed)).toBe(2);
+  });
+
+  it("rejects own fields that the deep freeze would not reach", () => {
+    // A named property on a value array, or a non-enumerable or symbol field
+    // on a node, would keep caller data mutable under a frozen root.
+    const extra = { n: 1 };
+    const withNamedProperty = Object.assign([mm(1).ir], { extra });
+    expect(() =>
+      fromExpressionIR(
+        { op: "max", dimension: "length", values: withNamedProperty } as never,
+        "length",
+      ),
+    ).toThrow("'max' values can contain only expression operands");
+    const hiddenIndexAlias = [mm(1).ir];
+    Object.defineProperty(hiddenIndexAlias, "hidden", { value: extra });
+    expect(() =>
+      fromExpressionIR(
+        { op: "min", dimension: "length", values: hiddenIndexAlias } as never,
+        "length",
+      ),
+    ).toThrow("'min' values can contain only expression operands");
+    const symbolField = {
+      op: "literal",
+      dimension: "length",
+      value: 1,
+      [Symbol("extra")]: extra,
+    };
+    expect(() => fromExpressionIR(symbolField as never, "length")).toThrow(
+      "'literal' fields must be enumerable string keys",
+    );
+    const hiddenField = { op: "literal", dimension: "length", value: 1 };
+    Object.defineProperty(hiddenField, "hidden", { value: extra });
+    expect(() => fromExpressionIR(hiddenField as never, "length")).toThrow(
+      "'literal' fields must be enumerable string keys",
+    );
+    expect(Object.isFrozen(extra)).toBe(false);
+  });
+
+  it("constructs long derived chains without re-inspecting earlier nodes", () => {
+    let total = mm(0);
+    for (let index = 0; index < 20_000; index += 1) {
+      total = total.add(mm(1));
+    }
+    expect(total.ir.op).toBe("add");
+    expect(Object.isFrozen(total.ir)).toBe(true);
+  });
+});

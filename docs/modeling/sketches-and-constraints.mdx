@@ -6,7 +6,10 @@ icon: "pen-tool"
 
 Sketches define planar profiles for extrusion, revolution, lofting, and sweeps.
 The callback receives a `SketchBuilder` and must return exactly one
-`sketch.profile(...)`.
+`sketch.profile(...)` from that same builder. Sketch references must come from
+that builder's methods; references from another sketch, or ones created with
+the exported reference classes' constructors, throw `TypeError`. The builder
+closes when the callback returns, so keep authoring inside the callback.
 
 ## Planes
 
@@ -59,7 +62,8 @@ do not currently express islands or general multi-region region algebra.
 - `arc(id, { center, radius, startAngle, endAngle })`
 - `polyline(id, points, { closed })`
 - `rectangle(id, options)`
-- `regularPolygon(id, sides, radius, options)`
+- `regularPolygon(id, sides, radius, { center?, rotation? })`, where `radius`
+  and `center` may be parametric but `rotation` must be a literal angle
 
 Use `sketch.loop([...])` to assemble ordered lines and arcs. Reverse an edge use
 when the loop traversal runs opposite its authored direction. A loop must be
@@ -169,9 +173,13 @@ cad.sketch("precision-profile", plane.xy(), buildProfile, {
 });
 ```
 
-Tolerance is a positive finite number in millimetres. It affects sketch
+Tolerance is a positive finite number in millimetres; `cad.sketch(...)` throws
+`TypeError` for a value that is not a number and `RangeError` for a
+non-positive or non-finite number, and `validateDocument` reports
+`FEATURE_INVALID` for an invalid tolerance in a document built by hand. It affects sketch
 solution and profile validity checks; it is not permission to accept arbitrary
-gaps.
+gaps. Circle `segments` must be an integer of at least 3 and arc `segments` an
+integer of at least 2.
 
 After the final call-time parameter and named-configuration values are
 resolved, the evaluator validates the solved profile before handing it to a

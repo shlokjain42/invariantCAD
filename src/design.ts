@@ -16,7 +16,11 @@ import {
 import { deepFreeze, type JsonValue } from "./core/json.js";
 import { DEFAULT_DESIGN_DOCUMENT_LIMITS } from "./document-limits.js";
 import {
+  assertExpressionIR,
   deg,
+  expressionIROf,
+  expressionVectorIROf,
+  forEachExpressionParameter,
   mm,
   scalar,
   type AngleExpression,
@@ -47,10 +51,24 @@ import {
   type PlaneIR,
   type PrincipalPlane,
   type RefIR,
+  type SketchConstraintIR,
+  type SketchEntityIR,
   type TopologyReferenceEntryIR,
+  type TopologySelectionIR,
   type TransformOperationIR,
 } from "./ir.js";
-import { ProfileDefinition, SketchBuilder } from "./sketch.js";
+import {
+  NOT_OWN_DATA,
+  ownDenseArray,
+  ownRecord,
+  readOwnData,
+} from "./internal/own-data.js";
+import {
+  ProfileDefinition,
+  SketchBuilder,
+  closeSketchBuilder,
+  issuedSketchRecords,
+} from "./sketch.js";
 import { TopologySelection } from "./topology.js";
 import {
   SHELL_DIRECTIONS,
@@ -67,6 +85,768 @@ import {
 } from "./topology-signatures.js";
 
 const DESIGN_OWNER = Symbol("InvariantCAD.DesignOwner");
+
+/**
+ * Handles returned by builder methods. The handle classes keep public
+ * constructors for compatibility, so the owner field alone cannot prove that
+ * a handle names a node or material its builder actually authored.
+ */
+const ISSUED_DESIGN_HANDLES = new WeakSet<object>();
+
+function issued<T extends object>(handle: T): T {
+  ISSUED_DESIGN_HANDLES.add(handle);
+  return handle;
+}
+
+/** Instance records created by AssemblyBuilder.instance(), by builder. */
+const ISSUED_ASSEMBLY_INSTANCES = new WeakMap<object, AssemblyBuilder>();
+const CLOSED_ASSEMBLY_BUILDERS = new WeakSet<AssemblyBuilder>();
+const CLOSED_CONFIGURATION_BUILDERS = new WeakSet<ConfigurationBuilder>();
+
+function assertConfigurationBuilderOpen(builder: ConfigurationBuilder): void {
+  if (CLOSED_CONFIGURATION_BUILDERS.has(builder)) {
+    throw new TypeError(
+      "This configuration builder is closed; add overrides inside its configuration() callback",
+    );
+  }
+}
+
+type Vec3ExpressionIR = readonly [ExpressionIR, ExpressionIR, ExpressionIR];
+
+/** Parameter IR nodes issued by a builder, keyed by node identity. */
+const PARAMETER_NODE_OWNERS = new WeakMap<object, DesignBuilder>();
+/** Each builder's parameter records, for raw IR that names a parameter by ID. */
+const DESIGN_PARAMETER_RECORDS = new WeakMap<
+  DesignBuilder,
+  Readonly<Record<ParameterId, ParameterIR>>
+>();
+
+/**
+ * Expressions carry only parameter IDs, so identity is checked through the
+ * issued parameter node. Raw IR without an issued node binds by ID and must
+ * name a parameter this design already defines, with the same dimension.
+ */
+function assertExpressionParametersOwned(
+  owner: DesignBuilder,
+  ir: ExpressionIR,
+  label: string,
+): void {
+  const records = DESIGN_PARAMETER_RECORDS.get(owner);
+  forEachExpressionParameter(ir, (node) => {
+    const nodeOwner = PARAMETER_NODE_OWNERS.get(node);
+    if (nodeOwner !== undefined) {
+      if (nodeOwner !== owner) {
+        throw new TypeError(
+          "Parameter references cannot cross design boundaries",
+        );
+      }
+      return;
+    }
+    const record =
+      records !== undefined && Object.hasOwn(records, node.id)
+        ? records[node.id]
+        : undefined;
+    if (record === undefined) {
+      throw new TypeError(
+        `${label} references parameter '${node.id}', which this design does not define`,
+      );
+    }
+    if (record.dimension !== node.dimension) {
+      throw new TypeError(
+        `${label} references ${record.dimension} parameter '${node.id}' as ${node.dimension}`,
+      );
+    }
+  });
+}
+
+/** Reads an expression's own `dimension` data field without running accessors. */
+function ownDimension(value: unknown): unknown {
+  return typeof value === "object" && value !== null
+    ? readOwnData(value, "dimension")
+    : undefined;
+}
+
+/** Reads an expression's IR after checking its dimension and parameter owner. */
+function ownedExpressionIR(
+  owner: DesignBuilder,
+  value: unknown,
+  dimension: Dimension,
+  label: string,
+): ExpressionIR {
+  const ir = expressionIROf(value, dimension, label);
+  assertExpressionParametersOwned(owner, ir, label);
+  return ir;
+}
+
+/** Checks raw expression IR, such as a transform-operation component. */
+function ownedRawExpressionIR(
+  owner: DesignBuilder,
+  value: unknown,
+  dimension: Dimension,
+  label: string,
+): ExpressionIR {
+  const ir = assertExpressionIR(value, label);
+  if (ir.dimension !== dimension) {
+    throw new TypeError(
+      `${label} must be ${dimension === "angle" ? "an" : "a"} ${dimension} expression, received ${ir.dimension}`,
+    );
+  }
+  assertExpressionParametersOwned(owner, ir, label);
+  return ir;
+}
+
+function threeComponents(value: unknown, label: string): readonly unknown[] {
+  if (!Array.isArray(value) || value.length !== 3) {
+    throw new TypeError(`${label} must contain exactly three components`);
+  }
+  return ownDenseArray(value as readonly unknown[], label);
+}
+
+function ownedVec3IR(
+  owner: DesignBuilder,
+  value: unknown,
+  dimension: Dimension,
+  label: string,
+): Vec3ExpressionIR {
+  const components = threeComponents(value, label);
+  return [
+    ownedExpressionIR(owner, components[0], dimension, `${label}[0]`),
+    ownedExpressionIR(owner, components[1], dimension, `${label}[1]`),
+    ownedExpressionIR(owner, components[2], dimension, `${label}[2]`),
+  ];
+}
+
+function ownedRawVec3IR(
+  owner: DesignBuilder,
+  value: unknown,
+  dimension: Dimension,
+  label: string,
+): Vec3ExpressionIR {
+  const components = threeComponents(value, label);
+  return [
+    ownedRawExpressionIR(owner, components[0], dimension, `${label}[0]`),
+    ownedRawExpressionIR(owner, components[1], dimension, `${label}[1]`),
+    ownedRawExpressionIR(owner, components[2], dimension, `${label}[2]`),
+  ];
+}
+
+/**
+ * Copies one transform operation into a builder-owned record after checking
+ * its kind, component dimensions, and parameter owners.
+ */
+function ownedTransformOperation(
+  owner: DesignBuilder,
+  value: unknown,
+  label: string,
+): TransformOperationIR {
+  if (typeof value !== "object" || value === null) {
+    throw new TypeError(`${label} must be a transform operation`);
+  }
+  // Snapshot own data fields once, so caller accessors never run and an
+  // inherited field cannot supply the kind or vector.
+  const operation = ownRecord(
+    value as {
+      readonly kind?: unknown;
+      readonly value?: unknown;
+      readonly normal?: unknown;
+    },
+    label,
+  );
+  switch (operation.kind) {
+    case "translate":
+      return {
+        kind: "translate",
+        value: ownedRawVec3IR(owner, operation.value, "length", `${label} value`),
+      };
+    case "rotate":
+      return {
+        kind: "rotate",
+        value: ownedRawVec3IR(owner, operation.value, "angle", `${label} value`),
+      };
+    case "scale":
+      return {
+        kind: "scale",
+        value: ownedRawVec3IR(owner, operation.value, "scalar", `${label} value`),
+      };
+    case "mirror":
+      return {
+        kind: "mirror",
+        normal: ownedRawVec3IR(
+          owner,
+          operation.normal,
+          "scalar",
+          `${label} normal`,
+        ),
+      };
+    default:
+      throw new TypeError(
+        `${label} must be a translate, rotate, scale, or mirror operation`,
+      );
+  }
+}
+
+function ownedTransformOperations(
+  owner: DesignBuilder,
+  value: unknown,
+  label: string,
+): TransformOperationIR[] {
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${label} must be an array of transform operations`);
+  }
+  const operations = ownDenseArray(value as readonly unknown[], label, {
+    maximumLength: DEFAULT_DESIGN_DOCUMENT_LIMITS.maxStructuralValues,
+  });
+  return operations.map((operation, index) =>
+    ownedTransformOperation(owner, operation, `${label}[${index}]`),
+  );
+}
+
+function ownedPlaneIR(
+  owner: DesignBuilder,
+  value: unknown,
+  label: string,
+): PlaneIR {
+  const ir =
+    typeof value === "object" && value !== null
+      ? readOwnData(value, "ir")
+      : undefined;
+  if (typeof ir !== "object" || ir === null) {
+    throw new TypeError(`${label} must be created by plane.xy(), plane.xz(), or plane.yz()`);
+  }
+  const candidate = ownRecord(
+    ir as {
+      readonly type?: unknown;
+      readonly plane?: unknown;
+      readonly origin?: unknown;
+    },
+    label,
+  );
+  if (
+    candidate.type !== "principal" ||
+    (candidate.plane !== "XY" &&
+      candidate.plane !== "XZ" &&
+      candidate.plane !== "YZ")
+  ) {
+    throw new TypeError(`${label} must be a principal XY, XZ, or YZ plane`);
+  }
+  return {
+    type: "principal",
+    plane: candidate.plane,
+    origin: ownedRawVec3IR(owner, candidate.origin, "length", `${label} origin`),
+  };
+}
+
+/**
+ * Copies a topology selection into builder-owned records and returns the
+ * copy for the node to store, rather than the caller's objects or whatever
+ * an overridden `toIR()` would return. Every container is snapshotted once
+ * through its own data properties, so caller accessors never run and no
+ * caller record or array reaches the document. Expression IR is validated,
+ * frozen in place, and checked for parameter owners, like every other builder
+ * expression. Like the parser, every query occurrence, aliases included,
+ * counts against the query-node limit before it is copied; shared subtrees
+ * are copied once, but each further occurrence adds the subtree's full query
+ * nodes, structural values, and height at its own depth, so the limits bound
+ * the expanded tree the writer and parser see. Cycles, excessive nesting, and
+ * lists longer than the remaining capacity throw before they are copied.
+ */
+function ownedTopologySelectionIR<K extends TopologyKind>(
+  owner: DesignBuilder,
+  selection: TopologySelection<K>,
+  topology: K,
+  label: string,
+): TopologySelectionIR<K> {
+  const limits = DEFAULT_DESIGN_DOCUMENT_LIMITS;
+  let scheduled = 0;
+  const reserve = (count: number): void => {
+    if (count > limits.maxTopologyQueryNodes - scheduled) {
+      throw new RangeError(
+        `${label} exceeds the authoring limit of ${limits.maxTopologyQueryNodes} topology query nodes`,
+      );
+    }
+    scheduled += count;
+  };
+  let structuralValues = 0;
+  // The deepest structural value reached so far, so each copied query can
+  // record its height for later occurrences at other depths.
+  let deepest = 0;
+  const ensureValueCapacity = (count: number): void => {
+    if (count > limits.maxStructuralValues - structuralValues) {
+      throw new RangeError(
+        `${label} exceeds the authoring limit of ${limits.maxStructuralValues} structural values`,
+      );
+    }
+  };
+  const reserveValues = (count: number): void => {
+    ensureValueCapacity(count);
+    structuralValues += count;
+  };
+  const reach = (depth: number): void => {
+    if (depth > limits.maxNestingDepth) {
+      throw new RangeError(
+        `${label} exceeds the authoring nesting depth of ${limits.maxNestingDepth}`,
+      );
+    }
+    if (depth > deepest) deepest = depth;
+  };
+  const enter = (depth: number): void => {
+    reserveValues(1);
+    reach(depth);
+  };
+  // Define rather than assign, so an own "__proto__" key stays data.
+  const define = (
+    target: Record<string, unknown>,
+    key: string,
+    value: unknown,
+  ): void => {
+    Object.defineProperty(target, key, {
+      value,
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
+  };
+  // Containers whose copy is in progress, so meeting one again is a cycle.
+  const active = new Set<object>();
+  // Finished query copies, so an aliased query is copied once, with the
+  // expanded size of the subtree each further occurrence adds.
+  const queryCopies = new Map<
+    object,
+    {
+      readonly copy: object;
+      /** Query nodes below this one; its parent reserves the query itself. */
+      readonly queryNodes: number;
+      readonly structuralValues: number;
+      readonly height: number;
+    }
+  >();
+
+  const expression = (value: unknown): ExpressionIR => {
+    const ir = assertExpressionIR(value, label);
+    assertExpressionParametersOwned(owner, ir, label);
+    return ir;
+  };
+
+  const json = (value: unknown, depth: number): JsonValue => {
+    enter(depth);
+    switch (typeof value) {
+      case "string":
+      case "boolean":
+        return value;
+      case "number":
+        if (!Number.isFinite(value)) {
+          throw new TypeError(`${label} must contain only finite numbers`);
+        }
+        return value;
+      case "object":
+        break;
+      default:
+        throw new TypeError(`${label} cannot contain ${typeof value} values`);
+    }
+    if (value === null) return null;
+    if (active.has(value)) {
+      throw new TypeError(`${label} cannot contain object cycles`);
+    }
+    active.add(value);
+    let result: JsonValue;
+    if (Array.isArray(value)) {
+      // Every item is at least one structural value, so a longer list cannot
+      // fit and is rejected before it is copied.
+      ensureValueCapacity((value as readonly unknown[]).length);
+      result =ownDenseArray(value as readonly unknown[], label).map((item) =>
+        json(item, depth + 1),
+      );
+    } else {
+      const snapshot = ownRecord(value, label) as Readonly<
+        Record<string, unknown>
+      >;
+      const copy: Record<string, JsonValue> = {};
+      for (const key of Object.keys(snapshot)) {
+        const child = snapshot[key];
+        // Undefined members are omitted, exactly as the canonical writer does.
+        if (child !== undefined) define(copy, key, json(child, depth + 1));
+      }
+      result = copy;
+    }
+    active.delete(value);
+    return result;
+  };
+
+  const query = (value: unknown, depth: number): object => {
+    if (typeof value !== "object" || value === null) {
+      throw new TypeError(`${label} queries must be plain records`);
+    }
+    const copied = queryCopies.get(value);
+    if (copied !== undefined) {
+      // The writer and parser expand every alias, so each occurrence counts
+      // its whole subtree at this depth.
+      reserve(copied.queryNodes);
+      reserveValues(copied.structuralValues);
+      reach(depth + copied.height);
+      return copied.copy;
+    }
+    if (active.has(value)) {
+      throw new TypeError(`${label} cannot contain cyclic topology queries`);
+    }
+    const queryNodesBefore = scheduled;
+    const valuesBefore = structuralValues;
+    const deepestBefore = deepest;
+    deepest = depth;
+    enter(depth);
+    active.add(value);
+    const node = ownRecord(value, `${label} query`) as Readonly<
+      Record<string, unknown>
+    >;
+    const op = node.op;
+    const vectorPredicate =
+      op === "direction" || op === "normal" || op === "position";
+    const copy: Record<string, unknown> = {};
+    for (const key of Object.keys(node)) {
+      const child = node[key];
+      if (child === undefined) continue;
+      if ((op === "and" || op === "or") && key === "queries") {
+        if (!Array.isArray(child)) {
+          throw new TypeError(`${label} must contain dense query lists`);
+        }
+        const length = (child as readonly unknown[]).length;
+        // Count operands before copying them: a list can alias one query
+        // many times.
+        reserve(length);
+        define(
+          copy,
+          key,
+          ownDenseArray(child as readonly unknown[], `${label} query list`, {
+            exactLength: length,
+          }).map((item) => query(item, depth + 1)),
+        );
+      } else if (op === "not" && key === "query") {
+        reserve(1);
+        define(copy, key, query(child, depth + 1));
+      } else if (op === "adjacentTo" && key === "selection") {
+        define(copy, key, selectionRecord(child, depth + 1));
+      } else if (vectorPredicate && key === "value") {
+        if (!Array.isArray(child) || child.length !== 3) {
+          throw new TypeError(`${label} must contain three-component vectors`);
+        }
+        define(
+          copy,
+          key,
+          ownDenseArray(child as readonly unknown[], label).map((item) =>
+            expression(item),
+          ),
+        );
+      } else if (
+        (vectorPredicate || op === "radius") &&
+        (key === "tolerance" || key === "value")
+      ) {
+        define(copy, key, expression(child));
+      } else {
+        define(copy, key, json(child, depth + 1));
+      }
+    }
+    active.delete(value);
+    queryCopies.set(value, {
+      copy,
+      queryNodes: scheduled - queryNodesBefore,
+      structuralValues: structuralValues - valuesBefore,
+      height: deepest - depth,
+    });
+    if (deepestBefore > deepest) deepest = deepestBefore;
+    return copy;
+  };
+
+  const selectionRecord = (
+    value: unknown,
+    depth: number,
+    expected?: K,
+  ): object => {
+    if (typeof value !== "object" || value === null) {
+      throw new TypeError(`${label} must be an explicit topology selection`);
+    }
+    if (active.has(value)) {
+      throw new TypeError(`${label} cannot contain cyclic topology queries`);
+    }
+    enter(depth);
+    active.add(value);
+    const record = ownRecord(value, `${label} selection`) as Readonly<
+      Record<string, unknown>
+    >;
+    if (expected !== undefined && record.topology !== expected) {
+      throw new TypeError(`${label} must select ${expected} topology`);
+    }
+    const copy: Record<string, unknown> = {};
+    for (const key of Object.keys(record)) {
+      const child = record[key];
+      if (child === undefined) continue;
+      if (key === "query") {
+        reserve(1);
+        define(copy, key, query(child, depth + 1));
+      } else {
+        define(copy, key, json(child, depth + 1));
+      }
+    }
+    active.delete(value);
+    return copy;
+  };
+
+  const selectionIR = readOwnData(selection, "ir");
+  if (selectionIR === NOT_OWN_DATA) {
+    throw new TypeError(`${label} must contain only data properties`);
+  }
+  return selectionRecord(selectionIR, 0, topology) as TopologySelectionIR<K>;
+}
+
+/**
+ * Copies caller metadata into builder-owned plain JSON records, so later
+ * caller mutation cannot reach a built document and authoring never freezes
+ * caller objects. Values JSON cannot preserve are rejected rather than being
+ * written as `{}` or failing only when the document is saved. A shared
+ * subtree is copied once, but like the parser, the limits count every
+ * occurrence of it, with its full size and height at that occurrence's depth.
+ */
+function detachMetadata(
+  value: unknown,
+  label: string,
+): Readonly<Record<string, JsonValue>> {
+  const limits = DEFAULT_DESIGN_DOCUMENT_LIMITS;
+  const copies = new Map<
+    object,
+    {
+      readonly value: JsonValue;
+      readonly structuralValues: number;
+      readonly height: number;
+    }
+  >();
+  const active = new Set<object>();
+  let structuralValues = 0;
+  // The deepest value reached so far, so each copied subtree can record its
+  // height for later occurrences at other depths.
+  let deepest = 0;
+  const ensureValueCapacity = (count: number): void => {
+    if (count > limits.maxStructuralValues - structuralValues) {
+      throw new RangeError(
+        `${label} exceeds the authoring limit of ${limits.maxStructuralValues} structural values`,
+      );
+    }
+  };
+  const reserveValues = (count: number): void => {
+    ensureValueCapacity(count);
+    structuralValues += count;
+  };
+  const reach = (depth: number): void => {
+    if (depth > limits.maxNestingDepth) {
+      throw new RangeError(
+        `${label} exceeds the authoring nesting depth of ${limits.maxNestingDepth}`,
+      );
+    }
+    if (depth > deepest) deepest = depth;
+  };
+  // Reads own data properties only, so caller accessors never run and an
+  // inherited value never reaches the document.
+  const ownData = (container: object, key: string, path: string): unknown => {
+    const descriptor = Object.getOwnPropertyDescriptor(container, key);
+    if (descriptor === undefined) return undefined;
+    if (!Object.hasOwn(descriptor, "value")) {
+      throw new TypeError(
+        `${label}${path} must be a data property, not an accessor`,
+      );
+    }
+    return descriptor.value as unknown;
+  };
+  const copy = (current: unknown, depth: number, path: string): JsonValue => {
+    if (typeof current === "object" && current !== null) {
+      const known = copies.get(current);
+      if (known !== undefined) {
+        // The writer and parser expand every alias, so each occurrence
+        // counts its whole subtree at this depth.
+        reserveValues(known.structuralValues);
+        reach(depth + known.height);
+        return known.value;
+      }
+    }
+    reserveValues(1);
+    reach(depth);
+    switch (typeof current) {
+      case "string":
+      case "boolean":
+        return current;
+      case "number":
+        if (!Number.isFinite(current)) {
+          throw new TypeError(`${label}${path} must be a finite number`);
+        }
+        return current;
+      case "object":
+        break;
+      default:
+        throw new TypeError(
+          `${label}${path} cannot contain a ${typeof current} value`,
+        );
+    }
+    if (current === null) return null;
+    if (active.has(current)) {
+      throw new TypeError(`${label} cannot contain object cycles`);
+    }
+    active.add(current);
+    const valuesBefore = structuralValues - 1;
+    const deepestBefore = deepest;
+    deepest = depth;
+    let result: JsonValue;
+    if (Array.isArray(current)) {
+      // Every item is at least one structural value, so a longer list cannot
+      // fit and is rejected before its items are read.
+      ensureValueCapacity(current.length);
+      const items: JsonValue[] = [];
+      for (let index = 0; index < current.length; index += 1) {
+        const itemPath = `${path}/${index}`;
+        const item = ownData(current, String(index), itemPath);
+        if (item === undefined) {
+          throw new TypeError(
+            `${label}${itemPath} must be a JSON value; arrays cannot be sparse or hold undefined`,
+          );
+        }
+        items.push(copy(item, depth + 1, itemPath));
+      }
+      result = items;
+    } else {
+      // A plain record's prototype is some realm's Object.prototype or null.
+      const prototype = Object.getPrototypeOf(current) as object | null;
+      if (prototype !== null && Object.getPrototypeOf(prototype) !== null) {
+        throw new TypeError(
+          `${label}${path} must contain only plain JSON objects and arrays`,
+        );
+      }
+      const record: Record<string, JsonValue> = {};
+      for (const key of Object.keys(current)) {
+        const childPath = `${path}/${key.replaceAll("~", "~0").replaceAll("/", "~1")}`;
+        const child = ownData(current, key, childPath);
+        // Undefined members are omitted, exactly as the canonical writer does.
+        if (child === undefined) continue;
+        const copied = copy(child, depth + 1, childPath);
+        // Define rather than assign so an own "__proto__" key stays data.
+        Object.defineProperty(record, key, {
+          value: copied,
+          writable: true,
+          enumerable: true,
+          configurable: true,
+        });
+      }
+      result = record;
+    }
+    active.delete(current);
+    copies.set(current, {
+      value: result,
+      structuralValues: structuralValues - valuesBefore,
+      height: deepest - depth,
+    });
+    if (deepestBefore > deepest) deepest = deepestBefore;
+    return result;
+  };
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value)
+  ) {
+    throw new TypeError(`${label} must be a plain JSON record`);
+  }
+  return deepFreeze(copy(value, 0, "")) as Readonly<Record<string, JsonValue>>;
+}
+
+function optionalBoolean(
+  value: unknown,
+  fallback: boolean,
+  label: string,
+): boolean {
+  if (value === undefined) return fallback;
+  if (typeof value !== "boolean") {
+    throw new TypeError(`${label} must be a boolean`);
+  }
+  return value;
+}
+
+function optionalString(value: unknown, label: string): string | undefined {
+  if (value !== undefined && typeof value !== "string") {
+    throw new TypeError(`${label} must be a string`);
+  }
+  return value;
+}
+
+/** Checks an integer option against the document grammar's lower bound. */
+function optionalInteger(
+  value: unknown,
+  minimum: number,
+  label: string,
+): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "number") {
+    throw new TypeError(`${label} must be a number`);
+  }
+  if (!Number.isSafeInteger(value) || value < minimum) {
+    throw new RangeError(`${label} must be an integer of at least ${minimum}`);
+  }
+  return value;
+}
+
+function optionalSegments(
+  value: unknown,
+  minimum: number,
+  label: string,
+): { readonly segments?: number } {
+  const segments = optionalInteger(value, minimum, label);
+  return segments === undefined ? {} : { segments };
+}
+
+function positiveTolerance(value: unknown, label: string): number {
+  if (typeof value !== "number") {
+    throw new TypeError(`${label} must be a number`);
+  }
+  if (!Number.isFinite(value) || !(value > 0)) {
+    throw new RangeError(`${label} must be finite and positive`);
+  }
+  return value;
+}
+
+const PART_OPTION_KEYS: readonly string[] = Object.freeze([
+  "partNumber",
+  "description",
+  "material",
+  "materialRef",
+  "massDensity",
+  "metadata",
+]);
+
+/** Checks parameter owners in every expression a sketch callback authored. */
+function assertSketchParametersOwned(
+  owner: DesignBuilder,
+  id: string,
+  entities: Readonly<Record<EntityId, SketchEntityIR>>,
+  constraints: Readonly<Record<EntityId, SketchConstraintIR>>,
+): void {
+  const check = (value: ExpressionIR, path: string): void =>
+    assertExpressionParametersOwned(owner, value, `Sketch '${id}' ${path}`);
+  for (const [entityKey, entity] of Object.entries(entities)) {
+    switch (entity.kind) {
+      case "point":
+        check(entity.x, `entity '${entityKey}' x`);
+        check(entity.y, `entity '${entityKey}' y`);
+        break;
+      case "circle":
+        check(entity.radius, `entity '${entityKey}' radius`);
+        break;
+      case "arc":
+        check(entity.radius, `entity '${entityKey}' radius`);
+        check(entity.startAngle, `entity '${entityKey}' startAngle`);
+        check(entity.endAngle, `entity '${entityKey}' endAngle`);
+        break;
+      default:
+        break;
+    }
+  }
+  for (const [constraintKey, constraint] of Object.entries(constraints)) {
+    if ("value" in constraint) {
+      check(constraint.value, `constraint '${constraintKey}' value`);
+    }
+  }
+}
 
 export class ModelRef<K extends OutputKind> {
   readonly kind: K;
@@ -248,7 +1028,7 @@ function principalPlane(
     ir: {
       type: "principal",
       plane: value,
-      origin: [origin[0].ir, origin[1].ir, origin[2].ir],
+      origin: expressionVectorIROf(origin, "length", "Plane origin"),
     },
   });
 }
@@ -269,25 +1049,25 @@ export const tf = {
   translate(value: Vec3Expression): TransformOperationIR {
     return deepFreeze({
       kind: "translate",
-      value: [value[0].ir, value[1].ir, value[2].ir],
+      value: expressionVectorIROf(value, "length", "Translation"),
     });
   },
   rotate(value: AngleVec3Expression): TransformOperationIR {
     return deepFreeze({
       kind: "rotate",
-      value: [value[0].ir, value[1].ir, value[2].ir],
+      value: expressionVectorIROf(value, "angle", "Rotation"),
     });
   },
   scale(value: ScalarVec3Expression): TransformOperationIR {
     return deepFreeze({
       kind: "scale",
-      value: [value[0].ir, value[1].ir, value[2].ir],
+      value: expressionVectorIROf(value, "scalar", "Scale"),
     });
   },
   mirror(normal: ScalarVec3Expression): TransformOperationIR {
     const operation: TransformOperationIR = {
       kind: "mirror",
-      normal: [normal[0].ir, normal[1].ir, normal[2].ir],
+      normal: expressionVectorIROf(normal, "scalar", "Mirror normal"),
     };
     return deepFreeze(operation);
   },
@@ -309,19 +1089,35 @@ export class AssemblyBuilder {
       readonly suppressed?: boolean;
     } = {},
   ): this {
+    if (CLOSED_ASSEMBLY_BUILDERS.has(this)) {
+      throw new TypeError(
+        "This assembly builder is closed; add instances inside its assembly() callback",
+      );
+    }
+    options = ownRecord(options, `Assembly instance '${id}' options`);
     this.owner.assertOwned(component);
     const stableId = entityId(id);
     if (this.instances.some((instance) => instance.id === stableId)) {
       throw new TypeError(`Duplicate assembly instance '${id}'`);
     }
-    this.instances.push(
-      deepFreeze({
-        id: stableId,
-        component: component.toIR(),
-        placement: options.placement ?? [],
-        suppressed: options.suppressed ?? false,
-      }),
+    const placement = ownedTransformOperations(
+      this.owner,
+      options.placement ?? [],
+      `Assembly instance '${id}' placement`,
     );
+    const suppressed = optionalBoolean(
+      options.suppressed,
+      false,
+      `Assembly instance '${id}' suppressed`,
+    );
+    const record = deepFreeze({
+      id: stableId,
+      component: component.toIR(),
+      placement,
+      suppressed,
+    });
+    ISSUED_ASSEMBLY_INSTANCES.set(record, this);
+    this.instances.push(record);
     return this;
   }
 }
@@ -333,15 +1129,17 @@ export interface ConfigurationOptions {
 
 export class ConfigurationBuilder {
   readonly owner: DesignBuilder;
-  private readonly parameterRecords = Object.create(null) as Record<
+  // ES private, not TypeScript private: the builder is handed to caller
+  // callbacks, which must not be able to write unchecked override records.
+  readonly #parameterRecords = Object.create(null) as Record<
     ParameterId,
     ExpressionIR
   >;
-  private readonly instanceSuppressionRecords = Object.create(null) as Record<
+  readonly #instanceSuppressionRecords = Object.create(null) as Record<
     NodeId,
     Record<EntityId, boolean>
   >;
-  private readonly partMaterialRecords = Object.create(null) as Record<
+  readonly #partMaterialRecords = Object.create(null) as Record<
     NodeId,
     MaterialId
   >;
@@ -354,18 +1152,25 @@ export class ConfigurationBuilder {
     parameter: Parameter<D>,
     value: Expression<NoInfer<D>>,
   ): this {
+    assertConfigurationBuilderOpen(this);
     this.owner.assertParameterOwned(parameter);
-    if (value.dimension !== parameter.dimension) {
+    if (ownDimension(value) !== parameter.dimension) {
       throw new TypeError(
         `Configuration value for '${parameter.id}' must have dimension ${parameter.dimension}`,
       );
     }
-    if (Object.hasOwn(this.parameterRecords, parameter.id)) {
+    const ir = ownedExpressionIR(
+      this.owner,
+      value,
+      parameter.dimension,
+      `Configuration value for '${parameter.id}'`,
+    );
+    if (Object.hasOwn(this.#parameterRecords, parameter.id)) {
       throw new TypeError(
         `Duplicate configuration parameter override '${parameter.id}'`,
       );
     }
-    this.parameterRecords[parameter.id] = value.ir;
+    this.#parameterRecords[parameter.id] = ir;
     return this;
   }
 
@@ -374,61 +1179,78 @@ export class ConfigurationBuilder {
     instanceId: string,
     suppressed = true,
   ): this {
+    assertConfigurationBuilderOpen(this);
     const stableId = this.owner.assertAssemblyInstance(assembly, instanceId);
-    let instances = this.instanceSuppressionRecords[assembly.node];
+    const flag = optionalBoolean(
+      suppressed,
+      true,
+      `Configuration suppression of '${assembly.node}/${stableId}'`,
+    );
+    let instances = this.#instanceSuppressionRecords[assembly.node];
     if (instances === undefined) {
       instances = Object.create(null) as Record<EntityId, boolean>;
-      this.instanceSuppressionRecords[assembly.node] = instances;
+      this.#instanceSuppressionRecords[assembly.node] = instances;
     }
     if (Object.hasOwn(instances, stableId)) {
       throw new TypeError(
         `Duplicate configuration instance override '${assembly.node}/${stableId}'`,
       );
     }
-    instances[stableId] = suppressed;
+    instances[stableId] = flag;
     return this;
   }
 
   partMaterial(part: PartRef, material: MaterialRef): this {
+    assertConfigurationBuilderOpen(this);
     this.owner.assertOwned(part);
     this.owner.assertOwned(material);
-    if (Object.hasOwn(this.partMaterialRecords, part.node)) {
+    if (Object.hasOwn(this.#partMaterialRecords, part.node)) {
       throw new TypeError(
         `Duplicate configuration material override '${part.node}'`,
       );
     }
-    this.partMaterialRecords[part.node] = material.id;
+    this.#partMaterialRecords[part.node] = material.id;
     return this;
   }
 
   toIR(options: ConfigurationOptions = {}): DesignConfigurationIR {
+    options = ownRecord(options, "Configuration options");
     if (
-      Object.keys(this.parameterRecords).length === 0 &&
-      Object.keys(this.instanceSuppressionRecords).length === 0 &&
-      Object.keys(this.partMaterialRecords).length === 0
+      Object.keys(this.#parameterRecords).length === 0 &&
+      Object.keys(this.#instanceSuppressionRecords).length === 0 &&
+      Object.keys(this.#partMaterialRecords).length === 0
     ) {
       throw new TypeError("A configuration requires at least one override");
     }
+    const description = optionalString(
+      options.description,
+      "Configuration description",
+    );
     return deepFreeze({
-      ...(options.description === undefined
+      ...(description === undefined ? {} : { description }),
+      ...(Object.keys(this.#parameterRecords).length === 0
         ? {}
-        : { description: options.description }),
-      ...(Object.keys(this.parameterRecords).length === 0
-        ? {}
-        : { parameterOverrides: { ...this.parameterRecords } }),
-      ...(Object.keys(this.instanceSuppressionRecords).length === 0
+        : { parameterOverrides: { ...this.#parameterRecords } }),
+      ...(Object.keys(this.#instanceSuppressionRecords).length === 0
         ? {}
         : {
             instanceSuppressions: Object.fromEntries(
-              Object.entries(this.instanceSuppressionRecords).map(
+              Object.entries(this.#instanceSuppressionRecords).map(
                 ([assembly, instances]) => [assembly, { ...instances }],
               ),
             ),
           }),
-      ...(Object.keys(this.partMaterialRecords).length === 0
+      ...(Object.keys(this.#partMaterialRecords).length === 0
         ? {}
-        : { partMaterialOverrides: { ...this.partMaterialRecords } }),
-      ...(options.metadata === undefined ? {} : { metadata: options.metadata }),
+        : { partMaterialOverrides: { ...this.#partMaterialRecords } }),
+      ...(options.metadata === undefined
+        ? {}
+        : {
+            metadata: detachMetadata(
+              options.metadata,
+              "Configuration metadata",
+            ),
+          }),
     });
   }
 }
@@ -491,6 +1313,8 @@ export class DesignBuilder {
     ConfigurationId,
     DesignConfigurationIR
   >;
+  /** IDs whose configuration() callback is still running. */
+  private readonly pendingConfigurations = new Set<ConfigurationId>();
   private readonly outputRecords = Object.create(null) as Record<
     string,
     RefIR<DesignOutputKind>
@@ -498,12 +1322,28 @@ export class DesignBuilder {
   private usesMassDensity = false;
 
   constructor(name: string, options: DesignOptions = {}) {
-    if (name.trim().length === 0) throw new TypeError("A design requires a name");
+    if (typeof name !== "string" || name.trim().length === 0) {
+      throw new TypeError("A design requires a name");
+    }
+    options = ownRecord(options, "Design options");
     this.name = name;
-    this.metadata = options.metadata;
+    this.metadata =
+      options.metadata === undefined
+        ? undefined
+        : detachMetadata(options.metadata, "Design metadata");
+    DESIGN_PARAMETER_RECORDS.set(this, this.parameterRecords);
   }
 
   assertOwned(reference: ModelRef<OutputKind> | MaterialRef): void {
+    if (
+      typeof reference !== "object" ||
+      reference === null ||
+      !ISSUED_DESIGN_HANDLES.has(reference)
+    ) {
+      throw new TypeError(
+        "Model references must be returned by a DesignBuilder method",
+      );
+    }
     if (reference[DESIGN_OWNER] !== this) {
       throw new TypeError("Model references cannot cross design boundaries");
     }
@@ -516,10 +1356,10 @@ export class DesignBuilder {
   }
 
   private assertPersistentTopologyReferences(
-    selection: TopologySelection,
+    persistentReferences: readonly TopologyReferenceRef[],
     input: SolidRef,
   ): void {
-    for (const reference of selection.persistentReferences) {
+    for (const reference of persistentReferences) {
       if (
         !this.topologyReferenceHandles.has(reference) ||
         reference[DESIGN_OWNER] !== this
@@ -546,6 +1386,46 @@ export class DesignBuilder {
     }
   }
 
+  /**
+   * Checks an explicit topology selection option and returns the IR the node
+   * stores. The selection's kind and handle lists are read once through own
+   * data properties, so caller accessors never run.
+   */
+  private ownedSelectionIR<K extends TopologyKind>(
+    selection: unknown,
+    topology: K,
+    input: SolidRef,
+    messages: { readonly explicit: string; readonly kind: string },
+    label: string,
+  ): TopologySelectionIR<K> {
+    if (!(selection instanceof TopologySelection)) {
+      throw new TypeError(messages.explicit);
+    }
+    if (readOwnData(selection, "topology") !== topology) {
+      throw new TypeError(messages.kind);
+    }
+    const handles = <T,>(key: string): readonly T[] => {
+      const list = readOwnData(selection, key);
+      if (typeof list !== "object" || list === null) {
+        throw new TypeError(messages.explicit);
+      }
+      return ownDenseArray(list as readonly T[], `${label} ${key}`);
+    };
+    for (const reference of handles<ModelRef<OutputKind>>("references")) {
+      this.assertOwned(reference);
+    }
+    this.assertPersistentTopologyReferences(
+      handles<TopologyReferenceRef>("persistentReferences"),
+      input,
+    );
+    return ownedTopologySelectionIR(
+      this,
+      selection as TopologySelection<K>,
+      topology,
+      label,
+    );
+  }
+
   assertAssemblyInstance(assembly: AssemblyRef, id: string): EntityId {
     this.assertOwned(assembly);
     const stableId = entityId(id);
@@ -569,26 +1449,45 @@ export class DesignBuilder {
     defaultValue: Expression<D>,
     options: ParameterOptions<D> = {},
   ): Parameter<D> {
+    options = ownRecord(options, `Parameter '${id}' options`);
     const key = parameterId(id);
     if (Object.hasOwn(this.parameterRecords, key)) {
       throw new TypeError(`Duplicate parameter '${id}'`);
     }
-    if (defaultValue.dimension !== dimension) {
+    if (ownDimension(defaultValue) !== dimension) {
       throw new TypeError(`Parameter '${id}' must have dimension ${dimension}`);
     }
+    const defaultIR = ownedExpressionIR(
+      this,
+      defaultValue,
+      dimension,
+      `Parameter '${id}' default`,
+    );
+    const min =
+      options.min === undefined
+        ? undefined
+        : ownedExpressionIR(this, options.min, dimension, `Parameter '${id}' min`);
+    const max =
+      options.max === undefined
+        ? undefined
+        : ownedExpressionIR(this, options.max, dimension, `Parameter '${id}' max`);
+    const label = optionalString(options.label, `Parameter '${id}' label`);
+    const description = optionalString(
+      options.description,
+      `Parameter '${id}' description`,
+    );
     this.parameterRecords[key] = deepFreeze({
       dimension,
-      default: defaultValue.ir,
-      ...(options.min === undefined ? {} : { min: options.min.ir }),
-      ...(options.max === undefined ? {} : { max: options.max.ir }),
-      ...(options.label === undefined ? {} : { label: options.label }),
-      ...(options.description === undefined
-        ? {}
-        : { description: options.description }),
+      default: defaultIR,
+      ...(min === undefined ? {} : { min }),
+      ...(max === undefined ? {} : { max }),
+      ...(label === undefined ? {} : { label }),
+      ...(description === undefined ? {} : { description }),
     });
     if (dimension === "massDensity") this.usesMassDensity = true;
     const parameter = new ParameterClass(key, dimension);
     this.parameterReferences.add(parameter);
+    PARAMETER_NODE_OWNERS.set(parameter.ir, this);
     return parameter;
   }
 
@@ -624,22 +1523,40 @@ export class DesignBuilder {
     if (Object.hasOwn(this.materialRecords, key)) {
       throw new TypeError(`Duplicate material '${id}'`);
     }
-    if (options.name.trim().length === 0) {
+    // Snapshot own data fields once: caller accessors never run, inherited
+    // fields are never used, and every check applies to the stored value.
+    const {
+      name,
+      description: rawDescription,
+      massDensity: rawMassDensity,
+      metadata: rawMetadata,
+    } = ownRecord(options, `Material '${id}' options`);
+    if (typeof name !== "string" || name.trim().length === 0) {
       throw new TypeError(`Material '${id}' requires a non-empty name`);
     }
-    if (options.massDensity.dimension !== "massDensity") {
+    const description = optionalString(
+      rawDescription,
+      `Material '${id}' description`,
+    );
+    if (ownDimension(rawMassDensity) !== "massDensity") {
       throw new TypeError("Material massDensity must be a mass-density expression");
     }
+    const massDensity = ownedExpressionIR(
+      this,
+      rawMassDensity,
+      "massDensity",
+      `Material '${id}' massDensity`,
+    );
     this.materialRecords[key] = deepFreeze({
-      name: options.name,
-      massDensity: options.massDensity.ir,
-      ...(options.description === undefined
+      name,
+      massDensity,
+      ...(description === undefined ? {} : { description }),
+      ...(rawMetadata === undefined
         ? {}
-        : { description: options.description }),
-      ...(options.metadata === undefined ? {} : { metadata: options.metadata }),
+        : { metadata: detachMetadata(rawMetadata, `Material '${id}' metadata`) }),
     });
     this.usesMassDensity = true;
-    return new MaterialRef(this, key);
+    return issued(new MaterialRef(this, key));
   }
 
   topologyReference<K extends TopologyKind>(
@@ -758,7 +1675,9 @@ export class DesignBuilder {
     this.topologyReferenceVariantCount = aggregateVariantCount;
     this.topologyReferenceAdjacencyCount += addedAdjacencyCount;
     this.topologyReferenceEvidenceCount += addedEvidenceCount;
-    const reference = new TopologyReferenceRef(this, key, topology, target);
+    const reference = issued(
+      new TopologyReferenceRef(this, key, topology, target),
+    );
     this.topologyReferenceHandles.add(reference);
     return reference;
   }
@@ -776,16 +1695,13 @@ export class DesignBuilder {
     id: string,
     options: { readonly size: Vec3Expression; readonly center?: boolean },
   ): SolidRef {
+    options = ownRecord(options, `Box '${id}' options`);
     const key = this.addNode(id, {
       kind: "box",
-      size: options.size.map((item) => item.ir) as [
-        typeof options.size[0]["ir"],
-        typeof options.size[1]["ir"],
-        typeof options.size[2]["ir"],
-      ],
-      center: options.center ?? false,
+      size: ownedVec3IR(this, options.size, "length", `Box '${id}' size`),
+      center: optionalBoolean(options.center, false, `Box '${id}' center`),
     });
-    return new SolidRef(this, key);
+    return issued(new SolidRef(this, key));
   }
 
   cylinder(
@@ -798,27 +1714,49 @@ export class DesignBuilder {
       readonly segments?: number;
     },
   ): SolidRef {
+    options = ownRecord(options, `Cylinder '${id}' options`);
     const key = this.addNode(id, {
       kind: "cylinder",
-      height: options.height.ir,
-      radiusBottom: options.radius.ir,
-      radiusTop: (options.radiusTop ?? options.radius).ir,
-      center: options.center ?? false,
-      ...(options.segments === undefined ? {} : { segments: options.segments }),
+      height: ownedExpressionIR(
+        this,
+        options.height,
+        "length",
+        `Cylinder '${id}' height`,
+      ),
+      radiusBottom: ownedExpressionIR(
+        this,
+        options.radius,
+        "length",
+        `Cylinder '${id}' radius`,
+      ),
+      radiusTop: ownedExpressionIR(
+        this,
+        options.radiusTop ?? options.radius,
+        "length",
+        `Cylinder '${id}' radiusTop`,
+      ),
+      center: optionalBoolean(options.center, false, `Cylinder '${id}' center`),
+      ...optionalSegments(options.segments, 3, `Cylinder '${id}' segments`),
     });
-    return new SolidRef(this, key);
+    return issued(new SolidRef(this, key));
   }
 
   sphere(
     id: string,
     options: { readonly radius: LengthExpression; readonly segments?: number },
   ): SolidRef {
+    options = ownRecord(options, `Sphere '${id}' options`);
     const key = this.addNode(id, {
       kind: "sphere",
-      radius: options.radius.ir,
-      ...(options.segments === undefined ? {} : { segments: options.segments }),
+      radius: ownedExpressionIR(
+        this,
+        options.radius,
+        "length",
+        `Sphere '${id}' radius`,
+      ),
+      ...optionalSegments(options.segments, 4, `Sphere '${id}' segments`),
     });
-    return new SolidRef(this, key);
+    return issued(new SolidRef(this, key));
   }
 
   sketch(
@@ -827,20 +1765,33 @@ export class DesignBuilder {
     build: (sketch: SketchBuilder) => ProfileDefinition,
     options: { readonly tolerance?: number } = {},
   ): ProfileRef {
+    options = ownRecord(options, `Sketch '${id}' options`);
+    const planeIR = ownedPlaneIR(this, sketchPlane, `Sketch '${id}' plane`);
+    const tolerance = positiveTolerance(
+      options.tolerance ?? 1e-7,
+      `Sketch '${id}' tolerance`,
+    );
     const sketch = new SketchBuilder();
-    const profile = build(sketch);
+    let profile: ProfileDefinition;
+    try {
+      profile = build(sketch);
+    } finally {
+      closeSketchBuilder(sketch);
+    }
     if (!(profile instanceof ProfileDefinition)) {
       throw new TypeError("A sketch callback must return sketch.profile(...)");
     }
+    const { entities, constraints } = issuedSketchRecords(sketch, profile);
+    assertSketchParametersOwned(this, id, entities, constraints);
     const key = this.addNode(id, {
       kind: "sketch",
-      plane: sketchPlane.ir,
-      entities: sketch.entities,
-      constraints: sketch.constraints,
+      plane: planeIR,
+      entities,
+      constraints,
       profile: profile.ir,
-      tolerance: options.tolerance ?? 1e-7,
+      tolerance,
     });
-    return new ProfileRef(this, key);
+    return issued(new ProfileRef(this, key));
   }
 
   polylinePath(
@@ -848,7 +1799,11 @@ export class DesignBuilder {
     points: readonly Vec3Expression[],
     options: { readonly tolerance?: number } = {},
   ): PathRef {
-    if (points.length < 2) {
+    options = ownRecord(options, `Polyline path '${id}' options`);
+    const orderedPoints = ownDenseArray(points, `Polyline path '${id}' points`, {
+      maximumLength: DEFAULT_DESIGN_DOCUMENT_LIMITS.maxStructuralValues,
+    });
+    if (orderedPoints.length < 2) {
       throw new TypeError("A polyline path requires at least two ordered points");
     }
     const tolerance = options.tolerance ?? 1e-7;
@@ -857,11 +1812,13 @@ export class DesignBuilder {
     }
     const key = this.addNode(id, {
       kind: "polylinePath",
-      points: points.map((point) => [point[0].ir, point[1].ir, point[2].ir]),
+      points: orderedPoints.map((point, index) =>
+        ownedVec3IR(this, point, "length", `Polyline path '${id}' point ${index}`),
+      ),
       closed: false,
       tolerance,
     });
-    return new PathRef(this, key);
+    return issued(new PathRef(this, key));
   }
 
   circularArcPath(
@@ -873,23 +1830,25 @@ export class DesignBuilder {
     },
     options: { readonly tolerance?: number } = {},
   ): PathRef {
+    options = ownRecord(options, `Circular-arc path '${id}' options`);
+    points = ownRecord(points, `Circular-arc path '${id}' points`);
     const tolerance = options.tolerance ?? 1e-7;
     if (!Number.isFinite(tolerance) || !(tolerance > 0)) {
       throw new RangeError(
         "Circular-arc path tolerance must be finite and positive",
       );
     }
-    const vector = (point: Vec3Expression) =>
-      [point[0].ir, point[1].ir, point[2].ir] as const;
+    const vector = (point: Vec3Expression, name: string) =>
+      ownedVec3IR(this, point, "length", `Circular-arc path '${id}' ${name}`);
     const key = this.addNode(id, {
       kind: "circularArcPath",
-      start: vector(points.start),
-      through: vector(points.through),
-      end: vector(points.end),
+      start: vector(points.start, "start"),
+      through: vector(points.through, "through"),
+      end: vector(points.end, "end"),
       closed: false,
       tolerance,
     });
-    return new PathRef(this, key);
+    return issued(new PathRef(this, key));
   }
 
   compositePath(
@@ -900,12 +1859,31 @@ export class DesignBuilder {
     },
     options: { readonly tolerance?: number } = {},
   ): PathRef {
-    if (path.segments.length < 2) {
+    options = ownRecord(options, `Composite path '${id}' options`);
+    path = ownRecord(path, `Composite path '${id}'`);
+    // Snapshot each segment's own data fields once, so its kind cannot change
+    // between the checks below and the node that is stored.
+    const segments = ownDenseArray(
+      path.segments,
+      `Composite path '${id}' segments`,
+      { maximumLength: DEFAULT_DESIGN_DOCUMENT_LIMITS.maxStructuralValues },
+    ).map((segment, index) => {
+      const label = `Composite path '${id}' segment ${index}`;
+      if (typeof segment !== "object" || segment === null) {
+        throw new TypeError(`${label} must be a line or circularArc segment`);
+      }
+      const snapshot = ownRecord(segment, label);
+      if (snapshot.kind !== "line" && snapshot.kind !== "circularArc") {
+        throw new TypeError(`${label} must be a line or circularArc segment`);
+      }
+      return snapshot;
+    });
+    if (segments.length < 2) {
       throw new TypeError(
         "A composite path requires at least two ordered segments",
       );
     }
-    if (!path.segments.some((segment) => segment.kind === "circularArc")) {
+    if (!segments.some((segment) => segment.kind === "circularArc")) {
       throw new TypeError(
         "A composite path requires at least one circular-arc segment; use polylinePath for line-only paths",
       );
@@ -916,24 +1894,24 @@ export class DesignBuilder {
         "Composite path tolerance must be finite and positive",
       );
     }
-    const vector = (point: Vec3Expression) =>
-      [point[0].ir, point[1].ir, point[2].ir] as const;
+    const vector = (point: Vec3Expression, name: string) =>
+      ownedVec3IR(this, point, "length", `Composite path '${id}' ${name}`);
     const key = this.addNode(id, {
       kind: "compositePath",
-      start: vector(path.start),
-      segments: path.segments.map((segment) =>
+      start: vector(path.start, "start"),
+      segments: segments.map((segment, index) =>
         segment.kind === "line"
-          ? { kind: "line", end: vector(segment.end) }
+          ? { kind: "line", end: vector(segment.end, `segment ${index} end`) }
           : {
               kind: "circularArc",
-              through: vector(segment.through),
-              end: vector(segment.end),
+              through: vector(segment.through, `segment ${index} through`),
+              end: vector(segment.end, `segment ${index} end`),
             },
       ),
       closed: false,
       tolerance,
     });
-    return new PathRef(this, key);
+    return issued(new PathRef(this, key));
   }
 
   extrude(
@@ -947,18 +1925,41 @@ export class DesignBuilder {
       readonly divisions?: number;
     },
   ): SolidRef {
+    options = ownRecord(options, `Extrude '${id}' options`);
     this.assertOwned(profile);
-    const scaleTop = options.scaleTop ?? [scalar(1), scalar(1)];
+    const rawScaleTop = options.scaleTop ?? [scalar(1), scalar(1)];
+    if (!Array.isArray(rawScaleTop) || rawScaleTop.length !== 2) {
+      throw new TypeError(`Extrude '${id}' scaleTop must contain two scalars`);
+    }
+    const scaleTop = ownDenseArray(rawScaleTop, `Extrude '${id}' scaleTop`);
     const key = this.addNode(id, {
       kind: "extrude",
       profile: profile.toIR(),
-      distance: options.distance.ir,
-      symmetric: options.symmetric ?? false,
-      twist: (options.twist ?? deg(0)).ir,
-      scaleTop: [scaleTop[0].ir, scaleTop[1].ir],
-      divisions: options.divisions ?? 0,
+      distance: ownedExpressionIR(
+        this,
+        options.distance,
+        "length",
+        `Extrude '${id}' distance`,
+      ),
+      symmetric: optionalBoolean(
+        options.symmetric,
+        false,
+        `Extrude '${id}' symmetric`,
+      ),
+      twist: ownedExpressionIR(
+        this,
+        options.twist ?? deg(0),
+        "angle",
+        `Extrude '${id}' twist`,
+      ),
+      scaleTop: [
+        ownedExpressionIR(this, scaleTop[0], "scalar", `Extrude '${id}' scaleTop[0]`),
+        ownedExpressionIR(this, scaleTop[1], "scalar", `Extrude '${id}' scaleTop[1]`),
+      ],
+      divisions:
+        optionalInteger(options.divisions, 0, `Extrude '${id}' divisions`) ?? 0,
     });
-    return new SolidRef(this, key);
+    return issued(new SolidRef(this, key));
   }
 
   revolve(
@@ -969,14 +1970,20 @@ export class DesignBuilder {
       readonly segments?: number;
     } = {},
   ): SolidRef {
+    options = ownRecord(options, `Revolve '${id}' options`);
     this.assertOwned(profile);
     const key = this.addNode(id, {
       kind: "revolve",
       profile: profile.toIR(),
-      angle: (options.angle ?? deg(360)).ir,
-      ...(options.segments === undefined ? {} : { segments: options.segments }),
+      angle: ownedExpressionIR(
+        this,
+        options.angle ?? deg(360),
+        "angle",
+        `Revolve '${id}' angle`,
+      ),
+      ...optionalSegments(options.segments, 3, `Revolve '${id}' segments`),
     });
-    return new SolidRef(this, key);
+    return issued(new SolidRef(this, key));
   }
 
   loft(
@@ -987,12 +1994,17 @@ export class DesignBuilder {
       readonly ruled?: true;
     } = {},
   ): SolidRef {
-    if (profiles.length < 2) {
+    options = ownRecord(options, `Loft '${id}' options`);
+    // Copy once, so the checked profiles are exactly the ones stored.
+    const sections = ownDenseArray(profiles, "Loft profiles", {
+      maximumLength: DEFAULT_DESIGN_DOCUMENT_LIMITS.maxStructuralValues,
+    });
+    if (sections.length < 2) {
       throw new TypeError("Loft requires at least two ordered profiles");
     }
-    for (const profile of profiles) this.assertOwned(profile);
+    for (const profile of sections) this.assertOwned(profile);
     if (
-      new Set(profiles.map((profile) => profile.node)).size !== profiles.length
+      new Set(sections.map((profile) => profile.node)).size !== sections.length
     ) {
       throw new TypeError("Loft requires distinct ordered profiles");
     }
@@ -1001,10 +2013,10 @@ export class DesignBuilder {
     }
     const key = this.addNode(id, {
       kind: "loft",
-      profiles: profiles.map((profile) => profile.toIR()),
+      profiles: sections.map((profile) => profile.toIR()),
       ruled: true,
     });
-    return new SolidRef(this, key);
+    return issued(new SolidRef(this, key));
   }
 
   sweep(
@@ -1016,6 +2028,7 @@ export class DesignBuilder {
       readonly frame?: "corrected-frenet";
     } = {},
   ): SolidRef {
+    options = ownRecord(options, `Sweep '${id}' options`);
     this.assertOwned(profile);
     this.assertOwned(path);
     if (
@@ -1034,7 +2047,7 @@ export class DesignBuilder {
       transition: "right-corner",
       frame: "corrected-frenet",
     });
-    return new SolidRef(this, key);
+    return issued(new SolidRef(this, key));
   }
 
   private boolean(
@@ -1044,17 +2057,21 @@ export class DesignBuilder {
     tools: readonly SolidRef[],
   ): SolidRef {
     this.assertOwned(target);
-    if (tools.length === 0) {
+    // Copy once, so the checked tools are exactly the ones stored.
+    const toolSolids = ownDenseArray(tools, `${operation} tools`, {
+      maximumLength: DEFAULT_DESIGN_DOCUMENT_LIMITS.maxStructuralValues,
+    });
+    if (toolSolids.length === 0) {
       throw new TypeError(`${operation} requires at least one tool solid`);
     }
-    for (const tool of tools) this.assertOwned(tool);
+    for (const tool of toolSolids) this.assertOwned(tool);
     const key = this.addNode(id, {
       kind: "boolean",
       operation,
       target: target.toIR(),
-      tools: tools.map((tool) => tool.toIR()),
+      tools: toolSolids.map((tool) => tool.toIR()),
     });
-    return new SolidRef(this, key);
+    return issued(new SolidRef(this, key));
   }
 
   union(id: string, target: SolidRef, tools: readonly SolidRef[]): SolidRef {
@@ -1075,15 +2092,20 @@ export class DesignBuilder {
     operations: readonly TransformOperationIR[],
   ): SolidRef {
     this.assertOwned(input);
-    if (operations.length === 0) {
+    const ownedOperations = ownedTransformOperations(
+      this,
+      operations,
+      `Transform '${id}' operations`,
+    );
+    if (ownedOperations.length === 0) {
       throw new TypeError("A transform requires at least one operation");
     }
     const key = this.addNode(id, {
       kind: "transform",
       input: input.toIR(),
-      operations,
+      operations: ownedOperations,
     });
-    return new SolidRef(this, key);
+    return issued(new SolidRef(this, key));
   }
 
   translate(id: string, input: SolidRef, value: Vec3Expression): SolidRef {
@@ -1111,24 +2133,30 @@ export class DesignBuilder {
       readonly radius: LengthExpression;
     },
   ): SolidRef {
+    options = ownRecord(options, `Fillet '${id}' options`);
     this.assertOwned(input);
-    if (!(options.edges instanceof TopologySelection)) {
-      throw new TypeError("Fillet edges must be an explicit topology selection");
-    }
-    if (options.edges.topology !== "edge") {
-      throw new TypeError("A fillet requires an edge topology selection");
-    }
-    for (const reference of options.edges.references) {
-      this.assertOwned(reference);
-    }
-    this.assertPersistentTopologyReferences(options.edges, input);
+    const edgesIR = this.ownedSelectionIR(
+      options.edges,
+      "edge",
+      input,
+      {
+        explicit: "Fillet edges must be an explicit topology selection",
+        kind: "A fillet requires an edge topology selection",
+      },
+      `Fillet '${id}' edges`,
+    );
     const key = this.addNode(id, {
       kind: "fillet",
       input: input.toIR(),
-      edges: options.edges.toIR(),
-      radius: options.radius.ir,
+      edges: edgesIR,
+      radius: ownedExpressionIR(
+        this,
+        options.radius,
+        "length",
+        `Fillet '${id}' radius`,
+      ),
     });
-    return new SolidRef(this, key);
+    return issued(new SolidRef(this, key));
   }
 
   chamfer(
@@ -1140,24 +2168,30 @@ export class DesignBuilder {
       readonly distance: LengthExpression;
     },
   ): SolidRef {
+    options = ownRecord(options, `Chamfer '${id}' options`);
     this.assertOwned(input);
-    if (!(options.edges instanceof TopologySelection)) {
-      throw new TypeError("Chamfer edges must be an explicit topology selection");
-    }
-    if (options.edges.topology !== "edge") {
-      throw new TypeError("A chamfer requires an edge topology selection");
-    }
-    for (const reference of options.edges.references) {
-      this.assertOwned(reference);
-    }
-    this.assertPersistentTopologyReferences(options.edges, input);
+    const edgesIR = this.ownedSelectionIR(
+      options.edges,
+      "edge",
+      input,
+      {
+        explicit: "Chamfer edges must be an explicit topology selection",
+        kind: "A chamfer requires an edge topology selection",
+      },
+      `Chamfer '${id}' edges`,
+    );
     const key = this.addNode(id, {
       kind: "chamfer",
       input: input.toIR(),
-      edges: options.edges.toIR(),
-      distance: options.distance.ir,
+      edges: edgesIR,
+      distance: ownedExpressionIR(
+        this,
+        options.distance,
+        "length",
+        `Chamfer '${id}' distance`,
+      ),
     });
-    return new SolidRef(this, key);
+    return issued(new SolidRef(this, key));
   }
 
   shell(
@@ -1171,17 +2205,18 @@ export class DesignBuilder {
       readonly tolerance?: LengthExpression;
     },
   ): SolidRef {
+    options = ownRecord(options, `Shell '${id}' options`);
     this.assertOwned(input);
-    if (!(options.openings instanceof TopologySelection)) {
-      throw new TypeError("Shell openings must be an explicit topology selection");
-    }
-    if (options.openings.topology !== "face") {
-      throw new TypeError("A shell requires a face topology selection");
-    }
-    for (const reference of options.openings.references) {
-      this.assertOwned(reference);
-    }
-    this.assertPersistentTopologyReferences(options.openings, input);
+    const openingsIR = this.ownedSelectionIR(
+      options.openings,
+      "face",
+      input,
+      {
+        explicit: "Shell openings must be an explicit topology selection",
+        kind: "A shell requires a face topology selection",
+      },
+      `Shell '${id}' openings`,
+    );
     const direction = options.direction ?? "inward";
     if (!SHELL_DIRECTIONS.includes(direction)) {
       throw new TypeError("Shell direction must be 'inward' or 'outward'");
@@ -1189,12 +2224,22 @@ export class DesignBuilder {
     const key = this.addNode(id, {
       kind: "shell",
       input: input.toIR(),
-      openings: options.openings.toIR(),
-      thickness: options.thickness.ir,
+      openings: openingsIR,
+      thickness: ownedExpressionIR(
+        this,
+        options.thickness,
+        "length",
+        `Shell '${id}' thickness`,
+      ),
       direction,
-      tolerance: (options.tolerance ?? mm(1e-6)).ir,
+      tolerance: ownedExpressionIR(
+        this,
+        options.tolerance ?? mm(1e-6),
+        "length",
+        `Shell '${id}' tolerance`,
+      ),
     });
-    return new SolidRef(this, key);
+    return issued(new SolidRef(this, key));
   }
 
   offset(
@@ -1207,6 +2252,7 @@ export class DesignBuilder {
       readonly tolerance?: LengthExpression;
     },
   ): SolidRef {
+    options = ownRecord(options, `Offset '${id}' options`);
     this.assertOwned(input);
     const direction = options.direction ?? "outward";
     if (!OFFSET_DIRECTIONS.includes(direction)) {
@@ -1215,11 +2261,21 @@ export class DesignBuilder {
     const key = this.addNode(id, {
       kind: "offset",
       input: input.toIR(),
-      distance: options.distance.ir,
+      distance: ownedExpressionIR(
+        this,
+        options.distance,
+        "length",
+        `Offset '${id}' distance`,
+      ),
       direction,
-      tolerance: (options.tolerance ?? mm(1e-6)).ir,
+      tolerance: ownedExpressionIR(
+        this,
+        options.tolerance ?? mm(1e-6),
+        "length",
+        `Offset '${id}' tolerance`,
+      ),
     });
-    return new SolidRef(this, key);
+    return issued(new SolidRef(this, key));
   }
 
   draft(
@@ -1239,41 +2295,49 @@ export class DesignBuilder {
       };
     },
   ): SolidRef {
+    options = ownRecord(options, `Draft '${id}' options`);
     this.assertOwned(input);
-    if (!(options.faces instanceof TopologySelection)) {
-      throw new TypeError("Draft faces must be an explicit topology selection");
-    }
-    if (options.faces.topology !== "face") {
-      throw new TypeError("A draft requires a face topology selection");
-    }
-    for (const reference of options.faces.references) {
-      this.assertOwned(reference);
-    }
-    this.assertPersistentTopologyReferences(options.faces, input);
+    const facesIR = this.ownedSelectionIR(
+      options.faces,
+      "face",
+      input,
+      {
+        explicit: "Draft faces must be an explicit topology selection",
+        kind: "A draft requires a face topology selection",
+      },
+      `Draft '${id}' faces`,
+    );
+    const neutralPlane = ownRecord(
+      options.neutralPlane,
+      `Draft '${id}' neutralPlane`,
+    );
     const key = this.addNode(id, {
       kind: "draft",
       input: input.toIR(),
-      faces: options.faces.toIR(),
-      angle: options.angle.ir,
-      pullDirection: [
-        options.pullDirection[0].ir,
-        options.pullDirection[1].ir,
-        options.pullDirection[2].ir,
-      ],
+      faces: facesIR,
+      angle: ownedExpressionIR(this, options.angle, "angle", `Draft '${id}' angle`),
+      pullDirection: ownedVec3IR(
+        this,
+        options.pullDirection,
+        "scalar",
+        `Draft '${id}' pullDirection`,
+      ),
       neutralPlane: {
-        origin: [
-          options.neutralPlane.origin[0].ir,
-          options.neutralPlane.origin[1].ir,
-          options.neutralPlane.origin[2].ir,
-        ],
-        normal: [
-          options.neutralPlane.normal[0].ir,
-          options.neutralPlane.normal[1].ir,
-          options.neutralPlane.normal[2].ir,
-        ],
+        origin: ownedVec3IR(
+          this,
+          neutralPlane.origin,
+          "length",
+          `Draft '${id}' neutralPlane origin`,
+        ),
+        normal: ownedVec3IR(
+          this,
+          neutralPlane.normal,
+          "scalar",
+          `Draft '${id}' neutralPlane normal`,
+        ),
       },
     });
-    return new SolidRef(this, key);
+    return issued(new SolidRef(this, key));
   }
 
   part(
@@ -1282,26 +2346,64 @@ export class DesignBuilder {
     options: PartOptions = {},
   ): PartRef {
     this.assertOwned(solid);
-    if (options.material !== undefined && options.materialRef !== undefined) {
+    // Options often come from a variable, which TypeScript's excess-property
+    // check does not cover; unknown keys must not reach or override the node.
+    // Own data fields are snapshotted once: caller accessors never run,
+    // inherited fields are never used, and every check applies to the stored
+    // value.
+    const {
+      partNumber: rawPartNumber,
+      description: rawDescription,
+      material: rawMaterial,
+      materialRef,
+      massDensity: rawMassDensity,
+      metadata: rawMetadata,
+    } = ownRecord(options, `Part '${id}' options`, PART_OPTION_KEYS);
+    if (rawMaterial !== undefined && materialRef !== undefined) {
       throw new TypeError("A part cannot use both material and materialRef");
     }
-    if (options.materialRef !== undefined) this.assertOwned(options.materialRef);
+    if (materialRef !== undefined) this.assertOwned(materialRef);
     if (
-      options.massDensity !== undefined &&
-      options.massDensity.dimension !== "massDensity"
+      rawMassDensity !== undefined &&
+      ownDimension(rawMassDensity) !== "massDensity"
     ) {
       throw new TypeError("Part massDensity must be a mass-density expression");
     }
-    const { massDensity, materialRef, ...definition } = options;
-    if (massDensity !== undefined) this.usesMassDensity = true;
+    const partNumber = optionalString(
+      rawPartNumber,
+      `Part '${id}' partNumber`,
+    );
+    const description = optionalString(
+      rawDescription,
+      `Part '${id}' description`,
+    );
+    const material = optionalString(rawMaterial, `Part '${id}' material`);
+    const metadata =
+      rawMetadata === undefined
+        ? undefined
+        : detachMetadata(rawMetadata, `Part '${id}' metadata`);
+    const massDensity =
+      rawMassDensity === undefined
+        ? undefined
+        : ownedExpressionIR(
+            this,
+            rawMassDensity,
+            "massDensity",
+            `Part '${id}' massDensity`,
+          );
+    const materialId = materialRef?.id;
     const key = this.addNode(id, {
       kind: "part",
       solid: solid.toIR(),
-      ...definition,
-      ...(materialRef === undefined ? {} : { materialId: materialRef.id }),
-      ...(massDensity === undefined ? {} : { massDensity: massDensity.ir }),
+      ...(partNumber === undefined ? {} : { partNumber }),
+      ...(description === undefined ? {} : { description }),
+      ...(material === undefined ? {} : { material }),
+      ...(metadata === undefined ? {} : { metadata }),
+      ...(materialId === undefined ? {} : { materialId }),
+      ...(massDensity === undefined ? {} : { massDensity }),
     });
-    return new PartRef(this, key);
+    if (massDensity !== undefined) this.usesMassDensity = true;
+    return issued(new PartRef(this, key));
   }
 
   assembly(
@@ -1309,13 +2411,41 @@ export class DesignBuilder {
     build: (assembly: AssemblyBuilder) => void,
   ): AssemblyRef {
     const builder = new AssemblyBuilder(this);
-    build(builder);
+    let issuedInstances: unknown;
+    try {
+      build(builder);
+    } finally {
+      CLOSED_ASSEMBLY_BUILDERS.add(builder);
+      // instances is a public field, so it is read through own data only:
+      // an accessor-backed field or entry never runs.
+      issuedInstances = readOwnData(builder, "instances");
+      if (Array.isArray(issuedInstances)) Object.freeze(issuedInstances);
+    }
+    // Only records instance() issued for this builder may reach the document.
+    const instances: AssemblyInstanceIR[] = [];
+    const instanceIds = new Set<EntityId>();
+    for (const instance of ownDenseArray(
+      issuedInstances as readonly AssemblyInstanceIR[],
+      `Assembly '${id}' instances`,
+      { maximumLength: DEFAULT_DESIGN_DOCUMENT_LIMITS.maxStructuralValues },
+    )) {
+      if (ISSUED_ASSEMBLY_INSTANCES.get(instance) !== builder) {
+        throw new TypeError(
+          `Assembly '${id}' instances must be added with instance()`,
+        );
+      }
+      if (instanceIds.has(instance.id)) {
+        throw new TypeError(`Duplicate assembly instance '${instance.id}'`);
+      }
+      instanceIds.add(instance.id);
+      instances.push(instance);
+    }
     const node: AssemblyNodeIR = {
       kind: "assembly",
-      instances: builder.instances,
+      instances,
     };
     const key = this.addNode(id, node);
-    return new AssemblyRef(this, key);
+    return issued(new AssemblyRef(this, key));
   }
 
   configuration(
@@ -1324,11 +2454,23 @@ export class DesignBuilder {
     options: ConfigurationOptions = {},
   ): ConfigurationId {
     const key = configurationId(id);
-    if (Object.hasOwn(this.configurationRecords, key)) {
+    if (
+      Object.hasOwn(this.configurationRecords, key) ||
+      this.pendingConfigurations.has(key)
+    ) {
       throw new TypeError(`Duplicate configuration '${id}'`);
     }
+    options = ownRecord(options, `Configuration '${id}' options`);
     const builder = new ConfigurationBuilder(this);
-    build(builder);
+    // Reserve the ID while the callback runs, so a nested configuration()
+    // with the same ID cannot succeed and then be overwritten.
+    this.pendingConfigurations.add(key);
+    try {
+      build(builder);
+    } finally {
+      this.pendingConfigurations.delete(key);
+      CLOSED_CONFIGURATION_BUILDERS.add(builder);
+    }
     this.configurationRecords[key] = builder.toIR(options);
     return key;
   }
