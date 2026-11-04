@@ -2,6 +2,37 @@
 
 ## [Unreleased]
 
+- The browser deployment guide's example Content Security Policy is corrected to
+  `script-src 'self' blob: 'wasm-unsafe-eval' 'unsafe-eval'`. The bundled
+  Manifold 3.5.1 runtime and the stock `occt-wasm` 3.8.0 glue are Emscripten
+  Embind builds that generate binding invokers with `new Function` while they
+  initialize. Under the previously documented
+  `script-src 'self' blob: 'wasm-unsafe-eval'` policy, and under the
+  attestation guide's `script-src 'self' blob:` example, Chromium throws
+  `EvalError`, so neither `createEvaluator()` nor `createOcctKernel()` can
+  start. This has been true since 0.1.1. Both guides now explain why
+  `'unsafe-eval'` is required and that the attested browser loader also needs
+  `blob:`. The Chromium release gate serves its production bundle and module
+  workers under exactly the documented policy and fails on any CSP violation.
+- `loadAttestedOcctRuntime` from `invariantcad/kernels/occt/node` and
+  `invariantcad/kernels/occt/browser` now rejects a `metadata/release.json` that
+  starts with a UTF-8 byte-order mark, failing with `invalid-release-manifest`.
+  In 0.1.1 the decoder silently stripped the BOM. A BOM-prefixed copy pinned by
+  its own digest was therefore accepted as exact canonical JSON and given a
+  second `declaredBuildIdentity` for the same declared recipe. Canonical
+  manifests and the reviewed ABI 0.9 pin are unaffected.
+- The OCCT facade README (`native/occt/README.md`) now describes the Node
+  attested loader correctly. Node 22.15 and newer use an isolated per-load
+  `node:module.registerHooks()` hook with no hook worker. Only Node 22.13 and
+  22.14 fall back to the process-wide `node:module.register()` worker hook,
+  which needs worker permission under the Permission Model.
+- Release-gate internals: the private disposable-worker coordinator now observes
+  a worker's result even when a deadline or abort wins during startup, or when
+  the handle has no terminate method, so a result that rejects on termination no
+  longer surfaces as an unhandled rejection.
+- Added a test confirming that kernels created from an attestedRuntime do not
+  advertise deterministic STEP export and that exportShape refuses deterministic
+  STEP requests for them.
 - Stock OCCT `mesh()` now tessellates a mesh-free copy of the shape on every
   call, so a mesh depends only on the shape and the options of that request.
   Before, OCCT stored the triangulation on the shape and reused any finer one,
