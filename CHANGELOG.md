@@ -2,6 +2,100 @@
 
 ## [Unreleased]
 
+- Builder methods now throw `TypeError` when an expression uses a `Parameter`
+  from another `DesignBuilder`. This applies wherever the parameter appears:
+  primitive sizes, sketch entities and constraints, paths, features, transforms
+  and placements, topology predicates, parameter defaults and bounds, densities,
+  and configuration values. Before, only `configuration(...).parameter(...)`
+  checked ownership. Elsewhere a foreign parameter silently bound to a same-ID
+  parameter of the consuming design and produced the wrong geometry, or left a
+  reference that failed later with `PARAMETER_MISSING`. Raw IR passed through
+  `fromExpressionIR` refers to parameters by ID and is accepted only when it
+  names a parameter the builder already defines, with the same dimension.
+- Wrong-dimensional expressions from untyped callers now throw `TypeError`
+  immediately, as the builder reference already documented. This covers
+  `add`/`sub`, `mul`/`div` by a non-scalar, mixed-dimension
+  `expr.min`/`expr.max`, trigonometry over non-angles, `expr.ratio` over unequal
+  dimensions, the vector helpers, topology predicates, and every builder input.
+  Before, these mistakes surfaced only later as `EXPRESSION_DIMENSION_MISMATCH`.
+  `new Expression(...)` and `fromExpressionIR(...)` now also reject malformed or
+  cyclic raw IR, and they deeply freeze the IR even when the caller froze only
+  its root.
+- `SketchBuilder.regularPolygon(...)` now works; in 0.1.1 every call threw,
+  including with the default rotation. `rotation` must be a literal angle, while
+  `radius` and `center` may be parametric.
+- Builder methods now check option values when they are called, so `build()`
+  output always satisfies the strict document grammar and saved documents
+  reload. A sketch tolerance must be finite and positive. `segments` (cylinder,
+  sphere, revolve, circle, arc) and extrude `divisions` must be integers within
+  the grammar's bounds; other values throw `RangeError`. Flags such as `center`,
+  `symmetric`, `clockwise`, `reversed`, and `suppressed` must be booleans, and
+  labels and descriptions must be strings; other values throw `TypeError`.
+  Before, values such as `segments: 7.5` evaluated but could not be reloaded,
+  and a sketch tolerance of `-1` failed with a misleading
+  `SKETCH_OVER_CONSTRAINED`. `validateDocument` now reports `FEATURE_INVALID`
+  for the same sketch-tolerance, segment, and division violations in documents
+  built by hand. `build()` still does not run semantic validation.
+- `build()` now returns a fully detached, deeply frozen document. Design,
+  material, part, and configuration metadata, transform operations, and assembly
+  placements are copied when they are authored. Changing those caller objects
+  later, including objects frozen only at the top level, can no longer alter a
+  built document or its hash, and authoring no longer freezes the caller's own
+  arrays and metadata.
+- Metadata must now be plain JSON data. The builder throws for non-finite
+  numbers, `Map`, `Set`, `Date`, class instances, functions, BigInts, sparse
+  arrays, and cycles, and for metadata above the default structural-value or
+  nesting limits, counting a shared subtree everywhere it occurs.
+  `stringifyDocument`, `hashDocument`, and `cloneDocument` now throw
+  `TypeError` for any object other than an array or a plain record, instead of
+  silently writing it as `{}`.
+- `part(id, solid, options)` now rejects option fields other than `partNumber`,
+  `description`, `material`, `materialRef`, `massDensity`, and `metadata` with
+  `TypeError`. Before, extra keys from an options variable leaked into the
+  document, and `solid`, `kind`, or `materialId` keys could override the
+  authored node or bypass the owned-material check.
+- Handles created with the exported `SolidRef`, `PartRef`, `MaterialRef`, sketch
+  reference, or `ProfileDefinition` constructors are now rejected; only handles
+  returned by builder methods are accepted. An assembly stores only instances
+  that `instance(...)` added, so raw records pushed onto
+  `AssemblyBuilder.instances` throw. A sketch callback must return a profile
+  from its own `SketchBuilder`, and `SketchBuilder.entities` and `constraints`
+  may hold only records its methods stored in that same map under the same
+  key; a raw record, or a constraint moved into `entities`, throws. Assembly
+  and sketch builders that escape their callback now throw instead of silently
+  dropping work.
+- `configuration(...)` now throws for a nested call that reuses the ID of a
+  configuration whose callback is still running. Before, both calls succeeded
+  and the outer one silently overwrote the inner overrides. A
+  `ConfigurationBuilder` kept after its callback returns or throws now rejects
+  further overrides with `TypeError`, instead of accepting them and dropping
+  them from the document.
+- `min` and `max` expressions with very many operands now evaluate. Before,
+  about 150,000 operands passed validation but failed evaluation with
+  `EXPRESSION_INVALID` "Maximum call stack size exceeded".
+- Breaking for 0.1.1 callers: builder option records (design, parameter,
+  material, part, primitives, sketch, paths, extrude, revolve, loft, sweep,
+  fillet, chamfer, shell, offset, draft, assembly instance, configuration, and
+  SketchBuilder circle, arc, rectangle, polyline, regularPolygon, profile and
+  CircleRef.loop) must be plain objects. Accessor-backed or inherited option
+  fields throw TypeError without the accessor running. Unused fields are still
+  ignored, except in part(), which rejects them.
+- Breaking: caller lists and records stored in documents (path points and
+  segments, loft profiles, Boolean tools, transform operations, placements,
+  plane IR, sketch coordinate pairs, raw loop edge uses, profile holes and
+  topology selections) are read once through own data. Accessor-backed,
+  inherited or sparse entries throw TypeError.
+- Topology selections passed to fillet, chamfer, shell and draft are now copied
+  into the document instead of stored by reference. Cyclic selections throw
+  TypeError. Selections with more than 100,000 query nodes (default
+  maxTopologyQueryNodes) or 1,000,000 structural values, or nested deeper than
+  128 levels, throw RangeError while authoring. As in the parser, a shared query
+  counts in full, at its own depth, everywhere it occurs.
+- Raw expression IR with a non-string op or dimension is rejected with a fixed
+  message, and a rejected non-plain IR root is no longer frozen. IR records with
+  symbol or non-enumerable fields, and `min`/`max` value arrays with any own
+  property besides their operands, throw `TypeError`, since freezing would not
+  reach that data.
 - Transforming a sphere or cone on the stock OCCT kernel no longer fails.
   Translate, rotate, scale and mirror previously threw `curveType: [object
   WebAssembly.Exception]` on the mechanical-exact profile for any shape with a
