@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+- `evaluateExpression` and `expressionDependencies` now visit each distinct
+  node once per call. Before, an expression that reused a subexpression, such
+  as `x.add(x)` applied repeatedly in the builder, took time exponential in its
+  depth, and a chain of a few hundred thousand operations overflowed the call
+  stack. Evaluation order is unchanged, including checking a divisor before its
+  numerator. For cyclic raw IR, `evaluateExpression` now throws `TypeError`
+  instead of overflowing the stack. `expressionDependencies` does not check for
+  cycles: it visits each node once, so it returns the parameters it reached.
 - Manifold extrude and revolve now reject sketch profiles with coordinates
   beyond ±1e10 mm with a `KERNEL_ERROR` that names the ceiling. Above about
   1.7e10 mm Manifold's polygon engine failed, and the diagnostic message was a
