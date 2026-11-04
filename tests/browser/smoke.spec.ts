@@ -7,11 +7,12 @@ import {
 
 test("documents the exact Content Security Policy served by this gate", () => {
   for (const guidePage of [
-    "browser-and-workers.mdx",
-    "occt-runtime-attestation.mdx",
+    "evaluation/browser-and-workers.mdx",
+    "evaluation/occt-runtime-attestation.mdx",
+    "reference/complete-guide.md",
   ]) {
     const guide = readFileSync(
-      new URL(`../../docs/evaluation/${guidePage}`, import.meta.url),
+      new URL(`../../docs/${guidePage}`, import.meta.url),
       "utf8",
     );
     expect(guide).toContain(
