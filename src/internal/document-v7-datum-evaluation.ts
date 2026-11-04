@@ -304,7 +304,7 @@ function abortFailure(node?: NodeId): CadResult<never> {
   return failure(
     diagnostic("EVALUATION_ABORTED", "Datum evaluation was aborted", {
       severity: "error",
-      ...(node === undefined ? {} : { node, path: `/nodes/${node}` }),
+      ...(node === undefined ? {} : { node, path: `/nodes/${jsonPointerSegment(node)}` }),
       details: { phase: DATUM_EVALUATION_PHASE },
     }),
   );
@@ -912,7 +912,7 @@ function featureFailure(
     diagnostic("FEATURE_INVALID", message, {
       severity: "error",
       node,
-      path: `/nodes/${node}/${path}`,
+      path: `/nodes/${jsonPointerSegment(node)}/${path}`,
       details: {
         phase: DATUM_EVALUATION_PHASE,
         ...details,
@@ -944,8 +944,8 @@ function evaluateDatumNode(
           node: id,
           path:
             node.kind === "datumPoint"
-              ? `/nodes/${id}/position`
-              : `/nodes/${id}/origin`,
+              ? `/nodes/${jsonPointerSegment(id)}/position`
+              : `/nodes/${jsonPointerSegment(id)}/origin`,
           details: { phase: DATUM_EVALUATION_PHASE },
         },
       ),
@@ -983,8 +983,8 @@ function evaluateDatumNode(
         node: id,
         path:
           node.kind === "datumAxis"
-            ? `/nodes/${id}/direction`
-            : `/nodes/${id}/xDirection`,
+            ? `/nodes/${jsonPointerSegment(id)}/direction`
+            : `/nodes/${jsonPointerSegment(id)}/xDirection`,
         details: { phase: DATUM_EVALUATION_PHASE },
       }),
     );
@@ -1021,8 +1021,8 @@ function evaluateDatumNode(
         node: id,
         path:
           node.kind === "datumPlane"
-            ? `/nodes/${id}/normal`
-            : `/nodes/${id}/yDirection`,
+            ? `/nodes/${jsonPointerSegment(id)}/normal`
+            : `/nodes/${jsonPointerSegment(id)}/yDirection`,
         details: { phase: DATUM_EVALUATION_PHASE },
       }),
     );

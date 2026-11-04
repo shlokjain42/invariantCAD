@@ -159,7 +159,7 @@ export function resolvedProfileRegionDiagnostic(
   tolerance: number,
   issue: ResolvedProfileRegionValidationIssue,
 ): Diagnostic {
-  const profilePath = `/nodes/${node}/profile`;
+  const profilePath = `/nodes/${jsonPointerSegment(node)}/profile`;
   if (issue.reason === "evaluation-aborted") {
     return diagnostic(
       "EVALUATION_ABORTED",
@@ -228,14 +228,14 @@ export function resolvedProfileRegionDiagnostic(
   const path =
     curveSource === undefined
       ? profilePath
-      : `/nodes/${node}/entities/${curveSource.entity}`;
+      : `/nodes/${jsonPointerSegment(node)}/entities/${jsonPointerSegment(curveSource.entity)}`;
   const related =
     otherCurveSource === undefined
       ? undefined
       : [
           {
             node,
-            path: `/nodes/${node}/entities/${otherCurveSource.entity}`,
+            path: `/nodes/${jsonPointerSegment(node)}/entities/${jsonPointerSegment(otherCurveSource.entity)}`,
             message: "Conflicting profile boundary entity",
           },
         ];

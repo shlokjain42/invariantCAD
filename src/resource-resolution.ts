@@ -1,3 +1,4 @@
+import { jsonPointerSegment } from "./core/json-pointer.js";
 import type { ResourceId } from "./core/ids.js";
 import {
   diagnostic,
@@ -356,7 +357,7 @@ function resolutionFailure<T = never>(
   return failure(
     diagnostic("RESOURCE_RESOLUTION_FAILED", message, {
       severity: "error",
-      path: `/resources/${id}`,
+      path: `/resources/${jsonPointerSegment(id)}`,
       details: { phase: "resourceResolution", resourceId: id },
     }),
   );
@@ -370,7 +371,7 @@ function integrityFailure<T = never>(
   return failure(
     diagnostic("RESOURCE_INTEGRITY_MISMATCH", message, {
       severity: "error",
-      path: `/resources/${definition.id}`,
+      path: `/resources/${jsonPointerSegment(definition.id)}`,
       details: {
         phase: "resourceResolution",
         resourceId: definition.id,
@@ -608,14 +609,14 @@ function captureLocations(
     if (!intrinsicArrayIsArray(value)) {
       return invalidInput(
         `Resource '${id}' locations must be a non-empty array`,
-        `/resources/${id}/locations`,
+        `/resources/${jsonPointerSegment(id)}/locations`,
       );
     }
     const length = value.length;
     if (!intrinsicNumberIsSafeInteger(length) || length <= 0) {
       return invalidInput(
         `Resource '${id}' locations must be a non-empty array`,
-        `/resources/${id}/locations`,
+        `/resources/${jsonPointerSegment(id)}/locations`,
       );
     }
     const output: string[] = [];
@@ -625,7 +626,7 @@ function captureLocations(
       if (!objectHasOwn(value, index)) {
         return invalidInput(
           `Resource '${id}' locations cannot be sparse`,
-          `/resources/${id}/locations/${index}`,
+          `/resources/${jsonPointerSegment(id)}/locations/${index}`,
         );
       }
       const location: unknown = value[index];
@@ -633,13 +634,13 @@ function captureLocations(
       if (typeof location !== "string" || location.length === 0) {
         return invalidInput(
           `Resource '${id}' locations must be non-empty strings`,
-          `/resources/${id}/locations/${index}`,
+          `/resources/${jsonPointerSegment(id)}/locations/${index}`,
         );
       }
       if (intrinsicSetHas(seen, location)) {
         return invalidInput(
           `Resource '${id}' locations cannot contain duplicates`,
-          `/resources/${id}/locations/${index}`,
+          `/resources/${jsonPointerSegment(id)}/locations/${index}`,
         );
       }
       intrinsicSetAdd(seen, location);
@@ -650,7 +651,7 @@ function captureLocations(
   } catch {
     return invalidInput(
       `Resource '${id}' locations could not be read safely`,
-      `/resources/${id}/locations`,
+      `/resources/${jsonPointerSegment(id)}/locations`,
     );
   }
 }
@@ -683,7 +684,7 @@ function captureDefinition(
     if (!isPlainRecord(value)) {
       return invalidInput(
         `Resource '${id}' definition must be a plain record`,
-        `/resources/${id}`,
+        `/resources/${jsonPointerSegment(id)}`,
       );
     }
     if (isAborted(signal)) return abortFailure();
@@ -692,7 +693,7 @@ function captureDefinition(
     if (digestProperty.kind !== "data") {
       return invalidInput(
         `Resource '${id}' digest must be an own data property`,
-        `/resources/${id}/digest`,
+        `/resources/${jsonPointerSegment(id)}/digest`,
       );
     }
     digest = digestProperty.value;
@@ -702,7 +703,7 @@ function captureDefinition(
     if (byteLengthProperty.kind !== "data") {
       return invalidInput(
         `Resource '${id}' byteLength must be an own data property`,
-        `/resources/${id}/byteLength`,
+        `/resources/${jsonPointerSegment(id)}/byteLength`,
       );
     }
     byteLength = byteLengthProperty.value;
@@ -712,7 +713,7 @@ function captureDefinition(
     if (mediaTypeProperty.kind !== "data") {
       return invalidInput(
         `Resource '${id}' mediaType must be an own data property`,
-        `/resources/${id}/mediaType`,
+        `/resources/${jsonPointerSegment(id)}/mediaType`,
       );
     }
     mediaType = mediaTypeProperty.value;
@@ -722,7 +723,7 @@ function captureDefinition(
     if (locationsProperty.kind === "accessor") {
       return invalidInput(
         `Resource '${id}' locations must be an own data property`,
-        `/resources/${id}/locations`,
+        `/resources/${jsonPointerSegment(id)}/locations`,
       );
     }
     rawLocations =
@@ -732,7 +733,7 @@ function captureDefinition(
   } catch {
     return invalidInput(
       `Resource '${id}' definition could not be read safely`,
-      `/resources/${id}`,
+      `/resources/${jsonPointerSegment(id)}`,
     );
   }
   if (
@@ -741,7 +742,7 @@ function captureDefinition(
   ) {
     return invalidInput(
       `Resource '${id}' digest must be lowercase SHA-256`,
-      `/resources/${id}/digest`,
+      `/resources/${jsonPointerSegment(id)}/digest`,
     );
   }
   if (
@@ -751,7 +752,7 @@ function captureDefinition(
   ) {
     return invalidInput(
       `Resource '${id}' byteLength must be a non-negative safe integer`,
-      `/resources/${id}/byteLength`,
+      `/resources/${jsonPointerSegment(id)}/byteLength`,
     );
   }
   if (
@@ -761,7 +762,7 @@ function captureDefinition(
   ) {
     return invalidInput(
       `Resource '${id}' mediaType must be a non-empty MIME type`,
-      `/resources/${id}/mediaType`,
+      `/resources/${jsonPointerSegment(id)}/mediaType`,
     );
   }
   const locations = captureLocations(rawLocations, id, signal);
@@ -805,7 +806,7 @@ function captureDefinitions(
             `Requested resource '${id}' is not defined`,
             {
               severity: "error",
-              path: `/resources/${id}`,
+              path: `/resources/${jsonPointerSegment(id)}`,
               details: { phase: "resourceResolution", resourceId: id },
             },
           ),
@@ -815,7 +816,7 @@ function captureDefinitions(
       if (definitionProperty.kind !== "data") {
         return invalidInput(
           `Resource '${id}' registry entry must be an own data property`,
-          `/resources/${id}`,
+          `/resources/${jsonPointerSegment(id)}`,
         );
       }
       const rawDefinition = definitionProperty.value;

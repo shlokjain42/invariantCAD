@@ -2431,12 +2431,12 @@ class StagedBodySetEvaluatedSolidV7 extends EvaluatedSolid {
 
 function partMassDensityPath(part: PartValue): string {
   if (part.definition.massDensity !== undefined) {
-    return `/nodes/${part.node}/massDensity`;
+    return `/nodes/${jsonPointerSegment(part.node)}/massDensity`;
   }
   if (part.materialId !== undefined) {
-    return `/materials/${part.materialId}/massDensity`;
+    return `/materials/${jsonPointerSegment(part.materialId)}/massDensity`;
   }
-  return `/nodes/${part.node}/massDensity`;
+  return `/nodes/${jsonPointerSegment(part.node)}/massDensity`;
 }
 
 function lexicalCompare(first: string, second: string): number {
@@ -2526,7 +2526,7 @@ function createBillOfMaterials(
           {
             severity: "warning",
             node: part.node,
-            path: `/nodes/${part.node}/partNumber`,
+            path: `/nodes/${jsonPointerSegment(part.node)}/partNumber`,
           },
         ),
       );
@@ -2538,8 +2538,8 @@ function createBillOfMaterials(
           node: part.node,
           path:
             part.materialId === undefined
-              ? `/nodes/${part.node}/material`
-              : `/nodes/${part.node}/materialId`,
+              ? `/nodes/${jsonPointerSegment(part.node)}/material`
+              : `/nodes/${jsonPointerSegment(part.node)}/materialId`,
           hints: ["Reference a document material or author a legacy material label"],
         }),
       );
@@ -2637,7 +2637,7 @@ function createBillOfMaterials(
         `Part number '${partNumber}' is used by ${partNodes.length} distinct part definitions`,
         {
           severity: "warning",
-          path: `/outputs/${name}`,
+          path: `/outputs/${jsonPointerSegment(name)}`,
           details: { partNumber, partNodes },
         },
       ),
@@ -2902,7 +2902,7 @@ export class EvaluatedAssembly {
           } without authored mass density`,
           {
             severity: "error",
-            path: `/outputs/${this.name}`,
+            path: `/outputs/${jsonPointerSegment(this.name)}`,
             hints: ["Author massDensity on every active leaf part definition"],
             related: partNodes.map((partNode) => ({
               message: `Part '${partNode}' has no authored mass density`,
@@ -2951,7 +2951,7 @@ export class EvaluatedAssembly {
           `Physical mass properties for assembly '${this.name}' could not be represented`,
           {
             severity: "error",
-            path: `/outputs/${this.name}`,
+            path: `/outputs/${jsonPointerSegment(this.name)}`,
             details: {
               cause: error instanceof Error ? error.message : String(error),
             },
@@ -3864,12 +3864,12 @@ function retainEvaluatedPartV7ViewState(
 
 function partV7MassDensityPath(part: EvaluatedPartValueV7): string {
   if (part.definition.massDensity !== undefined) {
-    return `/nodes/${part.node}/massDensity`;
+    return `/nodes/${jsonPointerSegment(part.node)}/massDensity`;
   }
   if (part.materialId !== undefined) {
-    return `/materials/${part.materialId}/massDensity`;
+    return `/materials/${jsonPointerSegment(part.materialId)}/massDensity`;
   }
-  return `/nodes/${part.node}/massDensity`;
+  return `/nodes/${jsonPointerSegment(part.node)}/massDensity`;
 }
 
 function partV7NonBlank(value: string | undefined): string | null {
@@ -3991,7 +3991,7 @@ function partMeasurementFailure(
     `Kernel '${part.kernelId}' returned malformed measurements for part leaf '${leaf}'`,
     {
       node: leaf,
-      path: `/nodes/${leaf}`,
+      path: `/nodes/${jsonPointerSegment(leaf)}`,
       details: {
         protocolViolation: true,
         reason,
@@ -4389,7 +4389,7 @@ export class EvaluatedPartV7 {
           {
             severity: "warning",
             node: part.node,
-            path: `/nodes/${part.node}/partNumber`,
+            path: `/nodes/${jsonPointerSegment(part.node)}/partNumber`,
           },
         ),
       );
@@ -4405,8 +4405,8 @@ export class EvaluatedPartV7 {
             node: part.node,
             path:
               part.materialId === undefined
-                ? `/nodes/${part.node}/material`
-                : `/nodes/${part.node}/materialId`,
+                ? `/nodes/${jsonPointerSegment(part.node)}/material`
+                : `/nodes/${jsonPointerSegment(part.node)}/materialId`,
             hints: [
               "Reference a document material or author a legacy material label",
             ],
@@ -5938,7 +5938,7 @@ function importedBodyEvaluationAbortFailure(
   return failure(
     diagnostic("EVALUATION_ABORTED", "Imported-body evaluation was aborted", {
       severity: "error",
-      ...(node === undefined ? {} : { node, path: `/nodes/${node}` }),
+      ...(node === undefined ? {} : { node, path: `/nodes/${jsonPointerSegment(node)}` }),
       details: { phase: "documentV7ImportedBodyEvaluation" },
     }),
   );
@@ -6089,7 +6089,7 @@ function importedBodyCapabilityFailure(
     diagnostic("KERNEL_CAPABILITY_MISSING", message, {
       severity: "error",
       node,
-      path: `/nodes/${node}`,
+      path: `/nodes/${jsonPointerSegment(node)}`,
       details: {
         phase: "documentV7ImportedBodyEvaluation",
         kernel,
@@ -6581,7 +6581,7 @@ export async function evaluateImportedBodyOutputsV7(
           `Verified resource '${node.resource}' is unavailable for imported body '${nodeId}'`,
           {
             node: nodeId,
-            path: `/nodes/${nodeId}/resource`,
+            path: `/nodes/${jsonPointerSegment(nodeId)}/resource`,
             details: {
               protocolViolation: true,
               resourceId: node.resource,
@@ -6621,7 +6621,7 @@ export async function evaluateImportedBodyOutputsV7(
           `Kernel '${kernelAccess.value.id}' failed to import document body '${nodeId}'`,
           {
             node: nodeId,
-            path: `/nodes/${nodeId}`,
+            path: `/nodes/${jsonPointerSegment(nodeId)}`,
             details: {
               resourceId: node.resource,
               format: node.format,
@@ -6653,7 +6653,7 @@ export async function evaluateImportedBodyOutputsV7(
           `Kernel '${kernelAccess.value.id}' reused an owned shape across imported-body nodes`,
           {
             node: nodeId,
-            path: `/nodes/${nodeId}`,
+            path: `/nodes/${jsonPointerSegment(nodeId)}`,
             details: {
               protocolViolation: true,
               resourceId: node.resource,
@@ -6709,7 +6709,7 @@ export async function evaluateImportedBodyOutputsV7(
             `Kernel '${kernelAccess.value.id}' returned malformed imported-body status`,
             {
               node: nodeId,
-              path: `/nodes/${nodeId}`,
+              path: `/nodes/${jsonPointerSegment(nodeId)}`,
               details: {
                 protocolViolation: true,
                 resourceId: node.resource,
@@ -6726,7 +6726,7 @@ export async function evaluateImportedBodyOutputsV7(
             `Kernel '${kernelAccess.value.id}' returned an invalid imported body '${nodeId}'`,
             {
               node: nodeId,
-              path: `/nodes/${nodeId}`,
+              path: `/nodes/${jsonPointerSegment(nodeId)}`,
               details: {
                 protocolViolation: true,
                 resourceId: node.resource,
@@ -6770,7 +6770,7 @@ export async function evaluateImportedBodyOutputsV7(
             `Kernel '${kernelAccess.value.id}' returned a non-positive imported body '${nodeId}'`,
             {
               node: nodeId,
-              path: `/nodes/${nodeId}`,
+              path: `/nodes/${jsonPointerSegment(nodeId)}`,
               details: {
                 protocolViolation: true,
                 resourceId: node.resource,
@@ -6801,7 +6801,7 @@ export async function evaluateImportedBodyOutputsV7(
           `Kernel '${kernelAccess.value.id}' could not validate imported body '${nodeId}'`,
           {
             node: nodeId,
-            path: `/nodes/${nodeId}`,
+            path: `/nodes/${jsonPointerSegment(nodeId)}`,
             details: {
               protocolViolation: true,
               resourceId: node.resource,
@@ -7802,7 +7802,7 @@ function bodySetEvaluationAbortFailure(
   return failure(
     diagnostic("EVALUATION_ABORTED", "Body-set evaluation was aborted", {
       severity: "error",
-      ...(node === undefined ? {} : { node, path: `/nodes/${node}` }),
+      ...(node === undefined ? {} : { node, path: `/nodes/${jsonPointerSegment(node)}` }),
       details: { phase: BODY_SET_EVALUATION_PHASE },
     }),
   );
@@ -7862,7 +7862,7 @@ function bodySetCapabilityFailure(
     diagnostic("KERNEL_CAPABILITY_MISSING", message, {
       severity: "error",
       node,
-      path: `/nodes/${node}`,
+      path: `/nodes/${jsonPointerSegment(node)}`,
       details: {
         phase: BODY_SET_EVALUATION_PHASE,
         kernel,
@@ -7932,7 +7932,7 @@ function validateStagedBooleanExactEvolutionCapabilities(
       `Kernel '${kernelId}' declares malformed exact indexed topology evolution metadata`,
       {
         node: nodeId,
-        path: `/nodes/${nodeId}`,
+        path: `/nodes/${jsonPointerSegment(nodeId)}`,
         details: {
           protocolViolation: true,
           kind: "exactIndexedTopologyEvolution",
@@ -8041,7 +8041,7 @@ function validateStagedBodyResultClassificationCapabilities(
       `Kernel '${kernelId}' declares malformed body-result classification metadata`,
       {
         node: nodeId,
-        path: `/nodes/${nodeId}`,
+        path: `/nodes/${jsonPointerSegment(nodeId)}`,
         details: {
           protocolViolation: true,
           kind: "bodyResultClassification",
@@ -8819,7 +8819,7 @@ function captureBodySetKernelAccess(
           `Kernel '${id}' advertises document-body import without implementing it`,
           {
             node: nodeId,
-            path: `/nodes/${nodeId}`,
+            path: `/nodes/${jsonPointerSegment(nodeId)}`,
             details: {
               protocolViolation: true,
               kind: "documentBodyImport",
@@ -8843,7 +8843,7 @@ function captureBodySetKernelAccess(
           `Kernel '${id}' advertises feature 'boolean' without implementing it`,
           {
             node: firstBooleanNode,
-            path: `/nodes/${firstBooleanNode}`,
+            path: `/nodes/${jsonPointerSegment(firstBooleanNode)}`,
             details: {
               protocolViolation: true,
               kind: "feature",
@@ -8870,7 +8870,7 @@ function captureBodySetKernelAccess(
             : `Kernel '${id}' advertises body-result classification without implementing it`,
           {
             node: firstBooleanNode,
-            path: `/nodes/${firstBooleanNode}`,
+            path: `/nodes/${jsonPointerSegment(firstBooleanNode)}`,
             details: {
               protocolViolation: true,
               kind: "bodyResultClassification",
@@ -8897,7 +8897,7 @@ function captureBodySetKernelAccess(
           `Kernel '${id}' advertises feature 'transform' without implementing it`,
           {
             node: firstTransformNode,
-            path: `/nodes/${firstTransformNode}`,
+            path: `/nodes/${jsonPointerSegment(firstTransformNode)}`,
             details: {
               protocolViolation: true,
               kind: "feature",
@@ -9011,7 +9011,7 @@ function classifyStagedBooleanResultV7(
       `Kernel '${access.id}' has no captured body-result classifier for Boolean '${nodeId}'`,
       {
         node: nodeId,
-        path: `/nodes/${nodeId}`,
+        path: `/nodes/${jsonPointerSegment(nodeId)}`,
         details: {
           protocolViolation: true,
           kind: "bodyResultClassification",
@@ -9043,7 +9043,7 @@ function classifyStagedBooleanResultV7(
       `Kernel '${access.id}' could not classify Boolean result '${nodeId}'`,
       {
         node: nodeId,
-        path: `/nodes/${nodeId}`,
+        path: `/nodes/${jsonPointerSegment(nodeId)}`,
         details: {
           protocolViolation: true,
           kind: "bodyResultClassification",
@@ -9072,7 +9072,7 @@ function classifyStagedBooleanResultV7(
         {
           severity: "error",
           node: nodeId,
-          path: `/nodes/${nodeId}`,
+          path: `/nodes/${jsonPointerSegment(nodeId)}`,
           details: {
             phase: diagnostics.phase,
             kernel: access.id,
@@ -9090,7 +9090,7 @@ function classifyStagedBooleanResultV7(
     `Kernel '${access.id}' returned a malformed body-result classification for Boolean '${nodeId}'`,
     {
       node: nodeId,
-      path: `/nodes/${nodeId}`,
+      path: `/nodes/${jsonPointerSegment(nodeId)}`,
       details: {
         protocolViolation: true,
         kind: "bodyResultClassification",
@@ -9142,7 +9142,7 @@ function validateStagedSolidGraphShape(
         `Kernel '${access.id}' returned malformed status for ${diagnostics.solidLabel} '${nodeId}'`,
         {
           node: nodeId,
-          path: `/nodes/${nodeId}`,
+          path: `/nodes/${jsonPointerSegment(nodeId)}`,
           details: { protocolViolation: true, nodeKind },
         },
       );
@@ -9160,7 +9160,7 @@ function validateStagedSolidGraphShape(
             {
               severity: "error",
               node: nodeId,
-              path: `/nodes/${nodeId}`,
+              path: `/nodes/${jsonPointerSegment(nodeId)}`,
               details: {
                 phase: diagnostics.phase,
                 kernel: access.id,
@@ -9175,7 +9175,7 @@ function validateStagedSolidGraphShape(
         `Kernel '${access.id}' returned an invalid ${diagnostics.solidLabel} '${nodeId}'`,
         {
           node: nodeId,
-          path: `/nodes/${nodeId}`,
+          path: `/nodes/${jsonPointerSegment(nodeId)}`,
           details: {
             protocolViolation: true,
             nodeKind,
@@ -9222,7 +9222,7 @@ function validateStagedSolidGraphShape(
           {
             severity: "error",
             node: nodeId,
-            path: `/nodes/${nodeId}`,
+            path: `/nodes/${jsonPointerSegment(nodeId)}`,
             details: {
               phase: diagnostics.phase,
               kernel: access.id,
@@ -9242,7 +9242,7 @@ function validateStagedSolidGraphShape(
         `Kernel '${access.id}' returned a non-positive ${diagnostics.solidLabel} '${nodeId}'`,
         {
           node: nodeId,
-          path: `/nodes/${nodeId}`,
+          path: `/nodes/${jsonPointerSegment(nodeId)}`,
           details: {
             protocolViolation: true,
             nodeKind,
@@ -9278,7 +9278,7 @@ function validateStagedSolidGraphShape(
       `Kernel '${access.id}' could not validate ${diagnostics.solidLabel} '${nodeId}'`,
       {
         node: nodeId,
-        path: `/nodes/${nodeId}`,
+        path: `/nodes/${jsonPointerSegment(nodeId)}`,
         details: {
           protocolViolation: true,
           nodeKind,
@@ -9364,7 +9364,7 @@ function resolvedTransformOperationV7(
         {
           severity: "error",
           node: nodeId,
-          path: `/nodes/${nodeId}/operations/${operationIndex}/${field}`,
+          path: `/nodes/${jsonPointerSegment(nodeId)}/operations/${operationIndex}/${field}`,
           details: { phase: diagnostics.phase },
         },
       ),
@@ -9386,7 +9386,7 @@ function resolvedTransformOperationV7(
             severity: "error",
             node: nodeId,
             path:
-              `/nodes/${nodeId}/operations/${operationIndex}/` +
+              `/nodes/${jsonPointerSegment(nodeId)}/operations/${operationIndex}/` +
               `${field}/${axis}`,
             details: {
               phase: diagnostics.phase,
@@ -9413,7 +9413,7 @@ function resolvedTransformOperationV7(
               severity: "error",
               node: nodeId,
               path:
-                `/nodes/${nodeId}/operations/${operationIndex}/value/` +
+                `/nodes/${jsonPointerSegment(nodeId)}/operations/${operationIndex}/value/` +
                 `${axis}`,
               details: {
                 phase: diagnostics.phase,
@@ -9437,7 +9437,7 @@ function resolvedTransformOperationV7(
           {
             severity: "error",
             node: nodeId,
-            path: `/nodes/${nodeId}/operations/${operationIndex}/normal`,
+            path: `/nodes/${jsonPointerSegment(nodeId)}/operations/${operationIndex}/normal`,
             details: {
               phase: diagnostics.phase,
               normal: vector,
@@ -9533,7 +9533,7 @@ function prepareStagedSolidGraphV7(
                 {
                   severity: "error",
                   node: nodeId,
-                  path: `/nodes/${nodeId}/size/${axis}`,
+                  path: `/nodes/${jsonPointerSegment(nodeId)}/size/${axis}`,
                   details: {
                     phase: diagnostics.phase,
                     value: size[axis],
@@ -9572,7 +9572,7 @@ function prepareStagedSolidGraphV7(
                 {
                   severity: "error",
                   node: nodeId,
-                  path: `/nodes/${nodeId}/${field}`,
+                  path: `/nodes/${jsonPointerSegment(nodeId)}/${field}`,
                   details: {
                     phase: diagnostics.phase,
                     value,
@@ -9609,7 +9609,7 @@ function prepareStagedSolidGraphV7(
               {
                 severity: "error",
                 node: nodeId,
-                path: `/nodes/${nodeId}/radius`,
+                path: `/nodes/${jsonPointerSegment(nodeId)}/radius`,
                 details: {
                   phase: diagnostics.phase,
                   value: radius,
@@ -9639,7 +9639,7 @@ function prepareStagedSolidGraphV7(
           {
             severity: "error",
             node: nodeId,
-            path: `/nodes/${nodeId}`,
+            path: `/nodes/${jsonPointerSegment(nodeId)}`,
             details: { phase: diagnostics.phase },
           },
         ),
@@ -9779,7 +9779,7 @@ async function evaluateStagedSolidGraphV7(
               `Verified resource '${node.resource}' is unavailable for ${diagnostics.solidLabel} '${nodeId}'`,
               {
                 node: nodeId,
-                path: `/nodes/${nodeId}/resource`,
+                path: `/nodes/${jsonPointerSegment(nodeId)}/resource`,
                 details: {
                   protocolViolation: true,
                   resourceId: node.resource,
@@ -9806,7 +9806,7 @@ async function evaluateStagedSolidGraphV7(
               `Solid graph Boolean '${nodeId}' has no evaluated target`,
               {
                 node: nodeId,
-                path: `/nodes/${nodeId}/target`,
+                path: `/nodes/${jsonPointerSegment(nodeId)}/target`,
                 details: {
                   protocolViolation: true,
                   referencedNode: node.target.node,
@@ -9833,7 +9833,7 @@ async function evaluateStagedSolidGraphV7(
                 `Solid graph Boolean '${nodeId}' has no evaluated tool at index ${toolIndex}`,
                 {
                   node: nodeId,
-                  path: `/nodes/${nodeId}/tools/${toolIndex}`,
+                  path: `/nodes/${jsonPointerSegment(nodeId)}/tools/${toolIndex}`,
                   details: {
                     protocolViolation: true,
                     referencedNode,
@@ -9869,7 +9869,7 @@ async function evaluateStagedSolidGraphV7(
               `Solid graph transform '${nodeId}' has no evaluated input`,
               {
                 node: nodeId,
-                path: `/nodes/${nodeId}/input`,
+                path: `/nodes/${jsonPointerSegment(nodeId)}/input`,
                 details: {
                   protocolViolation: true,
                   referencedNode: node.input.node,
@@ -9930,7 +9930,7 @@ async function evaluateStagedSolidGraphV7(
           `Kernel '${kernelAccess.value.id}' failed to construct solid graph node '${nodeId}'`,
           {
             node: nodeId,
-            path: `/nodes/${nodeId}`,
+            path: `/nodes/${jsonPointerSegment(nodeId)}`,
             details: {
               nodeKind: node.kind,
               ...(node.kind === "importedBody"
@@ -9960,7 +9960,7 @@ async function evaluateStagedSolidGraphV7(
           `Kernel '${kernelAccess.value.id}' returned a shape already owned by an earlier prepared part batch for solid graph node '${nodeId}'`,
           {
             node: nodeId,
-            path: `/nodes/${nodeId}`,
+            path: `/nodes/${jsonPointerSegment(nodeId)}`,
             details: {
               protocolViolation: true,
               crossBatchShapeOwnership: true,
@@ -9977,7 +9977,7 @@ async function evaluateStagedSolidGraphV7(
           `Kernel '${kernelAccess.value.id}' reused an owned shape for solid graph node '${nodeId}'`,
           {
             node: nodeId,
-            path: `/nodes/${nodeId}`,
+            path: `/nodes/${jsonPointerSegment(nodeId)}`,
             details: {
               protocolViolation: true,
               nodeKind: node.kind,
@@ -10180,7 +10180,7 @@ export async function evaluateBodySetOutputsV7(
         "maxBodySetMembers",
         options.evaluationLimits.maxBodySetMembers,
         selectedMemberCount,
-        `/nodes/${reference.node}/bodies`,
+        `/nodes/${jsonPointerSegment(reference.node)}/bodies`,
       );
     }
     for (
@@ -10191,7 +10191,7 @@ export async function evaluateBodySetOutputsV7(
       const member = outputNode.bodies[bodyIndex]!;
       importedBodyArrayAppend(solidRoots, {
         node: member.solid.node,
-        path: `/nodes/${reference.node}/bodies/${bodyIndex}/solid`,
+        path: `/nodes/${jsonPointerSegment(reference.node)}/bodies/${bodyIndex}/solid`,
       });
     }
   }
@@ -10817,7 +10817,7 @@ function partEvaluationAbortFailure(node?: NodeId): CadResult<never> {
   return failure(
     diagnostic("EVALUATION_ABORTED", "Part evaluation was aborted", {
       severity: "error",
-      ...(node === undefined ? {} : { node, path: `/nodes/${node}` }),
+      ...(node === undefined ? {} : { node, path: `/nodes/${jsonPointerSegment(node)}` }),
       details: { phase: PART_EVALUATION_PHASE },
     }),
   );
@@ -11084,7 +11084,7 @@ function partCapabilityFailure(
     diagnostic("KERNEL_CAPABILITY_MISSING", message, {
       severity: "error",
       node,
-      path: `/nodes/${node}`,
+      path: `/nodes/${jsonPointerSegment(node)}`,
       details: {
         phase: PART_EVALUATION_PHASE,
         kernel,
@@ -11263,7 +11263,7 @@ function appendProductGeometryBodySetRootsV7(
   for (let bodyIndex = 0; bodyIndex < node.bodies.length; bodyIndex += 1) {
     importedBodyArrayAppend(roots, {
       node: node.bodies[bodyIndex]!.solid.node,
-      path: `/nodes/${nodeId}/bodies/${bodyIndex}/solid`,
+      path: `/nodes/${jsonPointerSegment(nodeId)}/bodies/${bodyIndex}/solid`,
     });
   }
 }
@@ -11652,7 +11652,7 @@ function prepareProductGeometryOutputsV7Core(
         selectedBodyCount = nextBodyCount.value;
         importedBodyArrayAppend(solidRoots, {
           node: node.geometry.node,
-          path: `/nodes/${selection.node}/geometry`,
+          path: `/nodes/${jsonPointerSegment(selection.node)}/geometry`,
         });
       } else if (
         node.geometry.kind === "bodySet" &&
@@ -11685,7 +11685,7 @@ function prepareProductGeometryOutputsV7Core(
             {
               severity: "error",
               node: selection.node,
-              path: `/nodes/${selection.node}/geometry`,
+              path: `/nodes/${jsonPointerSegment(selection.node)}/geometry`,
               details: {
                 phase: PART_EVALUATION_PHASE,
                 geometryKind: node.geometry.kind,
@@ -11873,7 +11873,7 @@ function prepareProductGeometryOutputsV7Core(
           `Material '${id}' massDensity must evaluate to a finite, strictly positive number`,
           {
             severity: "error",
-            path: `/materials/${id}/massDensity`,
+            path: `/materials/${jsonPointerSegment(id)}/massDensity`,
             details: {
               phase: PART_EVALUATION_PHASE,
               cause: bodySetThrownCause(
@@ -11901,7 +11901,7 @@ function prepareProductGeometryOutputsV7Core(
           `Material '${id}' massDensity must be finite and strictly positive`,
           {
             severity: "error",
-            path: `/materials/${id}/massDensity`,
+            path: `/materials/${jsonPointerSegment(id)}/massDensity`,
             details: {
               phase: PART_EVALUATION_PHASE,
               value: massDensity,
@@ -11983,7 +11983,7 @@ function prepareProductGeometryOutputsV7Core(
             {
               severity: "error",
               node: selected.nodeId,
-              path: `/nodes/${selected.nodeId}/massDensity`,
+              path: `/nodes/${jsonPointerSegment(selected.nodeId)}/massDensity`,
               details: {
                 phase: PART_EVALUATION_PHASE,
                 cause: bodySetThrownCause(
@@ -12010,7 +12010,7 @@ function prepareProductGeometryOutputsV7Core(
             {
               severity: "error",
               node: selected.nodeId,
-              path: `/nodes/${selected.nodeId}/massDensity`,
+              path: `/nodes/${jsonPointerSegment(selected.nodeId)}/massDensity`,
               details: {
                 phase: PART_EVALUATION_PHASE,
                 value: massDensity,
@@ -13515,7 +13515,7 @@ export class Evaluator {
             ),
             {
               severity: "error",
-              path: `/outputs/${state.output}`,
+              path: `/outputs/${jsonPointerSegment(state.output)}`,
               details: {
                 phase: "importedBodyEvaluation",
                 kernel: this.kernel.id,
@@ -13587,6 +13587,16 @@ export class Evaluator {
     let selectedConfigurationId: ConfigurationId | null = null;
     let selectedConfiguration: DesignConfigurationIR | undefined;
     if (options.configuration !== undefined) {
+      // Like the hashing and Document v7 entry points, check the type before
+      // the name is used as a property key or a JSON Pointer token.
+      if (typeof options.configuration !== "string") {
+        return failure(
+          diagnostic("IR_INVALID", "configuration must be a string", {
+            severity: "error",
+            path: "/configuration",
+          }),
+        );
+      }
       if (!Object.hasOwn(document.configurations ?? {}, options.configuration)) {
         return failure(
           diagnostic(
@@ -13594,7 +13604,7 @@ export class Evaluator {
             `Unknown configuration '${options.configuration}'`,
             {
               severity: "error",
-              path: `/configurations/${options.configuration}`,
+              path: `/configurations/${jsonPointerSegment(options.configuration)}`,
               details: {
                 available: Object.keys(document.configurations ?? {}).sort(),
               },
@@ -13641,7 +13651,7 @@ export class Evaluator {
             `Material '${id}' massDensity must evaluate to a finite, strictly positive number`,
             {
               severity: "error",
-              path: `/materials/${id}/massDensity`,
+              path: `/materials/${jsonPointerSegment(id)}/massDensity`,
               details: {
                 cause: error instanceof Error ? error.message : String(error),
               },
@@ -13657,7 +13667,7 @@ export class Evaluator {
             `Material '${id}' massDensity must be finite and strictly positive`,
             {
               severity: "error",
-              path: `/materials/${id}/massDensity`,
+              path: `/materials/${jsonPointerSegment(id)}/massDensity`,
               details: { value: massDensity },
             },
           ),
@@ -13753,7 +13763,7 @@ export class Evaluator {
             {
             severity: "error",
             node: id,
-            path: `/nodes/${id}`,
+            path: `/nodes/${jsonPointerSegment(id)}`,
               details: { kernel: this.kernel.id, status: status.code },
             },
           ),
@@ -13764,7 +13774,7 @@ export class Evaluator {
         const emptyDiagnostic = diagnostic("EMPTY_RESULT", `Feature '${id}' is empty`, {
           severity: options.allowEmpty ? "warning" : "error",
           node: id,
-          path: `/nodes/${id}`,
+          path: `/nodes/${jsonPointerSegment(id)}`,
         });
         diagnostics.push(emptyDiagnostic);
         if (!options.allowEmpty) throw new EvaluationFailure(emptyDiagnostic);
@@ -13805,7 +13815,7 @@ export class Evaluator {
             {
               severity: "error",
               node: id,
-              path: `/nodes/${id}`,
+              path: `/nodes/${jsonPointerSegment(id)}`,
               hints: ["Choose an exact geometry kernel with indexed topology history"],
               details: {
                 ...capabilityDetails,
@@ -13828,7 +13838,7 @@ export class Evaluator {
             {
               severity: "error",
               node: id,
-              path: `/nodes/${id}`,
+              path: `/nodes/${jsonPointerSegment(id)}`,
               details: {
                 ...capabilityDetails,
                 protocolViolation: true,
@@ -13897,7 +13907,7 @@ export class Evaluator {
             {
               severity: "error",
               node: id,
-              path: `/nodes/${id}`,
+              path: `/nodes/${jsonPointerSegment(id)}`,
               hints: ["Choose an exact geometry kernel with indexed topology history"],
               details: {
                 ...capabilityDetails,
@@ -13978,7 +13988,7 @@ export class Evaluator {
             {
               severity: "error",
               node: id,
-              path: `/nodes/${id}`,
+              path: `/nodes/${jsonPointerSegment(id)}`,
               details: {
                 ...sharedDetails,
                 protocolViolation: true,
@@ -14006,7 +14016,7 @@ export class Evaluator {
           {
             severity: "error",
             node: id,
-            path: `/nodes/${id}`,
+            path: `/nodes/${jsonPointerSegment(id)}`,
             hints: [
               "Choose a geometry kernel whose composite-sweep refinements cover this design",
             ],
@@ -14030,7 +14040,7 @@ export class Evaluator {
           diagnostic("FEATURE_INVALID", `${field} must be positive`, {
             severity: "error",
             node: id,
-            path: `/nodes/${id}/${field}`,
+            path: `/nodes/${jsonPointerSegment(id)}/${field}`,
             details: { value },
           }),
         );
@@ -14196,7 +14206,7 @@ export class Evaluator {
             {
               severity: "error",
               node: id,
-              path: `/nodes/${id}`,
+              path: `/nodes/${jsonPointerSegment(id)}`,
               details: {
                 kernel: this.kernel.id,
                 ...(error instanceof TopologyEvolutionProtocolError
@@ -14363,7 +14373,7 @@ export class Evaluator {
           diagnostic("FEATURE_INVALID", `${label} must evaluate to a finite number`, {
             severity: "error",
             node: id,
-            path: `/nodes/${id}/${path}`,
+            path: `/nodes/${jsonPointerSegment(id)}/${path}`,
             details: {
               cause: error instanceof Error ? error.message : String(error),
             },
@@ -14375,7 +14385,7 @@ export class Evaluator {
           diagnostic("FEATURE_INVALID", `${label} must be finite`, {
             severity: "error",
             node: id,
-            path: `/nodes/${id}/${path}`,
+            path: `/nodes/${jsonPointerSegment(id)}/${path}`,
             details: { value: resolved },
           }),
         );
@@ -14397,7 +14407,7 @@ export class Evaluator {
           diagnostic("FEATURE_INVALID", `${label} must be nonzero`, {
             severity: "error",
             node: id,
-            path: `/nodes/${id}/${path}`,
+            path: `/nodes/${jsonPointerSegment(id)}/${path}`,
             details: { value: resolved },
           }),
         );
@@ -14414,7 +14424,7 @@ export class Evaluator {
       readonly input: KernelShape;
       readonly keys: readonly KernelTopologyKey[];
     } => {
-      const path = `/nodes/${id}/${field}`;
+      const path = `/nodes/${jsonPointerSegment(id)}/${field}`;
       if (!kernelSupportsTopology(this.kernel)) {
         throw new EvaluationFailure(
           diagnostic(
@@ -14764,7 +14774,7 @@ export class Evaluator {
                 diagnostic("FEATURE_INVALID", "radiusTop cannot be negative", {
                   severity: "error",
                   node: id,
-                  path: `/nodes/${id}/radiusTop`,
+                  path: `/nodes/${jsonPointerSegment(id)}/radiusTop`,
                 }),
               );
             }
@@ -14864,8 +14874,8 @@ export class Evaluator {
                   node: id,
                   path:
                     pointIndex === undefined
-                      ? `/nodes/${id}/points`
-                      : `/nodes/${id}/points/${pointIndex}`,
+                      ? `/nodes/${jsonPointerSegment(id)}/points`
+                      : `/nodes/${jsonPointerSegment(id)}/points/${pointIndex}`,
                   details: {
                     ...details,
                     ...(pointIndex === undefined ? {} : { pointIndex }),
@@ -14899,8 +14909,8 @@ export class Evaluator {
                   node: id,
                   path:
                     pointName === undefined
-                      ? `/nodes/${id}`
-                      : `/nodes/${id}/${pointName}`,
+                      ? `/nodes/${jsonPointerSegment(id)}`
+                      : `/nodes/${jsonPointerSegment(id)}/${pointName}`,
                   details: {
                     ...details,
                     ...(pointIndex === undefined ? {} : { pointIndex }),
@@ -14934,11 +14944,11 @@ export class Evaluator {
               const issuePath =
                 segmentIndex === undefined
                   ? pointRole === "start"
-                    ? `/nodes/${id}/start`
-                    : `/nodes/${id}`
+                    ? `/nodes/${jsonPointerSegment(id)}/start`
+                    : `/nodes/${jsonPointerSegment(id)}`
                   : pointRole === "through" || pointRole === "end"
-                    ? `/nodes/${id}/segments/${segmentIndex}/${pointRole}`
-                    : `/nodes/${id}/segments/${segmentIndex}`;
+                    ? `/nodes/${jsonPointerSegment(id)}/segments/${segmentIndex}/${pointRole}`
+                    : `/nodes/${jsonPointerSegment(id)}/segments/${segmentIndex}`;
               throw new EvaluationFailure(
                 diagnostic("FEATURE_INVALID", message, {
                   severity: "error",
@@ -14981,7 +14991,7 @@ export class Evaluator {
                 diagnostic("FEATURE_INVALID", "Revolve angle cannot exceed 360 degrees", {
                   severity: "error",
                   node: id,
-                  path: `/nodes/${id}/angle`,
+                  path: `/nodes/${jsonPointerSegment(id)}/angle`,
                 }),
               );
             }
@@ -15055,7 +15065,7 @@ export class Evaluator {
                 diagnostic("FEATURE_INVALID", message, {
                   severity: "error",
                   node: id,
-                  path: `/nodes/${id}/${path}`,
+                  path: `/nodes/${jsonPointerSegment(id)}/${path}`,
                   details,
                 }),
               );
@@ -15110,7 +15120,7 @@ export class Evaluator {
                 diagnostic("FEATURE_INVALID", message, {
                   severity: "error",
                   node: id,
-                  path: `/nodes/${id}/${input}`,
+                  path: `/nodes/${jsonPointerSegment(id)}/${input}`,
                   details: { ...details, input },
                 }),
               );
@@ -15272,7 +15282,7 @@ export class Evaluator {
                   {
                     severity: "error",
                     node: id,
-                    path: `/nodes/${id}/tolerance`,
+                    path: `/nodes/${jsonPointerSegment(id)}/tolerance`,
                     details: { tolerance, thickness },
                   },
                 ),
@@ -15324,7 +15334,7 @@ export class Evaluator {
                   {
                     severity: "error",
                     node: id,
-                    path: `/nodes/${id}/tolerance`,
+                    path: `/nodes/${jsonPointerSegment(id)}/tolerance`,
                     details: { tolerance, distance },
                   },
                 ),
@@ -15365,7 +15375,7 @@ export class Evaluator {
                   {
                     severity: "error",
                     node: id,
-                    path: `/nodes/${id}/angle`,
+                    path: `/nodes/${jsonPointerSegment(id)}/angle`,
                     details: {
                       value: angle,
                       minimumExclusive: DRAFT_MIN_ANGLE_RADIANS,
@@ -15441,7 +15451,7 @@ export class Evaluator {
                     {
                       severity: "error",
                       node: id,
-                      path: `/nodes/${id}/massDensity`,
+                      path: `/nodes/${jsonPointerSegment(id)}/massDensity`,
                       details: {
                         cause: error instanceof Error ? error.message : String(error),
                       },
@@ -15457,7 +15467,7 @@ export class Evaluator {
                     {
                       severity: "error",
                       node: id,
-                      path: `/nodes/${id}/massDensity`,
+                      path: `/nodes/${jsonPointerSegment(id)}/massDensity`,
                       details: { value: massDensity },
                     },
                   ),
@@ -15622,7 +15632,7 @@ export class Evaluator {
             {
               severity: "error",
               node: id,
-              path: `/nodes/${id}`,
+              path: `/nodes/${jsonPointerSegment(id)}`,
               details: {
                 kernel: this.kernel.id,
                 ...(error instanceof TopologyEvolutionProtocolError
@@ -15722,7 +15732,7 @@ export class Evaluator {
           throw new EvaluationFailure(
             diagnostic("OUTPUT_MISSING", "Profiles and paths cannot be final design outputs", {
               severity: "error",
-              path: `/outputs/${name}`,
+              path: `/outputs/${jsonPointerSegment(name)}`,
             }),
           );
         }

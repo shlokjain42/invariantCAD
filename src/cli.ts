@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { jsonPointerSegment } from "./core/json-pointer.js";
 import { open, writeFile } from "node:fs/promises";
 import { extname } from "node:path";
 import {
@@ -679,7 +680,7 @@ export async function runCli(argv = process.argv.slice(2)): Promise<number> {
             code: "BOM_OUTPUT_UNSUPPORTED",
             severity: "error",
             message: `Output '${outputName}' is a solid; BOM requires a part or assembly`,
-            path: `/outputs/${outputName}`,
+            path: `/outputs/${jsonPointerSegment(outputName)}`,
           };
           process.stderr.write(`${formatDiagnostics([value])}\n`);
           return 1;

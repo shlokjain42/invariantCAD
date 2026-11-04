@@ -1,3 +1,4 @@
+import { jsonPointerSegment } from "./core/json-pointer.js";
 import type {
   Brand,
   ConfigurationId,
@@ -803,7 +804,7 @@ function captureOptions(value: unknown): CadResult<CapturedOptionsV2> {
         if (typeof override !== "number" && !(override instanceof Expression)) {
           return invalidOptions(
             `Parameter override '${id}' must be a number or Expression`,
-            `/parameters/${id}`,
+            `/parameters/${jsonPointerSegment(id)}`,
           );
         }
         parameters[id] = override;
@@ -1493,7 +1494,7 @@ function resolvedMaterialDefinitions(
           `Material '${id}' massDensity must evaluate to a finite, strictly positive number`,
           {
             severity: "error",
-            path: `/materials/${id}/massDensity`,
+            path: `/materials/${jsonPointerSegment(id)}/massDensity`,
             details: { cause: safeErrorMessage(error) },
           },
         ),
@@ -1507,7 +1508,7 @@ function resolvedMaterialDefinitions(
           `Material '${id}' massDensity must be finite and strictly positive`,
           {
             severity: "error",
-            path: `/materials/${id}/massDensity`,
+            path: `/materials/${jsonPointerSegment(id)}/massDensity`,
             details: { value: massDensity },
           },
         ),
@@ -1646,7 +1647,7 @@ export async function hashDesignFeaturesV2(
           `Unknown configuration '${requested}'`,
           {
             severity: "error",
-            path: `/configurations/${requested}`,
+            path: `/configurations/${jsonPointerSegment(requested)}`,
             details: {
               available: Object.keys(snapshot.configurations ?? {}).sort(
                 lexicalCompare,
@@ -1679,7 +1680,7 @@ export async function hashDesignFeaturesV2(
           `Unknown configuration '${configurationId}'`,
           {
             severity: "error",
-            path: `/configurations/${configurationId}`,
+            path: `/configurations/${jsonPointerSegment(configurationId)}`,
           },
         ),
       );

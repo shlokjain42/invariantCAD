@@ -1,3 +1,4 @@
+import { jsonPointerSegment } from "../core/json-pointer.js";
 import type { NodeId } from "../core/ids.js";
 import {
   diagnostic,
@@ -300,7 +301,7 @@ export function planStagedSolidGraphV7(
               "maxSolidDependencyLinks",
               limits.maxSolidDependencyLinks,
               nextDependencyLinkCount,
-              `/nodes/${frame.id}/input`,
+              `/nodes/${jsonPointerSegment(frame.id)}/input`,
             );
           }
           dependencyLinkCount = nextDependencyLinkCount;
@@ -314,13 +315,13 @@ export function planStagedSolidGraphV7(
               "maxTransformOperations",
               limits.maxTransformOperations,
               nextTransformOperationCount,
-              `/nodes/${frame.id}/operations`,
+              `/nodes/${jsonPointerSegment(frame.id)}/operations`,
             );
           }
           transformOperationCount = nextTransformOperationCount;
           stack[stack.length] = {
             id: node.input.node,
-            path: `/nodes/${frame.id}/input`,
+            path: `/nodes/${jsonPointerSegment(frame.id)}/input`,
             expanded: false,
           };
           continue;
@@ -337,8 +338,8 @@ export function planStagedSolidGraphV7(
             );
             const operandPath =
               operandIndex === 0
-                ? `/nodes/${frame.id}/target`
-                : `/nodes/${frame.id}/tools/${operandIndex - 1}`;
+                ? `/nodes/${jsonPointerSegment(frame.id)}/target`
+                : `/nodes/${jsonPointerSegment(frame.id)}/tools/${operandIndex - 1}`;
             if (
               nextDependencyLinkCount >
               limits.maxSolidDependencyLinks
@@ -360,13 +361,13 @@ export function planStagedSolidGraphV7(
           ) {
             stack[stack.length] = {
               id: node.tools[toolIndex]!.node,
-              path: `/nodes/${frame.id}/tools/${toolIndex}`,
+              path: `/nodes/${jsonPointerSegment(frame.id)}/tools/${toolIndex}`,
               expanded: false,
             };
           }
           stack[stack.length] = {
             id: node.target.node,
-            path: `/nodes/${frame.id}/target`,
+            path: `/nodes/${jsonPointerSegment(frame.id)}/target`,
             expanded: false,
           };
           continue;
