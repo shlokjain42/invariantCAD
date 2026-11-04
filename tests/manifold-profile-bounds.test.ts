@@ -103,11 +103,13 @@ describe("Manifold profile coordinate ceiling", () => {
         1e200,
       ]) {
         const result = await evaluator.evaluate(squarePlate(halfExtent));
-        expect(result.ok).toBe(false);
-        if (result.ok) {
-          result.value.dispose();
-          continue;
+        try {
+          expect(result.ok).toBe(false);
+        } finally {
+          // Release an unexpected success even when the assertion throws.
+          if (result.ok) result.value.dispose();
         }
+        if (result.ok) continue;
         const error = result.diagnostics.find((item) => item.severity === "error");
         expect(error?.code).toBe("KERNEL_ERROR");
         expect(error?.node).toBe("plate");
