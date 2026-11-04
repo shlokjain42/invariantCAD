@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-04
+
 - Breaking: the general Document v1-v6 APIs no longer accept Document v7,
   including imported-body JSON and mixed pairs such as a v7 schema with another
   version. `validateDocument`, `parseDocument`, `parseDocumentValue`,
@@ -1671,6 +1673,7 @@
 - Parts and nested fixed-placement assemblies
 - Measurement, STL/OBJ export, canonical JSON, semantic hashes, CLI, and tests
 
-[Unreleased]: https://github.com/shlokjain42/invariantCAD/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/shlokjain42/invariantCAD/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/shlokjain42/invariantCAD/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/shlokjain42/invariantCAD/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/shlokjain42/invariantCAD/releases/tag/v0.1.0
