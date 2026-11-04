@@ -88,9 +88,11 @@ written, such as one in a missing directory, prints a one-line
 <Note>
   Requiring `--output` for multi-output documents and reporting export or
   write failures without a stack trace are implemented for the unreleased 0.2
-  line, not the current 0.1.1 npm package. The 0.1.1 CLI silently exports only
-  the first output in sorted name order when `--output` is omitted, and prints
-  a JavaScript stack trace when export or writing fails.
+  line, not the current 0.1.1 npm package. When `--output` is omitted, the
+  0.1.1 CLI silently exports only the first output in the parsed document's
+  `outputs` key order, which is sorted name order only for a canonically
+  serialized document. It prints a JavaScript stack trace when export or
+  writing fails.
 </Note>
 
 ## Parameter overrides
