@@ -61,8 +61,8 @@ repository rules in `.greptile/`.
 
 Ordinary pull requests add changelog entries under `Unreleased` and never bump
 the package version. Releases are prepared as `release/vX.Y.Z` pull requests.
-Merging one runs the full release acceptance suite and, after maintainer
-approval, publishes to npm with provenance, tags the release, creates the
+Merging one runs the full release acceptance suite and then, with no manual
+approval step, publishes to npm with provenance, tags the release, creates the
 GitHub release, and updates the live documentation. See the
 [maintainer release procedure](/releasing).
 
