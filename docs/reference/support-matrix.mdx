@@ -5,7 +5,9 @@ icon: "table-2"
 ---
 
 Legend: **Yes** is release-gated public behavior, **Partial** is usable with an
-explicitly documented weaker contract, and **No** is not advertised.
+explicitly documented weaker contract, and **No** is not advertised or not
+supported. Unmarked rows describe the published 0.1.1 package; tables, rows,
+and notes marked unreleased 0.2 describe the main branch only.
 
 ## Modeling
 
@@ -14,7 +16,7 @@ explicitly documented weaker contract, and **No** is not advertised.
 | Box, cylinder/cone, sphere | Yes | Yes | Yes | Yes |
 | Planar sketches and holes | Yes | Yes | Yes | Yes |
 | Extrude, symmetric extrude | Yes | Yes | Yes | Yes |
-| Twist/top-scale extrude | Yes | Yes | No | No |
+| Twist/top-scale/divided extrude | Yes | Yes | No | No |
 | Revolve | Yes | Yes | Yes | Yes |
 | Ruled solid loft | Yes | No | Yes | Yes |
 | Polyline path sweep | Yes | No | Yes | Yes |
@@ -26,6 +28,38 @@ explicitly documented weaker contract, and **No** is not advertised.
 | Shell/whole-solid offset | Yes | No | Yes, partial history | Yes, complete bounded evolution |
 | Draft | Yes | No | No | Yes |
 
+No capability names extrude `twist`, `scaleTop`, or `divisions`. OCCT
+advertises plain `extrude` and passes capability preflight, including the
+`mechanical-exact` profile; a nonzero `twist`, a `scaleTop` other than
+`[1, 1]`, or nonzero `divisions` then fails inside the kernel with
+`KERNEL_ERROR`, not `KERNEL_CAPABILITY_MISSING`. Published 0.1.1 tolerates a
+`twist` or `scaleTop` difference up to `modelingTolerance` (default `1e-7`)
+and builds a plain prism for it.
+
+OCCT applies a nonuniform `scale` through a general affine transform;
+published 0.1.1 treats factors that agree within `modelingTolerance` as
+uniform. Such results with curved faces are approximate, so their measured
+volume and area can differ from the analytic values: a cylinder scaled by
+`[1, 2, 1]` measures about 0.9% too large. In published 0.1.1, stock OCCT
+transforms of shapes with complete topology history and a degenerate pole or
+apex edge, such as a sphere or pointed cone, fail; unreleased 0.2 transforms
+them. Shapes with partial history, such as imported shapes and stock Boolean
+results, skip that per-edge work and transform in 0.1.1 as well.
+
+Unreleased 0.2 adds kernel-neutral evaluator checks that run before the
+geometry kernel:
+
+- a revolve profile must lie on one side of the revolve axis, which it may
+  touch; a crossing profile fails with `FEATURE_INVALID` (reason
+  `profile-crosses-axis`)
+- each hole must clear its outer loop and every other hole by more than the
+  sketch tolerance; touching, crossing, outside, or nested holes fail with
+  `SKETCH_NO_CLOSED_REGION`
+- each straight sweep-path segment must be longer than the right-corner miter
+  setbacks at its ends, and remote segments must clear the outer miter reach;
+  otherwise the sweep fails with `FEATURE_INVALID` (reason `path-clearance`).
+  See [clearance and conditioning](/modeling/paths-sweeps-and-lofts#clearance-and-conditioning).
+
 ## Topology
 
 | Capability | Manifold | Stock OCCT | Owned facade |
@@ -34,13 +68,20 @@ explicitly documented weaker contract, and **No** is not advertised.
 | Semantic roles and sketch source | No | Yes, feature-dependent | Yes, feature-dependent |
 | Geometry and adjacency queries | No | Yes | Yes |
 | Selection explanations | Snapshot-dependent | Yes | Yes |
-| Persistent signature protocol v2 | No | Yes | Yes |
-| Stored v1 compatibility profile | No | Yes | Yes |
+| Persistent signature protocol v2 | No | Bundled runtime only | Yes |
+| Stored v1 compatibility profile | No | Bundled runtime only | Yes |
 | Complete feature evolution | No | Partial | Selected feature slices |
 
 Construction and complete history are separate columns conceptually. A stock
 OCCT fillet may construct successfully while downstream semantic lineage is
 partial.
+
+Stock OCCT advertises both signature rows only from the bundled runtime that
+`createOcctKernel()` loads when neither `wasm` nor `moduleFactory` is supplied.
+An explicit `wasm` or `moduleFactory` without the owned facade ABI omits both,
+even with byte-identical stock files. The `mechanical-exact` preflight still
+passes, but a selector that uses a persistent topology reference then fails
+with `KERNEL_CAPABILITY_MISSING`.
 
 ## Product structure and analysis
 
@@ -60,11 +101,19 @@ geometry features are supported:
 | Measurement | Manifold | Stock OCCT | Owned facade | Assembly aggregate |
 | --- | --- | --- | --- | --- |
 | Volume, area, bounds, center, inertia | Yes | Yes | Yes | Yes |
-| Genus | Exact per connected mesh component | Unsupported (`null`) | Unsupported (`null`) | Unsupported (`null`) |
+| Genus (unreleased 0.2) | Exact per connected mesh component | Unsupported (`null`) | Unsupported (`null`) | Unsupported (`null`) |
 
-A numeric genus is exact for the backend representation. Unsupported results
-are explicit `null`; no backend or assembly path guesses, clamps, or silently
-converts the value.
+<Note>
+  The nullable genus contract is unreleased 0.2. Published 0.1.1 types genus
+  as `number` and always returns one: OCCT derives a heuristic integer from the
+  whole shape's Euler characteristic, clamped at zero; Manifold reports its
+  whole-mesh genus, which is negative for disjoint bodies; and assembly
+  aggregates report `0`.
+</Note>
+
+In unreleased 0.2, a numeric genus is exact for the backend representation.
+Unsupported results are explicit `null`; no backend or assembly path guesses,
+clamps, or silently converts the value.
 
 <Note>
   Body-result classification is implemented for the unreleased 0.2 line, not
@@ -101,11 +150,14 @@ multibody product boundary.
 </Note>
 
 The bundled zero-override stock OCCT runtime additionally advertises
-single-solid deterministic STEP export protocol v1: identical bytes require
+single-product deterministic STEP export protocol v1: identical bytes require
 the same backend shape representation, resolved metadata/options,
 implementation, and exact runtime artifact. Explicit `wasm`, `moduleFactory`,
 and attested runtimes retain weak raw STEP and omit this envelope until
-separately qualified. This is narrower than geometric canonicalization and
+separately qualified. An output that OCCT writes as several STEP products, such
+as a disjoint union, returns weak native bytes from a plain `export("step")`
+and fails with `EXPORT_UNSUPPORTED` (reason `multiple-products`) when STEP
+options are passed. This is narrower than geometric canonicalization and
 does not make STEP a portable artifact or cache format. Exact aggregate
 body-set and assembly STEP remains unsupported.
 
@@ -121,9 +173,15 @@ solid through stock OCCT's strong document-body import capability:
 This is a separate opaque one-body document and
 `Evaluator.evaluateImportedBody(...)` method. It verifies a caller-supplied
 SHA-256 and byte-length commitment before parsing, fixes healing to `none`, and
-does not publish the broader Document v7 product model. Multibody import,
-assembly import, repair/healing, automatic file/URL I/O, and approximate
-fallback remain unsupported.
+does not publish the broader Document v7 product model. Its JSON is a frozen,
+minimal [Document v7 subset](/interchange/import-export#imported-body-document-format)
+(schema `https://invariantcad.dev/schema/document/v7`, version `7`) that a
+future public Document v7 will keep accepting. Only the imported-body functions
+read, write, and evaluate it: `parseDocument`, `validateDocument`, and the other
+general v1–v6 document APIs return `IR_INVALID` at `/`, and
+`stringifyDocument`, `hashDocument`, and `cloneDocument` throw `TypeError`.
+Multibody import, assembly import, repair/healing, automatic file/URL I/O, and
+approximate fallback remain unsupported.
 
 ## Runtime coverage
 
@@ -132,7 +190,7 @@ fallback remain unsupported.
 | Node.js 22.13 | Full package checks |
 | Node.js 24 | Full package and documentation checks |
 | Node.js 26 | Tests, coverage, package, and security gates |
-| Chromium production bundle | Manifold and stock OCCT smoke |
+| Chromium production bundle | Manifold and stock OCCT smoke; unreleased 0.2 serves it under the documented [Content Security Policy](/evaluation/browser-and-workers#content-security-policy) |
 | Firefox/Safari | Not yet release-gated |
 | Deno | Not claimed |
 

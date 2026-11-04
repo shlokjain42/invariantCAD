@@ -24,7 +24,9 @@ models.
   present in a public npm release.
 - **Repository-only** means source or evidence exists for development, but the
   capability is deliberately inaccessible to package consumers.
-- **Next** identifies the current product milestone.
+- **Completed in** a release identifies a milestone whose outcomes shipped in
+  that release.
+- **In progress** identifies the current product milestone.
 - **Planned** identifies dependency-ordered work that has not shipped.
 - **Deferred** identifies work blocked on a named prerequisite or external
   review.
@@ -33,9 +35,10 @@ Capabilities are never inferred from a roadmap item. The
 [support matrix](/reference/support-matrix) and runtime capability reports are
 the authority for usable behavior.
 
-The Document v7 product work described below is source-only staging for 0.2.
-It is not available in the public 0.1.1 package unless a later roadmap entry
-explicitly marks it published.
+The Document v7 product work described below is source-only staging for 0.2,
+except the frozen imported-body subset that the unreleased 0.2 imported-body
+workflow reads and writes. None of it is available in the public 0.1.1 package
+unless a later roadmap entry explicitly marks it published.
 
 ## Current baseline
 
@@ -105,9 +108,11 @@ The repository does not silently download or distribute that bundle.
   caller cancellation and output ceilings, authored-metadata and structural
   scan limits, repeatable bytes for the same exact runtime inputs, and
   structured high-level option diagnostics. Explicit runtime overrides retain
-  weak native STEP until separately qualified. This does not claim geometric
-  canonicalization, imported-file canonicalization, exact aggregate STEP,
-  bounded native peak allocation, or a portable artifact/cache format.
+  weak native STEP until separately qualified, and an output that OCCT writes
+  as several STEP products keeps weak native bytes under a plain export. This
+  does not claim geometric canonicalization, imported-file canonicalization,
+  exact aggregate STEP, bounded native peak allocation, or a portable
+  artifact/cache format.
 - A public opaque single-imported-body workflow now captures a caller-supplied
   SHA-256 and byte-length commitment, canonically persists only the strict
   one-resource/one-imported-body/one-output subset, resolves bytes through a
@@ -118,14 +123,33 @@ The repository does not silently download or distribute that bundle.
   shape while borrowing its evaluator and exposes measurement, topology,
   tessellation, and capability-gated single-solid export. This narrow public
   facade does not promote the general Document v7 alias, ordinary builder,
-  product evaluator, body sets, external components, or assemblies.
+  product evaluator, body sets, external components, or assemblies. By
+  maintainer decision, the JSON it writes is a fixed minimal Document v7 subset
+  (schema `https://invariantcad.dev/schema/document/v7`, version 7) that tests
+  freeze byte-for-byte, and a future public Document v7 must keep accepting it.
+  The general v1–v6 document APIs reject Document v7, including this subset:
+  `parseDocument`, `parseDocumentValue`, `validateDocument`, `migrateDocument`,
+  `hashDesignFeatures`, `analyzeDesignImpact`, and `Evaluator.evaluate` return
+  `IR_INVALID` at `/`, and `stringifyDocument`, `hashDocument`, and
+  `cloneDocument` throw `TypeError`.
+- `ShapeMeasurements.genus` is now `number | null`. A number is the exact sum
+  of connected-component genera, which Manifold advertises through a versioned
+  measurement capability. Stock and owned OCCT return `null` instead of the
+  0.1.1 heuristic, and assembly aggregates return `null` instead of `0`.
+  Semantic-observation protocol v1 stays exact-genus only and therefore fails
+  with `KERNEL_CAPABILITY_MISSING` on OCCT; explicit v2 observer, encoder,
+  hash, witness, and codec-audit entry points in `invariantcad/conformance`
+  preserve `null`.
+- An optional versioned body-result classification protocol lets Manifold and
+  OCCT classify one shape as `single-body`, `multiple-bodies`, or
+  `non-body-topology`.
 
 ### Repository-only research and staged work
 
-The repository contains a private owned-OCCT shape-artifact candidate and a
-direct-box evaluator-cache experiment. No public backend advertises
-`shapeArtifacts`, no public evaluator option enables the experiment, and
-ordinary package consumers cannot bind it.
+The repository contains a private OCCT shape-artifact candidate, for the stock
+and owned runtimes, and a direct-box evaluator-cache experiment. No public
+backend advertises `shapeArtifacts`, no public evaluator option enables the
+experiment, and ordinary package consumers cannot bind it.
 
 This research is now maintenance-only while product modeling catches up. Its
 formats, threat boundary, evidence, non-claims, and promotion gates live in the
@@ -212,10 +236,12 @@ The repository-staged `evaluateProductDocument(...)` boundary now coordinates
 that fixed-assembly traversal with direct solid, body-set, and part outputs in
 one ordered mixed result. Requested aliases and output order remain visible,
 while equal definitions share native geometry. The operation captures the root
-document once, prepares one native batch per document and effective
-configuration, performs one aggregate kernel preflight, resolves geometry
-through one document-scoped resource session, and transfers every completed
-batch into one cross-batch ownership transaction and top-level result owner.
+document once and prepares one native batch per document and effective
+configuration, so `externalPart(...)` and `externalAssembly(...)` uses of one
+child document and configuration share a batch. It performs one aggregate
+kernel preflight, resolves geometry through one document-scoped resource
+session, and transfers every completed batch into one cross-batch ownership
+transaction and top-level result owner.
 It does not create synthetic nodes or call four independent evaluators.
 Suppressed structure and unrelated material/resource commitments remain inert;
 failure, cancellation, and late result-construction errors release all acquired
@@ -340,9 +366,14 @@ measurable product program.
 
 - Keep private artifact/cache research frozen except for security, correctness,
   dependency, and release-maintenance fixes.
-- Define a small application-facing API and assign compatibility schemas,
-  conformance protocols, kernel adapters, and future domain APIs to deliberate
-  subpaths or packages.
+- Give backend-author and kernel-specific APIs deliberate subpaths:
+  conformance protocols in `invariantcad/conformance`, the OCCT kernel in
+  `invariantcad/kernels/occt`, and the owned-runtime loaders in
+  `invariantcad/kernels/occt/browser` and `invariantcad/kernels/occt/node`.
+  Frozen v1–v6 document schemas, artifact-cache records, and the Manifold
+  kernel deliberately remain at the package root. Curating a smaller
+  application-facing surface carries forward to the 1.0 public-surface
+  criterion.
 - Add public API-diff reporting before expanding the already large export
   surface.
 - Establish a small executable reference corpus for workflows the public API
@@ -363,16 +394,19 @@ measurable product program.
   named configurations, suppression, material overrides, and BOMs; document
   migration, canonicalization, parsing, and hashing; exact persistent-topology
   capture, resolution, and explanation; and structured document-limit
-  diagnostics. Other feature-level snippets remain illustrative rather than
-  being mislabeled as standalone executable programs.
+  diagnostics. Unreleased 0.2 extends the matrix to eight modules with a
+  verified imported-body round trip (content commitment, caller-supplied
+  resource resolution, canonical persistence, and exact STEP round trip) and an
+  exact composite line/arc route sweep. Other feature-level snippets remain
+  illustrative rather than being mislabeled as standalone executable programs.
 - Raise checked coverage floors toward demonstrated coverage without treating
   100% line coverage as a substitute for realistic models.
 
 ### Exit gate
 
-The public API tiers, reference corpus, benchmark format, and Document v7 design
-are reviewed and executable in CI. New feature work is evaluated against those
-artifacts.
+The public entry points and their API reports, reference corpus, benchmark
+format, and Document v7 design are reviewed and executable in CI. New feature
+work is evaluated against those artifacts.
 
 ## Milestone 1 — composable product documents
 
@@ -428,8 +462,10 @@ cleanup. Real stock-OCCT evidence resolves a committed child document and its
 scoped STEP body, evaluates an imported/Boolean fixed subassembly, retains
 exact leaf topology and STEP export, produces a placed aggregate mesh/STL view,
 and restores the native ownership baseline. The milestone remains in progress
-because all of this Document v7 evidence is source-only staging for 0.2. It
-does not yet cover public v7 promotion, multi-level external-document graphs or
+because all of this Document v7 evidence is source-only staging for 0.2. Only
+the single-imported-body slice becomes public in 0.2, through the unreleased
+imported-body workflow and its frozen Document v7 subset. The evidence does not
+yet cover public v7 promotion, multi-level external-document graphs or
 scalable recursive component libraries, datum-backed modeling, other
 body-consuming operations, or the wider shape algebra; none of it is part of
 public 0.1.1.
