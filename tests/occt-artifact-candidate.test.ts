@@ -678,10 +678,26 @@ describe("OCCT shape-artifact codec candidate", { timeout: 30_000 }, () => {
         return { ...state, topology: { ...state.topology, faces } };
       });
 
+      // A long side face has area 1e9; the square of its 1e9 span once let
+      // its stored area drift by thousands of units.
+      const longFaceArea = rewriteSidecarState(slenderArtifact, (state) => {
+        const index = state.topology.faces.findIndex(
+          (face) => face.area > 1e8,
+        );
+        const face = state.topology.faces[index];
+        if (face === undefined) {
+          throw new TypeError("Slender box state lacks a long side face");
+        }
+        const faces = [...state.topology.faces];
+        faces[index] = { ...face, area: face.area + 4096 };
+        return { ...state, topology: { ...state.topology, faces } };
+      });
+
       const consumerCodec = codec(consumer);
       for (const [label, payload] of [
         ["overflowing stored bound", overflowingBound],
         ["near-face shift on a slender box", nearFaceShift],
+        ["long-face area drift on a slender box", longFaceArea],
       ] as const) {
         const borrowed = payload.slice();
         await expectRejected(() =>

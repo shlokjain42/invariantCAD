@@ -465,6 +465,20 @@ function sameCurve(
  * a distant or large item from loosening the comparison of a small one
  * elsewhere in the same shape.
  */
+/**
+ * Area reference for a face: the product of its two largest bound extents.
+ * Integration over a trimmed face can cancel to an area far below that
+ * product, so it covers that rounding, while a slender face is not given the
+ * square of its longest side as its area scale.
+ */
+function nativeAreaScale(bounds: KernelTopologyBounds): number {
+  const { min, max } = bounds;
+  const x = Math.max(max[0] - min[0], 0);
+  const y = Math.max(max[1] - min[1], 0);
+  const z = Math.max(max[2] - min[2], 0);
+  return Math.max(x * y, x * z, y * z);
+}
+
 function nativeScale(bounds: KernelTopologyBounds): {
   readonly extent: number;
   readonly span: number;
@@ -1108,7 +1122,7 @@ export function remapOcctShapeArtifactTopology(
     const actual = fresh.faces[faceMapping[index]!]!;
     const { extent, span } = nativeScale(actual.bounds);
     if (
-      !derivedNumber(expected.area, actual.area, span * span) ||
+      !derivedNumber(expected.area, actual.area, nativeAreaScale(actual.bounds)) ||
       !derivedVector(expected.center, actual.center, extent) ||
       !derivedVector(expected.bounds.min, actual.bounds.min, extent) ||
       !derivedVector(expected.bounds.max, actual.bounds.max, extent) ||
