@@ -24,6 +24,72 @@ function renamed(document: DesignDocument, from: string, to: string): DesignDocu
 }
 
 describe("JSON Pointer escaping in modeling diagnostics", () => {
+  it("escapes caller-supplied parameter and configuration names", async () => {
+    const evaluator = await createEvaluator();
+    try {
+      const cad = design("pointer-options");
+      cad.output("part", cad.box("part", { size: vec3(mm(1), mm(1), mm(1)) }));
+      const document = cad.build();
+      const parameter = await evaluator.evaluate(document, {
+        parameters: { "p/1~x": 1 },
+      });
+      if (parameter.ok) parameter.value.dispose();
+      expect(parameter.ok).toBe(false);
+      expect(parameter.diagnostics).toEqual([
+        expect.objectContaining({
+          code: "PARAMETER_MISSING",
+          path: "/parameters/p~11~0x",
+        }),
+      ]);
+      const configuration = await evaluator.evaluate(document, {
+        configuration: "c/1~x",
+      });
+      if (configuration.ok) configuration.value.dispose();
+      expect(configuration.ok).toBe(false);
+      expect(configuration.diagnostics).toEqual([
+        expect.objectContaining({
+          code: "CONFIGURATION_MISSING",
+          path: "/configurations/c~11~0x",
+        }),
+      ]);
+    } finally {
+      evaluator.dispose();
+    }
+  });
+
+  it("escapes node and parameter IDs in evaluation diagnostics", async () => {
+    const evaluator = await createEvaluator();
+    try {
+      const cad = design("pointer-feature");
+      const radius = cad.parameter.length("radiusParameter", mm(0));
+      cad.output("ball", cad.sphere("sphereNode", { radius }));
+      const document = renamed(
+        renamed(cad.build(), "sphereNode", "sph/1~x"),
+        "radiusParameter",
+        "r/1~x",
+      );
+      const sphere = await evaluator.evaluate(document);
+      if (sphere.ok) sphere.value.dispose();
+      expect(sphere.ok).toBe(false);
+      expect(sphere.diagnostics).toEqual([
+        expect.objectContaining({
+          code: "FEATURE_INVALID",
+          path: "/nodes/sph~11~0x/radius",
+        }),
+      ]);
+      const override = await evaluator.evaluate(document, {
+        parameters: { "r/1~x": Number.NaN },
+      });
+      if (override.ok) override.value.dispose();
+      expect(override.ok).toBe(false);
+      expect(override.diagnostics[0]).toMatchObject({
+        path: "/parameters/r~11~0x",
+      });
+    } finally {
+      evaluator.dispose();
+    }
+  });
+
   it("points mirror-normal and placement failures at escaped node IDs", async () => {
     const evaluator = await createEvaluator();
     try {
