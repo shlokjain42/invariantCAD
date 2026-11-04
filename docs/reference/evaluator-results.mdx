@@ -10,8 +10,21 @@ icon: "square-play"
 createEvaluator(options?: CreateEvaluatorOptions): Promise<Evaluator>
 ```
 
-`CreateEvaluatorOptions` accepts `kernel`, default-Manifold `manifold` options,
-and `sketchSolver`.
+`CreateEvaluatorOptions` has five optional fields:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `profile` | `"mesh-preview" \| "mechanical-exact"` | Runtime contract. Without `kernel`, `mesh-preview` creates Manifold and `mechanical-exact` creates stock OCCT. The kernel must pass `inspectEvaluatorProfile(kernel, profile)` or creation throws `TypeError` |
+| `kernel` | `GeometryKernel` | Use this kernel instead of creating one; the evaluator takes ownership |
+| `manifold` | `ManifoldKernelOptions` | Options for the created Manifold kernel; allowed without a profile or with `mesh-preview` |
+| `occt` | `OcctKernelOptions` | Options for the stock OCCT kernel that `mechanical-exact` creates |
+| `sketchSolver` | `SketchSolverBackend` | Replace the reference sketch solver; the evaluator takes ownership |
+
+Creation throws `TypeError` for an unknown `profile`, for `occt` without
+`profile: "mechanical-exact"`, and for `manifold` with `mechanical-exact`. When
+`kernel` is supplied, no kernel is created, so `manifold` and `occt` options are
+not used. See [evaluator profiles](/evaluation/evaluator#create-an-evaluator)
+for the capabilities each profile requires.
 
 ## Evaluation
 
@@ -29,9 +42,11 @@ See the [evaluator guide](/evaluation/evaluator) for option semantics.
 | Member | Type | Meaning |
 | --- | --- | --- |
 | `configurationId` | `string \| null` | Active named configuration, or `null` for the base design |
+| `parameters` | `Readonly<Record<string, number>>` | Resolved value of every document parameter in base units, after configuration bindings and evaluation overrides |
+| `diagnostics` | `readonly Diagnostic[]` | Warnings and information attached to the successful evaluation, such as `EMPTY_RESULT` warnings under `allowEmpty` |
 | `outputNames` | `readonly string[]` | Evaluated output names in deterministic order |
 | `output(name)` | `EvaluatedOutput` | Fetch a live named output or throw for an unavailable name |
-| `dispose()` | `void` | Release all shapes owned by the evaluation |
+| `dispose()` | `void` | Release all shapes owned by the evaluation; later calls are no-ops (see [ownership](/evaluation/evaluator#ownership-and-disposal)) |
 
 ## EvaluatedSolid
 
@@ -40,7 +55,7 @@ See the [evaluator guide](/evaluation/evaluator) for option semantics.
 | `mesh(options?)` | `MeshData` | Fresh detached typed arrays |
 | `measure()` | `ShapeMeasurements` | Geometric measurements in document units |
 | `topology()` | `CadResult<KernelTopologySnapshot>` | Requires backend topology support |
-| `export("stl")` | `Uint8Array` | Binary STL |
+| `export("stl")` | `Uint8Array` | Binary STL; the header holds the output name (see [exporters](/reference/public-surface#exporters)) |
 | `export("stl-ascii")` | `string` | ASCII STL |
 | `export("obj")` | `string` | Wavefront OBJ |
 | `export("step", options?)` | `Uint8Array` | No-options weak native export is published; deterministic options are an unreleased 0.2 strong contract |
@@ -57,7 +72,11 @@ density source, `billOfMaterials()`, and `physicalMassProperties()`.
 Provides:
 
 - `instances`: flattened evaluated part occurrences with stable paths and
-  transforms
+  transforms. The array, each occurrence record, and each `transform` are
+  frozen, detached copies of the data the result uses, so writing into them
+  throws in strict mode and never changes the assembly's mesh, measurements,
+  BOM, or later evaluations. Outputs that name the same assembly node share
+  one `instances` array
 - `mesh(options?)`: merged placed occurrence mesh
 - `measure()`: aggregate geometric properties from occurrence kernel
   measurements (see [assembly aggregation](/analysis/measurements#assembly-aggregation))

@@ -12,6 +12,7 @@ import {
   rotationMatrix,
   scaleMatrix,
   translationMatrix,
+  unitVector3,
   type Mat4,
   type Vec3,
 } from "../core/math.js";
@@ -140,7 +141,6 @@ const localAssemblyStringSlice = String.prototype.slice;
 const localAssemblyStringReplaceAll = String.prototype.replaceAll;
 const localAssemblyStringTrim = String.prototype.trim;
 const localAssemblyMathAbs = Math.abs;
-const localAssemblyMathHypot = Math.hypot;
 const LocalAssemblyUint32Array = Uint32Array;
 const localAssemblyUint32ArrayPrototype = Uint32Array.prototype;
 const localAssemblyTypedArrayPrototype =
@@ -1645,12 +1645,9 @@ function resolvedPlacement(
     } else if (operation.kind === "scale") {
       matrix = scaleMatrix(vector.value);
     } else {
-      const magnitude = localAssemblyApply<number>(
-        localAssemblyMathHypot,
-        Math,
-        [vector.value[0], vector.value[1], vector.value[2]],
-      );
-      if (!localAssemblyFinite(magnitude) || magnitude === 0) {
+      // Scale before squaring so every finite non-zero normal is accepted.
+      const unit = unitVector3(vector.value);
+      if (unit === undefined) {
         return failure(
           diagnostic(
             "FEATURE_INVALID",
@@ -1664,10 +1661,7 @@ function resolvedPlacement(
           ),
         );
       }
-      const [x, y, z] = vector.value;
-      const nx = x / magnitude;
-      const ny = y / magnitude;
-      const nz = z / magnitude;
+      const [nx, ny, nz] = unit;
       matrix = [
         1 - 2 * nx * nx,
         -2 * nx * ny,

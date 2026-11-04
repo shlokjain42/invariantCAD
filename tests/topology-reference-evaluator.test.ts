@@ -885,6 +885,59 @@ describe("document-owned topology references in evaluator", () => {
     expect(harness.disposeShapeCalls()).toBe(1);
   });
 
+  it("keeps a non-enumerable limit when a signal-bearing request is captured", async () => {
+    const harness = createHarness();
+    const limits = {};
+    Object.defineProperty(limits, "maxCandidatePairs", { value: 3 });
+    const result = await evaluate(harness, twoReferenceFilletDocument(), {
+      signal: new AbortController().signal,
+      topologySignatureLimits: limits,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics[0]).toMatchObject({
+      code: "TOPOLOGY_SIGNATURE_LIMIT_EXCEEDED",
+      node: "treated",
+      details: {
+        resource: "maxCandidatePairs",
+        limit: 3,
+        actual: 4,
+      },
+    });
+    expect(harness.filletKeys).toHaveLength(0);
+    expect(harness.disposeShapeCalls()).toBe(1);
+  });
+
+  it("keeps a captured limit when Object.prototype has a setter of that name", async () => {
+    const harness = createHarness();
+    let intercepted = 0;
+    Object.defineProperty(Object.prototype, "maxCandidatePairs", {
+      configurable: true,
+      get: () => undefined,
+      set: () => {
+        intercepted += 1;
+      },
+    });
+    let result: CadResult<EvaluatedDesign>;
+    try {
+      result = await evaluate(harness, twoReferenceFilletDocument(), {
+        signal: new AbortController().signal,
+        topologySignatureLimits: { maxCandidatePairs: 3 },
+      });
+    } finally {
+      delete (Object.prototype as { maxCandidatePairs?: unknown })
+        .maxCandidatePairs;
+    }
+
+    expect(intercepted).toBe(0);
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics[0]).toMatchObject({
+      code: "TOPOLOGY_SIGNATURE_LIMIT_EXCEEDED",
+      details: { resource: "maxCandidatePairs", limit: 3, actual: 4 },
+    });
+    expect(harness.disposeShapeCalls()).toBe(1);
+  });
+
   it("shares one matching work budget across v2 and compatibility-profile sessions", async () => {
     const harness = createHarness({
       signatures: signatureCapabilitiesV2,

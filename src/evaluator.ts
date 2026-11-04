@@ -12,6 +12,7 @@ import {
   rotationMatrix,
   scaleMatrix,
   translationMatrix,
+  unitVector3,
   type Mat4,
   type Vec3,
 } from "./core/math.js";
@@ -159,6 +160,7 @@ import {
   resolveEvaluationParameters,
   type EvaluationParameterOverride,
 } from "./internal/evaluation-parameters.js";
+import { captureYieldingEvaluationRequest } from "./internal/evaluation-request-capture.js";
 import { getArtifactCacheSessionInternalAccess } from "./internal/artifact-cache-session-access.js";
 import {
   getEvaluatorArtifactCacheCandidateBinding,
@@ -287,6 +289,12 @@ export interface EvaluationOptions {
   readonly parameters?: Readonly<Record<string, ParameterOverride>>;
   readonly outputs?: readonly string[];
   readonly signal?: AbortSignal;
+  /**
+   * Accept zero-volume feature results. Each one then produces an
+   * `EMPTY_RESULT` warning instead of failing the evaluation, and an empty
+   * solid can be returned as an output. It does not permit an empty output
+   * selection, which always fails with `OUTPUT_MISSING`.
+   */
   readonly allowEmpty?: boolean;
   /** Operational work limits for resolving stored topology evidence. */
   readonly topologySignatureLimits?: Partial<TopologySignatureLimits>;
@@ -678,6 +686,10 @@ interface AssemblyOccurrence {
 interface AssemblyValue {
   readonly kind: "assembly";
   readonly occurrences: readonly AssemblyOccurrence[];
+  /** Assembly nesting depth; an assembly of parts only has depth 1. */
+  readonly depth: number;
+  /** Total instance-path segments across `occurrences`. */
+  readonly pathSegments: number;
 }
 
 type NodeValue = ProfileValue | PathValue | SolidValue | PartValue | AssemblyValue;
@@ -693,11 +705,11 @@ class EvaluationFailure extends Error {
 }
 
 function mirrorMatrix(normal: Vec3): Mat4 {
-  const magnitude = Math.hypot(...normal);
-  if (magnitude < Number.EPSILON) {
-    throw new RangeError("Mirror normal cannot be zero");
+  const unit = unitVector3(normal);
+  if (unit === undefined) {
+    throw new RangeError("Mirror normal must be finite and non-zero");
   }
-  const [x, y, z] = normal.map((value) => value / magnitude) as unknown as Vec3;
+  const [x, y, z] = unit;
   return [
     1 - 2 * x * x,
     -2 * x * y,
@@ -731,12 +743,121 @@ function operationMatrix(operation: ResolvedTransformOperation): Mat4 {
   }
 }
 
+/**
+ * Fixed ceilings for flattening public v1-v6 assemblies. Occurrence records and
+ * path segments are charged cumulatively across one evaluation, before they
+ * are allocated, so a small document cannot expand into an unbounded tree.
+ */
+const PUBLIC_ASSEMBLY_EVALUATION_LIMITS = Object.freeze({
+  maxActiveOccurrences: 100_000,
+  maxAssemblyDepth: 64,
+  maxOccurrencePathSegments: 1_000_000,
+});
+
+function assemblyLimitFailure(
+  resource: keyof typeof PUBLIC_ASSEMBLY_EVALUATION_LIMITS,
+  actual: number,
+  node: NodeId,
+  path: string,
+): EvaluationFailure {
+  const limit = PUBLIC_ASSEMBLY_EVALUATION_LIMITS[resource];
+  return new EvaluationFailure(
+    diagnostic(
+      "RESOURCE_LIMIT_EXCEEDED",
+      `Assembly evaluation limit '${resource}' (${limit}) was exceeded`,
+      {
+        severity: "error",
+        node,
+        path,
+        details: { resource, limit, actual },
+      },
+    ),
+  );
+}
+
 function operationsMatrix(operations: readonly ResolvedTransformOperation[]): Mat4 {
   let result = IDENTITY_MATRIX;
   for (const operation of operations) {
     result = multiplyMatrices(operationMatrix(operation), result);
   }
   return result;
+}
+
+type KernelCapabilityCheckKind = Exclude<
+  KernelCapabilityKind,
+  "compositeSweepRefinement" | "exactIndexedTopologyEvolution" | "measurement"
+>;
+
+/**
+ * Returns the diagnostic for a node whose kernel does not declare, or does not
+ * implement, the requested capability, or `undefined` when it is usable.
+ * Primitives and features are implemented by the method of the same name;
+ * native import and export formats are implemented by `importShape` and
+ * `exportShape`.
+ *
+ * @internal
+ */
+export function kernelCapabilityDiagnostic(
+  kernel: GeometryKernel,
+  kind: KernelCapabilityCheckKind,
+  capability: KernelPrimitive | KernelFeature | KernelExchangeFormat,
+  id: NodeId,
+): Diagnostic | undefined {
+  const supported =
+    kind === "primitive"
+      ? kernelSupports(
+          kernel.capabilities,
+          "primitive",
+          capability as KernelPrimitive,
+        )
+      : kind === "feature"
+        ? kernelSupports(
+            kernel.capabilities,
+            "feature",
+            capability as KernelFeature,
+          )
+        : kernelSupports(
+            kernel.capabilities,
+            kind,
+            capability as KernelExchangeFormat,
+          );
+  if (!supported) {
+    return diagnostic(
+      "KERNEL_CAPABILITY_MISSING",
+      `Kernel '${kernel.id}' does not support ${kind} '${capability}'`,
+      {
+        severity: "error",
+        node: id,
+        path: `/nodes/${jsonPointerSegment(id)}`,
+        hints: ["Choose a compatible geometry kernel for this design"],
+        details: { kernel: kernel.id, kind, capability },
+      },
+    );
+  }
+  const method: keyof GeometryKernel =
+    kind === "nativeImport"
+      ? "importShape"
+      : kind === "nativeExport"
+        ? "exportShape"
+        : (capability as KernelPrimitive | KernelFeature);
+  if (typeof kernel[method] !== "function") {
+    return diagnostic(
+      "KERNEL_ERROR",
+      `Kernel '${kernel.id}' declares ${kind} '${capability}' without implementing it`,
+      {
+        severity: "error",
+        node: id,
+        path: `/nodes/${jsonPointerSegment(id)}`,
+        details: {
+          kernel: kernel.id,
+          kind,
+          capability,
+          protocolViolation: true,
+        },
+      },
+    );
+  }
+  return undefined;
 }
 
 function meshGeometryMeasurements(mesh: MeshData): Pick<
@@ -980,10 +1101,23 @@ class EvaluationOwner {
       [this],
     ) as CapturedEvaluationOwnerDisposal | undefined;
     if (capturedDisposal === undefined) {
-      for (let index = 0; index < this.#shapes.length; index += 1) {
-        this.kernel.disposeShape(this.#shapes[index]!);
-      }
+      // Mark the owner disposed first and attempt every shape exactly once,
+      // so one failing release neither leaks the rest nor leaves the result
+      // usable over released shapes.
       this.#disposed = true;
+      let firstError: unknown;
+      let disposalFailed = false;
+      for (let index = 0; index < this.#shapes.length; index += 1) {
+        try {
+          this.kernel.disposeShape(this.#shapes[index]!);
+        } catch (error) {
+          if (!disposalFailed) {
+            firstError = error;
+            disposalFailed = true;
+          }
+        }
+      }
+      if (disposalFailed) throw firstError;
       return;
     }
 
@@ -2618,6 +2752,19 @@ export interface EvaluatedOccurrence {
   readonly transform: Mat4;
 }
 
+/**
+ * Frozen occurrence data keyed by an evaluation's flattened occurrence list.
+ * Several outputs can name one assembly node; they share this copy instead of
+ * each allocating records outside the assembly evaluation ceilings.
+ */
+const sharedAssemblyOccurrences = new WeakMap<
+  readonly AssemblyOccurrence[],
+  {
+    readonly occurrences: readonly AssemblyOccurrence[];
+    readonly instances: readonly EvaluatedOccurrence[];
+  }
+>();
+
 export class EvaluatedAssembly {
   readonly name: string;
   readonly instances: readonly EvaluatedOccurrence[];
@@ -2631,8 +2778,27 @@ export class EvaluatedAssembly {
   ) {
     this.name = name;
     this.owner = owner;
-    this.occurrences = occurrences;
-    this.instances = occurrences.map((occurrence) => ({
+    // Outputs that name the same assembly node share one frozen copy, so
+    // output aliases cost nothing per occurrence.
+    const shared = sharedAssemblyOccurrences.get(occurrences);
+    if (shared !== undefined) {
+      this.occurrences = shared.occurrences;
+      this.instances = shared.instances;
+      return;
+    }
+    // Detach every occurrence transform into a frozen copy shared by the public
+    // instances and the internal mesh, measure, and BOM paths, so no caller can
+    // write through a public transform into this result or into shared
+    // evaluator matrices.
+    this.occurrences = Object.freeze(
+      occurrences.map((occurrence) =>
+        Object.freeze({
+          ...occurrence,
+          transform: Object.freeze([...occurrence.transform]) as unknown as Mat4,
+        }),
+      ),
+    );
+    this.instances = Object.freeze(this.occurrences.map((occurrence) => Object.freeze({
       id: occurrence.id,
       partNode: occurrence.part.node,
       ...(occurrence.part.definition.partNumber === undefined
@@ -2657,7 +2823,11 @@ export class EvaluatedAssembly {
         ? {}
         : { massDensitySource: occurrence.part.massDensitySource }),
       transform: occurrence.transform,
-    }));
+    })));
+    sharedAssemblyOccurrences.set(occurrences, {
+      occurrences: this.occurrences,
+      instances: this.instances,
+    });
   }
 
   billOfMaterials(): CadResult<BillOfMaterials> {
@@ -9256,18 +9426,10 @@ function resolvedTransformOperationV7(
     }
   }
   if (operation.kind === "mirror") {
-    const squaredNorm =
-      vector[0] * vector[0] +
-      vector[1] * vector[1] +
-      vector[2] * vector[2];
-    if (
-      !importedBodyApply<boolean>(
-        importedBodyNumberIsFinite,
-        Number,
-        [squaredNorm],
-      ) ||
-      !(squaredNorm > 0)
-    ) {
+    // Scale before squaring so every finite non-zero normal is accepted, and
+    // hand kernels a unit normal they cannot overflow while normalizing.
+    const unit = unitVector3(vector);
+    if (unit === undefined) {
       return failure(
         diagnostic(
           "FEATURE_INVALID",
@@ -9278,7 +9440,7 @@ function resolvedTransformOperationV7(
             path: `/nodes/${nodeId}/operations/${operationIndex}/normal`,
             details: {
               phase: diagnostics.phase,
-              squaredNorm,
+              normal: vector,
             },
           },
         ),
@@ -9288,7 +9450,16 @@ function resolvedTransformOperationV7(
       importedBodyApply<ResolvedTransformOperation>(
         importedBodyObjectFreeze,
         Object,
-        [{ kind: "mirror", normal: vector }],
+        [
+          {
+            kind: "mirror",
+            normal: importedBodyApply<Vec3>(
+              importedBodyObjectFreeze,
+              Object,
+              [unit],
+            ),
+          },
+        ],
       ),
     );
   }
@@ -13245,6 +13416,7 @@ export class Evaluator {
   #disposed = false;
   #artifactCacheEvaluationActive = false;
   #activeImportedBodyEvaluations = 0;
+  #suspendedEvaluations = 0;
 
   constructor(kernel: GeometryKernel, sketchSolver: SketchSolverBackend) {
     this.kernel = kernel;
@@ -13364,6 +13536,7 @@ export class Evaluator {
   ): Promise<CadResult<EvaluatedDesign>> {
     let document = inputDocument;
     let options = inputOptions;
+    let yieldsToHost = false;
     if (artifactCache !== undefined) {
       const parsed = parseDocumentValue(inputDocument);
       if (!parsed.ok) return parsed;
@@ -13371,6 +13544,21 @@ export class Evaluator {
       if (!capturedOptions.ok) return capturedOptions;
       document = parsed.value;
       options = capturedOptions.value;
+      yieldsToHost = options.signal !== undefined;
+    } else {
+      // A signal-bearing evaluation yields to the host, so work on a captured
+      // request: later changes to the caller's objects cannot reach nodes
+      // evaluated after a yield.
+      const captured = captureYieldingEvaluationRequest(
+        inputDocument,
+        inputOptions,
+      );
+      if (captured !== undefined) {
+        if (!captured.ok) return captured;
+        document = captured.value.document;
+        options = captured.value.options;
+        yieldsToHost = true;
+      }
     }
     if (
       (this.kernel.capabilities.protocolVersion as number) !==
@@ -13513,12 +13701,27 @@ export class Evaluator {
     };
     const resolvedTransform = (
       operation: TransformOperationIR,
+      node: NodeId,
+      path: string,
     ): ResolvedTransformOperation => {
       if (operation.kind === "mirror") {
-        return {
-          kind: "mirror",
-          normal: operation.normal.map(expression) as unknown as Vec3,
-        };
+        const authored = operation.normal.map(expression) as unknown as Vec3;
+        const normal = unitVector3(authored);
+        if (normal === undefined) {
+          throw new EvaluationFailure(
+            diagnostic(
+              "FEATURE_INVALID",
+              "Mirror normal must be finite and non-zero",
+              {
+                severity: "error",
+                node,
+                path: `${path}/normal`,
+                details: { normal: authored },
+              },
+            ),
+          );
+        }
+        return { kind: "mirror", normal };
       }
       return {
         kind: operation.kind,
@@ -13527,6 +13730,9 @@ export class Evaluator {
     };
     const cache = new Map<NodeId, NodeValue>();
     const createdShapes = new Set<KernelShape>();
+    let flattenedOccurrences = 0;
+    let flattenedPathSegments = 0;
+    let activeAssemblies = 0;
     const ensureLive = (): void => {
       if (options.signal?.aborted) {
         throw new EvaluationFailure(
@@ -13566,70 +13772,17 @@ export class Evaluator {
       return { kind: "solid", shape };
     };
     const requireKernelCapability = (
-      kind: Exclude<
-        KernelCapabilityKind,
-        | "compositeSweepRefinement"
-        | "exactIndexedTopologyEvolution"
-        | "measurement"
-      >,
+      kind: KernelCapabilityCheckKind,
       capability: KernelPrimitive | KernelFeature | KernelExchangeFormat,
       id: NodeId,
     ): void => {
-      const supported =
-        kind === "primitive"
-          ? kernelSupports(
-              this.kernel.capabilities,
-              "primitive",
-              capability as KernelPrimitive,
-            )
-          : kind === "feature"
-            ? kernelSupports(
-                this.kernel.capabilities,
-                "feature",
-                capability as KernelFeature,
-              )
-            : kernelSupports(
-                this.kernel.capabilities,
-                kind,
-                capability as KernelExchangeFormat,
-              );
-      if (!supported) {
-        throw new EvaluationFailure(
-          diagnostic(
-            "KERNEL_CAPABILITY_MISSING",
-            `Kernel '${this.kernel.id}' does not support ${kind} '${capability}'`,
-            {
-              severity: "error",
-              node: id,
-              path: `/nodes/${id}`,
-              hints: ["Choose a compatible geometry kernel for this design"],
-              details: { kernel: this.kernel.id, kind, capability },
-            },
-          ),
-        );
-      }
-      const implementation = this.kernel[
-        capability as keyof GeometryKernel
-      ];
-      if (typeof implementation !== "function") {
-        throw new EvaluationFailure(
-          diagnostic(
-            "KERNEL_ERROR",
-            `Kernel '${this.kernel.id}' declares ${kind} '${capability}' without implementing it`,
-            {
-              severity: "error",
-              node: id,
-              path: `/nodes/${id}`,
-              details: {
-                kernel: this.kernel.id,
-                kind,
-                capability,
-                protocolViolation: true,
-              },
-            },
-          ),
-        );
-      }
+      const missing = kernelCapabilityDiagnostic(
+        this.kernel,
+        kind,
+        capability,
+        id,
+      );
+      if (missing !== undefined) throw new EvaluationFailure(missing);
     };
     const requireExactIndexedTopologyEvolution = (
       capability: KernelFeature,
@@ -14996,7 +15149,13 @@ export class Evaluator {
             result = ownShape(
               this.kernel.transform!(
                 solidRef(node.input),
-                node.operations.map(resolvedTransform),
+                node.operations.map((operation, index) =>
+                  resolvedTransform(
+                    operation,
+                    id,
+                    `/nodes/${jsonPointerSegment(id)}/operations/${index}`,
+                  ),
+                ),
                 featureContext(id),
               ),
               id,
@@ -15291,34 +15450,120 @@ export class Evaluator {
           }
           case "assembly": {
             const occurrences: AssemblyOccurrence[] = [];
-            for (const instance of node.instances) {
-              const suppressed =
-                configuredInstanceSuppression(id, instance.id) ??
-                instance.suppressed;
-              if (suppressed) continue;
-              const component = evaluateNode(instance.component.node);
-              const placement = operationsMatrix(
-                instance.placement.map(resolvedTransform),
-              );
-              if (component.kind === "part") {
-                occurrences.push({
-                  id: instance.id,
-                  part: component,
-                  transform: placement,
-                });
-              } else if (component.kind === "assembly") {
-                occurrences.push(
-                  ...component.occurrences.map((occurrence) => ({
-                    id: `${instance.id}/${occurrence.id}`,
-                    part: occurrence.part,
-                    transform: multiplyMatrices(placement, occurrence.transform),
-                  })),
+            const maxDepth = PUBLIC_ASSEMBLY_EVALUATION_LIMITS.maxAssemblyDepth;
+            let depth = 1;
+            let pathSegments = 0;
+            // Charge flattened records before allocating them.
+            const chargeOccurrences = (
+              count: number,
+              segments: number,
+              path: string,
+            ): void => {
+              const limits = PUBLIC_ASSEMBLY_EVALUATION_LIMITS;
+              if (count > limits.maxActiveOccurrences - flattenedOccurrences) {
+                throw assemblyLimitFailure(
+                  "maxActiveOccurrences",
+                  flattenedOccurrences + count,
+                  id,
+                  path,
                 );
-              } else {
-                throw new Error("Assembly component did not evaluate to a part");
               }
+              if (
+                segments >
+                limits.maxOccurrencePathSegments - flattenedPathSegments
+              ) {
+                throw assemblyLimitFailure(
+                  "maxOccurrencePathSegments",
+                  flattenedPathSegments + segments,
+                  id,
+                  path,
+                );
+              }
+              flattenedOccurrences += count;
+              flattenedPathSegments += segments;
+              pathSegments += segments;
+            };
+            // Depth counts nesting from the outermost assembly on the current
+            // evaluation stack, so a deep chain fails before it can exhaust the
+            // call stack.
+            activeAssemblies += 1;
+            try {
+              for (const [instanceIndex, instance] of node.instances.entries()) {
+                const suppressed =
+                  configuredInstanceSuppression(id, instance.id) ??
+                  instance.suppressed;
+                if (suppressed) continue;
+                const instancePath =
+                  `/nodes/${jsonPointerSegment(id)}/instances/${instanceIndex}`;
+                if (
+                  instance.component.kind === "assembly" &&
+                  activeAssemblies + 1 > maxDepth
+                ) {
+                  throw assemblyLimitFailure(
+                    "maxAssemblyDepth",
+                    activeAssemblies + 1,
+                    id,
+                    `${instancePath}/component`,
+                  );
+                }
+                const component = evaluateNode(instance.component.node);
+                const placement = operationsMatrix(
+                  instance.placement.map((operation, operationIndex) =>
+                    resolvedTransform(
+                      operation,
+                      id,
+                      `${instancePath}/placement/${operationIndex}`,
+                    ),
+                  ),
+                );
+                if (component.kind === "part") {
+                  chargeOccurrences(1, 1, instancePath);
+                  occurrences.push({
+                    id: instance.id,
+                    part: component,
+                    transform: placement,
+                  });
+                } else if (component.kind === "assembly") {
+                  // A cached subassembly can be deeper than this stack shows.
+                  if (activeAssemblies + component.depth > maxDepth) {
+                    throw assemblyLimitFailure(
+                      "maxAssemblyDepth",
+                      activeAssemblies + component.depth,
+                      id,
+                      `${instancePath}/component`,
+                    );
+                  }
+                  if (component.depth + 1 > depth) depth = component.depth + 1;
+                  const nested = component.occurrences;
+                  chargeOccurrences(
+                    nested.length,
+                    component.pathSegments + nested.length,
+                    instancePath,
+                  );
+                  // Append one record at a time; spreading a large array into
+                  // push() overflows the call stack.
+                  for (let index = 0; index < nested.length; index += 1) {
+                    if (index % 1024 === 0) ensureLive();
+                    const occurrence = nested[index]!;
+                    occurrences.push({
+                      id: `${instance.id}/${occurrence.id}`,
+                      part: occurrence.part,
+                      transform: multiplyMatrices(
+                        placement,
+                        occurrence.transform,
+                      ),
+                    });
+                  }
+                } else {
+                  throw new Error(
+                    "Assembly component did not evaluate to a part",
+                  );
+                }
+              }
+            } finally {
+              activeAssemblies -= 1;
             }
-            result = { kind: "assembly", occurrences };
+            result = { kind: "assembly", occurrences, depth, pathSegments };
             break;
           }
         }
@@ -15350,6 +15595,9 @@ export class Evaluator {
           ),
         );
       }
+      // Observe an abort raised during this node's own work before a
+      // dependent feature passes its result to the kernel.
+      ensureLive();
       cache.set(id, result);
       return result;
     };
@@ -15358,20 +15606,47 @@ export class Evaluator {
       const requested = options.outputs ?? Object.keys(document.outputs);
       if (requested.length === 0) {
         throw new EvaluationFailure(
-          diagnostic("OUTPUT_MISSING", "The document has no outputs", {
-            severity: "error",
-            path: "/outputs",
-          }),
+          diagnostic(
+            "OUTPUT_MISSING",
+            options.outputs === undefined
+              ? "The document has no outputs"
+              : "No outputs were selected",
+            {
+              severity: "error",
+              path: "/outputs",
+            },
+          ),
         );
       }
       const rawOutputs = new Map<string, NodeValue>();
+      let outputIndex = -1;
       for (const name of requested) {
-        const reference = document.outputs[name];
+        outputIndex += 1;
+        if (yieldsToHost) {
+          // Let timers, UI events, and worker messages run, so a host abort
+          // can land before evaluation starts and between selected outputs.
+          await this.#yieldToHost();
+          ensureLive();
+        }
+        // Check the type before any lookup: converting a caller object to a
+        // property key would run its toString() and could pick another output.
+        if (typeof name !== "string") {
+          throw new EvaluationFailure(
+            diagnostic(
+              "IR_INVALID",
+              `Evaluation options.outputs[${outputIndex}] must be a string`,
+              { severity: "error", path: `/options/outputs/${outputIndex}` },
+            ),
+          );
+        }
+        const reference = Object.hasOwn(document.outputs, name)
+          ? document.outputs[name]
+          : undefined;
         if (reference === undefined) {
           throw new EvaluationFailure(
             diagnostic("OUTPUT_MISSING", `Unknown output '${name}'`, {
               severity: "error",
-              path: `/outputs/${name}`,
+              path: `/outputs/${jsonPointerSegment(name)}`,
             }),
           );
         }
@@ -15382,6 +15657,11 @@ export class Evaluator {
           await prepareDirectCachedBox(reference.node, directNode);
         }
         rawOutputs.set(name, evaluateNode(reference.node));
+      }
+      if (yieldsToHost) {
+        // Observe a host abort issued while the last output was evaluated.
+        await this.#yieldToHost();
+        ensureLive();
       }
       const owner = new EvaluationOwner(
         this.kernel,
@@ -15419,7 +15699,14 @@ export class Evaluator {
       );
       return success(evaluated, diagnostics);
     } catch (error) {
-      for (const shape of createdShapes) this.kernel.disposeShape(shape);
+      for (const shape of createdShapes) {
+        try {
+          this.kernel.disposeShape(shape);
+        } catch {
+          // Preserve the original structured failure while making best-effort
+          // cleanup of every other shape created by this evaluation.
+        }
+      }
       const value =
         error instanceof EvaluationFailure
           ? error.diagnostic
@@ -15433,12 +15720,26 @@ export class Evaluator {
     }
   }
 
+  async #yieldToHost(): Promise<void> {
+    this.#suspendedEvaluations += 1;
+    try {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+    } finally {
+      this.#suspendedEvaluations -= 1;
+    }
+  }
+
   dispose(): void {
     if (this.#disposed) return;
     if (this.#artifactCacheEvaluationActive) {
       throw new Error(
         "Cannot dispose an evaluator during a private artifact-cache evaluation",
       );
+    }
+    if (this.#suspendedEvaluations > 0) {
+      throw new Error("Cannot dispose an evaluator during an evaluation");
     }
     if (this.#activeImportedBodyEvaluations > 0) {
       throw new Error(

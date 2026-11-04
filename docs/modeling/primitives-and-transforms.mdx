@@ -36,8 +36,13 @@ exact OCCT circle into a polygon; exact kernels can preserve analytic surfaces
 while using the value for mesh extraction where applicable.
 
 All size, height, and radius expressions must resolve to finite valid geometry.
-The evaluator rejects zero or negative dimensions before asking a kernel to
-construct the shape.
+Before asking a kernel to construct the shape, the evaluator rejects with
+`FEATURE_INVALID` any box size, cylinder `height`, cylinder `radius` (stored as
+`radiusBottom`), or sphere `radius` that is zero or negative. A cylinder's
+`radiusTop` is the one exception: it may be zero, which builds a cone that comes
+to a point at the top, and only a negative value is rejected. Because the bottom
+radius must stay positive, author a downward-pointing cone apex-up and then
+rotate or mirror it.
 
 ## One transform
 
@@ -84,8 +89,15 @@ const mirrored = cad.mirror(
 );
 ```
 
-The vector is the mirror-plane normal. It must resolve to a usable finite
-direction. A zero normal is invalid.
+The vector is the normal of the mirror plane through the origin. Only its
+direction matters: the evaluator normalizes every finite, non-zero normal before
+calling the kernel, so `scalarVec3(2, 0, 0)`, `scalarVec3(1e-200, 0, 0)`, and
+`scalarVec3(1e200, 0, 0)` all mirror across the same plane. A normal whose
+components all resolve to zero, for example through a parameter override, fails
+with `FEATURE_INVALID` at `/nodes/<id>/operations/<index>/normal` before the
+kernel is asked to transform anything. The same rule applies to a `tf.mirror`
+assembly placement, whose diagnostic path ends in
+`/instances/<index>/placement/<index>/normal`.
 
 ## Topology through transforms
 

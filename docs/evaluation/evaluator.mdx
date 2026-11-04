@@ -23,11 +23,25 @@ const preview = await createEvaluator({ profile: "mesh-preview" });
 const exact = await createEvaluator({ profile: "mechanical-exact" });
 ```
 
-`mesh-preview` creates Manifold and requires its common mesh-modeling baseline.
-`mechanical-exact` creates stock OCCT and requires exact B-Rep, the common exact
-feature set, STEP/BREP import and export, and face/edge/vertex topology. A
-supplied custom kernel is checked against the same profile before an evaluator
-is returned.
+Both profiles require kernel protocol version 1 and callable `box`,
+`cylinder`, and `sphere` primitives.
+
+- `mesh-preview` creates Manifold and requires a mesh representation plus
+  `extrude`, `revolve`, `boolean`, and `transform`.
+- `mechanical-exact` creates stock OCCT and requires an exact B-Rep
+  representation; the `extrude`, `revolve`, `loft`, `sweep`,
+  `circularArcSweep`, `compositeSweep`, `boolean`, `transform`, `fillet`,
+  `chamfer`, `shell`, and `offset` features; native `step`, `brep`, and
+  `brep-binary` import and export through `importShape` and `exportShape`; and
+  topology snapshots through a callable `topology()` whose capabilities cover
+  faces, edges, and vertices with semantic roles, sketch sources, geometry, and
+  adjacency.
+
+A supplied custom kernel is checked against the same profile before an
+evaluator is returned. `manifold` options are allowed only without a profile or
+with `mesh-preview`, and `occt` options only with `mechanical-exact`; any other
+combination throws `TypeError`. When you supply `kernel`, no kernel is created,
+so `manifold` and `occt` options are not used.
 
 Use `inspectEvaluatorProfile(kernel, profile)` when an application needs to
 show missing capabilities without attempting evaluator creation. The returned
@@ -88,14 +102,16 @@ const result = await evaluator.evaluate(document, {
 | Option | Meaning |
 | --- | --- |
 | `configuration` | Exact document-owned configuration ID; omission selects the base design |
-| `parameters` | Finite overrides in document base units |
+| `parameters` | Overrides by parameter ID: finite numbers in document base units, or expressions of the parameter's dimension such as `mm(120)` |
 | `outputs` | Evaluate only the named output closure instead of every output |
 | `signal` | Cooperative cancellation signal |
-| `allowEmpty` | Permit an evaluation request with no selected outputs |
+| `allowEmpty` | Accept zero-volume feature results: `EMPTY_RESULT` becomes a warning instead of an error, and an empty solid can be returned as an output |
 | `topologySignatureLimits` | Bound persistent-reference matching work |
 
 Unknown output, parameter, or configuration IDs produce diagnostics. Duplicate
-output names in the option array are normalized rather than evaluated twice.
+output names in the option array are normalized rather than evaluated twice. An
+explicitly empty `outputs` array always fails with `OUTPUT_MISSING`, whatever
+`allowEmpty` is set to.
 
 ## Result handling
 
@@ -154,21 +170,79 @@ result.value.dispose(); // safe no-op
 // body.measure() now throws because its owner is disposed.
 ```
 
+`dispose()` marks the design disposed before it releases anything, then
+attempts every owned shape exactly once. If a kernel release throws, the
+remaining shapes are still released, the first error is rethrown, and the
+design stays disposed, so a retry is a no-op. A failed evaluation releases the
+shapes it created in the same best-effort way and still returns its original
+diagnostics.
+
 Use `try/finally`; do not rely on garbage collection to release WASM memory.
+
+The shapes belong to the evaluator's kernel. `evaluator.dispose()` disposes
+that kernel, which releases or invalidates every shape it still holds, so a
+live `EvaluatedDesign` then fails on `measure()`, `mesh()`, and exports.
+Dispose every evaluated design before the evaluator that produced it.
 
 ## Cancellation
 
-Pass an `AbortSignal` for long operations. The evaluator checks cancellation
-between bounded stages and forwards it to protocols that support asynchronous
-work. Some same-thread synchronous native WASM calls cannot be interrupted in
-the middle of one call; cancellation is observed at the next boundary.
+Pass an `AbortSignal` to stop work you no longer need. Evaluation runs on the
+calling thread, so the evaluator observes the signal at stage boundaries instead
+of interrupting work:
 
-For hard latency isolation, run evaluation in a worker or separate process that
-the host can terminate. See [browser and workers](/evaluation/browser-and-workers).
+- It checks the signal before each feature node and again after that node's own
+  kernel work, so an abort raised synchronously by a kernel, solver, or topology
+  callback stops evaluation before the next feature reaches the kernel.
+- When a `signal` is supplied, it yields to the host event loop before geometry
+  work starts, between selected outputs, and after the last output. An abort
+  from a timer, a UI handler, `AbortSignal.timeout(...)`, or a worker message
+  can land only at these yields.
+- It forwards the signal to protocols that check it during their own work, such
+  as sketch solving and profile-region validation.
+
+Host code cannot run while one output's feature graph is being evaluated, so a
+host abort issued during that time is observed when that output finishes. A
+single synchronous native WASM call is never interrupted. An aborted evaluation
+returns `EVALUATION_ABORTED` and releases every shape it created, including
+finished outputs.
+
+Because other code can run at those yields, an evaluation that receives a
+`signal` first captures its request. It admits the document through the same
+bounded snapshot as `parseDocumentValue(document)`, using the default
+[document preflight limits](/evaluation/diagnostics-and-limits#document-preflight-limits).
+It reads each option once as an own data property, ignores inherited option
+values, and keeps the same `signal`. `outputs` must be an array of at most
+1,000,000 entries; duplicates are dropped, entries after the first name the
+document does not declare are never read, and a long scan checks the signal
+every 1,024 entries and stops with `EVALUATION_ABORTED` once it is aborted. A `topologySignatureLimits` object is copied field by field: only
+the six supported limits (`maxTopologyItems`, `maxAdjacencyLinks`,
+`maxEvidenceRecords`, `maxReferenceVariants`, `maxCandidatePairs`, and
+`maxMatchingSteps`) are kept, each read as an own data property whether or not
+it is enumerable, and their values are validated when topology references are
+resolved, as without a signal. Changing the caller's
+document, `outputs` array, or other options after `evaluate(...)` returns its
+promise does not affect that evaluation. A document that exceeds a limit or
+does not match its version's schema, an option defined by a getter, a
+non-array `outputs`, an `outputs` array with a hole or more than 1,000,000
+entries (`details.resource` is `maxOutputSelectionEntries`), or a
+`topologySignatureLimits` object with any other enumerable own field fails
+with `IR_INVALID` before any geometry work. Without a signal, such a limits
+object fails only when the evaluation resolves a topology reference.
+
+These yields and checks apply when `signal` is an own data property of the
+options object, as in `{ signal }`. Without one, evaluation never yields and
+reads the document and options directly as before.
+
+For hard latency isolation, or to stop one large output mid-run, evaluate in a
+worker or separate process that the host can terminate. See
+[browser and workers](/evaluation/browser-and-workers).
 
 ## Reuse
 
 An evaluator can process multiple documents and variants sequentially. Results
-remain independently owned and must each be disposed. Kernel runtime module
-initialization may be shared internally, but shape ownership is never shared
+remain independently owned and must each be disposed. While an evaluation that
+received a `signal` is waiting at one of its event-loop yields,
+`evaluator.dispose()` throws; await the evaluation first, aborting it if you no
+longer need the result. Kernel runtime module initialization may be shared
+internally, but shape ownership is never shared
 implicitly across evaluated designs.

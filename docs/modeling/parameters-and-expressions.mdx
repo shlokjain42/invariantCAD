@@ -95,13 +95,31 @@ const result = await evaluator.evaluate(document, {
 
 Override numbers use base units, not the constructor originally used by the
 author. `width: 125` means 125 mm, even if the default was written as
-`inch(4.5)`.
+`inch(4.5)`, and `taper: Math.PI / 36` means 5 degrees because angles are
+stored in radians.
 
-<Warning>
-  Do not pass `deg(5)` or `mm(20)` as evaluation override values. Overrides are
-  plain finite numbers because evaluation options are data, while expression
-  objects belong to authoring.
-</Warning>
+An override can also be an expression object of the parameter's dimension:
+
+```ts
+const result = await evaluator.evaluate(document, {
+  parameters: {
+    width: mm(125),
+    taper: deg(5),
+  },
+});
+```
+
+The evaluator checks the expression's dimension against the parameter and fails
+with `EXPRESSION_DIMENSION_MISMATCH` when they differ, for example `deg(5)` for
+a length. A matching expression is evaluated like a configuration binding, so it
+may also reference other parameters of the same document.
+
+<Note>
+  Prefer plain numbers when overrides arrive as data, such as JSON, CLI
+  arguments, or a worker message. Expression objects are authoring objects: a
+  serialized or structured-cloned copy is no longer an `Expression` and fails
+  with `EXPRESSION_INVALID`.
+</Note>
 
 ## Configuration overrides
 

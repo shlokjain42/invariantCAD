@@ -5,8 +5,12 @@ import {
   design,
   mm,
   plane,
+  scalar,
+  scalarVec3,
   stringifyDocument,
+  tf,
   vec2,
+  vec3,
   type DesignDocument,
 } from "../src/index.js";
 import { jsonPointerSegment } from "../src/core/json-pointer.js";
@@ -20,6 +24,59 @@ function renamed(document: DesignDocument, from: string, to: string): DesignDocu
 }
 
 describe("JSON Pointer escaping in modeling diagnostics", () => {
+  it("points mirror-normal and placement failures at escaped node IDs", async () => {
+    const evaluator = await createEvaluator();
+    try {
+      const mirror = design("pointer-mirror");
+      const n = mirror.parameter.scalar("n", scalar(0));
+      const box = mirror.box("box", { size: vec3(mm(1), mm(2), mm(3)) });
+      mirror.output(
+        "mirrored",
+        mirror.mirror("mirrorNode", box, scalarVec3(n, 0, 0)),
+      );
+      const mirrored = await evaluator.evaluate(
+        renamed(mirror.build(), "mirrorNode", "mir/1~x"),
+      );
+      if (mirrored.ok) mirrored.value.dispose();
+      expect(mirrored.ok).toBe(false);
+      expect(mirrored.diagnostics).toEqual([
+        expect.objectContaining({
+          code: "FEATURE_INVALID",
+          path: "/nodes/mir~11~0x/operations/0/normal",
+        }),
+      ]);
+
+      const assembly = design("pointer-placement");
+      const m = assembly.parameter.scalar("m", scalar(0));
+      const part = assembly.part(
+        "part",
+        assembly.box("box", { size: vec3(mm(1), mm(2), mm(3)) }),
+      );
+      assembly.output(
+        "assembly",
+        assembly.assembly("assemblyNode", (instances) => {
+          instances.instance("plain", part);
+          instances.instance("mirrored", part, {
+            placement: [tf.mirror(scalarVec3(m, 0, 0))],
+          });
+        }),
+      );
+      const placed = await evaluator.evaluate(
+        renamed(assembly.build(), "assemblyNode", "asm/1~x"),
+      );
+      if (placed.ok) placed.value.dispose();
+      expect(placed.ok).toBe(false);
+      expect(placed.diagnostics).toEqual([
+        expect.objectContaining({
+          code: "FEATURE_INVALID",
+          path: "/nodes/asm~11~0x/instances/1/placement/0/normal",
+        }),
+      ]);
+    } finally {
+      evaluator.dispose();
+    }
+  });
+
   it("escapes tilde and slash in reference tokens", () => {
     expect(jsonPointerSegment("rev/1~x")).toBe("rev~11~0x");
     expect(jsonPointerSegment("~/")).toBe("~0~1");

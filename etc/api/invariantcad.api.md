@@ -1970,7 +1970,6 @@ export interface EvaluateImportedBodyOptions {
 
 // @public (undocumented)
 export interface EvaluationOptions {
-    // (undocumented)
     readonly allowEmpty?: boolean;
     readonly configuration?: string;
     // (undocumented)

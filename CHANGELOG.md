@@ -2,6 +2,105 @@
 
 ## [Unreleased]
 
+- Evaluation now rejects a non-string `outputs` entry with `IR_INVALID` at
+  `/options/outputs/<index>` before looking it up. Before, the entry was
+  converted to a property key, which ran its `toString()` and could select an
+  output the caller then could not read back by name. An unknown output name,
+  a zero mirror normal, and an assembly instance limit now escape `/` and `~`
+  in the node ID or output name of their JSON Pointer path.
+- Public evaluation now rejects a mirror normal whose components all resolve to
+  zero, for a `transform` node or a `tf.mirror` assembly placement, with
+  `FEATURE_INVALID` at `/nodes/<id>/operations/<index>/normal` or
+  `/nodes/<id>/instances/<index>/placement/<index>/normal` before any kernel
+  call. Previously Manifold reported `EMPTY_RESULT`, or returned an empty solid
+  under `allowEmpty`, while stock OCCT and assembly placements reported an
+  opaque `KERNEL_ERROR`. Every finite non-zero normal is now normalized without
+  overflow or underflow, and kernels receive the unit normal, so very large or
+  very small normals such as `1e200` and `1e-200` mirror correctly instead of
+  silently returning unmirrored geometry or failing. The staged Document v7
+  evaluators no longer reject finite non-zero normals above about `1e154` or
+  below about `1e-154`.
+- Output selection, parameter-reference validation, and `SketchBuilder`
+  duplicate checks now use own-property lookups. An unknown output named like an
+  `Object.prototype` member, such as `toString`, `constructor`, or `__proto__`,
+  now fails with `OUTPUT_MISSING`, including through the CLI `--output` flag. It
+  previously failed with `REFERENCE_MISSING` and could even return an undeclared
+  node named `undefined`. A reference to a missing parameter with such a name
+  reports `PARAMETER_MISSING` instead of `EXPRESSION_DIMENSION_MISMATCH`, and
+  sketches now accept `constructor`, `toString`, and `valueOf` as entity and
+  constraint IDs.
+- `validateDocument` and `parseDocument` diagnostics for transform and assembly-
+  placement expressions now include the `value` or `normal` member, for example
+  `/nodes/<id>/operations/0/value/1`, so the JSON Pointer resolves to the
+  authored component.
+- `EvaluatedAssembly.instances` is now a frozen array of frozen records, and
+  each `transform` is a frozen copy detached from the evaluator's internal
+  placement. Outputs that name the same assembly node share these records. The
+  shared identity matrix is also frozen. Writing into a returned transform
+  previously changed that assembly's mesh, measurements, and BOM. For an
+  unplaced instance it also corrupted every later placement in the process.
+- Public assembly evaluation now enforces fixed ceilings: 100,000 occurrence
+  records materialized per evaluation, 1,000,000 stored instance-path segments,
+  and an assembly nesting depth of 64. Exceeding one fails with
+  `RESOURCE_LIMIT_EXCEEDED` at the assembly instance, with `details.resource`,
+  `details.limit`, and `details.actual`, before the records are allocated. Small
+  documents with nested fan-out, or chains of a few thousand nested assemblies,
+  previously expanded without bound and failed with a misclassified
+  `KERNEL_ERROR` "Maximum call stack size exceeded". Designs that materialize
+  more than 100,000 occurrence records, such as a 16-level binary fan-out that
+  0.1.1 evaluated, are now rejected.
+- When the evaluation options contain an own data `signal`, as in
+  `{ signal }`, `Evaluator.evaluate(...)` now yields to the host event loop
+  before geometry work, between selected outputs, and after the last output. An
+  abort from a timer, UI handler, `AbortSignal.timeout(...)`, or worker message
+  can therefore take effect; previously only a signal that was already aborted,
+  or one aborted synchronously from a callback, was observed. The evaluator also
+  rechecks the signal after each feature's own kernel work, before a dependent
+  feature reaches the kernel. Because other code can run at those yields, such
+  an evaluation first captures its request: the document goes through
+  `parseDocumentValue` with the default limits, each option is read once as an
+  own data property, the `outputs` array is copied up to the first undeclared
+  name, and `topologySignatureLimits` keeps only its six supported fields. A
+  getter option, a non-array or sparse `outputs`, an `outputs` array with more
+  than 1,000,000 entries (`details.resource` `maxOutputSelectionEntries`), a
+  `topologySignatureLimits` object with any other enumerable own field, or an
+  over-limit document fails with `IR_INVALID` before any geometry work. A long
+  `outputs` scan stops with `EVALUATION_ABORTED` once the signal is aborted. While such an evaluation waits at
+  a yield, `evaluator.dispose()` throws. Evaluations without an own data signal
+  still run entirely inside the call and read their options as before.
+- An explicitly empty `outputs: []` selection now fails with the message "No
+  outputs were selected" instead of "The document has no outputs"; the
+  `OUTPUT_MISSING` code and `/outputs` path are unchanged.
+  `EvaluationOptions.allowEmpty` is now documented correctly: it turns a zero-
+  volume `EMPTY_RESULT` into a warning and never permits an empty output
+  selection.
+- A failing sketch solve now reports its error diagnostic once, attributed to
+  the sketch node. Previously the error was listed twice, once without `node`,
+  and a custom solver that reported a warning before its error ended the failure
+  list with a duplicated warning.
+- `EvaluatedDesign.dispose()` now marks the result disposed before releasing
+  shapes, attempts every shape even if a kernel release throws, and then
+  rethrows the first error; later calls are no-ops. Previously one failing
+  release leaked the remaining shapes, left the result usable over released
+  shapes, and made a second `dispose()` release shapes again. A failed
+  evaluation likewise attempts every shape it created and still resolves with
+  its original diagnostics. It previously rejected with the raw release error.
+- Binary STL export (`export("stl")`, `exportMesh(mesh, "stl")`, and
+  `exportBinaryStl`) now fits the name into the 80-byte header by cutting its
+  UTF-8 bytes on a character boundary. Long multi-byte names previously spilled
+  into the triangle count, or threw `RangeError` for meshes with fewer than four
+  triangles, such as an empty `allowEmpty` output. A name that starts with
+  `solid` (ignoring case and leading whitespace) is now written as
+  `InvariantCAD: <name>` so readers do not mistake the file for ASCII STL, which
+  changes the header bytes for such names.
+- Corrected the evaluation and modeling guides. They now list every
+  `CreateEvaluatorOptions` field and the complete requirements of each evaluator
+  profile, document expression parameter overrides and the `EvaluatedDesign`
+  `parameters` and `diagnostics` members, require disposing results before their
+  evaluator, and state that a cone's `radiusTop` may be zero. The assembly
+  placement example now puts the instance named `right` at +100 mm. The web-
+  server and browser-download export snippets copy bytes with
+  `Uint8Array.from(...)` so they type-check with the DOM library.
 - Builder methods now throw `TypeError` when an expression uses a `Parameter`
   from another `DesignBuilder`. This applies wherever the parameter appears:
   primitive sizes, sketch entities and constraints, paths, features, transforms

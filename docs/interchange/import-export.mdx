@@ -212,7 +212,7 @@ await writeFile("part.step", output.export("step"));
 ```ts
 const bytes = output.export("step");
 
-return new Response(bytes, {
+return new Response(Uint8Array.from(bytes), {
   headers: {
     "Content-Type": "model/step",
     "Content-Disposition": 'attachment; filename="part.step"',
@@ -220,8 +220,12 @@ return new Response(bytes, {
 });
 ```
 
-Dispose the evaluated design after the response body has copied or taken
-ownership of the returned detached bytes.
+`export(...)` is typed as `Uint8Array`, which TypeScript reads as
+`Uint8Array<ArrayBufferLike>`. With the DOM library, `BodyInit` and `BlobPart`
+accept only views backed by an `ArrayBuffer`, so the snippets on this page copy
+the bytes with `Uint8Array.from(...)` before handing them to `Response` or
+`Blob`. The returned bytes are already detached from native memory, so the
+evaluated design can be disposed as soon as the copy exists.
 
 ## Verified single-body import
 
@@ -549,7 +553,7 @@ product milestones.
 
 ```ts
 const bytes = output.export("stl");
-const blob = new Blob([bytes], { type: "model/stl" });
+const blob = new Blob([Uint8Array.from(bytes)], { type: "model/stl" });
 const url = URL.createObjectURL(blob);
 
 try {
