@@ -756,7 +756,9 @@ describe("OCCT facade compliance bundle verification", () => {
         fixture.trustedReleaseInput,
       ),
     ).resolves.toMatchObject({ ok: true, format: "tar.gz" });
-  });
+    // Building and verifying a gzip archive took over 7 s on a loaded CI
+    // runner, past the default 5 s test timeout.
+  }, 30_000);
 
   it("rejects a directory bundle with non-normalized file modes", async () => {
     const fixture = await makeFixture();
