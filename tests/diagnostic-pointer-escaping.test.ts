@@ -52,6 +52,16 @@ describe("JSON Pointer escaping in modeling diagnostics", () => {
           path: "/configurations/c~11~0x",
         }),
       ]);
+      for (const value of [null, 123, { toString: () => "c" }]) {
+        const invalid = await evaluator.evaluate(document, {
+          configuration: value as unknown as string,
+        });
+        if (invalid.ok) invalid.value.dispose();
+        expect(invalid.ok).toBe(false);
+        expect(invalid.diagnostics).toEqual([
+          expect.objectContaining({ code: "IR_INVALID", path: "/configuration" }),
+        ]);
+      }
     } finally {
       evaluator.dispose();
     }

@@ -3,11 +3,16 @@
 ## [Unreleased]
 
 - Diagnostic JSON Pointer paths now escape document keys. Document v1-v6
-  node, output, parameter, material, and configuration keys may contain `/`
-  and `~`, and evaluation, parameter-override, configuration, resource, and
-  CLI diagnostics interpolated them unescaped, so a node named `a/b` was
-  reported at `/nodes/a/b/...`. Each key is now written as one RFC 6901
-  reference token (`~` as `~0`, `/` as `~1`), for example `/nodes/a~1b/radius`.
+  node, output, and parameter keys may contain `/` and `~`, and evaluation,
+  parameter-override, resource, and CLI diagnostics interpolated them
+  unescaped, so a node named `a/b` was reported at `/nodes/a/b/...`. Each key
+  is now written as one RFC 6901 reference token (`~` as `~0`, `/` as `~1`),
+  for example `/nodes/a~1b/radius`. Unknown caller-supplied parameter and
+  configuration names are escaped the same way.
+- `Evaluator.evaluate` now rejects a non-string `configuration` option with
+  `IR_INVALID` at `/configuration`, as feature hashing and the Document v7
+  evaluators already did. Before, the value was converted to a property key
+  and reported as an unknown configuration.
 - `evaluateExpression` and `expressionDependencies` now visit each distinct
   node once per call. Before, an expression that reused a subexpression, such
   as `x.add(x)` applied repeatedly in the builder, took time exponential in its

@@ -13587,6 +13587,16 @@ export class Evaluator {
     let selectedConfigurationId: ConfigurationId | null = null;
     let selectedConfiguration: DesignConfigurationIR | undefined;
     if (options.configuration !== undefined) {
+      // Like the hashing and Document v7 entry points, check the type before
+      // the name is used as a property key or a JSON Pointer token.
+      if (typeof options.configuration !== "string") {
+        return failure(
+          diagnostic("IR_INVALID", "configuration must be a string", {
+            severity: "error",
+            path: "/configuration",
+          }),
+        );
+      }
       if (!Object.hasOwn(document.configurations ?? {}, options.configuration)) {
         return failure(
           diagnostic(
