@@ -2,8 +2,10 @@
 
 ## Supported versions
 
-InvariantCAD 0.1.x receives security fixes. The main branch is active
-development and may contain unreleased protocol work.
+InvariantCAD 0.2.x receives security fixes. InvariantCAD 0.1.x no longer
+receives fixes; users should upgrade to 0.2. The main branch is active
+development and may contain protocol work that is not yet in a published
+release.
 
 The separately built InvariantCAD-owned OpenCascade facade is not a published
 or supported release artifact. Security reports about its source, build recipe,

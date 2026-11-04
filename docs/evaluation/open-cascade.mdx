@@ -199,8 +199,8 @@ const binaryBrep = output.export("brep-binary");
 ```
 
 <Note>
-  The deterministic metadata and byte contract below is implemented for the
-  unreleased 0.2 line, not the current 0.1.1 npm package.
+  The deterministic metadata and byte contract below was added in 0.2.0 and
+  is not in 0.1.1.
 </Note>
 
 The bundled zero-override stock kernel's optional `capabilities.stepExport`
@@ -231,7 +231,7 @@ OCCT writes a shape that holds several disjoint solids, such as a union of
 separated boxes or a subtraction that splits its target, as an assembly with
 several `PRODUCT` records. That shape is outside the single-product contract.
 `output.export("step")` with no second argument then returns the weak native
-STEP bytes, as the published 0.1.1 package did. Passing any options object
+STEP bytes, as 0.1.1 did. Passing any options object
 requests the strong contract and throws `CadError` with
 `EXPORT_UNSUPPORTED` and `details.reason === "multiple-products"`. A low-level
 `kernel.exportShape(shape, "step")` call without `context.stepExport` follows

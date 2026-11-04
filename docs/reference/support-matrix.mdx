@@ -1,13 +1,13 @@
 ---
-title: "0.1 support matrix"
+title: "0.2 support matrix"
 description: "Feature-by-feature boundary for authoring, Manifold, stock OpenCascade, and the owned OCCT facade."
 icon: "table-2"
 ---
 
 Legend: **Yes** is release-gated public behavior, **Partial** is usable with an
 explicitly documented weaker contract, and **No** is not advertised or not
-supported. Unmarked rows describe the published 0.1.1 package; tables, rows,
-and notes marked unreleased 0.2 describe the main branch only.
+supported. Rows describe the 0.2.0 package; notes that name 0.1.1 record how
+that earlier release differed.
 
 ## Modeling
 
@@ -32,21 +32,21 @@ No capability names extrude `twist`, `scaleTop`, or `divisions`. OCCT
 advertises plain `extrude` and passes capability preflight, including the
 `mechanical-exact` profile; a nonzero `twist`, a `scaleTop` other than
 `[1, 1]`, or nonzero `divisions` then fails inside the kernel with
-`KERNEL_ERROR`, not `KERNEL_CAPABILITY_MISSING`. Published 0.1.1 tolerates a
-`twist` or `scaleTop` difference up to `modelingTolerance` (default `1e-7`)
-and builds a plain prism for it.
+`KERNEL_ERROR`, not `KERNEL_CAPABILITY_MISSING`. The 0.1.1 package tolerated
+a `twist` or `scaleTop` difference up to `modelingTolerance` (default `1e-7`)
+and built a plain prism for it.
 
 OCCT applies a nonuniform `scale` through a general affine transform;
-published 0.1.1 treats factors that agree within `modelingTolerance` as
+0.1.1 treated factors that agreed within `modelingTolerance` as
 uniform. Such results with curved faces are approximate, so their measured
 volume and area can differ from the analytic values: a cylinder scaled by
-`[1, 2, 1]` measures about 0.9% too large. In published 0.1.1, stock OCCT
+`[1, 2, 1]` measures about 0.9% too large. In 0.1.1, stock OCCT
 transforms of shapes with complete topology history and a degenerate pole or
-apex edge, such as a sphere or pointed cone, fail; unreleased 0.2 transforms
+apex edge, such as a sphere or pointed cone, failed; 0.2.0 transforms
 them. Shapes with partial history, such as imported shapes and stock Boolean
-results, skip that per-edge work and transform in 0.1.1 as well.
+results, skip that per-edge work and already transformed in 0.1.1.
 
-Unreleased 0.2 adds kernel-neutral evaluator checks that run before the
+0.2.0 adds kernel-neutral evaluator checks that run before the
 geometry kernel:
 
 - a revolve profile must lie on one side of the revolve axis, which it may
@@ -101,23 +101,22 @@ geometry features are supported:
 | Measurement | Manifold | Stock OCCT | Owned facade | Assembly aggregate |
 | --- | --- | --- | --- | --- |
 | Volume, area, bounds, center, inertia | Yes | Yes | Yes | Yes |
-| Genus (unreleased 0.2) | Exact per connected mesh component | Unsupported (`null`) | Unsupported (`null`) | Unsupported (`null`) |
+| Genus | Exact per connected mesh component | Unsupported (`null`) | Unsupported (`null`) | Unsupported (`null`) |
 
 <Note>
-  The nullable genus contract is unreleased 0.2. Published 0.1.1 types genus
-  as `number` and always returns one: OCCT derives a heuristic integer from the
-  whole shape's Euler characteristic, clamped at zero; Manifold reports its
-  whole-mesh genus, which is negative for disjoint bodies; and assembly
-  aggregates report `0`.
+  The nullable genus contract was added in 0.2.0. The 0.1.1 package typed
+  genus as `number` and always returned one: OCCT derived a heuristic integer
+  from the whole shape's Euler characteristic, clamped at zero; Manifold
+  reported its whole-mesh genus, which was negative for disjoint bodies; and
+  assembly aggregates reported `0`.
 </Note>
 
-In unreleased 0.2, a numeric genus is exact for the backend representation.
+A numeric genus is exact for the backend representation.
 Unsupported results are explicit `null`; no backend or assembly path guesses,
 clamps, or silently converts the value.
 
 <Note>
-  Body-result classification is implemented for the unreleased 0.2 line, not
-  the published 0.1.1 package.
+  Body-result classification was added in 0.2.0 and is not in 0.1.1.
 </Note>
 
 | Body-result classification | Manifold | Stock OCCT | Owned facade |
@@ -145,8 +144,8 @@ multibody product boundary.
 
 <Note>
   The strong deterministic STEP paragraph and verified-import table below
-  describe the unreleased 0.2 line. The exchange table above remains the
-  published 0.1.1 boundary.
+  describe behavior added in 0.2.0. The exchange table above is unchanged
+  from 0.1.1.
 </Note>
 
 The bundled zero-override stock OCCT runtime additionally advertises
@@ -161,7 +160,7 @@ options are passed. This is narrower than geometric canonicalization and
 does not make STEP a portable artifact or cache format. Exact aggregate
 body-set and assembly STEP remains unsupported.
 
-The unreleased public imported-body workflow admits exactly one committed
+The public imported-body workflow admits exactly one committed
 solid through stock OCCT's strong document-body import capability:
 
 | Imported format | Required media type | Unit policy | Manifold | Stock OCCT |
@@ -190,11 +189,11 @@ approximate fallback remain unsupported.
 | Node.js 22.13 | Full package checks |
 | Node.js 24 | Full package and documentation checks |
 | Node.js 26 | Tests, coverage, package, and security gates |
-| Chromium production bundle | Manifold and stock OCCT smoke; unreleased 0.2 serves it under the documented [Content Security Policy](/evaluation/browser-and-workers#content-security-policy) |
+| Chromium production bundle | Manifold and stock OCCT smoke; the bundle is served under the documented [Content Security Policy](/evaluation/browser-and-workers#content-security-policy) |
 | Firefox/Safari | Not yet release-gated |
 | Deno | Not claimed |
 
-## Explicitly not in 0.1
+## Explicitly not in 0.2
 
 - drawings, dimensions, PMI, and GD&T
 - sheet metal and flat patterns

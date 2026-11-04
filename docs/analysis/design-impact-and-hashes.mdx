@@ -34,12 +34,12 @@ output `name` and its `node`; look up that node in `nodes` for the reasons it
 is impacted.
 
 An unknown seed fails with `REFERENCE_MISSING`, `PARAMETER_MISSING`, or
-`CONFIGURATION_MISSING` at its `/changes/...` path. In the unreleased 0.2 line,
+`CONFIGURATION_MISSING` at its `/changes/...` path. Since 0.2.0,
 seeds may name any node or parameter key the parsed document contains,
 including keys preserved by frozen documents that the current builder would
-not author, such as `"node with space"`. The 0.1.1 package rejects seeds
+not author, such as `"node with space"`. The 0.1.1 package rejected seeds
 outside the builder ID grammar with `IR_INVALID`, even when the document
-contains them.
+contained them.
 
 Impact is existential across the base design and named configurations. It says
 an authored context can be affected; it does not execute geometry or prove the
@@ -98,7 +98,7 @@ than a feature hash and does not isolate which outputs depend on a change.
 ## Shape artifact foundation
 
 The artifact-cache module defines versioned keys, integrity records, bounded
-stores, session modes, and capability inspection. No shipped 0.1 backend
+stores, session modes, and capability inspection. No shipped 0.2 backend
 advertises a production shape-artifact codec, and the evaluator does not yet
 consume cross-run shape records.
 

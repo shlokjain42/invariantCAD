@@ -61,8 +61,8 @@ compatible kernel before evaluation.
 ### Deterministic single-product STEP
 
 <Note>
-  This strong contract is implemented for the unreleased 0.2 line. The current
-  0.1.1 npm package retains ordinary weak native STEP export.
+  This strong contract was added in 0.2.0. The 0.1.1 package retained
+  ordinary weak native STEP export.
 </Note>
 
 The bundled zero-override `createOcctKernel()` stock runtime advertises the
@@ -230,8 +230,8 @@ evaluated design can be disposed as soon as the copy exists.
 ## Verified single-body import
 
 <Note>
-  This public workflow is implemented for the unreleased 0.2 line. It is not
-  present in the current `invariantcad@0.1.1` npm package.
+  This public workflow was added in 0.2.0. It is not present in
+  `invariantcad@0.1.1`.
 </Note>
 
 The public imported-body boundary deliberately covers one exact solid, not the
@@ -679,7 +679,7 @@ operation must use both the scope and `request.id`: two child documents may
 legitimately reuse the same document-local resource ID while resolving
 different committed bytes. Ordinary `resolveResourcesV7(...)` requests remain
 unscoped; `documentScope` belongs to this repository-only staged session, not a
-new public 0.1.1 resolver contract.
+new public 0.2.0 resolver contract.
 
 Resolution is deterministic and two-phase. All selected external document
 commitments are preflighted and resolved before child assembly expansion or
@@ -820,8 +820,8 @@ handles; strict document admission and evaluation reject hand-authored
 recursive local graphs.
 
 The authoring facade, all four staged geometry-evaluator slices, and the
-kernel-independent datum resolver remain repository-only source work for 0.2:
-none is exported by the public 0.1.1 package root, available from a package
+kernel-independent datum resolver remain repository-only source work:
+none is exported by the public 0.2.0 package root, available from a package
 subpath, or integrated with the public builder or CLI. The facade can author
 datum points, axes, planes, and coordinate systems, but they are resolved by
 selected node ID rather than published as design outputs or consumed by

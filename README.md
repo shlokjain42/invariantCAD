@@ -11,7 +11,7 @@ B-Rep geometry. Designs stay independent of WebAssembly pointers and
 kernel-specific objects, so they remain serializable, testable, and suitable
 for deterministic builds.
 
-> **Status:** `0.1.1` is the current public foundation release. Parametric
+> **Status:** `0.2.0` is the current public foundation release. Parametric
 > modeling, sketches, assemblies, configurations, topology-aware features,
 > analysis, and interchange are usable today. Draft geometry and some complete
 > exact topology-history guarantees require the separately built owned OCCT
@@ -22,7 +22,7 @@ for deterministic builds.
 
 - Native TypeScript authoring with dimension-aware expressions
 - Immutable, versioned JSON design documents, validated when parsed or
-  evaluated; unreleased 0.2 also checks the grammar while authoring
+  evaluated and checked against the grammar while authoring
 - Replaceable geometry kernels: Manifold mesh and OpenCascade B-Rep
 - Parametric sketches, primitives, features, transforms, and Booleans
 - Semantic topology queries and persistent face, edge, and vertex references
@@ -102,9 +102,9 @@ evaluator owns native resources, so use the `finally` boundaries shown above.
 | Manifold | Watertight triangle mesh | Fast default modeling and STL/OBJ workflows | STL, ASCII STL, OBJ |
 | OpenCascade | Exact B-Rep | Analytic geometry, topology, STEP, and BREP workflows | STL, ASCII STL, OBJ, STEP, BREP |
 
-> **Unreleased 0.2:** The strong deterministic STEP contract described below
-> is implemented and release-gated in this source tree, but is not part of the
-> current `0.1.1` npm package.
+> **Since 0.2.0:** The strong deterministic STEP contract described below
+> is implemented and release-gated in the npm package. It was not part of
+> `0.1.1`.
 
 The bundled zero-override `createOcctKernel()` stock runtime advertises the
 optional versioned deterministic STEP contract
@@ -140,7 +140,7 @@ complete capability and deployment differences.
 
 ## Capability snapshot
 
-InvariantCAD 0.1 includes:
+InvariantCAD 0.2 includes:
 
 - Length, angle, scalar, vector, and density expressions with dependency checks
 - Boxes, cylinders/cones, spheres, sketches, extrudes, revolves, and transforms
@@ -148,7 +148,7 @@ InvariantCAD 0.1 includes:
 - Union, subtraction, intersection, fillet, chamfer, shell, and offset, plus
   draft with the owned OCCT facade only
 - Constraint-based sketches with lines, arcs, circles, rectangles, and closed
-  polylines; `regularPolygon` always throws in 0.1.1 and works in unreleased 0.2
+  polylines; `regularPolygon` works since 0.2.0 and always threw in 0.1.1
 - Semantic topology set queries plus persistent topology evidence
 - Materials, parts, nested assemblies, configurations, suppression, and BOMs
 - Volume, area, center of mass, inertia, density-aware mass, and gyration analysis
@@ -159,7 +159,7 @@ that changes a loop arc's radius, or a constraint that moves its center, does
 not move the adjacent line endpoints, so the loop opens and evaluation fails
 with `SKETCH_NO_CLOSED_REGION`; see
 [arcs in constrained loops](docs/modeling/sketches-and-constraints.mdx#arcs-in-constrained-loops).
-In unreleased 0.2, that diagnostic's details give the gap and the curves on
+Since 0.2.0, that diagnostic's details give the gap and the curves on
 either side of it.
 
 The [support matrix](docs/reference/support-matrix.mdx) distinguishes authoring,
@@ -192,7 +192,7 @@ its versioned source under [`docs/`](docs/README.md):
 - [Measurements and mass properties](docs/analysis/measurements.mdx)
 - [Import and export](docs/interchange/import-export.mdx)
 - [Public library surface](docs/reference/public-surface.mdx) and [complete export index](docs/reference/export-index.mdx)
-- [Complete 0.1 guide](docs/reference/complete-guide.md)
+- [Complete guide](docs/reference/complete-guide.md)
 - [Architecture](docs/architecture.md) and [roadmap](docs/roadmap.md)
 
 Type declarations with their source JSDoc ship with the npm package for

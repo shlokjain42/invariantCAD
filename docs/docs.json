@@ -36,7 +36,7 @@
     "codeblocks": "system"
   },
   "banner": {
-    "content": "InvariantCAD 0.1 is an early public foundation. Check the [support matrix](/reference/support-matrix) before committing to a backend.",
+    "content": "InvariantCAD 0.2 is an early public foundation. Check the [support matrix](/reference/support-matrix) before committing to a backend.",
     "dismissible": true,
     "type": "info"
   },
@@ -219,6 +219,7 @@
               "project/security",
               "project/contributing",
               "releasing",
+              "releases/0.2.0",
               "releases/0.1.1",
               "releases/0.1.0"
             ]

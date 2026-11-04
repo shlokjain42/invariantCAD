@@ -104,10 +104,10 @@ input, not its total size.
 | Document | `IR_INVALID`, migration/validation errors | Reject or migrate the input before evaluation |
 | Parameters | unknown override, dependency cycle, bounds | Correct IDs/formulas or override values |
 | Kernel | `KERNEL_CAPABILITY_MISSING`, `KERNEL_ERROR` | Choose a compatible backend or inspect native failure details |
-| Imported source | `IMPORT_SOURCE_INVALID` (unreleased 0.2) | Correct the one-body definition, format/media pairing, units, or unsafe source descriptor |
+| Imported source | `IMPORT_SOURCE_INVALID` | Correct the one-body definition, format/media pairing, units, or unsafe source descriptor |
 | Resource resolution | `RESOURCE_RESOLVER_MISSING`, `RESOURCE_RESOLUTION_FAILED`, `RESOURCE_INTEGRITY_MISMATCH`, `RESOURCE_LIMIT_EXCEEDED` | Supply committed bytes, correct the resolver/digest/length, or review the byte ceiling |
 | Topology | missing, ambiguous, fingerprint mismatch, limit exceeded | Refine selector/reference, recapture, or review limits |
-| Export | `EXPORT_OPTIONS_INVALID` (unreleased 0.2), `EXPORT_UNSUPPORTED`, `RESOURCE_LIMIT_EXCEEDED` for STEP output ceilings (unreleased 0.2) | Correct option-relative paths, use a supported format/kernel, export a single-product output with options, or raise `maxOutputBytes` |
+| Export | `EXPORT_OPTIONS_INVALID`, `EXPORT_UNSUPPORTED`, `RESOURCE_LIMIT_EXCEEDED` for STEP output ceilings | Correct option-relative paths, use a supported format/kernel, export a single-product output with options, or raise `maxOutputBytes` |
 | Physical data | `MASS_DENSITY_MISSING`, `MASS_PROPERTIES_INVALID` | Author valid density or correct geometry |
 | BOM | missing/duplicate part number, missing material | Fix manufacturing metadata; warnings may be non-fatal |
 | Cancellation | aborted operation | Stop the workflow or retry in a new scope |
@@ -134,7 +134,7 @@ tolerance (shell, offset, or topology predicate), a zero direction vector, or a
 negative radius is reported as a diagnostic, such as
 `TOPOLOGY_SELECTOR_INVALID`, instead of being thrown while authoring.
 
-For the unreleased public imported-body workflow, invalid caller definitions
+For the public imported-body workflow, invalid caller definitions
 and unsafe source descriptors return `IMPORT_SOURCE_INVALID`; invalid
 evaluation options return `IR_INVALID` with a path under `/options`. Resource failures identify the
 resolution, commitment, or resource-limit phase without exposing bytes. The
@@ -203,7 +203,7 @@ for direct external-part occurrences and fixed external subassemblies.
 `externalAssembly(resource, output)` selects one assembly output from a
 committed InvariantCAD document and expands its child-local part and assembly
 tree. Each active occurrence path may cross at most one external-document
-boundary. This is source-only work staged for 0.2, not a public 0.1.1
+boundary. This is source-only staged work, not a public 0.2.0
 evaluator, resolver, builder, or CLI API.
 
 Resolver requests made by this operation include a frozen `documentScope`.

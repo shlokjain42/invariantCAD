@@ -110,7 +110,7 @@ by the four staged geometry evaluators and the datum resolver. Its implementatio
 `src/internal/document-v7-body-set-authoring.ts`; it is not exported from the
 package root or any package subpath. The public `design(...)` builder,
 `DesignDocument` alias, evaluator, and migration target remain on frozen v6.
-This is repository-only work staged for 0.2, not public 0.1.1 authoring.
+This is repository-only staged work, not public 0.2.0 authoring.
 
 The facade privately composes the v6 builder for admitted parameters and
 native primitives, then adds staged configuration, material, resource,
@@ -517,8 +517,8 @@ aggregate STEP/BREP export.
 Part- and product-level STL/OBJ export is an aggregate tessellation view and is
 explicitly approximate/lossy; exact native export and topology remain per-solid
 or per-body capabilities. These omissions are product boundaries, not implicit
-fallbacks. The staged facade remains repository-only work for 0.2, and the
-public 0.1.1 document alias remains v6.
+fallbacks. The staged facade remains repository-only work, and the
+public 0.2.0 document alias remains v6.
 
 ## ID rules
 

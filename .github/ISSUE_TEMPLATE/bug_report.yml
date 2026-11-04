@@ -15,7 +15,7 @@ body:
       options:
         - label: I searched existing issues and pull requests for this problem.
           required: true
-        - label: I reproduced this with the latest available 0.1.x patch when practical.
+        - label: I reproduced this with the latest available 0.2.x patch when practical.
           required: true
         - label: This report contains no credentials, private vulnerability details, or confidential geometry.
           required: true
@@ -25,7 +25,7 @@ body:
     attributes:
       label: InvariantCAD version
       description: Output of `npm view invariantcad version` or the exact git commit.
-      placeholder: 0.1.1
+      placeholder: 0.2.0
     validations:
       required: true
 

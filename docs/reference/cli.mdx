@@ -14,11 +14,11 @@ invariantcad validate model.invariantcad.json
 ```
 
 Parses and validates the frozen document grammar without evaluating geometry.
-Success prints the document version and name. In the unreleased 0.2 line,
+Success prints the document version and name. Since 0.2.0,
 control characters, Unicode line and paragraph separators, and bidirectional
 embedding, override, and isolate controls in the name are printed as `\uXXXX`
 escapes, so an untrusted document cannot drive the terminal or forge extra
-output lines. The 0.1.1 CLI prints the name verbatim.
+output lines. The 0.1.1 CLI printed the name verbatim.
 
 ## Inspect
 
@@ -87,12 +87,11 @@ written, such as one in a missing directory, prints a one-line
 
 <Note>
   Requiring `--output` for multi-output documents and reporting export or
-  write failures without a stack trace are implemented for the unreleased 0.2
-  line, not the current 0.1.1 npm package. When `--output` is omitted, the
-  0.1.1 CLI silently exports only the first output in the parsed document's
-  `outputs` key order, which is sorted name order only for a canonically
-  serialized document. It prints a JavaScript stack trace when export or
-  writing fails.
+  write failures without a stack trace were added in 0.2.0. When `--output`
+  was omitted, the 0.1.1 CLI silently exported only the first output in the
+  parsed document's `outputs` key order, which is sorted name order only for
+  a canonically serialized document. It printed a JavaScript stack trace when
+  export or writing failed.
 </Note>
 
 ## Parameter overrides
@@ -108,10 +107,9 @@ written, such as one in a missing directory, prints a one-line
 
 <Note>
   Inline `--parameter` overrides and the rule against mixing them with
-  `--parameters` are implemented for the unreleased 0.2 line, not the current
-  0.1.1 npm package. The 0.1.1 CLI accepts only `--parameters values.json` and
-  silently ignores `--parameter`, so the model evaluates at its default and
-  configured values without an error.
+  `--parameters` were added in 0.2.0. The 0.1.1 CLI accepted only
+  `--parameters values.json` and silently ignored `--parameter`, so the model
+  evaluated at its default and configured values without an error.
 </Note>
 
 For one-off automation, repeat `--parameter name=value` instead:
@@ -139,9 +137,9 @@ configuration and the document defaults.
 ## Input files
 
 <Note>
-  These input-file checks are implemented for the unreleased 0.2 line. The
-  0.1.1 CLI reads whole files without them and reports a missing or unreadable
-  document or parameter file with a JavaScript stack trace.
+  These input-file checks were added in 0.2.0. The 0.1.1 CLI read whole files
+  without them and reported a missing or unreadable document or parameter
+  file with a JavaScript stack trace.
 </Note>
 
 Document and parameter files are limited to the default `maxDocumentBytes`
@@ -157,10 +155,9 @@ code 1.
 ## Strict argument handling
 
 <Note>
-  Fail-closed argument handling is implemented for the unreleased 0.2 line,
-  not the current 0.1.1 npm package. The 0.1.1 CLI ignores unknown options and
-  extra positional arguments instead of returning exit code 2, so a misspelled
-  option silently has no effect.
+  Fail-closed argument handling was added in 0.2.0. The 0.1.1 CLI ignored
+  unknown options and extra positional arguments instead of returning exit
+  code 2, so a misspelled option silently had no effect.
 </Note>
 
 Options are command-specific. Unknown or inapplicable options, extra positional
@@ -183,11 +180,11 @@ validated before the selected geometry kernel is initialized.
 | 1 | Document, evaluation, BOM, or export operation failed |
 | 2 | Command-line usage or argument error |
 
-Diagnostics are written to stderr as `SEVERITY CODE path: message`. In the
-unreleased 0.2 line, control characters and the other terminal-unsafe
+Diagnostics are written to stderr as `SEVERITY CODE path: message`. Since
+0.2.0, control characters and the other terminal-unsafe
 characters described under [Validate](#validate) are escaped as `\uXXXX` in
 paths and messages. The same characters inside `inspect` and `bom` JSON strings
 are written as `\uXXXX` escapes, so the output still parses to the same values;
-the 0.1.1 CLI escapes only the controls that `JSON.stringify` escapes. Machine
+the 0.1.1 CLI escaped only the controls that `JSON.stringify` escapes. Machine
 integrations should prefer the TypeScript API when they need complete
 structured diagnostic details rather than parsing CLI text.
