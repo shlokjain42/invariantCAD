@@ -48,8 +48,8 @@ export interface TopologyOriginOptions<K extends TopologyKind = TopologyKind> {
 }
 
 function assertPositiveInteger(value: number, label: string): void {
-  if (!Number.isInteger(value) || value < 1) {
-    throw new RangeError(`${label} must be a positive integer`);
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new RangeError(`${label} must be a positive safe integer`);
   }
 }
 

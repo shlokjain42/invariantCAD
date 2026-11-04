@@ -268,18 +268,26 @@ function normalized(value: Vec3, context: TopologyResolutionContext): Vec3 {
   if (!(magnitude > Number.EPSILON)) {
     invalid("Topology direction vectors cannot be zero", context, { value });
   }
-  return value.map((component) => component / magnitude) as unknown as Vec3;
+  // Divide by the largest component first. A finite vector whose magnitude
+  // overflows would otherwise collapse to zero and match every direction.
+  const scale = Math.max(...value.map((component) => Math.abs(component)));
+  const scaled = value.map((component) => component / scale);
+  const length = Math.hypot(...scaled);
+  return scaled.map((component) => component / length) as unknown as Vec3;
 }
 
 function angularDistance(first: Vec3, second: Vec3, unoriented: boolean): number {
-  const dot = Math.max(
-    -1,
-    Math.min(
-      1,
-      first[0] * second[0] + first[1] * second[1] + first[2] * second[2],
-    ),
+  // atan2(|a x b|, a . b) stays accurate near 0 and pi, where acos(a . b)
+  // turns a one-ulp dot error into about 2e-8 rad. Both terms scale with
+  // |a||b|, so residual normalization error cancels.
+  const dot =
+    first[0] * second[0] + first[1] * second[1] + first[2] * second[2];
+  const cross = Math.hypot(
+    first[1] * second[2] - first[2] * second[1],
+    first[2] * second[0] - first[0] * second[2],
+    first[0] * second[1] - first[1] * second[0],
   );
-  return Math.acos(unoriented ? Math.abs(dot) : dot);
+  return Math.atan2(cross, unoriented ? Math.abs(dot) : dot);
 }
 
 function selectionPath(context: TopologyResolutionContext, suffix: string): string | undefined {
@@ -498,10 +506,10 @@ function analyzeSelectionOrThrow<K extends TopologyKind>(
   persistent: PersistentReferenceResolutionState | undefined,
 ): TopologySelectionAnalysis<K> {
   if (
-    !Number.isInteger(selection.cardinality.min) ||
+    !Number.isSafeInteger(selection.cardinality.min) ||
     selection.cardinality.min < 1 ||
     (selection.cardinality.max !== undefined &&
-      (!Number.isInteger(selection.cardinality.max) ||
+      (!Number.isSafeInteger(selection.cardinality.max) ||
         selection.cardinality.max < selection.cardinality.min))
   ) {
     invalid("Topology selection cardinality is invalid", context, {
@@ -1052,6 +1060,16 @@ function analyzeSelectionOrThrow<K extends TopologyKind>(
         );
         return new Set([...byKey.keys()].filter((key) => !excluded.has(key)));
       }
+      default: {
+        // Typed callers cannot get here. Untyped IR with a missing or unknown
+        // operator must fail instead of resolving to an empty match set.
+        const op: unknown = (query as { readonly op?: unknown }).op;
+        invalid(
+          "Topology query operator is missing or unknown",
+          queryContext,
+          typeof op === "string" ? { op } : {},
+        );
+      }
     }
   };
 
@@ -1076,9 +1094,12 @@ function runTopologySelection<K extends TopologyKind, T>(
   context: TopologyResolutionContext,
   project: (analysis: TopologySelectionAnalysis<K>) => CadResult<T>,
 ): CadResult<T> {
-  let snapshotValidated = false;
+  // Only reading the kernel snapshot can be a kernel protocol violation. A
+  // selector that cannot be walked is caller input in every phase.
+  let readingSnapshot = false;
   try {
     const requirements = topologySelectionRequirements(selection);
+    readingSnapshot = true;
     const profiles =
       requirements.persistentReferences.length > 0 &&
       context.persistent !== undefined
@@ -1152,7 +1173,7 @@ function runTopologySelection<K extends TopologyKind, T>(
       // A persistent atom without a context is rejected at its exact query path.
       persistent = undefined;
     }
-    snapshotValidated = true;
+    readingSnapshot = false;
     return project(
       analyzeSelectionOrThrow(
         selection,
@@ -1174,13 +1195,13 @@ function runTopologySelection<K extends TopologyKind, T>(
             },
           })
         : diagnostic(
-            snapshotValidated ? "TOPOLOGY_SELECTOR_INVALID" : "KERNEL_ERROR",
+            readingSnapshot ? "KERNEL_ERROR" : "TOPOLOGY_SELECTOR_INVALID",
             safeErrorMessage(error, "Topology selector input could not be read"),
             {
               ...location(context),
-              ...(snapshotValidated
-                ? {}
-                : { details: { protocolViolation: true } }),
+              ...(readingSnapshot
+                ? { details: { protocolViolation: true } }
+                : {}),
             },
           );
     return { ok: false, diagnostics: [value] };

@@ -2,6 +2,45 @@
 
 ## [Unreleased]
 
+- Topology selection counts must now be safe integers. `exactly`, `atLeast`, and
+  `between` throw `RangeError` for any count above `Number.MAX_SAFE_INTEGER`
+  (for example `2 ** 53` or `1e300`), and `validateDocument` and
+  `resolveTopologySelection` reject such a selection with
+  `TOPOLOGY_SELECTOR_INVALID`. Previously such a document built, validated, and
+  saved, but `parseDocument` rejected the saved text with `IR_INVALID`, so it
+  could never be reloaded. The accepted document grammar, canonical bytes, and
+  semantic hashes are unchanged.
+- Face `normal` and edge `direction` selector queries now measure angles with a
+  numerically stable `atan2` form instead of `acos`. A face or edge whose
+  direction exactly equals a non-axis-aligned requested direction, such as `(1,
+  1, 0)`, used to be reported `TOPOLOGY_SELECTION_MISSING` at angular tolerances
+  of about `1e-8` rad or tighter, and now matches. Results at the default
+  `deg(0.1)` tolerance are unchanged.
+- `resolveTopologySelection` and `explainTopologySelection` now report a
+  structurally malformed selection (for example a missing `query`, a missing or
+  unknown query operator, an `and`/`or` without `queries`, or an `adjacentTo`
+  without its nested selection) as `TOPOLOGY_SELECTOR_INVALID` at the
+  selection's path, or at the exact query path for a missing or unknown
+  operator. They previously blamed the kernel with `KERNEL_ERROR` and
+  `protocolViolation: true` even though the snapshot was never read, and an
+  `and` whose first operand had no known operator matched nothing and reported a
+  missing selection. Malformed kernel snapshots still return `KERNEL_ERROR`.
+- Corrected the topology documentation. The persistent-topology guide no longer
+  promises a geometric fallback for items that share a creation anchor: with
+  complete history, any role or sketch-source anchor is authoritative. Items
+  that share a source-free class role, such as the lateral edges of an
+  extrusion, therefore cannot be captured and must be selected semantically. The
+  topology-selection guide now explains that fillet and chamfer cardinality
+  counts tangent-contour seeds, not the edges finally treated. The topology-
+  language reference now documents default tolerances, oriented face normals,
+  sign-insensitive edge directions, per-axis position tolerance, and every case
+  in which `explainTopologySelection` returns a failed result.
+- Fix topology normal/direction selectors so that finite direction vectors with
+  a magnitude that overflows keep their direction instead of matching every
+  reported normal or direction.
+- Clarify in the topology-selection guide that atLeast and between selections do
+  not report an item gained or lost inside their accepted range; only select()
+  and exactly(n) fail on any change in match count.
 - Evaluation now rejects a non-string `outputs` entry with `IR_INVALID` at
   `/options/outputs/<index>` before looking it up. Before, the entry was
   converted to a property key, which ran its `toString()` and could select an

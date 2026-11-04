@@ -117,8 +117,11 @@ separates two kinds of topology selection:
 - **Persistent references** store bounded detached evidence and resolve it
   against a later compatible topology snapshot.
 
-Both resolve to evaluation-scoped keys only after a unique match. Ambiguity is
-an explicit failure rather than an arbitrary first match.
+A semantic query resolves to every matching evaluation-scoped key, but only
+when the match count satisfies its declared cardinality. A persistent reference
+resolves only when its evidence identifies exactly one item. Neither breaks a
+tie by taking an arbitrary first match: too few or too many matches is an
+explicit failure.
 
 ## Determinism versus geometry identity
 

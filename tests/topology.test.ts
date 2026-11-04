@@ -7,10 +7,12 @@ import {
   captureTopologyReference,
   createEvaluator,
   createManifoldKernel,
+  deg,
   design,
   explainTopologySelection,
   hashDocument,
   parseDocumentValue,
+  rad,
   resolveTopologySelection,
   scalarVec3,
   stringifyDocument,
@@ -190,6 +192,58 @@ describe("semantic topology selections", () => {
     expect(parsed.diagnostics).toContainEqual(
       expect.objectContaining({ code: "IR_INVALID" }),
     );
+  });
+
+  it("limits selector cardinality to the safe integers the schema can reload", () => {
+    const vertical = topology.edges.direction(scalarVec3(0, 0, 1));
+    for (const unsafe of [2 ** 53, 2 ** 60, 1e300]) {
+      expect(() => vertical.exactly(unsafe)).toThrow(
+        new RangeError("Topology selection minimum must be a positive safe integer"),
+      );
+      expect(() => vertical.atLeast(unsafe)).toThrow(RangeError);
+      expect(() => vertical.between(1, unsafe)).toThrow(RangeError);
+    }
+
+    const cad = design("safe-cardinality");
+    const box = cad.box("box", { size: vec3(mm(10), mm(20), mm(30)) });
+    const rounded = cad.fillet("rounded", box, {
+      edges: vertical.between(1, Number.MAX_SAFE_INTEGER),
+      radius: mm(1),
+    });
+    cad.output("rounded", rounded);
+    const document = cad.build();
+    expect(validateDocument(document).ok).toBe(true);
+    const reloaded = parseDocumentValue(JSON.parse(stringifyDocument(document)));
+    expect(reloaded.ok).toBe(true);
+
+    const unsafe = structuredClone(document) as any;
+    unsafe.nodes.rounded.edges.cardinality = { min: 1, max: 2 ** 53 };
+    expect(validateDocument(unsafe).diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "TOPOLOGY_SELECTOR_INVALID",
+        path: "/nodes/rounded/edges/cardinality",
+      }),
+    );
+    expect(parseDocumentValue(unsafe).diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "IR_INVALID",
+        path: "/nodes/rounded/edges/cardinality/max",
+      }),
+    );
+
+    const resolved = resolveTopologySelection(
+      {
+        ...vertical.select().ir,
+        cardinality: { min: 2 ** 53 },
+      },
+      snapshot(),
+      { evaluate: (expression) => (expression.op === "literal" ? expression.value : Number.NaN) },
+    );
+    expect(resolved.ok).toBe(false);
+    expect(resolved.diagnostics[0]).toMatchObject({
+      code: "TOPOLOGY_SELECTOR_INVALID",
+      message: "Topology selection cardinality is invalid",
+    });
   });
 
   it("builds, validates, and canonically serializes a selected-edge chamfer", async () => {
@@ -1189,6 +1243,108 @@ describe("semantic topology selections", () => {
     });
   });
 
+  it("reports structurally malformed selector IR as a selector error, not a kernel fault", () => {
+    const context: TopologyResolutionContext = {
+      evaluate: (expression) =>
+        expression.op === "literal" ? expression.value : Number.NaN,
+      node: "rounded",
+      path: "/nodes/rounded/edges",
+    };
+    const cardinality = { min: 1, max: 1 };
+    const malformed = {
+      "and without queries": { topology: "edge", query: { op: "and" }, cardinality },
+      "or without queries": { topology: "edge", query: { op: "or" }, cardinality },
+      "not without query": { topology: "edge", query: { op: "not" }, cardinality },
+      "missing query": { topology: "edge", cardinality },
+      "adjacentTo without selection": {
+        topology: "edge",
+        query: { op: "adjacentTo" },
+        cardinality,
+      },
+      "nested missing query": {
+        topology: "edge",
+        query: { op: "adjacentTo", selection: { topology: "face", cardinality } },
+        cardinality,
+      },
+    } as const;
+    for (const [label, selection] of Object.entries(malformed)) {
+      for (const run of [resolveTopologySelection, explainTopologySelection]) {
+        const result = run(
+          selection as unknown as TopologySelectionIR<"edge">,
+          snapshot(),
+          context,
+        );
+        expect(result.ok, label).toBe(false);
+        expect(result.diagnostics, label).toHaveLength(1);
+        expect(result.diagnostics[0], label).toMatchObject({
+          code: "TOPOLOGY_SELECTOR_INVALID",
+          severity: "error",
+          node: "rounded",
+          path: "/nodes/rounded/edges",
+        });
+        expect(result.diagnostics[0]?.details, label).toBeUndefined();
+      }
+    }
+
+    // A malformed snapshot behind a well-formed selector is still the kernel's fault.
+    const duplicate = resolveTopologySelection(
+      topology.edges.all().atLeast(1).ir,
+      snapshot([verticalEdges[0]!, verticalEdges[0]!]),
+      context,
+    );
+    expect(duplicate.diagnostics[0]).toMatchObject({
+      code: "KERNEL_ERROR",
+      details: { protocolViolation: true },
+    });
+  });
+
+  it("rejects missing and unknown query operators instead of matching nothing", () => {
+    const context: TopologyResolutionContext = {
+      evaluate: (expression) =>
+        expression.op === "literal" ? expression.value : Number.NaN,
+      node: "rounded",
+      path: "/nodes/rounded/edges",
+    };
+    const cardinality = { min: 1, max: 1 };
+    const edges = (query: unknown) => ({ topology: "edge", query, cardinality });
+    const root = "/nodes/rounded/edges/query";
+    // [label, selection, reported path, reported op]
+    const malformed = [
+      ["and with an operand without op", edges({ op: "and", queries: [{}] }), `${root}/queries/0`, undefined],
+      ["and with an unknown first operand", edges({ op: "and", queries: [{ op: "bogus" }, { op: "all" }] }), `${root}/queries/0`, "bogus"],
+      ["and with a non-object operand", edges({ op: "and", queries: [42] }), `${root}/queries/0`, undefined],
+      ["or with an operand without op", edges({ op: "or", queries: [{ op: "all" }, {}] }), `${root}/queries/1`, undefined],
+      ["not with an unknown operand", edges({ op: "not", query: { op: "bogus" } }), `${root}/query`, "bogus"],
+      ["unknown root operator", edges({ op: "bogus" }), root, "bogus"],
+      [
+        "nested selection without op",
+        edges({ op: "adjacentTo", selection: { topology: "face", query: {}, cardinality } }),
+        `${root}/selection/query`,
+        undefined,
+      ],
+    ] as const;
+    for (const [label, selection, path, op] of malformed) {
+      for (const run of [resolveTopologySelection, explainTopologySelection]) {
+        const result = run(
+          selection as unknown as TopologySelectionIR<"edge">,
+          snapshot(),
+          context,
+        );
+        expect(result.ok, label).toBe(false);
+        expect(result.diagnostics, label).toEqual([
+          {
+            code: "TOPOLOGY_SELECTOR_INVALID",
+            severity: "error",
+            message: "Topology query operator is missing or unknown",
+            node: "rounded",
+            path,
+            details: op === undefined ? {} : { op },
+          },
+        ]);
+      }
+    }
+  });
+
   it("distinguishes ambiguous, missing, incomplete-history, and invalid snapshots", () => {
     const context = {
       evaluate: (expression: any): number => expression.value,
@@ -1395,6 +1551,135 @@ describe("semantic topology selections", () => {
     );
     expect(complement.ok).toBe(true);
     if (complement.ok) expect(complement.value).toEqual([key("fy")]);
+  });
+
+  it("keeps exact non-axis normal and direction matches at tight angular tolerances", () => {
+    const context: TopologyResolutionContext = {
+      evaluate: (expression) =>
+        expression.op === "literal" ? expression.value : Number.NaN,
+    };
+    const diagonalFace: KernelFaceDescriptor = {
+      ...xMinimumFace,
+      surface: { kind: "plane", normal: [Math.SQRT1_2, Math.SQRT1_2, 0] },
+      edges: [],
+    };
+    const diagonalEdge: KernelEdgeDescriptor = {
+      ...verticalEdges[0]!,
+      curve: { kind: "line", direction: [-Math.SQRT1_2, -Math.SQRT1_2, 0] },
+    };
+    const current: KernelTopologySnapshot = {
+      history: "complete",
+      faces: [diagonalFace],
+      edges: [diagonalEdge],
+      vertices: [],
+    };
+    // acos(1 - 1ulp) reported about 2.1e-8 rad for these identical directions.
+    for (const tolerance of [1e-8, 1e-12]) {
+      expect(
+        resolveTopologySelection(
+          topology.faces.normal(scalarVec3(1, 1, 0), rad(tolerance)).select().ir,
+          current,
+          context,
+        ),
+      ).toEqual({ ok: true, value: [diagonalFace.key], diagnostics: [] });
+      expect(
+        resolveTopologySelection(
+          topology.edges.direction(scalarVec3(1, 1, 0), rad(tolerance)).select().ir,
+          current,
+          context,
+        ),
+      ).toEqual({ ok: true, value: [diagonalEdge.key], diagnostics: [] });
+      expect(
+        resolveTopologySelection(
+          topology.faces.normal(scalarVec3(-1, -1, 0), rad(tolerance)).select().ir,
+          current,
+          context,
+        ).diagnostics[0]?.code,
+      ).toBe("TOPOLOGY_SELECTION_MISSING");
+    }
+
+    const tilted = (angle: number) =>
+      resolveTopologySelection(
+        topology.faces
+          .normal(
+            scalarVec3(
+              Math.cos(Math.PI / 4 + angle),
+              Math.sin(Math.PI / 4 + angle),
+              0,
+            ),
+            rad(1e-6),
+          )
+          .select().ir,
+        current,
+        context,
+      ).ok;
+    expect(tilted(0.5e-6)).toBe(true);
+    expect(tilted(2e-6)).toBe(false);
+  });
+
+  it("keeps the direction of finite vectors whose magnitude overflows", () => {
+    const context: TopologyResolutionContext = {
+      evaluate: (expression) =>
+        expression.op === "literal" ? expression.value : Number.NaN,
+    };
+    const huge = 1.3e308;
+    expect(Math.hypot(huge, huge, 0)).toBe(Number.POSITIVE_INFINITY);
+    const current = (scale: number): KernelTopologySnapshot => ({
+      history: "complete",
+      faces: [
+        {
+          ...xMinimumFace,
+          surface: { kind: "plane", normal: [scale, scale, 0] },
+          edges: [],
+        },
+        { ...yMinimumFace, edges: [] },
+      ],
+      edges: [
+        {
+          ...verticalEdges[0]!,
+          curve: { kind: "line", direction: [scale, scale, 0] },
+        },
+        verticalEdges[1]!,
+      ],
+      vertices: [],
+    });
+
+    // A range-based selection must not pick the unrelated -y face or +z edge.
+    for (const [requested, reported] of [
+      [huge, 1],
+      [1, huge],
+      [huge, huge],
+    ] as const) {
+      for (const tolerance of [rad(1e-12), deg(0.1)]) {
+        expect(
+          resolveTopologySelection(
+            topology.faces
+              .normal(scalarVec3(requested, requested, 0), tolerance)
+              .atLeast(1).ir,
+            current(reported),
+            context,
+          ),
+        ).toEqual({ ok: true, value: [key("fx")], diagnostics: [] });
+        expect(
+          resolveTopologySelection(
+            topology.edges
+              .direction(scalarVec3(-requested, -requested, 0), tolerance)
+              .atLeast(1).ir,
+            current(reported),
+            context,
+          ),
+        ).toEqual({ ok: true, value: [key("e00")], diagnostics: [] });
+        expect(
+          resolveTopologySelection(
+            topology.faces
+              .normal(scalarVec3(-requested, -requested, 0), tolerance)
+              .atLeast(1).ir,
+            current(reported),
+            context,
+          ).diagnostics[0]?.code,
+        ).toBe("TOPOLOGY_SELECTION_MISSING");
+      }
+    }
   });
 
   it("preserves evaluator selection diagnostics while attaching explanations", async () => {

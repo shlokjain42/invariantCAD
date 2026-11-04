@@ -533,4 +533,143 @@ describe("OCCT persistent-topology transform torture", { timeout: 30_000 }, () =
       else evaluator.dispose();
     }
   });
+
+  it("round-trips an exact box-vertex reference across translation and resize into an adjacent-edge fillet", async () => {
+    const kernel = await createOcctKernel();
+    const raw = (kernel as any).raw as { readonly shapeCount: number };
+    let evaluator: Evaluator | undefined;
+    let capturedDesign: EvaluatedDesign | undefined;
+    try {
+      evaluator = await createEvaluator({ kernel });
+      const baselineShapeCount = raw.shapeCount;
+      const capabilities = kernel.capabilities.topology?.signatures;
+      expect(capabilities?.protocolVersion).toBe(2);
+      expect(capabilities?.fingerprint).toContain(
+        "invariantcad-topology-descriptor@6",
+      );
+      if (capabilities === undefined) return;
+
+      const cad = design("persistent-box-vertex");
+      const width = cad.parameter.length("width", mm(10));
+      const shift = cad.parameter.length("shift", mm(0));
+      const radius = cad.parameter.length("radius", mm(1));
+      const box = cad.box("box", { size: vec3(width, mm(20), mm(30)) });
+      const body = cad.transform("body", box, [
+        tf.translate(vec3(shift, mm(0), mm(0))),
+      ]);
+      cad.output("body", body);
+
+      const captured = await evaluator.evaluate(cad.build(), {
+        outputs: ["body"],
+      });
+      expect(
+        captured.ok,
+        captured.ok ? undefined : JSON.stringify(captured.diagnostics),
+      ).toBe(true);
+      if (!captured.ok) return;
+      capturedDesign = captured.value;
+      const capturedTopology = expectSolid(capturedDesign, "body").topology();
+      expect(capturedTopology.ok).toBe(true);
+      if (!capturedTopology.ok) return;
+      expect(capturedTopology.value.history).toBe("complete");
+      const corners = capturedTopology.value.vertices.filter((item) =>
+        item.point.every((coordinate) => Math.abs(coordinate) < 1e-9),
+      );
+      expect(corners).toHaveLength(1);
+      const corner = corners[0]!;
+      const evidence = captureTopologyReference(
+        capturedTopology.value,
+        "vertex",
+        corner.key,
+        { capabilities, tolerance },
+      );
+      expect(
+        evidence.ok,
+        evidence.ok ? undefined : JSON.stringify(evidence.diagnostics),
+      ).toBe(true);
+      if (!evidence.ok) return;
+      const oldKey = corner.key;
+      expect(JSON.stringify(evidence.value)).not.toContain(oldKey);
+      capturedDesign.dispose();
+      capturedDesign = undefined;
+      expect(raw.shapeCount).toBe(baselineShapeCount);
+
+      const storedCorner = cad.topologyReference("corner", body, {
+        topology: "vertex",
+        variants: [evidence.value],
+      });
+      const rounded = cad.fillet("rounded", body, {
+        edges: topology.edges
+          .adjacentTo(topology.vertices.persistentReference(storedCorner).select())
+          .exactly(3),
+        radius,
+      });
+      cad.output("rounded", rounded);
+
+      const serialized = stringifyDocument(cad.build());
+      expect(serialized).not.toContain(oldKey);
+      const parsed = parseDocument(serialized);
+      expect(parsed.ok).toBe(true);
+      if (!parsed.ok || parsed.value.version !== 6) return;
+      const stored = Object.entries(parsed.value.topologyReferences ?? {}).find(
+        ([id]) => id === "corner",
+      )?.[1].variants[0] as PersistentTopologyReference<"vertex"> | undefined;
+      expect(stored).toBeDefined();
+      if (stored === undefined) return;
+
+      for (const parameters of [
+        { width: 16, shift: 3, radius: 1 },
+        { width: 24, shift: -7, radius: 2 },
+        { width: 10, shift: 0, radius: 1 },
+      ] as const) {
+        const changed = await evaluator.evaluate(parsed.value, { parameters });
+        expect(
+          changed.ok,
+          changed.ok ? undefined : JSON.stringify(changed.diagnostics),
+        ).toBe(true);
+        if (!changed.ok) continue;
+        try {
+          const changedTopology = expectSolid(changed.value, "body").topology();
+          expect(changedTopology.ok).toBe(true);
+          if (!changedTopology.ok) continue;
+          const resolved = resolveTopologyReference(
+            stored,
+            changedTopology.value,
+            { capabilities },
+          );
+          expect(
+            resolved.ok,
+            resolved.ok ? undefined : JSON.stringify(resolved.diagnostics),
+          ).toBe(true);
+          if (!resolved.ok) continue;
+          expect(resolved.value.evidence).toBe("semantic-lineage");
+          const current = changedTopology.value.vertices.find(
+            (item) => item.key === resolved.value.key,
+          );
+          expect(current?.point[0]).toBeCloseTo(parameters.shift, 9);
+          expect(current?.point[1]).toBeCloseTo(0, 9);
+          expect(current?.point[2]).toBeCloseTo(0, 9);
+
+          // Three mutually perpendicular edges rounded with one radius: each
+          // edge outside the corner cube loses r^2 (1 - pi/4) per unit length,
+          // and the corner cube keeps one sphere octant.
+          const r = parameters.radius;
+          const edgeLengths = parameters.width + 20 + 30;
+          const removed =
+            r ** 2 * (1 - Math.PI / 4) * (edgeLengths - 3 * r) +
+            r ** 3 * (1 - Math.PI / 6);
+          expect(
+            expectSolid(changed.value, "rounded").measure().volume,
+          ).toBeCloseTo(parameters.width * 20 * 30 - removed, 6);
+        } finally {
+          changed.value.dispose();
+        }
+        expect(raw.shapeCount).toBe(baselineShapeCount);
+      }
+    } finally {
+      capturedDesign?.dispose();
+      if (evaluator === undefined) kernel.dispose();
+      else evaluator.dispose();
+    }
+  });
 });

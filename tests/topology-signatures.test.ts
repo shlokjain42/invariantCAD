@@ -605,6 +605,79 @@ describe("persistent topology signatures", () => {
     });
   });
 
+  it("compares a vertex's own sketch-source anchor before its incident edges", () => {
+    const role = (
+      value: Exclude<KernelTopologyLineage["role"], undefined>,
+    ): readonly KernelTopologyLineage[] => [
+      { feature: "box", relation: "created", role: value },
+    ];
+    const sourced = (entity: string): readonly KernelTopologyLineage[] => [
+      {
+        feature: "pad",
+        relation: "created",
+        source: { kind: "sketch-entity", sketch: "profile", entity },
+      },
+    ];
+    const minimumRoles = [
+      "box.edge.y-min-z-min",
+      "box.edge.x-min-z-min",
+      "box.edge.x-min-y-min",
+    ] as const;
+    const maximumRoles = [
+      "box.edge.y-max-z-max",
+      "box.edge.x-max-z-max",
+      "box.edge.x-max-y-max",
+    ] as const;
+    const corner = (
+      id: string,
+      point: readonly [number, number, number],
+      entity: string,
+      roles: typeof minimumRoles | typeof maximumRoles,
+    ) => ({
+      edges: roles.map((value, index) =>
+        edge(`${id}-edge-${index}`, {
+          center: [point[0] + index + 1, point[1], point[2]],
+          lineage: role(value),
+          vertices: [id],
+        }),
+      ),
+      vertex: vertex(id, {
+        point,
+        lineage: sourced(entity),
+        edges: roles.map((_, index) => `${id}-edge-${index}`),
+      }),
+    });
+    const old = corner("old-corner", [0, 0, 0], "corner", minimumRoles);
+    const captured = captureTopologyReference(
+      snapshot([], old.edges, "complete", [old.vertex]),
+      "vertex",
+      key("old-corner"),
+      { capabilities: capabilitiesV2, tolerance },
+    );
+    expect(captured.ok).toBe(true);
+    if (!captured.ok) return;
+
+    // The moved corner keeps the direct anchor but not the incident-edge
+    // roles. The other corner keeps the incident-edge roles but not the
+    // direct anchor. Only the direct anchor decides.
+    const moved = corner("moved-corner", [100, 20, 30], "corner", maximumRoles);
+    const other = corner("other-corner", [0, 0, 0], "other", minimumRoles);
+    expect(
+      resolveTopologyReference(
+        captured.value,
+        snapshot([], [...moved.edges, ...other.edges], "complete", [
+          moved.vertex,
+          other.vertex,
+        ]),
+        { capabilities: capabilitiesV2 },
+      ),
+    ).toEqual({
+      ok: true,
+      value: { key: key("moved-corner"), evidence: "semantic-lineage" },
+      diagnostics: [],
+    });
+  });
+
   it("never cross-matches face and vertex neighbors in protocol-v2 edge evidence", () => {
     const anchored = (entity: string): readonly KernelTopologyLineage[] => [
       {
@@ -731,6 +804,88 @@ describe("persistent topology signatures", () => {
         }),
       ),
     ).toBe("TOPOLOGY_MATCH_AMBIGUOUS");
+  });
+
+  it("refuses to capture or resolve distinct coincident vertices with identical evidence", () => {
+    const anchoredEdge: readonly KernelTopologyLineage[] = [
+      { feature: "box", relation: "created", role: "box.edge.x-min-y-min" },
+      { feature: "box", relation: "created" },
+    ];
+    const coincident = (
+      history: KernelTopologySnapshot["history"],
+    ): KernelTopologySnapshot => {
+      const edgeLineage = history === "complete" ? anchoredEdge : [];
+      const vertexLineage = history === "complete" ? broadLineage("box") : [];
+      return snapshot(
+        [],
+        [
+          edge("coincident-edge-a", {
+            lineage: edgeLineage,
+            vertices: ["coincident-a"],
+          }),
+          edge("coincident-edge-b", {
+            lineage: edgeLineage,
+            vertices: ["coincident-b"],
+          }),
+        ],
+        history,
+        [
+          vertex("coincident-a", {
+            point: [1, 2, 3],
+            lineage: vertexLineage,
+            edges: ["coincident-edge-a"],
+          }),
+          vertex("coincident-b", {
+            point: [1, 2, 3],
+            lineage: vertexLineage,
+            edges: ["coincident-edge-b"],
+          }),
+        ],
+      );
+    };
+
+    for (const history of ["partial", "complete"] as const) {
+      const current = coincident(history);
+      const captured = captureTopologyReference(
+        current,
+        "vertex",
+        key("coincident-a"),
+        { capabilities: capabilitiesV2, tolerance },
+      );
+      expect(captured.ok, history).toBe(false);
+      expect(failureDiagnostic(captured), history).toMatchObject({
+        code: "TOPOLOGY_MATCH_AMBIGUOUS",
+        details: { topology: "vertex", candidates: 2 },
+      });
+      expect(JSON.stringify(captured.diagnostics), history).not.toContain(
+        "coincident-",
+      );
+
+      const unique = snapshot(
+        [],
+        [current.edges[0]!],
+        history,
+        [current.vertices[0]!],
+      );
+      const stored = captureTopologyReference(
+        unique,
+        "vertex",
+        key("coincident-a"),
+        { capabilities: capabilitiesV2, tolerance },
+      );
+      expect(stored.ok, history).toBe(true);
+      if (!stored.ok) continue;
+      const resolved = resolveTopologyReference(stored.value, current, {
+        capabilities: capabilitiesV2,
+      });
+      expect(failureDiagnostic(resolved), history).toMatchObject({
+        code: "TOPOLOGY_MATCH_AMBIGUOUS",
+        details: { topology: "vertex", candidates: 2 },
+      });
+      expect(JSON.stringify(resolved.diagnostics), history).not.toContain(
+        "coincident-",
+      );
+    }
   });
 
   it("normalizes persistent evidence into one canonical deeply frozen value", () => {

@@ -15,6 +15,21 @@ describe the intended item. Use a persistent reference when the user selects a
 specific item interactively or when no unique semantic query can be authored
 up front.
 
+Capture still has to prove that the stored evidence identifies exactly one
+item. When the snapshot has complete history, an item's role or sketch-source
+creation anchor is authoritative (see [How resolution works](#how-resolution-works)),
+and geometry is not used to tell apart items that share the same anchor. Such
+items cannot be captured: capture fails with `TOPOLOGY_MATCH_AMBIGUOUS`. This
+applies whenever several items in one result carry the same source-free class
+role, such as `extrude.edge.lateral`, `loft.edge.lateral`,
+`sweep.edge.lateral`, `fillet.face.blend`, or `chamfer.face.bevel`. It also
+applies to the side faces and rims of a multi-curve profile that has no sketch
+sources, and to the sweep side faces that one profile curve produces along
+several path segments. For example, one lateral edge of an extruded rectangle
+cannot be captured on the default OCCT kernel, which has complete extrusion
+history. Select such an item with a semantic query instead, for example the
+lateral edge adjacent to two source-anchored side faces.
+
 ## Complete capture, resolution, and explanation workflow
 
 This exact-OCCT module captures a semantically named face, changes the model,
@@ -153,9 +168,20 @@ silently upgrades a stored protocol or loosens a fingerprint.
 1. Validate the stored envelope and operational limits.
 2. Check the kernel's signature protocol and fingerprint.
 3. Normalize one current topology snapshot.
-4. Prefer authoritative semantic lineage when complete and uniquely anchored.
-5. Otherwise use bounded toleranced geometry and adjacency evidence.
-6. Return a current key only for exactly one match.
+4. If both snapshots have complete history and either side carries a role or
+   sketch-source creation anchor, compare only those anchors. Exact agreement
+   is a `semantic-lineage` match and any difference is a mismatch. Geometry is
+   not consulted, even when several current items share the anchor.
+5. Vertices have no semantic roles, but a protocol-v2 vertex can carry a
+   sketch-source creation anchor, which step 4 compares like any other. For a
+   vertex with no direct anchor on either side, under complete history, if
+   every incident edge on either side is anchored, the vertex matches by
+   `semantic-lineage` only when the complete incident-edge anchor sets agree
+   one-to-one.
+6. Otherwise, including whenever either snapshot has partial history, compare
+   bounded toleranced geometry and one-hop adjacency evidence
+   (`geometry-adjacency`).
+7. Return a current key only for exactly one match.
 
 No match produces `TOPOLOGY_MATCH_MISSING`. Multiple matches produce
 `TOPOLOGY_MATCH_AMBIGUOUS`. A fingerprint mismatch is distinct from both.
