@@ -342,7 +342,11 @@ function parseReleaseManifest(
   let text: string;
   let parsed: unknown;
   try {
-    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    // Keep a leading U+FEFF so a BOM-prefixed copy is rejected as noncanonical
+    // (JSON.parse refuses it) instead of decoding to the canonical text.
+    text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+      bytes,
+    );
     parsed = JSON.parse(text) as unknown;
   } catch (error) {
     throw failure(

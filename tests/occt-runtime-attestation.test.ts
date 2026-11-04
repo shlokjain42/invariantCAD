@@ -7,6 +7,12 @@ import {
   type OcctModuleOptions,
 } from "../src/occt-kernel.js";
 import {
+  DEFAULT_KERNEL_STEP_EXPORT_TIMESTAMP,
+  KERNEL_STEP_EXPORT_PROTOCOL_VERSION,
+  inspectKernelStepExportCapabilities,
+  type KernelShape,
+} from "../src/kernel.js";
+import {
   finishLoadingAttestedOcctRuntime,
   verifyOcctRuntimeRelease,
   type LoadAttestedOcctRuntimeOptions,
@@ -648,6 +654,22 @@ describe("OCCT runtime attestation", () => {
       reason: "invalid-release-manifest",
     });
 
+    const bom = new Uint8Array([0xef, 0xbb, 0xbf]);
+    const canonical = canonicalManifest();
+    const bomPrefixedManifest = new Uint8Array(
+      bom.byteLength + canonical.byteLength,
+    );
+    bomPrefixedManifest.set(bom);
+    bomPrefixedManifest.set(canonical, bom.byteLength);
+    await expect(
+      verifyOcctRuntimeRelease(
+        loaderOptions(JAVASCRIPT, WEBASSEMBLY, bomPrefixedManifest),
+      ),
+    ).rejects.toMatchObject({
+      name: "OcctRuntimeAttestationError",
+      reason: "invalid-release-manifest",
+    });
+
     const noDefault = textEncoder.encode("export const value = 1;\n");
     const verified = await verifyOcctRuntimeRelease(
       loaderOptions(noDefault),
@@ -761,6 +783,37 @@ describe("OCCT runtime attestation", () => {
       direct.dispose();
       attested.dispose();
     }
+  });
+
+  it("keeps attested runtimes on the weak raw STEP contract", async () => {
+    const runtime = await loadAttestedOcctRuntime(loaderOptions());
+    const kernel = await createOcctKernel({ attestedRuntime: runtime });
+    try {
+      expect(kernel.capabilities.stepExport).toBeUndefined();
+      expect(
+        inspectKernelStepExportCapabilities(kernel.capabilities),
+      ).toEqual({ status: "absent" });
+      // The qualification gate runs before shape lookup, so an unowned
+      // placeholder isolates it from the minimal raw test kernel.
+      const placeholder = {} as KernelShape;
+      expect(() =>
+        kernel.exportShape!(placeholder, "step", {
+          stepExport: {
+            protocolVersion: KERNEL_STEP_EXPORT_PROTOCOL_VERSION,
+            metadata: {
+              fileName: "attested.step",
+              timestamp: DEFAULT_KERNEL_STEP_EXPORT_TIMESTAMP,
+              productId: "ATTESTED",
+              productName: "attested",
+              productDescription: "",
+            },
+          },
+        }),
+      ).toThrow("runtime is not qualified for deterministic STEP export");
+    } finally {
+      kernel.dispose();
+    }
+    expect(state()).toMatchObject({ constructed: 1, disposed: 1 });
   });
 
   it("rejects forged or mixed kernel configuration before factory invocation", async () => {

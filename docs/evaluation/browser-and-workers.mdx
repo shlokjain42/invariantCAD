@@ -211,7 +211,9 @@ transferred from a terminated realm.
 An internal one-shot coordinator used by the release gate rejects pre-abort
 without creating a worker, starts the deadline before worker startup, settles
 result/abort/timeout/startup races once, terminates every created worker exactly
-once, and waits for its termination adapter before returning. Browser
+once, and waits for its termination adapter before returning. It observes every
+returned worker's result even when a deadline or abort wins during startup, so
+a result that rejects on termination is not reported as unhandled. Browser
 `Worker.terminate()` itself returns `void`; the browser adapter can therefore
 confirm the termination request but cannot await or claim worker exit. It is not
 exported as a library API; applications should implement an appropriate
@@ -305,23 +307,44 @@ authentication or a public cache API.
 
 ## Content Security Policy
 
-WebAssembly compilation may require `wasm-unsafe-eval` in `script-src`,
-depending on browser and deployment mode. Test the exact production policy;
-avoid broadly enabling `unsafe-eval`. Asset fetching also needs the relevant
-`connect-src` or `default-src` allowance. The attested browser loader also
-requires `blob:` for module scripts, for example:
+A `script-src` (or `default-src`) policy must allow both kinds of dynamic code
+that the bundled runtimes use while they initialize:
+
+- `'wasm-unsafe-eval'` permits WebAssembly compilation.
+- `'unsafe-eval'` is also required. The bundled Manifold 3.5.1 runtime and the
+  stock `occt-wasm` 3.8.0 glue are Emscripten Embind builds that generate their
+  binding invokers with `new Function`. Under a policy without
+  `'unsafe-eval'`, Chromium throws `EvalError` during runtime initialization,
+  so neither `createEvaluator()` nor `createOcctKernel()` can succeed.
+  `'wasm-unsafe-eval'` does not cover this.
+
+The attested browser loader also imports verified JavaScript from a Blob module
+URL, so it requires `blob:`. The Chromium release gate serves its production
+bundle, including its module workers, with exactly this policy:
 
 ```http
-Content-Security-Policy: script-src 'self' blob: 'wasm-unsafe-eval'
+Content-Security-Policy: script-src 'self' blob: 'wasm-unsafe-eval' 'unsafe-eval'
 ```
 
-Use only the directives required by the tested application and browser.
+Omit `blob:` if the application never uses the attested loader. Asset fetching
+also needs the relevant `connect-src` or `default-src` allowance for the WASM
+URLs. The allowances are needed in every realm that initializes a runtime,
+including module workers; the release gate sends the same policy with the page
+and with every worker script.
+
+Removing the `'unsafe-eval'` requirement would need runtimes rebuilt with
+Emscripten's `-sDYNAMIC_EXECUTION=0`; InvariantCAD does not ship such builds.
+The owned OCCT facade is built from the same Embind glue without that setting,
+so expect it to need the same allowance, although the owned pair is not
+executed in the Chromium gate. Test the exact production policy in every
+browser you support.
 
 ## Tested boundary
 
 The release suite currently guarantees Chromium production-bundle behavior for
 the public kernels, a synthetic matched-pair/tamper corpus through the browser
-attested loader, and the stock-runtime module-worker scenario described above.
+attested loader, and the stock-runtime module-worker scenario described above,
+all served under the Content Security Policy shown in the previous section.
 The owned ABI 0.9 pair is exercised through the separate Node process gate, not
 as a real owned-browser bundle in this Chromium test. Other evergreen browsers
 are plausible but are not claimed as release-gated until executable coverage is

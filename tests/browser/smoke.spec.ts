@@ -1,10 +1,48 @@
+import { readFileSync } from "node:fs";
 import { expect, test } from "@playwright/test";
 import type { BrowserSmokeResult } from "./app.js";
+import {
+  BROWSER_SMOKE_CONTENT_SECURITY_POLICY,
+} from "./content-security-policy.js";
+
+test("documents the exact Content Security Policy served by this gate", () => {
+  for (const guidePage of [
+    "browser-and-workers.mdx",
+    "occt-runtime-attestation.mdx",
+  ]) {
+    const guide = readFileSync(
+      new URL(`../../docs/evaluation/${guidePage}`, import.meta.url),
+      "utf8",
+    );
+    expect(guide).toContain(
+      "```http\nContent-Security-Policy: " +
+        `${BROWSER_SMOKE_CONTENT_SECURITY_POLICY}\n\`\`\`\n`,
+    );
+  }
+});
 
 test("loads both WASM kernels and confines artifact/evaluator native work to disposable module workers", async ({
   page,
 }) => {
-  await page.goto("/");
+  const cspViolations: string[] = [];
+  page.on("console", (message) => {
+    if (message.text().includes("Content Security Policy")) {
+      cspViolations.push(message.text());
+    }
+  });
+  await page.addInitScript(() => {
+    document.addEventListener("securitypolicyviolation", (event) => {
+      console.error(
+        `Content Security Policy violation: ${event.effectiveDirective} ` +
+          `blocked ${event.blockedURI}`,
+      );
+    });
+  });
+  const response = await page.goto("/");
+  // The production bundle runs under the documented example policy.
+  expect(response?.headers()["content-security-policy"]).toBe(
+    BROWSER_SMOKE_CONTENT_SECURITY_POLICY,
+  );
   const result = await page.evaluate(
     () => window.invariantCadBrowserSmoke,
   ) as BrowserSmokeResult;
@@ -139,4 +177,5 @@ test("loads both WASM kernels and confines artifact/evaluator native work to dis
   expect(attestation.blobUrlsCreated).toBe(3);
   expect(attestation.blobUrlsRevoked).toBe(3);
   expect(attestation.blobUrlsOutstanding).toBe(0);
+  expect(cspViolations).toEqual([]);
 });
