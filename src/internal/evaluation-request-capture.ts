@@ -69,7 +69,9 @@ function ownDataValue(
  * Copies the output selection without iterating caller code. Allocation is
  * bounded by the document's declared outputs: duplicates are dropped, and
  * reading stops after the first name the document does not declare, because
- * evaluation fails there with `OUTPUT_MISSING` and never reads further. Work
+ * evaluation fails there with `OUTPUT_MISSING` and never reads further. A
+ * non-string entry fails capture at its original index, so it never reaches a
+ * property-key conversion that could run caller code. Work
  * is bounded by `MAX_OUTPUT_SELECTION_ENTRIES`, checked before the scan, and a
  * long scan stops when `signal` is aborted.
  */
@@ -77,7 +79,7 @@ function captureOutputSelection(
   value: unknown,
   document: DesignDocument,
   signal: unknown,
-): readonly unknown[] {
+): readonly string[] {
   if (!Array.isArray(value)) {
     throw new CaptureFailure(
       "Evaluation options.outputs must be an array",
@@ -111,8 +113,8 @@ function captureOutputSelection(
       },
     );
   }
-  const selected: unknown[] = [];
-  const seen = new Set<unknown>();
+  const selected: string[] = [];
+  const seen = new Set<string>();
   for (let index = 0; index < length; index += 1) {
     if (
       index !== 0 &&
@@ -133,12 +135,18 @@ function captureOutputSelection(
       throw new CaptureFailure(`${label} must be an own data property`, path);
     }
     const name = descriptor.value as unknown;
+    if (typeof name !== "string") {
+      // Report the entry at its original index, before duplicates are
+      // dropped; the evaluator never receives it, so no lookup converts it.
+      if ((signal as { readonly aborted?: unknown } | null | undefined)?.aborted) {
+        throw new CaptureAborted();
+      }
+      throw new CaptureFailure(`${label} must be a string`, path);
+    }
     if (seen.has(name)) continue;
     seen.add(name);
     selected.push(name);
-    if (typeof name !== "string" || !Object.hasOwn(document.outputs, name)) {
-      break;
-    }
+    if (!Object.hasOwn(document.outputs, name)) break;
   }
   return Object.freeze(selected);
 }

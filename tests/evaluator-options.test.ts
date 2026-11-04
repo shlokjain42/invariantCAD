@@ -22,7 +22,7 @@ describe("output selection and allowEmpty", () => {
           },
         };
         const result = await evaluator.evaluate(threeBoxes(), {
-          outputs: ["b", entry] as unknown as readonly string[],
+          outputs: ["b", "b", entry] as unknown as readonly string[],
           ...(signal === undefined ? {} : { signal }),
         });
         if (result.ok) result.value.dispose();
@@ -30,7 +30,7 @@ describe("output selection and allowEmpty", () => {
         expect(result.diagnostics).toEqual([
           expect.objectContaining({
             code: "IR_INVALID",
-            path: "/options/outputs/1",
+            path: "/options/outputs/2",
           }),
         ]);
         expect(conversions).toBe(0);
