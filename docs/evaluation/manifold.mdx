@@ -53,6 +53,12 @@ The 0.1 adapter supports:
 It does not advertise exact B-Rep, native STEP/BREP, semantic topology
 snapshots, exact fillets/chamfers/shells/offsets, lofts, or path sweeps.
 
+Extrude and revolve profiles must stay within ±10,000,000,000 mm (`1e10`) of
+the sketch origin in both sketch axes. Manifold's 2D polygon engine stores
+coordinates as scaled 64-bit integers and fails just above 2^34 mm, so a larger
+profile fails before any native work with a `KERNEL_ERROR` that names the
+ceiling. The exact OCCT kernel has no such ceiling for ordinary extents.
+
 ## Precision model
 
 Manifold computes robust solids internally, but its public mesh carries Float32

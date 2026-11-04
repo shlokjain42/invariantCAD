@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+- Manifold extrude and revolve now reject sketch profiles with coordinates
+  beyond ±1e10 mm with a `KERNEL_ERROR` that names the ceiling. Above about
+  1.7e10 mm Manifold's polygon engine failed, and the diagnostic message was a
+  bare native exception number such as `107360`. Other native Manifold failures
+  in those operations now also report a readable message.
+- `pnpm example:bracket` works again and now runs as part of `pnpm verify`. Its
+  compact configuration narrowed the plate without moving the mounting holes,
+  so the holes crossed the outline once hole containment became enforced.
 - The browser deployment guide's example Content Security Policy is corrected to
   `script-src 'self' blob: 'wasm-unsafe-eval' 'unsafe-eval'`. The bundled
   Manifold 3.5.1 runtime and the stock `occt-wasm` 3.8.0 glue are Emscripten

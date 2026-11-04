@@ -71,6 +71,8 @@ const compactSteelSingle = cad.configuration(
   "compact-steel-single",
   (configuration) => {
     configuration.parameter(width, mm(60));
+    // Keep both holes inside the narrower 60 mm plate.
+    configuration.parameter(holeSpacing, mm(40));
     configuration.instanceSuppressed(pair, "right");
     configuration.partMaterial(bracket, steel);
   },
