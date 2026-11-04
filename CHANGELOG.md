@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+- Diagnostic JSON Pointer paths now escape document keys. Document v1-v6
+  node, output, parameter, material, and configuration keys may contain `/`
+  and `~`, and evaluation, parameter-override, configuration, resource, and
+  CLI diagnostics interpolated them unescaped, so a node named `a/b` was
+  reported at `/nodes/a/b/...`. Each key is now written as one RFC 6901
+  reference token (`~` as `~0`, `/` as `~1`), for example `/nodes/a~1b/radius`.
 - `evaluateExpression` and `expressionDependencies` now visit each distinct
   node once per call. Before, an expression that reused a subexpression, such
   as `x.add(x)` applied repeatedly in the builder, took time exponential in its
