@@ -5217,14 +5217,24 @@ class OcctKernel implements GeometryKernel {
               // limits to the whole document; apply the output ceiling too.
               checkOcctSignal(capturedContext.signal);
               const weakBytes = encodeUtf8(nativeSource);
-              if (weakBytes.byteLength > request.maxOutputBytes) {
+              if (typedArrayByteLengthGetter === undefined) {
+                throw new TypeError("Uint8Array byte-length intrinsic is unavailable");
+              }
+              // Read the length through the captured intrinsic getter, as the
+              // single-product path does, so caller code cannot change it.
+              const weakByteLength = occtKernelReflectApply(
+                typedArrayByteLengthGetter,
+                weakBytes,
+                [],
+              ) as number;
+              if (weakByteLength > request.maxOutputBytes) {
                 throwOcctStepExportRefusal(
                   "RESOURCE_LIMIT_EXCEEDED",
                   `OCCT STEP export exceeds maxOutputBytes ${request.maxOutputBytes}`,
                   {
                     resource: "maxOutputBytes",
                     limit: request.maxOutputBytes,
-                    actual: weakBytes.byteLength,
+                    actual: weakByteLength,
                   },
                 );
               }
