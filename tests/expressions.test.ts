@@ -525,12 +525,13 @@ describe("expression evaluation over shared and deep IR", () => {
     expect([...expressionDependencies(ordered)]).toEqual(["c", "b", "a"]);
   });
 
-  it("evaluates operand chains deeper than the call stack", () => {
-    let node: ExpressionIR = { op: "literal", dimension: "length", value: 3 } as ExpressionIR;
+  it("walks operand chains deeper than the call stack", () => {
+    let node = parameter;
     for (let depth = 0; depth < 200_000; depth += 1) {
       node = { op: "neg", dimension: "length", value: node } as ExpressionIR;
     }
-    expect(evaluateExpression(node, noParameters)).toBe(3);
+    expect(evaluateExpression(node, { resolveParameter: () => 3 })).toBe(3);
+    expect([...expressionDependencies(node)]).toEqual(["a"]);
   });
 
   it("checks the divisor before evaluating the numerator", () => {
