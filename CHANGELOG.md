@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+- Removed the dependency-audit exception for GHSA-g3hv-75wg-m249. The advisory
+  now covers only `minimatch` 7.0.0 up to 11.0.1, so the `minimatch` 3.1.5
+  inside the `mint` documentation tooling is no longer affected, and the audit
+  rejects exceptions that match nothing. API Extractor's `minimatch` override to
+  a patched 11.x release stays. `zod` 3 inside `mint` (GHSA-mrhx-c7xc-m3w5) is
+  now the only documented exception.
+
 ## [0.2.0] - 2026-11-04
 
 - Breaking: the general Document v1-v6 APIs no longer accept Document v7,

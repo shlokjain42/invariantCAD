@@ -37,18 +37,6 @@ export const DOCUMENTED_AUDIT_EXCEPTIONS: readonly DocumentedAuditException[] =
         "release; mint is documentation tooling that is neither shipped nor " +
         "imported at runtime.",
     }),
-    Object.freeze({
-      advisory: "GHSA-g3hv-75wg-m249",
-      module: "minimatch",
-      versions: Object.freeze(["3.1.5"]),
-      via: "mint",
-      reason:
-        "The globparts amplification fix exists only in minimatch 11.0.1 and " +
-        "newer, while mint's glob and Spectral dependencies require the " +
-        "CommonJS minimatch 3 API; mint is documentation tooling that only " +
-        "matches repository-authored patterns and is neither shipped nor " +
-        "imported at runtime.",
-    }),
   ]);
 
 export interface AuditPolicyEvaluation {

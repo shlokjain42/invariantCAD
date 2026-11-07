@@ -36,12 +36,6 @@ describe("dependency audit policy", () => {
         versions: ["3.24.0", "3.25.76"],
         via: "mint",
       }),
-      expect.objectContaining({
-        advisory: "GHSA-g3hv-75wg-m249",
-        module: "minimatch",
-        versions: ["3.1.5"],
-        via: "mint",
-      }),
     ]);
     expect(Object.isFrozen(DOCUMENTED_AUDIT_EXCEPTIONS)).toBe(true);
   });
@@ -52,13 +46,19 @@ describe("dependency audit policy", () => {
         { version: "3.24.0", paths: [mintPath], dev: true },
         { version: "3.25.76", paths: [`${mintPath}-alias`], dev: true },
       ]),
-      minimatchAdvisory([
-        { version: "3.1.5", paths: [minimatchMintPath], dev: true },
-      ]),
     ]);
     expect(admitted.unexcepted).toEqual([]);
     expect(admitted.matched).toEqual(DOCUMENTED_AUDIT_EXCEPTIONS);
     expect(admitted.stale).toEqual([]);
+  });
+
+  it("no longer excepts minimatch 3.1.5, which the advisory stopped covering", () => {
+    // GHSA-g3hv-75wg-m249 was narrowed to >= 7.0.0, < 11.0.1 on 2026-11-04,
+    // so a finding for the minimatch 3 inside mint must now fail the audit.
+    const advisory = minimatchAdvisory([
+      { version: "3.1.5", paths: [minimatchMintPath], dev: true },
+    ]);
+    expect(evaluateAuditAdvisories([advisory]).unexcepted).toEqual([advisory]);
   });
 
   it("fails closed on runtime, other-root, unlisted-version, and other advisories", () => {
