@@ -88,16 +88,12 @@ exactly because its JavaScript and WASM form a matched runtime.
 
 Dependency alerts are not dismissed merely to make a badge green. An
 exception requires documented reachability, fail-closed CI, and a removal plan.
-Two current exceptions cover advisories reached only through the `mint`
+One current exception covers an advisory reached only through the `mint`
 documentation tooling, which is neither shipped nor imported at runtime:
 
 - GHSA-mrhx-c7xc-m3w5 in the `zod` 3 versions that every published `mint`
   release pins; no patched `zod` 3 exists. InvariantCAD's runtime dependency is
   `zod` `^4.6.7`. It is removed when `mint` adopts a patched `zod`.
-- GHSA-g3hv-75wg-m249 in `minimatch` 3.1.5, fixed only in `minimatch` 11.0.1
-  and newer, which `mint`'s CommonJS `glob` and Spectral dependencies cannot
-  use. API Extractor's `minimatch` is overridden to a patched 11.x release. It
-  is removed when `mint` no longer resolves a vulnerable `minimatch`.
 
 The audit admits each exception only for its listed versions and only while
 every finding is a development dependency reached exclusively through `mint`.
