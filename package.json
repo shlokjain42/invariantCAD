@@ -125,7 +125,7 @@
   },
   "devDependencies": {
     "@arethetypeswrong/core": "0.18.5",
-    "@microsoft/api-extractor": "7.60.0",
+    "@microsoft/api-extractor": "7.60.1",
     "@playwright/test": "^1.61.1",
     "@types/node": "^26.1.1",
     "@vitest/coverage-v8": "^4.1.12",
